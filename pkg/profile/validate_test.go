@@ -10,6 +10,7 @@ import (
 
 // boolPtr is a helper to create *bool values for semantic tests.
 func boolPtr(b bool) *bool { return &b }
+func intPtr(i int) *int    { return &i }
 
 func TestValidateSchemaValid(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/profiles/valid-minimal.yaml")
@@ -102,7 +103,7 @@ func TestValidateErrorFormat(t *testing.T) {
 
 func TestSemanticTTLShorterThanIdle(t *testing.T) {
 	// Profile with TTL=1h but idleTimeout=2h — TTL shorter than idleTimeout
-	yamlData := []byte(`apiVersion: klankermaker.ai/v1alpha1
+	yamlData := []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: ttl-too-short
@@ -129,11 +130,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -155,9 +155,6 @@ spec:
       destination: cloudwatch
       logGroup: /klanker-maker/network
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `)
 
 	errs := profile.Validate(yamlData)
@@ -182,7 +179,7 @@ spec:
 
 // minimalCLIBase is a complete base profile YAML for CLI-related tests.
 // Tests append a `  cli:` block to this base.
-const minimalCLIBase = `apiVersion: klankermaker.ai/v1alpha1
+const minimalCLIBase = `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: notify-validate-test
@@ -205,11 +202,10 @@ spec:
       allowedDNSSuffixes:
         - ".amazonaws.com"
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -228,19 +224,19 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `
 
-// TestValidate_NotifyFields_AllSet verifies that a profile with all four notify
-// fields set to valid values passes schema validation.
+// TestValidate_NotifyFields_AllSet verifies that a profile with all notification
+// event fields set to valid values passes schema validation.
+// Phase 92 (Wave 2): migrated from cli.notify* to notification.events / .email.
 func TestValidate_NotifyFields_AllSet(t *testing.T) {
-	yaml := minimalCLIBase + `  cli:
-    notifyOnPermission: true
-    notifyOnIdle: true
-    notifyCooldownSeconds: 60
-    notificationEmailAddress: "ops@example.com"
+	yaml := minimalCLIBase + `  notification:
+    events:
+      onPermission: true
+      onIdle: true
+      cooldownSeconds: 60
+    email:
+      address: "ops@example.com"
 `
 	errs := profile.ValidateSchema([]byte(yaml))
 	if len(errs) != 0 {
@@ -252,54 +248,56 @@ func TestValidate_NotifyFields_AllSet(t *testing.T) {
 }
 
 // TestValidate_NotifyFields_WrongType_CooldownString verifies that schema
-// validation rejects notifyCooldownSeconds given as a string instead of integer.
+// validation rejects notification.events.cooldownSeconds given as a string.
 func TestValidate_NotifyFields_WrongType_CooldownString(t *testing.T) {
-	yaml := minimalCLIBase + `  cli:
-    notifyCooldownSeconds: "60"
+	yaml := minimalCLIBase + `  notification:
+    events:
+      cooldownSeconds: "60"
 `
 	errs := profile.ValidateSchema([]byte(yaml))
 	if len(errs) == 0 {
-		t.Error("expected schema validation to reject notifyCooldownSeconds as string, got no errors")
+		t.Error("expected schema validation to reject cooldownSeconds as string, got no errors")
 		return
 	}
 
 	found := false
 	for _, e := range errs {
 		msg := e.Error()
-		if strings.Contains(msg, "notifyCooldownSeconds") || strings.Contains(msg, "integer") ||
-			strings.Contains(msg, "type") || strings.Contains(msg, "cli") {
+		if strings.Contains(msg, "cooldownSeconds") || strings.Contains(msg, "integer") ||
+			strings.Contains(msg, "type") || strings.Contains(msg, "notification") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected error referencing notifyCooldownSeconds type, errors were: %v", errs)
+		t.Errorf("expected error referencing cooldownSeconds type, errors were: %v", errs)
 	}
 }
 
 // TestValidate_NotifyFields_WrongType_PermissionString verifies that schema
-// validation rejects notifyOnPermission given as a string instead of boolean.
+// validation rejects notification.events.onPermission given as a string.
 func TestValidate_NotifyFields_WrongType_PermissionString(t *testing.T) {
-	yaml := minimalCLIBase + `  cli:
-    notifyOnPermission: "yes"
+	yaml := minimalCLIBase + `  notification:
+    events:
+      onPermission: "yes"
 `
 	errs := profile.ValidateSchema([]byte(yaml))
 	if len(errs) == 0 {
-		t.Error("expected schema validation to reject notifyOnPermission as string, got no errors")
+		t.Error("expected schema validation to reject onPermission as string, got no errors")
 		return
 	}
 
 	found := false
 	for _, e := range errs {
 		msg := e.Error()
-		if strings.Contains(msg, "notifyOnPermission") || strings.Contains(msg, "boolean") ||
-			strings.Contains(msg, "type") || strings.Contains(msg, "cli") {
+		if strings.Contains(msg, "onPermission") || strings.Contains(msg, "boolean") ||
+			strings.Contains(msg, "type") || strings.Contains(msg, "notification") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected error referencing notifyOnPermission type, errors were: %v", errs)
+		t.Errorf("expected error referencing onPermission type, errors were: %v", errs)
 	}
 }
 
@@ -388,7 +386,7 @@ func minimalProfileWithPrefix(prefix string) []byte {
 	if prefix != "" {
 		prefixLine = "\n  prefix: " + prefix
 	}
-	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: test-prefix` + prefixLine + `
@@ -413,11 +411,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -439,15 +436,12 @@ spec:
       destination: cloudwatch
       logGroup: /klanker-maker/network
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `)
 }
 
 // minimalExecutionProfile returns a full valid profile YAML with the given execution YAML block.
 func minimalExecutionProfile(executionYAML string) []byte {
-	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-schema-test
@@ -471,11 +465,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -497,9 +490,6 @@ spec:
       destination: cloudwatch
       logGroup: /klanker-maker/network
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `)
 }
 
@@ -551,7 +541,7 @@ func TestRsyncSchemaValidation(t *testing.T) {
 
 	t.Run("rsyncPaths with non-string item (integer) is rejected", func(t *testing.T) {
 		// Use JSON-style inline array to embed a non-string
-		data := []byte(`apiVersion: klankermaker.ai/v1alpha1
+		data := []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-bad-items
@@ -577,11 +567,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -603,9 +592,6 @@ spec:
       destination: cloudwatch
       logGroup: /klanker-maker/network
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `)
 		errs := profile.ValidateSchema(data)
 		if len(errs) == 0 {
@@ -616,7 +602,7 @@ spec:
 
 // minimalProfileWithTlsCapture returns a full valid profile YAML with the given tlsCapture YAML block.
 func minimalProfileWithTlsCapture(tlsCaptureYAML string) []byte {
-	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: tls-capture-schema-test
@@ -641,11 +627,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -668,9 +653,6 @@ spec:
       logGroup: /klanker-maker/network
 ` + tlsCaptureYAML + `
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `)
 }
 
@@ -794,24 +776,27 @@ func TestValidateSchema_MetadataPrefix(t *testing.T) {
 
 // --- Phase 63: Slack validation tests ---
 
-// minimalCLISpecWith returns a minimal SandboxProfile with the given CLISpec for
-// direct ValidateSemantic testing.
-func minimalCLISpecWith(cli *profile.CLISpec) *profile.SandboxProfile {
+// minimalNotificationWith returns a minimal SandboxProfile with the given
+// NotificationSpec for direct ValidateSemantic testing.
+// Phase 92 (Wave 2): migrated from CLISpec to the structured notification block.
+func minimalNotificationWith(n *profile.NotificationSpec) *profile.SandboxProfile {
 	return &profile.SandboxProfile{
-		APIVersion: "klankermaker.ai/v1alpha1",
+		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Spec: profile.Spec{
-			CLI: cli,
+			Notification: n,
 		},
 	}
 }
 
 // TestValidateSemantic_Slack_PerSandboxAndOverride_Error verifies that setting
-// notifySlackPerSandbox=true and notifySlackChannelOverride is a non-warning error.
+// slack.perSandbox=true and slack.channelOverride is a non-warning error.
 func TestValidateSemantic_Slack_PerSandboxAndOverride_Error(t *testing.T) {
-	p := minimalCLISpecWith(&profile.CLISpec{
-		NotifySlackPerSandbox:      true,
-		NotifySlackChannelOverride: "CABC123",
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			PerSandbox:      boolPtr(true),
+			ChannelOverride: "CABC123",
+		},
 	})
 	errs := profile.ValidateSemantic(p)
 	if len(errs) == 0 {
@@ -833,11 +818,13 @@ func TestValidateSemantic_Slack_PerSandboxAndOverride_Error(t *testing.T) {
 }
 
 // TestValidateSemantic_Slack_PerSandboxWithoutSlackEnabled_Warning verifies that
-// notifySlackPerSandbox=true with notifySlackEnabled=&false is a warning (not error).
+// slack.perSandbox=true with slack.enabled=&false is a warning (not error).
 func TestValidateSemantic_Slack_PerSandboxWithoutSlackEnabled_Warning(t *testing.T) {
-	p := minimalCLISpecWith(&profile.CLISpec{
-		NotifySlackPerSandbox: true,
-		NotifySlackEnabled:    boolPtr(false),
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			PerSandbox: boolPtr(true),
+			Enabled:    boolPtr(false),
+		},
 	})
 	errs := profile.ValidateSemantic(p)
 	if len(errs) == 0 {
@@ -845,13 +832,13 @@ func TestValidateSemantic_Slack_PerSandboxWithoutSlackEnabled_Warning(t *testing
 	}
 	found := false
 	for _, e := range errs {
-		if e.IsWarning && strings.Contains(e.Message, "notifySlackPerSandbox") {
+		if e.IsWarning && strings.Contains(e.Message, "perSandbox") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected IsWarning=true with 'notifySlackPerSandbox' message, got: %v", errs)
+		t.Errorf("expected IsWarning=true with 'perSandbox' message, got: %v", errs)
 	}
 	// Must not be a hard error
 	for _, e := range errs {
@@ -862,11 +849,13 @@ func TestValidateSemantic_Slack_PerSandboxWithoutSlackEnabled_Warning(t *testing
 }
 
 // TestValidateSemantic_Slack_ArchiveWithoutPerSandbox_Warning verifies that
-// slackArchiveOnDestroy set without notifySlackPerSandbox=true is a warning.
+// slack.archiveOnDestroy set without slack.perSandbox=true is a warning.
 func TestValidateSemantic_Slack_ArchiveWithoutPerSandbox_Warning(t *testing.T) {
-	p := minimalCLISpecWith(&profile.CLISpec{
-		NotifySlackPerSandbox: false,
-		SlackArchiveOnDestroy: boolPtr(true),
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			PerSandbox:       boolPtr(false),
+			ArchiveOnDestroy: boolPtr(true),
+		},
 	})
 	errs := profile.ValidateSemantic(p)
 	if len(errs) == 0 {
@@ -874,13 +863,13 @@ func TestValidateSemantic_Slack_ArchiveWithoutPerSandbox_Warning(t *testing.T) {
 	}
 	found := false
 	for _, e := range errs {
-		if e.IsWarning && strings.Contains(e.Message, "slackArchiveOnDestroy") {
+		if e.IsWarning && strings.Contains(e.Message, "archiveOnDestroy") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected IsWarning=true with 'slackArchiveOnDestroy' message, got: %v", errs)
+		t.Errorf("expected IsWarning=true with 'archiveOnDestroy' message, got: %v", errs)
 	}
 	for _, e := range errs {
 		if !e.IsWarning {
@@ -892,8 +881,10 @@ func TestValidateSemantic_Slack_ArchiveWithoutPerSandbox_Warning(t *testing.T) {
 // TestValidateSemantic_Slack_BadChannelOverride_Error verifies that an invalid
 // channel ID (not matching ^C[A-Z0-9]+$) is a hard error.
 func TestValidateSemantic_Slack_BadChannelOverride_Error(t *testing.T) {
-	p := minimalCLISpecWith(&profile.CLISpec{
-		NotifySlackChannelOverride: "not-a-channel",
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			ChannelOverride: "not-a-channel",
+		},
 	})
 	errs := profile.ValidateSemantic(p)
 	if len(errs) == 0 {
@@ -912,11 +903,11 @@ func TestValidateSemantic_Slack_BadChannelOverride_Error(t *testing.T) {
 }
 
 // TestValidateSemantic_Slack_BothChannelsDisabled_Warning verifies that
-// notifyEmailEnabled=&false and notifySlackEnabled=&false is a warning.
+// email.enabled=&false and slack.enabled=&false is a warning.
 func TestValidateSemantic_Slack_BothChannelsDisabled_Warning(t *testing.T) {
-	p := minimalCLISpecWith(&profile.CLISpec{
-		NotifyEmailEnabled: boolPtr(false),
-		NotifySlackEnabled: boolPtr(false),
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Email: &profile.NotificationEmailSpec{Enabled: boolPtr(false)},
+		Slack: &profile.NotificationSlackSpec{Enabled: boolPtr(false)},
 	})
 	errs := profile.ValidateSemantic(p)
 	if len(errs) == 0 {
@@ -940,12 +931,14 @@ func TestValidateSemantic_Slack_BothChannelsDisabled_Warning(t *testing.T) {
 }
 
 // TestValidateSemantic_Slack_HappyPath_NoErrors verifies that a valid Slack config
-// (slackEnabled=true, perSandbox=true, archiveOnDestroy=true, no override) emits no errors.
+// (slack.enabled=true, perSandbox=true, archiveOnDestroy=true, no override) emits no errors.
 func TestValidateSemantic_Slack_HappyPath_NoErrors(t *testing.T) {
-	p := minimalCLISpecWith(&profile.CLISpec{
-		NotifySlackEnabled:    boolPtr(true),
-		NotifySlackPerSandbox: true,
-		SlackArchiveOnDestroy: boolPtr(true),
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:          boolPtr(true),
+			PerSandbox:       boolPtr(true),
+			ArchiveOnDestroy: boolPtr(true),
+		},
 	})
 	errs := profile.ValidateSemantic(p)
 	if len(errs) != 0 {
@@ -954,15 +947,17 @@ func TestValidateSemantic_Slack_HappyPath_NoErrors(t *testing.T) {
 }
 
 // TestValidateSemantic_Slack_BackwardCompat_Phase62Profile verifies that a profile
-// with only Phase 62 fields and no Slack fields produces zero Slack-related errors.
-// This is the critical Phase 62 regression test.
+// with only event/email fields and no Slack block produces zero Slack-related errors.
+// This is the critical Phase 62 backward-compat regression test.
 func TestValidateSemantic_Slack_BackwardCompat_Phase62Profile(t *testing.T) {
-	p := minimalCLISpecWith(&profile.CLISpec{
-		NotifyOnPermission:       true,
-		NotifyOnIdle:             true,
-		NotifyCooldownSeconds:    60,
-		NotificationEmailAddress: "ops@example.com",
-		// All Phase 63 fields absent (nil / zero values)
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Events: &profile.NotificationEventsSpec{
+			OnPermission:    boolPtr(true),
+			OnIdle:          boolPtr(true),
+			CooldownSeconds: intPtr(60),
+		},
+		Email: &profile.NotificationEmailSpec{Address: "ops@example.com"},
+		// No slack block (the old Phase 63 fields absent).
 	})
 	errs := profile.ValidateSemantic(p)
 	if len(errs) != 0 {
@@ -978,7 +973,7 @@ func TestValidateSemantic_Slack_BackwardCompat_Phase62Profile(t *testing.T) {
 // populated for semantic validation of additionalSnapshots.
 func makeMinimalSnapshotProfile(substrate string, snapshots []profile.AdditionalSnapshotSpec, addlVol *profile.AdditionalVolumeSpec) *profile.SandboxProfile {
 	return &profile.SandboxProfile{
-		APIVersion: "klankermaker.ai/v1alpha1",
+		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Spec: profile.Spec{
 			Runtime: profile.RuntimeSpec{

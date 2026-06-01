@@ -1,0 +1,143 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: codex
+  labels:
+    tier: development
+    tool: codex
+    builtin: "true"
+  prefix: codex
+
+spec:
+  cli:
+    agent: codex
+
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+    rootVolumeSize: 15
+    hibernation: true
+    additionalVolume:
+      size: 20
+      mountPoint: /data
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: codex
+      # Rust binary needs explicit CA cert path for MITM proxy TLS interception
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      # OPENAI_API_KEY is injected at boot via the SOPS-encrypted bundle.
+      # See spec.secrets below — the declarative path replaces the old OTP/SSM workaround.
+    rsyncPaths:
+      - ".gitconfig"
+      - ".codex"
+    initCommands:
+      - "yum install -y git nodejs npm jq tar gzip unzip"
+      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.133.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
+      - "mkdir -p /home/sandbox/.codex"
+      - "printf 'model = \"gpt-4o-mini\"\\nmodel_provider = \"openai-custom\"\\nsandbox_mode = \"workspace-write\"\\n\\n[model_providers.openai-custom]\\nname = \"OpenAI\"\\nbase_url = \"https://api.openai.com/v1\"\\nenv_key = \"OPENAI_API_KEY\"\\nwire_api = \"responses\"\\nsupports_websockets = false\\n' > /home/sandbox/.codex/config.toml"
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.codex"
+      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Codex Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "whereiskurt/meshtk"
+        - "whereiskurt/defcon.run.34"
+      allowedRefs:
+        - "main"
+        - "develop"
+        - "feature/*"
+        - "fix/*"
+
+  network:
+    enforcement: proxy
+    egress:
+      # GitHub hosts are implicitly allowed via sourceAccess.github.allowedRepos
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        # OpenAI / Codex
+        - ".openai.com"
+        - ".chatgpt.com"
+        # GitHub
+        - ".github.com"
+        - ".githubusercontent.com"
+        # Error reporting / CDN
+        - ".sentry.io"
+        - ".cloudfront.net"
+      allowedHosts: []
+
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 5.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 1000
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/network
+    learnMode: false
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "self"
+
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "60m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files
+
+  secrets:
+    sopsFile: ./secrets/codex.enc.yaml

@@ -2103,7 +2103,7 @@ Plans:
 **Goal:** A coherent SandboxProfile spec that is honest about what each section is and contains no dead fields. Four user-facing changes land together: (1) new `spec.notification:` block owns every email/Slack/invite/archive decision (14 `cli.notify*` fields move under structured sub-blocks); (2) `spec.identity:` → `spec.iam:` (rename to match reality — section is AWS IAM, not identity); (3) dead fields removed (`identity.sessionPolicy` + entire dead `spec.agent:` block); (4) structured `spec.agent:` block with Claude/Codex tool gating — compiler synthesizes `/home/sandbox/.claude/settings.json` and `~/.codex/config.toml` from typed fields, eliminating the inlined-JSON antipattern. Plus three correctness fixes: pointer-merge inheritance bug (typed `mergeNotificationSpec` + `mergeAgentSpec`), schema drift fix (`iam.allowedSecretPaths` declared in JSON schema), and `vscodeEnabled` relocated from `spec.cli:` to `spec.runtime.vscode.enabled` (provisioning-time, not CLI default). Zero running sandboxes constraint allows atomic YAML rewrites with no backwards compatibility.
 **Requirements**: Phase-local synthetic IDs (no formal REQ tracking — legacy/restructure phase). Validation criteria VC-1 through VC-11 in 92-VALIDATION.md.
 **Depends on:** Phase 91
-**Plans:** 7 plans (Waves 0-6)
+**Plans:** 6/7 plans executed
 
 Plans:
 - [ ] 92-00-test-scaffolding-research-spikes-PLAN.md — Wave 0: capture pre-Phase-92 byte-identity baselines (userdata + IAM HCL) before any Wave 1 touch + 6 RED test stubs for synthesizers/inheritance/mixed-mode (VC-3, VC-4, VC-5, VC-6, VC-7)

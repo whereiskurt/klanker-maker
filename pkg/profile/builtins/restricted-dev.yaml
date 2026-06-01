@@ -1,4 +1,4 @@
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: restricted-dev
@@ -49,11 +49,10 @@ spec:
         - "pkg.go.dev"
         - "sum.golang.org"
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
 
   sidecars:
     dnsProxy:
@@ -80,11 +79,3 @@ spec:
       enabled: true
       logPrompts: false
       logToolDetails: true
-
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: "20m"
-    allowedTools:
-      - bash
-      - read_file
-      - write_file

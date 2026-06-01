@@ -8,6 +8,16 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 92 (2026-05-31) — SandboxProfile spec restructure (complete):**
+- `spec.identity:` → `spec.iam:` (with `allowedSecretPaths` declared).
+- `spec.cli.notify*` → `spec.notification:` (typed `events` / `email` / `slack` sub-blocks).
+- `spec.cli.vscodeEnabled` → `spec.runtime.vscode.enabled`.
+- `spec.cli.{agent,claudeArgs,codexArgs}` → `spec.agent:` block (`default` / `claude.args` / `codex.args`). `spec.cli` is now `noBedrock`-only.
+- Inlined `configFiles["/home/sandbox/.claude/settings.json"]` REMOVED everywhere; settings.json is synthesized from `spec.agent.claude.tools.*` + `trustedDirectories` (canonical `permissions.allow` / `permissions.deny`). Codex `config.toml` is synthesized too — Codex has no native tool gating, so it ships inert hooks + an asymmetry note. See `docs/agent-tool-gating.md`.
+- Mixed mode (typed `agent.claude.tools.*` + inlined settings.json) is a hard `km validate` error.
+- Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
+- Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
+
 ## Where to look
 
 | You want to… | Look at |
@@ -27,7 +37,10 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Slack runbook (full setup, troubleshooting) | `docs/slack-notifications.md` |
 | VS Code runbook | `docs/vscode.md` |
 | Snapshot-backed EBS volumes in profiles | `OPERATOR-GUIDE.md` § additionalSnapshots |
-| Codex parity, `spec.cli.agent`, Slack prefix routing & agent switching | `docs/codex-parity.md` (Phase 70) |
+| Codex parity, `spec.agent.default`, Slack prefix routing & agent switching | `docs/codex-parity.md` (Phase 70) |
+| Structured Claude/Codex tool gating via `spec.agent:`, synthesizers, asymmetry note | `docs/agent-tool-gating.md` (Phase 92) |
+| Cut a release (goreleaser + GH Actions, tag-driven) | `docs/release.md` |
+| SOPS / SSM allowlist via `iam.allowedSecretPaths` | `docs/sandbox-secrets.md` (Phase 89, renamed `identity:`→`iam:` in Phase 92) |
 
 ## CLI
 
@@ -87,6 +100,46 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `profiles/` — Built-in SandboxProfile YAML files
 - `skills/` — User-invocable skills (klanker plugin)
 - `spec.runtime.additionalSnapshots` — list of snapshot-backed EBS volumes. Each entry materialises a fresh `aws_ebs_volume` from an existing EBS snapshot, attaches on `/dev/sd[f-p]`, mounts with userdata-detected filesystem. Coexists with `additionalVolume` (both can be set). EC2-only. Volume lifecycle = sandbox lifecycle. See `OPERATOR-GUIDE.md` § additionalSnapshots.
+
+## Profile spec — Phase 92 structural cleanup
+
+- **apiVersion bumped `v1alpha1` → `v1alpha2` (STRICT).** Profiles must declare `apiVersion: klankermaker.ai/v1alpha2`; `v1alpha1` is now rejected by the schema. No backwards compatibility (zero running sandboxes at cutover).
+- **`spec.identity:` → `spec.iam:`.** The IAM/session block moved out of the `identity:` namespace. `iam.{roleSessionDuration, allowedRegions, allowedSecretPaths}` are the surviving fields.
+- **`identity.sessionPolicy` removed** without replacement (it was never read by any code path).
+- **`iam.allowedSecretPaths`** (Phase 89 SOPS SSM allowlist) is now declared in the JSON schema (closes the Phase 89 schema drift).
+- **Dead top-level `spec.agent:` block removed** (`maxConcurrentTasks`, `taskTimeout`, `allowedTools` — never read). A new `agent:` block with structured tool-gating semantics is re-introduced later in Phase 92 (Waves 4/5).
+- **`spec.cli.notify*` → `spec.notification:` (Wave 3, 2026-05-31).** The 15 notify/Slack fields moved out of `spec.cli` into a structured `spec.notification:` block: `notification.events.{onPermission,onIdle,cooldownSeconds}`, `notification.email.{enabled,address}`, `notification.slack.{enabled,perSandbox,channelOverride,archiveOnDestroy}` plus `slack.inbound.{enabled,mentionOnly,reactAlways}`, `slack.transcript.enabled`, and `slack.invites.{emails,useConnect}`. Surviving `spec.cli` fields: `noBedrock`, `agent`, `claudeArgs`, `codexArgs`. **Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`) are UNCHANGED** — only the YAML surface changed; userdata output is byte-identical.
+- **`spec.cli.vscodeEnabled` → `spec.runtime.vscode.enabled` (Wave 3).** `IsVSCodeEnabled` now takes a `*RuntimeVSCodeSpec`.
+- `scripts/validate-all-profiles.sh` is the single-source-of-truth gate that runs `km validate` over the 20-file profile inventory (local-only; exits non-zero on any failure).
+
+## Releases
+
+Tag-driven via goreleaser + GH Actions. The `VERSION` file is the dev-build counter (auto-bumped by every `make build`); git tags (`vX.Y.Z`) are the release identity.
+
+**Artifacts produced per release:** four tarballs (`km_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.gz`), each bundling `km` + `terraform` v1.9.8 + `terragrunt` v0.99.1 + `LICENSE` + `README.md` + `OPERATOR-GUIDE.md` + `THIRD-PARTY-LICENSES.txt`. Plus a SHA256 checksums file. Operators still provide `aws` CLI + `session-manager-plugin` themselves.
+
+**Cut-a-release workflow:**
+
+1. **Pre-flight:** verify `main` is green, GSD milestone is at a clean checkpoint, `CHANGELOG`-worthy commits use conventional-commit prefixes (`feat:`, `fix:`, `docs:` — goreleaser groups by these).
+2. **Local sanity check (no tag):**
+   ```bash
+   goreleaser check
+   goreleaser release --snapshot --clean
+   ls dist/ && tar -tzf dist/km_v*_darwin_arm64.tar.gz
+   ```
+3. **Tag and push:**
+   ```bash
+   git tag vX.Y.Z              # or vX.Y.Z-rc1 for prerelease (auto-flagged)
+   git push origin vX.Y.Z
+   ```
+4. **GH Actions runs `.github/workflows/release.yml`** → cuts a **Draft** release. Review assets, then publish manually from the GH UI.
+5. **Post-release:** bump the klanker plugin version (`plugin.json` + `marketplace.json`) in lockstep if any skill content changed — clients cache the old version otherwise (see [[project_plugin_version_gates_cache]]).
+
+**Pinned bundled-tool versions:** `terraform` 1.9.8, `terragrunt` 0.99.1. Bumping these is a one-line edit to `.goreleaser.yaml` `before.hooks` args + the cache-key in the workflow.
+
+**Files:** `.goreleaser.yaml` (release config), `scripts/fetch-bundled-tools.sh` (per-platform tool fetcher, cached at `~/.cache/km-bundle/`), `.github/workflows/release.yml` (tag-triggered).
+
+Full runbook + troubleshooting: `docs/release.md`.
 
 ## SES per-install rule namespacing
 
@@ -155,7 +208,7 @@ http-proxy MITM intercepts and meters three AI provider endpoints into the same
 
 L7 proxy hosts are gated per profile:
 - `spec.execution.useBedrock: true` → adds `.amazonaws.com,api.anthropic.com`
-- `spec.cli.agent: codex` → adds `api.openai.com` (Phase 88)
+- `spec.agent.default: codex` → adds `api.openai.com` (Phase 88; field re-homed from `spec.cli.agent` in Phase 92)
 
 Unknown model IDs in any provider write rows with `spentUSD=0` and log
 `event_type=*_unknown_model` so operators see the gap in `km status`.
@@ -209,32 +262,44 @@ Output lands at `/workspace/.km-agent/runs/<timestamp>/output.json`. Detach from
 
 ```yaml
 spec:
+  # Phase 92: Claude/Codex tool gating + trustedDirectories are TYPED here, not
+  # inlined as configFiles JSON. The compiler synthesizes ~/.claude/settings.json
+  # (canonical permissions.allow/deny) + ~/.codex/config.toml. See docs/agent-tool-gating.md.
+  agent:
+    claude:
+      trustedDirectories: [/home/sandbox, /workspace]
+      tools:
+        autoApprove: [Bash, Read, Write, Edit, Glob, Grep]
   execution:
     configFiles:
-      "/home/sandbox/.claude/settings.json": |
-        {"trustedDirectories":["/home/sandbox","/workspace"]}
+      # OTHER config files are still inlined here; only the Claude settings.json
+      # key is forbidden (it is synthesized from spec.agent.claude).
+      "/home/sandbox/.claude/plugins/known_marketplaces.json": |
+        {"...": "..."}
   cli:
     noBedrock: true    # default to direct API for km shell / km agent run
 ```
 
-- `spec.execution.configFiles` — pre-seed tool config files (written after `initCommands`, owned by sandbox user)
+- `spec.agent.claude.tools.*` / `trustedDirectories` — typed Claude tool gating; synthesized into `~/.claude/settings.json` (Phase 92). Inlining `configFiles["/home/sandbox/.claude/settings.json"]` alongside these is a hard validation error.
+- `spec.execution.configFiles` — pre-seed OTHER tool config files (written after `initCommands`, owned by sandbox user)
 - `spec.cli.noBedrock` — operator-side default; doesn't affect sandbox provisioning, only CLI behavior when connecting
 
-### Agent: claude | codex (Phase 70)
+### Agent: claude | codex (Phase 70; restructured Phase 92)
 
-`spec.cli.agent` selects the default agent for `km shell` / `km agent run` /
+`spec.agent.default` selects the default agent for `km shell` / `km agent run` /
 Slack inbound dispatch:
 
 ```yaml
 spec:
-  cli:
-    agent: codex  # or "claude"; default claude; absence ≡ claude
+  agent:
+    default: codex  # or "claude"; default claude; absence ≡ claude
 ```
 
 The compiler writes `KM_AGENT` to `/etc/profile.d/km-notify-env.sh` and
-`/etc/km/notify.env`. It also writes `~/.codex/config.toml` on every sandbox
-regardless of value — Claude-default sandboxes have an inert config (forward-
-compat for when Codex ships a Claude-Code-style hook API).
+`/etc/km/notify.env`. It also synthesizes `~/.codex/config.toml` on every sandbox
+regardless of value (via `synthesizeCodexConfig`, Phase 92) — Claude-default
+sandboxes get an inert config (forward-compat for when Codex ships a
+Claude-Code-style hook API).
 
 Per-turn override via Slack: a message starting with `claude:` or `codex:`
 selects the agent for that turn (case-insensitive, anchored at start, zero or
@@ -244,7 +309,7 @@ triggers an 8-step clean handoff to a new top-level message. See
 
 **`km init --sidecars` is required** after this phase ships so management
 Lambdas pick up the schema addition. Existing sandboxes don't pick up
-`agent: codex` retroactively — `km destroy && km create`.
+`agent.default: codex` retroactively — `km destroy && km create`.
 
 ### DDB column hangover (Phase 70)
 
@@ -267,11 +332,11 @@ invitees are native workspace members rather than external collaborators):
   add people to channels post-install. Auto-detects whether to use `conversations.invite`
   (native) or `conversations.inviteShared` (Slack Connect, requires Pro tier). `--dry-run` is a
   read-only probe: classifies the address without sending any invite or joining any channel.
-- `spec.cli.notifySlackInviteEmails: []string` — profile field that auto-invites ADDITIONAL
+- `spec.notification.slack.invites.emails: []string` — profile field that auto-invites ADDITIONAL
   people (beyond the always-invited primary operator) to the per-sandbox `#sb-{id}` channel after
   `km create` succeeds. Auto-detects native vs Connect.
-- `spec.cli.useSlackConnect: *bool` (default true) — gates the Connect fallback for the
-  `notifySlackInviteEmails` loop only. True: external addresses auto-Connected. False:
+- `spec.notification.slack.invites.useConnect: *bool` (default true) — gates the Connect fallback for the
+  `notification.slack.invites.emails` loop only. True: external addresses auto-Connected. False:
   external addresses skipped with a fail-soft warning + follow-up command. Does NOT affect the
   primary operator invite (always invited) or `km slack invite`/`km slack init`.
 
@@ -298,9 +363,9 @@ channels. The effective behaviour is determined by the channel mode + optional p
 |------|---------|---------|
 | 1 | Shared (e.g. `#km-notifications`) | mention-only |
 | 2 | Per-sandbox `#sb-{id}` | every-message (back-compat) |
-| 3 | Operator override (`notifySlackChannelOverride`) | mention-only |
+| 3 | Operator override (`notification.slack.channelOverride`) | mention-only |
 
-- `spec.cli.notifySlackInboundMentionOnly: *bool` — per-profile tri-state override: nil = mode
+- `spec.notification.slack.inbound.mentionOnly: *bool` — per-profile tri-state override: nil = mode
   default, `true` = force polite, `false` = force chatty. Omit for smart per-mode behaviour.
 - `KM_SLACK_MENTION_ONLY` — install-level Lambda env var (`"true"`/`"false"`; default `"false"`).
   **Phase 91.1:** populated from `km-config.yaml` key `slack.mention_only` automatically by
@@ -317,9 +382,9 @@ channels. The effective behaviour is determined by the channel mode + optional p
 - **Phase 91.4 (km v0.3.773+):** first-only reactor toggle. `slack.react_always: false`
   in km-config.yaml flips the install-level default so the bridge posts 👀 only on
   top-level engagement messages — thread replies dispatch silently. Profile field
-  `cli.notifySlackInboundReactAlways *bool` shipped for forward-compat with future
+  `notification.slack.inbound.reactAlways *bool` shipped for forward-compat with future
   per-sandbox routing; runtime behaviour today is install-level.
-- **Phase 91.5 (km v0.3.776+):** per-sandbox `notifySlackInboundReactAlways` override.
+- **Phase 91.5 (km v0.3.776+):** per-sandbox `notification.slack.inbound.reactAlways` override.
   When the profile sets the field explicitly, `km create` writes `slack_react_always`
   to the sandbox's `km-sandboxes` row; the bridge's `FetchByChannel` reads it and the
   per-sandbox value wins over the install-level default at step 10. Profile field is

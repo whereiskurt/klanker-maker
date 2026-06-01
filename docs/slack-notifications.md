@@ -1,5 +1,13 @@
 # Slack Notifications Guide
 
+> **NOTE — Phase 92 (2026-05-31):** All `spec.cli.notify*` fields moved under the
+> structured `spec.notification:` block (`notification.events.*`,
+> `notification.email.*`, `notification.slack.*` with `slack.inbound`,
+> `slack.transcript`, `slack.invites` sub-blocks). `spec.cli.vscodeEnabled` moved
+> to `spec.runtime.vscode.enabled`. **Sandbox-side env var names are UNCHANGED** —
+> only the YAML surface changed. See `92-CONTEXT.md` § Phase Boundary for the full
+> field-by-field mapping.
+
 Klanker extends the operator-notify hook with parallel Slack delivery.
 The same `Notification` (permission prompt) and `Stop` (idle) events that trigger
 email also post to a Slack channel — shared or per-sandbox — via an Ed25519-signed
@@ -29,8 +37,8 @@ signed payloads and the Lambda forwards to the Slack Web API.
 
 Klanker provides Slack delivery alongside the existing email notification path:
 
-- **Same triggers:** `Notification` (Claude Code permission prompt) and `Stop` (idle timeout) events, gated by `notifyOnPermission` and `notifyOnIdle`.
-- **Parallel channels:** email and Slack run simultaneously unless you explicitly disable one via `notifyEmailEnabled: false`.
+- **Same triggers:** `Notification` (Claude Code permission prompt) and `Stop` (idle timeout) events, gated by `notification.events.onPermission` and `notification.events.onIdle`.
+- **Parallel channels:** email and Slack run simultaneously unless you explicitly disable one via `notification.email.enabled: false`.
 - **Signed payloads:** the `km-slack` binary on the sandbox constructs an Ed25519-signed envelope and POSTs it to the bridge Lambda Function URL. The Lambda verifies the signature using the sandbox's public key from DynamoDB before forwarding to the Slack Web API.
 - **Bot token isolation:** the Slack bot token is stored in SSM as a SecureString (KMS-encrypted). Only the bridge Lambda and the operator (via `km slack init` / `km slack status`) can read it.
 - **Operator channels via Slack Connect:** klankermaker.ai owns the Slack workspace. The operator is invited to the notification channel(s) via `conversations.inviteShared` (Slack Connect). The operator accepts the invite from their own Slack workspace — no workspace credential sharing required.
@@ -41,11 +49,11 @@ Klanker provides Slack delivery alongside the existing email notification path:
 
 | Mode | When | Channel name | Lifecycle |
 |------|------|-------------|-----------|
-| **Shared (default)** | `notifySlackEnabled: true`, neither per-sandbox nor override set | `#km-notifications` (or the name set during `km slack init`) | Permanent; shared across all sandboxes |
-| **Per-sandbox** | `notifySlackPerSandbox: true` | `#sb-{sandbox-id}` (sanitized) | Created at `km create`; archived at `km destroy` when `slackArchiveOnDestroy: true` |
-| **Override** | `notifySlackChannelOverride: "C..."` | Any existing channel the bot has been invited to | Unmanaged — operator is responsible for channel lifecycle |
+| **Shared (default)** | `notification.slack.enabled: true`, neither per-sandbox nor override set | `#km-notifications` (or the name set during `km slack init`) | Permanent; shared across all sandboxes |
+| **Per-sandbox** | `notification.slack.perSandbox: true` | `#sb-{sandbox-id}` (sanitized) | Created at `km create`; archived at `km destroy` when `notification.slack.archiveOnDestroy: true` |
+| **Override** | `notification.slack.channelOverride: "C..."` | Any existing channel the bot has been invited to | Unmanaged — operator is responsible for channel lifecycle |
 
-Modes are mutually exclusive: `notifySlackPerSandbox: true` and `notifySlackChannelOverride: <set>` at the same time is a validation error.
+Modes are mutually exclusive: `notification.slack.perSandbox: true` and `notification.slack.channelOverride: <set>` at the same time is a validation error.
 
 ---
 
@@ -130,17 +138,17 @@ If successful, `#km-notifications` shows: "If you see this, the bridge is wired.
 
 ## Profile Fields
 
-All new fields are under `spec.cli`. All are optional with the defaults shown.
+All new fields are under `spec.notification` (Phase 92; formerly `spec.cli`). All are optional with the defaults shown.
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `notifyEmailEnabled` | `bool*` | `true` | Set `false` to skip email dispatch when Slack is on. Omitting the field preserves the default (email always fires). |
-| `notifySlackEnabled` | `bool*` | `false` | Enable Slack delivery for events already gated by `notifyOnPermission` / `notifyOnIdle`. |
-| `notifySlackPerSandbox` | `bool` | `false` | Create `#sb-{sandbox-id}` at `km create`; archive at `km destroy`. Ignored when `notifySlackEnabled` is false. |
-| `notifySlackChannelOverride` | `string` | `""` | Hard-pin notifications to an existing Slack channel ID (format: `^C[A-Z0-9]+$`). Overrides both shared and per-sandbox modes. The bot must be a member. |
-| `slackArchiveOnDestroy` | `bool*` | `true` | Per-sandbox channels only. Set `false` to preserve the channel and its history after `km destroy`. |
+| `notification.email.enabled` | `bool*` | `true` | Set `false` to skip email dispatch when Slack is on. Omitting the field preserves the default (email always fires). |
+| `notification.slack.enabled` | `bool*` | `false` | Enable Slack delivery for events already gated by `notification.events.onPermission` / `notification.events.onIdle`. |
+| `notification.slack.perSandbox` | `bool*` | `false` | Create `#sb-{sandbox-id}` at `km create`; archive at `km destroy`. Ignored when `notification.slack.enabled` is false. |
+| `notification.slack.channelOverride` | `string` | `""` | Hard-pin notifications to an existing Slack channel ID (format: `^C[A-Z0-9]+$`). Overrides both shared and per-sandbox modes. The bot must be a member. |
+| `notification.slack.archiveOnDestroy` | `bool*` | `true` | Per-sandbox channels only. Set `false` to preserve the channel and its history after `km destroy`. |
 
-`bool*` indicates the field is a pointer (`*bool`) in the schema, allowing three states: unset (nil → default), `true`, `false`. Omitting the field is different from `false` for `notifyEmailEnabled` (omit = email on; `false` = email off).
+`bool*` indicates the field is a pointer (`*bool`) in the schema, allowing three states: unset (nil → default), `true`, `false`. Omitting the field is different from `false` for `notification.email.enabled` (omit = email on; `false` = email off).
 
 ---
 
@@ -150,11 +158,11 @@ All new fields are under `spec.cli`. All are optional with the defaults shown.
 
 | Rule | Condition | Severity | Message |
 |------|-----------|----------|---------|
-| Mutual exclusion | `notifySlackPerSandbox: true` AND `notifySlackChannelOverride` set | **Error** | "notifySlackPerSandbox and notifySlackChannelOverride are mutually exclusive" |
-| Dead per-sandbox | `notifySlackPerSandbox: true` AND `notifySlackEnabled: false` | Warning | "notifySlackPerSandbox has no effect when notifySlackEnabled is false" |
-| Dead archive | `slackArchiveOnDestroy` set AND `notifySlackPerSandbox: false` | Warning | "slackArchiveOnDestroy has no effect unless notifySlackPerSandbox is true" |
-| Channel ID format | `notifySlackChannelOverride` does not match `^C[A-Z0-9]+$` | **Error** | "notifySlackChannelOverride must match C[A-Z0-9]+" |
-| No delivery channel | `notifySlackEnabled: true` AND all three mode fields absent/false/empty AND shared channel not provisioned | Warning | "notifySlackEnabled is true but no delivery channel configured" |
+| Mutual exclusion | `notification.slack.perSandbox: true` AND `notification.slack.channelOverride` set | **Error** | "slack.perSandbox and slack.channelOverride are mutually exclusive" |
+| Dead per-sandbox | `notification.slack.perSandbox: true` AND `notification.slack.enabled: false` | Warning | "slack.perSandbox has no effect when slack.enabled is false" |
+| Dead archive | `notification.slack.archiveOnDestroy` set AND `notification.slack.perSandbox: false` | Warning | "slack.archiveOnDestroy has no effect unless slack.perSandbox is true" |
+| Channel ID format | `notification.slack.channelOverride` does not match `^C[A-Z0-9]+$` | **Error** | "slack.channelOverride must match C[A-Z0-9]+" |
+| No delivery channel | `notification.slack.enabled: true` AND all three mode fields absent/false/empty AND shared channel not provisioned | Warning | "slack.enabled is true but no delivery channel configured" |
 
 ---
 
@@ -164,35 +172,43 @@ All new fields are under `spec.cli`. All are optional with the defaults shown.
 
 ```yaml
 spec:
-  cli:
-    notifyOnIdle: true
-    notifyCooldownSeconds: 60
-    notifyEmailEnabled: false   # email off; Slack only
-    notifySlackEnabled: true
+  notification:
+    events:
+      onIdle: true
+      cooldownSeconds: 60
+    email:
+      enabled: false   # email off; Slack only
+    slack:
+      enabled: true
 ```
 
 ### Per-sandbox channel with archive on destroy
 
 ```yaml
 spec:
-  cli:
-    notifyOnPermission: true
-    notifyOnIdle: true
-    notifyCooldownSeconds: 0
-    notifyEmailEnabled: false
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    slackArchiveOnDestroy: true   # default; explicit here for clarity
+  notification:
+    events:
+      onPermission: true
+      onIdle: true
+      cooldownSeconds: 0
+    email:
+      enabled: false
+    slack:
+      enabled: true
+      perSandbox: true
+      archiveOnDestroy: true   # default; explicit here for clarity
 ```
 
 ### Override mode: pin to an existing channel
 
 ```yaml
 spec:
-  cli:
-    notifyOnIdle: true
-    notifySlackEnabled: true
-    notifySlackChannelOverride: "C01ABC1234DEF"   # bot must be invited
+  notification:
+    events:
+      onIdle: true
+    slack:
+      enabled: true
+      channelOverride: "C01ABC1234DEF"   # bot must be invited
 ```
 
 ---
@@ -329,8 +345,8 @@ These are injected into the sandbox at `km create` time by the compiler.
 
 | Variable | Source | Purpose |
 |----------|--------|---------|
-| `KM_NOTIFY_EMAIL_ENABLED` | profile `spec.cli.notifyEmailEnabled` | `1` or `0`; controls email dispatch in `km-notify-hook` |
-| `KM_NOTIFY_SLACK_ENABLED` | profile `spec.cli.notifySlackEnabled` | `1` or `0`; controls whether `km-slack` is invoked |
+| `KM_NOTIFY_EMAIL_ENABLED` | profile `spec.notification.email.enabled` | `1` or `0`; controls email dispatch in `km-notify-hook` |
+| `KM_NOTIFY_SLACK_ENABLED` | profile `spec.notification.slack.enabled` | `1` or `0`; controls whether `km-slack` is invoked |
 | `KM_SLACK_CHANNEL_ID` | runtime, resolved at `km create` | Slack channel ID to send notifications to (shared, per-sandbox, or override) |
 | `KM_SLACK_BRIDGE_URL` | runtime, from `/km/slack/bridge-url` | Lambda Function URL for the `km-slack` binary to POST to |
 
@@ -426,14 +442,14 @@ km doctor         # expect: ✓ Slack bot token: test message delivered (ts=...)
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | `km slack init` returns `not_allowed_token_type` | Workspace is free tier; Slack Connect requires Pro | Upgrade workspace to Pro at api.slack.com/pricing |
-| `km create` fails with `name_taken` (per-sandbox mode) | Another channel has the same sanitized name | Use `--alias` to change the sandbox name, or set `notifySlackChannelOverride` to an existing channel |
+| `km create` fails with `name_taken` (per-sandbox mode) | Another channel has the same sanitized name | Use `--alias` to change the sandbox name, or set `notification.slack.channelOverride` to an existing channel |
 | Override mode: "bot is not a member" | Bot was not invited to the override channel | In Slack: open the channel → Add people → invite the km bot app |
 | Hook fires, no Slack message appears | Bridge Lambda not deployed | Run `km init` then `km slack init`; check `/km/slack/bridge-url` via `km slack status` |
 | Hook fires on an existing sandbox, no Slack | Existing sandboxes lack `km-slack` binary and env vars | Run `km destroy` then `km create` to reprovision with the binary |
 | `km doctor` reports stale Slack channel | A destroyed sandbox left a non-archived channel | Archive manually in the Slack UI, or remove the `slack_channel_id` attribute from the DynamoDB sandbox record |
 | `km slack test` returns 401 | Bot token expired or revoked | Rotate: `km slack rotate-token --bot-token "$NEW_TOKEN"` (or legacy `km slack init --force --bot-token`) |
 | Bridge Lambda returns 403 | Signature verification failed (clock skew > 5 min, wrong key) | Ensure sandbox system clock is synced (chronyc / timedatectl); verify `km-identities` DynamoDB record for the sandbox exists |
-| Rate limit: bridge returns 503 | Slack returned 429 (rate limit) | Reduce notification frequency via `notifyCooldownSeconds` in the profile |
+| Rate limit: bridge returns 503 | Slack returned 429 (rate limit) | Reduce notification frequency via `notification.events.cooldownSeconds` in the profile |
 | Bridge returns 502 with `not_in_channel` | Bot is not a member of the channel | Add the bot to the channel in Slack UI, OR if the bot has `channels:join` scope it can self-rescue: `km slack test` after re-adding should succeed |
 
 ---
@@ -583,17 +599,17 @@ Audit-friendly per-scope table (14 scopes as of Phase 75 + Phase 72 + the
 | Scope | Slack API methods used | Why klanker needs it | Notes |
 |---|---|---|---|
 | `chat:write` | `chat.postMessage`, `chat.update` | All notification, transcript, reply, and operator-test messages | Primary path — no alternative |
-| `channels:manage` | `conversations.create`, `conversations.archive`, `conversations.invite` (public) | Per-sandbox public channel lifecycle and operator invite at `km create` | Required for `notifySlackPerSandbox: true` and `km slack invite` |
+| `channels:manage` | `conversations.create`, `conversations.archive`, `conversations.invite` (public) | Per-sandbox public channel lifecycle and operator invite at `km create` | Required for `notification.slack.perSandbox: true` and `km slack invite` |
 | `channels:join` | `conversations.join` | Self-rescue when the bot is ejected from a public channel during an app reinstall | Avoids requiring a human `/invite` after every token rotation |
 | `channels:read` | `conversations.info`, `conversations.list` | `km doctor` channel-name resolution; `km slack invite` channel lookup; bridge channel-membership probes | Read-only metadata on public channels |
 | `channels:history` | Events `message.channels` delivery; paginated reads | Inbound chat from public channels (poller consumes from per-sandbox SQS) | Pairs with the `message.channels` event subscription |
 | `groups:write` | `conversations.create` (private), `conversations.archive` (private), `conversations.invite` (private) | Per-sandbox private channel lifecycle when operator pre-creates private channels | |
 | `groups:read` | `conversations.info`, `conversations.list?types=private_channel` | `km doctor` and `km slack invite` against private and Slack Connect channels | Added as a Phase 72 follow-up after a reinstall produced `channel_not_found` for the shared Connect channel |
 | `groups:history` | Events `message.groups` delivery; paginated reads | Inbound chat from private channels | Pairs with the `message.groups` event subscription |
-| `conversations.connect:write` | `conversations.inviteShared` | Slack Connect invites for external operators and the auto-invite list when `useSlackConnect: true` | Requires Pro workspace tier; gracefully fails open on free tier |
+| `conversations.connect:write` | `conversations.inviteShared` | Slack Connect invites for external operators and the auto-invite list when `notification.slack.invites.useConnect: true` | Requires Pro workspace tier; gracefully fails open on free tier |
 | `reactions:read` | (future) reaction-triggered session fork | Forward-compatibility seam for the planned reaction-fork feature; not actively consumed today | Removing this scope today blocks only the future fork feature |
 | `reactions:write` | `reactions.add` | 👀 ACK on every accepted inbound Slack message (user feedback that the sandbox saw the message) | Independent of message delivery — failure logged but does not block reply |
-| `files:write` | `files.getUploadURLExternal`, `files.completeUploadExternal` | End-of-response transcript upload (gzipped JSONL) into the per-sandbox thread | Required only for `notifySlackTranscriptEnabled: true` |
+| `files:write` | `files.getUploadURLExternal`, `files.completeUploadExternal` | End-of-response transcript upload (gzipped JSONL) into the per-sandbox thread | Required only for `notification.slack.transcript.enabled: true` |
 | `files:read` | `files.info`; private-URL download with the bot token | Download user-attached files from inbound posts into `/workspace/.km-slack/attachments/` | Required for inbound file-attachment support (Phase 75) |
 | `users:read.email` | `users.lookupByEmail` | Auto-detect whether an invite address is a workspace member (regular invite) or external (Slack Connect); used by `km slack init`, `km slack invite`, and the `km create` auto-invite loop | Strictly narrower than `users:read` — does not enumerate the workspace directory |
 
@@ -745,12 +761,12 @@ handler preserves the separation of the three authentication domains.
 | DynamoDB `km-slack-nonces` | Nonce bytes only | ~5-minute TTL | At-rest AWS-managed KMS |
 | DynamoDB `km-identities` | Per-sandbox public keys + metadata | Sandbox lifetime | At-rest AWS-managed KMS |
 | SQS `{prefix}-slack-inbound-{sandbox-id}.fifo` | Inbound message bodies | 14-day SQS max; consumed within seconds in normal operation | At-rest AWS-managed KMS |
-| Slack channels `#sb-{id}` | Per-turn streaming, final transcript upload, operator chat | Per-workspace retention policy; channel archived (not deleted) at `km destroy` unless `slackArchiveOnDestroy: false` | Slack-side |
+| Slack channels `#sb-{id}` | Per-turn streaming, final transcript upload, operator chat | Per-workspace retention policy; channel archived (not deleted) at `km destroy` unless `notification.slack.archiveOnDestroy: false` | Slack-side |
 
 ⚠ **Transcripts contain whatever Claude saw.** Operator-side compliance
 (HIPAA, PCI, SOC 2 evidence handling) requires owner review of the artifacts
 bucket lifecycle and the Slack workspace retention policy. Klanker does not
-redact transcripts; do not enable `notifySlackTranscriptEnabled` for sandboxes
+redact transcripts; do not enable `notification.slack.transcript.enabled` for sandboxes
 that process regulated data without explicit owner sign-off.
 
 ### Slack security best-practices alignment
@@ -856,21 +872,24 @@ auto-acks. You should see "Verified" in the Slack App config.
 
 ### Per-sandbox enablement
 
-Add to your profile under `spec.cli`:
+Add to your profile under `spec.notification`:
 
 ```yaml
 spec:
-  cli:
-    notifyEmailEnabled: false
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true
-    slackArchiveOnDestroy: true
+  notification:
+    email:
+      enabled: false
+    slack:
+      enabled: true
+      perSandbox: true
+      archiveOnDestroy: true
+      inbound:
+        enabled: true
 ```
 
-`notifySlackInboundEnabled: true` requires `notifySlackEnabled: true` AND
-`notifySlackPerSandbox: true`. It is **incompatible with**
-`notifySlackChannelOverride` — channel-to-sandbox routing requires 1:1 mapping
+`notification.slack.inbound.enabled: true` requires `notification.slack.enabled: true` AND
+`notification.slack.perSandbox: true`. It is **incompatible with**
+`notification.slack.channelOverride` — channel-to-sandbox routing requires 1:1 mapping
 in v1.
 
 ### Behavior
@@ -1075,11 +1094,11 @@ km doctor            # slack_transcript_table_exists / slack_files_write_scope g
 
 | Field | Type | Default | Effect |
 |---|---|---|---|
-| `notifySlackTranscriptEnabled` | bool | `false` | Per-turn streaming + final upload to per-sandbox Slack thread |
+| `notification.slack.transcript.enabled` | bool | `false` | Per-turn streaming + final upload to per-sandbox Slack thread |
 
 **Validation rules:**
-- Requires `notifySlackEnabled: true` AND `notifySlackPerSandbox: true`
-- Incompatible with `notifySlackChannelOverride`
+- Requires `notification.slack.enabled: true` AND `notification.slack.perSandbox: true`
+- Incompatible with `notification.slack.channelOverride`
 
 ### CLI overrides
 
@@ -1120,7 +1139,7 @@ Sets `KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1`/`=0` in the SSM session env, taking 
 #### Slack Connect externally-shared channels reject file uploads
 
 Per-sandbox channels created via `km create` with
-`notifySlackPerSandbox: true` are shared with the operator via Slack
+`notification.slack.perSandbox: true` are shared with the operator via Slack
 Connect (`is_ext_shared: true`). UAT discovered that Slack's modern
 3-step file upload API (`files.completeUploadExternal`) silently
 returns `internal_error` when the target channel is externally shared,
@@ -1140,7 +1159,7 @@ affected — the upload silently fails and the operator gets no file.
 - Pull transcripts directly from S3:
   `aws s3 ls s3://<artifacts-bucket>/transcripts/<sandbox-id>/`
 - Use a non-Connect internal Slack channel (set
-  `notifySlackChannelOverride` to a host-workspace channel ID) — note
+  `notification.slack.channelOverride` to a host-workspace channel ID) — note
   this loses per-sandbox isolation
 
 **Known fix path (planned):** detect channel type at `km create`,
@@ -1305,7 +1324,7 @@ turn enumerating absolute paths and MIME types — Claude reads each file
 with its Read tool when relevant to the question.
 
 **Profile field:** No separate field. Gated on the existing
-`spec.cli.notifySlackInboundEnabled: true`.
+`spec.notification.slack.inbound.enabled: true`.
 
 **Caps:**
 
@@ -1503,7 +1522,7 @@ Slack Connect).
 |---|---|
 | Render install manifest | `km slack manifest [--app-name <name>]` |
 | Ad-hoc invite by email | `km slack invite <email> [--channel <name|id>] [--external]` |
-| Profile-driven auto-invite | `spec.cli.notifySlackInviteEmails: [<email>, ...]` |
+| Profile-driven auto-invite | `spec.notification.slack.invites.emails: [<email>, ...]` |
 | Scope drift diagnostic | `km doctor` adds `slack_users_read_email_scope` |
 
 ### Scopes carried by the manifest
@@ -1620,39 +1639,42 @@ the install's `resource_prefix` and bridge Lambda Function URL.
 Pipe to a file: `km slack manifest > app.json`. Paste into Slack admin → Apps → Build → New App
 → From manifest.
 
-### Profile fields: `notifySlackInviteEmails` + `useSlackConnect`
+### Profile fields: `notification.slack.invites.emails` + `notification.slack.invites.useConnect`
 
 The **primary operator** (the address set at `km slack init`, stored in SSM
 `{prefix}/slack/invite-email`) is ALWAYS invited to each per-sandbox `#sb-{id}` channel at
 `km create` time — a native workspace member via regular invite, an external operator via Slack
 Connect. This is unchanged from prior behavior (just now auto-detected).
 
-`notifySlackInviteEmails` adds MORE people beyond the primary operator. `useSlackConnect`
-(default `true`) controls whether external addresses in that list are auto-invited via Slack
-Connect or skipped.
+`notification.slack.invites.emails` adds MORE people beyond the primary operator.
+`notification.slack.invites.useConnect` (default `true`) controls whether external addresses in
+that list are auto-invited via Slack Connect or skipped.
 
 ```yaml
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    useSlackConnect: true            # default true; omit for the same behavior
-    notifySlackInviteEmails:
-      - alice@example.com   # workspace member → regular invite
-      - bob@external.com    # not in workspace → auto Slack Connect (useSlackConnect true)
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
+      invites:
+        useConnect: true            # default true; omit for the same behavior
+        emails:
+          - alice@example.com   # workspace member → regular invite
+          - bob@external.com    # not in workspace → auto Slack Connect (useConnect true)
 ```
 
 Behavior of the additional-folks list:
 - Internal members: regular invite (silent success).
-- External addresses, `useSlackConnect: true` (default): auto-invited via Slack Connect, no
+- External addresses, `invites.useConnect: true` (default): auto-invited via Slack Connect, no
   warning. A Connect failure (e.g. free-tier workspace) is logged as a fail-soft warning.
-- External addresses, `useSlackConnect: false`: skipped with a stderr warning; `km create`
+- External addresses, `invites.useConnect: false`: skipped with a stderr warning; `km create`
   continues (fail-soft). Follow up with
   `km slack invite --external bob@external.com --channel sb-{id}`.
 - Empty/unset list: no-op (the primary operator is still invited).
 
-Validation: `notifySlackInviteEmails` requires `notifySlackEnabled: true` (validation rule SE1).
-`useSlackConnect` has no validation rule — it is inert when the list is empty.
+Validation: `notification.slack.invites.emails` requires `notification.slack.enabled: true`
+(validation rule SE1). `invites.useConnect` has no validation rule — it is inert when the list
+is empty.
 
 ### `km doctor` new check: `slack_users_read_email_scope`
 
@@ -1667,7 +1689,7 @@ Validation: `notifySlackInviteEmails` requires `notifySlackEnabled: true` (valid
 | Symptom | Fix |
 |---|---|
 | `km slack invite` returns `missing_scope` | Bot doesn't have `users:read.email`. Run `km doctor`; remediation in WARN message. |
-| `km create` shows `[warn] bob@external.com is not a member ... (useSlackConnect: false)` | Expected when `useSlackConnect: false` and the address isn't a workspace member. Either set `useSlackConnect: true` (default) to auto-Connect, or run `km slack invite --external` afterward. |
+| `km create` shows `[warn] bob@external.com is not a member ... (useConnect: false)` | Expected when `invites.useConnect: false` and the address isn't a workspace member. Either set `notification.slack.invites.useConnect: true` (default) to auto-Connect, or run `km slack invite --external` afterward. |
 | `km slack manifest` says "run km slack init first" | SSM `{prefix}/slack/bridge-url` is unset. Run `km init` once first. |
 | Manifest pasted into Slack admin but app rejected | Confirm the JSON is valid (`python3 -m json.tool`). Confirm `display_information.name` ≤ 35 chars. |
 | `km slack invite` against private channel returns `not_in_channel` | Bot was kicked or never joined. The command auto-joins; if it still fails, manually `/invite @KlankerMaker` from Slack first. |
@@ -1699,27 +1721,29 @@ lets operators override the smart per-mode default in either direction.
 |------|---------|------------------------|-----|
 | 1 | Shared (e.g. `#km-notifications`) | `true` | Reduce noise in multi-participant corporate channels |
 | 2 | Per-sandbox `#sb-{id}` | `false` | Bot is the primary participant; every message is relevant |
-| 3 | Operator override (`notifySlackChannelOverride`) | `true` | Operator controls the channel; assume shared context |
+| 3 | Operator override (`notification.slack.channelOverride`) | `true` | Operator controls the channel; assume shared context |
 
-The effective value is: `notifySlackInboundMentionOnly` (if explicitly set) else the mode
-default above.
+The effective value is: `notification.slack.inbound.mentionOnly` (if explicitly set) else the
+mode default above.
 
 ### Profile field reference
 
 ```yaml
 spec:
-  cli:
-    notifySlackEnabled: true
-    # Tri-state *bool: nil = use mode default (table above), true = force polite, false = force chatty.
-    # Omit the field entirely to accept the per-mode smart default (recommended).
-    notifySlackInboundMentionOnly: true
+  notification:
+    slack:
+      enabled: true
+      inbound:
+        # Tri-state *bool: nil = use mode default (table above), true = force polite, false = force chatty.
+        # Omit the field entirely to accept the per-mode smart default (recommended).
+        mentionOnly: true
 ```
 
-Field: `spec.cli.notifySlackInboundMentionOnly` (`*bool`, optional). Sibling of
-`notifySlackEnabled`, `notifySlackPerSandbox`, `notifySlackChannelOverride` (introduced
-Phase 72). Validation: any bool is accepted; no semantic error for Mode 2 + `true` (the
-operator is intentionally making a per-sandbox channel polite, e.g. multiple operators sharing
-one sandbox).
+Field: `spec.notification.slack.inbound.mentionOnly` (`*bool`, optional). Sibling of
+`notification.slack.enabled`, `notification.slack.perSandbox`,
+`notification.slack.channelOverride`. Validation: any bool is accepted; no semantic error for
+Mode 2 + `true` (the operator is intentionally making a per-sandbox channel polite, e.g.
+multiple operators sharing one sandbox).
 
 ### Operator override examples
 
@@ -1727,10 +1751,11 @@ one sandbox).
 
 ```yaml
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    # mention_only: nil → Mode 2 default false → every-message behaviour
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
+      # inbound.mentionOnly: nil → Mode 2 default false → every-message behaviour
 ```
 
 **Force polite in a per-sandbox channel (rare — useful when multiple operators share a
@@ -1738,30 +1763,35 @@ sandbox and want to reduce chatter):**
 
 ```yaml
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundMentionOnly: true   # override Mode 2 default
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
+      inbound:
+        mentionOnly: true   # override Mode 2 default
 ```
 
 **Force chatty in a shared channel (testing / single-operator installs only):**
 
 ```yaml
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackChannelOverride: "#km-test-${KM_RESOURCE_PREFIX}"
-    notifySlackInboundMentionOnly: false  # override Mode 3 default
+  notification:
+    slack:
+      enabled: true
+      channelOverride: "#km-test-${KM_RESOURCE_PREFIX}"
+      inbound:
+        mentionOnly: false  # override Mode 3 default
 ```
 
 **Polite-mode on an operator-override channel (Mode 3, accepting the default):**
 
 ```yaml
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackChannelOverride: "#km-notifications"
-    # mention_only: nil → Mode 3 default true → polite-bot behaviour
+  notification:
+    slack:
+      enabled: true
+      channelOverride: "#km-notifications"
+      # inbound.mentionOnly: nil → Mode 3 default true → polite-bot behaviour
 ```
 
 ### Bridge env vars
@@ -1798,7 +1828,7 @@ not yet written) silently skips with an `[info]` line; the terragrunt fallback (
 and the bridge falls back to a runtime `auth.test` call on cold-start, which still works but
 is slower.
 
-**Per-profile override** (`notifySlackInboundMentionOnly`) still wins over the install default
+**Per-profile override** (`notification.slack.inbound.mentionOnly`) still wins over the install default
 at sandbox-create time — profiles can flip polite/chatty per sandbox.
 
 ### `km doctor` check: `slack_bot_user_id_cached`
@@ -1879,7 +1909,7 @@ Resolution: `km slack init --force` populates SSM; re-run `km init --dry-run=fal
 the value into the Lambda env block; `km doctor` then shows the check as `✓ OK`.
 
 `KM_SLACK_MENTION_ONLY` is install-level: it controls the Lambda default for sandboxes that
-don't set `notifySlackInboundMentionOnly` explicitly. Setting it to `"true"` makes
+don't set `notification.slack.inbound.mentionOnly` explicitly. Setting it to `"true"` makes
 Mode 1/3 channels polite and leaves Mode 2 (`#sb-{id}`) every-message unless the profile
 forces otherwise.
 
@@ -1901,9 +1931,9 @@ requires `km init --dry-run=false`, not `km init --sidecars`.
 | Bot ignores a thread reply (no @-mention) when the bot is already engaged in that thread | **Phase 91.3** added bypass for this case. If you upgraded to Phase 91 but not Phase 91.3 (km v0.3.772+), the @-mention is still required on every reply. Upgrade `km` and re-run `km init --dry-run=false`. |
 | Bot 👀-reacts to unrelated thread chatter in a shared channel | **Phase 91.3** thread-bypass keys on (channel, thread\_ts) — once the bot dispatches a turn in a thread, EVERY subsequent reply in that thread routes to the sandbox. If the thread root was a non-bot conversation that the bot was mistakenly mentioned in once, the entire thread is now bot-owned. Slack-side fix: start a new top-level thread. |
 | Want the bot to skip 👀 on thread replies (acknowledge top-level engagement only) | **Phase 91.4 (km v0.3.773+).** Set `slack.react_always: false` in `km-config.yaml`, run `km init --dry-run=false`. Top-level messages still get 👀 to signal "I saw you"; thread replies dispatch silently. |
-| Want some sandboxes chatty and others first-only | **Phase 91.5 (km v0.3.776+).** Set `cli.notifySlackInboundReactAlways: true \| false` per profile. `km create` writes `slack_react_always` to the sandbox's `km-sandboxes` row and the bridge prefers the per-sandbox value over `slack.react_always` in `km-config.yaml`. Profile field omitted → install default applies. Existing sandboxes need `km destroy --remote --yes && km create` to pick up profile changes. |
+| Want some sandboxes chatty and others first-only | **Phase 91.5 (km v0.3.776+).** Set `notification.slack.inbound.reactAlways: true \| false` per profile. `km create` writes `slack_react_always` to the sandbox's `km-sandboxes` row and the bridge prefers the per-sandbox value over `slack.react_always` in `km-config.yaml`. Profile field omitted → install default applies. Existing sandboxes need `km destroy --remote --yes && km create` to pick up profile changes. |
 | Mention-scan never fires; cold-start is slow | `KM_SLACK_BOT_USER_ID` is empty in Lambda env. Confirm `km slack init` has been run (writes SSM) — `km init` auto-reads SSM on next apply. |
-| Mode 2 (`#sb-{id}`) channel is polite when it should be chatty | Profile has `notifySlackInboundMentionOnly: true` set explicitly. Remove the field to restore the Mode 2 every-message default. |
+| Mode 2 (`#sb-{id}`) channel is polite when it should be chatty | Profile has `notification.slack.inbound.mentionOnly: true` set explicitly. Remove the field to restore the Mode 2 every-message default. |
 | `km init --sidecars` doesn't change the polite/chatty behaviour | Expected: `--sidecars` only rebuilds km + sidecar binaries and forces a Lambda cold-start. The Lambda environment block (where `KM_SLACK_MENTION_ONLY` lives) only updates on full terragrunt apply: `km init --dry-run=false`. |
 
 ### Out of scope

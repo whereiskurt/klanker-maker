@@ -419,7 +419,7 @@ func parseVSCodeStatus(out, sandboxID string) error {
 
 	switch {
 	case !sshdActive && !authkeysPresent:
-		return fmt.Errorf("VS Code not enabled in this sandbox's profile (set spec.cli.vscodeEnabled: true and recreate the sandbox)")
+		return fmt.Errorf("VS Code not enabled in this sandbox's profile (set spec.runtime.vscode.enabled: true and recreate the sandbox)")
 	case !authkeysPresent:
 		return fmt.Errorf("unexpected state: sshd is running but /home/sandbox/.ssh/authorized_keys is absent — recreate the sandbox")
 	case !sshdActive:

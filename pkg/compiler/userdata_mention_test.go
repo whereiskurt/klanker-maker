@@ -9,8 +9,28 @@ import (
 // boolPtr is a test helper that returns a pointer to the given bool.
 func boolPtr(b bool) *bool { return &b }
 
+// intPtr is a test helper that returns a pointer to the given int.
+func intPtr(i int) *int { return &i }
+
+// mentionProfile builds a SandboxProfile whose notification.slack block encodes
+// the given (perSandbox, channelOverride, mentionOnly) mode. Phase 92: the
+// mention-only resolution moved off cli.* onto notification.slack.*; the
+// resolver now takes a *profile.SandboxProfile.
+func mentionProfile(perSandbox bool, channelOverride string, mentionOnly *bool) *profile.SandboxProfile {
+	p := baseProfile()
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			PerSandbox:      boolPtr(perSandbox),
+			ChannelOverride: channelOverride,
+			Inbound:         &profile.NotificationSlackInboundSpec{MentionOnly: mentionOnly},
+		},
+	}
+	return p
+}
+
 // TestResolveMentionOnly exercises the 9-case (Mode × override) truth table for
-// resolveMentionOnly(*profile.CLISpec) plus the nil-cli defensive edge.
+// resolveMentionOnly(*profile.SandboxProfile) plus the nil-notification defensive edge.
 //
 // Truth table (Mode 1=shared, Mode 2=per-sandbox, Mode 3=channel-override):
 //
@@ -23,117 +43,42 @@ func boolPtr(b bool) *bool { return &b }
 //	Mode 3 (channel-override):override nil   → true  (polite)
 //	Mode 3 (channel-override):override &true → true  (forced polite)
 //	Mode 3 (channel-override):override &false→ false (forced chatty)
-//	nil cli:                               → false (defensive)
+//	nil notification:                       → true (shared-mode default)
 func TestResolveMentionOnly(t *testing.T) {
 	tests := []struct {
 		name           string
-		cli            *profile.CLISpec
+		profile        *profile.SandboxProfile
 		expectedResult bool
 	}{
-		// Mode 1: shared channel (NotifySlackPerSandbox=false, ChannelOverride="")
-		{
-			name: "Mode1_shared_override_nil_want_true",
-			cli: &profile.CLISpec{
-				NotifySlackPerSandbox:         false,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  nil,
-			},
-			expectedResult: true,
-		},
-		{
-			name: "Mode1_shared_override_true_want_true",
-			cli: &profile.CLISpec{
-				NotifySlackPerSandbox:         false,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  boolPtr(true),
-			},
-			expectedResult: true,
-		},
-		{
-			name: "Mode1_shared_override_false_want_false",
-			cli: &profile.CLISpec{
-				NotifySlackPerSandbox:         false,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  boolPtr(false),
-			},
-			expectedResult: false,
-		},
-		// Mode 2: per-sandbox (NotifySlackPerSandbox=true, ChannelOverride="")
-		{
-			name: "Mode2_perSandbox_override_nil_want_false",
-			cli: &profile.CLISpec{
-				NotifySlackPerSandbox:         true,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  nil,
-			},
-			expectedResult: false,
-		},
-		{
-			name: "Mode2_perSandbox_override_true_want_true",
-			cli: &profile.CLISpec{
-				NotifySlackPerSandbox:         true,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  boolPtr(true),
-			},
-			expectedResult: true,
-		},
-		{
-			name: "Mode2_perSandbox_override_false_want_false",
-			cli: &profile.CLISpec{
-				NotifySlackPerSandbox:         true,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  boolPtr(false),
-			},
-			expectedResult: false,
-		},
-		// Mode 3: channel-override (NotifySlackPerSandbox=false, ChannelOverride="C123ABC")
-		{
-			name: "Mode3_channelOverride_override_nil_want_true",
-			cli: &profile.CLISpec{
-				NotifySlackPerSandbox:         false,
-				NotifySlackChannelOverride:     "C123ABC",
-				NotifySlackInboundMentionOnly:  nil,
-			},
-			expectedResult: true,
-		},
-		{
-			name: "Mode3_channelOverride_override_true_want_true",
-			cli: &profile.CLISpec{
-				NotifySlackPerSandbox:         false,
-				NotifySlackChannelOverride:     "C123ABC",
-				NotifySlackInboundMentionOnly:  boolPtr(true),
-			},
-			expectedResult: true,
-		},
-		{
-			name: "Mode3_channelOverride_override_false_want_false",
-			cli: &profile.CLISpec{
-				NotifySlackPerSandbox:         false,
-				NotifySlackChannelOverride:     "C123ABC",
-				NotifySlackInboundMentionOnly:  boolPtr(false),
-			},
-			expectedResult: false,
-		},
-		// Edge: nil cli → defensive false
-		{
-			name:           "nilCLI_want_false",
-			cli:            nil,
-			expectedResult: false,
-		},
+		// Mode 1: shared channel (perSandbox=false, channelOverride="")
+		{"Mode1_shared_override_nil_want_true", mentionProfile(false, "", nil), true},
+		{"Mode1_shared_override_true_want_true", mentionProfile(false, "", boolPtr(true)), true},
+		{"Mode1_shared_override_false_want_false", mentionProfile(false, "", boolPtr(false)), false},
+		// Mode 2: per-sandbox (perSandbox=true, channelOverride="")
+		{"Mode2_perSandbox_override_nil_want_false", mentionProfile(true, "", nil), false},
+		{"Mode2_perSandbox_override_true_want_true", mentionProfile(true, "", boolPtr(true)), true},
+		{"Mode2_perSandbox_override_false_want_false", mentionProfile(true, "", boolPtr(false)), false},
+		// Mode 3: channel-override (perSandbox=false, channelOverride="C123ABC")
+		{"Mode3_channelOverride_override_nil_want_true", mentionProfile(false, "C123ABC", nil), true},
+		{"Mode3_channelOverride_override_true_want_true", mentionProfile(false, "C123ABC", boolPtr(true)), true},
+		{"Mode3_channelOverride_override_false_want_false", mentionProfile(false, "C123ABC", boolPtr(false)), false},
+		// Edge: nil notification → shared-mode default true
+		{"nilNotification_want_true", baseProfile(), true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := resolveMentionOnly(tc.cli)
+			got := resolveMentionOnly(tc.profile)
 			if got != tc.expectedResult {
-				t.Errorf("resolveMentionOnly(%+v) = %v, want %v", tc.cli, got, tc.expectedResult)
+				t.Errorf("resolveMentionOnly(%s) = %v, want %v", tc.name, got, tc.expectedResult)
 			}
 		})
 	}
 }
 
 // TestMentionOnlyCompiler verifies that KM_SLACK_MENTION_ONLY is emitted into the
-// generated userdata when NotifySlackEnabled=&true, and absent when Slack is disabled.
+// generated userdata when notification.slack.enabled=&true, and absent when Slack
+// is disabled.
 //
 // Sampled cases (full 9-case coverage is in TestResolveMentionOnly):
 //   - Mode 1 shared, Slack enabled, override nil → value "true"
@@ -142,76 +87,37 @@ func TestResolveMentionOnly(t *testing.T) {
 //   - Slack disabled (nil) → KEY ABSENT
 //   - Slack explicitly false → KEY ABSENT
 func TestMentionOnlyCompiler(t *testing.T) {
-	trueVal := true
-	falseVal := false
+	// slackProfile builds a profile with notification.slack.{enabled,perSandbox,
+	// inbound.mentionOnly} for the compiler-level assertion.
+	slackProfile := func(enabled *bool, perSandbox bool, mentionOnly *bool) *profile.SandboxProfile {
+		p := baseProfile()
+		p.Spec.CLI = &profile.CLISpec{}
+		p.Spec.Notification = &profile.NotificationSpec{
+			Slack: &profile.NotificationSlackSpec{
+				Enabled:    enabled,
+				PerSandbox: boolPtr(perSandbox),
+				Inbound:    &profile.NotificationSlackInboundSpec{MentionOnly: mentionOnly},
+			},
+		}
+		return p
+	}
 
 	tests := []struct {
 		name        string
-		cli         *profile.CLISpec
+		profile     *profile.SandboxProfile
 		wantPresent bool
 		wantValue   string // only checked when wantPresent=true
 	}{
-		{
-			name: "Mode1_shared_slackEnabled_overrideNil_want_true",
-			cli: &profile.CLISpec{
-				NotifySlackEnabled:            &trueVal,
-				NotifySlackPerSandbox:         false,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  nil,
-			},
-			wantPresent: true,
-			wantValue:   "true",
-		},
-		{
-			name: "Mode2_perSandbox_slackEnabled_overrideNil_want_false",
-			cli: &profile.CLISpec{
-				NotifySlackEnabled:            &trueVal,
-				NotifySlackPerSandbox:         true,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  nil,
-			},
-			wantPresent: true,
-			wantValue:   "false",
-		},
-		{
-			name: "Mode2_perSandbox_slackEnabled_overrideTrue_want_true",
-			cli: &profile.CLISpec{
-				NotifySlackEnabled:            &trueVal,
-				NotifySlackPerSandbox:         true,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  boolPtr(true),
-			},
-			wantPresent: true,
-			wantValue:   "true",
-		},
-		{
-			name: "slackEnabledNil_keyAbsent",
-			cli: &profile.CLISpec{
-				NotifySlackEnabled:            nil,
-				NotifySlackPerSandbox:         false,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  nil,
-			},
-			wantPresent: false,
-		},
-		{
-			name: "slackEnabledFalse_keyAbsent",
-			cli: &profile.CLISpec{
-				NotifySlackEnabled:            &falseVal,
-				NotifySlackPerSandbox:         false,
-				NotifySlackChannelOverride:     "",
-				NotifySlackInboundMentionOnly:  nil,
-			},
-			wantPresent: false,
-		},
+		{"Mode1_shared_slackEnabled_overrideNil_want_true", slackProfile(boolPtr(true), false, nil), true, "true"},
+		{"Mode2_perSandbox_slackEnabled_overrideNil_want_false", slackProfile(boolPtr(true), true, nil), true, "false"},
+		{"Mode2_perSandbox_slackEnabled_overrideTrue_want_true", slackProfile(boolPtr(true), true, boolPtr(true)), true, "true"},
+		{"slackEnabledNil_keyAbsent", slackProfile(nil, false, nil), false, ""},
+		{"slackEnabledFalse_keyAbsent", slackProfile(boolPtr(false), false, nil), false, ""},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p := baseProfile()
-			p.Spec.CLI = tc.cli
-
-			ud, err := generateUserData(p, "sb-mention-test", nil, "my-bucket", false, nil)
+			ud, err := generateUserData(tc.profile, "sb-mention-test", nil, "my-bucket", false, nil)
 			if err != nil {
 				t.Fatalf("generateUserData: %v", err)
 			}
@@ -273,21 +179,32 @@ func extractSlackLines(ud string) string {
 
 // TestResolveReactAlways — Phase 91.4 resolver. Symmetric with TestResolveMentionOnly
 // but simpler: explicit override wins; nil default = true (chatty-reactor).
+// Phase 92: re-homed to notification.slack.inbound.reactAlways.
 func TestResolveReactAlways(t *testing.T) {
-	boolPtr := func(b bool) *bool { return &b }
+	// reactProfile builds a profile with notification.slack.inbound.reactAlways set.
+	reactProfile := func(reactAlways *bool) *profile.SandboxProfile {
+		p := baseProfile()
+		p.Spec.CLI = &profile.CLISpec{}
+		p.Spec.Notification = &profile.NotificationSpec{
+			Slack: &profile.NotificationSlackSpec{
+				Inbound: &profile.NotificationSlackInboundSpec{ReactAlways: reactAlways},
+			},
+		}
+		return p
+	}
 	tests := []struct {
-		name string
-		cli  *profile.CLISpec
-		want bool
+		name    string
+		profile *profile.SandboxProfile
+		want    bool
 	}{
-		{"nil cli → true (defensive)", nil, true},
-		{"override nil → true (chatty default)", &profile.CLISpec{}, true},
-		{"override &true → true", &profile.CLISpec{NotifySlackInboundReactAlways: boolPtr(true)}, true},
-		{"override &false → false (first-only)", &profile.CLISpec{NotifySlackInboundReactAlways: boolPtr(false)}, false},
+		{"nil notification → true (defensive)", baseProfile(), true},
+		{"override nil → true (chatty default)", reactProfile(nil), true},
+		{"override &true → true", reactProfile(boolPtr(true)), true},
+		{"override &false → false (first-only)", reactProfile(boolPtr(false)), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := resolveReactAlways(tc.cli); got != tc.want {
+			if got := resolveReactAlways(tc.profile); got != tc.want {
 				t.Errorf("got %v want %v", got, tc.want)
 			}
 		})

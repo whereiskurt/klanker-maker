@@ -42,7 +42,7 @@ func (r *Recorder) Generate(base string) (*profile.SandboxProfile, error) {
 	}
 
 	p := &profile.SandboxProfile{
-		APIVersion: "klankermaker.ai/v1alpha1",
+		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Metadata: profile.Metadata{
 			Name: "observed-" + time.Now().Format("20060102-150405"),
@@ -72,10 +72,9 @@ func (r *Recorder) Generate(base string) (*profile.SandboxProfile, error) {
 					AllowedHosts:       remainingHosts,
 				},
 			},
-			Identity: profile.IdentitySpec{
+			IAM: profile.IAMSpec{
 				RoleSessionDuration: "1h",
 				AllowedRegions:      []string{"us-east-1"},
-				SessionPolicy:       "minimal",
 			},
 			Sidecars: profile.SidecarsSpec{
 				DNSProxy:  profile.SidecarConfig{Enabled: true, Image: "km-dns-proxy:latest"},
@@ -92,10 +91,6 @@ func (r *Recorder) Generate(base string) (*profile.SandboxProfile, error) {
 					Destination: "cloudwatch",
 					LogGroup:    "/klanker-maker/network",
 				},
-			},
-			Agent: profile.AgentSpec{
-				MaxConcurrentTasks: 1,
-				TaskTimeout:        "30m",
 			},
 		},
 	}

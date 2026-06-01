@@ -587,7 +587,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Disabled (non-fatal skip) when profile does not set notifySlackEnabled.
 	var slackChannelID string
 	var slackPerSandbox bool
-	if resolvedProfile.Spec.CLI != nil && resolvedProfile.Spec.CLI.NotifySlackEnabled != nil && *resolvedProfile.Spec.CLI.NotifySlackEnabled {
+	if sl := notificationSlack(resolvedProfile); sl != nil && sl.Enabled != nil && *sl.Enabled {
 		ssmClientForSlack := ssm.NewFromConfig(awsCfg)
 		ssmStore := &productionSSMParamStore{client: ssmClientForSlack}
 		botToken, _ := ssmStore.Get(ctx, cfg.GetSsmPrefix()+"slack/bot-token", true)
@@ -607,7 +607,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		// operator BEFORE terragrunt apply runs, so they can abort if the
 		// audience is wider than expected. Non-blocking: ChannelInfo failures
 		// degrade gracefully to "Audience: unknown" rather than aborting create.
-		if resolvedProfile.Spec.CLI.NotifySlackTranscriptEnabled && slackChannelID != "" {
+		if sl := notificationSlack(resolvedProfile); sl != nil && sl.Transcript != nil &&
+			sl.Transcript.Enabled != nil && *sl.Transcript.Enabled && slackChannelID != "" {
 			printTranscriptWarning(ctx, slackClient, slackChannelID)
 		}
 	}
@@ -617,7 +618,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// reuse the operator-generated pubkey rather than regenerating one in a read-only
 	// Lambda filesystem with no $HOME. This guarantees the operator's private key
 	// matches the sandbox's authorized_keys.
-	if profile.IsVSCodeEnabled(resolvedProfile.Spec.CLI) {
+	if profile.IsVSCodeEnabled(runtimeVSCode(resolvedProfile)) {
 		if envPub := os.Getenv("KM_VSCODE_SSH_PUBKEY"); envPub != "" {
 			network.VSCodeSSHPubKey = envPub
 			fmt.Fprintln(os.Stderr, "  ✓ VS Code keypair received from operator (KM_VSCODE_SSH_PUBKEY)")
@@ -892,8 +893,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		// SlackArchiveOnDestroy: persist *bool from profile so km destroy (Plan 63-09) is
 		// self-contained and does not need to re-read the original profile YAML at teardown time.
 		// nil round-trips as nil through DynamoDB (omitempty on marshal).
-		if resolvedProfile.Spec.CLI != nil {
-			meta.SlackArchiveOnDestroy = resolvedProfile.Spec.CLI.SlackArchiveOnDestroy
+		if sl := notificationSlack(resolvedProfile); sl != nil {
+			meta.SlackArchiveOnDestroy = sl.ArchiveOnDestroy
 		}
 		if len(clonedFromOverride) > 0 && clonedFromOverride[0] != "" {
 			meta.ClonedFrom = clonedFromOverride[0]
@@ -1027,7 +1028,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// instance ID is available for the SSM SendCommand env injection.
 	// FATAL: failure rolls back the queue AND archives the Slack channel — km create
 	// aborts (contrast with Step 11d which is non-fatal).
-	if resolvedProfile.Spec.CLI != nil && resolvedProfile.Spec.CLI.NotifySlackInboundEnabled {
+	if in := notificationSlackInbound(resolvedProfile); in != nil && in.Enabled != nil && *in.Enabled {
 		sandboxDynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
 		step11eTableName := cfg.GetSandboxTableName()
 
@@ -2057,7 +2058,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	// before remote compile. The pubkey is embedded into the userdata template at
 	// boot (Plan 73-04). Mirrors runCreate Step 6d so --remote and --local both
 	// produce identical authorized_keys content.
-	if profile.IsVSCodeEnabled(resolvedProfile.Spec.CLI) {
+	if profile.IsVSCodeEnabled(runtimeVSCode(resolvedProfile)) {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("locate home directory for vscode keypair: %w", err)

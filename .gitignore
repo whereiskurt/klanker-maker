@@ -25,6 +25,9 @@ infra/live/network/
 build/
 bin/
 
+# GoReleaser output (cross-platform release archives + bundled tool staging)
+dist/
+
 # Compiled binaries
 /km
 /dns-proxy

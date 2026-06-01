@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 14
+current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: "Completed 91-06-PLAN.md tasks 1-3; Task 4 (UAT) at checkpoint:human-verify"
-last_updated: "2026-05-30T22:58:24.332Z"
-last_activity: 2026-05-30
+stopped_at: Completed 92-05-PLAN.md (agent synthesizers + 11 fixture rewrites + VC-3 reconciliation + docs; VC-1/VC-3/VC-5/VC-11 GREEN)
+last_updated: "2026-05-31T23:18:54.445Z"
+last_activity: 2026-05-31
 progress:
   total_phases: 107
   completed_phases: 95
-  total_plans: 459
-  completed_plans: 423
-  percent: 88
+  total_plans: 466
+  completed_plans: 429
+  percent: 91
 ---
 
 # Project State
@@ -22,20 +22,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-21)
 
 **Core value:** A sandbox is a declarative policy object that compiles into a controlled, auditable execution environment
-**Current focus:** Phase 91 — Slack inbound @-mention-only (polite-bot) — 91-06 at UAT checkpoint
+**Current focus:** Phase 92 — Profile spec restructure (IAM rename / notification block / dead-field removal / structured agent tool gating) — Wave 0 (92-00) complete
 
 ## Current Position
 
-Phase: 91 (slack-inbound-mention-only-mode / polite-bot) — plans 91-00 → 91-06 complete on disk
-Plan: 91-06 — tasks 1–3 done; Task 4 (UAT) at checkpoint:human-verify
-Total Plans in Phase: 7 (91-00 → 91-06)
-Current Plan: 14
+Phase: 92 (profile-spec-restructure) — 7 plans planned (92-00 → 92-06); Wave 0 (92-00) executed
+Plan: 92-00 — all 3 tasks done; pre-Phase-92 byte-identity baselines captured, 4 RED stubs landed behind wave build tags
+Total Plans in Phase: 7 (92-00 → 92-06)
+Current Plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 Status: in-progress
-Last activity: 2026-05-30
+Last activity: 2026-05-31
 
-Next up: Phase 92 (profile-spec-restructure) — 7 plans planned (92-00 → 92-06), not yet executed
+Wave 1 UNBLOCKED: both byte-identity baselines (userdata + IAM HCL) committed before any Wave 1 source change.
 
-Progress: [█████████░] 88%
+Next up: Phase 92 Wave 1 (92-01) — IdentitySpec → IAMSpec rename; must keep TestIAMHCLPhase92ByteIdentity + TestUserdataLearnV2Phase92ByteIdentity GREEN.
+
+Progress: [█████████░] 91%
 
 ## Performance Metrics
 
@@ -454,6 +456,12 @@ Progress: [█████████░] 88%
 | Phase 91 P03 | 20min | 3 tasks | 9 files |
 | Phase 91 P05 | 12min | 2 tasks | 3 files |
 | Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot P06 | 3min | 3 tasks | 3 files |
+| Phase 92 P00 | 4min | 3 tasks | 8 files |
+| Phase 92 P01 | 30min | 3 tasks | 78 files |
+| Phase 92 P02 | 12min | 3 tasks | 11 files |
+| Phase 92 P03 | 55min | 4 tasks | 36 files |
+| Phase 92 P04 | 20min | 4 tasks | 24 files |
+| Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating P05 | 24min | 4 tasks | 24 files |
 
 ## Accumulated Context
 
@@ -1313,6 +1321,18 @@ Recent decisions affecting current work:
 - [Phase 91]: anyProfileMentionOnly gates checkSlackBotUserIDCached registration so SKIPPED is returned when no local profile activates mention-only
 - [Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot]: Phase 91 docs follow Phase 72 structural template: per-mode table + field ref + examples + env vars + doctor + rollout + troubleshooting
 - [Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot]: OPERATOR-GUIDE.md gained a new ## Slack notifications top-level section (was absent); mention-only subsection placed before SOPS section
+- [Phase 92]: Phase 92 Wave 0: byte-identity goldens (learn.v2 userdata + IAM HCL) captured from pre-change main; Wave 1 IAM rename must keep both GREEN
+- [Phase 92]: RED stubs gated by per-wave build tags (phase92_wave2/4/5) so default go test stays green while each wave has a compile-failing target
+- [Phase 92]: Phase 92 Wave 1: spec.identity → spec.iam, dead spec.agent/sessionPolicy removed, iam.allowedSecretPaths schema drift closed, apiVersion bumped v1alpha1 → v1alpha2 (STRICT)
+- [Phase 92]: 92-02: spec.notification block replaces 14 cli.notify* fields; typed mergeNotificationSpec fixes pointer-merge inheritance bug (VC-7)
+- [Phase 92]: 92-02: kept cli.notifySlackInboundReactAlways (15th notify field) on CLISpec — no target home in NotificationSlackInboundSpec; Wave 3 to resolve
+- [Phase 92]: Re-homed notifySlackInboundReactAlways off CLISpec into notification.slack.inbound.reactAlways (Wave-2 deferred item closed); CLISpec now exactly NoBedrock/Agent/ClaudeArgs/CodexArgs
+- [Phase 92]: NotifyEnv emission outer gate kept at Spec.CLI != nil (KM_AGENT still reads cli.Agent / Wave 4) so learn.v2 userdata stays byte-identical (VC-3)
+- [Phase 92]: 92-04: agent.claude.permissions is the only untyped passthrough (map[string]any / additionalProperties:true) per CONTEXT.md locked decision; everything else typed aggressively
+- [Phase 92]: 92-04: KM_AGENT keeps its Spec.CLI!=nil emission gate but sources value from agentDefault(p)=spec.agent.default; VC-3 byte-identity holds because learn.v2 carries both cli: and agent: blocks
+- [Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating]: Claude settings.json synthesizer emits canonical permissions.allow/deny (Wave 0 Option B), not legacy autoApprove/disallowedTools; passthrough merges into permissions object with typed allow/deny winning on collision.
+- [Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating]: VC-3 byte-identity reconciled: strict byte-identity for userdata outside the Claude settings.json blob + proven semantic equivalence (same tool set/trustedDirectories/hooks) for the blob, since canonical permissions.allow intentionally replaces legacy autoApprove. Baseline golden NOT regenerated.
+- [Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating]: Codex config.toml is synthesized (synthesizeCodexConfig) byte-identical to the Phase 70 heredoc and kept in its early userdata slot, preserving codex.yaml initCommands override and the byte-identity contract.
 
 ### Roadmap Evolution
 
@@ -1430,6 +1450,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-30T22:58:24.324Z
-Stopped at: Completed 91-06-PLAN.md tasks 1-3; Task 4 (UAT) at checkpoint:human-verify
+Last session: 2026-05-31T23:18:54.436Z
+Stopped at: Completed 92-05-PLAN.md (agent synthesizers + 11 fixture rewrites + VC-3 reconciliation + docs; VC-1/VC-3/VC-5/VC-11 GREEN)
 Resume file: None

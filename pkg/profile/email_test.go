@@ -10,7 +10,7 @@ import (
 // minimalProfileYAML returns a base valid profile YAML without spec.email,
 // used to compose test cases that add the email section.
 func minimalProfileWithEmailYAML(email string) string {
-	return `apiVersion: klankermaker.ai/v1alpha1
+	return `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: email-test
@@ -33,10 +33,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -56,9 +55,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 ` + email
 }
 

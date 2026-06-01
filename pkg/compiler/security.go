@@ -41,20 +41,20 @@ func compileSGRules(p *profile.SandboxProfile) []SGRule {
 	return rules
 }
 
-// compileIAMPolicy parses the profile's identity spec and returns an IAMSessionPolicy.
+// compileIAMPolicy parses the profile's iam spec and returns an IAMSessionPolicy.
 // roleSessionDuration is parsed as a Go duration string (e.g. "1h", "2h30m").
 // Default is 3600 seconds (1 hour) if not set or unparseable.
 func compileIAMPolicy(p *profile.SandboxProfile) *IAMSessionPolicy {
 	maxDuration := 3600 // default 1 hour
 
-	if d := p.Spec.Identity.RoleSessionDuration; d != "" {
+	if d := p.Spec.IAM.RoleSessionDuration; d != "" {
 		if parsed, err := time.ParseDuration(d); err == nil {
 			maxDuration = int(parsed.Seconds())
 		}
 	}
 
-	regions := make([]string, len(p.Spec.Identity.AllowedRegions))
-	copy(regions, p.Spec.Identity.AllowedRegions)
+	regions := make([]string, len(p.Spec.IAM.AllowedRegions))
+	copy(regions, p.Spec.IAM.AllowedRegions)
 
 	return &IAMSessionPolicy{
 		MaxSessionDuration: maxDuration,
@@ -63,7 +63,7 @@ func compileIAMPolicy(p *profile.SandboxProfile) *IAMSessionPolicy {
 }
 
 // compileSecrets builds the list of SSM parameter paths to inject at boot.
-// It reads identity.allowedSecretPaths from the profile.
+// It reads iam.allowedSecretPaths from the profile.
 // Note: The GitHub token is NOT injected via SecretPaths — it is stored per-sandbox
 // at /sandbox/{sandbox-id}/github-token and read at git-operation time by the
 // GIT_ASKPASS credential helper script installed in section 4 of userdata.go.
@@ -71,7 +71,7 @@ func compileSecrets(p *profile.SandboxProfile) []string {
 	var paths []string
 
 	// Add profile-defined secret paths
-	paths = append(paths, p.Spec.Identity.AllowedSecretPaths...)
+	paths = append(paths, p.Spec.IAM.AllowedSecretPaths...)
 
 	return paths
 }

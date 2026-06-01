@@ -364,7 +364,7 @@ func TestAMIList_UnusedFilter(t *testing.T) {
 	referencedAMI := makeImage("ami-0ref0000000", "referenced", "dev", "sb-bbbb2222", now.Add(-5*24*time.Hour), 10)
 
 	// Create a temp profile that references referencedAMI.
-	refProfile := fmt.Sprintf(`apiVersion: klankermaker.ai/v1alpha1
+	refProfile := fmt.Sprintf(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: dev
@@ -414,7 +414,7 @@ spec:
 // ============================================================
 
 func TestAMIDelete_RefuseWhenProfileReferences(t *testing.T) {
-	refProfile := `apiVersion: klankermaker.ai/v1alpha1
+	refProfile := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: dev
@@ -461,7 +461,7 @@ spec:
 // ============================================================
 
 func TestAMIDelete_ForceOverridesProfileRef(t *testing.T) {
-	refProfile := `apiVersion: klankermaker.ai/v1alpha1
+	refProfile := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: dev
@@ -792,7 +792,7 @@ func TestFindProfilesReferencingAMI(t *testing.T) {
 	targetAMI := "ami-0findme0000000"
 	otherAMI := "ami-0other0000000"
 
-	refProfile := fmt.Sprintf(`apiVersion: klankermaker.ai/v1alpha1
+	refProfile := fmt.Sprintf(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: dev
@@ -814,7 +814,7 @@ spec:
   agent: {}
 `, targetAMI)
 
-	otherProfile := fmt.Sprintf(`apiVersion: klankermaker.ai/v1alpha1
+	otherProfile := fmt.Sprintf(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: prod

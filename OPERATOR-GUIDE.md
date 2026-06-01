@@ -4,6 +4,20 @@ This guide covers the full first-time setup procedure for deploying Klanker Make
 AWS account prerequisites through deploying shared infrastructure and creating the first
 sandbox. Follow the sections in order.
 
+> **Profile spec change — Phase 92 (2026-05-31):** `spec.identity:` → `spec.iam:`.
+> `sessionPolicy:` removed. Dead top-level `spec.agent:` block removed. The schema
+> gained `iam.allowedSecretPaths` (Phase 89 drift fix). Profiles must now declare
+> `apiVersion: klankermaker.ai/v1alpha2` (`v1alpha1` is rejected).
+> **`spec.cli.notify*` moved under `spec.notification:`** (`notification.events.*`,
+> `notification.email.*`, `notification.slack.*` incl. `slack.inbound`,
+> `slack.transcript`, `slack.invites`). **`spec.cli.vscodeEnabled` →
+> `spec.runtime.vscode.enabled`.** Sandbox-side `KM_NOTIFY_*` / `KM_SLACK_*` env var
+> names are UNCHANGED — only the YAML surface moved. The
+> `notification.slack.invites.{emails,useConnect}` toggles replace the former
+> `cli.notifySlackInviteEmails` / `cli.useSlackConnect` operator runbook fields.
+> Validate the full built-in/profile inventory with
+> `bash scripts/validate-all-profiles.sh`.
+
 ---
 
 ## 1. Prerequisites
@@ -1220,10 +1234,12 @@ environment block is updated on `terragrunt apply` (full `km init`).
 
 ```yaml
 spec:
-  cli:
-    notifySlackEnabled: true
-    # Tri-state *bool: nil = mode default, true = force polite, false = force chatty
-    notifySlackInboundMentionOnly: true
+  notification:
+    slack:
+      enabled: true
+      inbound:
+        # Tri-state *bool: nil = mode default, true = force polite, false = force chatty
+        mentionOnly: true
 ```
 
 New `km doctor` check: `slack_bot_user_id_cached` — WARNs when at least one profile resolves

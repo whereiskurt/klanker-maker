@@ -434,9 +434,12 @@ func TestGitHubUserDataGITASKPASS(t *testing.T) {
 
 	ud := artifacts.UserData
 
-	// km-git-askpass script must read from /sandbox/${SANDBOX_ID}/github-token
-	if !strings.Contains(ud, "/sandbox/${SANDBOX_ID}/github-token") {
-		t.Errorf("GIT_ASKPASS script should read from /sandbox/$${SANDBOX_ID}/github-token\nGot:\n%s", ud)
+	// km-git-askpass reads the token from the per-sandbox SSM path. Phase 84.x made
+	// this prefix-aware and renders the sandbox id at compile time, so the path is
+	// {prefix}sandbox/{id}/github-token (e.g. /km/sandbox/sb-ghaskps1/github-token)
+	// rather than the old runtime ${SANDBOX_ID} form.
+	if !strings.Contains(ud, "sandbox/"+id+"/github-token") {
+		t.Errorf("GIT_ASKPASS script should read from {prefix}sandbox/%s/github-token\nGot:\n%s", id, ud)
 	}
 	// Script must handle Username prompt (echo x-access-token)
 	if !strings.Contains(ud, "x-access-token") {

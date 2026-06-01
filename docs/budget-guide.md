@@ -41,7 +41,7 @@ Each pool operates independently: a sandbox can exhaust its AI budget while comp
 Budget is configured under `spec.budget` in a SandboxProfile:
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: dev-with-budget
@@ -786,7 +786,7 @@ DynamoDB global tables use eventual consistency for cross-region replication, ty
 
 ### Adding Regions
 
-When a new region is added to `spec.identity.allowedRegions` across profiles, the global table must be extended:
+When a new region is added to `spec.iam.allowedRegions` across profiles, the global table must be extended:
 
 ```hcl
 # infra/modules/dynamodb-budget/v1.0.0/main.tf

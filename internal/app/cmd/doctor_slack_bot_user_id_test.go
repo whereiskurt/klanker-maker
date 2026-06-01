@@ -38,19 +38,21 @@ func TestAnyProfileMentionOnly(t *testing.T) {
 	t.Run("profile without notifySlackEnabled → false", func(t *testing.T) {
 		dir := writeProfile(t, `
 spec:
-  cli:
-    notifySlackEnabled: false
+  notification:
+    slack:
+      enabled: false
 `)
 		if anyProfileMentionOnly([]string{dir}) {
-			t.Error("expected false when notifySlackEnabled is false")
+			t.Error("expected false when notification.slack.enabled is false")
 		}
 	})
 
 	t.Run("shared channel (Mode 1) + notifySlackEnabled → true", func(t *testing.T) {
 		dir := writeProfile(t, `
 spec:
-  cli:
-    notifySlackEnabled: true
+  notification:
+    slack:
+      enabled: true
 `)
 		if !anyProfileMentionOnly([]string{dir}) {
 			t.Error("expected true for Mode 1 profile (shared, default mention-only)")
@@ -60,9 +62,10 @@ spec:
 	t.Run("per-sandbox (Mode 2) → false", func(t *testing.T) {
 		dir := writeProfile(t, `
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
 `)
 		if anyProfileMentionOnly([]string{dir}) {
 			t.Error("expected false for Mode 2 profile (per-sandbox, default every-message)")
@@ -72,10 +75,12 @@ spec:
 	t.Run("explicit mentionOnly: true on Mode 2 → true", func(t *testing.T) {
 		dir := writeProfile(t, `
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundMentionOnly: true
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
+      inbound:
+        mentionOnly: true
 `)
 		if !anyProfileMentionOnly([]string{dir}) {
 			t.Error("expected true when explicit override is true")
@@ -85,9 +90,11 @@ spec:
 	t.Run("explicit mentionOnly: false on Mode 1 → false", func(t *testing.T) {
 		dir := writeProfile(t, `
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackInboundMentionOnly: false
+  notification:
+    slack:
+      enabled: true
+      inbound:
+        mentionOnly: false
 `)
 		if anyProfileMentionOnly([]string{dir}) {
 			t.Error("expected false when explicit override is false")

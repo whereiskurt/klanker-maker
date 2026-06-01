@@ -13,7 +13,7 @@ import (
 // makeProfile builds a minimal SandboxProfile with the given rsyncPaths and rsyncFileList.
 func makeProfile(paths []string, fileList string) *profile.SandboxProfile {
 	return &profile.SandboxProfile{
-		APIVersion: "klankermaker.ai/v1alpha1",
+		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Spec: profile.Spec{
 			Execution: profile.ExecutionSpec{

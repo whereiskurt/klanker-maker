@@ -136,8 +136,8 @@ func TestGenerateYAML_Valid(t *testing.T) {
 	if err := unmarshalYAML(data, &p); err != nil {
 		t.Fatalf("GenerateYAML output could not be unmarshalled: %v\nYAML:\n%s", err, string(data))
 	}
-	if p.APIVersion != "klankermaker.ai/v1alpha1" {
-		t.Errorf("expected apiVersion klankermaker.ai/v1alpha1, got %q", p.APIVersion)
+	if p.APIVersion != "klankermaker.ai/v1alpha2" {
+		t.Errorf("expected apiVersion klankermaker.ai/v1alpha2, got %q", p.APIVersion)
 	}
 }
 

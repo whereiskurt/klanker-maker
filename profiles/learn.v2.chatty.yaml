@@ -1,4 +1,4 @@
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: learn-chatty
@@ -50,8 +50,6 @@ spec:
       CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
       OPENAI_API_KEY: ""
     configFiles:
-      "/home/sandbox/.claude/settings.json": |
-        {"trustedDirectories":["/home/sandbox","/workspace"],"autoApprove":["Bash","Read","Write","Edit","Glob","Grep","WebFetch","WebSearch","NotebookEdit"]}
       "/home/sandbox/.claude/plugins/known_marketplaces.json": |
         {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
 
@@ -110,11 +108,10 @@ spec:
       - /workspace
     maxSizeMB: 500
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
 
   sidecars:
     dnsProxy:
@@ -155,37 +152,55 @@ spec:
     allowedSenders:
       - "*"
 
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "30m"
-    allowedTools:
-      - bash
-      - read_file
-      - write_file
-      - list_files
-
   cli:
-    agent: claude
     ##Setting noBedrock calls the noBedrock() bash function call on loading and prevents accidentally Bedrock
     noBedrock: true
-    claudeArgs:
-      - "--dangerously-skip-permissions"
-    notifyOnIdle: false
-    notifyOnPermission: false
-    notifyEmailEnabled: false
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true
-    slackArchiveOnDestroy: false
-    # Phase 91 — Mode 2 (per-sandbox #sb-{id}) with explicit chatty override.
-    # Mode 2 default is `false` (chatty) — setting it explicitly to `false`
-    # here is functionally a no-op but documents the operator intent. This
-    # fixture exists to prove the `*bool` tri-state accepts the `false`
-    # variant through the schema/validator (POL-01/02/03).
-    notifySlackInboundMentionOnly: false
-    # Phase 72 — operator invite list. useSlackConnect: false to fail-soft
-    # skip any external addresses (avoids generating Slack Connect requests
-    # in testing). whereiskurt@gmail.com only.
-    useSlackConnect: false
-    notifySlackInviteEmails:
-      - whereiskurt@gmail.com
+
+  # Phase 92 (Wave 4) — agent/claudeArgs/codexArgs moved out of spec.cli into the
+  # structured spec.agent block. tools.* is populated in Wave 5.
+  agent:
+    default: claude
+    claude:
+      trustedDirectories:
+        - /home/sandbox
+        - /workspace
+      tools:
+        autoApprove:
+          - Bash
+          - Read
+          - Write
+          - Edit
+          - Glob
+          - Grep
+          - WebFetch
+          - WebSearch
+          - NotebookEdit
+      args:
+        - "--dangerously-skip-permissions"
+
+  # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
+  notification:
+    events:
+      onIdle: false
+      onPermission: false
+    email:
+      enabled: false
+    slack:
+      enabled: true
+      perSandbox: true
+      archiveOnDestroy: false
+      inbound:
+        enabled: true
+        # Phase 91 — Mode 2 (per-sandbox #sb-{id}) with explicit chatty override.
+        # Mode 2 default is `false` (chatty) — setting it explicitly to `false`
+        # here is functionally a no-op but documents the operator intent. This
+        # fixture exists to prove the `*bool` tri-state accepts the `false`
+        # variant through the schema/validator (POL-01/02/03).
+        mentionOnly: false
+      # Phase 72 — operator invite list. invites.useConnect: false to fail-soft
+      # skip any external addresses (avoids generating Slack Connect requests
+      # in testing). whereiskurt@gmail.com only.
+      invites:
+        useConnect: false
+        emails:
+          - whereiskurt@gmail.com

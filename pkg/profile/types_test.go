@@ -11,7 +11,7 @@ import (
 // TestArtifactsSpecParsesFromYAML verifies that ArtifactsSpec round-trips from YAML.
 func TestArtifactsSpecParsesFromYAML(t *testing.T) {
 	yamlData := `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: artifact-test
@@ -34,10 +34,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -57,9 +56,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   artifacts:
     paths:
       - "./output/**"
@@ -117,8 +113,8 @@ func TestParseValidProfile(t *testing.T) {
 		t.Fatalf("expected valid profile to parse without error, got: %v", err)
 	}
 
-	if p.APIVersion != "klankermaker.ai/v1alpha1" {
-		t.Errorf("expected apiVersion 'klankermaker.ai/v1alpha1', got '%s'", p.APIVersion)
+	if p.APIVersion != "klankermaker.ai/v1alpha2" {
+		t.Errorf("expected apiVersion 'klankermaker.ai/v1alpha2', got '%s'", p.APIVersion)
 	}
 	if p.Kind != "SandboxProfile" {
 		t.Errorf("expected kind 'SandboxProfile', got '%s'", p.Kind)
@@ -155,17 +151,14 @@ func TestParsePreservesAllSections(t *testing.T) {
 	if p.Spec.Network.Egress.AllowedDNSSuffixes == nil {
 		t.Error("expected spec.network.egress.allowedDNSSuffixes to be populated")
 	}
-	if p.Spec.Identity.RoleSessionDuration == "" {
-		t.Error("expected spec.identity.roleSessionDuration to be populated")
+	if p.Spec.IAM.RoleSessionDuration == "" {
+		t.Error("expected spec.iam.roleSessionDuration to be populated")
 	}
 	if p.Spec.Sidecars.DNSProxy.Enabled == false {
 		t.Error("expected spec.sidecars.dnsProxy.enabled to be true")
 	}
 	if p.Spec.Observability.CommandLog.Destination == "" {
 		t.Error("expected spec.observability.commandLog.destination to be populated")
-	}
-	if p.Spec.Agent.MaxConcurrentTasks == 0 {
-		t.Error("expected spec.agent.maxConcurrentTasks to be populated")
 	}
 }
 
@@ -209,7 +202,7 @@ func TestMetadataLabels(t *testing.T) {
 // compute and AI budget limits.
 func TestBudgetSpecParsesFromYAML(t *testing.T) {
 	yamlData := `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: budget-test
@@ -232,10 +225,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -255,9 +247,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   budget:
     compute:
       maxSpendUSD: 2.00
@@ -297,7 +286,7 @@ spec:
 // to zero when omitted (caller can treat zero as "use default 0.8").
 func TestBudgetSpecWarningThresholdDefault(t *testing.T) {
 	yamlData := `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: budget-threshold-default
@@ -320,10 +309,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -343,9 +331,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   budget:
     ai:
       maxSpendUSD: 10.00
@@ -371,7 +356,7 @@ spec:
 // TestRsyncPathsParsing verifies that rsyncPaths and rsyncFileList parse correctly
 // from YAML into ExecutionSpec fields.
 func TestRsyncPathsParsing(t *testing.T) {
-	baseYAML := `apiVersion: klankermaker.ai/v1alpha1
+	baseYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-test
@@ -394,10 +379,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -417,10 +401,7 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m`
-
+`
 	t.Run("rsyncPaths parses into slice", func(t *testing.T) {
 		yamlData := baseYAML + `
   execution:
@@ -431,7 +412,7 @@ spec:
       - "projects/*/config"
 `
 		// Re-parse using a full YAML that replaces the execution block
-		fullYAML := `apiVersion: klankermaker.ai/v1alpha1
+		fullYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-paths-test
@@ -457,10 +438,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -480,9 +460,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `
 		_ = yamlData
 		p, err := profile.Parse([]byte(fullYAML))
@@ -502,7 +479,7 @@ spec:
 	})
 
 	t.Run("rsyncFileList parses into string", func(t *testing.T) {
-		fullYAML := `apiVersion: klankermaker.ai/v1alpha1
+		fullYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-filelist-test
@@ -526,10 +503,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -549,9 +525,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `
 		p, err := profile.Parse([]byte(fullYAML))
 		if err != nil {
@@ -563,7 +536,7 @@ spec:
 	})
 
 	t.Run("no rsyncPaths or rsyncFileList is backward compatible", func(t *testing.T) {
-		fullYAML := `apiVersion: klankermaker.ai/v1alpha1
+		fullYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-compat-test
@@ -586,10 +559,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -609,9 +581,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `
 		p, err := profile.Parse([]byte(fullYAML))
 		if err != nil {
@@ -629,7 +598,7 @@ spec:
 // TestTlsCaptureSpecParsesFromYAML verifies that TlsCaptureSpec round-trips from YAML.
 func TestTlsCaptureSpecParsesFromYAML(t *testing.T) {
 	yamlData := `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: tls-capture-test
@@ -652,10 +621,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -680,9 +648,6 @@ spec:
         - openssl
       capturePayloads: false
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `
 
 	p, err := profile.Parse([]byte(yamlData))
@@ -818,7 +783,7 @@ func TestBudgetSpecOptional(t *testing.T) {
 // into a string slice and can be used to default extra args on km agent --claude.
 func TestCLISpec_ClaudeArgsParsesFromYAML(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: cli-claude-args-test
@@ -840,10 +805,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -859,10 +823,12 @@ spec:
       image: "km-tracing:latest"
   cli:
     noBedrock: true
-    claudeArgs:
-      - "--dangerously-skip-permissions"
-      - "--model"
-      - "claude-opus-4-7"
+  agent:
+    claude:
+      args:
+        - "--dangerously-skip-permissions"
+        - "--model"
+        - "claude-opus-4-7"
 `)
 
 	p, err := profile.Parse(yamlData)
@@ -875,13 +841,16 @@ spec:
 	if !p.Spec.CLI.NoBedrock {
 		t.Error("expected CLI.NoBedrock=true")
 	}
+	if p.Spec.Agent == nil || p.Spec.Agent.Claude == nil {
+		t.Fatal("expected Spec.Agent.Claude to be set, got nil")
+	}
 	want := []string{"--dangerously-skip-permissions", "--model", "claude-opus-4-7"}
-	if got := p.Spec.CLI.ClaudeArgs; len(got) != len(want) {
-		t.Fatalf("expected %d claudeArgs, got %d: %v", len(want), len(got), got)
+	if got := p.Spec.Agent.Claude.Args; len(got) != len(want) {
+		t.Fatalf("expected %d claude args, got %d: %v", len(want), len(got), got)
 	}
 	for i, w := range want {
-		if p.Spec.CLI.ClaudeArgs[i] != w {
-			t.Errorf("claudeArgs[%d] = %q, want %q", i, p.Spec.CLI.ClaudeArgs[i], w)
+		if p.Spec.Agent.Claude.Args[i] != w {
+			t.Errorf("agent.claude.args[%d] = %q, want %q", i, p.Spec.Agent.Claude.Args[i], w)
 		}
 	}
 }
@@ -890,7 +859,7 @@ spec:
 // as nil/empty when omitted.
 func TestCLISpec_ClaudeArgsOptional(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: cli-optional-test
@@ -912,10 +881,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -940,8 +908,8 @@ spec:
 	if p.Spec.CLI == nil {
 		t.Fatal("expected Spec.CLI to be set, got nil")
 	}
-	if len(p.Spec.CLI.ClaudeArgs) != 0 {
-		t.Errorf("expected empty claudeArgs, got %v", p.Spec.CLI.ClaudeArgs)
+	if p.Spec.Agent != nil && p.Spec.Agent.Claude != nil && len(p.Spec.Agent.Claude.Args) != 0 {
+		t.Errorf("expected empty claude args, got %v", p.Spec.Agent.Claude.Args)
 	}
 }
 
@@ -949,7 +917,7 @@ spec:
 // into a string slice and can be used to default extra args on km agent run --codex.
 func TestCLISpec_CodexArgsParsesFromYAML(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: cli-codex-args-test
@@ -971,10 +939,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -990,10 +957,12 @@ spec:
       image: "km-tracing:latest"
   cli:
     noBedrock: true
-    codexArgs:
-      - "--model"
-      - "o4-mini"
-      - "--dangerously-bypass-approvals-and-sandbox"
+  agent:
+    codex:
+      args:
+        - "--model"
+        - "o4-mini"
+        - "--dangerously-bypass-approvals-and-sandbox"
 `)
 
 	p, err := profile.Parse(yamlData)
@@ -1006,13 +975,16 @@ spec:
 	if !p.Spec.CLI.NoBedrock {
 		t.Error("expected CLI.NoBedrock=true")
 	}
+	if p.Spec.Agent == nil || p.Spec.Agent.Codex == nil {
+		t.Fatal("expected Spec.Agent.Codex to be set, got nil")
+	}
 	want := []string{"--model", "o4-mini", "--dangerously-bypass-approvals-and-sandbox"}
-	if got := p.Spec.CLI.CodexArgs; len(got) != len(want) {
-		t.Fatalf("expected %d codexArgs, got %d: %v", len(want), len(got), got)
+	if got := p.Spec.Agent.Codex.Args; len(got) != len(want) {
+		t.Fatalf("expected %d codex args, got %d: %v", len(want), len(got), got)
 	}
 	for i, w := range want {
-		if p.Spec.CLI.CodexArgs[i] != w {
-			t.Errorf("codexArgs[%d] = %q, want %q", i, p.Spec.CLI.CodexArgs[i], w)
+		if p.Spec.Agent.Codex.Args[i] != w {
+			t.Errorf("agent.codex.args[%d] = %q, want %q", i, p.Spec.Agent.Codex.Args[i], w)
 		}
 	}
 }
@@ -1021,7 +993,7 @@ spec:
 // as nil/empty when omitted.
 func TestCLISpec_CodexArgsOptional(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: cli-codex-optional-test
@@ -1043,10 +1015,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1071,8 +1042,8 @@ spec:
 	if p.Spec.CLI == nil {
 		t.Fatal("expected Spec.CLI to be set, got nil")
 	}
-	if len(p.Spec.CLI.CodexArgs) != 0 {
-		t.Errorf("expected empty codexArgs, got %v", p.Spec.CLI.CodexArgs)
+	if p.Spec.Agent != nil && p.Spec.Agent.Codex != nil && len(p.Spec.Agent.Codex.Args) != 0 {
+		t.Errorf("expected empty codex args, got %v", p.Spec.Agent.Codex.Args)
 	}
 }
 
@@ -1080,7 +1051,7 @@ spec:
 // notify fields round-trips correctly through profile.Parse().
 func TestParse_CLISpec_NotifyFields(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: notify-fields-test
@@ -1102,10 +1073,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1124,34 +1094,34 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
-  cli:
-    notifyOnPermission: true
-    notifyOnIdle: true
-    notifyCooldownSeconds: 120
-    notificationEmailAddress: "ops-team@example.com"
+  notification:
+    events:
+      onPermission: true
+      onIdle: true
+      cooldownSeconds: 120
+    email:
+      address: "ops-team@example.com"
 `)
 
 	p, err := profile.Parse(yamlData)
 	if err != nil {
 		t.Fatalf("expected profile with notify fields to parse without error, got: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be set, got nil")
+	if p.Spec.Notification == nil || p.Spec.Notification.Events == nil {
+		t.Fatal("expected Spec.Notification.Events to be set, got nil")
 	}
-	if !p.Spec.CLI.NotifyOnPermission {
-		t.Error("expected CLI.NotifyOnPermission=true, got false")
+	ev := p.Spec.Notification.Events
+	if ev.OnPermission == nil || !*ev.OnPermission {
+		t.Error("expected events.OnPermission=true, got false/nil")
 	}
-	if !p.Spec.CLI.NotifyOnIdle {
-		t.Error("expected CLI.NotifyOnIdle=true, got false")
+	if ev.OnIdle == nil || !*ev.OnIdle {
+		t.Error("expected events.OnIdle=true, got false/nil")
 	}
-	if p.Spec.CLI.NotifyCooldownSeconds != 120 {
-		t.Errorf("expected CLI.NotifyCooldownSeconds=120, got %d", p.Spec.CLI.NotifyCooldownSeconds)
+	if ev.CooldownSeconds == nil || *ev.CooldownSeconds != 120 {
+		t.Errorf("expected events.CooldownSeconds=120, got %v", ev.CooldownSeconds)
 	}
-	if p.Spec.CLI.NotificationEmailAddress != "ops-team@example.com" {
-		t.Errorf("expected CLI.NotificationEmailAddress=%q, got %q", "ops-team@example.com", p.Spec.CLI.NotificationEmailAddress)
+	if p.Spec.Notification.Email == nil || p.Spec.Notification.Email.Address != "ops-team@example.com" {
+		t.Errorf("expected email.Address=%q, got %+v", "ops-team@example.com", p.Spec.Notification.Email)
 	}
 }
 
@@ -1159,7 +1129,7 @@ spec:
 // omitting all four notify fields parses cleanly with zero values (backwards compat).
 func TestParse_CLISpec_NotifyFields_DefaultsZero(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: notify-zero-defaults-test
@@ -1181,10 +1151,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1203,9 +1172,6 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   cli:
     noBedrock: true
 `)
@@ -1217,18 +1183,9 @@ spec:
 	if p.Spec.CLI == nil {
 		t.Fatal("expected Spec.CLI to be set, got nil")
 	}
-	// All four notify fields must be zero-valued when omitted
-	if p.Spec.CLI.NotifyOnPermission {
-		t.Error("expected CLI.NotifyOnPermission=false (zero) when omitted, got true")
-	}
-	if p.Spec.CLI.NotifyOnIdle {
-		t.Error("expected CLI.NotifyOnIdle=false (zero) when omitted, got true")
-	}
-	if p.Spec.CLI.NotifyCooldownSeconds != 0 {
-		t.Errorf("expected CLI.NotifyCooldownSeconds=0 when omitted, got %d", p.Spec.CLI.NotifyCooldownSeconds)
-	}
-	if p.Spec.CLI.NotificationEmailAddress != "" {
-		t.Errorf("expected CLI.NotificationEmailAddress=\"\" when omitted, got %q", p.Spec.CLI.NotificationEmailAddress)
+	// The notification block must be nil when omitted (backwards compat).
+	if p.Spec.Notification != nil {
+		t.Errorf("expected Spec.Notification=nil when omitted, got %+v", p.Spec.Notification)
 	}
 }
 
@@ -1236,7 +1193,7 @@ spec:
 // for notifyOnPermission and notifyOnIdle round-trip correctly.
 func TestParse_CLISpec_NotifyFields_ExplicitFalse(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: notify-explicit-false-test
@@ -1258,10 +1215,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1280,32 +1236,31 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
-  cli:
-    notifyOnPermission: false
-    notifyOnIdle: false
+  notification:
+    events:
+      onPermission: false
+      onIdle: false
 `)
 
 	p, err := profile.Parse(yamlData)
 	if err != nil {
 		t.Fatalf("expected profile to parse, got: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be set, got nil")
+	if p.Spec.Notification == nil || p.Spec.Notification.Events == nil {
+		t.Fatal("expected Spec.Notification.Events to be set, got nil")
 	}
-	if p.Spec.CLI.NotifyOnPermission != false {
-		t.Error("expected CLI.NotifyOnPermission=false (explicit), got true")
+	ev := p.Spec.Notification.Events
+	if ev.OnPermission == nil || *ev.OnPermission != false {
+		t.Error("expected events.OnPermission=&false (explicit), got non-false/nil")
 	}
-	if p.Spec.CLI.NotifyOnIdle != false {
-		t.Error("expected CLI.NotifyOnIdle=false (explicit), got true")
+	if ev.OnIdle == nil || *ev.OnIdle != false {
+		t.Error("expected events.OnIdle=&false (explicit), got non-false/nil")
 	}
 }
 
 // minimalCLIProfileYAML returns a valid profile YAML with the cli section containing the given cliFields.
 func minimalCLIProfileYAML(cliFields string) []byte {
-	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: slack-fields-test
@@ -1327,10 +1282,61 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  cli:
+` + cliFields)
+}
+
+// minimalAgentDefaultProfileYAML returns a valid profile YAML with the structured
+// spec.agent block containing the given agentFields (indented under spec.agent).
+// Phase 92 (Wave 4): companion to minimalCLIProfileYAML for the re-homed
+// agent.default field (formerly cli.agent).
+func minimalAgentDefaultProfileYAML(agentFields string) []byte {
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: agent-default-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  iam:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
   sidecars:
     dnsProxy:
       enabled: true
@@ -1350,84 +1356,126 @@ spec:
     networkLog:
       destination: cloudwatch
   agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
-  cli:
-` + cliFields)
+` + agentFields)
+}
+
+// minimalNotificationProfileYAML returns a valid profile YAML with the notification
+// section containing the given notificationFields (indented under spec.notification).
+// Phase 92 (Wave 2): companion to minimalCLIProfileYAML for the structured block.
+func minimalNotificationProfileYAML(notificationFields string) []byte {
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: notification-fields-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  iam:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  notification:
+` + notificationFields)
 }
 
 // TestParse_CLISpec_SlackFields_AllSet verifies that a YAML profile setting all five
-// Phase 63 Slack fields round-trips correctly through profile.Parse().
+// Slack fields round-trips correctly through profile.Parse().
+// Phase 92 (Wave 2): migrated to the notification.slack block.
 func TestParse_CLISpec_SlackFields_AllSet(t *testing.T) {
-	yamlData := minimalCLIProfileYAML(`    notifyEmailEnabled: false
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackChannelOverride: "C0123ABC"
-    slackArchiveOnDestroy: false
+	yamlData := minimalNotificationProfileYAML(`    email:
+      enabled: false
+    slack:
+      enabled: true
+      perSandbox: true
+      channelOverride: "C0123ABC"
+      archiveOnDestroy: false
 `)
 
 	p, err := profile.Parse(yamlData)
 	if err != nil {
 		t.Fatalf("expected profile with all five Slack fields to parse, got: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be set, got nil")
+	if p.Spec.Notification == nil || p.Spec.Notification.Slack == nil {
+		t.Fatal("expected Spec.Notification.Slack to be set, got nil")
 	}
-	cli := p.Spec.CLI
-	if cli.NotifyEmailEnabled == nil {
-		t.Fatal("expected NotifyEmailEnabled to be non-nil, got nil")
+	slack := p.Spec.Notification.Slack
+	if p.Spec.Notification.Email == nil || p.Spec.Notification.Email.Enabled == nil {
+		t.Fatal("expected email.enabled to be non-nil, got nil")
 	}
-	if *cli.NotifyEmailEnabled != false {
-		t.Errorf("expected *NotifyEmailEnabled=false, got %v", *cli.NotifyEmailEnabled)
+	if *p.Spec.Notification.Email.Enabled != false {
+		t.Errorf("expected *email.enabled=false, got %v", *p.Spec.Notification.Email.Enabled)
 	}
-	if cli.NotifySlackEnabled == nil {
-		t.Fatal("expected NotifySlackEnabled to be non-nil, got nil")
+	if slack.Enabled == nil {
+		t.Fatal("expected slack.enabled to be non-nil, got nil")
 	}
-	if *cli.NotifySlackEnabled != true {
-		t.Errorf("expected *NotifySlackEnabled=true, got %v", *cli.NotifySlackEnabled)
+	if *slack.Enabled != true {
+		t.Errorf("expected *slack.enabled=true, got %v", *slack.Enabled)
 	}
-	if !cli.NotifySlackPerSandbox {
-		t.Error("expected NotifySlackPerSandbox=true, got false")
+	if slack.PerSandbox == nil || !*slack.PerSandbox {
+		t.Error("expected slack.perSandbox=true, got false/nil")
 	}
-	if cli.NotifySlackChannelOverride != "C0123ABC" {
-		t.Errorf("expected NotifySlackChannelOverride=%q, got %q", "C0123ABC", cli.NotifySlackChannelOverride)
+	if slack.ChannelOverride != "C0123ABC" {
+		t.Errorf("expected slack.channelOverride=%q, got %q", "C0123ABC", slack.ChannelOverride)
 	}
-	if cli.SlackArchiveOnDestroy == nil {
-		t.Fatal("expected SlackArchiveOnDestroy to be non-nil, got nil")
+	if slack.ArchiveOnDestroy == nil {
+		t.Fatal("expected slack.archiveOnDestroy to be non-nil, got nil")
 	}
-	if *cli.SlackArchiveOnDestroy != false {
-		t.Errorf("expected *SlackArchiveOnDestroy=false, got %v", *cli.SlackArchiveOnDestroy)
+	if *slack.ArchiveOnDestroy != false {
+		t.Errorf("expected *slack.archiveOnDestroy=false, got %v", *slack.ArchiveOnDestroy)
 	}
 }
 
 // TestParse_CLISpec_SlackFields_OmittedNilPointers verifies that a YAML profile with
-// no Slack fields parses cleanly with nil pointers (Phase 62 backward compat).
+// no Slack block parses cleanly with nil pointers (Phase 62 backward compat).
 func TestParse_CLISpec_SlackFields_OmittedNilPointers(t *testing.T) {
-	yamlData := minimalCLIProfileYAML(`    notifyOnPermission: true
+	yamlData := minimalNotificationProfileYAML(`    events:
+      onPermission: true
 `)
 
 	p, err := profile.Parse(yamlData)
 	if err != nil {
 		t.Fatalf("expected Phase 62 profile to parse cleanly, got: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be set, got nil")
+	if p.Spec.Notification == nil {
+		t.Fatal("expected Spec.Notification to be set, got nil")
 	}
-	cli := p.Spec.CLI
-	if cli.NotifyEmailEnabled != nil {
-		t.Errorf("expected NotifyEmailEnabled=nil (unset), got %v", *cli.NotifyEmailEnabled)
+	if p.Spec.Notification.Slack != nil {
+		t.Errorf("expected notification.slack=nil (unset), got %+v", p.Spec.Notification.Slack)
 	}
-	if cli.NotifySlackEnabled != nil {
-		t.Errorf("expected NotifySlackEnabled=nil (unset), got %v", *cli.NotifySlackEnabled)
-	}
-	if cli.SlackArchiveOnDestroy != nil {
-		t.Errorf("expected SlackArchiveOnDestroy=nil (unset), got %v", *cli.SlackArchiveOnDestroy)
-	}
-	if cli.NotifySlackPerSandbox {
-		t.Error("expected NotifySlackPerSandbox=false (zero), got true")
-	}
-	if cli.NotifySlackChannelOverride != "" {
-		t.Errorf("expected NotifySlackChannelOverride=%q (empty), got %q", "", cli.NotifySlackChannelOverride)
+	if p.Spec.Notification.Email != nil {
+		t.Errorf("expected notification.email=nil (unset), got %+v", p.Spec.Notification.Email)
 	}
 }
 
@@ -1438,25 +1486,26 @@ func TestParse_CLISpec_SlackFields_OmittedNilPointers(t *testing.T) {
 // Note: boolPtr is defined in validate_test.go (same package) — reuse it here.
 
 // TestVSCodeEnabled_DefaultTrue asserts that IsVSCodeEnabled returns true for
-// nil CLISpec, empty CLISpec, and CLISpec{VSCodeEnabled: &true}.
+// nil RuntimeVSCodeSpec, empty RuntimeVSCodeSpec, and {Enabled: &true}.
+// Phase 92 (Wave 2): the gate moved from cli.vscodeEnabled to runtime.vscode.enabled.
 func TestVSCodeEnabled_DefaultTrue(t *testing.T) {
 	if !profile.IsVSCodeEnabled(nil) {
-		t.Fatal("nil cli should return true")
+		t.Fatal("nil vscode should return true")
 	}
-	if !profile.IsVSCodeEnabled(&profile.CLISpec{}) {
-		t.Fatal("empty CLISpec should return true")
+	if !profile.IsVSCodeEnabled(&profile.RuntimeVSCodeSpec{}) {
+		t.Fatal("empty RuntimeVSCodeSpec should return true")
 	}
 	tru := true
-	if !profile.IsVSCodeEnabled(&profile.CLISpec{VSCodeEnabled: &tru}) {
+	if !profile.IsVSCodeEnabled(&profile.RuntimeVSCodeSpec{Enabled: &tru}) {
 		t.Fatal("&true should return true")
 	}
 }
 
 // TestVSCodeEnabled_False asserts that IsVSCodeEnabled returns false when
-// CLISpec.VSCodeEnabled is explicitly set to &false.
+// RuntimeVSCodeSpec.Enabled is explicitly set to &false.
 func TestVSCodeEnabled_False(t *testing.T) {
 	fls := false
-	if profile.IsVSCodeEnabled(&profile.CLISpec{VSCodeEnabled: &fls}) {
+	if profile.IsVSCodeEnabled(&profile.RuntimeVSCodeSpec{Enabled: &fls}) {
 		t.Fatal("&false should return false")
 	}
 }
@@ -1470,7 +1519,7 @@ func TestVSCodeEnabled_False(t *testing.T) {
 func TestAdditionalSnapshotSpec_YAMLParse(t *testing.T) {
 	// Helper to build a minimal profile YAML with the given runtime section
 	buildYAML := func(runtimeExtra string) []byte {
-		return []byte(`apiVersion: klankermaker.ai/v1alpha1
+		return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: snapshot-parse-test
@@ -1493,10 +1542,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1515,9 +1563,6 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `)
 	}
 
@@ -1687,7 +1732,7 @@ spec:
 func TestAdditionalSnapshotSpec_JSONSchemaValidation(t *testing.T) {
 	// buildSnapshotProfileRaw produces a profile YAML for schema validation.
 	buildSnapshotProfileRaw := func(snapshotEntry string) []byte {
-		return []byte(`apiVersion: klankermaker.ai/v1alpha1
+		return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: snapshot-schema-test
@@ -1711,10 +1756,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1733,9 +1777,6 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `)
 	}
 
@@ -1842,17 +1883,18 @@ spec:
 
 // TestCLISpec_Agent_EnumValid: claude and codex are accepted.
 // SC-1: schema accepts the two locked enum values.
+// Phase 92 (Wave 4): the field moved from cli.agent to spec.agent.default.
 func TestCLISpec_Agent_EnumValid(t *testing.T) {
 	cases := []struct {
 		name      string
 		agentLine string
 	}{
-		{"claude", "    agent: claude\n"},
-		{"codex", "    agent: codex\n"},
+		{"claude", "    default: claude\n"},
+		{"codex", "    default: codex\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := profile.Validate(minimalCLIProfileYAML(tc.agentLine))
+			errs := profile.Validate(minimalAgentDefaultProfileYAML(tc.agentLine))
 			if len(errs) > 0 {
 				t.Fatalf("expected no errors for agent=%s, got %v", tc.name, errs)
 			}
@@ -1868,12 +1910,12 @@ func TestCLISpec_Agent_EnumInvalid(t *testing.T) {
 		name      string
 		agentLine string
 	}{
-		{"goose-rejected", "    agent: goose\n"},
-		{"uppercase-rejected", "    agent: CLAUDE\n"},
+		{"goose-rejected", "    default: goose\n"},
+		{"uppercase-rejected", "    default: CLAUDE\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := profile.Validate(minimalCLIProfileYAML(tc.agentLine))
+			errs := profile.Validate(minimalAgentDefaultProfileYAML(tc.agentLine))
 			if len(errs) == 0 {
 				t.Fatalf("expected validation error for agent line %q, got none", tc.agentLine)
 			}
@@ -1891,26 +1933,25 @@ func TestCLISpec_Agent_EnumInvalid(t *testing.T) {
 	}
 }
 
-// TestCLISpec_Agent_AbsenceIsClaudeDefault: when cli.agent is omitted entirely,
-// the profile validates and parses with p.Spec.CLI.Agent == "" (zero value).
+// TestCLISpec_Agent_AbsenceIsClaudeDefault: when spec.agent is omitted entirely,
+// the profile validates and parses with p.Spec.Agent == nil (zero value).
 // The "default ≡ claude" behavior lives downstream in the compiler (Plan 70-02)
 // and the poller (Plan 70-05); the schema accepts absence.
+// Phase 92 (Wave 4): the field moved from cli.agent to spec.agent.default, so
+// absence now means a nil *AgentSpec.
 func TestCLISpec_Agent_AbsenceIsClaudeDefault(t *testing.T) {
-	// noBedrock: false provides a present-but-minimal cli block with no agent key.
+	// noBedrock: false provides a present-but-minimal cli block with no agent block.
 	yaml := minimalCLIProfileYAML("    noBedrock: false\n")
 	errs := profile.Validate(yaml)
 	if len(errs) > 0 {
-		t.Fatalf("expected no errors when cli.agent omitted, got %v", errs)
+		t.Fatalf("expected no errors when spec.agent omitted, got %v", errs)
 	}
 	p, parseErr := profile.Parse(yaml)
 	if parseErr != nil {
 		t.Fatalf("parse error: %v", parseErr)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatalf("expected p.Spec.CLI != nil")
-	}
-	if p.Spec.CLI.Agent != "" {
-		t.Fatalf("expected p.Spec.CLI.Agent == \"\" (zero value), got %q", p.Spec.CLI.Agent)
+	if p.Spec.Agent != nil && p.Spec.Agent.Default != "" {
+		t.Fatalf("expected p.Spec.Agent.Default == \"\" (zero value), got %q", p.Spec.Agent.Default)
 	}
 }
 
@@ -1918,28 +1959,29 @@ func TestCLISpec_Agent_AbsenceIsClaudeDefault(t *testing.T) {
 // *bool Slack fields round-trips as non-nil pointer to false (not nil).
 // This is the key bool-vs-*bool discrimination test.
 func TestParse_CLISpec_SlackFields_ExplicitFalse(t *testing.T) {
-	yamlData := minimalCLIProfileYAML(`    notifyEmailEnabled: false
-    notifySlackEnabled: false
+	yamlData := minimalNotificationProfileYAML(`    email:
+      enabled: false
+    slack:
+      enabled: false
 `)
 
 	p, err := profile.Parse(yamlData)
 	if err != nil {
 		t.Fatalf("expected profile with explicit false Slack booleans to parse, got: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be set, got nil")
+	if p.Spec.Notification == nil || p.Spec.Notification.Email == nil || p.Spec.Notification.Slack == nil {
+		t.Fatal("expected Spec.Notification.Email and .Slack to be set, got nil")
 	}
-	cli := p.Spec.CLI
-	if cli.NotifyEmailEnabled == nil {
-		t.Fatal("expected NotifyEmailEnabled to be non-nil (explicit false), got nil")
+	if p.Spec.Notification.Email.Enabled == nil {
+		t.Fatal("expected email.enabled to be non-nil (explicit false), got nil")
 	}
-	if *cli.NotifyEmailEnabled != false {
-		t.Errorf("expected *NotifyEmailEnabled=false, got %v", *cli.NotifyEmailEnabled)
+	if *p.Spec.Notification.Email.Enabled != false {
+		t.Errorf("expected *email.enabled=false, got %v", *p.Spec.Notification.Email.Enabled)
 	}
-	if cli.NotifySlackEnabled == nil {
-		t.Fatal("expected NotifySlackEnabled to be non-nil (explicit false), got nil")
+	if p.Spec.Notification.Slack.Enabled == nil {
+		t.Fatal("expected slack.enabled to be non-nil (explicit false), got nil")
 	}
-	if *cli.NotifySlackEnabled != false {
-		t.Errorf("expected *NotifySlackEnabled=false, got %v", *cli.NotifySlackEnabled)
+	if *p.Spec.Notification.Slack.Enabled != false {
+		t.Errorf("expected *slack.enabled=false, got %v", *p.Spec.Notification.Slack.Enabled)
 	}
 }

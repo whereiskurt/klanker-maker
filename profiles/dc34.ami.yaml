@@ -1,4 +1,4 @@
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: dc34
@@ -41,8 +41,6 @@ spec:
       CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
       OPENAI_API_KEY: ""
     configFiles:
-      "/home/sandbox/.claude/settings.json": |
-        {"trustedDirectories":["/home/sandbox","/workspace"],"autoApprove":["Bash","Read","Write","Edit","Glob","Grep","WebFetch","WebSearch","NotebookEdit"]}
       "/home/sandbox/.claude/plugins/known_marketplaces.json": |
         {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
 
@@ -90,11 +88,10 @@ spec:
       - /workspace
     maxSizeMB: 500
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
 
   sidecars:
     dnsProxy:
@@ -137,16 +134,26 @@ spec:
       - "whereiskurt@gmail.com"
       - "kurt.hundeck@*"
 
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "30m"
-    allowedTools:
-      - bash
-      - read_file
-      - write_file
-      - list_files
-
   cli:
     noBedrock: true
-    claudeArgs:
-      - "--dangerously-skip-permissions"
+
+  # Phase 92 (Wave 5) — claudeArgs moved out of spec.cli; inlined Claude
+  # settings.json removed (synthesized from agent.claude.tools.*).
+  agent:
+    claude:
+      trustedDirectories:
+        - /home/sandbox
+        - /workspace
+      tools:
+        autoApprove:
+          - Bash
+          - Read
+          - Write
+          - Edit
+          - Glob
+          - Grep
+          - WebFetch
+          - WebSearch
+          - NotebookEdit
+      args:
+        - "--dangerously-skip-permissions"

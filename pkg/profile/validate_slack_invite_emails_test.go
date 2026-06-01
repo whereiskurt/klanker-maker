@@ -1,8 +1,9 @@
 package profile_test
 
 // validate_slack_invite_emails_test.go — Phase 72 Layer 6 tests for
-// notifySlackInviteEmails and useSlackConnect profile field validation.
-// Plan 72-02 (Wave 1) — stub t.Skip calls replaced with real assertions.
+// notification.slack.invites.emails and .useConnect profile field validation.
+// Phase 92 (Wave 2): migrated from spec.cli.notifySlackInviteEmails/useSlackConnect
+// to the structured spec.notification.slack.invites block.
 
 import (
 	"bytes"
@@ -38,115 +39,125 @@ func containsInviteError(errs []profile.ValidationError, path, msg string) bool 
 	return false
 }
 
-// TestParse_NotifySlackInviteEmails — YAML with spec.cli.notifySlackInviteEmails
+// TestParse_NotifySlackInviteEmails — YAML with notification.slack.invites.emails
 // round-trips through Parse; the slice is intact and in order.
 func TestParse_NotifySlackInviteEmails(t *testing.T) {
 	const yaml = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackInviteEmails: [alice@example.com, bob@example.com]
+  notification:
+    slack:
+      enabled: true
+      invites:
+        emails: [alice@example.com, bob@example.com]
 `
 	p, err := profile.Parse([]byte(yaml))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be non-nil")
+	if p.Spec.Notification == nil || p.Spec.Notification.Slack == nil || p.Spec.Notification.Slack.Invites == nil {
+		t.Fatal("expected Spec.Notification.Slack.Invites to be non-nil")
 	}
-	got := p.Spec.CLI.NotifySlackInviteEmails
+	got := p.Spec.Notification.Slack.Invites.Emails
 	want := []string{"alice@example.com", "bob@example.com"}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("NotifySlackInviteEmails: got %v; want %v", got, want)
+		t.Errorf("invites.emails: got %v; want %v", got, want)
 	}
 }
 
-// TestValidate_InviteEmails_RequiresSlackEnabled — non-empty list + notifySlackEnabled:false
+// TestValidate_InviteEmails_RequiresSlackEnabled — non-empty list + slack.enabled:false
 // → validation error SE1 with correct path and message fragment.
 func TestValidate_InviteEmails_RequiresSlackEnabled(t *testing.T) {
 	const yaml = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
-  cli:
-    notifySlackEnabled: false
-    notifySlackInviteEmails: [alice@example.com]
+  notification:
+    slack:
+      enabled: false
+      invites:
+        emails: [alice@example.com]
 `
 	errs := parseAndValidateInvite(t, yaml)
-	if !containsInviteError(errs, "spec.cli.notifySlackInviteEmails", "requires notifySlackEnabled") {
-		t.Errorf("expected SE1 error (path=spec.cli.notifySlackInviteEmails, msg contains 'requires notifySlackEnabled'); got %+v", errs)
+	if !containsInviteError(errs, "spec.notification.slack.invites.emails", "requires notification.slack.enabled") {
+		t.Errorf("expected SE1 error (path=spec.notification.slack.invites.emails, msg contains 'requires notification.slack.enabled'); got %+v", errs)
 	}
 }
 
 // TestValidate_InviteEmails_InvalidEmail — malformed entry in the list
-// → validation error SE2 with path spec.cli.notifySlackInviteEmails[0] and "invalid email".
+// → validation error SE2 with path spec.notification.slack.invites.emails[0] and "invalid email".
 func TestValidate_InviteEmails_InvalidEmail(t *testing.T) {
 	const yaml = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackInviteEmails: [notanemail]
+  notification:
+    slack:
+      enabled: true
+      invites:
+        emails: [notanemail]
 `
 	errs := parseAndValidateInvite(t, yaml)
-	if !containsInviteError(errs, "spec.cli.notifySlackInviteEmails[0]", "invalid email") {
-		t.Errorf("expected SE2 error (path=spec.cli.notifySlackInviteEmails[0], msg contains 'invalid email'); got %+v", errs)
+	if !containsInviteError(errs, "spec.notification.slack.invites.emails[0]", "invalid email") {
+		t.Errorf("expected SE2 error (path=spec.notification.slack.invites.emails[0], msg contains 'invalid email'); got %+v", errs)
 	}
 }
 
-// TestParse_UseSlackConnect — useSlackConnect:false round-trips; omitting the field leaves nil pointer.
+// TestParse_UseSlackConnect — invites.useConnect:false round-trips; omitting the field leaves nil pointer.
 func TestParse_UseSlackConnect(t *testing.T) {
 	// Explicit false round-trips.
 	const yamlFalse = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
-  cli:
-    notifySlackEnabled: true
-    useSlackConnect: false
-    notifySlackInviteEmails: [alice@example.com]
+  notification:
+    slack:
+      enabled: true
+      invites:
+        useConnect: false
+        emails: [alice@example.com]
 `
 	p, err := profile.Parse([]byte(yamlFalse))
 	if err != nil {
 		t.Fatalf("parse (false): %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be non-nil")
+	if p.Spec.Notification == nil || p.Spec.Notification.Slack == nil || p.Spec.Notification.Slack.Invites == nil {
+		t.Fatal("expected Spec.Notification.Slack.Invites to be non-nil")
 	}
-	if p.Spec.CLI.UseSlackConnect == nil || *p.Spec.CLI.UseSlackConnect != false {
-		t.Errorf("expected UseSlackConnect=false; got %v", p.Spec.CLI.UseSlackConnect)
+	if p.Spec.Notification.Slack.Invites.UseConnect == nil || *p.Spec.Notification.Slack.Invites.UseConnect != false {
+		t.Errorf("expected useConnect=false; got %v", p.Spec.Notification.Slack.Invites.UseConnect)
 	}
-	// useSlackConnect:false with valid invite list and slackEnabled should produce no errors.
+	// useConnect:false with valid invite list and slack.enabled should produce no errors.
 	if errs := profile.ValidateSemantic(p); len(errs) != 0 {
-		t.Errorf("expected no validation errors for useSlackConnect:false; got %v", errs)
+		t.Errorf("expected no validation errors for useConnect:false; got %v", errs)
 	}
 
 	// Omitted field stays nil (resolved to true at read time in km create, not here).
 	const yamlOmit = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
-  cli:
-    notifySlackEnabled: true
-    notifySlackInviteEmails: [alice@example.com]
+  notification:
+    slack:
+      enabled: true
+      invites:
+        emails: [alice@example.com]
 `
 	p2, err := profile.Parse([]byte(yamlOmit))
 	if err != nil {
 		t.Fatalf("parse (omit): %v", err)
 	}
-	if p2.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be non-nil (omit case)")
+	if p2.Spec.Notification == nil || p2.Spec.Notification.Slack == nil || p2.Spec.Notification.Slack.Invites == nil {
+		t.Fatal("expected Spec.Notification.Slack.Invites to be non-nil (omit case)")
 	}
-	if p2.Spec.CLI.UseSlackConnect != nil {
-		t.Errorf("expected nil UseSlackConnect when omitted; got %v", *p2.Spec.CLI.UseSlackConnect)
+	if p2.Spec.Notification.Slack.Invites.UseConnect != nil {
+		t.Errorf("expected nil useConnect when omitted; got %v", *p2.Spec.Notification.Slack.Invites.UseConnect)
 	}
 }
 
@@ -156,35 +167,37 @@ func TestSchema_InviteEmails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read schema: %v", err)
 	}
-	if !bytes.Contains(schemaBytes, []byte(`"notifySlackInviteEmails"`)) {
-		t.Errorf("schema missing notifySlackInviteEmails entry")
+	if !bytes.Contains(schemaBytes, []byte(`"invites"`)) {
+		t.Errorf("schema missing invites entry")
 	}
 	if !bytes.Contains(schemaBytes, []byte(`"format": "email"`)) {
 		t.Errorf("schema missing format:email constraint")
 	}
-	if !bytes.Contains(schemaBytes, []byte(`"useSlackConnect"`)) {
-		t.Errorf("schema missing useSlackConnect entry")
+	if !bytes.Contains(schemaBytes, []byte(`"useConnect"`)) {
+		t.Errorf("schema missing useConnect entry")
 	}
 }
 
-// TestValidate_InviteEmails_EmptyList_NoRequiresSlack — empty list with notifySlackEnabled:false
+// TestValidate_InviteEmails_EmptyList_NoRequiresSlack — empty list with slack.enabled:false
 // → no error (empty list is a no-op).
 func TestValidate_InviteEmails_EmptyList_NoRequiresSlack(t *testing.T) {
 	const yaml = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
-  cli:
-    notifySlackEnabled: false
-    notifySlackInviteEmails: []
+  notification:
+    slack:
+      enabled: false
+      invites:
+        emails: []
 `
 	errs := parseAndValidateInvite(t, yaml)
 	for _, e := range errs {
 		if e.IsWarning {
 			continue
 		}
-		if strings.Contains(e.Message, "notifySlackInviteEmails") {
+		if strings.Contains(e.Message, "invites.emails") {
 			t.Errorf("unexpected error for empty invite list: %+v", e)
 		}
 	}

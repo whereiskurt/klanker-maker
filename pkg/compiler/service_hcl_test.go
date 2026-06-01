@@ -504,7 +504,7 @@ func TestECSMainContainerSecretPaths(t *testing.T) {
 	t.Setenv("KM_ACCOUNTS_APPLICATION", "")
 
 	p := baseECSProfile()
-	p.Spec.Identity = profile.IdentitySpec{
+	p.Spec.IAM = profile.IAMSpec{
 		AllowedSecretPaths: []string{"/sandbox/sb-secret-test/db-pass", "/sandbox/sb-secret-test/api-key"},
 	}
 

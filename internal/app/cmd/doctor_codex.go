@@ -256,8 +256,9 @@ func checkAgentTypeConsistency(
 		}
 
 		// Resolve the profile's agent; absence ≡ "claude" (CONTEXT.md locked decision).
+		// Phase 92 (Wave 4): agent default moved to spec.agent.default.
 		profileAgent := "claude"
-		if prof.Spec.CLI != nil && prof.Spec.CLI.Agent == "codex" {
+		if profileAgentDefault(prof) == "codex" {
 			profileAgent = "codex"
 		}
 
