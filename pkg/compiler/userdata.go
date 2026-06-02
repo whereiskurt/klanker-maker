@@ -2496,6 +2496,141 @@ command -v restorecon >/dev/null 2>&1 && restorecon -R -v /home/sandbox/.ssh || 
 echo "[km-bootstrap] VS Code Remote-SSH configured (authorized_keys written)"
 {{- end }}
 
+{{- if .DesktopEnabled }}
+# Phase 93: KasmVNC desktop (kiosk or full XFCE)
+# -------------------------------------------------------
+# Step 1: Install packages if not already present (idempotent — AMI-bakeable).
+# The guard allows a baked AMI to skip reinstall while always reseeding credentials/config.
+if ! command -v vncserver >/dev/null 2>&1; then
+  apt-get install -y dbus-x11 fonts-dejavu fonts-liberation x11-xserver-utils
+  UBUNTU_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME}")
+  KASMVNC_DEB="kasmvncserver_${UBUNTU_CODENAME}_1.4.0_amd64.deb"
+  wget -q -O "/tmp/${KASMVNC_DEB}" \
+    "https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/${KASMVNC_DEB}"
+  apt-get install -y "/tmp/${KASMVNC_DEB}"
+  rm -f "/tmp/${KASMVNC_DEB}"
+  {{- if eq .DesktopMode "kiosk" }}
+  apt-get install -y matchbox-window-manager
+  {{- end }}
+  {{- if eq .DesktopMode "full" }}
+  apt-get install -y xfce4 xfce4-goodies
+  {{- end }}
+  {{- range .DesktopBrowsers }}
+  {{- if eq . "firefox" }}
+  # Firefox: Mozilla Team PPA DEB (non-snap; snap-confined Firefox fails under VNC)
+  add-apt-repository -y ppa:mozillateam/ppa && apt-get update -q
+  apt-get install -y -t 'o=LP-PPA-mozillateam' firefox
+  {{- end }}
+  {{- if eq . "chromium" }}
+  # Chromium: xtradeb PPA DEB (non-snap; Ubuntu 24.04 default chromium is snap)
+  add-apt-repository -y ppa:xtradeb/apps && apt-get update -q
+  apt-get install -y -t 'o=LP-PPA-xtradeb' chromium
+  {{- end }}
+  {{- if eq . "chrome" }}
+  # Google Chrome: official Google APT repo (always a DEB, never a snap)
+  curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+    | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+    > /etc/apt/sources.list.d/google-chrome.list
+  apt-get update -q && apt-get install -y google-chrome-stable
+  {{- end }}
+  {{- if eq . "brave" }}
+  # Brave: official Brave APT repo
+  curl -fsSL https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg \
+    | gpg --dearmor -o /usr/share/keyrings/brave-browser-archive-keyring.gpg
+  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" \
+    > /etc/apt/sources.list.d/brave-browser-release.list
+  apt-get update -q && apt-get install -y brave-browser
+  {{- end }}
+  {{- end }}
+fi
+
+# Step 2: Always (re)seed per-sandbox KasmVNC credential (never baked — fresh every boot).
+mkdir -p /home/sandbox/.vnc /home/sandbox/.config
+printf '%s\n%s\n' '{{ .DesktopKasmPass }}' '{{ .DesktopKasmPass }}' \
+  | kasmvncpasswd -u '{{ .DesktopKasmUser }}' -w -r /home/sandbox/.kasmpasswd
+chmod 600 /home/sandbox/.kasmpasswd
+chown sandbox:sandbox /home/sandbox/.kasmpasswd
+
+# Step 3: Always write kasmvnc.yaml (loopback-only binding; SSL disabled; geometry from profile).
+# require_ssl defaults true in KasmVNC — must explicitly set false (loopback + SSM justification).
+cat > /home/sandbox/.vnc/kasmvnc.yaml << 'KASMYAML'
+desktop:
+  resolution:
+    width: {{ .DesktopGeometryWidth }}
+    height: {{ .DesktopGeometryHeight }}
+network:
+  interface: 127.0.0.1
+  websocket_port: auto
+  ssl:
+    require_ssl: false
+data_loss_prevention:
+  clipboard:
+    server_to_client:
+      enabled: true
+    client_to_server:
+      enabled: true
+KASMYAML
+chown sandbox:sandbox /home/sandbox/.vnc/kasmvnc.yaml
+
+# Step 4: Always write xstartup (kiosk vs full XFCE per profile mode).
+{{- if eq .DesktopMode "kiosk" }}
+cat > /home/sandbox/.vnc/xstartup << 'XSTARTUP'
+#!/bin/bash
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+export XDG_RUNTIME_DIR=/run/user/$(id -u sandbox)
+mkdir -p "${XDG_RUNTIME_DIR}"
+chown sandbox:sandbox "${XDG_RUNTIME_DIR}"
+chmod 700 "${XDG_RUNTIME_DIR}"
+exec dbus-launch --exit-with-session matchbox-window-manager -use_titlebar no &
+WM_PID=$!
+sleep 1
+{{ .DesktopBrowser0Binary }} &
+wait $WM_PID
+XSTARTUP
+{{- end }}
+{{- if eq .DesktopMode "full" }}
+cat > /home/sandbox/.vnc/xstartup << 'XSTARTUP'
+#!/bin/bash
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+export XDG_RUNTIME_DIR=/run/user/$(id -u sandbox)
+mkdir -p "${XDG_RUNTIME_DIR}"
+chown sandbox:sandbox "${XDG_RUNTIME_DIR}"
+chmod 700 "${XDG_RUNTIME_DIR}"
+exec dbus-launch --exit-with-session startxfce4
+XSTARTUP
+{{- end }}
+chmod +x /home/sandbox/.vnc/xstartup
+chown -R sandbox:sandbox /home/sandbox/.vnc
+
+# Step 5: Write and enable the kasmvnc systemd unit (system service; User=sandbox;
+# survives km pause/resume without a loginctl user session at boot).
+cat > /etc/systemd/system/kasmvnc.service << 'KASMUNIT'
+[Unit]
+Description=KasmVNC desktop session for km desktop
+After=network.target km-bootstrap.service
+
+[Service]
+User=sandbox
+Environment=DISPLAY=:1
+ExecStartPre=/bin/mkdir -p /run/user/1001
+ExecStartPre=/bin/chown sandbox:sandbox /run/user/1001
+ExecStart=/usr/bin/vncserver :1 -fg -geometry {{ .DesktopGeometry }} -interface 127.0.0.1
+ExecStop=/usr/bin/vncserver -kill :1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+KASMUNIT
+systemctl daemon-reload
+systemctl enable kasmvnc
+systemctl start kasmvnc
+echo "[km-bootstrap] KasmVNC desktop configured ({{ .DesktopMode }} mode, geometry {{ .DesktopGeometry }})"
+{{- end }}
+
 # km-recv: read and display signed emails from /var/mail/km/new/
 # Usage: km-recv [--json] [--watch] [--mark-read]
 cat > /opt/km/bin/km-recv << 'KMRECV'
@@ -3663,6 +3798,12 @@ type userDataParams struct {
 	//   firefox→firefox, chromium→chromium, chrome→google-chrome-stable, brave→brave-browser.
 	// Empty when DesktopEnabled is false or DesktopBrowsers is empty. Phase 93.
 	DesktopBrowser0Binary string
+	// DesktopGeometryWidth is the parsed width from DesktopGeometry (e.g. "1920" from "1920x1080").
+	// Pre-parsed at generateUserData time so the template does not need a custom function.
+	DesktopGeometryWidth string
+	// DesktopGeometryHeight is the parsed height from DesktopGeometry (e.g. "1080" from "1920x1080").
+	// Pre-parsed at generateUserData time so the template does not need a custom function.
+	DesktopGeometryHeight string
 	// NotifySlackEnabled gates conditional emission of the runtime SSM-fetch
 	// bootstrap step that polls /sandbox/{id}/slack-channel-id and
 	// /km/slack/bridge-url, writing them into /etc/profile.d/km-slack-runtime.sh.
@@ -4394,6 +4535,13 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		params.DesktopGeometry = geometry
 		// Map browsers[0] keyword → launch binary.
 		params.DesktopBrowser0Binary = desktopBrowserBinary(browsers[0])
+		// Pre-parse geometry width/height so the template doesn't need a custom function.
+		width, height := "1920", "1080"
+		if parts := strings.SplitN(geometry, "x", 2); len(parts) == 2 {
+			width, height = parts[0], parts[1]
+		}
+		params.DesktopGeometryWidth = width
+		params.DesktopGeometryHeight = height
 		if network != nil {
 			params.DesktopKasmUser = network.DesktopKasmUser
 			params.DesktopKasmPass = network.DesktopKasmPass
