@@ -15,6 +15,14 @@ set -euo pipefail
 KM_OS_ID="${ID:-amzn}"
 echo "[km-bootstrap] OS detected: ${KM_OS_ID} (${PRETTY_NAME:-unknown})"
 
+# EC2 Ubuntu's apt mirror (REGION.ec2.archive.ubuntu.com) advertises IPv6
+# addresses that are typically unroutable from the instance, so apt package
+# fetches fail with "Network is unreachable". Force apt to IPv4 globally before
+# any apt call below. (No-op on Amazon Linux, which has no apt.)
+if command -v apt-get >/dev/null 2>&1; then
+  echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99km-force-ipv4
+fi
+
 # km_pkg_install <pkg...> — install packages with the platform package manager.
 km_pkg_install() {
   if command -v dnf >/dev/null 2>&1; then
