@@ -2119,7 +2119,14 @@ Plans:
 **Out of scope (v1):** GNOME/KDE, audio, multi-monitor, session recording, Amazon Linux 2023 support, web-based file transfer as a headline feature.
 **Requirements**: DSK-01..DSK-15 (synthetic phase-local IDs, recorded in REQUIREMENTS.md following the Phase 84.2/84.3/89 precedent)
 **Depends on:** Phase 92 (`spec.runtime` schema shape + `IsVSCodeEnabled`/RuntimeVSCodeSpec sibling pattern; `km vscode` CLI/SSM helpers reused)
-**Plans:** 0 plans
+**Plans:** 8 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 93 to break down)
+- [ ] 93-00-PLAN.md — Wave 0: RED Desktop test stubs (Nyquist scaffold) (DSK-15)
+- [ ] 93-01-PLAN.md — Profile schema: RuntimeDesktopSpec + IsDesktopEnabled + JSON Schema (DSK-01, DSK-02, DSK-04)
+- [ ] 93-02-PLAN.md — km validate desktop rules + Ubuntu-only AMI guard (DSK-03)
+- [ ] 93-03-PLAN.md — Compiler threading + idempotent KasmVNC userdata (kiosk/full, loopback, no-SSL) (DSK-05, DSK-06, DSK-07, DSK-11)
+- [ ] 93-04-PLAN.md — Per-sandbox KasmVNC credential at km create (~/.km/desktop/<id>) (DSK-08)
+- [ ] 93-05-PLAN.md — km desktop start/status CLI (mirrors km vscode) (DSK-09, DSK-10)
+- [ ] 93-06-PLAN.md — profiles/desktop.yaml + inventory gate + klanker:desktop skill + docs (DSK-12, DSK-13, DSK-14)
+- [ ] 93-07-PLAN.md — Phase gate + operator live UAT checkpoint (DSK-15)
