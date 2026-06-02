@@ -476,7 +476,7 @@ pattern. Feature: `km desktop` — KasmVNC-backed browser/XFCE remote session.
 |----|-------------|--------|
 | DSK-01-SCHEMA | `spec.runtime.desktop` block added to `pkg/profile/types.go` (`RuntimeDesktopSpec`: `enabled *bool`, `mode string`, `browsers []string`, `geometry string`), sibling to `RuntimeVSCodeSpec` | Planned |
 | DSK-02-HELPER | `IsDesktopEnabled(*RuntimeDesktopSpec) bool` helper, defaulting **false** (nil block or nil `enabled` → false) — opposite of `IsVSCodeEnabled` | Planned |
-| DSK-03-VALIDATE | `km validate` rules: `mode` ∈ {kiosk,full}; `browsers` ⊆ {firefox,chromium,brave}; `browsers` non-empty when `mode: kiosk`; `geometry` matches `^[0-9]+x[0-9]+$`; non-Ubuntu AMI guard when desktop enabled | Planned |
+| DSK-03-VALIDATE | `km validate` rules: `mode` ∈ {kiosk,full}; `browsers` ⊆ {firefox,chromium,chrome,brave}; `browsers` non-empty when `mode: kiosk`; `geometry` matches `^[0-9]+x[0-9]+$`; non-Ubuntu AMI guard when desktop enabled | Planned |
 | DSK-04-SCHEMA-EXPORT | JSON Schema (`pkg/profile/schemas/…`) + `schema_export.go` gain the `spec.runtime.desktop` object schema | Planned |
 | DSK-05-COMPILER-THREAD | Compiler threads `DesktopEnabled`/`DesktopMode`/`DesktopBrowsers`/`DesktopGeometry`/`DesktopKasmCredential` through `service_hcl.go` config (mirrors `VSCodeSSHPubKey`/`VSCodeEnabled`) | Planned |
 | DSK-06-USERDATA-INSTALL | Idempotent userdata block gated by `{{- if .DesktopEnabled }}`: install KasmVNC `.deb` + matchbox-wm (kiosk)/XFCE (full) + selected browsers + fonts/dbus **only if absent** (AMI-bakeable skip) | Planned |

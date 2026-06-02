@@ -65,7 +65,7 @@ operator browser ──https──> localhost:8444
         └─ session (~/.vnc/xstartup):
              kiosk → matchbox-window-manager + <browser> maximized
              full  → exec startxfce4
-                 └─ Firefox / Chromium / Brave
+                 └─ Firefox / Chromium / Chrome / Brave
                         └─ outbound ──> profile's spec.network enforcement (unchanged)
 ```
 
@@ -91,7 +91,7 @@ spec:
     desktop:
       enabled: true          # default FALSE when block absent (heavy; opt-in)
       mode: kiosk            # kiosk | full   (default kiosk)
-      browsers: [firefox]    # subset of [firefox, chromium, brave]; default [firefox]
+      browsers: [firefox]    # subset of [firefox, chromium, chrome, brave]; default [firefox]
                              # kiosk launches browsers[0]; full installs all, none auto-launched
       geometry: 1920x1080    # optional, default 1920x1080
 ```
@@ -102,7 +102,7 @@ spec:
 - JSON schema (`pkg/profile/schemas/…`) + `schema_export.go` updated.
 - `km validate` rules:
   - `mode` ∈ {`kiosk`, `full`}.
-  - `browsers` ⊆ {`firefox`, `chromium`, `brave`}.
+  - `browsers` ⊆ {`firefox`, `chromium`, `chrome`, `brave`}.
   - `browsers` non-empty when `mode: kiosk`.
   - `geometry` matches `^[0-9]+x[0-9]+$` when set.
   - WARN/ERROR when `desktop.enabled` is true and the resolved AMI is not an
@@ -128,8 +128,7 @@ spec:
      (kiosk: matchbox + `browsers[0]` maximized; full: `exec startxfce4`).
   3. Enable + start the KasmVNC systemd unit; bind loopback.
   4. Ownership/permissions for the `sandbox` user; `restorecon` where relevant.
-- Browser install specifics: `firefox`/`chromium` from distro repos; `brave`
-  from the Brave APT repo. (Document the repo add for `brave`.)
+- Browser install specifics: `firefox`/`chromium` from PPAs; `chrome` (Google Chrome) from the Google APT repo (`google-chrome-stable`); `brave` from the Brave APT repo. (`chrome` != `chromium`; both are first-class enum members. Document the repo adds.)
 
 **What it does:** turns profile fields into a self-contained, idempotent,
 AMI-bakeable provisioning script.

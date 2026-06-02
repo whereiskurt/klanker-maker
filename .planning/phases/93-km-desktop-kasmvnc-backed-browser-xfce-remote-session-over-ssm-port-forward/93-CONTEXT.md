@@ -44,14 +44,14 @@ Amazon Linux 2023, web-based file transfer as a headline feature.
   - `enabled *bool` — **default false** when block absent (heavy install; opt-in,
     deliberately opposite of `vscode`'s default-on).
   - `mode string` — `kiosk` | `full`, default `kiosk`.
-  - `browsers []string` — subset of `{firefox, chromium, brave}`, default
+  - `browsers []string` — subset of `{firefox, chromium, chrome, brave}`, default
     `[firefox]`. Kiosk launches `browsers[0]`; full installs all, auto-launches none.
   - `geometry string` — optional, default `1920x1080`.
 - `IsDesktopEnabled(*RuntimeDesktopSpec) bool` helper, defaulting **false**.
 - JSON schema + `schema_export.go` updated.
 
 ### Validation (locked)
-- `km validate`: `mode` ∈ {kiosk, full}; `browsers` ⊆ {firefox, chromium, brave};
+- `km validate`: `mode` ∈ {kiosk, full}; `browsers` ⊆ {firefox, chromium, chrome, brave};
   `browsers` non-empty when `mode: kiosk`; `geometry` matches `^[0-9]+x[0-9]+$`
   when set; WARN/ERROR when `desktop.enabled` is true and the resolved AMI is not
   an Ubuntu slug/family (v1 KasmVNC target constraint).
@@ -65,8 +65,7 @@ Amazon Linux 2023, web-based file transfer as a headline feature.
 - **AMI-bakeable**: packages bake in; per-sandbox credential + config seeded fresh
   at boot (never baked) so one desktop AMI serves all sandboxes. Standard
   `km ami bake` + `spec.runtime.ami`.
-- Browser install: `firefox`/`chromium` from distro repos; `brave` from the Brave
-  APT repo.
+- Browser install: `firefox`/`chromium` from PPAs; `chrome` (Google Chrome) from the Google APT repo (google-chrome-stable); `brave` from the Brave APT repo. NOTE: `chrome` keyword installs Google Chrome; `chromium` is the open-source build — both are first-class.
 - systemd unit auto-starts KasmVNC on every boot (pattern from `km-queue`) so
   `km resume` restores the session.
 

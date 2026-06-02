@@ -129,6 +129,14 @@ add-apt-repository -y ppa:xtradeb/apps
 apt-get update -q
 apt-get install -y -t 'o=LP-PPA-xtradeb' chromium
 
+# Google Chrome (official Google APT repo; always a DEB, never a snap)
+curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+  | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] \
+  http://dl.google.com/linux/chrome/deb/ stable main" \
+  > /etc/apt/sources.list.d/google-chrome.list
+apt-get update -q && apt-get install -y google-chrome-stable
+
 # Brave (official APT repo)
 curl -fsSL https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg \
   | gpg --dearmor -o /usr/share/keyrings/brave-browser-archive-keyring.gpg
@@ -137,6 +145,22 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/brave-browser-archive-keyrin
   > /etc/apt/sources.list.d/brave-browser-release.list
 apt-get update -q && apt-get install -y brave-browser
 ```
+
+**Browser keyword → launch binary mapping** (the profile `browsers` keyword is
+NOT always the executable name — the compiler must map keyword→binary for the
+kiosk `browsers[0]` xstartup launch and for any per-browser install switch):
+
+| `browsers` keyword | apt package | launch binary (kiosk xstartup) |
+|--------------------|-------------|--------------------------------|
+| `firefox` | `firefox` (Mozilla PPA) | `firefox` |
+| `chromium` | `chromium` (xtradeb PPA) | `chromium` |
+| `chrome` | `google-chrome-stable` (Google APT) | `google-chrome-stable` |
+| `brave` | `brave-browser` (Brave APT) | `brave-browser` |
+
+Note `chrome` ≠ `chromium`: the keyword `chrome` installs **Google Chrome**
+(proprietary, with Widevine DRM + proprietary codecs) and `chromium` installs
+the open-source build. Both are first-class enum members; an operator may select
+either or both. The kiosk launch uses the mapped binary, not the raw keyword.
 
 ---
 
@@ -478,6 +502,9 @@ if ! command -v vncserver >/dev/null 2>&1; then
   {{- if eq . "chromium" }}
   add-apt-repository -y ppa:xtradeb/apps && apt-get update -q
   apt-get install -y -t 'o=LP-PPA-xtradeb' chromium
+  {{- end }}
+  {{- if eq . "chrome" }}
+  # ... Google Chrome APT repo setup (dl.google.com) ... → google-chrome-stable
   {{- end }}
   {{- if eq . "brave" }}
   # ... Brave APT repo setup ...

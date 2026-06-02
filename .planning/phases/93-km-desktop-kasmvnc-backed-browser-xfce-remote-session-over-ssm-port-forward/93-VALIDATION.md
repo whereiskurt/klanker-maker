@@ -49,7 +49,7 @@ Task IDs are assigned by the planner; the Requirement → Test mapping is fixed 
 | DSK-04-SCHEMA-EXPORT | unit + inventory | `go test ./pkg/profile/... -run TestSchema` + `./km validate profiles/desktop.yaml` | `pkg/profile/schemas/*`, `schema_export.go` | ⬜ pending |
 | DSK-05-COMPILER-THREAD | unit | `go test ./pkg/compiler/... -run TestUserDataDesktop` | `pkg/compiler/service_hcl.go` | ⬜ pending |
 | DSK-06-USERDATA-INSTALL | unit (golden) | `go test ./pkg/compiler/... -run TestUserDataDesktopEnabled` | `pkg/compiler/userdata_test.go` | ⬜ pending |
-| DSK-07-USERDATA-SESSION | unit (golden) | `go test ./pkg/compiler/... -run TestUserDataDesktopKiosk` (+`...Full`) | `pkg/compiler/userdata_test.go` | ⬜ pending |
+| DSK-07-USERDATA-SESSION | unit (golden) | `go test ./pkg/compiler/... -run TestUserDataDesktopKiosk` (+`...Full`, `...ChromeBinary`) | `pkg/compiler/userdata_test.go` | ⬜ pending |
 | DSK-08-CREDENTIAL | unit | `go test ./internal/app/cmd/... -run TestDesktopCredential` | `internal/app/cmd/create*_test.go` | ⬜ pending |
 | DSK-09-CLI-START | unit | `go test ./internal/app/cmd/... -run TestDesktopStart` | `internal/app/cmd/desktop_test.go` | ⬜ pending |
 | DSK-10-CLI-STATUS | unit | `go test ./internal/app/cmd/... -run TestDesktopStatus` | `internal/app/cmd/desktop_test.go` | ⬜ pending |
@@ -67,7 +67,7 @@ Task IDs are assigned by the planner; the Requirement → Test mapping is fixed 
 
 - [ ] `pkg/profile/types_test.go` — `TestIsDesktopEnabled` stub (RED/skip)
 - [ ] `pkg/profile/validate_test.go` — `TestDesktopValidate*` stubs (RED/skip)
-- [ ] `pkg/compiler/userdata_test.go` — `TestUserDataDesktopEnabled`, `TestUserDataDesktopDisabled`, `TestUserDataDesktopKiosk`, `TestUserDataDesktopFull`, `TestUserDataDesktopCredentialSeed` stubs
+- [ ] `pkg/compiler/userdata_test.go` — `TestUserDataDesktopEnabled`, `TestUserDataDesktopDisabled`, `TestUserDataDesktopKiosk`, `TestUserDataDesktopFull`, `TestUserDataDesktopCredentialSeed`, `TestUserDataDesktopChromeBinary` stubs
 - [ ] `internal/app/cmd/desktop_test.go` — new file mirroring `vscode_test.go` (mock fetcher, mock SSM), stubs behind skip
 - No framework install needed — Go stdlib testing already in use.
 
