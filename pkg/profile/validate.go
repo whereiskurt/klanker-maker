@@ -442,6 +442,10 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		}
 	}
 
+		// Phase 93 (Wave 2) DSK-03: Desktop semantic validation.
+	// Guarded by IsDesktopEnabled — all rules are no-ops when desktop is disabled.
+	errs = append(errs, validateDesktop(p)...)
+
 	// Phase 87 SNAP-02: Layer 1 semantic validation for additionalSnapshots.
 	errs = append(errs, validateAdditionalSnapshots(p)...)
 
@@ -506,6 +510,107 @@ func validateAgentClaudeNoMixedMode(p *SandboxProfile) []ValidationError {
 		}
 	}
 	return nil
+}
+
+// rawAMIIDPatternLocal matches a raw EC2 AMI ID: "ami-" followed by 8-17 lowercase hex chars.
+// Copied locally from pkg/compiler/service_hcl.go (IsRawAMIID) to avoid an import cycle:
+// pkg/profile must not import pkg/compiler (compiler imports profile). Phase 93.
+var rawAMIIDPatternLocal = regexp.MustCompile(`^ami-[0-9a-f]{8,17}$`)
+
+// validateDesktop enforces Phase 93 DSK-03 semantic rules for spec.runtime.desktop.
+// All rules are no-ops when IsDesktopEnabled returns false.
+//
+// Rules:
+//   - mode must be "kiosk" or "full" (empty defaults to "kiosk" → valid)
+//   - each browser must be in {firefox, chromium, chrome, brave}
+//   - when mode == kiosk, browsers must be non-empty
+//   - geometry, if set, must match ^[0-9]+x[0-9]+$ (lowercase x)
+//   - AMI must be ubuntu family: ubuntu- prefix → OK; raw AMI ID → WARN (cannot verify offline);
+//     known non-Ubuntu slug or empty (defaults to AL2023) → hard ERROR
+func validateDesktop(p *SandboxProfile) []ValidationError {
+	if !IsDesktopEnabled(p.Spec.Runtime.Desktop) {
+		return nil
+	}
+	d := p.Spec.Runtime.Desktop
+	var errs []ValidationError
+
+	// --- Mode validation ---
+	resolvedMode := d.Mode
+	if resolvedMode == "" {
+		resolvedMode = "kiosk" // empty defaults to kiosk — valid
+	}
+	if resolvedMode != "kiosk" && resolvedMode != "full" {
+		errs = append(errs, ValidationError{
+			Path:    "spec.runtime.desktop.mode",
+			Message: fmt.Sprintf("desktop.mode %q is not supported; must be one of: kiosk, full", d.Mode),
+		})
+	}
+
+	// --- Browsers validation ---
+	validBrowsers := map[string]bool{
+		"firefox":  true,
+		"chromium": true,
+		"chrome":   true,
+		"brave":    true,
+	}
+	for i, b := range d.Browsers {
+		if !validBrowsers[b] {
+			errs = append(errs, ValidationError{
+				Path:    fmt.Sprintf("spec.runtime.desktop.browsers[%d]", i),
+				Message: fmt.Sprintf("browser %q is not supported; must be one of: firefox, chromium, chrome, brave", b),
+			})
+		}
+	}
+	// kiosk requires at least one browser (matchbox-wm launches browsers[0] fullscreen)
+	if resolvedMode == "kiosk" && len(d.Browsers) == 0 {
+		errs = append(errs, ValidationError{
+			Path:    "spec.runtime.desktop.browsers",
+			Message: "desktop.mode: kiosk requires at least one browser in spec.runtime.desktop.browsers (the first entry is launched fullscreen)",
+		})
+	}
+
+	// --- Geometry validation ---
+	geometryRe := regexp.MustCompile(`^[0-9]+x[0-9]+$`)
+	if d.Geometry != "" && !geometryRe.MatchString(d.Geometry) {
+		errs = append(errs, ValidationError{
+			Path:    "spec.runtime.desktop.geometry",
+			Message: fmt.Sprintf("desktop.geometry %q does not match ^[0-9]+x[0-9]+$ (example: 1920x1080; use lowercase x)", d.Geometry),
+		})
+	}
+
+	// --- AMI / Ubuntu-only guard ---
+	ami := p.Spec.Runtime.AMI
+	switch {
+	case strings.HasPrefix(ami, "ubuntu-"):
+		// Known Ubuntu slug — OK; KasmVNC ships noble + jammy debs
+	case rawAMIIDPatternLocal.MatchString(ami):
+		// Raw AMI ID — cannot determine OS family offline; emit a WARN so the
+		// operator is aware but validation does not block create.
+		errs = append(errs, ValidationError{
+			Path: "spec.runtime.desktop.enabled",
+			Message: fmt.Sprintf(
+				"desktop is enabled but spec.runtime.ami %q is a raw AMI ID — km cannot verify the OS family offline. "+
+					"KasmVNC v1 supports Ubuntu 24.04/22.04 only; ensure your AMI is Ubuntu-based before km create",
+				ami),
+			IsWarning: true,
+		})
+	default:
+		// Known non-Ubuntu slug (e.g. "amazon-linux-2023") or empty (platform
+		// default is Amazon Linux 2023) — KasmVNC has no RHEL/AL2023 packages.
+		amiDesc := ami
+		if amiDesc == "" {
+			amiDesc = "empty (platform default is Amazon Linux 2023)"
+		}
+		errs = append(errs, ValidationError{
+			Path: "spec.runtime.desktop.enabled",
+			Message: fmt.Sprintf(
+				"desktop is enabled but spec.runtime.ami %s is not an Ubuntu slug. "+
+					"KasmVNC v1 supports Ubuntu 24.04 and 22.04 only (set spec.runtime.ami: ubuntu-24.04 or ubuntu-22.04)",
+				amiDesc),
+		})
+	}
+
+	return errs
 }
 
 // validateAdditionalSnapshots enforces Layer 1 (offline, no AWS calls) rules for the
