@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 93-03-PLAN.md (KasmVNC compiler threading + userdata template)
-last_updated: "2026-06-02T20:48:37.613Z"
+stopped_at: Completed 93-05-PLAN.md (km desktop CLI start/status + tests GREEN)
+last_updated: "2026-06-02T20:57:05.015Z"
 last_activity: 2026-06-02
 progress:
   total_phases: 108
   completed_phases: 95
   total_plans: 474
-  completed_plans: 433
+  completed_plans: 434
   percent: 91
 ---
 
@@ -466,6 +466,7 @@ Progress: [█████████░] 91%
 | Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward P01 | 119s | 2 tasks | 3 files |
 | Phase 93 P02 | 171s | 2 tasks | 2 files |
 | Phase 93 P03 | 297s | 2 tasks | 3 files |
+| Phase 93 P05 | 336 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1343,6 +1344,8 @@ Recent decisions affecting current work:
 - [Phase 93]: Copied raw AMI ID regex locally into validate.go to avoid pkg/profile→pkg/compiler import cycle
 - [Phase 93]: Empty mode defaults to kiosk (valid); empty browsers with kiosk is ERROR; empty browsers with full is OK
 - [Phase 93]: Pre-parse DesktopGeometryWidth/Height in generateUserData to avoid template FuncMap; DesktopBrowser0Binary computed field maps chrome→google-chrome-stable; system service (User=sandbox) for kasmvnc.service mirrors km-queue.service pattern
+- [Phase 93]: GenerateDesktopCredential exported (not unexported) because create_test.go from 93-04 uses cmd.GenerateDesktopCredential from external test package
+- [Phase 93]: desktopStatusScript uses systemctl is-active kasmvnc + test -f ~/.kasmpasswd; parseDesktopStatus returns three distinct error messages per failure mode
 
 ### Roadmap Evolution
 
@@ -1461,6 +1464,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-02T20:48:37.604Z
-Stopped at: Completed 93-03-PLAN.md (KasmVNC compiler threading + userdata template)
+Last session: 2026-06-02T20:57:05.005Z
+Stopped at: Completed 93-05-PLAN.md (km desktop CLI start/status + tests GREEN)
 Resume file: None
