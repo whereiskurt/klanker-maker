@@ -1,11 +1,39 @@
 ---
 phase: 93
 slug: km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward
-status: failed
+status: in-progress
 updated: 2026-06-02
-source: live operator UAT (km v0.3.790, sandbox desk-af0a8271, Ubuntu 24.04 EC2)
+source: live operator UAT (km v0.3.790→v0.3.793, Ubuntu 24.04 EC2)
 direction: OS-aware bootstrap (keep Ubuntu) — operator decision 2026-06-02
 ---
+
+## Resolution log (Phase 93.1 — OS-aware bootstrap)
+
+Autonomous work session 2026-06-02 (operator away). The Amazon-Linux-only
+bootstrap is being ported to Ubuntu issue-by-issue, each surfaced by a live boot:
+
+| Fix | Commit | Status |
+|-----|--------|--------|
+| GAP-93-01 example profile uncreateable (notification channel) | (earlier) | ✅ resolved |
+| OS-detect prelude + km_pkg_install + km_ensure_awscli; ssm-agent guarded; git/tmux/iptables/efs via helper | `fix(93): make EC2 userdata bootstrap OS-aware` | ✅ shipped |
+| AWS CLI extraction via python3 (not unzip — absent on Ubuntu, apt lock-contended at boot) — stub + full userdata | `fix(93): extract AWS CLI with python3, not unzip` | ✅ **validated live** (`aws-cli/2.34.59` installed on real Ubuntu box) |
+| GAP-93-02 desktop status distinguishes "installing" vs "not enabled" (unit-file + cloud-init probe) | (same) | ✅ shipped + unit-tested |
+| OS-aware sshd unit (`ssh.service` on Ubuntu; install openssh-server) | `fix(93): OS-aware sshd unit` | ✅ shipped, live boot pending |
+
+**Live boot progression (each boot got further):**
+- v0.3.790 (remote, desk-af0a8271): died at stub `aws: command not found` (Up 77s).
+- v0.3.791 (local, desk-779d7f16): stub aws-install ran but failed at `unzip: command not found` (Up 194s).
+- v0.3.792 (local, desk-7d2ae20d): **AWS CLI installed OK** (`/usr/local/bin/aws`), sidecars downloading, then aborted at `systemctl enable --now sshd` (Ubuntu unit is `ssh`).
+- v0.3.793 (local, desk-7d2ae20d successor): sshd fix in — boot verification in progress.
+
+**Verified to date:** full Go suite green (only pre-existing `TestUnlockCmd` baseline
+fails); rendered desktop userdata passes `bash -n`; AWS CLI python3 install
+confirmed on a real Ubuntu 24.04 sandbox via SSM. **Remaining:** confirm a clean
+boot reaches `kasmvnc active` + `km desktop start` renders Firefox-in-browser;
+then deploy compiler to the create-handler Lambda (`make build-lambdas` clean +
+`km init --dry-run=false`) so REMOTE create works; destroy test sandboxes;
+re-run the `93-VALIDATION.md` manual UAT table.
+
 
 # Phase 93 — UAT Findings (live)
 
