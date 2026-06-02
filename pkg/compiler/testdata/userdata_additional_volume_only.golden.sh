@@ -15,12 +15,22 @@ set -euo pipefail
 KM_OS_ID="${ID:-amzn}"
 echo "[km-bootstrap] OS detected: ${KM_OS_ID} (${PRETTY_NAME:-unknown})"
 
-# EC2 Ubuntu's apt mirror (REGION.ec2.archive.ubuntu.com) advertises IPv6
-# addresses that are typically unroutable from the instance, so apt package
-# fetches fail with "Network is unreachable". Force apt to IPv4 globally before
-# any apt call below. (No-op on Amazon Linux, which has no apt.)
+# km_apt_https — rewrite apt sources from http:// to https://. The sandbox SG
+# allows ONLY 443 egress (no port 80), so apt's default HTTP fetches are blocked;
+# the EC2 Ubuntu mirror and Launchpad PPAs all serve HTTPS. Call after the base
+# sources are present AND after any add-apt-repository. No-op on Amazon Linux.
+km_apt_https() {
+  command -v apt-get >/dev/null 2>&1 || return 0
+  sed -i 's|http://|https://|g' /etc/apt/sources.list 2>/dev/null || true
+  for f in /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
+    [ -e "$f" ] && sed -i 's|http://|https://|g' "$f" 2>/dev/null || true
+  done
+}
+# EC2 Ubuntu's apt mirror also advertises IPv6 addresses that are typically
+# unroutable from the instance, so force apt to IPv4. (No-op on Amazon Linux.)
 if command -v apt-get >/dev/null 2>&1; then
   echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99km-force-ipv4
+  km_apt_https
 fi
 
 # km_pkg_install <pkg...> — install packages with the platform package manager.
@@ -31,6 +41,7 @@ km_pkg_install() {
     yum install -y "$@"
   elif command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
+    km_apt_https
     apt-get update -y -q >/dev/null 2>&1 || true
     apt-get install -y "$@"
   else
