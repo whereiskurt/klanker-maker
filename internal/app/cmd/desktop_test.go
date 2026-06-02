@@ -212,8 +212,8 @@ func TestDesktopStatus(t *testing.T) {
 	})
 }
 
-// TestDesktopCredential is the Wave 0 stub for DSK-08-CREDENTIAL.
-// Wave 3 (93-04): km create writes ~/.km/desktop/<id> user:pass mode 0600; threaded into NetworkConfig.
-func TestDesktopCredential(t *testing.T) {
-	t.Skip("Wave 3 (93-04): km create writes ~/.km/desktop/<id> user:pass mode 0600; threaded into NetworkConfig")
-}
+// NOTE: TestDesktopCredential (DSK-08-CREDENTIAL) is implemented in create_test.go
+// (package cmd_test) by plan 93-04 — the km create credential generation lives there.
+// The Wave 0 stub that previously sat here was removed to avoid a duplicate, orphaned
+// skipped test (two TestDesktopCredential in package cmd vs cmd_test would leave a
+// lingering --- SKIP and trip the 93-07 DSK-15 no-skips gate).
