@@ -1960,10 +1960,31 @@ func TestCLISpec_Agent_AbsenceIsClaudeDefault(t *testing.T) {
 // Wave 1 (93-01) implements the type + helper; Wave 2 (93-02) adds validation.
 // ============================================================
 
-// TestIsDesktopEnabled is the Wave 0 stub for DSK-02-HELPER.
-// Wave 1 (93-01): implement IsDesktopEnabled default-false.
+// TestIsDesktopEnabled verifies the IsDesktopEnabled helper (DSK-02-HELPER).
+// Default is FALSE (opt-in, heavy install) — deliberate opposite of IsVSCodeEnabled.
 func TestIsDesktopEnabled(t *testing.T) {
-	t.Skip("Wave 1 (93-01): implement IsDesktopEnabled default-false")
+	t.Run("nil block returns false", func(t *testing.T) {
+		if profile.IsDesktopEnabled(nil) {
+			t.Error("IsDesktopEnabled(nil) must return false (opt-in default)")
+		}
+	})
+	t.Run("empty block (Enabled nil) returns false", func(t *testing.T) {
+		if profile.IsDesktopEnabled(&profile.RuntimeDesktopSpec{}) {
+			t.Error("IsDesktopEnabled(&RuntimeDesktopSpec{}) must return false (Enabled nil)")
+		}
+	})
+	t.Run("Enabled explicit false returns false", func(t *testing.T) {
+		enabled := false
+		if profile.IsDesktopEnabled(&profile.RuntimeDesktopSpec{Enabled: &enabled}) {
+			t.Error("IsDesktopEnabled with Enabled=&false must return false")
+		}
+	})
+	t.Run("Enabled explicit true returns true", func(t *testing.T) {
+		enabled := true
+		if !profile.IsDesktopEnabled(&profile.RuntimeDesktopSpec{Enabled: &enabled}) {
+			t.Error("IsDesktopEnabled with Enabled=&true must return true")
+		}
+	})
 }
 
 // TestParse_CLISpec_SlackFields_ExplicitFalse verifies that explicit false for
