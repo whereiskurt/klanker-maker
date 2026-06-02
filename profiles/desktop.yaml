@@ -128,7 +128,9 @@ spec:
     events:
       onIdle: false
       onPermission: false
+    # At least one delivery channel must be enabled or `km create` rejects the
+    # profile (km validate only WARNs). Email goes to the operator inbox.
     email:
-      enabled: false
+      enabled: true
     slack:
       enabled: false
