@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 93-01-PLAN.md (RuntimeDesktopSpec + IsDesktopEnabled + desktop JSON Schema)
-last_updated: "2026-06-02T20:40:32.129Z"
+stopped_at: Completed 93-02-PLAN.md (desktop ValidateSemantic rules — mode/browsers/geometry/ubuntu-guard)
+last_updated: "2026-06-02T20:45:00.862Z"
 last_activity: 2026-06-02
 progress:
   total_phases: 108
   completed_phases: 95
   total_plans: 474
-  completed_plans: 431
+  completed_plans: 432
   percent: 91
 ---
 
@@ -464,6 +464,7 @@ Progress: [█████████░] 91%
 | Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating P05 | 24min | 4 tasks | 24 files |
 | Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward P00 | 8min | 2 tasks | 4 files |
 | Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward P01 | 119s | 2 tasks | 3 files |
+| Phase 93 P02 | 171s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1338,6 +1339,8 @@ Recent decisions affecting current work:
 - [Phase 93]: Wave 0 stubs use t.Skip as first/only statement so packages compile before RuntimeDesktopSpec exists (93-01)
 - [Phase 93]: desktop_test.go bodies are skip-only in Wave 0 to avoid duplicate mock declarations with vscode_test.go (same package cmd)
 - [Phase 93-km-desktop]: RuntimeDesktopSpec is opt-in (default false) — opposite of IsVSCodeEnabled default-on; KasmVNC is heavy install
+- [Phase 93]: Copied raw AMI ID regex locally into validate.go to avoid pkg/profile→pkg/compiler import cycle
+- [Phase 93]: Empty mode defaults to kiosk (valid); empty browsers with kiosk is ERROR; empty browsers with full is OK
 
 ### Roadmap Evolution
 
@@ -1456,6 +1459,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-02T20:40:32.120Z
-Stopped at: Completed 93-01-PLAN.md (RuntimeDesktopSpec + IsDesktopEnabled + desktop JSON Schema)
+Last session: 2026-06-02T20:45:00.853Z
+Stopped at: Completed 93-02-PLAN.md (desktop ValidateSemantic rules — mode/browsers/geometry/ubuntu-guard)
 Resume file: None
