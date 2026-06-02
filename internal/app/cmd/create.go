@@ -2658,3 +2658,50 @@ func extractOutputInstanceID(outputs map[string]interface{}) string {
 	}
 	return ""
 }
+
+// GenerateDesktopCredential generates a per-sandbox KasmVNC credential and stores it at
+// ~/.km/desktop/<sandboxID> in "user:pass" format (mode 0600). It threads the user and
+// password into network.DesktopKasmUser and network.DesktopKasmPass.
+//
+// When KM_DESKTOP_KASM_USER + KM_DESKTOP_KASM_PASS are set (Lambda subprocess path),
+// the env values are used directly and no file is written — the operator's laptop already
+// holds the credential file.
+//
+// Phase 93 (DSK-08-CREDENTIAL). Mirrors the VSCode keypair pattern at lines 616-638.
+func GenerateDesktopCredential(homeDir, sandboxID string, network *compiler.NetworkConfig) error {
+	// Lambda subprocess path: reuse the operator-generated credential.
+	if envUser := os.Getenv("KM_DESKTOP_KASM_USER"); envUser != "" {
+		if envPass := os.Getenv("KM_DESKTOP_KASM_PASS"); envPass != "" {
+			network.DesktopKasmUser = envUser
+			network.DesktopKasmPass = envPass
+			return nil
+		}
+	}
+
+	// Local path: generate a fresh random password.
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+	const passwordLen = 16
+	passBuf := make([]byte, passwordLen)
+	randBuf := make([]byte, passwordLen)
+	if _, err := cryptorand.Read(randBuf); err != nil {
+		return fmt.Errorf("generate desktop password: %w", err)
+	}
+	for i := range passBuf {
+		passBuf[i] = alphabet[int(randBuf[i])%len(alphabet)]
+	}
+	pass := string(passBuf)
+	const user = "kasm"
+
+	desktopDir := filepath.Join(homeDir, ".km", "desktop")
+	if err := os.MkdirAll(desktopDir, 0o700); err != nil {
+		return fmt.Errorf("create desktop credential dir: %w", err)
+	}
+	credPath := filepath.Join(desktopDir, sandboxID)
+	if err := os.WriteFile(credPath, []byte(user+":"+pass), 0o600); err != nil {
+		return fmt.Errorf("write desktop credential: %w", err)
+	}
+
+	network.DesktopKasmUser = user
+	network.DesktopKasmPass = pass
+	return nil
+}
