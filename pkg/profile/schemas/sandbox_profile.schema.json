@@ -280,6 +280,35 @@
                   "description": "Enable sshd + authorized_keys provisioning for VS Code Remote-SSH via SSM port-forward. Default true (omit = enabled). Set false to skip SSH provisioning."
                 }
               }
+            },
+            "desktop": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "KasmVNC graphical session provisioning (Phase 93). Opt-in (heavy install) — omitting or setting enabled: false skips all desktop provisioning.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable KasmVNC desktop session provisioning. Default false (opt-in; heavy install). Must be true to provision the desktop."
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": ["kiosk", "full"],
+                  "description": "Desktop mode (default kiosk). kiosk = matchbox-wm + single-browser fullscreen; full = XFCE4 full desktop."
+                },
+                "browsers": {
+                  "type": "array",
+                  "description": "Browsers to install. Subset of [firefox, chromium, chrome, brave]. Default [firefox]. For kiosk mode, browsers[0] is launched.",
+                  "items": {
+                    "type": "string",
+                    "enum": ["firefox", "chromium", "chrome", "brave"]
+                  }
+                },
+                "geometry": {
+                  "type": "string",
+                  "pattern": "^[0-9]+x[0-9]+$",
+                  "description": "VNC display resolution in WxH format (default 1920x1080)."
+                }
+              }
             }
           }
         },
