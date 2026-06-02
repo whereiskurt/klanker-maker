@@ -21,7 +21,11 @@ import (
 const desktopStatusScript = `echo "=== kasmvnc ==="
 systemctl is-active kasmvnc 2>&1 || true
 echo "=== kasmpasswd ==="
-test -f /home/sandbox/.kasmpasswd && echo yes || echo no`
+test -f /home/sandbox/.kasmpasswd && echo yes || echo no
+echo "=== unitfile ==="
+test -f /etc/systemd/system/kasmvnc.service && echo yes || echo no
+echo "=== cloudinit ==="
+cloud-init status 2>/dev/null | head -1 || echo "status: unknown"`
 
 // NewDesktopCmd returns the `km desktop` parent command. Phase 93.
 func NewDesktopCmd(cfg *config.Config) *cobra.Command {
@@ -205,14 +209,32 @@ func runDesktopStatus(ctx context.Context, _ *config.Config, fetcher SandboxFetc
 func parseDesktopStatus(out, sandboxID string) error {
 	kasmActive := strings.Contains(out, "=== kasmvnc ===\nactive")
 	kasmPasswd := strings.Contains(out, "=== kasmpasswd ===\nyes")
+	// unitPresent: the kasmvnc.service unit file is written only by the desktop
+	// userdata block, so it is the authoritative signal that the profile actually
+	// enabled the desktop — distinguishing "not enabled" from "enabled, still
+	// installing/booting" (Phase 93.1, GAP-93-02).
+	unitPresent := strings.Contains(out, "=== unitfile ===\nyes")
+	cloudInitRunning := strings.Contains(out, "status: running")
 
-	switch {
-	case !kasmActive && !kasmPasswd:
-		return fmt.Errorf("desktop not enabled in this sandbox's profile — set spec.runtime.desktop.enabled: true and recreate the sandbox")
-	case !kasmPasswd:
-		return fmt.Errorf("unexpected state: kasmvnc is running but ~/.kasmpasswd is absent — recreate the sandbox")
-	case !kasmActive:
-		return fmt.Errorf("desktop not running — is spec.runtime.desktop.enabled: true set and the sandbox recreated? Try: km shell %s -- sudo systemctl start kasmvnc", sandboxID)
+	if kasmActive && kasmPasswd {
+		return nil
 	}
-	return nil
+
+	// No unit file → the desktop was never provisioned for this sandbox.
+	if !unitPresent {
+		if cloudInitRunning {
+			return fmt.Errorf("desktop not ready yet — the sandbox is still running cloud-init (first boot installs KasmVNC + the browser, which takes a few minutes). Re-check with: km desktop status %s", sandboxID)
+		}
+		return fmt.Errorf("desktop not enabled in this sandbox's profile — set spec.runtime.desktop.enabled: true and recreate the sandbox")
+	}
+
+	// Unit file present → desktop IS enabled; report the in-progress / failed state.
+	switch {
+	case cloudInitRunning:
+		return fmt.Errorf("desktop still provisioning — cloud-init is mid first-boot install (KasmVNC + browser). Wait a few minutes, then: km desktop status %s", sandboxID)
+	case !kasmPasswd:
+		return fmt.Errorf("desktop enabled but ~/.kasmpasswd is not seeded yet — boot may still be in progress; re-check shortly or inspect: km shell %s -- sudo journalctl -u cloud-final", sandboxID)
+	default: // unit present, password seeded, but service not active
+		return fmt.Errorf("desktop installed but kasmvnc is not running — try: km shell %s -- sudo systemctl status kasmvnc", sandboxID)
+	}
 }

@@ -66,14 +66,25 @@ km_pkg_install() {
 km_ensure_awscli() {
   command -v aws >/dev/null 2>&1 && return 0
   echo "[km-bootstrap] AWS CLI not found — installing v2..."
-  km_pkg_install unzip curl >/dev/null 2>&1 || true
   local tmpd
   tmpd=$(mktemp -d)
-  if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "${tmpd}/awscliv2.zip" \
-     && (cd "${tmpd}" && unzip -q awscliv2.zip && ./aws/install); then
-    echo "[km-bootstrap] AWS CLI v2 installed"
+  if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "${tmpd}/awscliv2.zip"; then
+    # Extract WITHOUT depending on 'unzip': it is absent on minimal Ubuntu and
+    # apt is frequently dpkg-lock-contended at early boot. python3 ships on both
+    # Ubuntu and Amazon Linux base images, so use it as the portable extractor.
+    if command -v unzip >/dev/null 2>&1; then
+      (cd "${tmpd}" && unzip -q awscliv2.zip)
+    else
+      (cd "${tmpd}" && python3 -c "import zipfile; zipfile.ZipFile('awscliv2.zip').extractall()")
+    fi
+    chmod -R +x "${tmpd}/aws" 2>/dev/null || true
+    if "${tmpd}/aws/install" 2>/dev/null || bash "${tmpd}/aws/install"; then
+      echo "[km-bootstrap] AWS CLI v2 installed"
+    else
+      echo "[km-bootstrap] ERROR: AWS CLI install step failed" >&2
+    fi
   else
-    echo "[km-bootstrap] ERROR: AWS CLI install failed" >&2
+    echo "[km-bootstrap] ERROR: AWS CLI download failed" >&2
   fi
   rm -rf "${tmpd}"
   export PATH="/usr/local/bin:${PATH}"

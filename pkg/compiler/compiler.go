@@ -139,17 +139,23 @@ export AWS_DEFAULT_REGION="$REGION"
 # step fault-tolerant.
 if ! command -v aws >/dev/null 2>&1; then
   echo "[km-bootstrap-stub] AWS CLI not found — installing v2..."
-  if command -v apt-get >/dev/null 2>&1; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y -q >/dev/null 2>&1 || true
-    apt-get install -y -q unzip curl >/dev/null 2>&1 || true
-  fi
   STUB_TMP=$(mktemp -d)
-  if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "$STUB_TMP/awscliv2.zip" \
-     && (cd "$STUB_TMP" && unzip -q awscliv2.zip && ./aws/install); then
-    echo "[km-bootstrap-stub] AWS CLI v2 installed"
+  if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "$STUB_TMP/awscliv2.zip"; then
+    # Extract WITHOUT 'unzip' (absent on minimal Ubuntu; apt is dpkg-lock
+    # contended at early boot). python3 ships on Ubuntu + Amazon Linux images.
+    if command -v unzip >/dev/null 2>&1; then
+      (cd "$STUB_TMP" && unzip -q awscliv2.zip)
+    else
+      (cd "$STUB_TMP" && python3 -c "import zipfile; zipfile.ZipFile('awscliv2.zip').extractall()")
+    fi
+    chmod -R +x "$STUB_TMP/aws" 2>/dev/null || true
+    if "$STUB_TMP/aws/install" 2>/dev/null || bash "$STUB_TMP/aws/install"; then
+      echo "[km-bootstrap-stub] AWS CLI v2 installed"
+    else
+      echo "[km-bootstrap-stub] ERROR: AWS CLI install step failed"
+    fi
   else
-    echo "[km-bootstrap-stub] ERROR: AWS CLI install failed"
+    echo "[km-bootstrap-stub] ERROR: AWS CLI download failed"
   fi
   rm -rf "$STUB_TMP"
   export PATH="/usr/local/bin:$PATH"
