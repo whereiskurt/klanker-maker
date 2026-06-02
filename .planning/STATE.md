@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 92-05-PLAN.md (agent synthesizers + 11 fixture rewrites + VC-3 reconciliation + docs; VC-1/VC-3/VC-5/VC-11 GREEN)
-last_updated: "2026-06-01T01:32:35.686Z"
-last_activity: 2026-05-31
+stopped_at: Completed 93-00-PLAN.md (Wave 0 Desktop TDD stubs — 12 skipped stubs, repo green)
+last_updated: "2026-06-02T20:28:08.366Z"
+last_activity: 2026-06-02
 progress:
-  total_phases: 107
+  total_phases: 108
   completed_phases: 95
-  total_plans: 466
-  completed_plans: 429
+  total_plans: 474
+  completed_plans: 430
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 92-00 — all 3 tasks done; pre-Phase-92 byte-identity baselines captured,
 Total Plans in Phase: 7 (92-00 → 92-06)
 Current Plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 Status: in-progress
-Last activity: 2026-05-31
+Last activity: 2026-06-02
 
 Wave 1 UNBLOCKED: both byte-identity baselines (userdata + IAM HCL) committed before any Wave 1 source change.
 
@@ -462,6 +462,7 @@ Progress: [█████████░] 91%
 | Phase 92 P03 | 55min | 4 tasks | 36 files |
 | Phase 92 P04 | 20min | 4 tasks | 24 files |
 | Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating P05 | 24min | 4 tasks | 24 files |
+| Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward P00 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1333,6 +1334,8 @@ Recent decisions affecting current work:
 - [Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating]: Claude settings.json synthesizer emits canonical permissions.allow/deny (Wave 0 Option B), not legacy autoApprove/disallowedTools; passthrough merges into permissions object with typed allow/deny winning on collision.
 - [Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating]: VC-3 byte-identity reconciled: strict byte-identity for userdata outside the Claude settings.json blob + proven semantic equivalence (same tool set/trustedDirectories/hooks) for the blob, since canonical permissions.allow intentionally replaces legacy autoApprove. Baseline golden NOT regenerated.
 - [Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating]: Codex config.toml is synthesized (synthesizeCodexConfig) byte-identical to the Phase 70 heredoc and kept in its early userdata slot, preserving codex.yaml initCommands override and the byte-identity contract.
+- [Phase 93]: Wave 0 stubs use t.Skip as first/only statement so packages compile before RuntimeDesktopSpec exists (93-01)
+- [Phase 93]: desktop_test.go bodies are skip-only in Wave 0 to avoid duplicate mock declarations with vscode_test.go (same package cmd)
 
 ### Roadmap Evolution
 
@@ -1451,6 +1454,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-31T23:18:54.436Z
-Stopped at: Completed 92-05-PLAN.md (agent synthesizers + 11 fixture rewrites + VC-3 reconciliation + docs; VC-1/VC-3/VC-5/VC-11 GREEN)
+Last session: 2026-06-02T20:28:08.356Z
+Stopped at: Completed 93-00-PLAN.md (Wave 0 Desktop TDD stubs — 12 skipped stubs, repo green)
 Resume file: None
