@@ -2352,7 +2352,11 @@ systemctl enable km-queue 2>/dev/null || true
 echo "[km-bootstrap] km-queue.service enabled (auto-starts on every boot incl. km resume)"
 # Phase 73: VS Code Remote-SSH access (sshd + authorized_keys + SELinux context)
 systemctl daemon-reload
-systemctl enable --now sshd
+# OpenSSH service: Amazon Linux uses 'sshd.service'; Ubuntu/Debian use
+# 'ssh.service' (and the server may not be preinstalled). Install if absent, then
+# enable whichever unit exists (Phase 93.1: keep AL behaviour, add Ubuntu).
+command -v sshd >/dev/null 2>&1 || dpkg -s openssh-server >/dev/null 2>&1 || km_pkg_install openssh-server || true
+systemctl enable --now sshd 2>/dev/null || systemctl enable --now ssh 2>/dev/null || true
 mkdir -p /home/sandbox/.ssh
 chmod 700 /home/sandbox/.ssh
 cat > /home/sandbox/.ssh/authorized_keys << 'KEY'
