@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 93-04-PLAN.md (KasmVNC credential generation at km create)
-last_updated: "2026-06-02T21:03:30.768Z"
+stopped_at: "Completed 93-06-PLAN.md (operator deliverables: profile, skill, docs)"
+last_updated: "2026-06-02T21:14:17.747Z"
 last_activity: 2026-06-02
 progress:
   total_phases: 108
   completed_phases: 95
   total_plans: 474
-  completed_plans: 435
+  completed_plans: 436
   percent: 91
 ---
 
@@ -468,6 +468,7 @@ Progress: [█████████░] 91%
 | Phase 93 P03 | 297s | 2 tasks | 3 files |
 | Phase 93 P05 | 336 | 2 tasks | 4 files |
 | Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward P04 | 10min | 1 tasks | 2 files |
+| Phase 93-km-desktop P06 | 363 | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -1349,6 +1350,8 @@ Recent decisions affecting current work:
 - [Phase 93]: desktopStatusScript uses systemctl is-active kasmvnc + test -f ~/.kasmpasswd; parseDesktopStatus returns three distinct error messages per failure mode
 - [Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward]: Export GenerateDesktopCredential for testability from package cmd_test; randomPassword extracted as named helper with error return
 - [Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward]: desktop-creds.txt S3 upload in runCreateRemote mirrors vscode-pubkey.txt; Lambda subprocess uses KM_DESKTOP_KASM_USER/PASS env vars instead of re-generating
+- [Phase 93-06]: profiles/desktop.yaml uses ubuntu-24.04 AMI, kiosk mode, firefox browser; schema required sourceAccess + allowedHosts added
+- [Phase 93-06]: Plugin version bumped 0.3.0→0.4.0 in lockstep across plugin.json + marketplace.json
 
 ### Roadmap Evolution
 
@@ -1467,6 +1470,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-02T21:03:30.759Z
-Stopped at: Completed 93-04-PLAN.md (KasmVNC credential generation at km create)
+Last session: 2026-06-02T21:14:17.736Z
+Stopped at: Completed 93-06-PLAN.md (operator deliverables: profile, skill, docs)
 Resume file: None

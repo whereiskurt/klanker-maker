@@ -2119,7 +2119,7 @@ Plans:
 **Out of scope (v1):** GNOME/KDE, audio, multi-monitor, session recording, Amazon Linux 2023 support, web-based file transfer as a headline feature.
 **Requirements**: DSK-01..DSK-15 (synthetic phase-local IDs, recorded in REQUIREMENTS.md following the Phase 84.2/84.3/89 precedent)
 **Depends on:** Phase 92 (`spec.runtime` schema shape + `IsVSCodeEnabled`/RuntimeVSCodeSpec sibling pattern; `km vscode` CLI/SSM helpers reused)
-**Plans:** 6/8 plans executed
+**Plans:** 7/8 plans executed
 
 Plans:
 - [ ] 93-00-PLAN.md — Wave 0: RED Desktop test stubs (Nyquist scaffold) (DSK-15)
