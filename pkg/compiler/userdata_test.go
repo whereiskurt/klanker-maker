@@ -2147,3 +2147,46 @@ func TestUserdataBackwardCompat_ZeroDiffNoSnapshots(t *testing.T) {
 		t.Error("rendered userdata MUST NOT contain mount section header when no additional volumes/snapshots are configured")
 	}
 }
+
+// ============================================================
+// Phase 93 Wave 0: Desktop userdata stubs (DSK-05, DSK-06, DSK-07, DSK-08, DSK-11)
+// Wave 2 (93-03) implements the KasmVNC userdata rendering.
+// ============================================================
+
+// TestUserDataDesktopEnabled is the Wave 0 stub for DSK-06-USERDATA-INSTALL.
+// Wave 2 (93-03): asserts KasmVNC install block + kasmpasswd seed emitted.
+func TestUserDataDesktopEnabled(t *testing.T) {
+	t.Skip("Wave 2 (93-03): asserts KasmVNC install block + kasmpasswd seed emitted")
+}
+
+// TestUserDataDesktopDisabled is the Wave 0 stub for DSK-05-COMPILER-THREAD.
+// Wave 2 (93-03): asserts disabled profile emits no desktop block.
+func TestUserDataDesktopDisabled(t *testing.T) {
+	t.Skip("Wave 2 (93-03): asserts disabled profile emits no desktop block")
+}
+
+// TestUserDataDesktopKiosk is the Wave 0 stub for DSK-07-USERDATA-SESSION.
+// Wave 2 (93-03): asserts kiosk xstartup matchbox + browsers[0]; kasmvnc.yaml interface 127.0.0.1 + require_ssl false.
+// Also covers DSK-11-SECURITY (interface: 127.0.0.1 + require_ssl: false assertion).
+func TestUserDataDesktopKiosk(t *testing.T) {
+	t.Skip("Wave 2 (93-03): asserts kiosk xstartup matchbox + browsers[0]; kasmvnc.yaml interface 127.0.0.1 + require_ssl false")
+}
+
+// TestUserDataDesktopFull is the Wave 0 stub for DSK-07-USERDATA-SESSION.
+// Wave 2 (93-03): asserts full xstartup exec startxfce4.
+func TestUserDataDesktopFull(t *testing.T) {
+	t.Skip("Wave 2 (93-03): asserts full xstartup exec startxfce4")
+}
+
+// TestUserDataDesktopCredentialSeed is the Wave 0 stub for DSK-08-CREDENTIAL.
+// Wave 2 (93-03): asserts kasmvncpasswd seeded from DesktopKasmUser/Pass.
+func TestUserDataDesktopCredentialSeed(t *testing.T) {
+	t.Skip("Wave 2 (93-03): asserts kasmvncpasswd seeded from DesktopKasmUser/Pass")
+}
+
+// TestUserDataDesktopChromeBinary is the Wave 0 stub for DSK-07-USERDATA-SESSION.
+// Wave 2 (93-03): browsers [chrome] → installs google-chrome-stable AND xstartup
+// launches google-chrome-stable (not raw keyword).
+func TestUserDataDesktopChromeBinary(t *testing.T) {
+	t.Skip("Wave 2 (93-03): browsers [chrome] → installs google-chrome-stable AND xstartup launches google-chrome-stable (not raw keyword)")
+}
