@@ -5,13 +5,70 @@
 set -euo pipefail
 
 # ============================================================
+# 0. OS abstraction (Phase 93.1: Amazon Linux 2023 + Ubuntu 24.04/22.04)
+# The base bootstrap historically assumed Amazon Linux (yum/dnf + a
+# preinstalled AWS CLI). Ubuntu (required by the remote desktop feature)
+# ships neither, so detect the OS and provide portable helpers BEFORE any
+# package install or aws call below.
+# ============================================================
+. /etc/os-release 2>/dev/null || true
+KM_OS_ID="${ID:-amzn}"
+echo "[km-bootstrap] OS detected: ${KM_OS_ID} (${PRETTY_NAME:-unknown})"
+
+# km_pkg_install <pkg...> — install packages with the platform package manager.
+km_pkg_install() {
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y "$@"
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y "$@"
+  elif command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y -q >/dev/null 2>&1 || true
+    apt-get install -y "$@"
+  else
+    echo "[km-bootstrap] WARN: no supported package manager for: $*" >&2
+    return 1
+  fi
+}
+
+# km_ensure_awscli — install the AWS CLI v2 if absent (Ubuntu base AMIs lack it;
+# Amazon Linux ships it). Runs before the proxy/iptables enforcement is
+# configured, and the SG allows broad 443 egress, so the public installer at
+# awscli.amazonaws.com is reachable.
+km_ensure_awscli() {
+  command -v aws >/dev/null 2>&1 && return 0
+  echo "[km-bootstrap] AWS CLI not found — installing v2..."
+  km_pkg_install unzip curl >/dev/null 2>&1 || true
+  local tmpd
+  tmpd=$(mktemp -d)
+  if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "${tmpd}/awscliv2.zip" \
+     && (cd "${tmpd}" && unzip -q awscliv2.zip && ./aws/install); then
+    echo "[km-bootstrap] AWS CLI v2 installed"
+  else
+    echo "[km-bootstrap] ERROR: AWS CLI install failed" >&2
+  fi
+  rm -rf "${tmpd}"
+  export PATH="/usr/local/bin:${PATH}"
+  hash -r 2>/dev/null || true
+}
+km_ensure_awscli
+
+# ============================================================
 # 1. SSM Agent: install and start
 # ============================================================
-echo "[km-bootstrap] Installing amazon-ssm-agent..."
-yum install -y amazon-ssm-agent 2>&1 | tee -a /var/log/km-bootstrap.log
-systemctl enable amazon-ssm-agent
-systemctl start amazon-ssm-agent
-echo "[km-bootstrap] SSM agent started"
+if command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+  echo "[km-bootstrap] Installing amazon-ssm-agent..."
+  km_pkg_install amazon-ssm-agent 2>&1 | tee -a /var/log/km-bootstrap.log
+  systemctl enable amazon-ssm-agent
+  systemctl start amazon-ssm-agent
+  echo "[km-bootstrap] SSM agent started"
+else
+  # Ubuntu/Debian: amazon-ssm-agent ships preinstalled as a snap on Canonical's
+  # EC2 images (the unit is snap.amazon-ssm-agent.amazon-ssm-agent). It is
+  # already running (it is how km reaches the box), so do not reinstall/enable
+  # under the Amazon-Linux unit name — that would fail.
+  echo "[km-bootstrap] amazon-ssm-agent assumed preinstalled (Ubuntu snap) — skipping install"
+fi
 
 # ============================================================
 # 1.5. Sandbox + sidecar users: create early so a later userdata
@@ -1491,7 +1548,7 @@ echo "[km-bootstrap] km-queue-runner installed at /opt/km/bin/km-queue-runner"
 # kicked operator-side (via SSM systemctl start) before initCommands have finished.
 # Without tmux, the runner can't spawn per-entry sessions and entry 001 fails 127.
 if ! command -v tmux >/dev/null 2>&1; then
-  (dnf install -y tmux 2>&1 || yum install -y tmux 2>&1) | tail -3
+  km_pkg_install tmux 2>&1 | tail -3
 fi
 echo "[km-bootstrap] tmux present: $(command -v tmux || echo MISSING)"
 
@@ -2086,7 +2143,7 @@ echo "[km-bootstrap] Configuring iptables DNAT..."
 
 # Amazon Linux 2023 uses nftables — install iptables compatibility layer
 if ! command -v iptables &>/dev/null; then
-  yum install -y iptables-nft 2>/dev/null || yum install -y iptables 2>/dev/null || true
+  km_pkg_install iptables-nft 2>/dev/null || km_pkg_install iptables 2>/dev/null || true
 fi
 
 # IMDS exemption MUST be inserted first (-I inserts at top of chain).
