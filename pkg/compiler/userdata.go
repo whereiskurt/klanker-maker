@@ -2581,10 +2581,17 @@ echo "[km-bootstrap] VS Code Remote-SSH configured (authorized_keys written)"
 # Step 1: Install packages if not already present (idempotent — AMI-bakeable).
 # The guard allows a baked AMI to skip reinstall while always reseeding credentials/config.
 if ! command -v vncserver >/dev/null 2>&1; then
-  apt-get install -y dbus-x11 fonts-dejavu fonts-liberation x11-xserver-utils
+  apt-get update -y -q || true
+  # fonts-dejavu is a removed metapackage on Ubuntu 24.04 (noble) — use
+  # fonts-dejavu-core. Also pull the tooling the later steps need but that is
+  # absent on minimal Ubuntu cloud images: software-properties-common
+  # (add-apt-repository), gnupg (gpg), curl, ca-certificates.
+  apt-get install -y dbus-x11 fonts-dejavu-core fonts-liberation x11-xserver-utils \
+    software-properties-common ca-certificates curl gnupg
   UBUNTU_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME}")
   KASMVNC_DEB="kasmvncserver_${UBUNTU_CODENAME}_1.4.0_amd64.deb"
-  wget -q -O "/tmp/${KASMVNC_DEB}" \
+  # curl (not wget — wget is not guaranteed on minimal Ubuntu; curl is present).
+  curl -fsSL -o "/tmp/${KASMVNC_DEB}" \
     "https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/${KASMVNC_DEB}"
   apt-get install -y "/tmp/${KASMVNC_DEB}"
   rm -f "/tmp/${KASMVNC_DEB}"
