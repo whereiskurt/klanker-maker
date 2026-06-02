@@ -463,6 +463,38 @@ Phase 84.2/84.3 pattern.
 *Last updated: 2026-05-26 — Phase 89 synthetic IDs added for plan-checker traceability (23 IDs covering schema, KMS module, bootstrap CLI, compiler/userdata, lifecycle, doctor, sidecar deploy, docs, UAT)*
 
 ---
+
+## Phase 93 — Synthetic IDs (phase-local)
+
+These IDs are phase-local and synthetic — they derive from the Phase 93 design
+spec (`docs/superpowers/specs/2026-06-02-km-desktop-remote-browser-design.md`)
+and `93-CONTEXT.md`. Phase 93's ROADMAP entry recorded "Requirements: TBD"; these
+IDs are minted here for plan-checker traceability following the Phase 84.2/84.3/89
+pattern. Feature: `km desktop` — KasmVNC-backed browser/XFCE remote session.
+
+| ID | Description | Status |
+|----|-------------|--------|
+| DSK-01-SCHEMA | `spec.runtime.desktop` block added to `pkg/profile/types.go` (`RuntimeDesktopSpec`: `enabled *bool`, `mode string`, `browsers []string`, `geometry string`), sibling to `RuntimeVSCodeSpec` | Planned |
+| DSK-02-HELPER | `IsDesktopEnabled(*RuntimeDesktopSpec) bool` helper, defaulting **false** (nil block or nil `enabled` → false) — opposite of `IsVSCodeEnabled` | Planned |
+| DSK-03-VALIDATE | `km validate` rules: `mode` ∈ {kiosk,full}; `browsers` ⊆ {firefox,chromium,brave}; `browsers` non-empty when `mode: kiosk`; `geometry` matches `^[0-9]+x[0-9]+$`; non-Ubuntu AMI guard when desktop enabled | Planned |
+| DSK-04-SCHEMA-EXPORT | JSON Schema (`pkg/profile/schemas/…`) + `schema_export.go` gain the `spec.runtime.desktop` object schema | Planned |
+| DSK-05-COMPILER-THREAD | Compiler threads `DesktopEnabled`/`DesktopMode`/`DesktopBrowsers`/`DesktopGeometry`/`DesktopKasmCredential` through `service_hcl.go` config (mirrors `VSCodeSSHPubKey`/`VSCodeEnabled`) | Planned |
+| DSK-06-USERDATA-INSTALL | Idempotent userdata block gated by `{{- if .DesktopEnabled }}`: install KasmVNC `.deb` + matchbox-wm (kiosk)/XFCE (full) + selected browsers + fonts/dbus **only if absent** (AMI-bakeable skip) | Planned |
+| DSK-07-USERDATA-SESSION | userdata seeds `~/.vnc/xstartup` (kiosk: matchbox + `browsers[0]` maximized; full: `exec startxfce4`), `~/.vnc/kasmvnc.yaml` (SSL off, clipboard on, geometry), enables systemd unit, binds loopback | Planned |
+| DSK-08-CREDENTIAL | Per-sandbox KasmVNC credential generated at `km create`, stored at `~/.km/desktop/<id>`, threaded into compiler config, seeded into `~/.kasmpasswd` fresh at boot, **never baked** | Planned |
+| DSK-09-CLI-START | `km desktop start <id> [--local-port 8444]`: local-port probe → fetch DDB → instance/region → SSM pre-flight (KasmVNC active) → print `https://localhost:PORT/` + credential → blocking SSM port-forward | Planned |
+| DSK-10-CLI-STATUS | `km desktop status <id>`: one-round-trip SSM probe of the KasmVNC unit, one-line health summary, non-zero exit when unhealthy (mirrors `parseVSCodeStatus`) | Planned |
+| DSK-11-SECURITY | KasmVNC + session bind 127.0.0.1 only; SSL disabled justified by loopback + encrypted SSM tunnel; SSM port-forward is sole ingress; per-sandbox credential defense-in-depth | Planned |
+| DSK-12-PROFILE-EXAMPLE | `profiles/desktop.yaml` (kiosk-Firefox example) added and wired into `scripts/validate-all-profiles.sh` | Planned |
+| DSK-13-SKILL | `klanker:desktop` user-invocable skill added alongside `klanker:vscode`; `plugin.json` + `marketplace.json` version bumped in lockstep | Planned |
+| DSK-14-DOCS | `docs/desktop.md` runbook + `CLAUDE.md` "Where to look" row/section + `OPERATOR-GUIDE.md` section | Planned |
+| DSK-15-TESTS | Profile validate tests, compiler userdata tests (mirroring `TestUserDataVSCode*`: kiosk/full xstartup, credential seed, loopback bind, disabled-emits-nothing, missing-credential errors, idempotent guard), `desktop_test.go` (port-in-use, pre-flight parse, status, start prints URL+credential) | Planned |
+
+---
+
+*Last updated: 2026-06-02 — Phase 93 synthetic IDs added for plan-checker traceability (15 IDs covering schema, helper, validation, compiler/userdata, credential, CLI, security, profile example, skill, docs, tests)*
+
+---
 *Requirements defined: 2026-03-21*
 *Last updated: 2026-03-21 — PROV-09, PROV-10 added; ECS moved from Out of Scope to v1; k8s added to v2; Docker/local remains out of scope*
 *Last updated: 2026-03-21 — INFR-08 added: no cross-repo dependency on defcon.run.34; all modules and app code must be copied and adapted into Klanker Maker repo*
