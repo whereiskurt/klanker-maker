@@ -18,6 +18,7 @@ PROFILES=(
   profiles/ao.yaml
   profiles/codex.yaml
   profiles/dc34.yaml
+  profiles/desktop.yaml
   profiles/dc34.ami.yaml
   profiles/example-additional-snapshots.yaml
   profiles/goose.yaml
