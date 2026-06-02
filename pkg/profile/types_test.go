@@ -1955,6 +1955,17 @@ func TestCLISpec_Agent_AbsenceIsClaudeDefault(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Phase 93 Wave 0: Desktop test stubs (DSK-02 / SNAP-15-TESTS)
+// Wave 1 (93-01) implements the type + helper; Wave 2 (93-02) adds validation.
+// ============================================================
+
+// TestIsDesktopEnabled is the Wave 0 stub for DSK-02-HELPER.
+// Wave 1 (93-01): implement IsDesktopEnabled default-false.
+func TestIsDesktopEnabled(t *testing.T) {
+	t.Skip("Wave 1 (93-01): implement IsDesktopEnabled default-false")
+}
+
 // TestParse_CLISpec_SlackFields_ExplicitFalse verifies that explicit false for
 // *bool Slack fields round-trips as non-nil pointer to false (not nil).
 // This is the key bool-vs-*bool discrimination test.

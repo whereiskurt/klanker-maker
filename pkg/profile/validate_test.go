@@ -1206,3 +1206,32 @@ func TestValidateAdditionalSnapshots_Layer1(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================
+// Phase 93 Wave 0: Desktop semantic validation stubs (DSK-03)
+// Wave 2 (93-02) implements ValidateSemantic desktop checks.
+// ============================================================
+
+// TestDesktopValidateMode is the Wave 0 stub for DSK-03-VALIDATE.
+// Wave 2 (93-02): asserts mode ∈ {kiosk, full}; invalid mode → ERROR.
+func TestDesktopValidateMode(t *testing.T) {
+	t.Skip("Wave 2 (93-02): implement desktop semantic validation")
+}
+
+// TestDesktopValidateBrowsers is the Wave 0 stub for DSK-03-VALIDATE.
+// Wave 2 (93-02): asserts browsers ⊆ {firefox, chromium, brave} and non-empty for kiosk mode.
+func TestDesktopValidateBrowsers(t *testing.T) {
+	t.Skip("Wave 2 (93-02): implement desktop semantic validation")
+}
+
+// TestDesktopValidateGeometry is the Wave 0 stub for DSK-03-VALIDATE.
+// Wave 2 (93-02): asserts geometry matches `^[0-9]+x[0-9]+$`.
+func TestDesktopValidateGeometry(t *testing.T) {
+	t.Skip("Wave 2 (93-02): implement desktop semantic validation")
+}
+
+// TestDesktopValidateUbuntuGuard is the Wave 0 stub for DSK-03-VALIDATE.
+// Wave 2 (93-02): asserts non-ubuntu slug → ERROR; raw AMI ID → WARN.
+func TestDesktopValidateUbuntuGuard(t *testing.T) {
+	t.Skip("Wave 2 (93-02): implement desktop semantic validation")
+}
