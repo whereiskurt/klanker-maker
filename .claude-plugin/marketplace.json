@@ -1,14 +1,14 @@
 {
   "name": "klanker-maker",
-  "description": "Klanker Maker sandbox platform — agent-side email/Slack/operator skills + operator-side init/vscode/cluster skills",
+  "description": "Klanker Maker sandbox platform — agent-side email/Slack/operator skills + operator-side init/vscode/desktop/cluster skills",
   "owner": {
     "name": "whereiskurt"
   },
   "plugins": [
     {
       "name": "klanker",
-      "description": "Sandbox email/Slack/operator orchestration, platform init, VS Code Remote-SSH, and cross-account k8s IRSA",
-      "version": "0.3.0",
+      "description": "Sandbox email/Slack/operator orchestration, platform init, VS Code Remote-SSH, remote browser desktop (KasmVNC), and cross-account k8s IRSA",
+      "version": "0.4.0",
       "source": "./"
     }
   ]
