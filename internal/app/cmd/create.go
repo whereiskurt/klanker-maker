@@ -638,6 +638,25 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 	}
 
+	// Step 6e: Phase 93 — generate per-sandbox KasmVNC credential on the operator's laptop.
+	// When KM_DESKTOP_KASM_USER/KM_DESKTOP_KASM_PASS are set (Lambda subprocess path), those
+	// are reused directly (no file write). Otherwise a fresh credential is written to
+	// ~/.km/desktop/<id> and threaded into NetworkConfig for the userdata template.
+	// Mirrors the VSCode keypair pattern at Step 6d above.
+	if profile.IsDesktopEnabled(resolvedProfile.Spec.Runtime.Desktop) {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("locate home directory for desktop credential: %w", err)
+		}
+		if err := GenerateDesktopCredential(homeDir, sandboxID, network); err != nil {
+			return fmt.Errorf("desktop credential: %w", err)
+		}
+		if network.DesktopKasmPass != os.Getenv("KM_DESKTOP_KASM_PASS") || os.Getenv("KM_DESKTOP_KASM_PASS") == "" {
+			credPath := filepath.Join(homeDir, ".km", "desktop", sandboxID)
+			fmt.Fprintf(os.Stderr, "  + Desktop credential written to %s\n", credPath)
+		}
+	}
+
 	// Step 7: Compile profile into Terragrunt/Docker artifacts.
 	// For docker substrate, compile once and dispatch immediately — no AZ retry loop needed.
 	// Docker substrate does not use EBS volumes — BDM lookup is not needed; pass nil.
@@ -2073,6 +2092,24 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		fmt.Fprintf(os.Stderr, "  ✓ VS Code keypair written to %s\n", privPath)
 	}
 
+	// Phase 93: generate per-sandbox KasmVNC credential on the operator's laptop
+	// before remote compile. The credential is embedded into the userdata template at
+	// boot (Plan 93-03). Mirrors the VSCode keypair block above.
+	// Credential is written to ~/.km/desktop/<id> and uploaded as desktop-creds.txt
+	// so the create-handler Lambda can set KM_DESKTOP_KASM_USER/KM_DESKTOP_KASM_PASS
+	// for the km create subprocess (which then reads env instead of writing its own file).
+	if profile.IsDesktopEnabled(resolvedProfile.Spec.Runtime.Desktop) {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("locate home directory for desktop credential: %w", err)
+		}
+		if err := GenerateDesktopCredential(homeDir, sandboxID, network); err != nil {
+			return "", fmt.Errorf("desktop credential (remote): %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "  ✓ Desktop credential written to %s\n",
+			filepath.Join(homeDir, ".km", "desktop", sandboxID))
+	}
+
 	// Step 7: Compile profile into artifacts
 	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network, remoteAmiBDMDevices)
 	if err != nil {
@@ -2140,6 +2177,17 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		toUpload = append(toUpload, artifact{
 			key:     artifactPrefix + "/vscode-pubkey.txt",
 			content: network.VSCodeSSHPubKey,
+			mime:    "text/plain",
+		})
+	}
+	// Phase 93: upload KasmVNC credential so the create-handler Lambda can propagate
+	// KM_DESKTOP_KASM_USER/KM_DESKTOP_KASM_PASS to the km create subprocess.
+	// The Lambda subprocess then reads these env vars (Step 6e) instead of regenerating,
+	// ensuring operator ~/.km/desktop/<id> and sandbox authorized credential agree.
+	if network.DesktopKasmUser != "" && network.DesktopKasmPass != "" {
+		toUpload = append(toUpload, artifact{
+			key:     artifactPrefix + "/desktop-creds.txt",
+			content: network.DesktopKasmUser + ":" + network.DesktopKasmPass,
 			mime:    "text/plain",
 		})
 	}
@@ -2659,6 +2707,22 @@ func extractOutputInstanceID(outputs map[string]interface{}) string {
 	return ""
 }
 
+// randomPassword returns an n-character base62 password using crypto/rand.
+// The returned string contains only [A-Za-z0-9] — never a colon or newline —
+// so it is safe to store in "user:pass" credential files.
+func randomPassword(n int) (string, error) {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+	buf := make([]byte, n)
+	randBuf := make([]byte, n)
+	if _, err := cryptorand.Read(randBuf); err != nil {
+		return "", fmt.Errorf("cryptorand read: %w", err)
+	}
+	for i := range buf {
+		buf[i] = alphabet[int(randBuf[i])%len(alphabet)]
+	}
+	return string(buf), nil
+}
+
 // GenerateDesktopCredential generates a per-sandbox KasmVNC credential and stores it at
 // ~/.km/desktop/<sandboxID> in "user:pass" format (mode 0600). It threads the user and
 // password into network.DesktopKasmUser and network.DesktopKasmPass.
@@ -2679,17 +2743,10 @@ func GenerateDesktopCredential(homeDir, sandboxID string, network *compiler.Netw
 	}
 
 	// Local path: generate a fresh random password.
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-	const passwordLen = 16
-	passBuf := make([]byte, passwordLen)
-	randBuf := make([]byte, passwordLen)
-	if _, err := cryptorand.Read(randBuf); err != nil {
+	pass, err := randomPassword(16)
+	if err != nil {
 		return fmt.Errorf("generate desktop password: %w", err)
 	}
-	for i := range passBuf {
-		passBuf[i] = alphabet[int(randBuf[i])%len(alphabet)]
-	}
-	pass := string(passBuf)
 	const user = "kasm"
 
 	desktopDir := filepath.Join(homeDir, ".km", "desktop")

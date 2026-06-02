@@ -514,7 +514,7 @@ func TestDesktopCredentialSource(t *testing.T) {
 		name    string
 		pattern string
 	}{
-		{"generateDesktopCredential helper", "func generateDesktopCredential("},
+		{"GenerateDesktopCredential helper", "func GenerateDesktopCredential("},
 		{"randomPassword helper", "func randomPassword("},
 		{"IsDesktopEnabled guard (local)", "IsDesktopEnabled"},
 		{"KM_DESKTOP_KASM_USER env", "KM_DESKTOP_KASM_USER"},
