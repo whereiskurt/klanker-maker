@@ -31,11 +31,13 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |
+| Run a remote browser/desktop in a sandbox via km desktop | `klanker:desktop` skill |
 | Cross-account k8s (IRSA) cluster onboarding | `klanker:cluster` skill |
 | Full operator runbook | `OPERATOR-GUIDE.md` |
 | Email protocol deep-dive (SES, IAM, signing) | `docs/multi-agent-email.md` |
 | Slack runbook (full setup, troubleshooting) | `docs/slack-notifications.md` |
 | VS Code runbook | `docs/vscode.md` |
+| Remote browser/desktop runbook (KasmVNC, kiosk, full XFCE, AMI-bake) | `docs/desktop.md` (Phase 93) |
 | Snapshot-backed EBS volumes in profiles | `OPERATOR-GUIDE.md` § additionalSnapshots |
 | Codex parity, `spec.agent.default`, Slack prefix routing & agent switching | `docs/codex-parity.md` (Phase 70) |
 | Structured Claude/Codex tool gating via `spec.agent:`, synthesizers, asymmetry note | `docs/agent-tool-gating.md` (Phase 92) |
@@ -72,6 +74,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km vscode start <sandbox-id>` — open SSM port-forward + ssh-config Host entry for VS Code Remote-SSH (`--local-port`)
 - `km vscode status <sandbox-id>` — check sshd state + authorized_keys presence
 - `km vscode rekey <sandbox-id>` — rotate per-sandbox keypair without `km destroy && km create` (`--force`, `--yes`)
+- `km desktop start <sandbox-id>` — open SSM port-forward to KasmVNC graphical session; prints `https://localhost:8444/` + credential (`--local-port`)
+- `km desktop status <sandbox-id>` — check KasmVNC unit state on the sandbox
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role
