@@ -3640,6 +3640,29 @@ type userDataParams struct {
 	// generated locally by sshkey.GenerateAndWrite during km create. Empty when VSCodeEnabled
 	// is false. Phase 73.
 	VSCodeSSHPubKey string
+	// DesktopEnabled gates the KasmVNC install + session block. Derived from
+	// profile.IsDesktopEnabled(p.Spec.Runtime.Desktop). Phase 93.
+	DesktopEnabled bool
+	// DesktopMode is "kiosk" (matchbox-wm + single browser) or "full" (XFCE4 desktop).
+	// Defaults to "kiosk" when absent. Phase 93.
+	DesktopMode string
+	// DesktopBrowsers is the list of browser keywords to install (firefox, chromium, chrome, brave).
+	// Defaults to ["firefox"] when absent. Phase 93.
+	DesktopBrowsers []string
+	// DesktopGeometry is the VNC display resolution in "WxH" format (e.g. "1920x1080").
+	// Defaults to "1920x1080" when absent. Phase 93.
+	DesktopGeometry string
+	// DesktopKasmUser is the KasmVNC username. Threaded from NetworkConfig.DesktopKasmUser.
+	// Empty when DesktopEnabled is false. Phase 93.
+	DesktopKasmUser string
+	// DesktopKasmPass is the KasmVNC password. Threaded from NetworkConfig.DesktopKasmPass.
+	// Empty when DesktopEnabled is false. Phase 93.
+	DesktopKasmPass string
+	// DesktopBrowser0Binary is the launch binary for the primary kiosk browser (browsers[0]).
+	// Mapped from keyword to binary per the browser keyword→binary table:
+	//   firefox→firefox, chromium→chromium, chrome→google-chrome-stable, brave→brave-browser.
+	// Empty when DesktopEnabled is false or DesktopBrowsers is empty. Phase 93.
+	DesktopBrowser0Binary string
 	// NotifySlackEnabled gates conditional emission of the runtime SSM-fetch
 	// bootstrap step that polls /sandbox/{id}/slack-channel-id and
 	// /km/slack/bridge-url, writing them into /etc/profile.d/km-slack-runtime.sh.
@@ -3668,6 +3691,28 @@ type userDataParams struct {
 // Exported for use in tests that need direct template access.
 func parseUserDataTemplate() (*template.Template, error) {
 	return template.New("userdata").Parse(userDataTemplate)
+}
+
+// desktopBrowserBinary maps a browser keyword from spec.runtime.desktop.browsers
+// to the actual launch binary name. The keyword is used in the YAML profile; the
+// binary is what gets launched in the kiosk xstartup script.
+//
+// Mapping (Phase 93):
+//
+//	firefox  → firefox          (Mozilla PPA DEB)
+//	chromium → chromium         (xtradeb PPA DEB)
+//	chrome   → google-chrome-stable (Google APT repo DEB)
+//	brave    → brave-browser    (Brave APT repo DEB)
+func desktopBrowserBinary(keyword string) string {
+	switch keyword {
+	case "chrome":
+		return "google-chrome-stable"
+	case "brave":
+		return "brave-browser"
+	default:
+		// firefox and chromium have keyword == binary.
+		return keyword
+	}
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -4321,6 +4366,37 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		params.VSCodeSSHPubKey = network.VSCodeSSHPubKey
 		if params.VSCodeEnabled && params.VSCodeSSHPubKey == "" {
 			return "", fmt.Errorf("VSCodeEnabled=true but VSCodeSSHPubKey is empty — run `make build && km init --sidecars` to refresh the management Lambda or pass --remote=false to use a local create")
+		}
+	}
+
+	// Phase 93: KasmVNC desktop (kiosk or full XFCE). Opt-in (DesktopEnabled defaults false).
+	params.DesktopEnabled = profile.IsDesktopEnabled(p.Spec.Runtime.Desktop)
+	if params.DesktopEnabled {
+		mode := ""
+		browsers := []string(nil)
+		geometry := ""
+		if p.Spec.Runtime.Desktop != nil {
+			mode = p.Spec.Runtime.Desktop.Mode
+			browsers = p.Spec.Runtime.Desktop.Browsers
+			geometry = p.Spec.Runtime.Desktop.Geometry
+		}
+		if mode == "" {
+			mode = "kiosk"
+		}
+		if len(browsers) == 0 {
+			browsers = []string{"firefox"}
+		}
+		if geometry == "" {
+			geometry = "1920x1080"
+		}
+		params.DesktopMode = mode
+		params.DesktopBrowsers = browsers
+		params.DesktopGeometry = geometry
+		// Map browsers[0] keyword → launch binary.
+		params.DesktopBrowser0Binary = desktopBrowserBinary(browsers[0])
+		if network != nil {
+			params.DesktopKasmUser = network.DesktopKasmUser
+			params.DesktopKasmPass = network.DesktopKasmPass
 		}
 	}
 
