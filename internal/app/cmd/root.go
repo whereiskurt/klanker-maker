@@ -86,6 +86,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewAMICmd(cfg))
 	root.AddCommand(NewSlackCmd(cfg))
 	root.AddCommand(NewVSCodeCmd(cfg))
+	root.AddCommand(NewDesktopCmd(cfg))
 	root.AddCommand(NewClusterCmd(cfg))
 
 	// "km at" — schedule deferred and recurring sandbox operations.
