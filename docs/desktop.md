@@ -15,7 +15,7 @@ The engine is **KasmVNC** — a web-native VNC server with a built-in HTML5 clie
 7. [Clipboard usage](#clipboard-usage)
 8. [Credential lifecycle](#credential-lifecycle)
 9. [Security model](#security-model)
-10. [First-boot network caveat + AMI-bake workflow](#first-boot-network-caveat--ami-bake-workflow)
+10. [First-boot install, network, and the AMI-bake workflow](#first-boot-install-network-and-the-ami-bake-workflow)
 11. [km resume behavior](#km-resume-behavior)
 12. [CLI commands](#cli-commands)
 13. [Troubleshooting](#troubleshooting)
@@ -42,6 +42,7 @@ operator browser ──https──> localhost:8444
 - **SSM tunnel = security boundary.** IAM-authenticated, encrypted, no public port exposed.
 - A **systemd unit** auto-starts KasmVNC on every boot so `km resume` restores the session.
 - Browser **egress** flows through whatever `spec.network` the profile declares. The desktop inherits the profile's existing network posture with no changes to the egress-enforcement model.
+- **Enforcement-mode agnostic.** Both `spec.network.enforcement: proxy` and `ebpf`/`both` work on Ubuntu desktop sandboxes — the OS-aware bootstrap frees `:53` from Ubuntu's `systemd-resolved` for the eBPF resolver. The desktop install runs before enforcement is active (see [First-boot install, network…](#first-boot-install-network-and-the-ami-bake-workflow)).
 
 ---
 
@@ -106,13 +107,16 @@ KasmVNC was chosen over alternatives for two specific reasons:
 
 ## One-time setup
 
-After enabling `spec.runtime.desktop` in a profile for the first time, refresh the management Lambdas so the new schema fields are understood remotely:
+The default `km create` is **remote**: the create-handler Lambda runs `km create` as a subprocess and **compiles the userdata itself**, so the Lambda's bundled `km` must contain the desktop schema + OS-aware bootstrap. After pulling a build that changes either, redeploy the Lambdas:
 
 ```bash
-make build && km init --sidecars
+make build-lambdas        # clean build — km init SKIPS already-present build/*.zip
+km init --dry-run=false   # full apply; bundles the current km into the create-handler Lambda
 ```
 
-Without `km init --sidecars`, `km create --remote` against a desktop-enabled profile will fail to thread the KasmVNC credential (`DesktopKasmCredential`) into userdata.
+> `km init --sidecars` rebuilds binaries + cold-starts the Lambda but is less reliable than the full apply for picking up compiler changes; prefer `--dry-run=false`. `km create --local` always uses your local `km` binary, so for iterating you can skip the Lambda redeploy entirely.
+
+Without a current Lambda, a **remote** desktop create produces stale userdata (e.g. missing the Ubuntu OS-aware fixes or the KasmVNC credential threading).
 
 ---
 
@@ -198,23 +202,28 @@ The SSM tunnel is the real security boundary. KasmVNC authentication is defense-
 
 ---
 
-## First-boot network caveat + AMI-bake workflow
+## First-boot install, network, and the AMI-bake workflow
 
-A fresh non-AMI boot must reach the following endpoints to install the desktop stack during userdata:
+**The `spec.network` allowlist does NOT gate the desktop install.** The desktop
+stack is installed in userdata **before** network enforcement (the proxy/iptables
+DNAT and the eBPF cgroup attach) is configured, and the sandbox security group
+permits HTTPS (443) egress. So a fresh boot reaches the package repos regardless
+of the profile's `allowedDNSSuffixes`/`allowedHosts` — you do **not** need to
+widen the allowlist for the install to succeed. (`apt` is pinned to **HTTPS** and
+IPv4 on Ubuntu because the SG allows only 443/53 — port 80 is closed — and the
+EC2 mirror's IPv6 is unroutable; this is handled automatically by the OS-aware
+bootstrap.)
 
-| Endpoint | Purpose |
-|---|---|
-| `archive.ubuntu.com`, `security.ubuntu.com` | Ubuntu package mirrors |
-| `github.com`, `objects.githubusercontent.com` | KasmVNC release tarball |
-| `ppa.launchpad.net`, `keyserver.ubuntu.com` | Firefox PPA |
-| `dl.google.com` | Google APT repo (for `browsers: [chrome]`) |
-| `brave-browser-apt-release.s3.brave.com` | Brave APT repo (for `browsers: [brave]`) |
+What the allowlist **does** govern is the **browser's runtime traffic** once
+enforcement comes up — i.e. which sites the operator can actually reach inside the
+session. That's the normal `spec.network` posture; tune it per profile.
 
-Under a **locked-down `spec.network`**, either allowlist these domains for first boot, OR use the AMI-bake workflow (recommended for routine use):
+The only real first-boot cost is **time**: the desktop stack (KasmVNC + WM +
+browser, ~hundreds of MB) installs from scratch. For routine use, bake an AMI:
 
 ```bash
-# Step 1 — Create with an open network profile (allowedDNSSuffixes: ["*"])
-#           so the userdata install can reach package repos
+# Step 1 — Create a desktop sandbox (any network posture works — the install runs
+#           pre-enforcement over HTTPS; no need to widen the allowlist)
 km create profiles/desktop.yaml --alias bake-session
 
 # Step 2 — Wait for the sandbox to fully boot, then bake an AMI
@@ -282,22 +291,29 @@ km desktop start $SB --local-port 18444
 The sandbox was created with `desktop.enabled: false` (or the field absent). Recreate with `spec.runtime.desktop.enabled: true`.
 
 **"KasmVNC is not running" / unit inactive**
-The sandbox may not have finished booting, or the systemd unit failed. Check:
+The sandbox may not have finished booting, or the systemd unit failed. `kasmvnc`
+is a **system** service. Open a shell (`km shell $SB` is interactive — it does not
+take a trailing `-- <cmd>`) and run:
 ```bash
-km shell $SB -- journalctl --user -u kasmvnc -n 50
+sudo systemctl status kasmvnc
+sudo journalctl -u kasmvnc -n 50
 ```
-Common causes: missing fonts/dbus (first-boot package failure), bad geometry string.
+Common causes (all fixed in the OS-aware bootstrap, but useful when debugging a
+hand-rolled profile): missing fonts/dbus, `:53` held by systemd-resolved (eBPF
+mode), an unreadable TLS cert (sandbox not in the `ssl-cert` group), or a bad
+geometry string.
 
 **Black screen after connecting**
-The xstartup script failed. Triage:
+The xstartup session failed. In `km shell $SB`, triage:
 ```bash
-km shell $SB -- journalctl --user -u kasmvnc -n 50
-km shell $SB -- cat ~/.vnc/*.log
+sudo journalctl -u kasmvnc -n 50
+cat ~/.vnc/*.log
 ```
-Check that dbus-launch and matchbox-window-manager (kiosk) or startxfce4 (full) are installed.
+Check that `dbus-launch` and `matchbox-window-manager` (kiosk) or `startxfce4`
+(full) are installed, and that the browser binary launched.
 
 **Slow first boot**
-Expected if using a non-AMI launch — the desktop stack (KasmVNC + WM + browser) must install from scratch. Use the AMI-bake workflow for routine use. See [First-boot network caveat](#first-boot-network-caveat--ami-bake-workflow).
+Expected if using a non-AMI launch — the desktop stack (KasmVNC + WM + browser) must install from scratch. Use the AMI-bake workflow for routine use. See [First-boot install, network…](#first-boot-install-network-and-the-ami-bake-workflow).
 
 **Credential file missing (`~/.km/desktop/<id>` not found)**
 The sandbox was created on a different machine, or the file was deleted manually. Options:
@@ -317,7 +333,7 @@ Set `spec.runtime.ami: ubuntu-24.04` (or `ubuntu-22.04`). Amazon Linux 2023 is n
 - **GNOME / KDE deferred.** XFCE4 is the only supported full-desktop environment.
 - **Audio deferred.** KasmVNC has audio support; it is not wired up in v1.
 - **Multi-monitor deferred.** Single display only in v1.
-- **Per-machine credential (cross-machine gap).** `~/.km/desktop/<id>` is written on the creation machine only. To connect from a different laptop, read the credential from the sandbox via `km shell <id> -- cat ~/.kasmpasswd` and use it to log in manually.
+- **Per-machine credential (cross-machine gap).** `~/.km/desktop/<id>` is written on the creation machine only. To connect from a different laptop, `km shell <id>` into the sandbox, `cat ~/.kasmpasswd`, and use it to log in manually (note: `km shell` is interactive — it does not accept a trailing `-- <cmd>`).
 
 ---
 

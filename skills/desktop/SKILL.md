@@ -11,7 +11,7 @@ Operator-side workflow for opening a graphical session inside a sandbox EC2 and 
 
 ## Cross-references
 
-- `klanker:init` — run `make build && km init --sidecars` once before desktop support works for new sandboxes
+- `klanker:init` — redeploy the create-handler Lambda (`make build-lambdas` + `km init --dry-run=false`) so remote `km create` understands the desktop schema + Ubuntu bootstrap
 - `klanker:user` — `km create`, `km list`, `km destroy` lifecycle
 
 ## Profile field
@@ -49,14 +49,14 @@ The credential file is written by `km create` when `desktop.enabled: true` and r
 
 ## One-time setup
 
-After enabling `spec.runtime.desktop` in a profile for the first time, refresh the management Lambdas so the new schema fields are understood remotely:
+The default `km create` is **remote**: the create-handler Lambda runs `km create` as a subprocess and compiles the userdata itself, so its bundled `km` must carry the desktop schema + OS-aware bootstrap. After a build that changes either, redeploy:
 
 ```bash
-make build
-km init --sidecars
+make build-lambdas        # clean build — km init skips already-present build/*.zip
+km init --dry-run=false   # full apply; bundles current km into the create-handler Lambda
 ```
 
-Without this step, `km create --remote` against a desktop-enabled profile will fail to thread `DesktopKasmCredential` into userdata.
+(`km create --local` always uses your local binary, so you can iterate without the Lambda redeploy.) Without a current Lambda, a remote desktop create produces stale userdata.
 
 ## Per-sandbox workflow
 
@@ -67,7 +67,7 @@ km create profiles/desktop.yaml --alias my-desktop
 # 2. Resolve the sandbox ID
 SB=$(km list | awk '/my-desktop/ {print $1}')
 
-# 3. Open the SSM tunnel (blocking — Ctrl-C to close the tunnel; session keeps running)
+# 3. Open the SSM tunnel (blocking; auto-reconnects on drop — Ctrl-C to close it; session keeps running)
 km desktop start $SB
 # Prints: https://localhost:8444/   user: sandbox   password: <random>
 # Open that URL in your local browser while the tunnel is active.
@@ -103,20 +103,20 @@ KasmVNC includes seamless bidirectional clipboard. Text copied in the remote bro
 - SSL is disabled at the KasmVNC layer because the SSM tunnel already encrypts the transport and the loopback-only bind removes the network exposure. This avoids a self-signed-cert browser warning.
 - The per-sandbox credential is defense-in-depth so another local process on the operator's machine cannot ride the forwarded port.
 
-## First-boot network caveat
+## First-boot install + AMI-bake
 
-A fresh non-AMI boot must reach the following endpoints to install the desktop stack during userdata:
+The `spec.network` allowlist does **not** gate the desktop install — the stack is
+installed in userdata *before* network enforcement (proxy/iptables/eBPF) comes up,
+and the security group permits HTTPS egress, so the package repos are reachable
+regardless of `allowedDNSSuffixes`/`allowedHosts`. (apt is auto-pinned to HTTPS +
+IPv4 on Ubuntu because the SG allows only 443/53.) The allowlist governs the
+**browser's runtime traffic** once enforcement is active — tune it per profile.
 
-- Ubuntu package mirrors (`archive.ubuntu.com`, `security.ubuntu.com`)
-- KasmVNC release tarball (`github.com`, `objects.githubusercontent.com`)
-- Firefox PPA (`ppa.launchpad.net`, `keyserver.ubuntu.com`) for `browsers: [firefox]`
-- Google APT repo (`dl.google.com`) for `browsers: [chrome]`
-- Brave APT repo (`brave-browser-apt-release.s3.brave.com`) for `browsers: [brave]`
-
-Under a locked-down `spec.network`, either allowlist those domains for first boot, or bake the AMI first:
+The only first-boot cost is **time** (the stack is hundreds of MB). For routine
+use, bake an AMI:
 
 ```bash
-# 1. Create under an open profile (allowedDNSSuffixes: "*") to let packages install
+# 1. Create a desktop sandbox (any network posture works for the install)
 km create profiles/desktop.yaml --alias bake-session
 
 # 2. Wait for boot, then bake
@@ -126,9 +126,8 @@ km ami bake <sandbox-id>
 km destroy <sandbox-id> --remote --yes
 
 # 4. In your production profile, set the baked AMI ID:
-#    spec.runtime.ami: ami-xxxxxxxxxxxxxxxxx
-#    Now packages are pre-installed; first-boot is fast even under a locked spec.network.
-km create profiles/my-locked-desktop.yaml
+#    spec.runtime.ami: ami-xxxxxxxxxxxxxxxxx   # packages pre-installed → fast boot
+km create profiles/my-production-desktop.yaml
 ```
 
 ## km resume behavior

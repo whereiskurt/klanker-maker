@@ -1464,13 +1464,14 @@ spec:
 ### Operator workflow
 
 ```bash
-# One-time: refresh management Lambdas when enabling desktop for the first time
-make build && km init --sidecars
+# One-time: redeploy the create-handler Lambda so REMOTE create understands the
+# desktop schema + Ubuntu OS-aware bootstrap (the Lambda compiles userdata itself).
+make build-lambdas && km init --dry-run=false   # (km create --local skips this)
 
 # Create — per-sandbox KasmVNC credential is generated locally
 km create profiles/desktop.yaml --alias my-desktop
 
-# Open the SSM tunnel (blocking; Ctrl-C to close)
+# Open the SSM tunnel (blocking; auto-reconnects on drop — Ctrl-C to close)
 km desktop start my-desktop
 # Prints: https://localhost:8444/   user: sandbox   password: <random>
 

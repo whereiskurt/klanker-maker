@@ -18,6 +18,13 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
 - Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
 
+**Phase 93 (2026-06-02) — `km desktop` (KasmVNC remote browser/XFCE) + Ubuntu OS-aware bootstrap (complete):**
+- `km desktop start|status <id>` — KasmVNC graphical session in the operator's local browser over an SSM port-forward (loopback `127.0.0.1:8444`, SSM-only, no public/SG change). Mirrors `km vscode`. New `spec.runtime.desktop` block (`enabled` default **false**, `mode: kiosk|full`, `browsers ⊆ {firefox,chromium,chrome,brave}`, `geometry`). Engine: KasmVNC. **Ubuntu 24.04/22.04 only** (`km validate` errors on desktop+non-Ubuntu AMI). See `docs/desktop.md` / `klanker:desktop` skill.
+- **The EC2 userdata bootstrap is now OS-aware** (`pkg/compiler/userdata.go` + the >12KB stub in `compiler.go`): was Amazon-Linux-only; Ubuntu needs apt-over-HTTPS (SG allows only 443, not port 80), `ForceIPv4`, AWS-CLI install via python3 (no `unzip`), `ssh.service`, and `systemd-resolved` stopped for the eBPF resolver on `:53`. AL2023 path unchanged. Both `proxy` and `ebpf`/`both` enforcement verified on Ubuntu. Desktop install runs BEFORE network enforcement, so the `spec.network` allowlist does not gate it. Details: `.planning/phases/93-*/93-UAT.md` and [[project_ubuntu_userdata_constraints]].
+- `km desktop start`/`km vscode start` now **auto-reconnect** the SSM port-forward on drop (Ctrl-C to quit), with a liveness probe that recycles a silently-hung plugin — KasmVNC/sshd survive server-side. `runReconnectingPortForward` in `internal/app/cmd/shell.go`.
+- The unused `cmd/configui` web dashboard was **removed**.
+- **Deploy:** desktop schema + OS-aware userdata are compiled by the create-handler Lambda, so for remote `km create` redeploy with `make build-lambdas` (clean) + `km init --dry-run=false`. The reconnect wrapper is operator-side (local binary only). Existing sandboxes need `km destroy && km create`.
+
 ## Where to look
 
 | You want to… | Look at |
