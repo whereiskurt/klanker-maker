@@ -44,6 +44,32 @@ default **remote** `km create` produce this fixed userdata, redeploy the Lambda:
 GAP-93-02 (status message) also shipped: `km desktop status` now distinguishes
 "still installing" from "not enabled" via a unit-file + cloud-init probe.
 
+### Follow-up: eBPF enforcement on Ubuntu (validated 2026-06-02)
+Investigated + fixed + live-verified. The enforcer is portable (embedded bpf2go
+bytecode, no clang/CO-RE/libbpf/pkg deps), but its DNS resolver binds
+`127.0.0.1:53`, which collides with Ubuntu's `systemd-resolved`. Fix (eBPF
+userdata block, `command`/`-L`-guarded, no-op on AL): stop+disable
+systemd-resolved and break the `/etc/resolv.conf` symlink before the
+`km-ebpf-enforcer` service starts. Live test (`ubuntu-24.04` + `enforcement:
+ebpf`, sandbox `desk-2e68131a`): cloud-init `done`, enforcer active, all 4 cgroup
+BPF programs attached (connect4/sendmsg4/sockops/egress), DNS allowlist enforced
+(s3.amazonaws.com + api.anthropic.com resolve; github.com + example.com blocked
+with `"allowed":false` audit). **Both proxy and eBPF modes now work on Ubuntu.**
+Commit: `fix(93): free :53 for eBPF resolver on Ubuntu`.
+
+### Removed: unused configui web dashboard (2026-06-02)
+`cmd/configui` + `docs/configui-guide.md` deleted; CFUI-01..04 marked removed.
+Was never deployed in the operator workflow; its test had drifted at Phase 92.
+
+### Deferred follow-up (not desktop-blocking): SSM tunnel auto-reconnect
+`km desktop`/`km vscode` raw port-forwards have no keep-alive; a dropped SSM
+socket shows as a frozen desktop (the KasmVNC session itself survives server-side
+— only the tunnel dies). Recommended fix: wrap the port-forward in a
+reconnect/health-probe loop (KasmVNC is the durable layer, like tmux is for
+`km agent`). Custom-doc `idleSessionTimeout` 20→60 is a cheap freebie but does
+NOT affect port-forwards (those use the AWS-managed StartPortForwardingSession
+doc + account-level idle preference).
+
 
 ## Resolution log (Phase 93.1 — OS-aware bootstrap)
 
