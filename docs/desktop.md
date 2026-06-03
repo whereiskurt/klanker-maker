@@ -125,7 +125,7 @@ km create profiles/desktop.yaml --alias my-desktop
 # 2. Get the sandbox ID
 SB=$(km list | awk '/my-desktop/ {print $1}')
 
-# 3. Open the SSM tunnel (blocking — Ctrl-C to close the tunnel; session keeps running)
+# 3. Open the SSM tunnel (blocking; auto-reconnects if it drops — Ctrl-C to close it; session keeps running)
 km desktop start $SB
 # Output:
 #   KasmVNC session ready
@@ -261,7 +261,7 @@ km desktop status <sandbox-id>
 2. Fetches the DDB record → extracts instance ID + region.
 3. SSM pre-flight: is the KasmVNC systemd unit active? Descriptive errors for: not installed, unit inactive, desktop not enabled in profile.
 4. Prints `https://localhost:<port>/` + KasmVNC user/password (from `~/.km/desktop/<id>`).
-5. Opens a blocking SSM port-forward (`AWS-StartPortForwardingSession`); Ctrl-C closes the tunnel, the session keeps running.
+5. Opens a blocking SSM port-forward (`AWS-StartPortForwardingSession`) with **auto-reconnect**: the `session-manager-plugin` has no keep-alive, so on laptop sleep / Wi-Fi roam / NAT idle-timeout the tunnel is re-established automatically (an HTTPS liveness probe also recycles a silently-hung plugin). KasmVNC survives server-side, so you land back in the same session. Ctrl-C closes the tunnel for good; the session keeps running on the sandbox.
 
 **`km desktop status <sandbox-id>`**
 - One-round-trip SSM probe to check KasmVNC unit state.

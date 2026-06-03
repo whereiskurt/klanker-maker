@@ -61,14 +61,16 @@ Commit: `fix(93): free :53 for eBPF resolver on Ubuntu`.
 `cmd/configui` + `docs/configui-guide.md` deleted; CFUI-01..04 marked removed.
 Was never deployed in the operator workflow; its test had drifted at Phase 92.
 
-### Deferred follow-up (not desktop-blocking): SSM tunnel auto-reconnect
-`km desktop`/`km vscode` raw port-forwards have no keep-alive; a dropped SSM
-socket shows as a frozen desktop (the KasmVNC session itself survives server-side
-— only the tunnel dies). Recommended fix: wrap the port-forward in a
-reconnect/health-probe loop (KasmVNC is the durable layer, like tmux is for
-`km agent`). Custom-doc `idleSessionTimeout` 20→60 is a cheap freebie but does
-NOT affect port-forwards (those use the AWS-managed StartPortForwardingSession
-doc + account-level idle preference).
+### Shipped: SSM tunnel auto-reconnect (km desktop / km vscode)
+`km desktop`/`km vscode` port-forwards had no keep-alive; a dropped SSM socket
+showed as a frozen desktop (the KasmVNC/sshd session survives server-side — only
+the tunnel dies). Fixed: `runReconnectingPortForward` (shell.go) wraps the
+port-forward in a reconnect loop until Ctrl-C, with a liveness probe that recycles
+a silently-hung plugin (HTTPS probe for desktop :8444, SSH-banner probe for vscode
+:22). KasmVNC is the durable layer (like tmux is for `km agent`). Unit-tested.
+Note: custom-doc `idleSessionTimeout` (20 min) does NOT affect port-forwards
+(those use the AWS-managed StartPortForwardingSession doc + the account-level idle
+preference) — left as-is; the reconnect wrapper is the real fix.
 
 
 ## Resolution log (Phase 93.1 — OS-aware bootstrap)
