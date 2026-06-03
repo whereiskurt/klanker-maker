@@ -2731,8 +2731,13 @@ After=network.target km-bootstrap.service
 [Service]
 User=sandbox
 Environment=DISPLAY=:1
-ExecStartPre=/bin/mkdir -p /run/user/1001
-ExecStartPre=/bin/chown sandbox:sandbox /run/user/1001
+Environment=HOME=/home/sandbox
+Environment=XDG_RUNTIME_DIR=/run/user/1001
+# /run/user is root-owned and the sandbox user has no logind session to create
+# /run/user/<uid>, so run the runtime-dir setup as root via the '+' prefix.
+ExecStartPre=+/bin/mkdir -p /run/user/1001
+ExecStartPre=+/bin/chown sandbox:sandbox /run/user/1001
+ExecStartPre=+/bin/chmod 700 /run/user/1001
 ExecStart=/usr/bin/vncserver :1 -fg -geometry {{ .DesktopGeometry }} -interface 127.0.0.1
 ExecStop=/usr/bin/vncserver -kill :1
 Restart=on-failure
