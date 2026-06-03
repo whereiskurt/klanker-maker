@@ -2685,10 +2685,15 @@ cat > /home/sandbox/.vnc/xstartup << 'XSTARTUP'
 #!/bin/bash
 unset SESSION_MANAGER
 unset DBUS_SESSION_BUS_ADDRESS
-export XDG_RUNTIME_DIR=/run/user/$(id -u sandbox)
-mkdir -p "${XDG_RUNTIME_DIR}"
-chown sandbox:sandbox "${XDG_RUNTIME_DIR}"
-chmod 700 "${XDG_RUNTIME_DIR}"
+# This runs as the sandbox user. /run/user/<uid> is created by systemd-logind
+# only for real login sessions; this service has none, so the user cannot mkdir
+# there (it is root-owned). Fall back to a user-owned tmp dir.
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+if ! mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null; then
+  export XDG_RUNTIME_DIR="/tmp/km-xdg-$(id -u)"
+  mkdir -p "${XDG_RUNTIME_DIR}"
+fi
+chmod 700 "${XDG_RUNTIME_DIR}" 2>/dev/null || true
 exec dbus-launch --exit-with-session matchbox-window-manager -use_titlebar no &
 WM_PID=$!
 sleep 1
@@ -2701,10 +2706,15 @@ cat > /home/sandbox/.vnc/xstartup << 'XSTARTUP'
 #!/bin/bash
 unset SESSION_MANAGER
 unset DBUS_SESSION_BUS_ADDRESS
-export XDG_RUNTIME_DIR=/run/user/$(id -u sandbox)
-mkdir -p "${XDG_RUNTIME_DIR}"
-chown sandbox:sandbox "${XDG_RUNTIME_DIR}"
-chmod 700 "${XDG_RUNTIME_DIR}"
+# This runs as the sandbox user. /run/user/<uid> is created by systemd-logind
+# only for real login sessions; this service has none, so the user cannot mkdir
+# there (it is root-owned). Fall back to a user-owned tmp dir.
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+if ! mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null; then
+  export XDG_RUNTIME_DIR="/tmp/km-xdg-$(id -u)"
+  mkdir -p "${XDG_RUNTIME_DIR}"
+fi
+chmod 700 "${XDG_RUNTIME_DIR}" 2>/dev/null || true
 exec dbus-launch --exit-with-session startxfce4
 XSTARTUP
 {{- end }}
