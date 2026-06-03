@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -123,6 +125,49 @@ spec:
   lifecycle:
     teardown_policy: destroy
 `
+
+const profileRetain = `
+apiVersion: km/v1
+kind: SandboxProfile
+metadata:
+  name: test-profile
+spec:
+  runtime:
+    substrate: ec2
+  lifecycle:
+    teardownPolicy: retain
+`
+
+// mockDynamoLock satisfies awspkg.SandboxMetadataAPI; returns an item whose
+// `locked` attribute is controlled by the `locked` field.
+type mockDynamoLock struct{ locked bool }
+
+func (m *mockDynamoLock) GetItem(ctx context.Context, in *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	item := map[string]dynamodbtypes.AttributeValue{
+		"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: "sb-aabbccdd"},
+		"created_at": &dynamodbtypes.AttributeValueMemberS{Value: "2026-01-01T00:00:00Z"},
+	}
+	if m.locked {
+		item["locked"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: true}
+	}
+	return &dynamodb.GetItemOutput{Item: item}, nil
+}
+
+func (m *mockDynamoLock) PutItem(ctx context.Context, in *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
+	return &dynamodb.PutItemOutput{}, nil
+}
+func (m *mockDynamoLock) UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	return &dynamodb.UpdateItemOutput{}, nil
+}
+func (m *mockDynamoLock) DeleteItem(ctx context.Context, in *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error) {
+	return &dynamodb.DeleteItemOutput{}, nil
+}
+func (m *mockDynamoLock) Scan(ctx context.Context, in *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	return &dynamodb.ScanOutput{}, nil
+}
+func (m *mockDynamoLock) Query(ctx context.Context, in *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	return &dynamodb.QueryOutput{}, nil
+}
 
 // --------------------------------------------------------------------------
 // Tests
@@ -269,6 +314,54 @@ func TestHandleTTLEvent_CallsTeardownFunc(t *testing.T) {
 	}
 	if calledWithID != "sb-aabbccdd" {
 		t.Errorf("expected TeardownFunc to be called with 'sb-aabbccdd', got: %q", calledWithID)
+	}
+}
+
+// TestHandleTTLEvent_RetainPolicyPreservesSandbox: teardownPolicy=retain on an
+// automatic (idle/TTL) trigger must NOT destroy — the previous routing only
+// special-cased "stop" and let "retain" fall through to destroy, reaping
+// retain sandboxes on the idle timer.
+func TestHandleTTLEvent_RetainPolicyPreservesSandbox(t *testing.T) {
+	mockS3 := &mockS3GetPutAPI{getBody: profileRetain}
+	teardownCalled := false
+	h := &TTLHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		Scheduler:    &mockSchedulerAPI{},
+		Bucket:       "test-bucket",
+		Domain:       "sandboxes.klankermaker.ai",
+		TeardownFunc: func(ctx context.Context, sandboxID string) error { teardownCalled = true; return nil },
+	}
+	// Empty EventType = automatic idle/TTL trigger (the path that reaped them).
+	if err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if teardownCalled {
+		t.Error("teardownPolicy=retain must NOT destroy on an automatic trigger")
+	}
+}
+
+// TestHandleTTLEvent_LockedSkipsAutomaticTeardown: a km-locked sandbox must not
+// be auto-destroyed even when the policy is destroy — the idle/TTL path had no
+// lock check at all.
+func TestHandleTTLEvent_LockedSkipsAutomaticTeardown(t *testing.T) {
+	mockS3 := &mockS3GetPutAPI{getBody: profileNoArtifacts} // policy=destroy
+	teardownCalled := false
+	h := &TTLHandler{
+		S3Client:         mockS3,
+		SESClient:        &mockSESAPI{},
+		Scheduler:        &mockSchedulerAPI{},
+		DynamoClient:     &mockDynamoLock{locked: true},
+		SandboxTableName: "km-sandbox-metadata",
+		Bucket:           "test-bucket",
+		Domain:           "sandboxes.klankermaker.ai",
+		TeardownFunc:     func(ctx context.Context, sandboxID string) error { teardownCalled = true; return nil },
+	}
+	if err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if teardownCalled {
+		t.Error("a locked sandbox must NOT be auto-destroyed on an idle/TTL trigger")
 	}
 }
 

@@ -227,17 +227,44 @@ func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 	case "schedule-create":
 		return h.handleScheduleCreate(ctx, event)
 	default:
-		// "ttl", "idle", "destroy", "" — check teardownPolicy before destroying.
-		// If the profile says "stop", stop the instance instead of destroying it.
+		// "ttl", "idle", "destroy", "" — automatic teardown triggers.
+		//
+		// Explicit "destroy" (operator km destroy) overrides teardownPolicy and the
+		// lock; the CLI enforces the safety lock client-side before it ever reaches
+		// here. For AUTOMATIC triggers (ttl/idle/empty) we honor both safety
+		// mechanisms and the full teardownPolicy set, mirroring the canonical
+		// pkg/lifecycle.ExecuteTeardown semantics (destroy / stop / retain).
 		if event.EventType != "destroy" {
-			if policy := h.lookupTeardownPolicy(ctx, event.SandboxID); policy == "stop" {
+			// Safety lock (km lock): never auto-stop or auto-destroy a locked
+			// sandbox — the operator must km unlock first. Previously absent, so
+			// idle/TTL reaped locked sandboxes.
+			if h.isSandboxLocked(ctx, event.SandboxID) {
+				log.Warn().
+					Str("sandbox_id", event.SandboxID).
+					Str("event_type", event.EventType).
+					Msg("sandbox is locked (km lock) — skipping automatic teardown")
+				return nil
+			}
+			switch policy := h.lookupTeardownPolicy(ctx, event.SandboxID); policy {
+			case "stop":
 				log.Info().
 					Str("sandbox_id", event.SandboxID).
 					Str("event_type", event.EventType).
 					Str("teardown_policy", "stop").
 					Msg("teardownPolicy is 'stop' — stopping instead of destroying")
 				return h.handleStop(ctx, event)
+			case "retain":
+				// retain means: leave everything running; operator tears down
+				// manually. Previously this fell through to destroy — the defect
+				// that reaped retain sandboxes on the idle timer.
+				log.Info().
+					Str("sandbox_id", event.SandboxID).
+					Str("event_type", event.EventType).
+					Str("teardown_policy", "retain").
+					Msg("teardownPolicy is 'retain' — preserving sandbox; operator must destroy manually")
+				return nil
 			}
+			// "destroy" (and any unknown value) falls through to handleDestroy.
 		}
 		return h.handleDestroy(ctx, event)
 	}
@@ -962,6 +989,27 @@ func (h *TTLHandler) lookupHibernation(ctx context.Context, sandboxID string) bo
 // lookupTeardownPolicy downloads the sandbox profile from S3 and returns the
 // teardownPolicy value ("destroy" or "stop"). Returns "destroy" on any error
 // or if the profile doesn't specify a policy — fail-safe to full cleanup.
+// isSandboxLocked reports whether the sandbox carries a km lock (the DynamoDB
+// `locked` attribute). A locked sandbox must never be auto-stopped or
+// auto-destroyed by TTL/idle triggers — the operator must km unlock first.
+//
+// Fails OPEN (returns false) when there is no DynamoDB client or the read
+// errors, so a transient DynamoDB fault cannot wedge automatic teardown forever
+// and leak resources; the failure is logged. The authoritative teardownPolicy
+// (S3-backed) is the primary safety net; the lock is defense-in-depth.
+func (h *TTLHandler) isSandboxLocked(ctx context.Context, sandboxID string) bool {
+	if h.DynamoClient == nil {
+		return false
+	}
+	meta, err := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, sandboxID)
+	if err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).
+			Msg("could not read lock state from DynamoDB; treating as unlocked")
+		return false
+	}
+	return meta != nil && meta.Locked
+}
+
 func (h *TTLHandler) lookupTeardownPolicy(ctx context.Context, sandboxID string) string {
 	// Primary: read from S3 profile (authoritative source).
 	profileBytes, err := downloadProfileFromS3(ctx, h.S3Client, h.Bucket, sandboxID)
