@@ -310,14 +310,38 @@ hand-rolled profile): missing fonts/dbus, `:53` held by systemd-resolved (eBPF
 mode), an unreadable TLS cert (sandbox not in the `ssl-cert` group), or a bad
 geometry string.
 
-**Black screen after connecting**
-The xstartup session failed. In `km shell $SB`, triage:
+**Black screen after connecting (browser exits instantly)**
+The window manager came up but the browser failed to launch. The usual root cause
+on Ubuntu 24.04 is the **unprivileged user-namespace restriction**
+(`kernel.apparmor_restrict_unprivileged_userns=1`), which kills the browser's
+content sandbox at startup. The OS-aware bootstrap sets that sysctl to `0`, so a
+current build does not hit this — but a **baked AMI or create-handler Lambda that
+predates the fix** will. Recreate from a current build (`make build-lambdas &&
+km init --dry-run=false`, then `km destroy && km create`), or rebake the AMI. To
+confirm the cause in `km shell $SB`:
 ```bash
 sudo journalctl -u kasmvnc -n 50
 cat ~/.vnc/*.log
+sysctl kernel.apparmor_restrict_unprivileged_userns   # should be 0
 ```
-Check that `dbus-launch` and `matchbox-window-manager` (kiosk) or `startxfce4`
-(full) are installed, and that the browser binary launched.
+Also verify `dbus-launch` and `matchbox-window-manager` (kiosk) / `startxfce4`
+(full) are installed.
+
+**Firefox: "Your profile cannot be loaded"**
+The browser launched but could not create its profile under `~/.config/mozilla`
+(Firefox uses the XDG path, not `~/.mozilla`). Root cause: `~/.config` left
+root-owned by the bootstrap. Fixed in the current bootstrap (`~/.config` is
+chowned to the sandbox user); seen only on stale AMIs/Lambdas. Recreate from a
+current build, or as an immediate patch in `km shell $SB`:
+```bash
+sudo chown -R sandbox:sandbox /home/sandbox/.config
+```
+
+**XFCE (full mode): "Unable to load a failsafe session"**
+XFCE could not find `/etc/xdg` because a bare VNC session leaves `XDG_CONFIG_DIRS`
+unset. Fixed in the current bootstrap (xstartup exports `XDG_CONFIG_DIRS` /
+`XDG_DATA_DIRS`). Seen only on AMIs/Lambdas built before the fix — recreate from a
+current build.
 
 **Slow first boot**
 Expected if using a non-AMI launch — the desktop stack (KasmVNC + WM + browser) must install from scratch. Use the AMI-bake workflow for routine use. See [First-boot install, network…](#first-boot-install-network-and-the-ami-bake-workflow).
