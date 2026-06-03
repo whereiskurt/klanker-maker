@@ -707,6 +707,14 @@ type NetworkConfig struct {
 	// Empty for ECS/Docker substrates (gated by the template's {{- if .VSCodeEnabled }}).
 	// Phase 73.
 	VSCodeSSHPubKey string
+	// DesktopKasmUser is the KasmVNC username seeded into ~/.kasmpasswd at boot.
+	// Generated per-sandbox at `km create` (crypto/rand base62); never baked into AMIs.
+	// Empty when desktop is disabled. Phase 93.
+	DesktopKasmUser string
+	// DesktopKasmPass is the KasmVNC password seeded into ~/.kasmpasswd at boot.
+	// Generated per-sandbox at `km create` (crypto/rand base62); never baked into AMIs.
+	// Empty when desktop is disabled. Phase 93.
+	DesktopKasmPass string
 }
 
 // budgetHCLFields extracts the budget-related template fields from a SandboxProfile.

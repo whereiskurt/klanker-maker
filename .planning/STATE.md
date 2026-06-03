@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 92-05-PLAN.md (agent synthesizers + 11 fixture rewrites + VC-3 reconciliation + docs; VC-1/VC-3/VC-5/VC-11 GREEN)
-last_updated: "2026-06-01T01:32:35.686Z"
-last_activity: 2026-05-31
+stopped_at: "Completed 93-06-PLAN.md (operator deliverables: profile, skill, docs)"
+last_updated: "2026-06-02T21:14:17.747Z"
+last_activity: 2026-06-02
 progress:
-  total_phases: 107
+  total_phases: 108
   completed_phases: 95
-  total_plans: 466
-  completed_plans: 429
+  total_plans: 474
+  completed_plans: 436
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 92-00 — all 3 tasks done; pre-Phase-92 byte-identity baselines captured,
 Total Plans in Phase: 7 (92-00 → 92-06)
 Current Plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 Status: in-progress
-Last activity: 2026-05-31
+Last activity: 2026-06-02
 
 Wave 1 UNBLOCKED: both byte-identity baselines (userdata + IAM HCL) committed before any Wave 1 source change.
 
@@ -462,6 +462,13 @@ Progress: [█████████░] 91%
 | Phase 92 P03 | 55min | 4 tasks | 36 files |
 | Phase 92 P04 | 20min | 4 tasks | 24 files |
 | Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating P05 | 24min | 4 tasks | 24 files |
+| Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward P00 | 8min | 2 tasks | 4 files |
+| Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward P01 | 119s | 2 tasks | 3 files |
+| Phase 93 P02 | 171s | 2 tasks | 2 files |
+| Phase 93 P03 | 297s | 2 tasks | 3 files |
+| Phase 93 P05 | 336 | 2 tasks | 4 files |
+| Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward P04 | 10min | 1 tasks | 2 files |
+| Phase 93-km-desktop P06 | 363 | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -1333,6 +1340,18 @@ Recent decisions affecting current work:
 - [Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating]: Claude settings.json synthesizer emits canonical permissions.allow/deny (Wave 0 Option B), not legacy autoApprove/disallowedTools; passthrough merges into permissions object with typed allow/deny winning on collision.
 - [Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating]: VC-3 byte-identity reconciled: strict byte-identity for userdata outside the Claude settings.json blob + proven semantic equivalence (same tool set/trustedDirectories/hooks) for the blob, since canonical permissions.allow intentionally replaces legacy autoApprove. Baseline golden NOT regenerated.
 - [Phase 92-profile-spec-restructure-notification-block-iam-rename-dead-field-removal-structured-agent-tool-gating]: Codex config.toml is synthesized (synthesizeCodexConfig) byte-identical to the Phase 70 heredoc and kept in its early userdata slot, preserving codex.yaml initCommands override and the byte-identity contract.
+- [Phase 93]: Wave 0 stubs use t.Skip as first/only statement so packages compile before RuntimeDesktopSpec exists (93-01)
+- [Phase 93]: desktop_test.go bodies are skip-only in Wave 0 to avoid duplicate mock declarations with vscode_test.go (same package cmd)
+- [Phase 93-km-desktop]: RuntimeDesktopSpec is opt-in (default false) — opposite of IsVSCodeEnabled default-on; KasmVNC is heavy install
+- [Phase 93]: Copied raw AMI ID regex locally into validate.go to avoid pkg/profile→pkg/compiler import cycle
+- [Phase 93]: Empty mode defaults to kiosk (valid); empty browsers with kiosk is ERROR; empty browsers with full is OK
+- [Phase 93]: Pre-parse DesktopGeometryWidth/Height in generateUserData to avoid template FuncMap; DesktopBrowser0Binary computed field maps chrome→google-chrome-stable; system service (User=sandbox) for kasmvnc.service mirrors km-queue.service pattern
+- [Phase 93]: GenerateDesktopCredential exported (not unexported) because create_test.go from 93-04 uses cmd.GenerateDesktopCredential from external test package
+- [Phase 93]: desktopStatusScript uses systemctl is-active kasmvnc + test -f ~/.kasmpasswd; parseDesktopStatus returns three distinct error messages per failure mode
+- [Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward]: Export GenerateDesktopCredential for testability from package cmd_test; randomPassword extracted as named helper with error return
+- [Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward]: desktop-creds.txt S3 upload in runCreateRemote mirrors vscode-pubkey.txt; Lambda subprocess uses KM_DESKTOP_KASM_USER/PASS env vars instead of re-generating
+- [Phase 93-06]: profiles/desktop.yaml uses ubuntu-24.04 AMI, kiosk mode, firefox browser; schema required sourceAccess + allowedHosts added
+- [Phase 93-06]: Plugin version bumped 0.3.0→0.4.0 in lockstep across plugin.json + marketplace.json
 
 ### Roadmap Evolution
 
@@ -1447,9 +1466,10 @@ Recent decisions affecting current work:
 - Phase 90 added: km init self-healing provider locks via reconfigure-upgrade per module — `km init` (apply loop + `--plan` path) runs `terragrunt init -reconfigure -upgrade` per regional module so stale `.terraform.lock.hcl` from an upgraded old install (observed on km 0.2.x; operator had to manually `init -reconfigure -upgrade` to "move a lock version on") is moved forward to root.hcl's exact pins (aws 6.46.0, tls 4.3.0) automatically. New `ReconfigureUpgrade` method in `pkg/terragrunt/runner.go` + `InitRunner` interface; replaces the ses-only `Reconfigure` branch in `init.go` with a universal per-module call; `planModule` runs it before `PlanWithOutput`. Destroy paths (uninit, cluster) and bootstrap foundation apply stay on plain `Reconfigure` (out of scope). Accepted tradeoffs: registry round-trip + few seconds per module on every init; lock drift becomes invisible. Brainstormed + spec'd 2026-05-27; original one-line "add -upgrade to shared Reconfigure" proposal corrected after finding Reconfigure is ses-only in `km init` (would not have healed other modules). Spec: `docs/superpowers/specs/2026-05-27-km-init-self-healing-locks-design.md`.
 - Phase 91 added: Slack inbound @-mention-only mode for shared/override channels — stop the km-slack bridge from forwarding every message in subscribed channels; only react when message text contains `<@{bot_user_id}>`. Smart per-channel-mode defaults: per-sandbox `#sb-{id}` channels keep current every-message behaviour (bot is primary participant); shared (Mode 1) + operator-controlled override (Mode 3) channels default to @-mention-only. New `cli.notifySlackInboundMentionOnly *bool` profile field lets operators force on/off, otherwise mode-derived default applies. Implementation surfaces: (1) `pkg/profile/types.go` + JSON schema + `validate.go` new CLISpec field; (2) bridge handler detects mention via `<@{bot_user_id}>` substring scan; bot_user_id cached in SSM at `{prefix}slack/bot-user-id` (verify caching path in `km slack init` against current auth.test response handling); (3) `pkg/compiler/userdata.go` emits `KM_SLACK_MENTION_ONLY` env var into bridge config from resolved profile + mode-derived default; (4) `docs/slack-notifications.md` operator-facing doc + decision matrix table; (5) `km doctor` sanity check that bot_user_id is cached when at least one profile has mention-only enabled. Out of scope: per-channel runtime overrides (slash command), display-name mentions without `<@U...>` form, reactions-as-actions integration. Origin: raised by operator during Phase 72 UAT 2026-05-30 — corporate-workspace install where shared `#km-notifications` would be too noisy if the bot 👀-reacted to every team message. Initial design captured in `.planning/todos/pending/2026-05-30-slack-inbound-mention-only-mode.md`. Depends on Phase 72 (uses `bot_user_id` from `auth.test` response shape established in 72-01; reuses `notifySlackEnabled`/`notifySlackPerSandbox`/`notifySlackChannelOverride` mode dispatch from `create_slack.go`).
 - Phase 92 added: Profile spec restructure — notification block + iam rename + dead-field removal + structured agent tool gating. Consolidates four user-facing changes in a single phase with 7 waves: (1) new top-level `spec.notification:` block owns the 14 `notify*` fields currently scattered through `spec.cli:`, with sub-blocks (`notification.events`, `notification.email`, `notification.slack.{inbound,transcript,invites}`); (2) `spec.identity:` → `spec.iam:` rename (section is AWS IAM, not "identity"); (3) dead fields removed (`identity.sessionPolicy`, entire dead `spec.agent:` block with `maxConcurrentTasks`/`taskTimeout`/`allowedTools` confirmed unused); (4) structured `spec.agent:` block fills the reclaimed slot with `agent.{default,claude,codex}` typed tool-gating — compiler synthesizes `/home/sandbox/.claude/settings.json` and `~/.codex/config.toml` from typed fields, eliminating inlined-JSON-in-YAML antipattern. Plus three correctness fixes that fall out: inheritance bug fix (`pkg/profile/inherit.go` doesn't merge pointer sections — child profile setting one notify field silently loses parent's other notify settings; typed mergers added for Notification + Agent), schema drift fix (`allowedSecretPaths` is wired in compiler but missing from JSON schema), and `vscodeEnabled` relocated from `cli:` to `runtime.vscode.enabled` (it's userdata provisioning, not CLI defaulting). User constraints: zero running sandboxes, no backwards compatibility required, all 20 profile YAMLs (12 in `profiles/` + 8 in `pkg/profile/builtins/`) rewritten atomically per wave. Pre-phase cleanup already done by user 2026-05-30: `profiles/uat/` tree, `profiles/hermes.open.yaml`, `profiles/secrets/codex.enc.yaml` deleted. Wave layout: Wave 0 (research + RED tests), Wave 1 (iam rename + dead-field removal + schema drift fix), Wave 2 (notification types/schema/inherit), Wave 3 (notification compiler + CLI + fixtures + docs), Wave 4 (agent types/schema/inherit + mixed-mode validator), Wave 5 (Claude settings.json + Codex config.toml synthesizers + fixture rewrite + docs), Wave 6 (operator UAT). Brainstormed 2026-05-30 starting from "I want to plan a comprehensive restructuring of the profiles spec"; user picked Claude-Code-settings.json tool gating layer (not kernel/proxy enforcement) and full Approach B (notification + agent restructure together). Context: `.planning/todos/pending/2026-05-30-phase-92-profile-spec-restructure-CONTEXT.md` (PRD-ready, all 14 implementation decisions locked).
+- Phase 93 added: km desktop — KasmVNC-backed browser/XFCE remote session over SSM port-forward. Give an operator a graphical session — default a single maximized browser (kiosk mode), optionally a full XFCE desktop — rendered in their **local** browser over an SSM port-forward, so web-browser-based interactions (Chrome/Firefox/Brave) run remotely inside the sandbox EC2. New `spec.runtime.desktop` block: `enabled` (default **false** — opt-in, opposite of `vscode`'s default-on, because the install is heavy), `mode: kiosk|full` (default kiosk), `browsers` ⊆ {firefox,chromium,chrome,brave} (default `[firefox]`; kiosk launches `browsers[0]`, full installs all), optional `geometry` (default 1920x1080). Engine is **KasmVNC** (web-native VNC server with a built-in HTML5 client + seamless bidirectional clipboard) — one component replacing TigerVNC+websockify+noVNC; chosen specifically because *proper clipboard* is a hard requirement. `km desktop start/status <id>` mirrors `km vscode` (loopback-only bind, SSM port-forward is the sole access path; reuses `sendSSMAndWait`/`buildPortForwardCmd`/`extractResourceID`/`ResolveSandboxID` + the dep-injection pattern). Per-sandbox KasmVNC credential generated at `km create`, stored at `~/.km/desktop/<id>`, seeded into `~/.kasmpasswd` fresh at boot and **never baked** so one AMI serves all sandboxes. Idempotent, AMI-bakeable userdata (install if absent, skip if baked; XFCE for full mode, matchbox-window-manager for kiosk). Posture-agnostic networking — inherits the profile's `spec.network` egress enforcement unchanged. SSL disabled at the KasmVNC layer (justified by loopback bind + encrypted SSM tunnel). Compiler threads new `Desktop*` fields through `service_hcl.go` like `VSCodeSSHPubKey`; new `IsDesktopEnabled(*RuntimeDesktopSpec)` helper defaults **false**. **v1 target distro: Ubuntu 24.04/22.04 only** (KasmVNC's official builds); `km validate` guards non-Ubuntu AMI when desktop enabled. Deliverables: `profiles/desktop.yaml` kiosk-Firefox example (added to `scripts/validate-all-profiles.sh`) + a `klanker:desktop` skill (bump plugin.json/marketplace.json per the cache-gate). Rollout: schema addition → `make build && km init --sidecars` to refresh management Lambdas; existing sandboxes need `km destroy && km create`. Out of scope (v1): GNOME/KDE, audio, multi-monitor, session recording, Amazon Linux 2023, web-based file transfer as a headline feature. Brainstormed + spec'd 2026-06-02 starting from "I want to add an apache guacamole setup … xfce/gnome start … full system linux in a browser"; user steered away from Guacamole (gateway value duplicates the SSM tunnel) to KasmVNC, and from full-desktop-first toward browser-first/kiosk-default. Spec: `docs/superpowers/specs/2026-06-02-km-desktop-remote-browser-design.md`. Depends on Phase 92 (`spec.runtime` schema shape + RuntimeVSCodeSpec/`IsVSCodeEnabled` sibling pattern; `km vscode` CLI/SSM helpers reused).
 
 ## Session Continuity
 
-Last session: 2026-05-31T23:18:54.436Z
-Stopped at: Completed 92-05-PLAN.md (agent synthesizers + 11 fixture rewrites + VC-3 reconciliation + docs; VC-1/VC-3/VC-5/VC-11 GREEN)
+Last session: 2026-06-02T21:14:17.736Z
+Stopped at: Completed 93-06-PLAN.md (operator deliverables: profile, skill, docs)
 Resume file: None

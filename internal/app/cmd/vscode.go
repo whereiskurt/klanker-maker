@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -183,14 +184,16 @@ func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetche
 	fmt.Printf("✓ Updated ~/.ssh/config (Host: %s)\n", alias)
 	fmt.Printf("✓ Forwarding localhost:%d → sandbox:22\n\n", localPort)
 	fmt.Printf("In VS Code: F1 → \"Remote-SSH: Connect to Host...\" → %s\n", alias)
-	fmt.Printf("Press Ctrl-C to close the tunnel (sshd keeps running on the sandbox).\n\n")
+	fmt.Printf("The tunnel auto-reconnects if it drops; press Ctrl-C to close it (sshd keeps running on the sandbox).\n\n")
 
-	// Open the foreground SSM port-forward (blocks until Ctrl-C).
-	pfCmd := buildPortForwardCmd(ctx, instanceID, rec.Region, strconv.Itoa(localPort), "22")
-	pfCmd.Stdin = os.Stdin
-	pfCmd.Stdout = os.Stdout
-	pfCmd.Stderr = os.Stderr
-	return execFn(pfCmd)
+	// Open the SSM port-forward with auto-reconnect. sshd survives a dropped tunnel,
+	// so reconnecting lets VS Code re-establish over the same forward. An SSH-banner
+	// liveness probe recycles a silently-hung plugin.
+	region := rec.Region
+	buildPF := func(c context.Context) *exec.Cmd {
+		return buildPortForwardCmd(c, instanceID, region, strconv.Itoa(localPort), "22")
+	}
+	return runReconnectingPortForward(ctx, execFn, buildPF, sshBannerTunnelProbe(localPort), true, os.Stdout)
 }
 
 // runVSCodeStatus resolves the sandbox, runs the combined SSM status script, and prints a

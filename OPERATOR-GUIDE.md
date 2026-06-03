@@ -1421,3 +1421,120 @@ New sandboxes use `v1.1.0` via the bumped `infra/templates/sandbox/terragrunt.hc
 | Caller lacks `ec2:DescribeSnapshots` | `km create` pre-flight | WARN logged; terragrunt apply is fallback |
 | EBS attach > 60s at boot | userdata | WARNING to `/var/log/km-bootstrap.log`; sandbox boots without mount |
 | Snapshot KMS decryption fails | EC2 boot | Volume attach fails; userdata WARNs; sandbox boots without mount. Fix: grant `kms:CreateGrant` to sandbox EC2 service role |
+
+## 10. km desktop — KasmVNC remote browser session
+
+`km desktop` gives operators a graphical browser session inside a sandbox EC2 rendered in their **local browser** over an SSM port-forward. The engine is **KasmVNC** — a web-native VNC server with a built-in HTML5 client and seamless bidirectional clipboard. Two modes are available: `kiosk` (default — single maximized browser) and `full` (XFCE4 desktop).
+
+Full runbook: `docs/desktop.md`. Skill: `klanker:desktop`.
+
+### When to use
+
+- You need a remote browser running inside the sandbox EC2 (manual web testing, OAuth flows, visual QA, browser automation observation).
+- You need a full graphical desktop environment in the sandbox.
+- Your use case requires bidirectional clipboard between the operator's machine and the remote browser.
+
+### Schema
+
+```yaml
+spec:
+  runtime:
+    ami: ubuntu-24.04         # Ubuntu 24.04 or 22.04 required
+    desktop:
+      enabled: true           # default false; opt-in (heavy install)
+      mode: kiosk             # kiosk | full
+      browsers: [firefox]     # subset of: firefox, chromium, chrome, brave
+      geometry: 1920x1080     # optional
+```
+
+`desktop.enabled` defaults **false** (deliberately opt-in — the install is heavy). Set it explicitly. `km validate` hard-errors when `desktop.enabled: true` and the AMI is not Ubuntu.
+
+**Browser enum:** `{firefox, chromium, chrome, brave}`. `chrome` = Google Chrome; `chromium` = open-source build.
+
+### Validation layers
+
+| Check | Caught by | Behavior |
+|---|---|---|
+| `mode` not in `{kiosk, full}` | `km validate` | Error |
+| `browsers` not a subset of `{firefox, chromium, chrome, brave}` | `km validate` | Error |
+| `browsers` empty when `mode: kiosk` | `km validate` | Error |
+| `geometry` not matching `NNNxNNN` | `km validate` | Error |
+| `desktop.enabled: true` + non-Ubuntu AMI | `km validate` | Error |
+
+### Operator workflow
+
+```bash
+# One-time: redeploy the create-handler Lambda so REMOTE create understands the
+# desktop schema + Ubuntu OS-aware bootstrap (the Lambda compiles userdata itself).
+make build-lambdas && km init --dry-run=false   # (km create --local skips this)
+
+# Create — per-sandbox KasmVNC credential is generated locally
+km create profiles/desktop.yaml --alias my-desktop
+
+# Open the SSM tunnel (blocking; auto-reconnects on drop — Ctrl-C to close)
+km desktop start my-desktop
+# Prints: https://localhost:8444/   user: sandbox   password: <random>
+
+# Open https://localhost:8444/ in your local browser and log in.
+
+# Check KasmVNC unit state
+km desktop status my-desktop
+
+# (Optional) rotate the KasmVNC password on a running sandbox — no restart,
+# no session interruption; re-open with km desktop start afterward
+km desktop rekey my-desktop [--force] [--yes]
+
+# Teardown
+km destroy my-desktop --remote --yes
+```
+
+`--local-port <N>` overrides the default 8444.
+
+### Credential lifecycle
+
+At `km create` time, a per-sandbox KasmVNC credential (username + random password) is generated and stored locally at `~/.km/desktop/<sandbox-id>`. It is seeded into the sandbox's `~/.kasmpasswd` via userdata and is **never baked into an AMI**, so one desktop AMI serves all sandboxes with different credentials. `km destroy` removes the local credential file.
+
+### AMI-bake for routine use
+
+The first-boot userdata installs KasmVNC + WM + browsers — this is slow (several minutes). For repeated use, bake an AMI:
+
+```bash
+# Any network posture works — the install runs pre-enforcement over HTTPS
+km create profiles/desktop.yaml --alias bake-session
+
+# Wait for full boot, then bake
+km ami bake bake-session
+# Output includes: ami-xxxxxxxxxxxxxxxxx
+
+km destroy bake-session --remote --yes
+
+# In your production profile: spec.runtime.ami: ami-xxxxxxxxxxxxxxxxx
+# Subsequent boots skip package installation entirely.
+```
+
+### First-boot network requirements
+
+The `spec.network` allowlist does **not** gate the desktop install. The stack is installed in userdata *before* network enforcement (proxy/iptables/eBPF) comes up, and the sandbox security group permits HTTPS (443) egress — so a fresh boot reaches distro mirrors, the KasmVNC release URL, and browser vendor repos regardless of `allowedDNSSuffixes`/`allowedHosts`. (On Ubuntu `apt` is auto-pinned to HTTPS + IPv4 because the SG allows only 443/53 — no port 80.) The allowlist governs the **browser's runtime egress** once the session is up; tune it per profile. The only first-boot cost is time — use the AMI-bake workflow above to skip it.
+
+### Security model
+
+- KasmVNC + session bind `127.0.0.1` on the sandbox — no LAN/VPC exposure.
+- Only ingress is the operator's SSM `AWS-StartPortForwardingSession` (authenticated, encrypted).
+- SSL disabled at KasmVNC layer — acceptable because of loopback bind + SSM tunnel.
+- Per-sandbox credential is defense-in-depth against local port-riding.
+
+### Rollout
+
+The desktop schema + Ubuntu OS-aware bootstrap are compiled by the **create-handler Lambda** (it runs `km create` as a subprocess), which only updates on a full apply — so redeploy with `make build-lambdas` (clean) + `km init --dry-run=false`, not `--sidecars`. Existing sandboxes do not pick up `desktop` retroactively — `km destroy && km create`.
+
+### Failure mode reference
+
+| Condition | Caught where | Behavior |
+|---|---|---|
+| Non-Ubuntu AMI + `desktop.enabled: true` | `km validate` | Hard error |
+| `browsers` empty in kiosk mode | `km validate` | Hard error |
+| Local port in use | `km desktop start` | Fails fast with `--local-port` hint |
+| KasmVNC unit not active | `km desktop start` pre-flight | Descriptive error; suggests `km desktop status` |
+| Desktop not enabled in profile | `km desktop start` pre-flight | "desktop not enabled — set `spec.runtime.desktop.enabled: true` and recreate" |
+| Credential file missing | `km desktop start` | Error with recovery hint (use `km shell` to read `~/.kasmpasswd`) |
+| Slow first boot (no AMI) | boot time | Expected; nudge toward `km ami bake` |

@@ -66,13 +66,14 @@ build: bump-version
 build-km: build
 
 ## test: run all Go unit tests + static analysis gates
-## Note: five packages have pre-existing failures unrelated to Phase 84.4
-## (cmd/configui, cmd/km-slack, cmd/ttl-handler, internal/app/cmd, pkg/compiler).
+## Note: some packages have pre-existing failures unrelated to Phase 84.4
+## (cmd/km-slack, cmd/ttl-handler, internal/app/cmd, pkg/compiler).
 ## They are excluded until a separate cleanup fixes them.
+## (cmd/configui removed 2026-06-02 — the web dashboard was unused.)
 ## See .planning/phases/84.4-*/deferred-items.md for details.
 .PHONY: test
 test:
-	go test $$(go list ./... | grep -v 'cmd/configui' | grep -v 'cmd/km-slack' | grep -v 'cmd/ttl-handler' | grep -v 'internal/app/cmd' | grep -v 'pkg/compiler')
+	go test $$(go list ./... | grep -v 'cmd/km-slack' | grep -v 'cmd/ttl-handler' | grep -v 'internal/app/cmd' | grep -v 'pkg/compiler')
 	$(MAKE) test-no-82.1-leftovers
 	$(MAKE) test-phase-84-1-import-blocks
 	$(MAKE) test-phase-84-1-removed-blocks

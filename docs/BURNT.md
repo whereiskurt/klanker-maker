@@ -5,30 +5,30 @@
 
 ---
 
-## TL;DR — 61 days, 10.3 billion tokens, one operator
+## TL;DR — 75 days, 12.6 billion tokens, one operator
 
 | | |
 |---|---|
-| **Total tokens consumed** | **~10.31 BILLION** |
-| Total commits | ~2,654 |
-| Net lines of code | ~485K |
-| Phases shipped | **50+** across 9 sprints |
-| Sprints chronicled | 9 (and counting) |
+| **Total tokens consumed** | **~12.59 BILLION** |
+| Total commits | ~3,035 |
+| Net lines of code | ~565K |
+| Phases shipped | **58+** across 10 sprints |
+| Sprints chronicled | 10 (and counting) |
 | Plan cost | **$200/mo** (Claude Code 5x MAX, Opus 4.7) |
-| Avg tokens / commit | ~3.9M |
-| Avg tokens / line of net code | ~21K |
-| Latest snapshot | **2026-05-19 EDT** |
+| Avg tokens / commit | ~4.1M |
+| Avg tokens / line of net code | ~22K |
+| Latest snapshot | **2026-06-02 EDT** |
 
-> 10.3 billion tokens. ~2,654 commits. ~485K lines of net code. **One $200/month plan. Zero hand-typed code.**
+> 12.6 billion tokens. ~3,035 commits. ~565K lines of net code. **One $200/month plan. Zero hand-typed code.**
 
 ---
 
-## Daily token burn (3/20 → 5/19)
+## Daily token burn (3/20 → 6/2)
 
 One row per day. Bar length = total tokens consumed that day (input + cache reads + output). Grouped by ISO week (Sun → Sat) with weekly subtotals on the right.
 
 ```
-DAILY TOKEN BURN — 3/20 → 5/19 EDT  (each █ ≈ 23M tokens)
+DAILY TOKEN BURN — 3/20 → 6/2 EDT  (each █ ≈ 23M tokens)
 
 WEEK 1 · 3/15–3/21  ──────────────────────  total: 429M
   Fri 3/20  ▏                                 11M
@@ -106,13 +106,31 @@ WEEK 9 · 5/10–5/16  ───────────────────
   Fri 5/15  ███████                          152M
   Sat 5/16  ████████                         188M
 
-WEEK 10 · 5/17–5/23  ─────────────────────  total: 381M  (in progress)
+WEEK 10 · 5/17–5/23  ─────────────────────  total: 845M
   Sun 5/17  █████████                        196M
   Mon 5/18  ███████                          166M
-  Tue 5/19  ▏                                 19M
+  Tue 5/19  ███                               68M
+  Wed 5/20  ███████                          155M
+  Thu 5/21  ██                                49M
+  Fri 5/22  ██████                           132M
+  Sat 5/23  ███                               79M
+
+WEEK 11 · 5/24–5/30  ─────────────────────  total: 924M
+  Sun 5/24  ███████████████████              427M  ◀ 3rd-biggest day
+  Mon 5/25  █                                 23M
+  Tue 5/26  ▏                                 19M
+  Wed 5/27  ███                               72M
+  Thu 5/28  █████                            105M
+  Fri 5/29  ████                             103M
+  Sat 5/30  ████████                         175M
+
+WEEK 12 · 5/31–6/6  ──────────────────────  total: 902M  (in progress)
+  Sun 5/31  █████████████████                390M
+  Mon  6/1  ·                                  0M
+  Tue  6/2  ██████████████████████           512M  ◀ 2nd-biggest day
 ```
 
-> Eight days cleared 300M tokens. Week 2 (3/22–3/28) was the all-time peak at **2.82B tokens in seven days** — the original "weekend that ate a week" pulling Phase 27 OTEL through Phase 28 GitHub MITM. The 5/15–5/18 stretch is the second-densest run on record: **702M tokens in four days** powering the Phase 84.x multi-install cascade from research → seven-phase ship sequence (84 → 84.1 → 84.2 → 84.3 → 84.4 → 84.4.1 → 84.4.1.1).
+> Week 2 (3/22–3/28) is still the all-time peak at **2.82B tokens in seven days** — the original "weekend that ate a week." But BURNT X put up three of the heaviest single days ever: **6/2 at 512M (2nd-biggest day in project history) and 5/24 at 427M (3rd)**, both bowing only to 3/22's 694M. The 6/2 evening alone burned **426M in five hours** shipping `km desktop`, including the new record 151.6M peak hour. Note the lone rest day — **6/1 went completely dark**, the only zero-token day of the fortnight.
 
 ---
 
@@ -120,8 +138,9 @@ WEEK 10 · 5/17–5/23  ──────────────────�
 
 ```
 BURNT II   ████████████████████████████████████████████████████████████  2.74B   3/21–28  Full week
+BURNT X    █████████████████████████████████████████████████             2.28B   5/19–6/2 Spec Restructure + Desktop  ← latest
 BURNT V    ███████████████████████████████████                           1.55B   4/3–15   Agents & Email
-BURNT IX   ███████████████████████████                                   1.23B   5/9–19   Multi-Install Cascade  ← latest
+BURNT IX   ███████████████████████████                                   1.23B   5/9–19   Multi-Install Cascade
 BURNT I    ██████████████████████████                                    1.13B   3/20–23  Weekend kickoff
 BURNT VIII ████████████████████████                                      1.06B   5/4–8    Multi-Instance + VS Code
 BURNT VII  ███████████████████                                           0.84B   4/27–5/4 Slack Bidirectional
@@ -136,7 +155,8 @@ BURNT III  ████████████                                 
 
 | # | Sprint | Period | Tokens | Commits |
 |---|---|---|---:|---:|
-| **IX** | **Multi-Install Cascade** | **5/9–5/19** | **1.23B** | **579** |
+| **X** | **Spec Restructure & Desktop** | **5/19–6/2** | **2.28B** | **381** |
+| IX | Multi-Install Cascade | 5/9–5/19 | 1.23B | 579 |
 | VIII | Multi-Instance & VS Code | 5/4–5/8 | 1.06B | 157 |
 | VII | Slack Bidirectional | 4/27–5/4 | 0.84B | 311 |
 | VI | AMI Lifecycle | 4/15–26 | 0.69B | 216 |
@@ -150,9 +170,251 @@ BURNT III  ████████████                                 
 
 ## How to read this file
 
-Chapters are ordered **latest first** (IX at top, I at bottom). Each chapter is a self-contained snapshot from the moment it was generated, with its own running-total table — so the cumulative view at the bottom of any chapter reflects what was true on that snapshot date, not today. The numbers at the very top of this file are the live cumulative.
+Chapters are ordered **latest first** (X at top, I at bottom). Each chapter is a self-contained snapshot from the moment it was generated, with its own running-total table — so the cumulative view at the bottom of any chapter reflects what was true on that snapshot date, not today. The numbers at the very top of this file are the live cumulative.
 
 Generation process: see [`BURNT.process.md`](./BURNT.process.md).
+
+---
+---
+
+# BURNT X: The Spec Restructure & The Remote Desktop
+
+> **May 19 – June 2, 2026** | Claude Code on **5x MAX** (Opus 4.7) | klanker-maker eight-phase fortnight — prompt queue, snapshot-backed volumes, OpenAI metering, SOPS secrets, polite-bot Slack, the v1alpha2 spec restructure, and `km desktop`
+
+---
+
+## The Numbers
+
+| | |
+|---|---|
+| **Tokens consumed** | **2,284,000,000+** |
+| Input | 2,274,521,043 (99.57%) |
+| Output | 9,759,344 (0.43%) |
+| Input:Output ratio | 233 : 1 |
+| Cache read | 2,221,059,826 (97.65% of input) |
+| **Sessions** | **43** |
+| **API calls** | **8,932** |
+| **Turns** | **5,015** |
+| **Plan cost** | **$200/mo** |
+
+> **2.28 BILLION TOKENS in 14 days — the second-biggest sprint on record**, behind only BURNT II (the original "weekend that ate a week"). Eight phases shipped end-to-end: **86** (`km create --prompt` queue), **87** (snapshot-backed EBS volumes), **88** (Codex/OpenAI budget metering), **89** (SOPS secret injection), **72** (Slack corporate-workspace auto-invite + manifest), **91** (polite-bot @-mention-only, five sub-phases), **92** (the `apiVersion v1alpha2` profile-spec restructure), and **93** (`km desktop` KasmVNC remote browser + OS-aware Ubuntu userdata). And it set a **new all-time peak hour: 151.6M tokens between 9–10pm on 6/2** — a record that stood at 94.7M since the very first weekend in March.
+
+---
+
+## Heat Map (EDT)
+
+<table>
+<tr><th colspan="4" align="left">TUESDAY 5/19 — 43.3M (Phase 86 km create --prompt queue — planning)</th></tr>
+<tr><td>9pm</td><td align="right">14.5M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">10.0M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>11pm</strong></td><td align="right"><strong>18.8M</strong></td><td>🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><th colspan="4" align="left">WEDNESDAY 5/20 — 154.5M (Phase 86 prompt queue — ship)</th></tr>
+<tr><td>6am</td><td align="right">31.2M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>7am</strong></td><td align="right"><strong>55.8M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>8am</td><td align="right">6.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">34.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">12.9M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">4.4M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>5pm</td><td align="right">9.5M</td><td>🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">THURSDAY 5/21 — 49.0M (Phase 87 additionalSnapshots)</th></tr>
+<tr><td>8am</td><td align="right">0.3M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td><strong>8pm</strong></td><td align="right"><strong>17.9M</strong></td><td>🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>9pm</td><td align="right">8.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">9.4M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">13.4M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">FRIDAY 5/22 — 131.8M (Phase 87 close → Phase 88 OpenAI metering kickoff)</th></tr>
+<tr><td>8am</td><td align="right">2.5M</td><td>🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">8.2M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>5pm</td><td align="right">12.5M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">3.0M</td><td>🟧</td><td></td></tr>
+<tr><td><strong>7pm</strong></td><td align="right"><strong>27.7M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>8pm</td><td align="right">20.6M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">22.0M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">16.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">18.4M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SATURDAY 5/23 — 79.2M (Phase 88 OpenAI/Codex metering — overnight)</th></tr>
+<tr><td><strong>12am</strong></td><td align="right"><strong>75.7M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>1am</td><td align="right">3.5M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SUNDAY 5/24 — 427.3M (Phase 88 metering marathon — biggest day of the sprint)</th></tr>
+<tr><td>10am</td><td align="right">0.9M</td><td>🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">21.6M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>12pm</td><td align="right">57.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>1pm</td><td align="right">18.7M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>2pm</strong></td><td align="right"><strong>77.9M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>3pm</td><td align="right">11.0M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">72.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">37.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">34.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">28.2M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">22.6M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">2.5M</td><td>🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">42.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">MONDAY 5/25 — 23.0M (Phase 88 close)</th></tr>
+<tr><td>12am</td><td align="right">3.1M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>8am</td><td align="right">2.7M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>6pm</td><td align="right">1.3M</td><td>🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">0.2M</td><td>🟧</td><td></td></tr>
+<tr><td><strong>8pm</strong></td><td align="right"><strong>15.7M</strong></td><td>🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><th colspan="4" align="left">TUESDAY 5/26 — 18.9M (Phase 89 SOPS secret injection — kickoff)</th></tr>
+<tr><td>8am</td><td align="right">0.6M</td><td>🟧</td><td></td></tr>
+<tr><td><strong>9am</strong></td><td align="right"><strong>8.6M</strong></td><td>🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>10am</td><td align="right">0.1M</td><td>🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">1.2M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>3pm</td><td align="right">0.3M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>10pm</td><td align="right">1.5M</td><td>🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">6.5M</td><td>🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">WEDNESDAY 5/27 — 72.0M (Phase 89 SOPS build)</th></tr>
+<tr><td>3pm</td><td align="right">0.8M</td><td>🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">4.9M</td><td>🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">1.4M</td><td>🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">6.3M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">24.8M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">3.8M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td><strong>11pm</strong></td><td align="right"><strong>30.1M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><th colspan="4" align="left">THURSDAY 5/28 — 105.2M (Phase 89 SOPS close — midnight inferno)</th></tr>
+<tr><td><strong>12am</strong></td><td align="right"><strong>85.5M</strong></td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>1am</td><td align="right">5.3M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>8am</td><td align="right">7.4M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>11am</td><td align="right">2.5M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>11pm</td><td align="right">4.5M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">FRIDAY 5/29 — 103.2M (Phase 72 corporate-workspace Slack execution)</th></tr>
+<tr><td>1am</td><td align="right">0.9M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>9am</td><td align="right">29.9M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">15.5M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>12pm</strong></td><td align="right"><strong>36.9M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>2pm</td><td align="right">10.2M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">2.6M</td><td>🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">5.7M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>7pm</td><td align="right">0.7M</td><td>🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">0.8M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SATURDAY 5/30 — 174.8M (Phase 72 close → Phase 91 + 92 kickoff)</th></tr>
+<tr><td>11am</td><td align="right">6.8M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>12pm</td><td align="right">8.7M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>1pm</td><td align="right">4.5M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>4pm</td><td align="right">2.0M</td><td>🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">28.6M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">39.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>7pm</strong></td><td align="right"><strong>58.3M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>8pm</td><td align="right">12.9M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">1.5M</td><td>🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">12.2M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SUNDAY 5/31 — 390.4M (Phase 91 polite-bot + Phase 92 spec restructure — ship)</th></tr>
+<tr><td>12am</td><td align="right">9.2M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · ·</sub></td></tr>
+<tr><td>8am</td><td align="right">14.0M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">30.8M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">46.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">0.5M</td><td>🟧</td><td></td></tr>
+<tr><td>12pm</td><td align="right">67.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>1pm</td><td align="right">14.4M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>2pm</strong></td><td align="right"><strong>69.9M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>3pm</td><td align="right">21.2M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">31.2M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">11.5M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">4.1M</td><td>🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">52.9M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">5.5M</td><td>🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">11.0M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">MONDAY 6/1 — 0M (rest day — the only one of the sprint)</th></tr>
+<tr><td colspan="4"><sub>· · · dark · · ·</sub></td></tr>
+<tr><th colspan="4" align="left">TUESDAY 6/2 — 511.7M (Phase 93 km desktop — the record inferno · snapshot day, still active)</th></tr>
+<tr><td>2pm</td><td align="right">2.1M</td><td>🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">9.4M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">20.7M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">10.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">78.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">107.7M</td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td></td></tr>
+<tr><td>8pm</td><td align="right">87.8M</td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td></td></tr>
+<tr><td><strong>9pm</strong></td><td align="right"><strong>151.6M</strong></td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td>⬅️ <strong>SPRINT PEAK HOUR · ALL-TIME RECORD</strong></td></tr>
+<tr><td>10pm</td><td align="right">43.9M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+</table>
+
+> 🟧 = 4M tokens · 🔥 = 4M tokens (80M+ "inferno" hours). Four inferno hours this sprint — one at midnight 5/28 closing Phase 89, then a **four-hour wall on 6/2 evening (79M → 108M → 88M → 152M)** shipping Phase 93 `km desktop`. The 9–10pm 6/2 hour at **151.6M tokens is the single densest hour in project history** — 61% above the prior record (94.7M, set 3/21 during the original BURNT II weekend).
+
+---
+
+## Monster Sessions
+
+| Tokens | Output | API calls | Span | Window |
+|---:|---:|---:|---:|---|
+| **482.4M** | 1.35M | 1,060 | 10.0h | 6/2 12:00 → 22:03 — Phase 93 `km desktop` ship: KasmVNC schema → start/status → rekey → SSM auto-reconnect |
+| **391.1M** | 819.9K | 888 | 44.0h | 5/22 21:09 → 5/24 17:10 — Phase 87 snapshots close → Phase 88 OpenAI/Codex metering marathon |
+| **211.1M** | 772.0K | 651 | 19.0h | 5/30 17:32 → 5/31 12:34 — Phase 91 polite-bot + Phase 92 spec-restructure kickoff |
+| **209.5M** | 634.3K | 686 | 47.2h | 5/19 20:56 → 5/21 20:09 — Phase 86 `--prompt` queue + Phase 87 additionalSnapshots |
+| **162.2M** | 522.6K | 674 | 19.2h | 5/27 16:38 → 5/28 11:47 — Phase 89 SOPS secret injection close (midnight 85M inferno) |
+| **108.1M** | 676.8K | 470 | 48.4h | 5/31 15:09 → 6/2 15:34 — Phase 92 close → Phase 93 desktop research/build |
+| **90.9M** | 444.3K | 386 | 13.2h | 5/29 00:58 → 14:10 — Phase 72 corporate-workspace Slack execution |
+| **87.3M** | 533.7K | 407 | 2.4h | 5/31 12:42 → 15:07 — Phase 92 spec-restructure burst (the tightest output rate of the sprint) |
+| **76.7M** | 229.1K | 390 | 3.6h | 5/24 17:11 → 20:48 — Phase 88 metering, daytime |
+| **70.4M** | 285.2K | 373 | 5.4h | 5/22 17:23 → 22:46 — Phase 87 snapshots, evening |
+
+> Ten sessions cleared 70M+ each. The top one is the snapshot session itself — 482M tokens in a single 10-hour 6/2 sitting to land `km desktop` end-to-end, and it was *still open* when this chapter was cut (hence the 6/2 day total keeps climbing). The 44-hour 391M weekend session (5/22–5/24) is the second-longest continuous span ever chronicled.
+
+---
+
+## What Got Built
+
+| | |
+|---|---|
+| Commits | 381 |
+| Files changed | 1,223 |
+| Lines added | 93,082 |
+| Lines deleted | 13,390 |
+| Net lines | +79,692 |
+| Phases shipped (8 total) | **86** (`km create --prompt` queue — repeatable `--prompt <text-or-@file>`, on-box prompt queue, `km agent list --queue`), **87** (`spec.runtime.additionalSnapshots` — snapshot-backed EBS volumes, fresh `aws_ebs_volume` per entry, `/dev/sd[f-p]` auto-rotation, userdata-detected filesystem), **88** (Codex/OpenAI budget metering — http-proxy MITM interceptor for `api.openai.com`, price table, `BUDGET#ai#{modelID}` row parity with Bedrock/Anthropic, `*_unknown_model` gap logging), **89** (SOPS secret injection — `iam.allowedSecretPaths` SSM allowlist, shared KMS key via `km bootstrap --shared-secrets-key`, auto-decrypt on read), **72** (Slack corporate-workspace support — `km slack manifest`, `km slack invite` with native-vs-Connect auto-detect, `notification.slack.invites.emails/useConnect`, `users:read.email` scope + doctor check), **91 / 91.1 / 91.3 / 91.4 / 91.5 / 91.6** (polite-bot @-mention-only inbound — `KM_SLACK_MENTION_ONLY` from `km-config.yaml`, SSM-cached `bot_user_id`, thread-bypass, first-only reactor toggle, per-sandbox `reactAlways` override), **92 / 92.01–92.05** (the `apiVersion v1alpha2` profile-spec restructure — `identity:`→`iam:`, `cli.notify*`→`notification:`, `cli.vscodeEnabled`→`runtime.vscode.enabled`, structured `agent:` tool-gating with synthesized `settings.json`/`config.toml`, mixed-mode validator, v1alpha1→v1alpha2 migration tool), **93 / 93.1** (`km desktop` KasmVNC remote browser/XFCE over SSM port-forward, `spec.runtime.desktop` block, **OS-aware Ubuntu 24.04/22.04 userdata bootstrap**, `km desktop rekey`, SSM port-forward auto-reconnect for desktop + vscode) |
+| Phases planned end-to-end (not yet shipped) | **90** (`km init` self-healing provider locks via reconfigure/upgrade per module — design + roadmap landed) |
+| Features shipped | **Phase 92 spec restructure:** strict `apiVersion: klankermaker.ai/v1alpha2` (v1alpha1 rejected), `spec.iam:` block (`roleSessionDuration`/`allowedRegions`/`allowedSecretPaths`), `spec.notification:` (typed `events`/`email`/`slack` sub-blocks, 15 fields migrated out of `cli`), `spec.runtime.vscode.enabled`, `spec.agent:` block (`default`/`claude.args`/`codex.args` + `claude.tools.*`/`trustedDirectories`), `synthesizeClaudeSettings` (canonical `permissions.allow`/`deny`) + `synthesizeCodexConfig` (inert hooks + asymmetry note), mixed-mode hard-fail validator, byte-identical userdata env output, `scripts/validate-all-profiles.sh` 20-file gate, v1alpha1→v1alpha2 migration tool · **Phase 93 km desktop:** `km desktop start/status/rekey`, loopback `127.0.0.1:8444` KasmVNC over SSM (no public/SG change), `spec.runtime.desktop` (`mode: kiosk\|full`, `browsers ⊆ {firefox,chromium,chrome,brave}`, `geometry`), Ubuntu-only validation gate, **OS-aware userdata** (apt-over-HTTPS on 443-only SG, `ForceIPv4`, python3 AWS-CLI install, `ssh.service`, `systemd-resolved` stopped for eBPF resolver on `:53`), `runReconnectingPortForward` with liveness probe, `cmd/configui` removal · **Phase 88 metering:** `api.openai.com` MITM interceptor gated by `spec.agent.default: codex`, OpenAI price table, `IncrementAISpend` wiring mirroring the Anthropic pipeline · **Phase 89 secrets:** SOPS-encrypted secret injection, `iam.allowedSecretPaths` allowlist, shared KMS key bootstrap · **Phase 87 snapshots:** `additionalSnapshots` coexisting with `additionalVolume`, baked-AMI `/dev/sdf` collision auto-rotation · **Phase 86 prompt queue:** repeatable `--prompt`, `@file` expansion, on-box queue + `km agent list --queue` · **Phase 72 corporate Slack:** manifest generator, ad-hoc `km slack invite`, auto-invite loop, Connect-fallback gate · **Phase 91 polite-bot:** mode-aware mention scan, thread-bypass, first-only reactor, per-sandbox override |
+
+---
+
+## What Does 2.28 Billion Tokens Even Mean?
+
+| | |
+|---|---|
+| Pages of text | ~1,714,000 |
+| Full-length novels | ~5,710 |
+| English Wikipedias | ~6.92x |
+| Lord of the Rings cover-to-covers | ~1,523 |
+
+...to write back **9.76M tokens** and produce **381 commits** / **80K net lines** across **8 shipped phases (plus 1 planned end-to-end)** — every line authored by Claude Code on Opus 4.7. The operator did the profile design (the desktop kiosk-Firefox example, the SOPS secret paths), the multi-OS UAT (eBPF + proxy enforcement validated on both Ubuntu 24.04 and AL2023), and the ship/no-ship calls.
+
+---
+
+## Running Total
+
+| Period | Tokens | Commits | Lines |
+|---|---:|---:|---:|
+| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
+| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
+| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
+| eBPF sprint (4/1–3) | 604,000,000 | 145 | 23K |
+| Agent & Email (4/3–15) | 1,545,000,000 | 201 | 26K |
+| AMI Lifecycle (4/15–26) | 686,700,000 | 216 | 35K |
+| Slack Bidirectional (4/27–5/4) | 842,000,000 | 311 | 79K |
+| Multi-Instance & VS Code (5/4–5/8) | 1,025,000,000 | 157 | 33K net |
+| Multi-Install Cascade (5/9–5/19) | 1,234,000,000 | 579 | 139K net |
+| Spec Restructure & Desktop (5/19–6/2) | 2,284,000,000 | 381 | 80K net |
+| **Cumulative** | **~12,593,700,000** | **~3,035** | **~565K net** |
+
+> **Past 12.5 BILLION.** Over 3,000 commits. ~565K net lines. **Eight more phases in 14 days** — and the second-biggest sprint ever recorded, capped by the densest single hour in project history. The whole `apiVersion v1alpha2` spec was restructured *and* a KasmVNC remote desktop shipped with OS-aware Ubuntu bootstrap, in the same fortnight. Still $200/mo. Still one human. The inferno set a new record.
+
+---
+
+*Generated by Claude Code · snapshot 2026-06-02 EDT (6/2 still active at cut)*
 
 ---
 ---

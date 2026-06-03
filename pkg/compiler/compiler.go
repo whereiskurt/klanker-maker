@@ -131,6 +131,36 @@ echo "[km-bootstrap-stub] Waiting for IAM credentials..."
 IMDS_TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
 REGION=$(curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" "http://169.254.169.254/latest/meta-data/placement/region")
 export AWS_DEFAULT_REGION="$REGION"
+# Ensure the AWS CLI exists before using it. Ubuntu base AMIs ship NO aws CLI
+# (Amazon Linux does), and this stub needs it to download the full bootstrap
+# script from S3. The security group allows broad 443 egress at this stage
+# (the proxy/iptables enforcement is configured later by the full script), so
+# the public AWS CLI installer is reachable. set -e is active, so keep every
+# step fault-tolerant.
+if ! command -v aws >/dev/null 2>&1; then
+  echo "[km-bootstrap-stub] AWS CLI not found — installing v2..."
+  STUB_TMP=$(mktemp -d)
+  if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "$STUB_TMP/awscliv2.zip"; then
+    # Extract WITHOUT 'unzip' (absent on minimal Ubuntu; apt is dpkg-lock
+    # contended at early boot). python3 ships on Ubuntu + Amazon Linux images.
+    if command -v unzip >/dev/null 2>&1; then
+      (cd "$STUB_TMP" && unzip -q awscliv2.zip)
+    else
+      (cd "$STUB_TMP" && python3 -c "import zipfile; zipfile.ZipFile('awscliv2.zip').extractall()")
+    fi
+    chmod -R +x "$STUB_TMP/aws" 2>/dev/null || true
+    if "$STUB_TMP/aws/install" 2>/dev/null || bash "$STUB_TMP/aws/install"; then
+      echo "[km-bootstrap-stub] AWS CLI v2 installed"
+    else
+      echo "[km-bootstrap-stub] ERROR: AWS CLI install step failed"
+    fi
+  else
+    echo "[km-bootstrap-stub] ERROR: AWS CLI download failed"
+  fi
+  rm -rf "$STUB_TMP"
+  export PATH="/usr/local/bin:$PATH"
+  hash -r 2>/dev/null || true
+fi
 # Wait for instance profile credentials to become available (can take 10-30s)
 for i in $(seq 1 30); do
   if aws sts get-caller-identity >/dev/null 2>&1; then

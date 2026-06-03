@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	cmd "github.com/whereiskurt/klanker-maker/internal/app/cmd"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 )
 
 // TestRunCreate_GitHubToken verifies that create.go contains the GitHub token wiring.
@@ -391,6 +395,135 @@ func TestRunCreate_SlackArchiveOnDestroy(t *testing.T) {
 		{"notification.slack nil guard", "notificationSlack(resolvedProfile)"},
 		{"SlackArchiveOnDestroy write", "meta.SlackArchiveOnDestroy"},
 		{"nil round-trip comment", "nil round-trips as nil"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
+// TestDesktopCredential verifies the per-sandbox KasmVNC credential lifecycle.
+//
+// It tests the GenerateDesktopCredential helper directly — not the full runCreate
+// flow — so the test is fast and does not require AWS credentials. The helper is
+// the single source of truth for credential generation; the runCreate/runCreateRemote
+// call sites are thin wrappers verified by source-level checks below.
+func TestDesktopCredential(t *testing.T) {
+	t.Run("enabled profile writes file and threads NetworkConfig", func(t *testing.T) {
+		home := t.TempDir()
+		network := &compiler.NetworkConfig{}
+		if err := cmd.GenerateDesktopCredential(home, "sbx-test-01", network); err != nil {
+			t.Fatalf("GenerateDesktopCredential: %v", err)
+		}
+
+		// File must exist at ~/.km/desktop/<id>
+		credPath := filepath.Join(home, ".km", "desktop", "sbx-test-01")
+		data, err := os.ReadFile(credPath)
+		if err != nil {
+			t.Fatalf("credential file not written: %v", err)
+		}
+
+		// Content must be "kasm:<password>"
+		content := string(data)
+		if !strings.HasPrefix(content, "kasm:") {
+			t.Errorf("credential content %q does not start with 'kasm:'", content)
+		}
+		parts := strings.SplitN(content, ":", 2)
+		if len(parts) != 2 || parts[1] == "" {
+			t.Errorf("credential content %q: expected non-empty password after colon", content)
+		}
+		password := parts[1]
+		if strings.ContainsAny(password, ":\n") {
+			t.Errorf("password %q contains invalid characters (colon or newline)", password)
+		}
+		if len(password) < 8 {
+			t.Errorf("password %q is too short (got %d, want >= 8)", password, len(password))
+		}
+
+		// File mode must be 0600
+		info, err := os.Stat(credPath)
+		if err != nil {
+			t.Fatalf("stat credential file: %v", err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("credential file mode: got %04o, want 0600", got)
+		}
+
+		// NetworkConfig fields must be threaded
+		if network.DesktopKasmUser != "kasm" {
+			t.Errorf("NetworkConfig.DesktopKasmUser: got %q, want %q", network.DesktopKasmUser, "kasm")
+		}
+		if network.DesktopKasmPass != password {
+			t.Errorf("NetworkConfig.DesktopKasmPass does not match file password")
+		}
+	})
+
+	t.Run("two creates produce different passwords", func(t *testing.T) {
+		home := t.TempDir()
+		n1 := &compiler.NetworkConfig{}
+		n2 := &compiler.NetworkConfig{}
+		if err := cmd.GenerateDesktopCredential(home, "sbx-a", n1); err != nil {
+			t.Fatalf("first GenerateDesktopCredential: %v", err)
+		}
+		if err := cmd.GenerateDesktopCredential(home, "sbx-b", n2); err != nil {
+			t.Fatalf("second GenerateDesktopCredential: %v", err)
+		}
+		if n1.DesktopKasmPass == n2.DesktopKasmPass {
+			t.Errorf("two creates produced the same password %q — not random", n1.DesktopKasmPass)
+		}
+	})
+
+	t.Run("env var override skips file write", func(t *testing.T) {
+		// KM_DESKTOP_KASM_USER / KM_DESKTOP_KASM_PASS override (Lambda subprocess path)
+		t.Setenv("KM_DESKTOP_KASM_USER", "kasm")
+		t.Setenv("KM_DESKTOP_KASM_PASS", "override-password")
+
+		home := t.TempDir()
+		network := &compiler.NetworkConfig{}
+		if err := cmd.GenerateDesktopCredential(home, "sbx-override", network); err != nil {
+			t.Fatalf("GenerateDesktopCredential with env override: %v", err)
+		}
+
+		// No file should be written when env vars are set (Lambda has no ~/.km)
+		credPath := filepath.Join(home, ".km", "desktop", "sbx-override")
+		if _, err := os.Stat(credPath); err == nil {
+			t.Errorf("credential file written even though env override was set — Lambda path must not write files")
+		}
+
+		// NetworkConfig threaded from env
+		if network.DesktopKasmUser != "kasm" {
+			t.Errorf("NetworkConfig.DesktopKasmUser from env: got %q, want %q", network.DesktopKasmUser, "kasm")
+		}
+		if network.DesktopKasmPass != "override-password" {
+			t.Errorf("NetworkConfig.DesktopKasmPass from env: got %q, want %q", network.DesktopKasmPass, "override-password")
+		}
+	})
+}
+
+// TestDesktopCredentialSource verifies that create.go contains the required
+// call sites and source patterns for desktop credential integration.
+func TestDesktopCredentialSource(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"GenerateDesktopCredential helper", "func GenerateDesktopCredential("},
+		{"randomPassword helper", "func randomPassword("},
+		{"IsDesktopEnabled guard (local)", "IsDesktopEnabled"},
+		{"KM_DESKTOP_KASM_USER env", "KM_DESKTOP_KASM_USER"},
+		{"KM_DESKTOP_KASM_PASS env", "KM_DESKTOP_KASM_PASS"},
+		{"~/.km/desktop dir", `".km", "desktop"`},
+		{"DesktopKasmUser thread", "DesktopKasmUser"},
+		{"DesktopKasmPass thread", "DesktopKasmPass"},
+		{"desktop-creds.txt upload", "desktop-creds.txt"},
+		{"crypto/rand usage", "cryptorand"},
 	}
 	for _, c := range checks {
 		if !strings.Contains(s, c.pattern) {

@@ -1,0 +1,136 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: desktop
+  labels:
+    tier: development
+    tool: browser-desktop
+  prefix: desk
+
+# First-boot network caveat
+# --------------------------
+# A fresh non-AMI boot must reach the following endpoints to install the desktop stack:
+#   - Ubuntu package mirrors (archive.ubuntu.com, security.ubuntu.com)
+#   - KasmVNC release tarball (github.com, objects.githubusercontent.com)
+#   - Firefox PPA (ppa.launchpad.net, keyserver.ubuntu.com)
+#
+# Under a locked-down spec.network, either allowlist those domains for first boot
+# OR bake the AMI on a permissive profile (km create + km ami bake) and then launch
+# under a restricted profile using spec.runtime.ami: <baked-ami-id>.
+#
+# Browser *runtime* egress (what Firefox fetches once running) is governed by the
+# profile's spec.network as usual — tighten it to match your use case.
+#
+# AMI-bake recommended for routine use:
+#   km create profiles/desktop.yaml && km ami bake <sandbox-id>
+#   # then in your profile: spec.runtime.ami: ami-xxxxxxxxxxxxxxxxx
+#   km validate profiles/desktop.yaml && km create profiles/desktop.yaml
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: stop
+
+  runtime:
+    # Ubuntu 24.04 required — KasmVNC only supports Ubuntu in v1.
+    # km validate will reject desktop.enabled: true on non-Ubuntu AMIs.
+    ami: ubuntu-24.04
+    substrate: ec2
+    instanceType: t3.large
+    region: us-east-1
+    spot: false
+    hibernation: false
+    rootVolumeSize: 30
+
+    desktop:
+      enabled: true
+      # mode: kiosk — browsers[0] (firefox) is launched maximized; matchbox-wm
+      # provides the window manager. No desktop environment overhead.
+      # Set mode: full for a complete XFCE4 desktop session.
+      mode: kiosk
+      # browsers: first entry is the kiosk browser in mode=kiosk.
+      # Supported values: firefox, chromium, chrome, brave
+      # (chrome = Google Chrome; chromium = open-source build; both are distinct.)
+      browsers:
+        - firefox
+      geometry: 1920x1080
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+    privileged: false
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos: []
+      allowedRefs: []
+
+  network:
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - "time.aws.com"
+        # Anthropic / Claude Code
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
+        # Firefox update + telemetry domains (adjust for stricter postures)
+        - ".mozilla.org"
+        - ".mozilla.com"
+        - ".mozilla.net"
+        - ".firefox.com"
+      allowedHosts: []
+
+  budget:
+    compute:
+      maxSpendUSD: 1.00
+    ai:
+      maxSpendUSD: 0.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 200
+
+  iam:
+    roleSessionDuration: "4h"
+    allowedRegions:
+      - us-east-1
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/network
+
+  notification:
+    events:
+      onIdle: false
+      onPermission: false
+    # At least one delivery channel must be enabled or `km create` rejects the
+    # profile (km validate only WARNs). Email goes to the operator inbox.
+    email:
+      enabled: true
+    slack:
+      enabled: false

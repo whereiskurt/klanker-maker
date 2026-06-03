@@ -33,13 +33,100 @@ const userDataTemplate = `#!/bin/bash
 set -euo pipefail
 
 # ============================================================
+# 0. OS abstraction (Phase 93.1: Amazon Linux 2023 + Ubuntu 24.04/22.04)
+# The base bootstrap historically assumed Amazon Linux (yum/dnf + a
+# preinstalled AWS CLI). Ubuntu (required by the remote desktop feature)
+# ships neither, so detect the OS and provide portable helpers BEFORE any
+# package install or aws call below.
+# ============================================================
+. /etc/os-release 2>/dev/null || true
+KM_OS_ID="${ID:-amzn}"
+echo "[km-bootstrap] OS detected: ${KM_OS_ID} (${PRETTY_NAME:-unknown})"
+
+# km_apt_https — rewrite apt sources from http:// to https://. The sandbox SG
+# allows ONLY 443 egress (no port 80), so apt's default HTTP fetches are blocked;
+# the EC2 Ubuntu mirror and Launchpad PPAs all serve HTTPS. Call after the base
+# sources are present AND after any add-apt-repository. No-op on Amazon Linux.
+km_apt_https() {
+  command -v apt-get >/dev/null 2>&1 || return 0
+  sed -i 's|http://|https://|g' /etc/apt/sources.list 2>/dev/null || true
+  for f in /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
+    [ -e "$f" ] && sed -i 's|http://|https://|g' "$f" 2>/dev/null || true
+  done
+}
+# EC2 Ubuntu's apt mirror also advertises IPv6 addresses that are typically
+# unroutable from the instance, so force apt to IPv4. (No-op on Amazon Linux.)
+if command -v apt-get >/dev/null 2>&1; then
+  echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99km-force-ipv4
+  km_apt_https
+fi
+
+# km_pkg_install <pkg...> — install packages with the platform package manager.
+km_pkg_install() {
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y "$@"
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y "$@"
+  elif command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    km_apt_https
+    apt-get update -y -q >/dev/null 2>&1 || true
+    apt-get install -y "$@"
+  else
+    echo "[km-bootstrap] WARN: no supported package manager for: $*" >&2
+    return 1
+  fi
+}
+
+# km_ensure_awscli — install the AWS CLI v2 if absent (Ubuntu base AMIs lack it;
+# Amazon Linux ships it). Runs before the proxy/iptables enforcement is
+# configured, and the SG allows broad 443 egress, so the public installer at
+# awscli.amazonaws.com is reachable.
+km_ensure_awscli() {
+  command -v aws >/dev/null 2>&1 && return 0
+  echo "[km-bootstrap] AWS CLI not found — installing v2..."
+  local tmpd
+  tmpd=$(mktemp -d)
+  if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "${tmpd}/awscliv2.zip"; then
+    # Extract WITHOUT depending on 'unzip': it is absent on minimal Ubuntu and
+    # apt is frequently dpkg-lock-contended at early boot. python3 ships on both
+    # Ubuntu and Amazon Linux base images, so use it as the portable extractor.
+    if command -v unzip >/dev/null 2>&1; then
+      (cd "${tmpd}" && unzip -q awscliv2.zip)
+    else
+      (cd "${tmpd}" && python3 -c "import zipfile; zipfile.ZipFile('awscliv2.zip').extractall()")
+    fi
+    chmod -R +x "${tmpd}/aws" 2>/dev/null || true
+    if "${tmpd}/aws/install" 2>/dev/null || bash "${tmpd}/aws/install"; then
+      echo "[km-bootstrap] AWS CLI v2 installed"
+    else
+      echo "[km-bootstrap] ERROR: AWS CLI install step failed" >&2
+    fi
+  else
+    echo "[km-bootstrap] ERROR: AWS CLI download failed" >&2
+  fi
+  rm -rf "${tmpd}"
+  export PATH="/usr/local/bin:${PATH}"
+  hash -r 2>/dev/null || true
+}
+km_ensure_awscli
+
+# ============================================================
 # 1. SSM Agent: install and start
 # ============================================================
-echo "[km-bootstrap] Installing amazon-ssm-agent..."
-yum install -y amazon-ssm-agent 2>&1 | tee -a /var/log/km-bootstrap.log
-systemctl enable amazon-ssm-agent
-systemctl start amazon-ssm-agent
-echo "[km-bootstrap] SSM agent started"
+if command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+  echo "[km-bootstrap] Installing amazon-ssm-agent..."
+  km_pkg_install amazon-ssm-agent 2>&1 | tee -a /var/log/km-bootstrap.log
+  systemctl enable amazon-ssm-agent
+  systemctl start amazon-ssm-agent
+  echo "[km-bootstrap] SSM agent started"
+else
+  # Ubuntu/Debian: amazon-ssm-agent ships preinstalled as a snap on Canonical's
+  # EC2 images (the unit is snap.amazon-ssm-agent.amazon-ssm-agent). It is
+  # already running (it is how km reaches the box), so do not reinstall/enable
+  # under the Amazon-Linux unit name — that would fail.
+  echo "[km-bootstrap] amazon-ssm-agent assumed preinstalled (Ubuntu snap) — skipping install"
+fi
 
 # ============================================================
 # 1.5. Sandbox + sidecar users: create early so a later userdata
@@ -48,17 +135,23 @@ echo "[km-bootstrap] SSM agent started"
 # ============================================================
 useradd -r -s /usr/sbin/nologin km-sidecar || true
 {{- if .Privileged }}
-useradd -m -s /bin/bash -d /home/sandbox -G wheel sandbox 2>/dev/null || true
+# Create the user first, THEN grant admin via whichever group exists — Amazon
+# Linux/RHEL use "wheel", Ubuntu/Debian use "sudo". Creating with -G wheel
+# directly fails on Ubuntu (no wheel group), which left the user uncreated and
+# aborted the boot at the next chown.
+useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
+usermod -aG wheel sandbox 2>/dev/null || usermod -aG sudo sandbox 2>/dev/null || true
 echo "sandbox ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sandbox
 chmod 0440 /etc/sudoers.d/sandbox
 {{- else }}
 useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
 # Defensive scrub: when launching from an AMI baked off a privileged sandbox, the
-# image carries /etc/sudoers.d/sandbox + wheel membership. Without this the
+# image carries /etc/sudoers.d/sandbox + admin-group membership. Without this the
 # non-privileged user could sudo -s to root, escaping the eBPF cgroup
 # enforcement (root processes are never enrolled into the sandbox cgroup).
 rm -f /etc/sudoers.d/sandbox
 gpasswd -d sandbox wheel 2>/dev/null || true
+gpasswd -d sandbox sudo 2>/dev/null || true
 {{- end }}
 mkdir -p /workspace
 chown sandbox:sandbox /workspace
@@ -145,7 +238,14 @@ fi
 # 2.7. EFS shared filesystem: install utils and mount (Phase 43)
 # ============================================================
 echo "[km-bootstrap] Mounting EFS shared filesystem {{ .EFSFilesystemID }}..."
-yum install -y amazon-efs-utils 2>&1 | tee -a /var/log/km-bootstrap.log
+# amazon-efs-utils is only packaged for Amazon Linux / RHEL. EFS on Ubuntu would
+# require building efs-utils from source — out of scope (Phase 93.1). Guard so a
+# non-yum host does not abort the bootstrap.
+if command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+  km_pkg_install amazon-efs-utils 2>&1 | tee -a /var/log/km-bootstrap.log
+else
+  echo "[km-bootstrap] WARN: amazon-efs-utils unavailable on this OS — EFS mount may fail" | tee -a /var/log/km-bootstrap.log
+fi
 mkdir -p "{{ .EFSMountPoint }}"
 # Add fstab entry with _netdev,nofail,tls so boot continues if EFS is unavailable
 if ! grep -q "{{ .EFSFilesystemID }}" /etc/fstab 2>/dev/null; then
@@ -368,7 +468,7 @@ mkdir -p /opt/km/bin
 # AL2023 minimal does not ship git; install before any "git config" call.
 # Idempotent — no-op when an AMI bake already includes git.
 if ! command -v git >/dev/null 2>&1; then
-  yum install -y git 2>&1 | tail -1
+  km_pkg_install git 2>&1 | tail -1
 fi
 # Askpass bakes in {{ .SandboxID }} at compile time (not ${KM_SANDBOX_ID})
 # so it works in any subprocess context — including ones that clear or
@@ -446,7 +546,7 @@ PREPUSH
 chmod +x /opt/km/hooks/pre-push
 # Install git if not present (needed for hooks and source access)
 if ! command -v git &>/dev/null; then
-  yum install -y git 2>&1 | tail -1
+  km_pkg_install git 2>&1 | tail -1
 fi
 git config --system core.hooksPath /opt/km/hooks
 echo "[km-bootstrap] Ref enforcement hooks installed (allowedRefs: {{ .AllowedRefs }})"
@@ -2454,7 +2554,7 @@ echo "[km-bootstrap] km-queue-runner installed at /opt/km/bin/km-queue-runner"
 # kicked operator-side (via SSM systemctl start) before initCommands have finished.
 # Without tmux, the runner can't spawn per-entry sessions and entry 001 fails 127.
 if ! command -v tmux >/dev/null 2>&1; then
-  (dnf install -y tmux 2>&1 || yum install -y tmux 2>&1) | tail -3
+  km_pkg_install tmux 2>&1 | tail -3
 fi
 echo "[km-bootstrap] tmux present: $(command -v tmux || echo MISSING)"
 
@@ -2484,7 +2584,11 @@ echo "[km-bootstrap] km-queue.service enabled (auto-starts on every boot incl. k
 {{- if .VSCodeEnabled }}
 # Phase 73: VS Code Remote-SSH access (sshd + authorized_keys + SELinux context)
 systemctl daemon-reload
-systemctl enable --now sshd
+# OpenSSH service: Amazon Linux uses 'sshd.service'; Ubuntu/Debian use
+# 'ssh.service' (and the server may not be preinstalled). Install if absent, then
+# enable whichever unit exists (Phase 93.1: keep AL behaviour, add Ubuntu).
+command -v sshd >/dev/null 2>&1 || dpkg -s openssh-server >/dev/null 2>&1 || km_pkg_install openssh-server || true
+systemctl enable --now sshd 2>/dev/null || systemctl enable --now ssh 2>/dev/null || true
 mkdir -p /home/sandbox/.ssh
 chmod 700 /home/sandbox/.ssh
 cat > /home/sandbox/.ssh/authorized_keys << 'KEY'
@@ -2494,6 +2598,198 @@ chmod 600 /home/sandbox/.ssh/authorized_keys
 chown -R sandbox:sandbox /home/sandbox/.ssh
 command -v restorecon >/dev/null 2>&1 && restorecon -R -v /home/sandbox/.ssh || true
 echo "[km-bootstrap] VS Code Remote-SSH configured (authorized_keys written)"
+{{- end }}
+
+{{- if .DesktopEnabled }}
+# Phase 93: KasmVNC desktop (kiosk or full XFCE)
+# -------------------------------------------------------
+# Step 0: Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor
+# (kernel.apparmor_restrict_unprivileged_userns=1), which breaks the browser
+# sandboxes — Firefox/Chromium exit instantly at launch, leaving a black desktop.
+# Allow userns so the browser sandbox can initialize; persist across reboots
+# (km resume). Guarded by the proc path → no-op where the knob doesn't exist.
+if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+  echo 'kernel.apparmor_restrict_unprivileged_userns=0' > /etc/sysctl.d/60-km-desktop-userns.conf
+  sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 || true
+fi
+
+# Step 1: Install packages if not already present (idempotent — AMI-bakeable).
+# The guard allows a baked AMI to skip reinstall while always reseeding credentials/config.
+if ! command -v vncserver >/dev/null 2>&1; then
+  km_apt_https
+  apt-get update -y -q || true
+  # fonts-dejavu is a removed metapackage on Ubuntu 24.04 (noble) — use
+  # fonts-dejavu-core. Also pull the tooling the later steps need but that is
+  # absent on minimal Ubuntu cloud images: software-properties-common
+  # (add-apt-repository), gnupg (gpg), curl, ca-certificates.
+  apt-get install -y dbus-x11 fonts-dejavu-core fonts-liberation x11-xserver-utils \
+    software-properties-common ca-certificates curl gnupg
+  UBUNTU_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME}")
+  KASMVNC_DEB="kasmvncserver_${UBUNTU_CODENAME}_1.4.0_amd64.deb"
+  # curl (not wget — wget is not guaranteed on minimal Ubuntu; curl is present).
+  curl -fsSL -o "/tmp/${KASMVNC_DEB}" \
+    "https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/${KASMVNC_DEB}"
+  apt-get install -y "/tmp/${KASMVNC_DEB}"
+  rm -f "/tmp/${KASMVNC_DEB}"
+  # KasmVNC's Xvnc requires a TLS cert to start even when require_ssl is false.
+  # Generate the snakeoil cert and add the sandbox user to the ssl-cert group so
+  # it can read the (root:ssl-cert 0640) private key — otherwise the service
+  # crash-loops with "certificate file doesn't exist or isn't a file".
+  apt-get install -y ssl-cert
+  make-ssl-cert generate-default-snakeoil --force-overwrite || true
+  usermod -aG ssl-cert sandbox || true
+  {{- if eq .DesktopMode "kiosk" }}
+  apt-get install -y matchbox-window-manager
+  {{- end }}
+  {{- if eq .DesktopMode "full" }}
+  apt-get install -y xfce4 xfce4-goodies
+  {{- end }}
+  {{- range .DesktopBrowsers }}
+  {{- if eq . "firefox" }}
+  # Firefox: Mozilla Team PPA DEB (non-snap; snap-confined Firefox fails under VNC)
+  add-apt-repository -y ppa:mozillateam/ppa && km_apt_https && apt-get update -q
+  apt-get install -y -t 'o=LP-PPA-mozillateam' firefox
+  {{- end }}
+  {{- if eq . "chromium" }}
+  # Chromium: xtradeb PPA DEB (non-snap; Ubuntu 24.04 default chromium is snap)
+  add-apt-repository -y ppa:xtradeb/apps && km_apt_https && apt-get update -q
+  apt-get install -y -t 'o=LP-PPA-xtradeb' chromium
+  {{- end }}
+  {{- if eq . "chrome" }}
+  # Google Chrome: official Google APT repo (always a DEB, never a snap)
+  curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+    | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+    > /etc/apt/sources.list.d/google-chrome.list
+  apt-get update -q && apt-get install -y google-chrome-stable
+  {{- end }}
+  {{- if eq . "brave" }}
+  # Brave: official Brave APT repo
+  curl -fsSL https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg \
+    | gpg --dearmor -o /usr/share/keyrings/brave-browser-archive-keyring.gpg
+  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" \
+    > /etc/apt/sources.list.d/brave-browser-release.list
+  apt-get update -q && apt-get install -y brave-browser
+  {{- end }}
+  {{- end }}
+fi
+
+# Step 2: Always (re)seed per-sandbox KasmVNC credential (never baked — fresh every boot).
+# These dirs are created as root here, so chown them to the sandbox user — otherwise
+# a root-owned ~/.config blocks the browser from creating its profile
+# (Firefox: "Your Firefox profile cannot be loaded" → black screen).
+mkdir -p /home/sandbox/.vnc /home/sandbox/.config
+chown sandbox:sandbox /home/sandbox/.vnc /home/sandbox/.config
+printf '%s\n%s\n' '{{ .DesktopKasmPass }}' '{{ .DesktopKasmPass }}' \
+  | kasmvncpasswd -u '{{ .DesktopKasmUser }}' -w -r /home/sandbox/.kasmpasswd
+chmod 600 /home/sandbox/.kasmpasswd
+chown sandbox:sandbox /home/sandbox/.kasmpasswd
+
+# Step 3: Always write kasmvnc.yaml (loopback-only binding; SSL disabled; geometry from profile).
+# require_ssl defaults true in KasmVNC — must explicitly set false (loopback + SSM justification).
+cat > /home/sandbox/.vnc/kasmvnc.yaml << 'KASMYAML'
+desktop:
+  resolution:
+    width: {{ .DesktopGeometryWidth }}
+    height: {{ .DesktopGeometryHeight }}
+network:
+  interface: 127.0.0.1
+  websocket_port: auto
+  udp:
+    # Loopback-only access via the SSM tunnel — no WebRTC/UDP. Setting public_ip
+    # stops KasmVNC's STUN probe (UDP, blocked by the SG) that otherwise hangs
+    # ~70s and aborts startup. Does NOT expose any public interface.
+    public_ip: 127.0.0.1
+  ssl:
+    require_ssl: false
+data_loss_prevention:
+  clipboard:
+    server_to_client:
+      enabled: true
+    client_to_server:
+      enabled: true
+KASMYAML
+chown sandbox:sandbox /home/sandbox/.vnc/kasmvnc.yaml
+
+# Step 4: Always write xstartup (kiosk vs full XFCE per profile mode).
+{{- if eq .DesktopMode "kiosk" }}
+cat > /home/sandbox/.vnc/xstartup << 'XSTARTUP'
+#!/bin/bash
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+# This runs as the sandbox user. /run/user/<uid> is created by systemd-logind
+# only for real login sessions; this service has none, so the user cannot mkdir
+# there (it is root-owned). Fall back to a user-owned tmp dir.
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+if ! mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null; then
+  export XDG_RUNTIME_DIR="/tmp/km-xdg-$(id -u)"
+  mkdir -p "${XDG_RUNTIME_DIR}"
+fi
+chmod 700 "${XDG_RUNTIME_DIR}" 2>/dev/null || true
+# XFCE (full mode) aborts with "Unable to load a failsafe session" when
+# XDG_CONFIG_DIRS does not include /etc/xdg; a bare VNC session leaves it unset.
+export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
+export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+exec dbus-launch --exit-with-session matchbox-window-manager -use_titlebar no &
+WM_PID=$!
+sleep 1
+{{ .DesktopBrowser0Binary }} &
+wait $WM_PID
+XSTARTUP
+{{- end }}
+{{- if eq .DesktopMode "full" }}
+cat > /home/sandbox/.vnc/xstartup << 'XSTARTUP'
+#!/bin/bash
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+# This runs as the sandbox user. /run/user/<uid> is created by systemd-logind
+# only for real login sessions; this service has none, so the user cannot mkdir
+# there (it is root-owned). Fall back to a user-owned tmp dir.
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+if ! mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null; then
+  export XDG_RUNTIME_DIR="/tmp/km-xdg-$(id -u)"
+  mkdir -p "${XDG_RUNTIME_DIR}"
+fi
+chmod 700 "${XDG_RUNTIME_DIR}" 2>/dev/null || true
+# XFCE (full mode) aborts with "Unable to load a failsafe session" when
+# XDG_CONFIG_DIRS does not include /etc/xdg; a bare VNC session leaves it unset.
+export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
+export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+exec dbus-launch --exit-with-session startxfce4
+XSTARTUP
+{{- end }}
+chmod +x /home/sandbox/.vnc/xstartup
+chown -R sandbox:sandbox /home/sandbox/.vnc
+
+# Step 5: Write and enable the kasmvnc systemd unit (system service; User=sandbox;
+# survives km pause/resume without a loginctl user session at boot).
+cat > /etc/systemd/system/kasmvnc.service << 'KASMUNIT'
+[Unit]
+Description=KasmVNC desktop session for km desktop
+After=network.target km-bootstrap.service
+
+[Service]
+User=sandbox
+Environment=DISPLAY=:1
+Environment=HOME=/home/sandbox
+Environment=XDG_RUNTIME_DIR=/run/user/1001
+# /run/user is root-owned and the sandbox user has no logind session to create
+# /run/user/<uid>, so run the runtime-dir setup as root via the '+' prefix.
+ExecStartPre=+/bin/mkdir -p /run/user/1001
+ExecStartPre=+/bin/chown sandbox:sandbox /run/user/1001
+ExecStartPre=+/bin/chmod 700 /run/user/1001
+ExecStart=/usr/bin/vncserver :1 -select-de manual -fg -geometry {{ .DesktopGeometry }} -interface 127.0.0.1
+ExecStop=/usr/bin/vncserver -kill :1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+KASMUNIT
+systemctl daemon-reload
+systemctl enable kasmvnc
+systemctl start kasmvnc
+echo "[km-bootstrap] KasmVNC desktop configured ({{ .DesktopMode }} mode, geometry {{ .DesktopGeometry }})"
 {{- end }}
 
 # km-recv: read and display signed emails from /var/mail/km/new/
@@ -3068,7 +3364,7 @@ echo "[km-bootstrap] Configuring iptables DNAT..."
 
 # Amazon Linux 2023 uses nftables — install iptables compatibility layer
 if ! command -v iptables &>/dev/null; then
-  yum install -y iptables-nft 2>/dev/null || yum install -y iptables 2>/dev/null || true
+  km_pkg_install iptables-nft 2>/dev/null || km_pkg_install iptables 2>/dev/null || true
 fi
 
 # IMDS exemption MUST be inserted first (-I inserts at top of chain).
@@ -3125,6 +3421,21 @@ echo "[km-bootstrap] Proxy env vars configured (gatekeeper mode belt-and-suspend
 # 6b. eBPF cgroup enforcement: kernel-level DNS/IP allowlisting
 # ============================================================
 echo "[km-bootstrap] Configuring eBPF network enforcement..."
+
+# Phase 93.1: free 127.0.0.1:53 for the enforcer's DNS resolver BEFORE the
+# enforcer service starts. On Ubuntu, systemd-resolved owns :53 (stub listener)
+# and /etc/resolv.conf is a managed symlink — both must be cleared or the
+# enforcer crash-loops on bind and DNS breaks. No-op on Amazon Linux (no
+# systemd-resolved unit, plain resolv.conf file).
+if systemctl list-unit-files systemd-resolved.service >/dev/null 2>&1; then
+  systemctl stop systemd-resolved 2>/dev/null || true
+  systemctl disable systemd-resolved 2>/dev/null || true
+  echo "[km-bootstrap] systemd-resolved stopped (freeing :53 for the eBPF resolver)"
+fi
+if [ -L /etc/resolv.conf ]; then
+  cp -L /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
+  rm -f /etc/resolv.conf
+fi
 
 # Create sandbox cgroup for eBPF attachment
 mkdir -p /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope
@@ -3259,7 +3570,7 @@ CGROUPEOF
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 # Override resolv.conf to route ALL DNS through the enforcer's resolver.
 # The enforcer runs its own DNS resolver on :53 (both eBPF and gatekeeper modes).
-cp /etc/resolv.conf /etc/resolv.conf.bak
+cp /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
 echo "nameserver 127.0.0.1" > /etc/resolv.conf
 echo "[km-bootstrap] DNS routed through eBPF enforcer resolver on :53"
 {{- else }}
@@ -3640,6 +3951,35 @@ type userDataParams struct {
 	// generated locally by sshkey.GenerateAndWrite during km create. Empty when VSCodeEnabled
 	// is false. Phase 73.
 	VSCodeSSHPubKey string
+	// DesktopEnabled gates the KasmVNC install + session block. Derived from
+	// profile.IsDesktopEnabled(p.Spec.Runtime.Desktop). Phase 93.
+	DesktopEnabled bool
+	// DesktopMode is "kiosk" (matchbox-wm + single browser) or "full" (XFCE4 desktop).
+	// Defaults to "kiosk" when absent. Phase 93.
+	DesktopMode string
+	// DesktopBrowsers is the list of browser keywords to install (firefox, chromium, chrome, brave).
+	// Defaults to ["firefox"] when absent. Phase 93.
+	DesktopBrowsers []string
+	// DesktopGeometry is the VNC display resolution in "WxH" format (e.g. "1920x1080").
+	// Defaults to "1920x1080" when absent. Phase 93.
+	DesktopGeometry string
+	// DesktopKasmUser is the KasmVNC username. Threaded from NetworkConfig.DesktopKasmUser.
+	// Empty when DesktopEnabled is false. Phase 93.
+	DesktopKasmUser string
+	// DesktopKasmPass is the KasmVNC password. Threaded from NetworkConfig.DesktopKasmPass.
+	// Empty when DesktopEnabled is false. Phase 93.
+	DesktopKasmPass string
+	// DesktopBrowser0Binary is the launch binary for the primary kiosk browser (browsers[0]).
+	// Mapped from keyword to binary per the browser keyword→binary table:
+	//   firefox→firefox, chromium→chromium, chrome→google-chrome-stable, brave→brave-browser.
+	// Empty when DesktopEnabled is false or DesktopBrowsers is empty. Phase 93.
+	DesktopBrowser0Binary string
+	// DesktopGeometryWidth is the parsed width from DesktopGeometry (e.g. "1920" from "1920x1080").
+	// Pre-parsed at generateUserData time so the template does not need a custom function.
+	DesktopGeometryWidth string
+	// DesktopGeometryHeight is the parsed height from DesktopGeometry (e.g. "1080" from "1920x1080").
+	// Pre-parsed at generateUserData time so the template does not need a custom function.
+	DesktopGeometryHeight string
 	// NotifySlackEnabled gates conditional emission of the runtime SSM-fetch
 	// bootstrap step that polls /sandbox/{id}/slack-channel-id and
 	// /km/slack/bridge-url, writing them into /etc/profile.d/km-slack-runtime.sh.
@@ -3668,6 +4008,28 @@ type userDataParams struct {
 // Exported for use in tests that need direct template access.
 func parseUserDataTemplate() (*template.Template, error) {
 	return template.New("userdata").Parse(userDataTemplate)
+}
+
+// desktopBrowserBinary maps a browser keyword from spec.runtime.desktop.browsers
+// to the actual launch binary name. The keyword is used in the YAML profile; the
+// binary is what gets launched in the kiosk xstartup script.
+//
+// Mapping (Phase 93):
+//
+//	firefox  → firefox          (Mozilla PPA DEB)
+//	chromium → chromium         (xtradeb PPA DEB)
+//	chrome   → google-chrome-stable (Google APT repo DEB)
+//	brave    → brave-browser    (Brave APT repo DEB)
+func desktopBrowserBinary(keyword string) string {
+	switch keyword {
+	case "chrome":
+		return "google-chrome-stable"
+	case "brave":
+		return "brave-browser"
+	default:
+		// firefox and chromium have keyword == binary.
+		return keyword
+	}
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -4321,6 +4683,44 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		params.VSCodeSSHPubKey = network.VSCodeSSHPubKey
 		if params.VSCodeEnabled && params.VSCodeSSHPubKey == "" {
 			return "", fmt.Errorf("VSCodeEnabled=true but VSCodeSSHPubKey is empty — run `make build && km init --sidecars` to refresh the management Lambda or pass --remote=false to use a local create")
+		}
+	}
+
+	// Phase 93: KasmVNC desktop (kiosk or full XFCE). Opt-in (DesktopEnabled defaults false).
+	params.DesktopEnabled = profile.IsDesktopEnabled(p.Spec.Runtime.Desktop)
+	if params.DesktopEnabled {
+		mode := ""
+		browsers := []string(nil)
+		geometry := ""
+		if p.Spec.Runtime.Desktop != nil {
+			mode = p.Spec.Runtime.Desktop.Mode
+			browsers = p.Spec.Runtime.Desktop.Browsers
+			geometry = p.Spec.Runtime.Desktop.Geometry
+		}
+		if mode == "" {
+			mode = "kiosk"
+		}
+		if len(browsers) == 0 {
+			browsers = []string{"firefox"}
+		}
+		if geometry == "" {
+			geometry = "1920x1080"
+		}
+		params.DesktopMode = mode
+		params.DesktopBrowsers = browsers
+		params.DesktopGeometry = geometry
+		// Map browsers[0] keyword → launch binary.
+		params.DesktopBrowser0Binary = desktopBrowserBinary(browsers[0])
+		// Pre-parse geometry width/height so the template doesn't need a custom function.
+		width, height := "1920", "1080"
+		if parts := strings.SplitN(geometry, "x", 2); len(parts) == 2 {
+			width, height = parts[0], parts[1]
+		}
+		params.DesktopGeometryWidth = width
+		params.DesktopGeometryHeight = height
+		if network != nil {
+			params.DesktopKasmUser = network.DesktopKasmUser
+			params.DesktopKasmPass = network.DesktopKasmPass
 		}
 	}
 

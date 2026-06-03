@@ -872,9 +872,8 @@ The `km` CLI is grouped by workflow stage. Every command picks its AWS profile a
 ## Architecture
 
 ```text
-km CLI / ConfigUI
+km CLI
 ├── cmd/km/                     CLI entry point
-├── cmd/configui/               Web dashboard (Go + embedded HTML)
 ├── cmd/ttl-handler/            Lambda: TTL expiry + artifact upload
 ├── cmd/budget-enforcer/        Lambda: budget ceiling enforcement
 ├── cmd/create-handler/         Lambda: remote sandbox creation via EventBridge
@@ -936,7 +935,6 @@ Editable architecture diagram: [`docs/sandbox-architecture.excalidraw`](docs/san
 | [Multi-Agent Email](docs/multi-agent-email.md) | SES setup, sandbox addressing, signing protocol, cross-sandbox orchestration |
 | [Docker Substrate](docs/docker.md) | Running sandboxes locally via Docker Compose (`km create --docker`) |
 | [Sidecar Reference](docs/sidecar-reference.md) | Each sidecar's config, env vars, log formats, EC2 vs ECS deployment |
-| [ConfigUI Guide](docs/configui-guide.md) | Web dashboard setup, profile editor, secrets management |
 | [VS Code Remote-SSH](docs/vscode.md) | `km vscode start/status`, ed25519 keypair lifecycle, SSM tunnel, troubleshooting |
 
 ---

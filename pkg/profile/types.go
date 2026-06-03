@@ -180,6 +180,26 @@ type RuntimeVSCodeSpec struct {
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
+// RuntimeDesktopSpec gates KasmVNC graphical session provisioning.
+// Phase 93: new opt-in (heavy install) — nil block or nil Enabled both return
+// false from IsDesktopEnabled. Deliberate opposite of VSCode's default-on.
+// Fields: Mode (kiosk|full), Browsers (subset of firefox/chromium/chrome/brave),
+// Geometry (WxH pattern, default 1920x1080).
+type RuntimeDesktopSpec struct {
+	// Enabled gates KasmVNC + DE package install. nil = disabled (opt-in; heavy install).
+	// Must be set to true explicitly to provision the desktop session.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// Mode selects the desktop mode. "kiosk" = matchbox-wm + single-browser fullscreen;
+	// "full" = XFCE4 full desktop. Default "kiosk".
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	// Browsers lists which browsers to install. Subset of [firefox, chromium, chrome, brave].
+	// Default [firefox]. For kiosk mode, browsers[0] is launched maximized.
+	Browsers []string `json:"browsers,omitempty" yaml:"browsers,omitempty"`
+	// Geometry sets the VNC display resolution in WxH format (e.g. "1920x1080").
+	// Default 1920x1080.
+	Geometry string `json:"geometry,omitempty" yaml:"geometry,omitempty"`
+}
+
 // OTPSpec defines one-time password secrets that are fetched from SSM at boot
 // and deleted after first read, providing ephemeral bootstrap credentials.
 type OTPSpec struct {
@@ -315,6 +335,10 @@ type RuntimeSpec struct {
 	// Phase 92 (Wave 2): replaces the old cli.vscodeEnabled gate. nil = default
 	// enabled. See IsVSCodeEnabled.
 	VSCode *RuntimeVSCodeSpec `yaml:"vscode,omitempty" json:"vscode,omitempty"`
+	// Desktop gates KasmVNC graphical session provisioning. nil = disabled (opt-in; heavy install).
+	// Phase 93: KasmVNC-backed browser/XFCE remote session over SSM port-forward.
+	// See IsDesktopEnabled.
+	Desktop *RuntimeDesktopSpec `yaml:"desktop,omitempty" json:"desktop,omitempty"`
 }
 
 // ExecutionSpec controls the shell environment within the sandbox.
@@ -621,6 +645,23 @@ func IsVSCodeEnabled(vscode *RuntimeVSCodeSpec) bool {
 		return true
 	}
 	return *vscode.Enabled
+}
+
+// IsDesktopEnabled returns true only when the operator has explicitly set
+// spec.runtime.desktop.enabled: true. Default is FALSE (nil block or nil Enabled
+// both return false) — this is the deliberate opt-in opposite of IsVSCodeEnabled.
+//
+// Phase 93: KasmVNC desktop is a heavy install (VNC server + DE + browsers).
+// Operators must explicitly opt in; omitting the block skips all desktop provisioning.
+//
+// Used by:
+//   - pkg/compiler/userdata.go to gate the KasmVNC userdata block (Plan 93-03)
+//   - internal/app/cmd/create.go to decide whether to generate desktop credential (Plan 93-04)
+func IsDesktopEnabled(desktop *RuntimeDesktopSpec) bool {
+	if desktop == nil || desktop.Enabled == nil {
+		return false
+	}
+	return *desktop.Enabled
 }
 
 // Parse unmarshals a SandboxProfile from raw YAML bytes.

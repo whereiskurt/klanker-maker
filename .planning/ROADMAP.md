@@ -2113,3 +2113,20 @@ Plans:
 - [ ] 92-04-agent-types-schema-inherit-mixed-mode-validator-PLAN.md — Wave 4: new AgentSpec/Claude/Codex/ToolsSpec types + schema + typed mergeAgentSpec + mixed-mode validator (autoApprove + inlined configFiles → error) + CLI cmd + userdata.go agent migrations (CLISpec now NoBedrock-only) (VC-1, VC-6)
 - [ ] 92-05-agent-synthesizers-fixture-rewrite-docs-PLAN.md — Wave 5: new agent_claude.go + agent_codex.go synthesizers (canonical permissions.allow/deny per Wave 0 research; Codex inert-config + asymmetry doc) + 20 fixture rewrites (inlined Claude settings.json removed; agent.claude.tools.* populated) + docs/agent-tool-gating.md (new) + codex-parity.md + CLAUDE.md (VC-1, VC-3, VC-5, VC-11)
 - [ ] 92-06-operator-uat-PLAN.md — Wave 6: 10-scenario operator UAT (Scenario 0 full-inventory validation is hard exit gate; scenarios cover stale-key rejection, real km create + SSM inspection, denied-tool refusal, Slack notify-hook idle, mentionOnly inbound, codex: prefix routing, km doctor); autonomous: false (VC-2, VC-8, VC-9, VC-10, VC-11)
+
+### Phase 93: km desktop — KasmVNC-backed browser/XFCE remote session over SSM port-forward
+**Goal:** Give an operator a graphical session — default a single maximized browser (kiosk), optionally a full XFCE desktop — rendered in their **local** browser over an SSM port-forward, so web-browser-based interactions (Chrome/Firefox/Brave) run remotely inside the sandbox EC2. New `spec.runtime.desktop` block (`enabled` default **false** / opt-in; `mode: kiosk|full` default kiosk; `browsers` ⊆ {firefox,chromium,chrome,brave}; optional `geometry`). Engine is **KasmVNC** (web-native VNC server with built-in HTML5 client + seamless bidirectional clipboard) — one component replacing TigerVNC+websockify+noVNC. `km desktop start/status <id>` mirrors `km vscode` (loopback-only bind, SSM port-forward is the sole access path, per-sandbox KasmVNC credential at `~/.km/desktop/<id>` seeded fresh at boot and never baked). Idempotent, AMI-bakeable userdata. Posture-agnostic networking (inherits the profile's `spec.network`). **Ubuntu 24.04/22.04 only** in v1. Deliverables include `profiles/desktop.yaml` (kiosk-Firefox example, added to `scripts/validate-all-profiles.sh`) and a `klanker:desktop` skill. Acceptance: a profile with `spec.runtime.desktop.enabled: true, mode: kiosk, browsers: [firefox]` boots, `km desktop start` prints a `localhost` URL + credential, and the operator drives Firefox in their browser with working clipboard. Design spec: `docs/superpowers/specs/2026-06-02-km-desktop-remote-browser-design.md`.
+**Out of scope (v1):** GNOME/KDE, audio, multi-monitor, session recording, Amazon Linux 2023 support, web-based file transfer as a headline feature.
+**Requirements**: DSK-01..DSK-15 (synthetic phase-local IDs, recorded in REQUIREMENTS.md following the Phase 84.2/84.3/89 precedent)
+**Depends on:** Phase 92 (`spec.runtime` schema shape + `IsVSCodeEnabled`/RuntimeVSCodeSpec sibling pattern; `km vscode` CLI/SSM helpers reused)
+**Plans:** 7/8 plans executed
+
+Plans:
+- [ ] 93-00-PLAN.md — Wave 0: RED Desktop test stubs (Nyquist scaffold) (DSK-15)
+- [ ] 93-01-PLAN.md — Profile schema: RuntimeDesktopSpec + IsDesktopEnabled + JSON Schema (DSK-01, DSK-02, DSK-04)
+- [ ] 93-02-PLAN.md — km validate desktop rules + Ubuntu-only AMI guard (DSK-03)
+- [ ] 93-03-PLAN.md — Compiler threading + idempotent KasmVNC userdata (kiosk/full, loopback, no-SSL) (DSK-05, DSK-06, DSK-07, DSK-11)
+- [ ] 93-04-PLAN.md — Per-sandbox KasmVNC credential at km create (~/.km/desktop/<id>) (DSK-08)
+- [ ] 93-05-PLAN.md — km desktop start/status CLI (mirrors km vscode) (DSK-09, DSK-10)
+- [ ] 93-06-PLAN.md — profiles/desktop.yaml + inventory gate + klanker:desktop skill + docs (DSK-12, DSK-13, DSK-14)
+- [ ] 93-07-PLAN.md — Phase gate + operator live UAT checkpoint (DSK-15)

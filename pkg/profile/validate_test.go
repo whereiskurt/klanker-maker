@@ -1206,3 +1206,335 @@ func TestValidateAdditionalSnapshots_Layer1(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================
+// Phase 93 Wave 0: Desktop semantic validation stubs (DSK-03)
+// Wave 2 (93-02) implements ValidateSemantic desktop checks.
+// ============================================================
+
+// ============================================================
+// Phase 93 Wave 2 (plan-02): Desktop semantic validation tests
+// DSK-03-VALIDATE: mode enum, browsers membership, geometry, Ubuntu guard
+// ============================================================
+
+// makeDesktopProfile builds a minimal SandboxProfile with spec.runtime.desktop
+// configured as specified. The desktop block is always enabled (Enabled = &true).
+// ami may be empty to use the platform default.
+func makeDesktopProfile(mode string, browsers []string, geometry string, ami string) *profile.SandboxProfile {
+	t := true
+	return &profile.SandboxProfile{
+		APIVersion: "klankermaker.ai/v1alpha2",
+		Kind:       "SandboxProfile",
+		Spec: profile.Spec{
+			Runtime: profile.RuntimeSpec{
+				AMI: ami,
+				Desktop: &profile.RuntimeDesktopSpec{
+					Enabled:  &t,
+					Mode:     mode,
+					Browsers: browsers,
+					Geometry: geometry,
+				},
+			},
+		},
+	}
+}
+
+// makeDisabledDesktopProfile builds a profile with desktop.enabled = false so
+// desktop rules must not fire even with otherwise invalid values.
+func makeDisabledDesktopProfile(ami string) *profile.SandboxProfile {
+	f := false
+	return &profile.SandboxProfile{
+		APIVersion: "klankermaker.ai/v1alpha2",
+		Kind:       "SandboxProfile",
+		Spec: profile.Spec{
+			Runtime: profile.RuntimeSpec{
+				AMI: ami,
+				Desktop: &profile.RuntimeDesktopSpec{
+					Enabled: &f,
+					Mode:    "gnome", // invalid — but desktop is off
+				},
+			},
+		},
+	}
+}
+
+// desktopErrs filters ValidateSemantic output to only errors whose Path contains
+// "desktop" so unrelated profile-level errors (e.g. TTL) don't affect assertions.
+func desktopErrs(p *profile.SandboxProfile) []profile.ValidationError {
+	var out []profile.ValidationError
+	for _, e := range profile.ValidateSemantic(p) {
+		if strings.Contains(e.Path, "desktop") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// TestDesktopValidateMode asserts mode ∈ {kiosk, full}; invalid mode → ERROR;
+// disabled profile → no desktop errors.
+func TestDesktopValidateMode(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      string
+		wantErr   bool
+		wantField string
+	}{
+		{"kiosk is valid", "kiosk", false, ""},
+		{"full is valid", "full", false, ""},
+		{"empty mode defaults to kiosk (valid)", "", false, ""},
+		{"gnome is invalid", "gnome", true, "spec.runtime.desktop.mode"},
+		{"kde is invalid", "kde", true, "spec.runtime.desktop.mode"},
+		{"KIOSK uppercase is invalid", "KIOSK", true, "spec.runtime.desktop.mode"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Use ubuntu-24.04 so AMI guard doesn't fire
+			p := makeDesktopProfile(tc.mode, []string{"firefox"}, "", "ubuntu-24.04")
+			errs := desktopErrs(p)
+
+			var hardErrs []profile.ValidationError
+			for _, e := range errs {
+				if !e.IsWarning {
+					hardErrs = append(hardErrs, e)
+				}
+			}
+
+			if tc.wantErr {
+				if len(hardErrs) == 0 {
+					t.Fatalf("mode=%q: expected hard error, got none", tc.mode)
+				}
+				found := false
+				for _, e := range hardErrs {
+					if strings.Contains(e.Path, tc.wantField) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("mode=%q: expected error at path %q, got: %v", tc.mode, tc.wantField, hardErrs)
+				}
+			} else {
+				if len(hardErrs) != 0 {
+					t.Errorf("mode=%q: expected no hard errors, got: %v", tc.mode, hardErrs)
+				}
+			}
+		})
+	}
+
+	// Disabled profile must emit no desktop errors
+	t.Run("disabled profile no desktop errors", func(t *testing.T) {
+		p := makeDisabledDesktopProfile("amazon-linux-2023")
+		errs := desktopErrs(p)
+		if len(errs) != 0 {
+			t.Errorf("disabled desktop profile: expected no desktop errors, got: %v", errs)
+		}
+	})
+}
+
+// TestDesktopValidateBrowsers asserts browsers ⊆ {firefox, chromium, chrome, brave};
+// invalid browser → ERROR; browsers empty with kiosk mode → ERROR;
+// browsers empty with full mode → OK.
+func TestDesktopValidateBrowsers(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      string
+		browsers  []string
+		wantErr   bool
+		wantField string
+	}{
+		{"firefox ok", "kiosk", []string{"firefox"}, false, ""},
+		{"chromium ok", "kiosk", []string{"chromium"}, false, ""},
+		{"chrome ok", "kiosk", []string{"chrome"}, false, ""},
+		{"brave ok", "kiosk", []string{"brave"}, false, ""},
+		{"all four ok", "full", []string{"firefox", "chromium", "chrome", "brave"}, false, ""},
+		{"edge is invalid", "kiosk", []string{"edge"}, true, "spec.runtime.desktop.browsers"},
+		{"safari is invalid", "kiosk", []string{"safari"}, true, "spec.runtime.desktop.browsers"},
+		{"mixed valid and invalid", "kiosk", []string{"firefox", "edge"}, true, "spec.runtime.desktop.browsers"},
+		{"empty browsers kiosk -> error", "kiosk", []string{}, true, "spec.runtime.desktop.browsers"},
+		{"nil browsers kiosk -> error (treated as empty)", "kiosk", nil, true, "spec.runtime.desktop.browsers"},
+		{"empty browsers full -> ok", "full", []string{}, false, ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := makeDesktopProfile(tc.mode, tc.browsers, "", "ubuntu-24.04")
+			errs := desktopErrs(p)
+
+			var hardErrs []profile.ValidationError
+			for _, e := range errs {
+				if !e.IsWarning {
+					hardErrs = append(hardErrs, e)
+				}
+			}
+
+			if tc.wantErr {
+				if len(hardErrs) == 0 {
+					t.Fatalf("mode=%q browsers=%v: expected hard error, got none", tc.mode, tc.browsers)
+				}
+				if tc.wantField != "" {
+					found := false
+					for _, e := range hardErrs {
+						if strings.Contains(e.Path, tc.wantField) {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Errorf("mode=%q browsers=%v: expected error at path containing %q, got: %v",
+							tc.mode, tc.browsers, tc.wantField, hardErrs)
+					}
+				}
+			} else {
+				if len(hardErrs) != 0 {
+					t.Errorf("mode=%q browsers=%v: expected no hard errors, got: %v", tc.mode, tc.browsers, hardErrs)
+				}
+			}
+		})
+	}
+}
+
+// TestDesktopValidateGeometry asserts geometry matches ^[0-9]+x[0-9]+$;
+// empty geometry (unset) is OK; invalid patterns → ERROR.
+func TestDesktopValidateGeometry(t *testing.T) {
+	tests := []struct {
+		name     string
+		geometry string
+		wantErr  bool
+	}{
+		{"1920x1080 ok", "1920x1080", false},
+		{"1280x720 ok", "1280x720", false},
+		{"empty (unset) ok", "", false},
+		{"capital X is invalid", "1920X1080", true},
+		{"word huge is invalid", "huge", true},
+		{"no height is invalid", "1920x", true},
+		{"no width is invalid", "x1080", true},
+		{"spaces not ok", "1920 x 1080", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := makeDesktopProfile("kiosk", []string{"firefox"}, tc.geometry, "ubuntu-24.04")
+			errs := desktopErrs(p)
+
+			var hardErrs []profile.ValidationError
+			for _, e := range errs {
+				if !e.IsWarning {
+					hardErrs = append(hardErrs, e)
+				}
+			}
+
+			if tc.wantErr {
+				if len(hardErrs) == 0 {
+					t.Fatalf("geometry=%q: expected hard error, got none", tc.geometry)
+				}
+				found := false
+				for _, e := range hardErrs {
+					if strings.Contains(e.Path, "spec.runtime.desktop.geometry") {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("geometry=%q: expected error at spec.runtime.desktop.geometry, got: %v", tc.geometry, hardErrs)
+				}
+			} else {
+				if len(hardErrs) != 0 {
+					t.Errorf("geometry=%q: expected no hard errors, got: %v", tc.geometry, hardErrs)
+				}
+			}
+		})
+	}
+}
+
+// TestDesktopValidateUbuntuGuard asserts:
+//   - ubuntu-24.04 → no error
+//   - ubuntu-22.04 → no error
+//   - amazon-linux-2023 → hard ERROR
+//   - "" (empty, defaults to AL2023) → hard ERROR
+//   - raw AMI ID → WARN (IsWarning true), not ERROR
+//   - desktop disabled + non-ubuntu → no error
+func TestDesktopValidateUbuntuGuard(t *testing.T) {
+	tests := []struct {
+		name       string
+		ami        string
+		wantHard   bool
+		wantWarn   bool
+		wantNoErrs bool
+	}{
+		{"ubuntu-24.04 ok", "ubuntu-24.04", false, false, true},
+		{"ubuntu-22.04 ok", "ubuntu-22.04", false, false, true},
+		{"amazon-linux-2023 hard error", "amazon-linux-2023", true, false, false},
+		{"empty ami hard error (defaults al2023)", "", true, false, false},
+		{"raw ami id warn not error", "ami-0123456789abcdef0", false, true, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := makeDesktopProfile("kiosk", []string{"firefox"}, "", tc.ami)
+			errs := desktopErrs(p)
+
+			var hardErrs, warnErrs []profile.ValidationError
+			for _, e := range errs {
+				if e.IsWarning {
+					warnErrs = append(warnErrs, e)
+				} else {
+					hardErrs = append(hardErrs, e)
+				}
+			}
+
+			if tc.wantNoErrs {
+				if len(errs) != 0 {
+					t.Errorf("ami=%q: expected no desktop errors, got: %v", tc.ami, errs)
+				}
+				return
+			}
+
+			if tc.wantHard {
+				if len(hardErrs) == 0 {
+					t.Fatalf("ami=%q: expected hard error (non-Ubuntu), got none (all errs: %v)", tc.ami, errs)
+				}
+				// Must not be a warn-only situation
+				hasAMIGuardError := false
+				for _, e := range hardErrs {
+					if strings.Contains(e.Path, "desktop") {
+						hasAMIGuardError = true
+						break
+					}
+				}
+				if !hasAMIGuardError {
+					t.Errorf("ami=%q: hard error not at desktop path, got: %v", tc.ami, hardErrs)
+				}
+			}
+
+			if tc.wantWarn {
+				if len(warnErrs) == 0 {
+					t.Fatalf("ami=%q: expected WARN for raw AMI ID, got none (all errs: %v)", tc.ami, errs)
+				}
+				// Must NOT produce a hard error for raw AMI
+				if len(hardErrs) != 0 {
+					t.Errorf("ami=%q: raw AMI ID should produce WARN only, got hard errors: %v", tc.ami, hardErrs)
+				}
+				hasAMIGuardWarn := false
+				for _, e := range warnErrs {
+					if strings.Contains(e.Path, "desktop") {
+						hasAMIGuardWarn = true
+						break
+					}
+				}
+				if !hasAMIGuardWarn {
+					t.Errorf("ami=%q: WARN not at desktop path, got: %v", tc.ami, warnErrs)
+				}
+			}
+		})
+	}
+
+	// Disabled desktop + non-ubuntu AMI must produce no desktop errors
+	t.Run("disabled desktop non-ubuntu no error", func(t *testing.T) {
+		p := makeDisabledDesktopProfile("amazon-linux-2023")
+		errs := desktopErrs(p)
+		if len(errs) != 0 {
+			t.Errorf("disabled desktop + amazon-linux-2023: expected no desktop errors, got: %v", errs)
+		}
+	})
+}

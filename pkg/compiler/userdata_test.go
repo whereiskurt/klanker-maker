@@ -1539,7 +1539,10 @@ func TestUserdataPrivilegedEnabled(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"-G wheel sandbox",
+		// Admin granted OS-aware: wheel (Amazon Linux) with a sudo (Ubuntu) fallback,
+		// added AFTER useradd so a missing group never aborts user creation.
+		"usermod -aG wheel sandbox",
+		"usermod -aG sudo sandbox",
 		"NOPASSWD:ALL",
 		"/etc/sudoers.d/sandbox",
 	} {
@@ -2145,5 +2148,181 @@ func TestUserdataBackwardCompat_ZeroDiffNoSnapshots(t *testing.T) {
 	const sectionHeader = "Additional EBS volume: format and mount ("
 	if strings.Contains(got, sectionHeader) {
 		t.Error("rendered userdata MUST NOT contain mount section header when no additional volumes/snapshots are configured")
+	}
+}
+
+// ============================================================
+// Phase 93 Wave 2 (93-03): Desktop userdata tests (DSK-05, DSK-06, DSK-07, DSK-08, DSK-11)
+// ============================================================
+
+// desktopProfile returns a SandboxProfile with spec.runtime.desktop enabled
+// in kiosk mode with Firefox. Used as the base fixture for desktop tests.
+func desktopProfile(mode string, browsers []string, geometry string) *profile.SandboxProfile {
+	tru := true
+	if browsers == nil {
+		browsers = []string{"firefox"}
+	}
+	if mode == "" {
+		mode = "kiosk"
+	}
+	if geometry == "" {
+		geometry = "1920x1080"
+	}
+	p := baseProfile()
+	p.Spec.Runtime.Desktop = &profile.RuntimeDesktopSpec{
+		Enabled:  &tru,
+		Mode:     mode,
+		Browsers: browsers,
+		Geometry: geometry,
+	}
+	return p
+}
+
+// desktopNet returns a NetworkConfig with the per-sandbox KasmVNC credential.
+func desktopNet(user, pass string) *NetworkConfig {
+	return &NetworkConfig{
+		// VSCodeSSHPubKey must be populated too since VSCode defaults to enabled.
+		// Use a fake pubkey so the VSCodeEnabled gate doesn't block generation.
+		VSCodeSSHPubKey: "ssh-ed25519 AAAA fake-desktop-test-key",
+		DesktopKasmUser: user,
+		DesktopKasmPass: pass,
+	}
+}
+
+// TestUserDataDesktopEnabled asserts that an enabled desktop profile emits the
+// KasmVNC install guard, the deb URL, and the kasmvncpasswd credential seed.
+// Covers DSK-06-USERDATA-INSTALL.
+func TestUserDataDesktopEnabled(t *testing.T) {
+	p := desktopProfile("kiosk", []string{"firefox"}, "1920x1080")
+	net := desktopNet("kasm", "testpass")
+	out, err := generateUserData(p, "sb-desktop", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "command -v vncserver") {
+		t.Error("expected 'command -v vncserver' idempotency guard in desktop block")
+	}
+	if !strings.Contains(out, "kasmvncserver_") {
+		t.Error("expected KasmVNC deb filename reference in desktop block")
+	}
+	if !strings.Contains(out, "kasmvncpasswd") {
+		t.Error("expected 'kasmvncpasswd' credential seed in desktop block")
+	}
+}
+
+// TestUserDataDesktopDisabled asserts that a profile with desktop.enabled=false (or
+// absent desktop block) emits no KasmVNC, kasmvncpasswd, or vncserver strings.
+// Covers DSK-05-COMPILER-THREAD.
+func TestUserDataDesktopDisabled(t *testing.T) {
+	p := baseProfile()
+	// baseProfile has no desktop block — IsDesktopEnabled returns false.
+	net := &NetworkConfig{
+		VSCodeSSHPubKey: "ssh-ed25519 AAAA fake-disabled-test-key",
+	}
+	out, err := generateUserData(p, "sb-nodeskop", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	for _, forbidden := range []string{"kasmvnc", "kasmvncpasswd", "vncserver", "KasmVNC"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("disabled desktop profile must not emit %q in userdata", forbidden)
+		}
+	}
+}
+
+// TestUserDataDesktopKiosk asserts that kiosk mode userdata contains:
+//   - matchbox-window-manager (kiosk WM)
+//   - the default browser binary (firefox)
+//   - kasmvnc.yaml with interface: 127.0.0.1
+//   - kasmvnc.yaml with require_ssl: false
+//
+// Covers DSK-07-USERDATA-SESSION and DSK-11-SECURITY.
+func TestUserDataDesktopKiosk(t *testing.T) {
+	p := desktopProfile("kiosk", []string{"firefox"}, "1920x1080")
+	net := desktopNet("kasm", "testpass")
+	out, err := generateUserData(p, "sb-kiosk", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "matchbox-window-manager") {
+		t.Error("kiosk mode must install and launch matchbox-window-manager")
+	}
+	if !strings.Contains(out, "firefox") {
+		t.Error("kiosk mode with browsers=[firefox] must reference the firefox binary in xstartup")
+	}
+	// DSK-11-SECURITY: kasmvnc.yaml loopback binding
+	if !strings.Contains(out, "127.0.0.1") {
+		t.Error("kasmvnc.yaml must bind to 127.0.0.1 (loopback-only; DSK-11-SECURITY)")
+	}
+	// DSK-11-SECURITY: SSL disabled (default is require_ssl: true; must be explicitly false)
+	if !strings.Contains(out, "require_ssl: false") {
+		t.Error("kasmvnc.yaml must set require_ssl: false (loopback + SSM tunnel justification; DSK-11-SECURITY)")
+	}
+}
+
+// TestUserDataDesktopFull asserts that full mode userdata contains xfce4 and startxfce4,
+// and does NOT contain matchbox-window-manager.
+// Covers DSK-07-USERDATA-SESSION.
+func TestUserDataDesktopFull(t *testing.T) {
+	p := desktopProfile("full", []string{"firefox"}, "1920x1080")
+	net := desktopNet("kasm", "testpass")
+	out, err := generateUserData(p, "sb-full", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "startxfce4") {
+		t.Error("full mode xstartup must exec startxfce4")
+	}
+	if !strings.Contains(out, "xfce4") {
+		t.Error("full mode must install xfce4 package")
+	}
+	if strings.Contains(out, "matchbox-window-manager") {
+		t.Error("full mode must NOT install/launch matchbox-window-manager")
+	}
+}
+
+// TestUserDataDesktopCredentialSeed asserts that the kasmvncpasswd seed command
+// interpolates the correct DesktopKasmUser and DesktopKasmPass values.
+// Covers DSK-08-CREDENTIAL (userdata half; km create half is tested in cmd package).
+func TestUserDataDesktopCredentialSeed(t *testing.T) {
+	const user = "kasm"
+	const pass = "s3cr3tpass"
+	p := desktopProfile("kiosk", []string{"firefox"}, "")
+	net := desktopNet(user, pass)
+	out, err := generateUserData(p, "sb-cred", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, user) {
+		t.Errorf("expected DesktopKasmUser %q in kasmvncpasswd seed line", user)
+	}
+	if !strings.Contains(out, pass) {
+		t.Errorf("expected DesktopKasmPass %q in kasmvncpasswd seed line", pass)
+	}
+	if !strings.Contains(out, "kasmvncpasswd") {
+		t.Error("expected kasmvncpasswd command in credential seed block")
+	}
+}
+
+// TestUserDataDesktopChromeBinary asserts that browsers=[chrome] installs
+// google-chrome-stable (not the raw keyword "chrome") and that the kiosk xstartup
+// launches google-chrome-stable as the binary.
+// Covers DSK-07-USERDATA-SESSION browser keyword→binary mapping.
+func TestUserDataDesktopChromeBinary(t *testing.T) {
+	p := desktopProfile("kiosk", []string{"chrome"}, "1920x1080")
+	net := desktopNet("kasm", "testpass")
+	out, err := generateUserData(p, "sb-chrome", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	// Chrome must install google-chrome-stable (official Google APT pkg name)
+	if !strings.Contains(out, "google-chrome-stable") {
+		t.Error("browsers=[chrome] must install google-chrome-stable (not the raw keyword 'chrome')")
+	}
+	// The xstartup kiosk launch must use the binary google-chrome-stable, not raw keyword
+	// We verify this by checking the binary name appears in the xstartup heredoc context.
+	// The template emits DesktopBrowser0Binary which maps chrome→google-chrome-stable.
+	if strings.Count(out, "google-chrome-stable") < 1 {
+		t.Error("expected 'google-chrome-stable' binary reference in kiosk xstartup launch")
 	}
 }

@@ -5,13 +5,100 @@
 set -euo pipefail
 
 # ============================================================
+# 0. OS abstraction (Phase 93.1: Amazon Linux 2023 + Ubuntu 24.04/22.04)
+# The base bootstrap historically assumed Amazon Linux (yum/dnf + a
+# preinstalled AWS CLI). Ubuntu (required by the remote desktop feature)
+# ships neither, so detect the OS and provide portable helpers BEFORE any
+# package install or aws call below.
+# ============================================================
+. /etc/os-release 2>/dev/null || true
+KM_OS_ID="${ID:-amzn}"
+echo "[km-bootstrap] OS detected: ${KM_OS_ID} (${PRETTY_NAME:-unknown})"
+
+# km_apt_https — rewrite apt sources from http:// to https://. The sandbox SG
+# allows ONLY 443 egress (no port 80), so apt's default HTTP fetches are blocked;
+# the EC2 Ubuntu mirror and Launchpad PPAs all serve HTTPS. Call after the base
+# sources are present AND after any add-apt-repository. No-op on Amazon Linux.
+km_apt_https() {
+  command -v apt-get >/dev/null 2>&1 || return 0
+  sed -i 's|http://|https://|g' /etc/apt/sources.list 2>/dev/null || true
+  for f in /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
+    [ -e "$f" ] && sed -i 's|http://|https://|g' "$f" 2>/dev/null || true
+  done
+}
+# EC2 Ubuntu's apt mirror also advertises IPv6 addresses that are typically
+# unroutable from the instance, so force apt to IPv4. (No-op on Amazon Linux.)
+if command -v apt-get >/dev/null 2>&1; then
+  echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99km-force-ipv4
+  km_apt_https
+fi
+
+# km_pkg_install <pkg...> — install packages with the platform package manager.
+km_pkg_install() {
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y "$@"
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y "$@"
+  elif command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    km_apt_https
+    apt-get update -y -q >/dev/null 2>&1 || true
+    apt-get install -y "$@"
+  else
+    echo "[km-bootstrap] WARN: no supported package manager for: $*" >&2
+    return 1
+  fi
+}
+
+# km_ensure_awscli — install the AWS CLI v2 if absent (Ubuntu base AMIs lack it;
+# Amazon Linux ships it). Runs before the proxy/iptables enforcement is
+# configured, and the SG allows broad 443 egress, so the public installer at
+# awscli.amazonaws.com is reachable.
+km_ensure_awscli() {
+  command -v aws >/dev/null 2>&1 && return 0
+  echo "[km-bootstrap] AWS CLI not found — installing v2..."
+  local tmpd
+  tmpd=$(mktemp -d)
+  if curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "${tmpd}/awscliv2.zip"; then
+    # Extract WITHOUT depending on 'unzip': it is absent on minimal Ubuntu and
+    # apt is frequently dpkg-lock-contended at early boot. python3 ships on both
+    # Ubuntu and Amazon Linux base images, so use it as the portable extractor.
+    if command -v unzip >/dev/null 2>&1; then
+      (cd "${tmpd}" && unzip -q awscliv2.zip)
+    else
+      (cd "${tmpd}" && python3 -c "import zipfile; zipfile.ZipFile('awscliv2.zip').extractall()")
+    fi
+    chmod -R +x "${tmpd}/aws" 2>/dev/null || true
+    if "${tmpd}/aws/install" 2>/dev/null || bash "${tmpd}/aws/install"; then
+      echo "[km-bootstrap] AWS CLI v2 installed"
+    else
+      echo "[km-bootstrap] ERROR: AWS CLI install step failed" >&2
+    fi
+  else
+    echo "[km-bootstrap] ERROR: AWS CLI download failed" >&2
+  fi
+  rm -rf "${tmpd}"
+  export PATH="/usr/local/bin:${PATH}"
+  hash -r 2>/dev/null || true
+}
+km_ensure_awscli
+
+# ============================================================
 # 1. SSM Agent: install and start
 # ============================================================
-echo "[km-bootstrap] Installing amazon-ssm-agent..."
-yum install -y amazon-ssm-agent 2>&1 | tee -a /var/log/km-bootstrap.log
-systemctl enable amazon-ssm-agent
-systemctl start amazon-ssm-agent
-echo "[km-bootstrap] SSM agent started"
+if command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+  echo "[km-bootstrap] Installing amazon-ssm-agent..."
+  km_pkg_install amazon-ssm-agent 2>&1 | tee -a /var/log/km-bootstrap.log
+  systemctl enable amazon-ssm-agent
+  systemctl start amazon-ssm-agent
+  echo "[km-bootstrap] SSM agent started"
+else
+  # Ubuntu/Debian: amazon-ssm-agent ships preinstalled as a snap on Canonical's
+  # EC2 images (the unit is snap.amazon-ssm-agent.amazon-ssm-agent). It is
+  # already running (it is how km reaches the box), so do not reinstall/enable
+  # under the Amazon-Linux unit name — that would fail.
+  echo "[km-bootstrap] amazon-ssm-agent assumed preinstalled (Ubuntu snap) — skipping install"
+fi
 
 # ============================================================
 # 1.5. Sandbox + sidecar users: create early so a later userdata
@@ -19,7 +106,12 @@ echo "[km-bootstrap] SSM agent started"
 # requires the local "sandbox" user to exist for runAsDefaultUser).
 # ============================================================
 useradd -r -s /usr/sbin/nologin km-sidecar || true
-useradd -m -s /bin/bash -d /home/sandbox -G wheel sandbox 2>/dev/null || true
+# Create the user first, THEN grant admin via whichever group exists — Amazon
+# Linux/RHEL use "wheel", Ubuntu/Debian use "sudo". Creating with -G wheel
+# directly fails on Ubuntu (no wheel group), which left the user uncreated and
+# aborted the boot at the next chown.
+useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
+usermod -aG wheel sandbox 2>/dev/null || usermod -aG sudo sandbox 2>/dev/null || true
 echo "sandbox ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sandbox
 chmod 0440 /etc/sudoers.d/sandbox
 mkdir -p /workspace
@@ -227,7 +319,7 @@ mkdir -p /opt/km/bin
 # AL2023 minimal does not ship git; install before any "git config" call.
 # Idempotent — no-op when an AMI bake already includes git.
 if ! command -v git >/dev/null 2>&1; then
-  yum install -y git 2>&1 | tail -1
+  km_pkg_install git 2>&1 | tail -1
 fi
 # Askpass bakes in sb-phase92-baseline at compile time (not ${KM_SANDBOX_ID})
 # so it works in any subprocess context — including ones that clear or
@@ -2256,7 +2348,7 @@ echo "[km-bootstrap] km-queue-runner installed at /opt/km/bin/km-queue-runner"
 # kicked operator-side (via SSM systemctl start) before initCommands have finished.
 # Without tmux, the runner can't spawn per-entry sessions and entry 001 fails 127.
 if ! command -v tmux >/dev/null 2>&1; then
-  (dnf install -y tmux 2>&1 || yum install -y tmux 2>&1) | tail -3
+  km_pkg_install tmux 2>&1 | tail -3
 fi
 echo "[km-bootstrap] tmux present: $(command -v tmux || echo MISSING)"
 
@@ -2284,7 +2376,11 @@ systemctl enable km-queue 2>/dev/null || true
 echo "[km-bootstrap] km-queue.service enabled (auto-starts on every boot incl. km resume)"
 # Phase 73: VS Code Remote-SSH access (sshd + authorized_keys + SELinux context)
 systemctl daemon-reload
-systemctl enable --now sshd
+# OpenSSH service: Amazon Linux uses 'sshd.service'; Ubuntu/Debian use
+# 'ssh.service' (and the server may not be preinstalled). Install if absent, then
+# enable whichever unit exists (Phase 93.1: keep AL behaviour, add Ubuntu).
+command -v sshd >/dev/null 2>&1 || dpkg -s openssh-server >/dev/null 2>&1 || km_pkg_install openssh-server || true
+systemctl enable --now sshd 2>/dev/null || systemctl enable --now ssh 2>/dev/null || true
 mkdir -p /home/sandbox/.ssh
 chmod 700 /home/sandbox/.ssh
 cat > /home/sandbox/.ssh/authorized_keys << 'KEY'
@@ -2861,6 +2957,21 @@ echo "[km-bootstrap] Proxy env vars configured (gatekeeper mode belt-and-suspend
 # ============================================================
 echo "[km-bootstrap] Configuring eBPF network enforcement..."
 
+# Phase 93.1: free 127.0.0.1:53 for the enforcer's DNS resolver BEFORE the
+# enforcer service starts. On Ubuntu, systemd-resolved owns :53 (stub listener)
+# and /etc/resolv.conf is a managed symlink — both must be cleared or the
+# enforcer crash-loops on bind and DNS breaks. No-op on Amazon Linux (no
+# systemd-resolved unit, plain resolv.conf file).
+if systemctl list-unit-files systemd-resolved.service >/dev/null 2>&1; then
+  systemctl stop systemd-resolved 2>/dev/null || true
+  systemctl disable systemd-resolved 2>/dev/null || true
+  echo "[km-bootstrap] systemd-resolved stopped (freeing :53 for the eBPF resolver)"
+fi
+if [ -L /etc/resolv.conf ]; then
+  cp -L /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
+  rm -f /etc/resolv.conf
+fi
+
 # Create sandbox cgroup for eBPF attachment
 mkdir -p /sys/fs/cgroup/km.slice/km-sb-phase92-baseline.scope
 
@@ -2974,7 +3085,7 @@ fi
 CGROUPEOF
 # Override resolv.conf to route ALL DNS through the enforcer's resolver.
 # The enforcer runs its own DNS resolver on :53 (both eBPF and gatekeeper modes).
-cp /etc/resolv.conf /etc/resolv.conf.bak
+cp /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
 echo "nameserver 127.0.0.1" > /etc/resolv.conf
 echo "[km-bootstrap] DNS routed through eBPF enforcer resolver on :53"
 
@@ -3093,17 +3204,6 @@ CFDIR="$(dirname '/home/sandbox/.claude/settings.json')"
 mkdir -p "$CFDIR"
 cat > '/home/sandbox/.claude/settings.json' << 'KM_CONFIG_EOF'
 {
-  "autoApprove": [
-    "Bash",
-    "Read",
-    "Write",
-    "Edit",
-    "Glob",
-    "Grep",
-    "WebFetch",
-    "WebSearch",
-    "NotebookEdit"
-  ],
   "hooks": {
     "Notification": [
       {
@@ -3134,6 +3234,19 @@ cat > '/home/sandbox/.claude/settings.json' << 'KM_CONFIG_EOF'
           }
         ]
       }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "NotebookEdit"
     ]
   },
   "trustedDirectories": [
