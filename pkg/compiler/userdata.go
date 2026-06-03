@@ -2726,6 +2726,10 @@ if ! mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null; then
   mkdir -p "${XDG_RUNTIME_DIR}"
 fi
 chmod 700 "${XDG_RUNTIME_DIR}" 2>/dev/null || true
+# XFCE (full mode) aborts with "Unable to load a failsafe session" when
+# XDG_CONFIG_DIRS does not include /etc/xdg; a bare VNC session leaves it unset.
+export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
+export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 exec dbus-launch --exit-with-session matchbox-window-manager -use_titlebar no &
 WM_PID=$!
 sleep 1
@@ -2747,6 +2751,10 @@ if ! mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null; then
   mkdir -p "${XDG_RUNTIME_DIR}"
 fi
 chmod 700 "${XDG_RUNTIME_DIR}" 2>/dev/null || true
+# XFCE (full mode) aborts with "Unable to load a failsafe session" when
+# XDG_CONFIG_DIRS does not include /etc/xdg; a bare VNC session leaves it unset.
+export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
+export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 exec dbus-launch --exit-with-session startxfce4
 XSTARTUP
 {{- end }}
