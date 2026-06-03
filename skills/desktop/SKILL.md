@@ -79,7 +79,12 @@ km desktop status $SB
 #    no session interruption; re-open with km desktop start afterward
 km desktop rekey $SB [--force] [--yes]
 
-# 6. Teardown also removes the local credential file
+# 6. (Optional) force a server-side restart when the desktop is frozen, the WM is
+#    wedged, or input is stuck (e.g. a latched modifier). Re-runs xstartup —
+#    like logging out of XFCE and back in. Drops the live session.
+km desktop restart $SB [--yes]
+
+# 7. Teardown also removes the local credential file
 km destroy $SB --remote --yes
 ```
 

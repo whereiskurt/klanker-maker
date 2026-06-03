@@ -1,7 +1,7 @@
 {
   "name": "klanker",
   "description": "Klanker Maker sandbox platform — agent-side email/Slack/operator skills + operator-side init/vscode/desktop/cluster skills",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "author": {
     "name": "whereiskurt",
     "url": "https://github.com/whereiskurt"

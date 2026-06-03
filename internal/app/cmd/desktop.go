@@ -31,6 +31,21 @@ test -f /etc/systemd/system/kasmvnc.service && echo yes || echo no
 echo "=== cloudinit ==="
 cloud-init status 2>/dev/null | head -1 || echo "status: unknown"`
 
+// desktopRestartScript force-restarts the server-side KasmVNC session: stop the
+// unit, hard-kill a wedged Xvnc, clear stale X lock/socket files, then start
+// again. This re-runs ~/.vnc/xstartup, so the WM + browser come up fresh — the
+// equivalent of logging out of XFCE and back in. set +e keeps a no-op stop/kill
+// (e.g. already-dead Xvnc) from aborting before the start.
+const desktopRestartScript = `set +e
+echo "=== RESTART ==="
+sudo systemctl stop kasmvnc 2>&1
+sudo -u sandbox /usr/bin/vncserver -kill :1 >/dev/null 2>&1
+sudo rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null
+sudo systemctl start kasmvnc 2>&1
+sleep 3
+echo "=== STATUS ==="
+systemctl is-active kasmvnc 2>&1`
+
 // NewDesktopCmd returns the `km desktop` parent command. Phase 93.
 func NewDesktopCmd(cfg *config.Config) *cobra.Command {
 	return newDesktopCmdInternal(cfg, nil, nil, nil)
@@ -46,6 +61,7 @@ func newDesktopCmdInternal(cfg *config.Config, fetcher SandboxFetcher, execFn Sh
 	parent.AddCommand(newDesktopStartCmd(cfg, fetcher, execFn, ssmClient))
 	parent.AddCommand(newDesktopStatusCmd(cfg, fetcher, ssmClient))
 	parent.AddCommand(newDesktopRekeyCmd(cfg, fetcher, ssmClient))
+	parent.AddCommand(newDesktopRestartCmd(cfg, fetcher, ssmClient))
 	return parent
 }
 
@@ -281,6 +297,93 @@ applies to the next login (open km desktop start and log in again).`,
 	cmd.Flags().BoolVar(&force, "force", false, "Override the km lock safety lock")
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
 	return cmd
+}
+
+func newDesktopRestartCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI) *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "restart <sandbox-id>",
+		Short: "Force a server-side restart of the KasmVNC session (Xvnc + WM + browser)",
+		Long: `Force-restart the KasmVNC graphical session on the sandbox.
+
+Stops the kasmvnc unit, hard-kills a wedged Xvnc, clears stale X lock/socket
+files, then starts it again — re-running ~/.vnc/xstartup so the window manager
+and browser come up fresh. Equivalent to logging out of XFCE and back in. Use it
+when the desktop is frozen, the WM is in a bad state, or input handling is stuck.
+
+This interrupts any connected session (the browser session is dropped); the
+sandbox, its files, and the KasmVNC credential are untouched. Reconnect with
+km desktop start afterward.`,
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			f, _, s, err := resolveDesktopDeps(c.Context(), cfg, fetcher, nil, ssmClient)
+			if err != nil {
+				return err
+			}
+			sandboxID, err := ResolveSandboxID(c.Context(), cfg, args[0])
+			if err != nil {
+				return err
+			}
+			return runDesktopRestart(c.Context(), cfg, f, s, sandboxID, yes)
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
+	return cmd
+}
+
+// runDesktopRestart resolves the sandbox, confirms the desktop is provisioned
+// (unit file present — NOT that it is currently active, since a hung session is
+// exactly when restart is wanted), optionally prompts, then force-restarts the
+// KasmVNC session over SSM and verifies the unit comes back active.
+func runDesktopRestart(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, sandboxID string, yes bool) error {
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox: %w", err)
+	}
+	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	if err != nil {
+		return fmt.Errorf("find EC2 instance: %w", err)
+	}
+
+	// Pre-flight: confirm the desktop is provisioned for this sandbox. We check
+	// the unit FILE (not active state) — a frozen/inactive session is precisely
+	// when a restart is wanted, so we must not gate on it being active.
+	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, desktopStatusScript)
+	if err != nil {
+		return fmt.Errorf("ssm pre-flight: %w", err)
+	}
+	if !strings.Contains(out, "=== unitfile ===\nyes") {
+		if strings.Contains(out, "status: running") {
+			return fmt.Errorf("desktop not ready yet — the sandbox is still running cloud-init. Re-check with: km desktop status %s", sandboxID)
+		}
+		return fmt.Errorf("desktop not enabled in this sandbox's profile — set spec.runtime.desktop.enabled: true and recreate the sandbox")
+	}
+
+	// Confirmation (skipped with --yes) — restart drops the live session.
+	if !yes {
+		fmt.Printf("Restart the KasmVNC session on %s? This drops any connected desktop session.\n", sandboxID)
+		fmt.Printf("Continue? [y/N] ")
+		var answer string
+		fmt.Scanln(&answer)
+		fmt.Println()
+		if answer != "y" && answer != "Y" && answer != "yes" {
+			fmt.Println("Aborted.")
+			return nil
+		}
+	}
+
+	restartOut, err := sendSSMAndWait(ctx, ssmClient, instanceID, desktopRestartScript)
+	if err != nil {
+		return fmt.Errorf("ssm restart: %w", err)
+	}
+	if !strings.Contains(restartOut, "=== STATUS ===\nactive") {
+		return fmt.Errorf("KasmVNC did not come back active after restart. Inspect with:\n  km shell %s   (then: sudo systemctl status kasmvnc; sudo journalctl -u kasmvnc -n 50)", sandboxID)
+	}
+
+	fmt.Printf("✓ KasmVNC session restarted (Xvnc + window manager + browser came up fresh)\n")
+	fmt.Printf("Reconnect with: km desktop start %s\n", sandboxID)
+	return nil
 }
 
 // runDesktopRekey rotates the KasmVNC password. Gates mirror runVSCodeRekey:

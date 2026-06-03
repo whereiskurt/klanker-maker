@@ -84,6 +84,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km desktop start <sandbox-id>` — open SSM port-forward to KasmVNC graphical session; prints `https://localhost:8444/` + credential (`--local-port`)
 - `km desktop status <sandbox-id>` — check KasmVNC unit state on the sandbox
 - `km desktop rekey <sandbox-id>` — rotate the per-sandbox KasmVNC password on a running sandbox (no restart / no session interruption; `--force`, `--yes`)
+- `km desktop restart <sandbox-id>` — force a server-side restart of the KasmVNC session (Xvnc + WM + browser, like logging out of XFCE and back in) for a frozen/wedged desktop or stuck input; drops the live session (`--yes`)
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role

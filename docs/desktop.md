@@ -264,6 +264,7 @@ The KasmVNC systemd unit is enabled at boot and restarts automatically. After `k
 km desktop start <sandbox-id> [--local-port 8444]
 km desktop status <sandbox-id>
 km desktop rekey <sandbox-id> [--force] [--yes]
+km desktop restart <sandbox-id> [--yes]
 ```
 
 **`km desktop start <sandbox-id>`**
@@ -283,6 +284,11 @@ km desktop rekey <sandbox-id> [--force] [--yes]
 2. Generates a fresh 16-char password, rewrites `~/.kasmpasswd` on the sandbox via `kasmvncpasswd` over SSM (with a readback check), then **atomically** replaces the local `~/.km/desktop/<id>` credential.
 3. **No session interruption.** KasmVNC re-reads its password file per web-auth (verified: after a rekey the running server accepts the new password and rejects the old one, with no restart — same `MainPID`), so an already-connected session stays live and the new password applies on the next login. Re-open with `km desktop start`.
 4. `--yes` skips the confirmation prompt; `--force` overrides a `km lock`. If the local `~/.km/desktop/<id>` is absent (cross-laptop), the username defaults to `kasm` (the only user `km` provisions) and the file is created fresh.
+
+**`km desktop restart <sandbox-id>`** — force a server-side restart of the KasmVNC session when it's frozen, the window manager is wedged, or input handling is stuck (e.g. a latched modifier). Equivalent to logging out of XFCE and back in.
+1. Pre-flight confirms the desktop is **provisioned** (the unit *file* exists) — deliberately NOT that it's currently active, since a hung/inactive session is exactly when you want to restart.
+2. Over SSM (as root): `systemctl stop kasmvnc` → hard-kill a wedged `Xvnc` (`vncserver -kill :1`) → clear stale `/tmp/.X1-lock` + `/tmp/.X11-unix/X1` → `systemctl start kasmvnc`, then verifies the unit comes back **active**. Restarting the unit re-runs `~/.vnc/xstartup`, so the WM + browser come up fresh.
+3. **Interrupts the live session** — the connected browser session is dropped (the sandbox, its files, and the KasmVNC credential are untouched). `--yes` skips the confirmation prompt. Reconnect with `km desktop start` afterward.
 
 ---
 
@@ -364,6 +370,9 @@ fine at first and degrades as the latch accumulates.
 - **Immediate fix:** open the KasmVNC toolbar (tab on the left edge) and tap the
   **Alt** (and Ctrl/Shift) key buttons to release the latch; or tap Option once
   in the desktop.
+- **If the session is wedged:** `km desktop restart <id>` force-restarts Xvnc +
+  the WM/browser (like logging out of XFCE and back in) — clears any latched
+  state. Drops the connected session; reconnect with `km desktop start`.
 - **Durable fix (shipped):** `full` mode pre-seeds xfwm4 with `easy_click=none`,
   so a latched Alt can no longer hijack the pointer. Sandboxes created before this
   build need `km destroy && km create` to pick it up.

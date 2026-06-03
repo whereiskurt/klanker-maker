@@ -212,6 +212,57 @@ func TestDesktopStatus(t *testing.T) {
 	})
 }
 
+// healthyRestartSSMOutput satisfies both the restart pre-flight (unitfile present)
+// and the post-restart status check (kasmvnc active) from one fixed mock output.
+const healthyRestartSSMOutput = "=== kasmvnc ===\nactive\n=== kasmpasswd ===\nyes\n=== unitfile ===\nyes\n=== cloudinit ===\nstatus: done\n=== RESTART ===\n=== STATUS ===\nactive\n"
+
+// notEnabledRestartSSMOutput has no unit file → restart pre-flight must reject.
+const notEnabledRestartSSMOutput = "=== kasmvnc ===\ninactive\n=== kasmpasswd ===\nno\n=== unitfile ===\nno\n=== cloudinit ===\nstatus: done\n"
+
+// failedRestartSSMOutput is provisioned (unitfile present) but kasmvnc does not
+// come back active after the restart.
+const failedRestartSSMOutput = "=== kasmvnc ===\ninactive\n=== kasmpasswd ===\nyes\n=== unitfile ===\nyes\n=== cloudinit ===\nstatus: done\n=== RESTART ===\n=== STATUS ===\nfailed\n"
+
+func TestDesktopRestart(t *testing.T) {
+	t.Run("Healthy_RestartsAndReportsReady", func(t *testing.T) {
+		mockSSM := &vsCodeSSMMock{output: healthyRestartSSMOutput}
+		fetcher := newDesktopEC2Sandbox("sb-desk-003")
+		out := captureStdout(func() {
+			// yes=true skips the confirmation prompt (no stdin in tests).
+			if err := runDesktopRestart(context.Background(), &config.Config{}, fetcher, mockSSM, "sb-desk-003", true); err != nil {
+				t.Errorf("expected nil error for healthy restart, got: %v", err)
+			}
+		})
+		if !strings.Contains(out, "restarted") {
+			t.Errorf("output missing 'restarted'; got: %s", out)
+		}
+	})
+
+	t.Run("NotEnabled_ReturnsError", func(t *testing.T) {
+		mockSSM := &vsCodeSSMMock{output: notEnabledRestartSSMOutput}
+		fetcher := newDesktopEC2Sandbox("sb-desk-003")
+		err := runDesktopRestart(context.Background(), &config.Config{}, fetcher, mockSSM, "sb-desk-003", true)
+		if err == nil {
+			t.Fatal("expected error when desktop unit is absent, got nil")
+		}
+		if !strings.Contains(err.Error(), "desktop.enabled") {
+			t.Errorf("error missing 'desktop.enabled' hint; got: %v", err)
+		}
+	})
+
+	t.Run("DidNotComeBackActive_ReturnsError", func(t *testing.T) {
+		mockSSM := &vsCodeSSMMock{output: failedRestartSSMOutput}
+		fetcher := newDesktopEC2Sandbox("sb-desk-003")
+		err := runDesktopRestart(context.Background(), &config.Config{}, fetcher, mockSSM, "sb-desk-003", true)
+		if err == nil {
+			t.Fatal("expected error when kasmvnc does not return active, got nil")
+		}
+		if !strings.Contains(err.Error(), "did not come back active") {
+			t.Errorf("error missing restart-failure hint; got: %v", err)
+		}
+	})
+}
+
 // NOTE: TestDesktopCredential (DSK-08-CREDENTIAL) is implemented in create_test.go
 // (package cmd_test) by plan 93-04 — the km create credential generation lives there.
 // The Wave 0 stub that previously sat here was removed to avoid a duplicate, orphaned
