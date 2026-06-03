@@ -1,11 +1,49 @@
 ---
 phase: 93
 slug: km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward
-status: in-progress
+status: resolved
 updated: 2026-06-02
-source: live operator UAT (km v0.3.790→v0.3.793, Ubuntu 24.04 EC2)
+source: live operator UAT (km v0.3.790→v0.3.799, Ubuntu 24.04 EC2)
 direction: OS-aware bootstrap (keep Ubuntu) — operator decision 2026-06-02
 ---
+
+## ✅ RESOLVED — end-to-end verified on a clean boot (km v0.3.799)
+
+A fresh `km create profiles/desktop.yaml` (sandbox `desk-c1cf9494`, Ubuntu 24.04,
+no AMI, NO manual patching) reached:
+- `cloud-init status: done` (entire userdata runs cleanly on Ubuntu — no AL-ism aborts),
+- `kasmvnc` **active**, listening on **`127.0.0.1:8444` (loopback only)**,
+- firefox + matchbox + vncserver + kasmvncserver installed, `~/.kasmpasswd` seeded,
+- `km desktop status desk-c1cf9494` → "✓ KasmVNC desktop ready".
+
+**Trust model preserved:** loopback-only bind, access exclusively via the SSM
+port-forward (`km desktop start`), identical to `km vscode`. **No security-group
+change and no public exposure** — apt was switched to HTTPS (443, already allowed)
+rather than opening port 80; `network.udp.public_ip` only disables a STUN probe.
+
+### Complete fix list (all committed to pkg/compiler, validated live)
+1. OS-detect prelude + `km_pkg_install` (apt/yum/dnf) + `km_ensure_awscli`.
+2. AWS CLI v2 extracted with **python3** (Ubuntu lacks `unzip`; apt lock-contended at boot) — stub + full userdata.
+3. `amazon-ssm-agent` install/enable guarded to yum hosts (Ubuntu ships it via snap).
+4. `git`/`tmux`/`iptables`/`efs` routed through `km_pkg_install`.
+5. OS-aware sshd: `ssh.service` + install `openssh-server` on Ubuntu.
+6. Ubuntu noble deps: `fonts-dejavu-core` (not `fonts-dejavu`) + `software-properties-common`/`gnupg`/`curl`; KasmVNC deb via `curl` not `wget`.
+7. `Acquire::ForceIPv4` (EC2 mirror IPv6 unroutable).
+8. **apt over HTTPS** (`km_apt_https`) — SG allows only 443, not port 80.
+9. kasmvnc xstartup `XDG_RUNTIME_DIR` fallback (user can't mkdir root-owned `/run/user/<uid>`).
+10. kasmvnc.service: `ExecStartPre=+...` (run `/run/user` setup as root) + `HOME`/`XDG_RUNTIME_DIR` env.
+11. `vncserver -select-de manual`; snakeoil TLS cert + `sandbox` in `ssl-cert` group; `network.udp.public_ip: 127.0.0.1` (skip STUN hang).
+
+### Remaining operator step (for REMOTE create)
+The create-handler Lambda compiles userdata via its bundled `km`. To make the
+default **remote** `km create` produce this fixed userdata, redeploy the Lambda:
+`make build-lambdas` (clean) then `km init --dry-run=false`. LOCAL create
+(`km create --local`) already works with the rebuilt binary. (See
+[[project_km_init_skips_existing_lambda_zips]] / [[project_schema_change_requires_km_init]].)
+
+GAP-93-02 (status message) also shipped: `km desktop status` now distinguishes
+"still installing" from "not enabled" via a unit-file + cloud-init probe.
+
 
 ## Resolution log (Phase 93.1 — OS-aware bootstrap)
 
