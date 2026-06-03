@@ -2603,6 +2603,16 @@ echo "[km-bootstrap] VS Code Remote-SSH configured (authorized_keys written)"
 {{- if .DesktopEnabled }}
 # Phase 93: KasmVNC desktop (kiosk or full XFCE)
 # -------------------------------------------------------
+# Step 0: Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor
+# (kernel.apparmor_restrict_unprivileged_userns=1), which breaks the browser
+# sandboxes — Firefox/Chromium exit instantly at launch, leaving a black desktop.
+# Allow userns so the browser sandbox can initialize; persist across reboots
+# (km resume). Guarded by the proc path → no-op where the knob doesn't exist.
+if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+  echo 'kernel.apparmor_restrict_unprivileged_userns=0' > /etc/sysctl.d/60-km-desktop-userns.conf
+  sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 || true
+fi
+
 # Step 1: Install packages if not already present (idempotent — AMI-bakeable).
 # The guard allows a baked AMI to skip reinstall while always reseeding credentials/config.
 if ! command -v vncserver >/dev/null 2>&1; then
