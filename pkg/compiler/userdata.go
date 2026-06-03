@@ -2615,6 +2615,13 @@ if ! command -v vncserver >/dev/null 2>&1; then
     "https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/${KASMVNC_DEB}"
   apt-get install -y "/tmp/${KASMVNC_DEB}"
   rm -f "/tmp/${KASMVNC_DEB}"
+  # KasmVNC's Xvnc requires a TLS cert to start even when require_ssl is false.
+  # Generate the snakeoil cert and add the sandbox user to the ssl-cert group so
+  # it can read the (root:ssl-cert 0640) private key — otherwise the service
+  # crash-loops with "certificate file doesn't exist or isn't a file".
+  apt-get install -y ssl-cert
+  make-ssl-cert generate-default-snakeoil --force-overwrite || true
+  usermod -aG ssl-cert sandbox || true
   {{- if eq .DesktopMode "kiosk" }}
   apt-get install -y matchbox-window-manager
   {{- end }}
@@ -2668,6 +2675,11 @@ desktop:
 network:
   interface: 127.0.0.1
   websocket_port: auto
+  udp:
+    # Loopback-only access via the SSM tunnel — no WebRTC/UDP. Setting public_ip
+    # stops KasmVNC's STUN probe (UDP, blocked by the SG) that otherwise hangs
+    # ~70s and aborts startup. Does NOT expose any public interface.
+    public_ip: 127.0.0.1
   ssl:
     require_ssl: false
 data_loss_prevention:
@@ -2738,7 +2750,7 @@ Environment=XDG_RUNTIME_DIR=/run/user/1001
 ExecStartPre=+/bin/mkdir -p /run/user/1001
 ExecStartPre=+/bin/chown sandbox:sandbox /run/user/1001
 ExecStartPre=+/bin/chmod 700 /run/user/1001
-ExecStart=/usr/bin/vncserver :1 -fg -geometry {{ .DesktopGeometry }} -interface 127.0.0.1
+ExecStart=/usr/bin/vncserver :1 -select-de manual -fg -geometry {{ .DesktopGeometry }} -interface 127.0.0.1
 ExecStop=/usr/bin/vncserver -kill :1
 Restart=on-failure
 RestartSec=5
