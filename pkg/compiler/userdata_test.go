@@ -1539,7 +1539,10 @@ func TestUserdataPrivilegedEnabled(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"-G wheel sandbox",
+		// Admin granted OS-aware: wheel (Amazon Linux) with a sudo (Ubuntu) fallback,
+		// added AFTER useradd so a missing group never aborts user creation.
+		"usermod -aG wheel sandbox",
+		"usermod -aG sudo sandbox",
 		"NOPASSWD:ALL",
 		"/etc/sudoers.d/sandbox",
 	} {
