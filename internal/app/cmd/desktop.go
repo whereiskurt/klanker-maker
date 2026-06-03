@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -171,14 +172,16 @@ func runDesktopStart(ctx context.Context, _ *config.Config, fetcher SandboxFetch
 	fmt.Printf("Open in your browser: https://localhost:%d/\n\n", localPort)
 	fmt.Printf("  user: %s\n", credUser)
 	fmt.Printf("  pass: %s\n\n", credPass)
-	fmt.Printf("Press Ctrl-C to close the tunnel (KasmVNC keeps running on the sandbox).\n\n")
+	fmt.Printf("The tunnel auto-reconnects if it drops; press Ctrl-C to close it (KasmVNC keeps running on the sandbox).\n\n")
 
-	// Open the foreground SSM port-forward (blocks until Ctrl-C).
-	pfCmd := buildPortForwardCmd(ctx, instanceID, rec.Region, strconv.Itoa(localPort), "8444")
-	pfCmd.Stdin = os.Stdin
-	pfCmd.Stdout = os.Stdout
-	pfCmd.Stderr = os.Stderr
-	return execFn(pfCmd)
+	// Open the SSM port-forward with auto-reconnect. KasmVNC survives a dropped
+	// tunnel server-side, so reconnecting returns to the same desktop session. An
+	// HTTPS liveness probe also recycles a silently-hung plugin (frozen desktop).
+	region := rec.Region
+	buildPF := func(c context.Context) *exec.Cmd {
+		return buildPortForwardCmd(c, instanceID, region, strconv.Itoa(localPort), "8444")
+	}
+	return runReconnectingPortForward(ctx, execFn, buildPF, httpsTunnelProbe(localPort), true, os.Stdout)
 }
 
 // runDesktopStatus resolves the sandbox, runs the combined SSM status script, and prints a

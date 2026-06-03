@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -696,6 +699,136 @@ func buildPortForwardCmd(ctx context.Context, instanceID, region, localPort, rem
 		"--profile", "klanker-terraform",
 		"--document-name", "AWS-StartPortForwardingSession",
 		"--parameters", fmt.Sprintf(`{"portNumber":["%s"],"localPortNumber":["%s"]}`, remotePort, localPort))
+}
+
+// tunnelProbe reports whether the forwarded local port is carrying live traffic.
+// Returns true when healthy. Used to detect a silently-hung session-manager-plugin
+// (local port still bound, but the underlying WebSocket is dead).
+type tunnelProbe func() bool
+
+// httpsTunnelProbe probes a forwarded HTTPS service (e.g. KasmVNC on :8444). Any
+// HTTP response — including 401/403 — means the tunnel carries data end-to-end.
+// TLS verification is skipped (KasmVNC uses a self-signed/loopback cert).
+func httpsTunnelProbe(localPort int) tunnelProbe {
+	client := &http.Client{
+		Timeout:   6 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec // loopback self-signed cert behind the SSM tunnel
+	}
+	url := fmt.Sprintf("https://127.0.0.1:%d/", localPort)
+	return func() bool {
+		resp, err := client.Get(url)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return true
+	}
+}
+
+// sshBannerTunnelProbe probes a forwarded SSH service (e.g. sshd on :22). An SSH
+// server sends its "SSH-2.0-…" banner immediately on connect, so a successful
+// read confirms the tunnel carries data; a bound-but-silent local port times out.
+func sshBannerTunnelProbe(localPort int) tunnelProbe {
+	addr := fmt.Sprintf("127.0.0.1:%d", localPort)
+	return func() bool {
+		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+		if err != nil {
+			return false
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		buf := make([]byte, 8)
+		n, err := conn.Read(buf)
+		return err == nil && n > 0
+	}
+}
+
+// runReconnectingPortForward runs an SSM port-forward and auto-reconnects when the
+// tunnel drops, until the operator presses Ctrl-C. The session-manager-plugin has
+// no keep-alive and frequently dies (or hangs) on laptop sleep / Wi-Fi roam / NAT
+// idle-timeout; the remote service (KasmVNC, sshd) survives, so re-establishing the
+// tunnel drops the operator straight back into the same session.
+//
+// buildCmd must return a FRESH *exec.Cmd each call (exec.CommandContext is
+// single-use); it is given a context that is cancelled on Ctrl-C. If probe is
+// non-nil, a liveness loop recycles a hung-but-bound plugin so the loop reconnects.
+// reconnect=false preserves the old one-shot behaviour (and keeps unit tests with a
+// mock execFn from looping).
+func runReconnectingPortForward(ctx context.Context, execFn ShellExecFunc, buildCmd func(context.Context) *exec.Cmd, probe tunnelProbe, reconnect bool, out io.Writer) error {
+	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	attempt := 0
+	for {
+		cmd := buildCmd(sigCtx)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		var probeDone chan struct{}
+		if probe != nil && reconnect {
+			probeDone = make(chan struct{})
+			go watchTunnelLiveness(sigCtx, cmd, probe, out, probeDone)
+		}
+
+		err := execFn(cmd)
+		if probeDone != nil {
+			close(probeDone)
+		}
+
+		// Operator pressed Ctrl-C / TERM — quit cleanly, do not reconnect.
+		if sigCtx.Err() != nil {
+			return nil
+		}
+		// Clean exit (incl. mock execFn returning nil) or reconnect disabled — done.
+		if err == nil || !reconnect {
+			return err
+		}
+		attempt++
+		fmt.Fprintf(out, "\n⚠ SSM tunnel dropped (%v) — reconnecting (attempt %d; Ctrl-C to stop)...\n", err, attempt)
+		select {
+		case <-sigCtx.Done():
+			return nil
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// watchTunnelLiveness kills cmd when the probe reports the tunnel unresponsive for
+// two consecutive checks, so runReconnectingPortForward re-establishes it. A grace
+// period lets the tunnel + remote service come up before the first probe.
+func watchTunnelLiveness(ctx context.Context, cmd *exec.Cmd, probe tunnelProbe, out io.Writer, done <-chan struct{}) {
+	select {
+	case <-time.After(20 * time.Second): // grace: first boot of the remote service
+	case <-ctx.Done():
+		return
+	case <-done:
+		return
+	}
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	fails := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-ticker.C:
+			if probe() {
+				fails = 0
+				continue
+			}
+			fails++
+			if fails >= 2 {
+				fmt.Fprintf(out, "\n⚠ tunnel unresponsive — recycling the SSM session...\n")
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+				return
+			}
+		}
+	}
 }
 
 // execDockerShell builds and runs: docker exec -it [(-u root)] km-{sandboxID}-main /bin/bash.
