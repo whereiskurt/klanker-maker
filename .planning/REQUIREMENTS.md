@@ -74,12 +74,12 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **INFR-07**: Domain registered in management account and connected to application account
 - [x] **INFR-08**: All infrastructure modules and application code from defcon.run.34 (Terraform modules: network, ec2spot, ecs-cluster, ecs-task, ecs-service, secrets; Terragrunt patterns: site.hcl, service.hcl; Go application: apps/local/configui/) are copied into the Klanker Maker repo, renamed, and adapted — no runtime or build-time dependency on defcon.run.34 exists
 
-### ConfigUI
+### ConfigUI — REMOVED 2026-06-02 (web dashboard was unused; `cmd/configui` deleted)
 
-- [x] **CFUI-01**: Web-based profile editor for creating/editing SandboxProfile YAML
-- [x] **CFUI-02**: Live sandbox status dashboard showing running sandboxes
-- [x] **CFUI-03**: AWS resource discovery showing what each sandbox provisioned
-- [x] **CFUI-04**: SOPS secrets management UI for encrypt/decrypt operations
+- [~] ~~**CFUI-01**: Web-based profile editor for creating/editing SandboxProfile YAML~~ (removed)
+- [~] ~~**CFUI-02**: Live sandbox status dashboard showing running sandboxes~~ (removed)
+- [~] ~~**CFUI-03**: AWS resource discovery showing what each sandbox provisioned~~ (removed)
+- [~] ~~**CFUI-04**: SOPS secrets management UI for encrypt/decrypt operations~~ (removed)
 
 ### Platform Configuration
 
@@ -281,10 +281,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MAIL-03 | Phase 4 | Complete |
 | MAIL-04 | Phase 4 | Complete |
 | MAIL-05 | Phase 4 | Complete |
-| CFUI-01 | Phase 5 | Complete |
-| CFUI-02 | Phase 5 | Complete |
-| CFUI-03 | Phase 5 | Complete |
-| CFUI-04 | Phase 5 | Complete |
+| CFUI-01 | Phase 5 | Removed 2026-06-02 (configui deleted) |
+| CFUI-02 | Phase 5 | Removed 2026-06-02 (configui deleted) |
+| CFUI-03 | Phase 5 | Removed 2026-06-02 (configui deleted) |
+| CFUI-04 | Phase 5 | Removed 2026-06-02 (configui deleted) |
 | CONF-01 | Phase 6 | Complete |
 | CONF-02 | Phase 6 | Complete |
 | CONF-03 | Phase 6 | Complete |
