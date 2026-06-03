@@ -2776,6 +2776,28 @@ XSTARTUP
 {{- end }}
 chmod +x /home/sandbox/.vnc/xstartup
 chown -R sandbox:sandbox /home/sandbox/.vnc
+{{- if eq .DesktopMode "full" }}
+
+# Step 4b (full XFCE only): disable xfwm4's Alt+click window move/resize.
+# Web-VNC clients drop the modifier key-up when focus leaves the canvas (Cmd-Tab,
+# toolbar click, browser shortcut) — especially on macOS, where Option maps to
+# X11 Alt — so the remote X server latches Alt as "held". xfwm4's default
+# easy_click=Alt then turns every click into a window move/resize and every
+# keystroke into an Alt-shortcut ("ALT key and clicks getting messed up"). Setting
+# easy_click=none means a latched Alt can no longer hijack the pointer. Pre-seeded
+# before the session starts so xfconfd loads it on launch; always written so it
+# survives an AMI bake.
+mkdir -p /home/sandbox/.config/xfce4/xfconf/xfce-perchannel-xml
+cat > /home/sandbox/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml << 'XFWM4XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="easy_click" type="string" value="none"/>
+  </property>
+</channel>
+XFWM4XML
+chown -R sandbox:sandbox /home/sandbox/.config/xfce4
+{{- end }}
 
 # Step 5: Write and enable the kasmvnc systemd unit (system service; User=sandbox;
 # survives km pause/resume without a loginctl user session at boot).

@@ -2236,6 +2236,35 @@ func TestUserDataDesktopLocalhostCert(t *testing.T) {
 	}
 }
 
+// TestUserDataDesktopFullDisablesAltClick asserts full XFCE mode pre-seeds
+// xfwm4 with easy_click=none, so a latched Alt modifier (common with web-VNC on
+// macOS) can't turn clicks into window move/resize. Kiosk mode (matchbox) has no
+// such binding and must not emit the xfwm4 config.
+func TestUserDataDesktopFullDisablesAltClick(t *testing.T) {
+	net := desktopNet("kasm", "testpass")
+
+	full := desktopProfile("full", []string{"firefox"}, "1920x1080")
+	out, err := generateUserData(full, "sb-full", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData(full) failed: %v", err)
+	}
+	if !strings.Contains(out, `name="easy_click" type="string" value="none"`) {
+		t.Error("full XFCE mode must pre-seed xfwm4 easy_click=none to disable Alt+click window ops")
+	}
+	if !strings.Contains(out, "xfce-perchannel-xml/xfwm4.xml") {
+		t.Error("full XFCE mode must write the xfwm4.xml perchannel config")
+	}
+
+	kiosk := desktopProfile("kiosk", []string{"firefox"}, "1920x1080")
+	kout, err := generateUserData(kiosk, "sb-kiosk", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData(kiosk) failed: %v", err)
+	}
+	if strings.Contains(kout, "xfwm4.xml") {
+		t.Error("kiosk mode (matchbox) must not emit the xfwm4 config — it has no Alt+click binding")
+	}
+}
+
 // TestUserDataDesktopDisabled asserts that a profile with desktop.enabled=false (or
 // absent desktop block) emits no KasmVNC, kasmvncpasswd, or vncserver strings.
 // Covers DSK-05-COMPILER-THREAD.

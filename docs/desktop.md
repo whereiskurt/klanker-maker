@@ -354,6 +354,26 @@ The sandbox was created on a different machine, or the file was deleted manually
 **`km validate` error: "desktop requires an Ubuntu AMI"**
 Set `spec.runtime.ami: ubuntu-24.04` (or `ubuntu-22.04`). Amazon Linux 2023 is not supported in v1.
 
+**Alt key / clicks "get messed up" over time (full XFCE)**
+A stuck modifier. Web-VNC clients lose the modifier *key-up* event when focus
+leaves the canvas (Cmd-Tab, clicking the KasmVNC toolbar, a browser shortcut) —
+especially on macOS, where Option maps to X11 `Alt`. The remote X server then
+latches Alt as "held", and xfwm4's default `Alt+click` = move/resize window turns
+every click into a window drag and every keystroke into an Alt-shortcut. It's
+fine at first and degrades as the latch accumulates.
+- **Immediate fix:** open the KasmVNC toolbar (tab on the left edge) and tap the
+  **Alt** (and Ctrl/Shift) key buttons to release the latch; or tap Option once
+  in the desktop.
+- **Durable fix (shipped):** `full` mode pre-seeds xfwm4 with `easy_click=none`,
+  so a latched Alt can no longer hijack the pointer. Sandboxes created before this
+  build need `km destroy && km create` to pick it up.
+- **Browser-only use:** prefer `mode: kiosk` — matchbox has no `Alt+click`
+  window bindings, so a stuck modifier is nearly harmless.
+
+Note: the `SSL alert number 46 / certificate unknown` lines in the KasmVNC log are
+just the browser rejecting the self-signed cert (untrusted-CA warning) — cosmetic,
+unrelated to input.
+
 ---
 
 ## Limitations
