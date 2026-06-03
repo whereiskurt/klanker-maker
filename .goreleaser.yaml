@@ -4,7 +4,9 @@ version: 2
 project_name: km
 
 # Run BEFORE the build matrix: fetch terraform + terragrunt for every target
-# platform into dist/extras/{os}_{arch}/ so the archive step can include them.
+# platform into .extras/{os}_{arch}/ so the archive step can include them.
+# (.extras lives OUTSIDE dist/ — goreleaser 2.x cleans dist/ then errors if a
+# before-hook repopulates it: "dist is not empty".)
 before:
   hooks:
     - go mod tidy
@@ -39,18 +41,18 @@ archives:
     # {{ .Os }} / {{ .Arch }} are evaluated PER archive, so each tarball
     # gets only its own platform's toolchain.
     files:
-      - src: dist/extras/{{ .Os }}_{{ .Arch }}/terraform
+      - src: .extras/{{ .Os }}_{{ .Arch }}/terraform
         dst: bin/terraform
         info:
           mode: 0755
-      - src: dist/extras/{{ .Os }}_{{ .Arch }}/terragrunt
+      - src: .extras/{{ .Os }}_{{ .Arch }}/terragrunt
         dst: bin/terragrunt
         info:
           mode: 0755
       - LICENSE*
       - README.md
       - OPERATOR-GUIDE.md
-      - src: dist/extras/THIRD-PARTY-LICENSES.txt
+      - src: .extras/THIRD-PARTY-LICENSES.txt
         dst: THIRD-PARTY-LICENSES.txt
 
 checksum:

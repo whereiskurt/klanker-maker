@@ -27,6 +27,8 @@ bin/
 
 # GoReleaser output (cross-platform release archives + bundled tool staging)
 dist/
+# Bundled terraform/terragrunt staged by scripts/fetch-bundled-tools.sh (before-hook)
+.extras/
 
 # Compiled binaries
 /km

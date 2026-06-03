@@ -8,7 +8,9 @@ set -euo pipefail
 TF_VER="${1:?terraform version required}"
 TG_VER="${2:?terragrunt version required}"
 
-EXTRAS_DIR="dist/extras"
+# NOTE: must live OUTSIDE dist/ — goreleaser 2.x cleans dist/ then errors if a
+# before-hook repopulates it ("dist is not empty"). dist/ is goreleaser-owned.
+EXTRAS_DIR=".extras"
 CACHE_DIR="${KM_BUNDLE_CACHE:-$HOME/.cache/km-bundle}"
 
 mkdir -p "$EXTRAS_DIR" "$CACHE_DIR"
