@@ -3394,6 +3394,21 @@ echo "[km-bootstrap] Proxy env vars configured (gatekeeper mode belt-and-suspend
 # ============================================================
 echo "[km-bootstrap] Configuring eBPF network enforcement..."
 
+# Phase 93.1: free 127.0.0.1:53 for the enforcer's DNS resolver BEFORE the
+# enforcer service starts. On Ubuntu, systemd-resolved owns :53 (stub listener)
+# and /etc/resolv.conf is a managed symlink — both must be cleared or the
+# enforcer crash-loops on bind and DNS breaks. No-op on Amazon Linux (no
+# systemd-resolved unit, plain resolv.conf file).
+if systemctl list-unit-files systemd-resolved.service >/dev/null 2>&1; then
+  systemctl stop systemd-resolved 2>/dev/null || true
+  systemctl disable systemd-resolved 2>/dev/null || true
+  echo "[km-bootstrap] systemd-resolved stopped (freeing :53 for the eBPF resolver)"
+fi
+if [ -L /etc/resolv.conf ]; then
+  cp -L /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
+  rm -f /etc/resolv.conf
+fi
+
 # Create sandbox cgroup for eBPF attachment
 mkdir -p /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope
 
@@ -3527,7 +3542,7 @@ CGROUPEOF
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 # Override resolv.conf to route ALL DNS through the enforcer's resolver.
 # The enforcer runs its own DNS resolver on :53 (both eBPF and gatekeeper modes).
-cp /etc/resolv.conf /etc/resolv.conf.bak
+cp /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
 echo "nameserver 127.0.0.1" > /etc/resolv.conf
 echo "[km-bootstrap] DNS routed through eBPF enforcer resolver on :53"
 {{- else }}
