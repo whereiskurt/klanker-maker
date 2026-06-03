@@ -1480,6 +1480,10 @@ km desktop start my-desktop
 # Check KasmVNC unit state
 km desktop status my-desktop
 
+# (Optional) rotate the KasmVNC password on a running sandbox — no restart,
+# no session interruption; re-open with km desktop start afterward
+km desktop rekey my-desktop [--force] [--yes]
+
 # Teardown
 km destroy my-desktop --remote --yes
 ```
@@ -1495,7 +1499,7 @@ At `km create` time, a per-sandbox KasmVNC credential (username + random passwor
 The first-boot userdata installs KasmVNC + WM + browsers — this is slow (several minutes). For repeated use, bake an AMI:
 
 ```bash
-# Create a permissive sandbox (allowedDNSSuffixes: ["*"]) to allow package downloads
+# Any network posture works — the install runs pre-enforcement over HTTPS
 km create profiles/desktop.yaml --alias bake-session
 
 # Wait for full boot, then bake
@@ -1510,7 +1514,7 @@ km destroy bake-session --remote --yes
 
 ### First-boot network requirements
 
-A fresh non-AMI boot must reach distro mirrors + KasmVNC release URL + browser vendor repos. Under a locked-down `spec.network`, allowlist those domains for first boot OR use the AMI-bake workflow above. Browser *runtime* egress is separate and governed by the profile as usual.
+The `spec.network` allowlist does **not** gate the desktop install. The stack is installed in userdata *before* network enforcement (proxy/iptables/eBPF) comes up, and the sandbox security group permits HTTPS (443) egress — so a fresh boot reaches distro mirrors, the KasmVNC release URL, and browser vendor repos regardless of `allowedDNSSuffixes`/`allowedHosts`. (On Ubuntu `apt` is auto-pinned to HTTPS + IPv4 because the SG allows only 443/53 — no port 80.) The allowlist governs the **browser's runtime egress** once the session is up; tune it per profile. The only first-boot cost is time — use the AMI-bake workflow above to skip it.
 
 ### Security model
 
@@ -1521,7 +1525,7 @@ A fresh non-AMI boot must reach distro mirrors + KasmVNC release URL + browser v
 
 ### Rollout
 
-Schema addition → `make build && km init --sidecars` to refresh management Lambdas. Existing sandboxes do not pick up `desktop` retroactively — `km destroy && km create`.
+The desktop schema + Ubuntu OS-aware bootstrap are compiled by the **create-handler Lambda** (it runs `km create` as a subprocess), which only updates on a full apply — so redeploy with `make build-lambdas` (clean) + `km init --dry-run=false`, not `--sidecars`. Existing sandboxes do not pick up `desktop` retroactively — `km destroy && km create`.
 
 ### Failure mode reference
 
