@@ -2665,7 +2665,11 @@ if ! command -v vncserver >/dev/null 2>&1; then
 fi
 
 # Step 2: Always (re)seed per-sandbox KasmVNC credential (never baked — fresh every boot).
+# These dirs are created as root here, so chown them to the sandbox user — otherwise
+# a root-owned ~/.config blocks the browser from creating its profile
+# (Firefox: "Your Firefox profile cannot be loaded" → black screen).
 mkdir -p /home/sandbox/.vnc /home/sandbox/.config
+chown sandbox:sandbox /home/sandbox/.vnc /home/sandbox/.config
 printf '%s\n%s\n' '{{ .DesktopKasmPass }}' '{{ .DesktopKasmPass }}' \
   | kasmvncpasswd -u '{{ .DesktopKasmUser }}' -w -r /home/sandbox/.kasmpasswd
 chmod 600 /home/sandbox/.kasmpasswd
