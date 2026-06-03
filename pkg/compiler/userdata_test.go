@@ -2210,6 +2210,32 @@ func TestUserDataDesktopEnabled(t *testing.T) {
 	}
 }
 
+// TestUserDataDesktopLocalhostCert asserts the desktop block generates a
+// self-signed TLS cert with a localhost/127.0.0.1 SAN and points KasmVNC at it,
+// so https://localhost:8444 (reached via the SSM port-forward) matches the cert
+// instead of the default snakeoil cert (CN = system hostname).
+func TestUserDataDesktopLocalhostCert(t *testing.T) {
+	p := desktopProfile("kiosk", []string{"firefox"}, "1920x1080")
+	net := desktopNet("kasm", "testpass")
+	out, err := generateUserData(p, "sb-cert", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "subjectAltName=DNS:localhost,IP:127.0.0.1") {
+		t.Error("expected self-signed cert with localhost/127.0.0.1 SAN")
+	}
+	if !strings.Contains(out, "pem_certificate: /home/sandbox/.vnc/self.crt") {
+		t.Error("expected kasmvnc.yaml to point pem_certificate at the localhost-SAN cert")
+	}
+	if !strings.Contains(out, "pem_key: /home/sandbox/.vnc/self.key") {
+		t.Error("expected kasmvnc.yaml to point pem_key at the localhost-SAN key")
+	}
+	// The snakeoil dependency must be gone — it was the source of the hostname mismatch.
+	if strings.Contains(out, "make-ssl-cert generate-default-snakeoil") {
+		t.Error("snakeoil cert generation should be replaced by the localhost-SAN cert")
+	}
+}
+
 // TestUserDataDesktopDisabled asserts that a profile with desktop.enabled=false (or
 // absent desktop block) emits no KasmVNC, kasmvncpasswd, or vncserver strings.
 // Covers DSK-05-COMPILER-THREAD.

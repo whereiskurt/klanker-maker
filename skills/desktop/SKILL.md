@@ -104,7 +104,7 @@ KasmVNC includes seamless bidirectional clipboard. Text copied in the remote bro
 
 - KasmVNC binds `127.0.0.1` on the sandbox — no LAN/VPC exposure.
 - The only access path is the operator's SSM `AWS-StartPortForwardingSession` (authenticated, encrypted) — same as `km vscode`.
-- SSL is disabled at the KasmVNC layer because the SSM tunnel already encrypts the transport and the loopback-only bind removes the network exposure. This avoids a self-signed-cert browser warning.
+- SSL is not *required* at the KasmVNC layer (`require_ssl: false`) — the SSM tunnel already encrypts the transport and the loopback-only bind removes the network exposure. KasmVNC still serves HTTPS with a self-signed cert whose SAN includes `localhost`/`127.0.0.1` (so it matches the `https://localhost:8444/` tunnel URL); the browser shows a one-time untrusted-CA warning that is safe to accept.
 - The per-sandbox credential is defense-in-depth so another local process on the operator's machine cannot ride the forwarded port.
 
 ## First-boot install + AMI-bake

@@ -2623,7 +2623,7 @@ if ! command -v vncserver >/dev/null 2>&1; then
   # absent on minimal Ubuntu cloud images: software-properties-common
   # (add-apt-repository), gnupg (gpg), curl, ca-certificates.
   apt-get install -y dbus-x11 fonts-dejavu-core fonts-liberation x11-xserver-utils \
-    software-properties-common ca-certificates curl gnupg
+    software-properties-common ca-certificates curl gnupg openssl
   UBUNTU_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME}")
   KASMVNC_DEB="kasmvncserver_${UBUNTU_CODENAME}_1.4.0_amd64.deb"
   # curl (not wget — wget is not guaranteed on minimal Ubuntu; curl is present).
@@ -2631,13 +2631,6 @@ if ! command -v vncserver >/dev/null 2>&1; then
     "https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/${KASMVNC_DEB}"
   apt-get install -y "/tmp/${KASMVNC_DEB}"
   rm -f "/tmp/${KASMVNC_DEB}"
-  # KasmVNC's Xvnc requires a TLS cert to start even when require_ssl is false.
-  # Generate the snakeoil cert and add the sandbox user to the ssl-cert group so
-  # it can read the (root:ssl-cert 0640) private key — otherwise the service
-  # crash-loops with "certificate file doesn't exist or isn't a file".
-  apt-get install -y ssl-cert
-  make-ssl-cert generate-default-snakeoil --force-overwrite || true
-  usermod -aG ssl-cert sandbox || true
   {{- if eq .DesktopMode "kiosk" }}
   apt-get install -y matchbox-window-manager
   {{- end }}
@@ -2688,6 +2681,22 @@ printf '%s\n%s\n' '{{ .DesktopKasmPass }}' '{{ .DesktopKasmPass }}' \
 chmod 600 /home/sandbox/.kasmpasswd
 chown sandbox:sandbox /home/sandbox/.kasmpasswd
 
+# Step 2b: Always (re)generate a self-signed TLS cert whose SAN includes
+# localhost + 127.0.0.1. KasmVNC's Xvnc serves HTTPS and requires a readable
+# cert to start; its packaged default points pem_certificate at the snakeoil
+# cert, whose CN is the system hostname — which mismatches the https://localhost
+# URL the operator reaches through the SSM port-forward (browser cert warning).
+# A localhost SAN makes the cert match the URL. (TLS here is defense-in-depth;
+# the SSM tunnel + per-sandbox KasmVNC password are the real boundaries.)
+# Regenerated each boot so the key is per-sandbox (never baked/shared).
+openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+  -keyout /home/sandbox/.vnc/self.key \
+  -out /home/sandbox/.vnc/self.crt \
+  -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" >/dev/null 2>&1
+chmod 600 /home/sandbox/.vnc/self.key
+chown sandbox:sandbox /home/sandbox/.vnc/self.key /home/sandbox/.vnc/self.crt
+
 # Step 3: Always write kasmvnc.yaml (loopback-only binding; SSL disabled; geometry from profile).
 # require_ssl defaults true in KasmVNC — must explicitly set false (loopback + SSM justification).
 cat > /home/sandbox/.vnc/kasmvnc.yaml << 'KASMYAML'
@@ -2704,6 +2713,10 @@ network:
     # ~70s and aborts startup. Does NOT expose any public interface.
     public_ip: 127.0.0.1
   ssl:
+    # Point at our localhost-SAN cert (Step 2b) instead of KasmVNC's default
+    # snakeoil (CN = hostname), so https://localhost:8444 matches the cert.
+    pem_certificate: /home/sandbox/.vnc/self.crt
+    pem_key: /home/sandbox/.vnc/self.key
     require_ssl: false
 data_loss_prevention:
   clipboard:

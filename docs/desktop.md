@@ -88,7 +88,7 @@ KasmVNC was chosen over alternatives for two specific reasons:
 1. **One component** — replaces TigerVNC + websockify + noVNC. All three services in a single binary.
 2. **Seamless bidirectional clipboard** — a hard requirement for the browser-in-browser case. Both keyboard shortcuts (Ctrl+C / Ctrl+V) and the toolbar clipboard pass text without the paste-from-sidebar friction of the noVNC alternative.
 
-**SSL is disabled at the KasmVNC layer** because the SSM tunnel already encrypts the transport and the loopback-only bind removes the network exposure — this avoids a self-signed-cert browser warning in the operator's local browser. If a future KasmVNC release refuses plain HTTP, the fallback is a self-signed cert with documented "accept the warning" instructions.
+**SSL is not *required* at the KasmVNC layer** (`require_ssl: false`) because the SSM tunnel already encrypts the transport and the loopback-only bind removes the network exposure. KasmVNC still serves HTTPS and presents a TLS cert; the bootstrap generates a **self-signed cert whose SAN includes `localhost` + `127.0.0.1`** so it matches the `https://localhost:8444/` URL reached through the port-forward (the packaged default snakeoil cert has the system hostname as CN, which mismatches). It is still self-signed, so the browser shows a one-time untrusted-CA warning that is safe to accept given the loopback + SSM model.
 
 ---
 
@@ -196,7 +196,7 @@ The credential is **never baked into an AMI** — it is always seeded fresh at b
 | **Blast radius** | One credential per sandbox; compromise of one credential affects only that sandbox |
 | **Credential storage** | `~/.km/desktop/<sandbox-id>` on the operator laptop (mode 0600) |
 | **Port exposure** | KasmVNC binds `127.0.0.1` on the sandbox — no LAN/VPC exposure |
-| **SSL** | Disabled at KasmVNC layer (loopback bind + SSM encryption justify it) |
+| **SSL** | Not required at KasmVNC layer (`require_ssl: false`); still serves HTTPS with a self-signed cert (SAN: `localhost`/`127.0.0.1`) matching the tunnel URL — untrusted-CA warning expected, safe to accept |
 
 The SSM tunnel is the real security boundary. KasmVNC authentication is defense-in-depth so another local process on the operator's machine cannot ride the forwarded port.
 
