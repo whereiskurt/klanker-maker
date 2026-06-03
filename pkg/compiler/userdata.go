@@ -2656,10 +2656,13 @@ if ! command -v vncserver >/dev/null 2>&1; then
   apt-get install -y -t 'o=LP-PPA-xtradeb' chromium
   {{- end }}
   {{- if eq . "chrome" }}
-  # Google Chrome: official Google APT repo (always a DEB, never a snap)
+  # Google Chrome: official Google APT repo (always a DEB, never a snap).
+  # MUST be https:// — the sandbox SG allows only 443 (no port 80), so an
+  # http:// source times out on apt-get update and (under set -e) aborts the
+  # entire bootstrap before the KasmVNC unit is written. Google serves HTTPS.
   curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
     | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
-  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
     > /etc/apt/sources.list.d/google-chrome.list
   apt-get update -q && apt-get install -y google-chrome-stable
   {{- end }}

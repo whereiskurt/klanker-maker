@@ -2325,4 +2325,13 @@ func TestUserDataDesktopChromeBinary(t *testing.T) {
 	if strings.Count(out, "google-chrome-stable") < 1 {
 		t.Error("expected 'google-chrome-stable' binary reference in kiosk xstartup launch")
 	}
+	// The Chrome apt source MUST be https:// — the sandbox SG allows only 443
+	// (no port 80), so an http:// source times out on apt-get update and, under
+	// set -e, aborts the entire bootstrap before the KasmVNC unit is written.
+	if strings.Contains(out, "http://dl.google.com/linux/chrome/deb") {
+		t.Error("Chrome apt source uses http:// — SG blocks port 80; must be https://dl.google.com")
+	}
+	if !strings.Contains(out, "https://dl.google.com/linux/chrome/deb/ stable main") {
+		t.Error("expected Chrome apt source over https://dl.google.com/linux/chrome/deb/")
+	}
 }
