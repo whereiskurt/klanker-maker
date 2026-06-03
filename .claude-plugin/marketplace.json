@@ -8,7 +8,7 @@
     {
       "name": "klanker",
       "description": "Sandbox email/Slack/operator orchestration, platform init, VS Code Remote-SSH, remote browser desktop (KasmVNC), and cross-account k8s IRSA",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "source": "./"
     }
   ]

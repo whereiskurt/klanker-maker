@@ -75,7 +75,11 @@ km desktop start $SB
 # 4. (Optional) check KasmVNC unit state
 km desktop status $SB
 
-# 5. Teardown also removes the local credential file
+# 5. (Optional) rotate the KasmVNC password on a running sandbox — no restart,
+#    no session interruption; re-open with km desktop start afterward
+km desktop rekey $SB [--force] [--yes]
+
+# 6. Teardown also removes the local credential file
 km destroy $SB --remote --yes
 ```
 

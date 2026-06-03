@@ -83,6 +83,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km vscode rekey <sandbox-id>` — rotate per-sandbox keypair without `km destroy && km create` (`--force`, `--yes`)
 - `km desktop start <sandbox-id>` — open SSM port-forward to KasmVNC graphical session; prints `https://localhost:8444/` + credential (`--local-port`)
 - `km desktop status <sandbox-id>` — check KasmVNC unit state on the sandbox
+- `km desktop rekey <sandbox-id>` — rotate the per-sandbox KasmVNC password on a running sandbox (no restart / no session interruption; `--force`, `--yes`)
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role

@@ -263,6 +263,7 @@ The KasmVNC systemd unit is enabled at boot and restarts automatically. After `k
 ```bash
 km desktop start <sandbox-id> [--local-port 8444]
 km desktop status <sandbox-id>
+km desktop rekey <sandbox-id> [--force] [--yes]
 ```
 
 **`km desktop start <sandbox-id>`**
@@ -276,6 +277,12 @@ km desktop status <sandbox-id>
 - One-round-trip SSM probe to check KasmVNC unit state.
 - Prints a one-line health summary.
 - Exits non-zero when unhealthy.
+
+**`km desktop rekey <sandbox-id>`** — rotate the KasmVNC password on a running sandbox without `destroy && create` (parallels `km vscode rekey`).
+1. Gates: EC2 running-state check → `km lock` check (`--force` to override) → SSM pre-flight.
+2. Generates a fresh 16-char password, rewrites `~/.kasmpasswd` on the sandbox via `kasmvncpasswd` over SSM (with a readback check), then **atomically** replaces the local `~/.km/desktop/<id>` credential.
+3. **No session interruption.** KasmVNC re-reads its password file per web-auth (verified: after a rekey the running server accepts the new password and rejects the old one, with no restart — same `MainPID`), so an already-connected session stays live and the new password applies on the next login. Re-open with `km desktop start`.
+4. `--yes` skips the confirmation prompt; `--force` overrides a `km lock`. If the local `~/.km/desktop/<id>` is absent (cross-laptop), the username defaults to `kasm` (the only user `km` provisions) and the file is created fresh.
 
 ---
 
