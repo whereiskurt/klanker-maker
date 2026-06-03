@@ -135,17 +135,23 @@ fi
 # ============================================================
 useradd -r -s /usr/sbin/nologin km-sidecar || true
 {{- if .Privileged }}
-useradd -m -s /bin/bash -d /home/sandbox -G wheel sandbox 2>/dev/null || true
+# Create the user first, THEN grant admin via whichever group exists — Amazon
+# Linux/RHEL use "wheel", Ubuntu/Debian use "sudo". Creating with -G wheel
+# directly fails on Ubuntu (no wheel group), which left the user uncreated and
+# aborted the boot at the next chown.
+useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
+usermod -aG wheel sandbox 2>/dev/null || usermod -aG sudo sandbox 2>/dev/null || true
 echo "sandbox ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sandbox
 chmod 0440 /etc/sudoers.d/sandbox
 {{- else }}
 useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
 # Defensive scrub: when launching from an AMI baked off a privileged sandbox, the
-# image carries /etc/sudoers.d/sandbox + wheel membership. Without this the
+# image carries /etc/sudoers.d/sandbox + admin-group membership. Without this the
 # non-privileged user could sudo -s to root, escaping the eBPF cgroup
 # enforcement (root processes are never enrolled into the sandbox cgroup).
 rm -f /etc/sudoers.d/sandbox
 gpasswd -d sandbox wheel 2>/dev/null || true
+gpasswd -d sandbox sudo 2>/dev/null || true
 {{- end }}
 mkdir -p /workspace
 chown sandbox:sandbox /workspace

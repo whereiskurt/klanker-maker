@@ -106,7 +106,12 @@ fi
 # requires the local "sandbox" user to exist for runAsDefaultUser).
 # ============================================================
 useradd -r -s /usr/sbin/nologin km-sidecar || true
-useradd -m -s /bin/bash -d /home/sandbox -G wheel sandbox 2>/dev/null || true
+# Create the user first, THEN grant admin via whichever group exists — Amazon
+# Linux/RHEL use "wheel", Ubuntu/Debian use "sudo". Creating with -G wheel
+# directly fails on Ubuntu (no wheel group), which left the user uncreated and
+# aborted the boot at the next chown.
+useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
+usermod -aG wheel sandbox 2>/dev/null || usermod -aG sudo sandbox 2>/dev/null || true
 echo "sandbox ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sandbox
 chmod 0440 /etc/sudoers.d/sandbox
 mkdir -p /workspace
