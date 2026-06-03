@@ -805,3 +805,64 @@ spec:
 		t.Errorf("expected 'download sops bundle' in error, got: %v", err)
 	}
 }
+
+// keyAwareS3Mock returns a per-key body so the desktop-creds.txt read can be
+// distinguished from the profile/vscode-pubkey reads.
+type keyAwareS3Mock struct {
+	bodyByKeySuffix map[string]string
+	defaultBody     string
+}
+
+func (m *keyAwareS3Mock) GetObject(_ context.Context, input *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	body := m.defaultBody
+	if input.Key != nil {
+		for suffix, b := range m.bodyByKeySuffix {
+			if strings.HasSuffix(*input.Key, suffix) {
+				body = b
+				break
+			}
+		}
+	}
+	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(body))}, nil
+}
+
+// TestCreateHandler_DesktopCredsEnv verifies the handler reads desktop-creds.txt and
+// threads KM_DESKTOP_KASM_USER/KM_DESKTOP_KASM_PASS into the km create subprocess env,
+// so the box's KasmVNC password matches the operator's ~/.km/desktop/<id> (no 401).
+func TestCreateHandler_DesktopCredsEnv(t *testing.T) {
+	mockS3 := &keyAwareS3Mock{
+		defaultBody:     minimalProfile,
+		bodyByKeySuffix: map[string]string{"desktop-creds.txt": "kasm:s3cret-pass"},
+	}
+	var capturedEnv []string
+	h := &CreateHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp",
+		RunCommand: func(_ string, _ []string, env []string) ([]byte, error) {
+			capturedEnv = env
+			return []byte("sandbox created"), nil
+		},
+	}
+	event := CreateEvent{
+		SandboxID:      "sb-deskcreds",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-deskcreds",
+	}
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle error: %v", err)
+	}
+	wantUser, wantPass := false, false
+	for _, e := range capturedEnv {
+		if e == "KM_DESKTOP_KASM_USER=kasm" {
+			wantUser = true
+		}
+		if e == "KM_DESKTOP_KASM_PASS=s3cret-pass" {
+			wantPass = true
+		}
+	}
+	if !wantUser || !wantPass {
+		t.Errorf("desktop creds not threaded into subprocess env (user=%v pass=%v)", wantUser, wantPass)
+	}
+}

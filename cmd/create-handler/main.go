@@ -245,6 +245,27 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 		}
 	}
 
+	// Phase 93: pass the operator-generated KasmVNC credential ("user:pass") through
+	// to the subprocess so its desktop-credential step REUSES it instead of
+	// regenerating a fresh password the operator never sees — otherwise the box's
+	// ~/.kasmpasswd and the operator's ~/.km/desktop/<id> diverge and login 401s.
+	credKey := event.ArtifactPrefix + "/desktop-creds.txt"
+	if dcResp, dcErr := h.S3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: strPtr(event.ArtifactBucket),
+		Key:    strPtr(credKey),
+	}); dcErr == nil {
+		dcBytes, readErr := io.ReadAll(dcResp.Body)
+		dcResp.Body.Close()
+		if readErr == nil {
+			if parts := strings.SplitN(strings.TrimSpace(string(dcBytes)), ":", 2); len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+				env = append(env,
+					"KM_DESKTOP_KASM_USER="+parts[0],
+					"KM_DESKTOP_KASM_PASS="+parts[1],
+				)
+			}
+		}
+	}
+
 	// Step 4: Run km create subprocess
 	runner := h.RunCommand
 	if runner == nil {
