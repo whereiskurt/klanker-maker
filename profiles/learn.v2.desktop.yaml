@@ -12,7 +12,7 @@ spec:
     ttl: "8h"
     idleTimeout: "2h"
     # destroy / stop /retuain
-    
+
     teardownPolicy: retain
 
   runtime:
@@ -23,7 +23,7 @@ spec:
       # mode: kiosk — browsers[0] (firefox) is launched maximized; matchbox-wm
       # provides the window manager. No desktop environment overhead.
       # Set mode: full for a complete XFCE4 desktop session.
-      mode: kiosk
+      mode: full
       # browsers: first entry is the kiosk browser in mode=kiosk.
       # Supported values: firefox, chromium, chrome, brave
       # (chrome = Google Chrome; chromium = open-source build; both are distinct.)
