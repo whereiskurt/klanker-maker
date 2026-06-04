@@ -210,6 +210,20 @@ func TestDesktopStatus(t *testing.T) {
 			t.Errorf("error missing 'desktop.enabled' hint; got: %v", err)
 		}
 	})
+
+	// Regression: the unit can read non-"active" (activating / restart window /
+	// orphaned-but-serving Xvnc) while the desktop is actually reachable on :8444.
+	// A live listener + seeded credential must count as ready, even if is-active
+	// is not "active" — otherwise status spuriously reports "not ready" for a
+	// working desktop.
+	t.Run("InactiveUnitButListening_ReportsReady", func(t *testing.T) {
+		const listeningOut = "=== kasmvnc ===\nactivating\n=== kasmpasswd ===\nyes\n=== unitfile ===\nyes\n=== listener ===\nyes\n"
+		mockSSM := &vsCodeSSMMock{output: listeningOut}
+		fetcher := newDesktopEC2Sandbox("sb-desk-002")
+		if err := runDesktopStatus(context.Background(), &config.Config{}, fetcher, mockSSM, "sb-desk-002"); err != nil {
+			t.Errorf("expected ready when :8444 is listening despite unit not active, got: %v", err)
+		}
+	})
 }
 
 // healthyRestartSSMOutput satisfies both the restart pre-flight (unitfile present)

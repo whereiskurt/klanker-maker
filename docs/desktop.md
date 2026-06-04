@@ -275,9 +275,9 @@ km desktop restart <sandbox-id> [--yes]
 5. Opens a blocking SSM port-forward (`AWS-StartPortForwardingSession`) with **auto-reconnect**: the `session-manager-plugin` has no keep-alive, so on laptop sleep / Wi-Fi roam / NAT idle-timeout the tunnel is re-established automatically (an HTTPS liveness probe also recycles a silently-hung plugin). KasmVNC survives server-side, so you land back in the same session. Ctrl-C closes the tunnel for good; the session keeps running on the sandbox.
 
 **`km desktop status <sandbox-id>`**
-- One-round-trip SSM probe to check KasmVNC unit state.
-- Prints a one-line health summary.
-- Exits non-zero when unhealthy.
+- One-round-trip SSM probe.
+- Reports **ready** when the credential is seeded AND the desktop is reachable — either the systemd unit is `active` **or** Xvnc is actually listening on `:8444`. (The listener check matters because `systemctl is-active` can read non-`active` — activating, a restart window, or an orphaned-but-serving Xvnc — while the desktop is perfectly connectable; keying solely on the unit state made status spuriously report "not ready" for a working desktop.)
+- Prints a one-line health summary; exits non-zero when unhealthy.
 
 **`km desktop rekey <sandbox-id>`** — rotate the KasmVNC password on a running sandbox without `destroy && create` (parallels `km vscode rekey`).
 1. Gates: EC2 running-state check → `km lock` check (`--force` to override) → SSM pre-flight.

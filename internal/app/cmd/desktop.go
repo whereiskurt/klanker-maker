@@ -28,6 +28,8 @@ echo "=== kasmpasswd ==="
 test -f /home/sandbox/.kasmpasswd && echo yes || echo no
 echo "=== unitfile ==="
 test -f /etc/systemd/system/kasmvnc.service && echo yes || echo no
+echo "=== listener ==="
+(ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -q ':8444 ' && echo yes || echo no
 echo "=== cloudinit ==="
 cloud-init status 2>/dev/null | head -1 || echo "status: unknown"`
 
@@ -232,6 +234,12 @@ func runDesktopStatus(ctx context.Context, _ *config.Config, fetcher SandboxFetc
 func parseDesktopStatus(out, sandboxID string) error {
 	kasmActive := strings.Contains(out, "=== kasmvnc ===\nactive")
 	kasmPasswd := strings.Contains(out, "=== kasmpasswd ===\nyes")
+	// kasmListening: Xvnc is actually accepting connections on :8444. This is the
+	// signal the operator truly cares about — `systemctl is-active` can read
+	// non-"active" (activating, a restart window, or an orphaned-but-serving Xvnc)
+	// while the desktop is perfectly reachable, which made status spuriously report
+	// "not ready" for a working desktop. Treat a live listener as ready too.
+	kasmListening := strings.Contains(out, "=== listener ===\nyes")
 	// unitPresent: the kasmvnc.service unit file is written only by the desktop
 	// userdata block, so it is the authoritative signal that the profile actually
 	// enabled the desktop — distinguishing "not enabled" from "enabled, still
@@ -239,7 +247,9 @@ func parseDesktopStatus(out, sandboxID string) error {
 	unitPresent := strings.Contains(out, "=== unitfile ===\nyes")
 	cloudInitRunning := strings.Contains(out, "status: running")
 
-	if kasmActive && kasmPasswd {
+	// Ready = the credential is seeded AND the desktop is reachable — either the
+	// unit reports active OR Xvnc is actually listening on :8444.
+	if kasmPasswd && (kasmActive || kasmListening) {
 		return nil
 	}
 
@@ -257,8 +267,8 @@ func parseDesktopStatus(out, sandboxID string) error {
 		return fmt.Errorf("desktop still provisioning — cloud-init is mid first-boot install (KasmVNC + browser). Wait a few minutes, then: km desktop status %s", sandboxID)
 	case !kasmPasswd:
 		return fmt.Errorf("desktop enabled but ~/.kasmpasswd is not seeded yet — boot may still be in progress; re-check shortly or inspect: km shell %s -- sudo journalctl -u cloud-final", sandboxID)
-	default: // unit present, password seeded, but service not active
-		return fmt.Errorf("desktop installed but kasmvnc is not running — try: km shell %s -- sudo systemctl status kasmvnc", sandboxID)
+	default: // unit present, password seeded, but neither active nor listening on :8444
+		return fmt.Errorf("desktop installed but kasmvnc is not serving (unit not active and nothing listening on :8444) — try: km desktop restart %s, or inspect: km shell %s -- sudo systemctl status kasmvnc", sandboxID, sandboxID)
 	}
 }
 
