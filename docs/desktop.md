@@ -200,6 +200,35 @@ The credential is **never baked into an AMI** — it is always seeded fresh at b
 
 The SSM tunnel is the real security boundary. KasmVNC authentication is defense-in-depth so another local process on the operator's machine cannot ride the forwarded port.
 
+### Browser network enforcement (eBPF + MITM parity)
+
+By default a graphical browser would **escape** the sandbox's network controls: it
+runs under the `kasmvnc.service` systemd cgroup (`system.slice/…`), not the
+`km.slice/km-{id}.scope` cgroup the eBPF programs attach to — so the
+connect4/egress allowlist never sees it. And in `enforcement: both` there is no
+transparent iptables DNAT, so nothing routes the browser to the MITM proxy; even
+in `proxy` mode Firefox would reject the MITM cert because it uses its own NSS
+store, not the system CA bundle.
+
+The desktop bootstrap closes both gaps so the browser gets the **same posture as
+the shell**:
+
+- **eBPF allow/deny:** `~/.vnc/xstartup` moves the desktop session into
+  `km.slice/km-{id}.scope` before launching the WM/browser, so the browser (a
+  child) inherits the enforced cgroup. No-op in non-enforced modes.
+- **MITM (Firefox):** when `firefox` is a browser and enforcement is `proxy` or
+  `both`, the bootstrap writes `/etc/firefox/policies/policies.json` that (a)
+  routes HTTP/SSL through the http-proxy at `127.0.0.1:3128` and (b) trusts the
+  MITM CA (`ImportEnterpriseRoots` + installs `km-proxy-ca.crt`). The proxy then
+  meters/inspects browser HTTPS exactly as it does shell traffic.
+
+**Limitations:** the Firefox policy is Firefox-only — Chromium/Chrome/Brave use
+their own proxy/cert handling and are not yet wired for MITM (the cgroup eBPF
+enrollment still covers them). Pure `ebpf` mode has no proxy MITM path, so only
+allow/deny applies to the browser there. An L7 *redirect* rule (e.g.
+google→youtube) is a separate feature of the http-proxy sidecar, not configured
+by these policies.
+
 ---
 
 ## First-boot install, network, and the AMI-bake workflow

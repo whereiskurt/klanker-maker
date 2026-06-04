@@ -2387,6 +2387,61 @@ func TestUserDataDesktopFirefoxPinNotSnap(t *testing.T) {
 	}
 }
 
+// TestUserDataDesktopBrowserParity asserts the desktop browser gets the same
+// enforcement posture as the shell: (1) the xstartup session is moved into the
+// km eBPF cgroup scope so the browser inherits it, and (2) with firefox + a
+// proxy/both enforcement mode, a Firefox enterprise policy routes HTTPS through
+// the http-proxy and trusts the MITM CA.
+func TestUserDataDesktopBrowserParity(t *testing.T) {
+	net := desktopNet("kasm", "testpass")
+
+	// firefox + both → cgroup enrollment + firefox policy (proxy + CA).
+	p := desktopProfile("full", []string{"firefox"}, "1920x1080")
+	p.Spec.Network.Enforcement = "both"
+	out, err := generateUserData(p, "sb-parity", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "km.slice/km-sb-parity.scope/cgroup.procs") {
+		t.Error("xstartup must enroll the desktop session into the km eBPF cgroup scope")
+	}
+	if !strings.Contains(out, "/etc/firefox/policies/policies.json") {
+		t.Error("firefox + both must write the Firefox enterprise policy")
+	}
+	if !strings.Contains(out, `"HTTPProxy": "127.0.0.1:3128"`) || !strings.Contains(out, `"SSLProxy": "127.0.0.1:3128"`) {
+		t.Error("firefox policy must route HTTP/SSL through the http-proxy at 127.0.0.1:3128")
+	}
+	if !strings.Contains(out, `"ImportEnterpriseRoots": true`) || !strings.Contains(out, "km-proxy-ca.crt") {
+		t.Error("firefox policy must trust the MITM CA (ImportEnterpriseRoots + Install km-proxy-ca.crt)")
+	}
+
+	// ebpf-only → cgroup enrollment present, but NO firefox proxy policy (no proxy
+	// MITM path in pure ebpf mode).
+	pe := desktopProfile("full", []string{"firefox"}, "1920x1080")
+	pe.Spec.Network.Enforcement = "ebpf"
+	oute, err := generateUserData(pe, "sb-ebpf", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData(ebpf) failed: %v", err)
+	}
+	if !strings.Contains(oute, "km.slice/km-sb-ebpf.scope/cgroup.procs") {
+		t.Error("cgroup enrollment must be present regardless of enforcement mode")
+	}
+	if strings.Contains(oute, "/etc/firefox/policies/policies.json") {
+		t.Error("ebpf-only mode has no http-proxy MITM path; firefox proxy policy must not be written")
+	}
+
+	// no firefox (chromium only) + both → no firefox policy.
+	pc := desktopProfile("full", []string{"chromium"}, "1920x1080")
+	pc.Spec.Network.Enforcement = "both"
+	outc, err := generateUserData(pc, "sb-chromium", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData(chromium) failed: %v", err)
+	}
+	if strings.Contains(outc, "/etc/firefox/policies/policies.json") {
+		t.Error("firefox policy must not be written when firefox is not a desktop browser")
+	}
+}
+
 // TestUserDataDesktopChromeBinary asserts that browsers=[chrome] installs
 // google-chrome-stable (not the raw keyword "chrome") and that the kiosk xstartup
 // launches google-chrome-stable as the binary.

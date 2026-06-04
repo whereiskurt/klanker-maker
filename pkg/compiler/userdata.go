@@ -2763,6 +2763,11 @@ chmod 700 "${XDG_RUNTIME_DIR}" 2>/dev/null || true
 # XDG_CONFIG_DIRS does not include /etc/xdg; a bare VNC session leaves it unset.
 export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
 export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+# Full-parity enforcement: move this session into the km eBPF cgroup scope so the
+# browser (a child) is subject to the same connect4/egress allowlist as the shell.
+# cgroup.procs is root:sandbox 0664 (km-bootstrap); children inherit in cgroup v2.
+# No-op when the scope is absent (proxy-only / non-enforced modes).
+echo $$ > /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs 2>/dev/null || true
 exec dbus-launch --exit-with-session matchbox-window-manager -use_titlebar no &
 WM_PID=$!
 sleep 1
@@ -2788,6 +2793,11 @@ chmod 700 "${XDG_RUNTIME_DIR}" 2>/dev/null || true
 # XDG_CONFIG_DIRS does not include /etc/xdg; a bare VNC session leaves it unset.
 export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
 export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+# Full-parity enforcement: move this session into the km eBPF cgroup scope so the
+# browser (a child) is subject to the same connect4/egress allowlist as the shell.
+# cgroup.procs is root:sandbox 0664 (km-bootstrap); children inherit in cgroup v2.
+# No-op when the scope is absent (proxy-only / non-enforced modes).
+echo $$ > /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs 2>/dev/null || true
 exec dbus-launch --exit-with-session startxfce4
 XSTARTUP
 {{- end }}
@@ -2814,6 +2824,38 @@ cat > /home/sandbox/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml << 'XFWM4
 </channel>
 XFWM4XML
 chown -R sandbox:sandbox /home/sandbox/.config/xfce4
+{{- end }}
+{{- if and .DesktopHasFirefox (or (eq .Enforcement "proxy") (eq .Enforcement "both")) }}
+
+# Step 4c (firefox + proxy/both): Firefox enterprise policy so the browser gets
+# the same L7 MITM posture as the shell's HTTP_PROXY. Two parts:
+#   1. Route HTTPS through the http-proxy (127.0.0.1:3128). In proxy mode the
+#      uid-based DNAT already catches Firefox; in both mode there is no DNAT, so
+#      this explicit proxy is what sends browser traffic to the MITM.
+#   2. Trust the MITM CA. Firefox uses its OWN NSS store, so the system
+#      ca-certificates bundle is not enough — ImportEnterpriseRoots makes it
+#      honor the OS trust store and Install adds the proxy CA explicitly. (The
+#      cert is fetched later in bootstrap; Firefox reads policies at launch.)
+# /etc/firefox/policies/policies.json is the standard system-wide policy path the
+# Mozilla deb honors.
+mkdir -p /etc/firefox/policies
+cat > /etc/firefox/policies/policies.json << 'FFPOLICY'
+{
+  "policies": {
+    "Certificates": {
+      "ImportEnterpriseRoots": true,
+      "Install": ["/usr/local/share/ca-certificates/km-proxy-ca.crt"]
+    },
+    "Proxy": {
+      "Mode": "manual",
+      "HTTPProxy": "127.0.0.1:3128",
+      "SSLProxy": "127.0.0.1:3128",
+      "Passthrough": "169.254.169.254, localhost, 127.0.0.1",
+      "Locked": true
+    }
+  }
+}
+FFPOLICY
 {{- end }}
 
 # Step 5: Write and enable the kasmvnc systemd unit (system service; User=sandbox;
@@ -4029,6 +4071,10 @@ type userDataParams struct {
 	//   firefox→firefox, chromium→chromium, chrome→google-chrome-stable, brave→brave-browser.
 	// Empty when DesktopEnabled is false or DesktopBrowsers is empty. Phase 93.
 	DesktopBrowser0Binary string
+	// DesktopHasFirefox is true when "firefox" is in DesktopBrowsers. Gates the
+	// Firefox enterprise policy (proxy → http-proxy MITM + CA trust) so the
+	// desktop browser gets the same L7 MITM posture as the shell's HTTP_PROXY.
+	DesktopHasFirefox bool
 	// DesktopGeometryWidth is the parsed width from DesktopGeometry (e.g. "1920" from "1920x1080").
 	// Pre-parsed at generateUserData time so the template does not need a custom function.
 	DesktopGeometryWidth string
@@ -4766,6 +4812,12 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		params.DesktopGeometry = geometry
 		// Map browsers[0] keyword → launch binary.
 		params.DesktopBrowser0Binary = desktopBrowserBinary(browsers[0])
+		for _, b := range browsers {
+			if b == "firefox" {
+				params.DesktopHasFirefox = true
+				break
+			}
+		}
 		// Pre-parse geometry width/height so the template doesn't need a custom function.
 		width, height := "1920", "1080"
 		if parts := strings.SplitN(geometry, "x", 2); len(parts) == 2 {
