@@ -2359,6 +2359,34 @@ func TestUserDataDesktopCredentialSeed(t *testing.T) {
 	}
 }
 
+// TestUserDataDesktopFirefoxPinNotSnap asserts browsers=[firefox] installs the
+// Mozilla PPA DEB via an apt pin (priority 1001), not the snap-transitional. On
+// Ubuntu 24.04 the archive's firefox is an epoch'd snap-transitional that an
+// `apt -t o=...` flag does NOT override (target-release ≠ origin), so the pin is
+// the only thing that works; the snap refuses to run under the kasmvnc cgroup.
+func TestUserDataDesktopFirefoxPinNotSnap(t *testing.T) {
+	p := desktopProfile("kiosk", []string{"firefox"}, "1920x1080")
+	net := desktopNet("kasm", "testpass")
+	out, err := generateUserData(p, "sb-ff", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "/etc/apt/preferences.d/mozilla-firefox") {
+		t.Error("firefox install must write an apt pin at /etc/apt/preferences.d/mozilla-firefox")
+	}
+	if !strings.Contains(out, "Pin-Priority: 1001") || !strings.Contains(out, "Pin: release o=LP-PPA-mozillateam") {
+		t.Error("firefox pin must be release o=LP-PPA-mozillateam at Pin-Priority 1001 (beats the epoch'd snap-transitional)")
+	}
+	// The old `-t 'o=LP-PPA-mozillateam'` form is a no-op (target-release ≠ origin)
+	// and must not be relied on.
+	if strings.Contains(out, "-t 'o=LP-PPA-mozillateam'") {
+		t.Error("firefox install must not use the ineffective -t 'o=LP-PPA-mozillateam' flag; rely on the pin")
+	}
+	if !strings.Contains(out, "snap remove firefox") {
+		t.Error("firefox install should drop the snap if a transitional dep pulled it")
+	}
+}
+
 // TestUserDataDesktopChromeBinary asserts that browsers=[chrome] installs
 // google-chrome-stable (not the raw keyword "chrome") and that the kiosk xstartup
 // launches google-chrome-stable as the binary.

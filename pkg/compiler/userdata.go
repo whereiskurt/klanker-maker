@@ -2639,9 +2639,26 @@ if ! command -v vncserver >/dev/null 2>&1; then
   {{- end }}
   {{- range .DesktopBrowsers }}
   {{- if eq . "firefox" }}
-  # Firefox: Mozilla Team PPA DEB (non-snap; snap-confined Firefox fails under VNC)
-  add-apt-repository -y ppa:mozillateam/ppa && km_apt_https && apt-get update -q
-  apt-get install -y -t 'o=LP-PPA-mozillateam' firefox
+  # Firefox: Mozilla Team PPA DEB, NOT the snap. On Ubuntu 24.04 the archive's
+  # firefox is a snap-transitional package whose epoch (1:1snap1) always outranks
+  # the PPA version at equal priority, and apt -t o=... does NOT match an origin
+  # (target-release matches suites only) — so without an explicit pin apt installs
+  # the snap, which then refuses to launch under the kasmvnc systemd cgroup
+  # ("/system.slice/kasmvnc.service is not a snap cgroup"). Pin the PPA at 1001
+  # (>1000 so it wins even as a downgrade over an already-pulled transitional),
+  # then drop the snap if an XFCE dep pulled it first.
+  add-apt-repository -y ppa:mozillateam/ppa
+  cat > /etc/apt/preferences.d/mozilla-firefox << 'FFPIN'
+Package: firefox*
+Pin: release o=LP-PPA-mozillateam
+Pin-Priority: 1001
+FFPIN
+  km_apt_https && apt-get update -q
+  # --allow-downgrades: if a transitional firefox (epoch 1:1snap1) was already
+  # pulled (e.g. as an XFCE dep) the pinned PPA deb is a "downgrade", which -y
+  # refuses without this flag — so the deb would silently fail to install.
+  apt-get install -y --allow-downgrades firefox
+  snap remove firefox 2>/dev/null || true
   {{- end }}
   {{- if eq . "chromium" }}
   # Chromium: xtradeb PPA DEB (non-snap; Ubuntu 24.04 default chromium is snap)

@@ -343,6 +343,19 @@ current build, or as an immediate patch in `km shell $SB`:
 sudo chown -R sandbox:sandbox /home/sandbox/.config
 ```
 
+**Firefox: "...is not a snap cgroup for tag snap.firefox.firefox"**
+You got the **snap** Firefox, not the deb — and snap Firefox refuses to launch
+under the kasmvnc systemd cgroup. On Ubuntu 24.04 the archive's `firefox` is a
+snap-transitional package whose epoch (`1:1snap1`) outranks the Mozilla PPA's
+version, so without an explicit apt pin apt installs the snap. Fixed in the
+current bootstrap (pins `o=LP-PPA-mozillateam` at priority 1001 + installs the
+deb with `--allow-downgrades` + removes the snap). Recover an existing box:
+```bash
+printf 'Package: firefox*\nPin: release o=LP-PPA-mozillateam\nPin-Priority: 1001\n' | sudo tee /etc/apt/preferences.d/mozilla-firefox
+sudo add-apt-repository -y ppa:mozillateam/ppa && sudo apt-get update
+sudo apt-get install -y --allow-downgrades firefox && sudo snap remove firefox
+```
+
 **XFCE (full mode): "Unable to load a failsafe session"**
 XFCE could not find `/etc/xdg` because a bare VNC session leaves `XDG_CONFIG_DIRS`
 unset. Fixed in the current bootstrap (xstartup exports `XDG_CONFIG_DIRS` /
