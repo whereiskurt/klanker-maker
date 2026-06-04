@@ -2134,9 +2134,12 @@ Plans:
 ### Phase 94: km doctor leaked per-sandbox debris cleanup (log groups, DDB rows, S3 lifecycle)
 
 **Goal:** Teach `km doctor` to detect, reclaim, and prevent the orphaned per-sandbox debris that teardown leaves behind — found in a live crawl as ~271 retention-less CloudWatch log groups (`/aws/lambda/{prefix}-budget-enforcer-{id}`, `/aws/lambda/{prefix}-github-token-refresher-{id}`, the per-sandbox sandbox log-group family), leaked DynamoDB rows (`{prefix}-budgets` per-sandbox rows, `-identities`, `-slack-threads`, `status=failed` `-sandboxes` rows), and an artifacts S3 bucket with no lifecycle expiry on transient prefixes (`logs/`, `remote-create/`, `agent-runs/`, `slack-inbound/`). Three new checks follow the established `checkStale*`/`checkOrphaned*` contract (list → group by sandbox-id → diff against `SandboxLister` active set → WARN with hint → reclaim only under `--dry-run=false --delete-X`): `checkStaleLogGroups` (`doctor_log_groups.go`, `--delete-logs` + `--set-log-retention` guardrail), `checkOrphanedDDBRows` (`doctor_ddb_rows.go`, `--delete-ddb-rows`, preserving AI-model `BUDGET#ai#` rows and guarding in-flight creates), and `checkS3LifecyclePolicy` (extends `doctor_artifacts.go`, `--set-s3-lifecycle` guardrail). Two config knobs `doctor_log_retention_days` / `doctor_s3_expire_days` (default 30) via the five-touchpoint pattern. Operator-side binary change only — no Lambda/terragrunt deploy. Out of scope: orphan EBS snapshots (manual operator backups). Design spec: `docs/superpowers/specs/2026-06-04-km-doctor-debris-cleanup-design.md`.
-**Requirements**: TBD (derived during /gsd:plan-phase)
+**Requirements**: DBG-INFRA, DBG-CFG, DBG-FLAGS, DBG-LOGS, DBG-LOGS-PREFIX, DBG-LOGS-RET, DBG-DDB, DBG-DDB-AI, DBG-DDB-GUARD, DBG-DDB-SLACK, DBG-S3, DBG-S3-SET, DBG-PAGE, DBG-MULTI (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 94)
 **Depends on:** Phase 93
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 94 to break down)
+- [ ] 94-01-PLAN.md — Shared infra: 3 mocked-API interfaces + DoctorDeps fields + initRealDeps wiring, 2 five-touchpoint config knobs, 4 flags + --with-deletes fan-out, runDoctor threading (Wave 1)
+- [ ] 94-02-PLAN.md — checkStaleLogGroups: 4 log-group families (literal km- prefix) + --set-log-retention guardrail + tests (Wave 2)
+- [ ] 94-03-PLAN.md — checkOrphanedDDBRows: 4 tables, BUDGET#ai# preservation, status=failed/nocap guard, slack non-key sandbox_id + tests (Wave 3)
+- [ ] 94-04-PLAN.md — checkS3LifecyclePolicy: transient-prefix expiry detection + merge-preserving --set-s3-lifecycle + tests (Wave 4)

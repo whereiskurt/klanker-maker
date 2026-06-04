@@ -492,6 +492,36 @@ pattern. Feature: `km desktop` — KasmVNC-backed browser/XFCE remote session.
 
 ---
 
+
+## Phase 94 — Synthetic IDs (phase-local)
+
+These IDs are phase-local and synthetic — they derive from the Phase 94 design
+spec (`docs/superpowers/specs/2026-06-04-km-doctor-debris-cleanup-design.md`),
+`94-CONTEXT.md`, and the `94-VALIDATION.md` per-task map (DBG-* labels). Phase 94's
+ROADMAP entry recorded "Requirements: TBD"; these IDs are minted here for
+plan-checker traceability following the Phase 84.2/84.3/89/93 pattern. Feature:
+`km doctor` leaked per-sandbox debris cleanup (log groups, DDB rows, S3 lifecycle).
+
+| ID | Description | Status |
+|----|-------------|--------|
+| DBG-INFRA | Three mocked-API interfaces (`CWLogsCleanupAPI`, `DDBScanDeleteAPI`, `S3LifecycleAPI`) + `DoctorDeps` client/bool fields + `initRealDepsWithExisting` wiring | Planned |
+| DBG-CFG | Config knobs `doctor_log_retention_days` / `doctor_s3_expire_days` via the five-touchpoint pattern (incl. merge-list) + `DoctorConfigProvider` accessors + clamp | Planned |
+| DBG-FLAGS | `--delete-logs` / `--delete-ddb-rows` / `--set-log-retention` / `--set-s3-lifecycle` flags threaded through `runDoctor`; `--with-deletes` fans out to the two delete flags | Planned |
+| DBG-LOGS | `checkStaleLogGroups` enumerates all FOUR log-group families (budget-enforcer, github-token-refresher, `/km/sandboxes/`, `/km/sidecars/`), orphan→WARN, `--delete-logs` reclaims | Planned |
+| DBG-LOGS-PREFIX | Lambda families matched on LITERAL `km-` prefix (not dynamic `resource_prefix`) — fixes the non-default-prefix leak | Planned |
+| DBG-LOGS-RET | `--set-log-retention` idempotently sets `retentionInDays` on management + sandbox groups lacking it; management groups never deleted | Planned |
+| DBG-DDB | `checkOrphanedDDBRows` scans four tables (budgets/identities/slack-threads/sandboxes), orphan→WARN, `--delete-ddb-rows` reclaims | Planned |
+| DBG-DDB-AI | `BUDGET#ai#{modelID}` rows preserved unconditionally (regression guard) | Planned |
+| DBG-DDB-GUARD | `sandboxes` rows purged only when `status` ∈ {failed,nocap}; in-flight `starting` and other statuses skipped | Planned |
+| DBG-DDB-SLACK | `slack-threads` orphans resolved via non-key `sandbox_id` attribute; rows missing it are skipped | Planned |
+| DBG-S3 | `checkS3LifecyclePolicy` WARNs when no expiry rule covers transient prefixes (`logs/`, `remote-create/`, `agent-runs/`, `slack-inbound/`) | Planned |
+| DBG-S3-SET | `--set-s3-lifecycle` installs transient-only expiry rules, preserves existing/unrelated rules, never touches build-artifact prefixes, idempotent | Planned |
+| DBG-PAGE | Full pagination on `DescribeLogGroups` (NextToken) and DynamoDB `Scan` (LastEvaluatedKey) | Planned |
+| DBG-MULTI | `--ignore-prefix` / `doctor_ignore_prefixes` + active-set diff isolate sibling installs | Planned |
+| DBG-UAT | Live reclamation against the `kph` install (manual; requires real AWS account) | Planned |
+
+---
+
 *Last updated: 2026-06-02 — Phase 93 synthetic IDs added for plan-checker traceability (15 IDs covering schema, helper, validation, compiler/userdata, credential, CLI, security, profile example, skill, docs, tests)*
 
 ---
