@@ -21,6 +21,7 @@ import (
 // ssmParamStoreClient is the minimal SSM interface needed by productionSSMParamStore.
 type ssmParamStoreClient interface {
 	GetParameter(ctx context.Context, input *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
+	PutParameter(ctx context.Context, input *ssm.PutParameterInput, optFns ...func(*ssm.Options)) (*ssm.PutParameterOutput, error)
 }
 
 // productionSSMParamStore adapts an SSM client to the SSMParamStore interface.
@@ -45,6 +46,31 @@ func (s *productionSSMParamStore) Get(ctx context.Context, name string, withDecr
 		return "", nil
 	}
 	return *out.Parameter.Value, nil
+}
+
+// Put writes (overwriting) an SSM String parameter. secure=true switches to a
+// SecureString (no caller currently needs it for the Slack channel cache, but
+// the signature matches the slackSSMStore.Put convention used elsewhere).
+//
+// productionSSMParamStore is the only SSMParamStore implementation with write
+// capability; the read-only fakes used by destroy/doctor satisfy the narrower
+// SSMParamStore contract and intentionally do NOT implement ssmParamWriter, so
+// the by-name channel cache is silently skipped on those paths.
+func (s *productionSSMParamStore) Put(ctx context.Context, name, value string, secure bool) error {
+	input := &ssm.PutParameterInput{
+		Name:      awssdk.String(name),
+		Value:     awssdk.String(value),
+		Type:      ssmtypes.ParameterTypeString,
+		Overwrite: awssdk.Bool(true),
+	}
+	if secure {
+		input.Type = ssmtypes.ParameterTypeSecureString
+	}
+	_, err := s.client.PutParameter(ctx, input)
+	if err != nil {
+		return fmt.Errorf("SSM PutParameter %s: %w", name, err)
+	}
+	return nil
 }
 
 // SlackAPI is the operator-side Slack client interface used during km create.
@@ -72,6 +98,87 @@ type SlackAPI interface {
 // SSM SDK into test files.
 type SSMParamStore interface {
 	Get(ctx context.Context, name string, withDecryption bool) (string, error)
+}
+
+// ssmParamWriter is the optional write capability of an SSMParamStore. It is
+// implemented by productionSSMParamStore (the real create-path store) and by
+// the create-path test fake. Read-only stores used by destroy/doctor do NOT
+// implement it; resolveSlackChannel type-asserts for it and silently skips the
+// by-name channel cache when absent, so those paths stay read-only.
+type ssmParamWriter interface {
+	Put(ctx context.Context, name, value string, secure bool) error
+}
+
+// slackChannelNameCacheKey returns the SSM path that maps a Slack channel NAME
+// to its channel ID, e.g. "/km/slack/channel-id-by-name/sb-demo".
+//
+// This is the O(1) reuse path for per-sandbox channels: the sandbox-id-keyed
+// param (/{prefix}/sandbox/{id}/slack-channel-id) is useless for reuse because
+// the sandbox id is regenerated on every recreate, whereas the channel name is
+// re-derived deterministically from the (stable) --alias. Caching by name lets
+// a name_taken recovery resolve the existing channel without enumerating every
+// public channel via conversations.list (the O(N) scan that gets rate-limited
+// in large workspaces).
+func slackChannelNameCacheKey(slackPrefix, channelName string) string {
+	return slackPrefix + "channel-id-by-name/" + channelName
+}
+
+// cacheSlackChannelIDByName best-effort writes the name→ID mapping. Non-fatal:
+// a cache write failure (or a read-only store) only costs a future scan, it
+// never fails sandbox provisioning.
+func cacheSlackChannelIDByName(ctx context.Context, store SSMParamStore, slackPrefix, channelName, channelID string) {
+	writer, ok := store.(ssmParamWriter)
+	if !ok || channelID == "" {
+		return
+	}
+	key := slackChannelNameCacheKey(slackPrefix, channelName)
+	if err := writer.Put(ctx, key, channelID, false); err != nil {
+		log.Debug().Err(err).Str("key", key).Str("channel", channelID).
+			Msg("could not cache Slack channel ID by name (non-fatal — next recreate falls back to scan)")
+	}
+}
+
+// resolveExistingChannelID recovers the ID of an already-existing channel after
+// CreateChannel returned name_taken, in priority order:
+//
+//  1. By-name SSM cache (O(1)) — if a cached ID resolves via conversations.info
+//     (single call), reuse it directly. A deleted/renamed channel fails the
+//     conversations.info probe and falls through to the scan.
+//  2. FindChannelByName enumeration (O(N)) — the fallback. On success the result
+//     is written back to the cache so the next recreate is O(1). On a rate-limit
+//     failure mid-scan the error is rate-limit-specific (NOT a channels:read
+//     scope hint, which would be misleading). An empty result means the name is
+//     reserved by an archived channel (Slack's 30-day window).
+func resolveExistingChannelID(ctx context.Context, api SlackAPI, ssmStore SSMParamStore, slackPrefix, channelName string) (string, error) {
+	// 1. By-name cache.
+	if cachedID, _ := ssmStore.Get(ctx, slackChannelNameCacheKey(slackPrefix, channelName), false); cachedID != "" {
+		if _, _, infoErr := api.ChannelInfo(ctx, cachedID); infoErr == nil {
+			log.Debug().Str("channel", cachedID).Str("name", channelName).
+				Msg("reused Slack channel ID from by-name SSM cache (skipped conversations.list scan)")
+			return cachedID, nil
+		}
+		// Cache stale (channel deleted/renamed) — fall through to the scan.
+		log.Debug().Str("channel", cachedID).Str("name", channelName).
+			Msg("cached Slack channel ID no longer resolves; falling back to conversations.list scan")
+	}
+
+	// 2. Enumeration fallback.
+	existingID, lookupErr := api.FindChannelByName(ctx, channelName)
+	if lookupErr != nil {
+		var apierr *slack.SlackAPIError
+		if errors.As(lookupErr, &apierr) && apierr.Code == "ratelimited" {
+			return "", fmt.Errorf("channel #%s exists but resolving its ID timed out: Slack rate-limited conversations.list while scanning the workspace. "+
+				"Retry shortly, or set notification.slack.channelOverride to the channel ID: %w", channelName, lookupErr)
+		}
+		return "", fmt.Errorf("channel #%s exists (name_taken) but lookup via conversations.list failed: %w\n"+
+			"Either grant the bot the channels:read scope and retry, or pick a unique --alias / use notification.slack.channelOverride", channelName, lookupErr)
+	}
+	if existingID == "" {
+		return "", fmt.Errorf("channel name #%s is reserved (likely by an archived channel within Slack's 30-day window); pick a unique --alias or unarchive the existing channel", channelName)
+	}
+	// Persist so the next recreate skips the scan entirely.
+	cacheSlackChannelIDByName(ctx, ssmStore, slackPrefix, channelName, existingID)
+	return existingID, nil
 }
 
 // SSMRunner is a narrow interface for running shell commands on a sandbox
@@ -171,17 +278,19 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 		case nameTaken:
 			// Channel exists in Slack but isn't tracked here — typically because
 			// a prior create attempt for the same alias already created it (the
-			// failure mode km slack init also recovers from). Look up the existing
-			// channel and reuse rather than failing the whole sandbox provisioning.
-			existingID, lookupErr := api.FindChannelByName(ctx, channelName)
-			if lookupErr != nil {
-				return "", false, fmt.Errorf("channel #%s exists (name_taken) but lookup via conversations.list failed: %w\n"+
-					"Either grant the bot the channels:read scope and retry, or pick a unique --alias / use notifySlackChannelOverride", channelName, lookupErr)
-			}
-			if existingID == "" {
-				return "", false, fmt.Errorf("channel name #%s is reserved (likely by an archived channel within Slack's 30-day window); pick a unique --alias or unarchive the existing channel", channelName)
+			// failure mode km slack init also recovers from) and survived
+			// archiveOnDestroy:false. Resolve the existing channel and reuse
+			// rather than failing the whole sandbox provisioning.
+			existingID, resolveErr := resolveExistingChannelID(ctx, api, ssmStore, slackPrefix, channelName)
+			if resolveErr != nil {
+				return "", false, resolveErr
 			}
 			chID = existingID
+
+		default: // createErr == nil — fresh channel created.
+			// Cache the name→ID mapping so a future recreate with the same --alias
+			// hits the O(1) reuse path instead of enumerating every public channel.
+			cacheSlackChannelIDByName(ctx, ssmStore, slackPrefix, channelName, chID)
 		}
 
 		// Ensure the bot is in the channel. Required because:
