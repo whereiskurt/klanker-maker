@@ -124,6 +124,12 @@ type NotificationSlackSpec struct {
 	// ChannelOverride hard-pins notifications to a Slack channel ID
 	// (^C[A-Z0-9]+$). Mutually exclusive with PerSandbox=true. Empty = default.
 	ChannelOverride string `json:"channelOverride,omitempty" yaml:"channelOverride,omitempty"`
+	// ChannelName customizes the auto-created per-sandbox channel name (requires
+	// PerSandbox=true). Used verbatim (sanitized to Slack rules) with NO forced
+	// "sb-" prefix; supports {alias} and {id} token substitution. Empty = the
+	// default "sb-{alias}" / "sb-{id}" derivation. Mutually exclusive with
+	// ChannelOverride.
+	ChannelName string `json:"channelName,omitempty" yaml:"channelName,omitempty"`
 	// ArchiveOnDestroy archives the per-sandbox channel at km destroy. nil =
 	// default true. Only meaningful when PerSandbox=true.
 	ArchiveOnDestroy *bool `json:"archiveOnDestroy,omitempty" yaml:"archiveOnDestroy,omitempty"`

@@ -685,6 +685,10 @@
                   "pattern": "^C[A-Z0-9]+$",
                   "description": "Slack channel ID (must start with C) to hard-pin notifications. Mutually exclusive with perSandbox=true."
                 },
+                "channelName": {
+                  "type": "string",
+                  "description": "Custom name for the auto-created per-sandbox channel (requires perSandbox=true). Used verbatim (sanitized to Slack rules) with NO forced sb- prefix; supports {alias} and {id} token substitution. Empty = default sb-{alias}/sb-{id}. Mutually exclusive with channelOverride."
+                },
                 "archiveOnDestroy": {
                   "type": "boolean",
                   "description": "Archive the per-sandbox channel at km destroy. Default true. Only meaningful with perSandbox=true."

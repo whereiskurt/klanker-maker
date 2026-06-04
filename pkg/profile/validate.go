@@ -340,6 +340,24 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 			})
 		}
 
+		// Rule S3b: channelName is only meaningful for an auto-created per-sandbox
+		// channel, and conflicts with a pinned override channel.
+		if slack.ChannelName != "" {
+			if override != "" {
+				errs = append(errs, ValidationError{
+					Path:    "spec.notification.slack.channelName",
+					Message: "notification.slack.channelName and notification.slack.channelOverride are mutually exclusive — channelName names a NEW per-sandbox channel; channelOverride pins an existing one",
+				})
+			}
+			if !perSandbox {
+				errs = append(errs, ValidationError{
+					Path:      "spec.notification.slack.channelName",
+					Message:   "notification.slack.channelName is only meaningful when notification.slack.perSandbox: true",
+					IsWarning: true,
+				})
+			}
+		}
+
 		// Rule S4 (error): channel ID regex. Belt-and-suspenders with the JSON schema pattern.
 		if override != "" {
 			ok, _ := regexp.MatchString(`^C[A-Z0-9]+$`, override)

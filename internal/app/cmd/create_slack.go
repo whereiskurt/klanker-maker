@@ -155,23 +155,9 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 
 	// Mode 2 — per-sandbox: create a dedicated channel for this sandbox.
 	if sl.PerSandbox != nil && *sl.PerSandbox {
-		nameSeed := alias
-		if nameSeed == "" {
-			nameSeed = sandboxID
-		}
-		sanitized := sanitizeChannelName(nameSeed)
-		if sanitized == "" {
-			return "", false, fmt.Errorf("could not derive Slack channel name from alias/sandboxID %q", nameSeed)
-		}
-		// Always prefix per-sandbox channels with "sb-" to namespace them.
-		// This matches the #sb-{alias} or #sb-{id} naming from CONTEXT.md.
-		channelName := sanitized
-		if !strings.HasPrefix(channelName, "sb-") {
-			channelName = "sb-" + channelName
-		}
-		if len(channelName) > 80 {
-			channelName = channelName[:80]
-			channelName = strings.TrimRight(channelName, "-")
+		channelName, derr := deriveSandboxChannelName(sl.ChannelName, alias, sandboxID)
+		if derr != nil {
+			return "", false, derr
 		}
 
 		chID, createErr := api.CreateChannel(ctx, channelName)
@@ -321,6 +307,50 @@ func slackInviteResultWarn(res slack.EnsureMemberResult, err error, email, chann
 //   - Cap at 80 characters (trimming trailing hyphens after truncation).
 //
 // Returns "" for unrecoverable inputs (empty after sanitization).
+// deriveSandboxChannelName computes the per-sandbox Slack channel name.
+//
+//   - custom != "": operator-chosen name. {alias} and {id} tokens are substituted
+//     ({alias} falls back to the sandbox ID when no alias is set), then sanitized
+//     to Slack's rules and used VERBATIM — no forced "sb-" prefix (the operator
+//     owns namespacing).
+//   - custom == "": default derivation — sanitize(alias|id) force-prefixed with
+//     "sb-" so per-sandbox channels are namespaced (#sb-{alias} / #sb-{id}).
+//
+// The result is always trimmed to Slack's 80-character channel-name limit.
+func deriveSandboxChannelName(custom, alias, sandboxID string) (string, error) {
+	var name string
+	if custom != "" {
+		aliasTok := alias
+		if aliasTok == "" {
+			aliasTok = sandboxID
+		}
+		seed := strings.ReplaceAll(custom, "{alias}", aliasTok)
+		seed = strings.ReplaceAll(seed, "{id}", sandboxID)
+		name = sanitizeChannelName(seed)
+		if name == "" {
+			return "", fmt.Errorf("notification.slack.channelName %q sanitized to an empty channel name", custom)
+		}
+	} else {
+		seed := alias
+		if seed == "" {
+			seed = sandboxID
+		}
+		s := sanitizeChannelName(seed)
+		if s == "" {
+			return "", fmt.Errorf("could not derive Slack channel name from alias/sandboxID %q", seed)
+		}
+		name = s
+		if !strings.HasPrefix(name, "sb-") {
+			name = "sb-" + name
+		}
+	}
+	if len(name) > 80 {
+		name = name[:80]
+		name = strings.TrimRight(name, "-")
+	}
+	return name, nil
+}
+
 func sanitizeChannelName(s string) string {
 	s = strings.ToLower(s)
 	var b strings.Builder

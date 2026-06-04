@@ -186,6 +186,7 @@ func mergeNotificationSlackSpec(parent, child *NotificationSlackSpec) *Notificat
 		Enabled:          pickBoolPtr(parent.Enabled, child.Enabled),
 		PerSandbox:       pickBoolPtr(parent.PerSandbox, child.PerSandbox),
 		ChannelOverride:  pickString(parent.ChannelOverride, child.ChannelOverride),
+		ChannelName:      pickString(parent.ChannelName, child.ChannelName),
 		ArchiveOnDestroy: pickBoolPtr(parent.ArchiveOnDestroy, child.ArchiveOnDestroy),
 		Inbound:          mergeNotificationSlackInboundSpec(parent.Inbound, child.Inbound),
 		Transcript:       mergeNotificationSlackTranscriptSpec(parent.Transcript, child.Transcript),

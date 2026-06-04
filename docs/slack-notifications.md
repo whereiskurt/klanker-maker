@@ -50,10 +50,24 @@ Klanker provides Slack delivery alongside the existing email notification path:
 | Mode | When | Channel name | Lifecycle |
 |------|------|-------------|-----------|
 | **Shared (default)** | `notification.slack.enabled: true`, neither per-sandbox nor override set | `#km-notifications` (or the name set during `km slack init`) | Permanent; shared across all sandboxes |
-| **Per-sandbox** | `notification.slack.perSandbox: true` | `#sb-{sandbox-id}` (sanitized) | Created at `km create`; archived at `km destroy` when `notification.slack.archiveOnDestroy: true` |
+| **Per-sandbox** | `notification.slack.perSandbox: true` | `#sb-{alias}` (or `#sb-{sandbox-id}`), sanitized | Created at `km create`; archived at `km destroy` when `notification.slack.archiveOnDestroy: true` |
+| **Per-sandbox, custom name** | `notification.slack.perSandbox: true` + `notification.slack.channelName: <name>` | `<name>` verbatim (sanitized), **no `sb-` prefix**; `{alias}`/`{id}` tokens supported | Same lifecycle as per-sandbox |
 | **Override** | `notification.slack.channelOverride: "C..."` | Any existing channel the bot has been invited to | Unmanaged — operator is responsible for channel lifecycle |
 
 Modes are mutually exclusive: `notification.slack.perSandbox: true` and `notification.slack.channelOverride: <set>` at the same time is a validation error.
+
+**Custom per-sandbox channel name.** By default the per-sandbox channel is force-prefixed `sb-` (`#sb-{alias}`). Set `notification.slack.channelName` to choose your own name — used verbatim after sanitization (lowercase, non-`[a-z0-9_]`→`-`, ≤80 chars) with **no `sb-` prefix**, so you own the namespacing. It supports `{alias}` and `{id}` token substitution (`{alias}` falls back to the sandbox ID when no `--alias` is set):
+
+```yaml
+spec:
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
+      channelName: "proj-{alias}"   # → #proj-myml   (literal names work too: "acme-desktops")
+```
+
+`channelName` requires `perSandbox: true` (warning otherwise) and is mutually exclusive with `channelOverride` (error). The channel ID is persisted at `km create`, so archive/lookup on `km destroy` work regardless of the chosen name.
 
 ---
 
@@ -146,6 +160,7 @@ All new fields are under `spec.notification` (Phase 92; formerly `spec.cli`). Al
 | `notification.slack.enabled` | `bool*` | `false` | Enable Slack delivery for events already gated by `notification.events.onPermission` / `notification.events.onIdle`. |
 | `notification.slack.perSandbox` | `bool*` | `false` | Create `#sb-{sandbox-id}` at `km create`; archive at `km destroy`. Ignored when `notification.slack.enabled` is false. |
 | `notification.slack.channelOverride` | `string` | `""` | Hard-pin notifications to an existing Slack channel ID (format: `^C[A-Z0-9]+$`). Overrides both shared and per-sandbox modes. The bot must be a member. |
+| `notification.slack.channelName` | `string` | `""` | Custom name for the auto-created per-sandbox channel (requires `perSandbox: true`). Verbatim (sanitized), no `sb-` prefix; supports `{alias}`/`{id}` tokens. Empty = default `sb-{alias}`. Mutually exclusive with `channelOverride`. |
 | `notification.slack.archiveOnDestroy` | `bool*` | `true` | Per-sandbox channels only. Set `false` to preserve the channel and its history after `km destroy`. |
 
 `bool*` indicates the field is a pointer (`*bool`) in the schema, allowing three states: unset (nil → default), `true`, `false`. Omitting the field is different from `false` for `notification.email.enabled` (omit = email on; `false` = email off).
@@ -162,6 +177,8 @@ All new fields are under `spec.notification` (Phase 92; formerly `spec.cli`). Al
 | Dead per-sandbox | `notification.slack.perSandbox: true` AND `notification.slack.enabled: false` | Warning | "slack.perSandbox has no effect when slack.enabled is false" |
 | Dead archive | `notification.slack.archiveOnDestroy` set AND `notification.slack.perSandbox: false` | Warning | "slack.archiveOnDestroy has no effect unless slack.perSandbox is true" |
 | Channel ID format | `notification.slack.channelOverride` does not match `^C[A-Z0-9]+$` | **Error** | "slack.channelOverride must match C[A-Z0-9]+" |
+| channelName + override | `notification.slack.channelName` AND `notification.slack.channelOverride` both set | **Error** | "channelName and channelOverride are mutually exclusive" |
+| Dead channelName | `notification.slack.channelName` set AND `notification.slack.perSandbox: false` | Warning | "channelName is only meaningful when perSandbox: true" |
 | No delivery channel | `notification.slack.enabled: true` AND all three mode fields absent/false/empty AND shared channel not provisioned | Warning | "slack.enabled is true but no delivery channel configured" |
 
 ---

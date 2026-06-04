@@ -817,6 +817,52 @@ func TestValidateSemantic_Slack_PerSandboxAndOverride_Error(t *testing.T) {
 	}
 }
 
+// TestValidateSemantic_Slack_ChannelNameAndOverride_Error verifies that
+// slack.channelName together with slack.channelOverride is a hard error.
+func TestValidateSemantic_Slack_ChannelNameAndOverride_Error(t *testing.T) {
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			ChannelName:     "acme-desktops",
+			ChannelOverride: "CABC123",
+		},
+	})
+	errs := profile.ValidateSemantic(p)
+	found := false
+	for _, e := range errs {
+		if !e.IsWarning && strings.Contains(e.Message, "channelName") && strings.Contains(e.Message, "mutually exclusive") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected non-warning 'channelName ... mutually exclusive' error, got: %v", errs)
+	}
+}
+
+// TestValidateSemantic_Slack_ChannelNameWithoutPerSandbox_Warning verifies that
+// slack.channelName without perSandbox=true is a warning (no-op).
+func TestValidateSemantic_Slack_ChannelNameWithoutPerSandbox_Warning(t *testing.T) {
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:     boolPtr(true),
+			ChannelName: "acme-desktops",
+		},
+	})
+	errs := profile.ValidateSemantic(p)
+	found := false
+	for _, e := range errs {
+		if e.IsWarning && strings.Contains(e.Message, "channelName") {
+			found = true
+		}
+		if !e.IsWarning {
+			t.Errorf("expected only warnings for channelName-without-perSandbox, got hard error: %s", e.Error())
+		}
+	}
+	if !found {
+		t.Errorf("expected IsWarning with 'channelName' message, got: %v", errs)
+	}
+}
+
 // TestValidateSemantic_Slack_PerSandboxWithoutSlackEnabled_Warning verifies that
 // slack.perSandbox=true with slack.enabled=&false is a warning (not error).
 func TestValidateSemantic_Slack_PerSandboxWithoutSlackEnabled_Warning(t *testing.T) {
