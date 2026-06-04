@@ -29,6 +29,8 @@ spec:
       # (chrome = Google Chrome; chromium = open-source build; both are distinct.)
       browsers:
         - firefox
+        - chrome
+        - brave
       geometry: 1920x1080
 
     substrate: ec2
