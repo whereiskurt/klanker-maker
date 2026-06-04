@@ -2130,3 +2130,13 @@ Plans:
 - [ ] 93-05-PLAN.md — km desktop start/status CLI (mirrors km vscode) (DSK-09, DSK-10)
 - [ ] 93-06-PLAN.md — profiles/desktop.yaml + inventory gate + klanker:desktop skill + docs (DSK-12, DSK-13, DSK-14)
 - [ ] 93-07-PLAN.md — Phase gate + operator live UAT checkpoint (DSK-15)
+
+### Phase 94: km doctor leaked per-sandbox debris cleanup (log groups, DDB rows, S3 lifecycle)
+
+**Goal:** Teach `km doctor` to detect, reclaim, and prevent the orphaned per-sandbox debris that teardown leaves behind — found in a live crawl as ~271 retention-less CloudWatch log groups (`/aws/lambda/{prefix}-budget-enforcer-{id}`, `/aws/lambda/{prefix}-github-token-refresher-{id}`, the per-sandbox sandbox log-group family), leaked DynamoDB rows (`{prefix}-budgets` per-sandbox rows, `-identities`, `-slack-threads`, `status=failed` `-sandboxes` rows), and an artifacts S3 bucket with no lifecycle expiry on transient prefixes (`logs/`, `remote-create/`, `agent-runs/`, `slack-inbound/`). Three new checks follow the established `checkStale*`/`checkOrphaned*` contract (list → group by sandbox-id → diff against `SandboxLister` active set → WARN with hint → reclaim only under `--dry-run=false --delete-X`): `checkStaleLogGroups` (`doctor_log_groups.go`, `--delete-logs` + `--set-log-retention` guardrail), `checkOrphanedDDBRows` (`doctor_ddb_rows.go`, `--delete-ddb-rows`, preserving AI-model `BUDGET#ai#` rows and guarding in-flight creates), and `checkS3LifecyclePolicy` (extends `doctor_artifacts.go`, `--set-s3-lifecycle` guardrail). Two config knobs `doctor_log_retention_days` / `doctor_s3_expire_days` (default 30) via the five-touchpoint pattern. Operator-side binary change only — no Lambda/terragrunt deploy. Out of scope: orphan EBS snapshots (manual operator backups). Design spec: `docs/superpowers/specs/2026-06-04-km-doctor-debris-cleanup-design.md`.
+**Requirements**: TBD (derived during /gsd:plan-phase)
+**Depends on:** Phase 93
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 94 to break down)
