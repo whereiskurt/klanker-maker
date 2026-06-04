@@ -149,30 +149,35 @@ func TestDeriveSandboxChannelName(t *testing.T) {
 	cases := []struct {
 		name    string
 		custom  string
+		profile string
 		alias   string
 		id      string
 		want    string
 		wantErr bool
 	}{
 		// Default derivation: sb- prefix forced.
-		{name: "default_with_alias", custom: "", alias: "myml", id: "sb-abc123", want: "sb-myml"},
-		{name: "default_no_alias_uses_id", custom: "", alias: "", id: "sb-abc123", want: "sb-abc123"},
-		{name: "default_alias_with_dots", custom: "", alias: "my.box.1", id: "sb-x", want: "sb-my-box-1"},
+		{name: "default_with_alias", custom: "", profile: "desktop", alias: "myml", id: "sb-abc123", want: "sb-myml"},
+		{name: "default_no_alias_uses_id", custom: "", profile: "desktop", alias: "", id: "sb-abc123", want: "sb-abc123"},
+		{name: "default_alias_with_dots", custom: "", profile: "desktop", alias: "my.box.1", id: "sb-x", want: "sb-my-box-1"},
 		// Custom name: verbatim, NO sb- prefix.
-		{name: "custom_literal", custom: "acme-desktops", alias: "myml", id: "sb-x", want: "acme-desktops"},
-		{name: "custom_no_forced_prefix", custom: "team", alias: "myml", id: "sb-x", want: "team"},
+		{name: "custom_literal", custom: "acme-desktops", profile: "desktop", alias: "myml", id: "sb-x", want: "acme-desktops"},
+		{name: "custom_no_forced_prefix", custom: "team", profile: "desktop", alias: "myml", id: "sb-x", want: "team"},
 		// Token substitution.
-		{name: "custom_alias_token", custom: "proj-{alias}", alias: "myml", id: "sb-x", want: "proj-myml"},
-		{name: "custom_id_token", custom: "box-{id}", alias: "myml", id: "sb-abc123", want: "box-sb-abc123"},
-		{name: "custom_alias_token_falls_back_to_id", custom: "proj-{alias}", alias: "", id: "sb-abc", want: "proj-sb-abc"},
+		{name: "custom_alias_token", custom: "proj-{alias}", profile: "desktop", alias: "myml", id: "sb-x", want: "proj-myml"},
+		{name: "custom_id_token", custom: "box-{id}", profile: "desktop", alias: "myml", id: "sb-abc123", want: "box-sb-abc123"},
+		{name: "custom_alias_token_falls_back_to_id", custom: "proj-{alias}", profile: "desktop", alias: "", id: "sb-abc", want: "proj-sb-abc"},
+		// {profile} token (the shipped default scheme).
+		{name: "custom_profile_alias", custom: "sb-{profile}-{alias}", profile: "desktop", alias: "myml", id: "sb-x", want: "sb-desktop-myml"},
+		{name: "custom_profile_alias_falls_back_to_id", custom: "sb-{profile}-{alias}", profile: "learn.v2", alias: "", id: "sb-abc", want: "sb-learn-v2-sb-abc"},
+		{name: "custom_profile_only", custom: "sb-{profile}", profile: "Learn V2", alias: "x", id: "sb-x", want: "sb-learn-v2"},
 		// Sanitization of custom names (spaces/case/symbols → hyphens/lowercase).
-		{name: "custom_sanitized", custom: "Acme Team!!", alias: "x", id: "sb-x", want: "acme-team"},
+		{name: "custom_sanitized", custom: "Acme Team!!", profile: "desktop", alias: "x", id: "sb-x", want: "acme-team"},
 		// Empty sanitized custom → error.
-		{name: "custom_all_symbols_errors", custom: "@@@", alias: "x", id: "sb-x", wantErr: true},
+		{name: "custom_all_symbols_errors", custom: "@@@", profile: "desktop", alias: "x", id: "sb-x", wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := deriveSandboxChannelName(tc.custom, tc.alias, tc.id)
+			got, err := deriveSandboxChannelName(tc.custom, tc.profile, tc.alias, tc.id)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error for custom=%q, got name %q", tc.custom, got)
@@ -183,7 +188,7 @@ func TestDeriveSandboxChannelName(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if got != tc.want {
-				t.Errorf("deriveSandboxChannelName(%q,%q,%q) = %q; want %q", tc.custom, tc.alias, tc.id, got, tc.want)
+				t.Errorf("deriveSandboxChannelName(%q,%q,%q,%q) = %q; want %q", tc.custom, tc.profile, tc.alias, tc.id, got, tc.want)
 			}
 		})
 	}

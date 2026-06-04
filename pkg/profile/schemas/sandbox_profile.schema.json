@@ -687,7 +687,7 @@
                 },
                 "channelName": {
                   "type": "string",
-                  "description": "Custom name for the auto-created per-sandbox channel (requires perSandbox=true). Used verbatim (sanitized to Slack rules) with NO forced sb- prefix; supports {alias} and {id} token substitution. Empty = default sb-{alias}/sb-{id}. Mutually exclusive with channelOverride."
+                  "description": "Custom name for the auto-created per-sandbox channel (requires perSandbox=true). Used verbatim (sanitized to Slack rules) with NO forced sb- prefix; supports {profile} (metadata.name), {alias}, and {id} token substitution. Empty = default sb-{alias}/sb-{id}. Mutually exclusive with channelOverride."
                 },
                 "archiveOnDestroy": {
                   "type": "boolean",

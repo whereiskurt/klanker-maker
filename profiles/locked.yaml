@@ -213,6 +213,9 @@ spec:
     slack:
       enabled: false
       # perSandbox: true
+      # # Channel named after the profile, unique per sandbox. {profile}=metadata.name,
+      # # {alias}=--alias (falls back to sandbox id). Omit for the default #sb-{alias}.
+      # channelName: "sb-{profile}-{alias}"
       # archiveOnDestroy: false
       # inbound:
       #   enabled: true

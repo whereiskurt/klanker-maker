@@ -155,7 +155,7 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 
 	// Mode 2 — per-sandbox: create a dedicated channel for this sandbox.
 	if sl.PerSandbox != nil && *sl.PerSandbox {
-		channelName, derr := deriveSandboxChannelName(sl.ChannelName, alias, sandboxID)
+		channelName, derr := deriveSandboxChannelName(sl.ChannelName, p.Metadata.Name, alias, sandboxID)
 		if derr != nil {
 			return "", false, derr
 		}
@@ -309,22 +309,23 @@ func slackInviteResultWarn(res slack.EnsureMemberResult, err error, email, chann
 // Returns "" for unrecoverable inputs (empty after sanitization).
 // deriveSandboxChannelName computes the per-sandbox Slack channel name.
 //
-//   - custom != "": operator-chosen name. {alias} and {id} tokens are substituted
-//     ({alias} falls back to the sandbox ID when no alias is set), then sanitized
-//     to Slack's rules and used VERBATIM — no forced "sb-" prefix (the operator
-//     owns namespacing).
+//   - custom != "": operator-chosen name. {profile}, {alias}, and {id} tokens are
+//     substituted ({profile} = the profile's metadata.name; {alias} falls back to
+//     the sandbox ID when no alias is set), then sanitized to Slack's rules and
+//     used VERBATIM — no forced "sb-" prefix (the operator owns namespacing).
 //   - custom == "": default derivation — sanitize(alias|id) force-prefixed with
 //     "sb-" so per-sandbox channels are namespaced (#sb-{alias} / #sb-{id}).
 //
 // The result is always trimmed to Slack's 80-character channel-name limit.
-func deriveSandboxChannelName(custom, alias, sandboxID string) (string, error) {
+func deriveSandboxChannelName(custom, profileName, alias, sandboxID string) (string, error) {
 	var name string
 	if custom != "" {
 		aliasTok := alias
 		if aliasTok == "" {
 			aliasTok = sandboxID
 		}
-		seed := strings.ReplaceAll(custom, "{alias}", aliasTok)
+		seed := strings.ReplaceAll(custom, "{profile}", profileName)
+		seed = strings.ReplaceAll(seed, "{alias}", aliasTok)
 		seed = strings.ReplaceAll(seed, "{id}", sandboxID)
 		name = sanitizeChannelName(seed)
 		if name == "" {
