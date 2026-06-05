@@ -3197,6 +3197,18 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkOrphanedArtifacts(ctx, transcriptS3, transcriptBucket, listSandboxIDs, dryRun, deps.DeleteS3)
 	})
 
+	// Phase 94: S3 lifecycle expiry guardrail for transient prefixes
+	// (logs/, remote-create/, agent-runs/, slack-inbound/). WARNs when any
+	// transient prefix lacks an expiry rule; installs merge-preserving rules
+	// under --set-s3-lifecycle (explicit opt-in, excluded from --with-deletes).
+	s3Lifecycle := deps.S3LifecycleClient
+	s3LifecycleBucket := cfg.GetArtifactsBucket()
+	setS3Lifecycle := deps.SetS3Lifecycle
+	s3ExpireDays := int32(cfg.GetDoctorS3ExpireDays())
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkS3LifecyclePolicy(ctx, s3Lifecycle, s3LifecycleBucket, s3ExpireDays, dryRun, setS3Lifecycle)
+	})
+
 	// Phase 79: km-presence daemon liveness check. Demote ERROR to WARN —
 	// a stale presence daemon is a warning, not a hard platform failure
 	// (matches the Slack inbound check pattern). The check is SKIPPED when
