@@ -114,25 +114,66 @@ func (e *SlackAPIError) Error() string {
 // users.info). Returns the parsed SlackAPIResponse and a *SlackAPIError on
 // non-OK responses.
 func (c *Client) callForm(ctx context.Context, method string, form url.Values) (*SlackAPIResponse, error) {
-	var rdr io.Reader
+	var encoded string
 	if form != nil {
-		rdr = strings.NewReader(form.Encode())
+		encoded = form.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/"+method, rdr)
+	newReq := func() (*http.Request, error) {
+		var rdr io.Reader
+		if form != nil {
+			rdr = strings.NewReader(encoded)
+		}
+		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/"+method, rdr)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.botToken)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+		return req, nil
+	}
+	raw, err := c.callRaw(ctx, method, newReq)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.botToken)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+	return decodeSlackResponse(method, raw)
+}
 
-	resp, err := c.httpClient.Do(req)
+// callJSON is the shared JSON-body method dispatcher.
+func (c *Client) callJSON(ctx context.Context, method string, body any) (*SlackAPIResponse, error) {
+	var payload []byte
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("slack: marshal %s: %w", method, err)
+		}
+		payload = b
+	}
+	newReq := func() (*http.Request, error) {
+		var rdr io.Reader
+		if payload != nil {
+			rdr = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/"+method, rdr)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.botToken)
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+		return req, nil
+	}
+	raw, err := c.callRaw(ctx, method, newReq)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	return decodeSlackResponse(method, raw)
+}
 
+// decodeSlackResponse parses the standard {ok,error,...} envelope and converts a
+// non-OK body into a *SlackAPIError, preserving the decoded response so callers
+// that inspect typed misses (e.g. users_not_found) keep working.
+func decodeSlackResponse(method string, raw []byte) (*SlackAPIResponse, error) {
 	var apiResp SlackAPIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.Unmarshal(raw, &apiResp); err != nil {
 		return nil, fmt.Errorf("slack: decode %s: %w", method, err)
 	}
 	if !apiResp.OK {
@@ -141,37 +182,108 @@ func (c *Client) callForm(ctx context.Context, method string, form url.Values) (
 	return &apiResp, nil
 }
 
-// callJSON is the shared JSON-body method dispatcher.
-func (c *Client) callJSON(ctx context.Context, method string, body any) (*SlackAPIResponse, error) {
-	var rdr io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
+// Rate-limit handling for Slack Web API methods.
+//
+// Slack throttles per-method (Tier 1–4) and throttles non-Marketplace apps
+// harder still. conversations.list (Tier 2) is the painful one: enumerating a
+// large workspace (thousands of channels, many pages) drains the per-minute
+// budget and Slack starts answering with HTTP 429 — or, for some tiered methods,
+// an HTTP 200 body carrying ok:false, error:"ratelimited". Before this handling
+// the very first throttled page aborted the whole scan (see FindChannelByName).
+//
+// These knobs bound the retry so a wedged call can never blow the Lambda
+// timeout. Exposed (like BridgeBackoff) so tests can shrink them.
+var (
+	// SlackRateLimitMaxAttempts is the total attempt count (initial + retries)
+	// for a rate-limited Slack call.
+	SlackRateLimitMaxAttempts = 3
+	// SlackRetryAfterCap caps how long a single Retry-After sleep may be. Slack
+	// can advise tens of seconds; we never sleep longer than this to stay
+	// Lambda-safe.
+	SlackRetryAfterCap = 30 * time.Second
+	// SlackRetryAfterDefault is used when a 429/ratelimited response carries no
+	// usable Retry-After header.
+	SlackRetryAfterDefault = time.Second
+)
+
+// slackSleep performs the inter-attempt sleep, honoring ctx so a cancelled
+// context aborts promptly. Package-level so tests can swap it for a no-op.
+var slackSleep = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// callRaw sends a freshly-built request (via newReq) and returns the response
+// body bytes, retrying on Slack rate-limiting (HTTP 429, or ok:false
+// error:"ratelimited") up to SlackRateLimitMaxAttempts with a Retry-After-aware,
+// capped backoff. ctx is honored during sleeps. A fresh request is built per
+// attempt because the body reader is consumed on each send.
+//
+// On exhausted retries it returns a *SlackAPIError{Code:"ratelimited"} so
+// callers can detect the rate-limit case (and avoid emitting misleading
+// "grant channels:read" guidance).
+func (c *Client) callRaw(ctx context.Context, method string, newReq func() (*http.Request, error)) ([]byte, error) {
+	for attempt := 0; ; attempt++ {
+		req, err := newReq()
 		if err != nil {
-			return nil, fmt.Errorf("slack: marshal %s: %w", method, err)
+			return nil, err
 		}
-		rdr = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/"+method, rdr)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.botToken)
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("slack: read %s: %w", method, readErr)
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
+		if !isSlackRateLimited(resp.StatusCode, body) {
+			return body, nil
+		}
+		if attempt >= SlackRateLimitMaxAttempts-1 {
+			return nil, &SlackAPIError{Method: method, Code: "ratelimited"}
+		}
+		if err := slackSleep(ctx, retryAfterDelay(resp.Header.Get("Retry-After"))); err != nil {
+			return nil, err
+		}
 	}
-	defer resp.Body.Close()
+}
 
-	var apiResp SlackAPIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return nil, fmt.Errorf("slack: decode %s: %w", method, err)
+// isSlackRateLimited reports whether a response indicates Slack rate-limiting,
+// covering both the HTTP 429 signal and the ok:false/error:"ratelimited" body
+// some tiered methods return with a 200 status.
+func isSlackRateLimited(status int, body []byte) bool {
+	if status == http.StatusTooManyRequests {
+		return true
 	}
-	if !apiResp.OK {
-		return &apiResp, &SlackAPIError{Method: method, Code: apiResp.Error}
+	var probe struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
 	}
-	return &apiResp, nil
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false
+	}
+	return !probe.OK && probe.Error == "ratelimited"
+}
+
+// retryAfterDelay parses a Retry-After header (seconds) into a capped backoff,
+// falling back to SlackRetryAfterDefault when absent or unparseable.
+func retryAfterDelay(header string) time.Duration {
+	d := SlackRetryAfterDefault
+	if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs > 0 {
+		d = time.Duration(secs) * time.Second
+	}
+	if d > SlackRetryAfterCap {
+		d = SlackRetryAfterCap
+	}
+	return d
 }
 
 // AuthTest validates the bot token. Used by km slack init and km doctor.
@@ -217,27 +329,28 @@ func (c *Client) AuthTestWithUserID(ctx context.Context) (string, error) {
 // Transport and non-2xx HTTP errors are returned as errors; Slack ok=false is
 // NOT checked here — callers decode and check the ok field themselves.
 func (c *Client) callJSONRaw(ctx context.Context, method string, body any) ([]byte, error) {
-	var rdr io.Reader
+	var payload []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("slack: marshal %s: %w", method, err)
 		}
-		rdr = bytes.NewReader(b)
+		payload = b
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/"+method, rdr)
-	if err != nil {
-		return nil, err
+	newReq := func() (*http.Request, error) {
+		var rdr io.Reader
+		if payload != nil {
+			rdr = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/"+method, rdr)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.botToken)
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+		return req, nil
 	}
-	req.Header.Set("Authorization", "Bearer "+c.botToken)
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	return c.callRaw(ctx, method, newReq)
 }
 
 // PostMessage posts to channel with the bold-header format from CONTEXT.md.
@@ -493,8 +606,13 @@ func (c *Client) FindChannelByName(ctx context.Context, name string) (string, er
 	cursor := ""
 	for {
 		body := map[string]any{
-			"types":            "public_channel",
-			"limit":            200, // Slack max 1000; 200 keeps each page fast
+			"types": "public_channel",
+			// Slack max page size. conversations.list returns channels in roughly
+			// creation order, so a freshly-created per-sandbox channel sorts LAST —
+			// the scan may have to walk EVERY page to find it. Use the max page
+			// size (1000, not 200) to minimise the number of Tier-2 calls and the
+			// rate-limit exposure; callRaw backs off if Slack throttles anyway.
+			"limit":            1000,
 			"exclude_archived": true,
 		}
 		if cursor != "" {

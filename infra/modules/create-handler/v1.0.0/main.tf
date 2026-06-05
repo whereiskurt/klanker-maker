@@ -38,8 +38,8 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
         Resource = [
           "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${var.resource_prefix}-*",
           "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${var.resource_prefix}-*:*",
-          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/km/sandboxes/*",
-          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/km/sandboxes/*:*",
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/${var.resource_prefix}/sandboxes/*",
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/${var.resource_prefix}/sandboxes/*:*",
         ]
       },
       {

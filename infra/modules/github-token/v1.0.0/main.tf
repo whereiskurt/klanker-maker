@@ -11,7 +11,7 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 resource "aws_kms_key" "github_token" {
-  description             = "KMS key for km-github-token-refresher-${var.sandbox_id} SSM SecureString encryption"
+  description             = "KMS key for ${var.resource_prefix}-github-token-refresher-${var.sandbox_id} SSM SecureString encryption"
   enable_key_rotation     = true
   deletion_window_in_days = 7
 
@@ -156,7 +156,7 @@ resource "aws_lambda_function" "github_token_refresher" {
 
 # CloudWatch Log Group for Lambda logs (30-day retention)
 resource "aws_cloudwatch_log_group" "github_token_refresher" {
-  name              = "/aws/lambda/km-github-token-refresher-${var.sandbox_id}"
+  name              = "/aws/lambda/${var.resource_prefix}-github-token-refresher-${var.sandbox_id}"
   retention_in_days = 30
 
   tags = {

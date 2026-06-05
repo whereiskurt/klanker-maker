@@ -174,6 +174,37 @@ type SESGetEmailIdentityAPI interface {
 	GetEmailIdentity(ctx context.Context, params *sesv2.GetEmailIdentityInput, optFns ...func(*sesv2.Options)) (*sesv2.GetEmailIdentityOutput, error)
 }
 
+// CWLogsCleanupAPI covers CloudWatch Logs operations for doctor_log_groups.go.
+// The real *cloudwatchlogs.Client satisfies this interface.
+type CWLogsCleanupAPI interface {
+	DescribeLogGroups(ctx context.Context, input *cloudwatchlogs.DescribeLogGroupsInput,
+		optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogGroupsOutput, error)
+	DeleteLogGroup(ctx context.Context, input *cloudwatchlogs.DeleteLogGroupInput,
+		optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DeleteLogGroupOutput, error)
+	PutRetentionPolicy(ctx context.Context, input *cloudwatchlogs.PutRetentionPolicyInput,
+		optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutRetentionPolicyOutput, error)
+}
+
+// DDBScanDeleteAPI covers DynamoDB operations for doctor_ddb_rows.go.
+// The real *dynamodb.Client satisfies this interface.
+type DDBScanDeleteAPI interface {
+	Scan(ctx context.Context, input *dynamodb.ScanInput,
+		optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
+	DeleteItem(ctx context.Context, input *dynamodb.DeleteItemInput,
+		optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
+	BatchWriteItem(ctx context.Context, input *dynamodb.BatchWriteItemInput,
+		optFns ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error)
+}
+
+// S3LifecycleAPI covers S3 lifecycle operations for checkS3LifecyclePolicy.
+// The real *s3.Client satisfies this interface.
+type S3LifecycleAPI interface {
+	GetBucketLifecycleConfiguration(ctx context.Context, input *s3.GetBucketLifecycleConfigurationInput,
+		optFns ...func(*s3.Options)) (*s3.GetBucketLifecycleConfigurationOutput, error)
+	PutBucketLifecycleConfiguration(ctx context.Context, input *s3.PutBucketLifecycleConfigurationInput,
+		optFns ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error)
+}
+
 // DoctorConfigProvider abstracts config fields consumed by doctor checks.
 // Both *config.Config (production) and test stubs implement this interface.
 type DoctorConfigProvider interface {
@@ -196,6 +227,13 @@ type DoctorConfigProvider interface {
 	// GetDoctorStaleAMIDays returns the threshold in days for the stale-AMI check.
 	// Default is 30 (set in Config.DoctorStaleAMIDays by Plan 02).
 	GetDoctorStaleAMIDays() int
+	// GetDoctorLogRetentionDays returns the retention period in days applied by
+	// --set-log-retention to CloudWatch log groups lacking a retention policy.
+	// Default is 30 (km-config.yaml key: doctor_log_retention_days).
+	GetDoctorLogRetentionDays() int
+	// GetDoctorS3ExpireDays returns the expiry period in days used by --set-s3-lifecycle
+	// to expire transient artifact prefixes. Default is 30 (km-config.yaml key: doctor_s3_expire_days).
+	GetDoctorS3ExpireDays() int
 	// GetProfileSearchPaths returns the list of directories searched for profile YAML files.
 	// Used by checkStaleAMIs to skip AMIs that are still referenced by a profile.
 	GetProfileSearchPaths() []string
@@ -239,6 +277,8 @@ func (a *appConfigAdapter) GetIdentityTableName() string     { return a.cfg.Iden
 func (a *appConfigAdapter) GetAWSProfile() string            { return a.cfg.AWSProfile }
 func (a *appConfigAdapter) GetArtifactsBucket() string       { return a.cfg.ArtifactsBucket }
 func (a *appConfigAdapter) GetDoctorStaleAMIDays() int       { return a.cfg.DoctorStaleAMIDays }
+func (a *appConfigAdapter) GetDoctorLogRetentionDays() int   { return a.cfg.DoctorLogRetentionDays }
+func (a *appConfigAdapter) GetDoctorS3ExpireDays() int       { return a.cfg.DoctorS3ExpireDays }
 func (a *appConfigAdapter) GetProfileSearchPaths() []string  { return a.cfg.ProfileSearchPaths }
 func (a *appConfigAdapter) GetSlackStreamMessagesTableName() string {
 	return a.cfg.GetSlackStreamMessagesTableName()
@@ -433,6 +473,29 @@ type DoctorDeps struct {
 	// CodexFetchProfile returns the parsed SandboxProfile for a given sandbox ID.
 	// Wraps downloadProfileFromS3 + profile.Parse in production.
 	CodexFetchProfile ProfileFetcherFunc
+
+	// Phase 94 — leaked-debris cleanup clients.
+	// CWLogsCleanupClient is used by checkStaleLogGroups to enumerate and delete orphaned
+	// per-sandbox CloudWatch log groups and to apply --set-log-retention policies.
+	// Nil causes the check to be skipped.
+	CWLogsCleanupClient CWLogsCleanupAPI
+	// DDBScanDeleteClient is used by checkOrphanedDDBRows to scan and delete orphaned rows
+	// in the budgets/identities/slack-threads/sandboxes tables. Nil = skipped.
+	DDBScanDeleteClient DDBScanDeleteAPI
+	// S3LifecycleClient is used by checkS3LifecyclePolicy to inspect and update the
+	// lifecycle configuration on the artifacts bucket. Nil = skipped.
+	S3LifecycleClient S3LifecycleAPI
+	// Phase 94 — deletion / guardrail opt-ins (honored only with DryRun=false).
+	// DeleteLogs opts checkStaleLogGroups into deleting orphaned log groups.
+	DeleteLogs bool
+	// DeleteDDBRows opts checkOrphanedDDBRows into deleting orphaned DDB rows.
+	DeleteDDBRows bool
+	// SetLogRetention opts checkStaleLogGroups into applying a retention policy to log
+	// groups that currently have none. Idempotent no-op if already set.
+	SetLogRetention bool
+	// SetS3Lifecycle opts checkS3LifecyclePolicy into installing an S3 lifecycle rule
+	// expiring transient artifact prefixes. Idempotent; preserves unrelated rules.
+	SetS3Lifecycle bool
 }
 
 // =============================================================================
@@ -2332,6 +2395,10 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var deleteSSH bool
 	var deleteSSM bool
 	var deleteStateDigests bool
+	var deleteLogs bool
+	var deleteDDBRows bool
+	var setLogRetention bool
+	var setS3Lifecycle bool
 	var withDeletes bool
 	var backfillTags bool
 	var ignorePrefixes []string
@@ -2391,8 +2458,12 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 				deleteSSH = true
 				deleteSSM = true
 				deleteStateDigests = true
+				// Phase 94: --with-deletes implies the two delete flags only.
+				// Guardrail flags (setLogRetention, setS3Lifecycle) stay explicit opt-in.
+				deleteLogs = true
+				deleteDDBRows = true
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests, ignorePrefixes)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests, deleteLogs, deleteDDBRows, setLogRetention, setS3Lifecycle, ignorePrefixes)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
@@ -2415,8 +2486,21 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"With --dry-run=false, delete per-sandbox SSM parameters (signing-key, encryption-key, safe-phrase, github-token) whose sandbox row is gone from DynamoDB. Explicit opt-in required because these parameters contain cryptographic secrets.")
 	cmd.Flags().BoolVar(&deleteStateDigests, "delete-state-digests", false,
 		"With --dry-run=false, delete orphan DDB lock rows where the S3 state object is definitively gone (HeadObject returns NotFound). Generic errors — network, 5xx, throttling — NEVER trigger deletion (logged as 'could not verify'). Live S3 + stale MD5 mismatches are reported but NEVER deleted by this flag.")
+	// Phase 94 flags.
+	cmd.Flags().BoolVar(&deleteLogs, "delete-logs", false,
+		"With --dry-run=false, delete orphaned CloudWatch log groups for destroyed sandboxes "+
+			"(budget-enforcer, github-token-refresher, and sandbox audit-log groups). Implied by --with-deletes.")
+	cmd.Flags().BoolVar(&deleteDDBRows, "delete-ddb-rows", false,
+		"With --dry-run=false, delete DynamoDB rows in budgets/identities/slack-threads for "+
+			"sandboxes whose record is gone from km-sandboxes, and status=failed rows in km-sandboxes. Implied by --with-deletes.")
+	cmd.Flags().BoolVar(&setLogRetention, "set-log-retention", false,
+		"With --dry-run=false, set a retention policy (default 30 days, configurable via doctor_log_retention_days in km-config.yaml) on management and "+
+			"sandbox log groups that currently have no retention. Idempotent no-op if already set.")
+	cmd.Flags().BoolVar(&setS3Lifecycle, "set-s3-lifecycle", false,
+		"With --dry-run=false, install an S3 lifecycle rule expiring transient artifact "+
+			"prefixes (logs/, remote-create/, agent-runs/, slack-inbound/) after N days (default 30, configurable via doctor_s3_expire_days). Idempotent; preserves unrelated rules.")
 	cmd.Flags().BoolVar(&withDeletes, "with-deletes", false,
-		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh --delete-ssm --delete-state-digests. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
+		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh --delete-ssm --delete-state-digests --delete-logs --delete-ddb-rows. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
 	cmd.Flags().BoolVar(&backfillTags, "backfill-tags", false,
 		"Retrofit km:resource-prefix tag onto pre-Phase-82 resources. Uses tag:GetResources(km:sandbox-id=*) filtered by this install's DDB sandbox table. Default --dry-run=true — pass --dry-run=false to apply.")
 	cmd.Flags().StringSliceVar(&ignorePrefixes, "ignore-prefix", nil,
@@ -2425,7 +2509,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests bool, ignorePrefixes []string) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests, deleteLogs, deleteDDBRows, setLogRetention, setS3Lifecycle bool, ignorePrefixes []string) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -2457,6 +2541,11 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	deps.DeleteSSH = deleteSSH
 	deps.DeleteSSM = deleteSSM
 	deps.DeleteStateDigests = deleteStateDigests
+	// Phase 94 — leaked-debris cleanup flags.
+	deps.DeleteLogs = deleteLogs
+	deps.DeleteDDBRows = deleteDDBRows
+	deps.SetLogRetention = setLogRetention
+	deps.SetS3Lifecycle = setS3Lifecycle
 
 	// Merge ignore-prefixes: km-config.yaml doctor_ignore_prefixes + --ignore-prefix
 	// flag, minus the local prefix (never ignore yourself). Preserves any value a
@@ -2863,6 +2952,44 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkStaleSSMParameters(ctx, ssmReaderForCleanup, ssmDeleterForCleanup, listerForCleanup, dryRun, deleteSSM, ssmParamPrefix)
 	})
 
+	// Stale per-sandbox CloudWatch log groups check (Phase 94-02).
+	// Covers all four log-group families under both legacy km- and dynamic
+	// {prefix} names; deletion gated on --delete-logs; retention guardrail
+	// gated on --set-log-retention.
+	cwLogsCleanup := deps.CWLogsCleanupClient
+	deleteLogs := deps.DeleteLogs
+	setLogRetention := deps.SetLogRetention
+	retentionDays := int32(cfg.GetDoctorLogRetentionDays())
+	logsResourcePrefix := cfg.GetResourcePrefix()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkStaleLogGroups(ctx, cwLogsCleanup, listerForCleanup, dryRun, deleteLogs, setLogRetention, retentionDays, logsResourcePrefix)
+	})
+
+	// Orphaned DynamoDB rows check (Phase 94-03).
+	// Scans budgets / identities / slack-threads / sandboxes for rows whose
+	// sandbox-id is gone from the active set. AI spend rows (BUDGET#ai#) are
+	// never deleted. sandboxes rows are deleted only for status∈{failed,nocap}.
+	// Deletion gated on --delete-ddb-rows.
+	ddbScanDelete := deps.DDBScanDeleteClient
+	deleteDDBRows := deps.DeleteDDBRows
+	budgetsTbl := cfg.GetBudgetTableName()
+	if budgetsTbl == "" {
+		budgetsTbl = cfg.GetResourcePrefix() + "-budgets"
+	}
+	identitiesTbl := cfg.GetIdentityTableName()
+	if identitiesTbl == "" {
+		identitiesTbl = cfg.GetResourcePrefix() + "-identities"
+	}
+	slackThreadsTbl := cfg.GetSlackThreadsTableName()
+	sandboxesTbl := cfg.GetSandboxTableName()
+	if sandboxesTbl == "" {
+		sandboxesTbl = cfg.GetResourcePrefix() + "-sandboxes"
+	}
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkOrphanedDDBRows(ctx, ddbScanDelete, listerForCleanup, dryRun, deleteDDBRows,
+			budgetsTbl, identitiesTbl, slackThreadsTbl, sandboxesTbl)
+	})
+
 	// Stale per-sandbox Lambdas check (budget-enforcer + github-token-refresher
 	// for destroyed sandboxes). Deletion gated on --delete-lambdas opt-in.
 	lambdaCleanup := deps.LambdaCleanup
@@ -3068,6 +3195,18 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	// DDB query). Deletion gated on the same --delete-s3 opt-in.
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkOrphanedArtifacts(ctx, transcriptS3, transcriptBucket, listSandboxIDs, dryRun, deps.DeleteS3)
+	})
+
+	// Phase 94: S3 lifecycle expiry guardrail for transient prefixes
+	// (logs/, remote-create/, agent-runs/, slack-inbound/). WARNs when any
+	// transient prefix lacks an expiry rule; installs merge-preserving rules
+	// under --set-s3-lifecycle (explicit opt-in, excluded from --with-deletes).
+	s3Lifecycle := deps.S3LifecycleClient
+	s3LifecycleBucket := cfg.GetArtifactsBucket()
+	setS3Lifecycle := deps.SetS3Lifecycle
+	s3ExpireDays := int32(cfg.GetDoctorS3ExpireDays())
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkS3LifecyclePolicy(ctx, s3Lifecycle, s3LifecycleBucket, s3ExpireDays, dryRun, setS3Lifecycle)
 	})
 
 	// Phase 79: km-presence daemon liveness check. Demote ERROR to WARN —
@@ -3437,6 +3576,14 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 		}
 		return profilepkg.Parse(profileBytes)
 	}
+
+	// Phase 94 — leaked-debris cleanup clients.
+	// All three underlying SDK constructors are already imported and used elsewhere in this
+	// function (cloudwatchlogs.NewFromConfig at CWFilterClient above, dynamodb.NewFromConfig
+	// at DynamoClient, s3.NewFromConfig at S3Client). Reuse the same awsCfg.
+	deps.CWLogsCleanupClient = cloudwatchlogs.NewFromConfig(awsCfg)
+	deps.DDBScanDeleteClient = dynamodb.NewFromConfig(awsCfg)
+	deps.S3LifecycleClient = s3.NewFromConfig(awsCfg)
 
 	return deps
 }

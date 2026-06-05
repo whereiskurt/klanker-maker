@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -633,6 +634,8 @@ func (c *testConfig) GetIdentityTableName() string     { return "" }
 func (c *testConfig) GetAWSProfile() string            { return "" }
 func (c *testConfig) GetArtifactsBucket() string       { return "" }
 func (c *testConfig) GetDoctorStaleAMIDays() int       { return 30 }
+func (c *testConfig) GetDoctorLogRetentionDays() int   { return 30 }
+func (c *testConfig) GetDoctorS3ExpireDays() int       { return 30 }
 func (c *testConfig) GetProfileSearchPaths() []string  { return nil }
 func (c *testConfig) GetSlackStreamMessagesTableName() string {
 	return "km-slack-stream-messages"
@@ -779,6 +782,36 @@ func TestDoctorCmd_DeleteStateDigestsAlone_DoesNotImplyOthers(t *testing.T) {
 	if deps.DeleteEBS || deps.DeleteSQS || deps.DeleteS3 || deps.DeleteLambdas || deps.DeleteSSH || deps.DeleteSSM {
 		t.Errorf("--delete-state-digests alone must not enable other opt-ins; got EBS=%v SQS=%v S3=%v Lambdas=%v SSH=%v SSM=%v",
 			deps.DeleteEBS, deps.DeleteSQS, deps.DeleteS3, deps.DeleteLambdas, deps.DeleteSSH, deps.DeleteSSM)
+	}
+}
+
+// TestDoctorFlags_WithDeletesImpliesNewFlags asserts that --with-deletes sets
+// DeleteLogs=true and DeleteDDBRows=true (Phase 94), while the guardrail flags
+// SetLogRetention and SetS3Lifecycle remain false (they are never implied by
+// --with-deletes — those must be set explicitly).
+func TestDoctorFlags_WithDeletesImpliesNewFlags(t *testing.T) {
+	deps := allOKDeps()
+	cmd := NewDoctorCmdWithDeps(minimalConfig(), deps)
+	cmd.SetOut(new(nopWriter))
+	if err := cmd.Flags().Set("with-deletes", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.RunE(cmd, []string{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// --with-deletes must imply both delete flags.
+	if !deps.DeleteLogs {
+		t.Error("--with-deletes should set DeleteLogs=true")
+	}
+	if !deps.DeleteDDBRows {
+		t.Error("--with-deletes should set DeleteDDBRows=true")
+	}
+	// Guardrail flags must NOT be implied by --with-deletes.
+	if deps.SetLogRetention {
+		t.Error("--with-deletes must NOT set SetLogRetention=true (explicit opt-in only)")
+	}
+	if deps.SetS3Lifecycle {
+		t.Error("--with-deletes must NOT set SetS3Lifecycle=true (explicit opt-in only)")
 	}
 }
 
@@ -939,6 +972,8 @@ func (c *testDoctorConfig) GetIdentityTableName() string     { return "" }
 func (c *testDoctorConfig) GetAWSProfile() string            { return c.awsProfile }
 func (c *testDoctorConfig) GetArtifactsBucket() string       { return "" }
 func (c *testDoctorConfig) GetDoctorStaleAMIDays() int       { return 30 }
+func (c *testDoctorConfig) GetDoctorLogRetentionDays() int   { return 30 }
+func (c *testDoctorConfig) GetDoctorS3ExpireDays() int       { return 30 }
 func (c *testDoctorConfig) GetProfileSearchPaths() []string  { return nil }
 func (c *testDoctorConfig) GetSlackStreamMessagesTableName() string {
 	return "km-slack-stream-messages"
@@ -2199,4 +2234,89 @@ func TestDoctor_WarnsOnOrphanSCPs(t *testing.T) {
 			t.Errorf("message %q missing orphan from page 1", result.Message)
 		}
 	})
+}
+
+// =============================================================================
+// Phase 94 — mock fakes for the three new API interfaces
+// (CWLogsCleanupAPI, DDBScanDeleteAPI, S3LifecycleAPI)
+// These fakes are consumed by Wave 2-4 tests in doctor_log_groups_test.go,
+// doctor_ddb_rows_test.go, and doctor_artifacts_test.go.
+// Here they only need to compile and satisfy the interfaces.
+// =============================================================================
+
+// mockCWLogsCleanup is a configurable fake for CWLogsCleanupAPI.
+// Each method field may be set per-test; nil fields default to a no-error response.
+type mockCWLogsCleanup struct {
+	describeLogGroupsFn  func(ctx context.Context, input *cloudwatchlogs.DescribeLogGroupsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogGroupsOutput, error)
+	deleteLogGroupFn     func(ctx context.Context, input *cloudwatchlogs.DeleteLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DeleteLogGroupOutput, error)
+	putRetentionPolicyFn func(ctx context.Context, input *cloudwatchlogs.PutRetentionPolicyInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutRetentionPolicyOutput, error)
+}
+
+func (m *mockCWLogsCleanup) DescribeLogGroups(ctx context.Context, input *cloudwatchlogs.DescribeLogGroupsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogGroupsOutput, error) {
+	if m.describeLogGroupsFn != nil {
+		return m.describeLogGroupsFn(ctx, input, optFns...)
+	}
+	return &cloudwatchlogs.DescribeLogGroupsOutput{}, nil
+}
+
+func (m *mockCWLogsCleanup) DeleteLogGroup(ctx context.Context, input *cloudwatchlogs.DeleteLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DeleteLogGroupOutput, error) {
+	if m.deleteLogGroupFn != nil {
+		return m.deleteLogGroupFn(ctx, input, optFns...)
+	}
+	return &cloudwatchlogs.DeleteLogGroupOutput{}, nil
+}
+
+func (m *mockCWLogsCleanup) PutRetentionPolicy(ctx context.Context, input *cloudwatchlogs.PutRetentionPolicyInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutRetentionPolicyOutput, error) {
+	if m.putRetentionPolicyFn != nil {
+		return m.putRetentionPolicyFn(ctx, input, optFns...)
+	}
+	return &cloudwatchlogs.PutRetentionPolicyOutput{}, nil
+}
+
+// mockDDBScanDelete is a configurable fake for DDBScanDeleteAPI.
+type mockDDBScanDelete struct {
+	scanFn           func(ctx context.Context, input *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
+	deleteItemFn     func(ctx context.Context, input *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
+	batchWriteItemFn func(ctx context.Context, input *dynamodb.BatchWriteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error)
+}
+
+func (m *mockDDBScanDelete) Scan(ctx context.Context, input *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	if m.scanFn != nil {
+		return m.scanFn(ctx, input, optFns...)
+	}
+	return &dynamodb.ScanOutput{}, nil
+}
+
+func (m *mockDDBScanDelete) DeleteItem(ctx context.Context, input *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error) {
+	if m.deleteItemFn != nil {
+		return m.deleteItemFn(ctx, input, optFns...)
+	}
+	return &dynamodb.DeleteItemOutput{}, nil
+}
+
+func (m *mockDDBScanDelete) BatchWriteItem(ctx context.Context, input *dynamodb.BatchWriteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error) {
+	if m.batchWriteItemFn != nil {
+		return m.batchWriteItemFn(ctx, input, optFns...)
+	}
+	return &dynamodb.BatchWriteItemOutput{}, nil
+}
+
+// mockS3Lifecycle is a configurable fake for S3LifecycleAPI.
+type mockS3Lifecycle struct {
+	getLifecycleFn func(ctx context.Context, input *s3.GetBucketLifecycleConfigurationInput, optFns ...func(*s3.Options)) (*s3.GetBucketLifecycleConfigurationOutput, error)
+	putLifecycleFn func(ctx context.Context, input *s3.PutBucketLifecycleConfigurationInput, optFns ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error)
+}
+
+func (m *mockS3Lifecycle) GetBucketLifecycleConfiguration(ctx context.Context, input *s3.GetBucketLifecycleConfigurationInput, optFns ...func(*s3.Options)) (*s3.GetBucketLifecycleConfigurationOutput, error) {
+	if m.getLifecycleFn != nil {
+		return m.getLifecycleFn(ctx, input, optFns...)
+	}
+	return &s3.GetBucketLifecycleConfigurationOutput{}, nil
+}
+
+func (m *mockS3Lifecycle) PutBucketLifecycleConfiguration(ctx context.Context, input *s3.PutBucketLifecycleConfigurationInput, optFns ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error) {
+	if m.putLifecycleFn != nil {
+		return m.putLifecycleFn(ctx, input, optFns...)
+	}
+	return &s3.PutBucketLifecycleConfigurationOutput{}, nil
 }

@@ -1194,7 +1194,7 @@ After=network.target
 [Service]
 User=km-sidecar
 Environment=SANDBOX_ID={{ .SandboxID }}
-Environment=CW_LOG_GROUP=/km/sandboxes/{{ .SandboxID }}/
+Environment=CW_LOG_GROUP=/{{ .ResourcePrefix }}/sandboxes/{{ .SandboxID }}/
 Environment=AUDIT_LOG_DEST=cloudwatch
 {{- if gt .IdleTimeoutMinutes 0 }}
 Environment=IDLE_TIMEOUT_MINUTES={{ .IdleTimeoutMinutes }}

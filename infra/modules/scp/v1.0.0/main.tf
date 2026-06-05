@@ -18,6 +18,10 @@ locals {
 
   # IAM escalation carve-out: base roles + budget-enforcer (needs AttachRolePolicy/DetachRolePolicy
   # for Bedrock IAM revocation on budget breach)
+  # NOTE (Phase 94-05): km-budget-enforcer-* is a hardcoded km- pattern — a known non-default-install
+  # gap. v1.0.0 has no resource_prefix variable. The live infrastructure uses v2.0.0 which already
+  # uses wildcard *-budget-enforcer-* patterns that are prefix-agnostic. This module version is
+  # unused in production; do not fix here (no resource_prefix var available).
   trusted_arns_iam = concat(
     local.trusted_arns_base,
     ["arn:aws:iam::${var.application_account_id}:role/km-budget-enforcer-*"]
@@ -26,6 +30,8 @@ locals {
   # SSM pivot carve-out: only SSM instance roles and operator SSO — NOT the full trusted_arns_base.
   # This is intentionally more restrictive: only roles that legitimately use SSM for instance access.
   # km-github-token-refresher-* added here (not base/instance/iam) — it only needs SSM GetParameter/PutParameter.
+  # NOTE (Phase 94-05): km-ec2spot-ssm-* and km-github-token-refresher-* are hardcoded km- patterns —
+  # a pre-existing non-default-install gap, same as trusted_arns_iam above. v2.0.0 is the fix.
   trusted_arns_ssm = [
     "arn:aws:iam::${var.application_account_id}:role/km-ec2spot-ssm-*",
     "arn:aws:iam::${var.application_account_id}:role/km-github-token-refresher-*",

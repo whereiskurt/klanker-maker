@@ -871,3 +871,71 @@ region: us-east-1
 		t.Errorf("Slack.ReactAlways: got &%v, want nil", *cfg.Slack.ReactAlways)
 	}
 }
+
+// TestDoctorRetentionAndExpireDays verifies the five-touchpoint pattern for the two
+// Phase 94 config knobs: doctor_log_retention_days and doctor_s3_expire_days.
+func TestDoctorRetentionAndExpireDays(t *testing.T) {
+	t.Run("default 30 when unset", func(t *testing.T) {
+		dir := t.TempDir()
+		orig, _ := os.Getwd()
+		t.Cleanup(func() { os.Chdir(orig) })
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if cfg.DoctorLogRetentionDays != 30 {
+			t.Errorf("DoctorLogRetentionDays: got %d, want 30 (default)", cfg.DoctorLogRetentionDays)
+		}
+		if cfg.DoctorS3ExpireDays != 30 {
+			t.Errorf("DoctorS3ExpireDays: got %d, want 30 (default)", cfg.DoctorS3ExpireDays)
+		}
+	})
+
+	t.Run("yaml file setting both keys to 7 loads 7 (proves merge-list wiring)", func(t *testing.T) {
+		dir := t.TempDir()
+		writeKMConfig(t, dir, `
+domain: test.example.com
+doctor_log_retention_days: 7
+doctor_s3_expire_days: 7
+`)
+		orig, _ := os.Getwd()
+		t.Cleanup(func() { os.Chdir(orig) })
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if cfg.DoctorLogRetentionDays != 7 {
+			t.Errorf("DoctorLogRetentionDays: got %d, want 7 (yaml override)", cfg.DoctorLogRetentionDays)
+		}
+		if cfg.DoctorS3ExpireDays != 7 {
+			t.Errorf("DoctorS3ExpireDays: got %d, want 7 (yaml override)", cfg.DoctorS3ExpireDays)
+		}
+	})
+
+	t.Run("<=0 clamps to 30", func(t *testing.T) {
+		dir := t.TempDir()
+		orig, _ := os.Getwd()
+		t.Cleanup(func() { os.Chdir(orig) })
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		t.Setenv("KM_DOCTOR_LOG_RETENTION_DAYS", "0")
+		t.Setenv("KM_DOCTOR_S3_EXPIRE_DAYS", "-1")
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if cfg.DoctorLogRetentionDays != 30 {
+			t.Errorf("DoctorLogRetentionDays: got %d, want 30 (zero clamped to default)", cfg.DoctorLogRetentionDays)
+		}
+		if cfg.DoctorS3ExpireDays != 30 {
+			t.Errorf("DoctorS3ExpireDays: got %d, want 30 (negative clamped to default)", cfg.DoctorS3ExpireDays)
+		}
+	})
+}

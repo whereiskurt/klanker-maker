@@ -2473,3 +2473,54 @@ func TestUserDataDesktopChromeBinary(t *testing.T) {
 		t.Error("expected Chrome apt source over https://dl.google.com/linux/chrome/deb/")
 	}
 }
+
+// ============================================================
+// Phase 94-05: ResourcePrefix log-group path substitution (EC2 userdata)
+// ============================================================
+
+// TestUserdataCWLogGroupResourcePrefix verifies that the EC2 km-audit-log systemd
+// unit's CW_LOG_GROUP env var renders with the dynamic {prefix} from
+// KM_RESOURCE_PREFIX, not the hardcoded /km/ path. Tests both "kph" (non-default)
+// and "km" (default — proving the km→km no-op at the string level).
+func TestUserdataCWLogGroupResourcePrefix(t *testing.T) {
+	cases := []struct {
+		prefix         string
+		sandboxID      string
+		wantCWLogGroup string
+	}{
+		{
+			prefix:         "kph",
+			sandboxID:      "sb-kph-audit-01",
+			wantCWLogGroup: "Environment=CW_LOG_GROUP=/kph/sandboxes/sb-kph-audit-01/",
+		},
+		{
+			prefix:         "km",
+			sandboxID:      "sb-km-audit-01",
+			wantCWLogGroup: "Environment=CW_LOG_GROUP=/km/sandboxes/sb-km-audit-01/",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run("prefix="+tc.prefix, func(t *testing.T) {
+			t.Setenv("KM_RESOURCE_PREFIX", tc.prefix)
+
+			p := baseProfile()
+			out, err := generateUserData(p, tc.sandboxID, nil, "my-bucket", false, nil)
+			if err != nil {
+				t.Fatalf("generateUserData failed: %v", err)
+			}
+
+			if !strings.Contains(out, tc.wantCWLogGroup) {
+				t.Errorf("CW_LOG_GROUP: want %q in userdata, not found", tc.wantCWLogGroup)
+			}
+
+			// Guard: hardcoded /km/sandboxes/ must NOT appear for non-km prefix.
+			if tc.prefix != "km" {
+				if strings.Contains(out, "CW_LOG_GROUP=/km/sandboxes/") {
+					t.Errorf("found hardcoded /km/sandboxes/ in userdata for prefix=%q (should use /%s/sandboxes/)", tc.prefix, tc.prefix)
+				}
+			}
+		})
+	}
+}

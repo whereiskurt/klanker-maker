@@ -73,10 +73,12 @@ func (f *fakeSlackAPI) InviteUserToChannelStrict(_ context.Context, _, _ string)
 	return nil
 }
 
-// fakeSSMParamStore implements SSMParamStore for tests.
-// Shared across create_slack_test.go and destroy_slack_test.go (same package).
+// fakeSSMParamStore implements SSMParamStore (and the optional ssmParamWriter)
+// for tests. Shared across create_slack_test.go and destroy_slack_test.go.
 type fakeSSMParamStore struct {
 	params map[string]string
+	puts   []struct{ Name, Value string }
+	putErr error
 }
 
 func (f *fakeSSMParamStore) Get(_ context.Context, name string, _ bool) (string, error) {
@@ -84,6 +86,18 @@ func (f *fakeSSMParamStore) Get(_ context.Context, name string, _ bool) (string,
 		return v, nil
 	}
 	return "", nil
+}
+
+func (f *fakeSSMParamStore) Put(_ context.Context, name, value string, _ bool) error {
+	if f.putErr != nil {
+		return f.putErr
+	}
+	if f.params == nil {
+		f.params = map[string]string{}
+	}
+	f.params[name] = value
+	f.puts = append(f.puts, struct{ Name, Value string }{name, value})
+	return nil
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -391,6 +405,155 @@ func TestResolveSlack_PerSandbox_NameTaken_ArchivedReservation(t *testing.T) {
 	}
 }
 
+// TestResolveSlack_PerSandbox_NameTaken_UsesByNameCache verifies the O(1)
+// reuse path: when the by-name SSM cache holds the channel ID and
+// conversations.info (ChannelInfo) confirms it still resolves, the scan
+// (FindChannelByName / conversations.list) is NEVER invoked.
+func TestResolveSlack_PerSandbox_NameTaken_UsesByNameCache(t *testing.T) {
+	p := profileWithSlack(boolPtrCreate(true), true, "")
+	api := &fakeSlackAPI{
+		createChannelErr: &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		// channelInfoErr defaults to nil → cached ID validates successfully.
+		// findChannelErr intentionally set so the test FAILS loudly if the scan runs.
+		findChannelErr: fmt.Errorf("FindChannelByName must NOT be called on a cache hit"),
+	}
+	ssmStore := &fakeSSMParamStore{
+		params: map[string]string{
+			"/km/slack/invite-email":               "invite@example.com",
+			"/km/slack/channel-id-by-name/sb-demo": "C0CACHED99",
+		},
+	}
+
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	if err != nil {
+		t.Fatalf("expected cache hit to succeed, got: %v", err)
+	}
+	if chID != "C0CACHED99" {
+		t.Errorf("channelID = %q; want C0CACHED99 (from by-name cache)", chID)
+	}
+	if !perSb {
+		t.Error("perSandbox should be true on the cache-reuse path")
+	}
+	if api.findChannelCalled {
+		t.Error("FindChannelByName (conversations.list scan) must NOT be called on a cache hit")
+	}
+	if !api.channelInfoCalled {
+		t.Error("ChannelInfo must be called to validate the cached ID")
+	}
+	if !api.joinChannelCalled {
+		t.Error("JoinChannel must still run to ensure bot membership")
+	}
+}
+
+// TestResolveSlack_PerSandbox_NameTaken_CacheMiss_FallsBackToScan verifies that
+// with no by-name cache entry, name_taken recovery falls back to the scan.
+func TestResolveSlack_PerSandbox_NameTaken_CacheMiss_FallsBackToScan(t *testing.T) {
+	p := profileWithSlack(boolPtrCreate(true), true, "")
+	api := &fakeSlackAPI{
+		createChannelErr:  &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		findChannelResult: "CSCANNED",
+	}
+	ssmStore := &fakeSSMParamStore{
+		params: map[string]string{"/km/slack/invite-email": "invite@example.com"},
+	}
+
+	chID, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if chID != "CSCANNED" {
+		t.Errorf("channelID = %q; want CSCANNED (scan fallback)", chID)
+	}
+	if !api.findChannelCalled {
+		t.Error("FindChannelByName must be called on a cache miss")
+	}
+	// The scan result should be written back to the cache for next time.
+	cacheKey := "/km/slack/channel-id-by-name/sb-demo"
+	if got := ssmStore.params[cacheKey]; got != "CSCANNED" {
+		t.Errorf("scan result not cached: %s = %q; want CSCANNED", cacheKey, got)
+	}
+}
+
+// TestResolveSlack_PerSandbox_NameTaken_StaleCache_FallsBackToScan verifies that
+// a cached ID that no longer resolves (conversations.info errors) is discarded
+// and the scan runs.
+func TestResolveSlack_PerSandbox_NameTaken_StaleCache_FallsBackToScan(t *testing.T) {
+	p := profileWithSlack(boolPtrCreate(true), true, "")
+	api := &fakeSlackAPI{
+		createChannelErr:  &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		channelInfoErr:    &slack.SlackAPIError{Method: "conversations.info", Code: "channel_not_found"},
+		findChannelResult: "CFRESH",
+	}
+	ssmStore := &fakeSSMParamStore{
+		params: map[string]string{
+			"/km/slack/invite-email":               "invite@example.com",
+			"/km/slack/channel-id-by-name/sb-demo": "C0STALE",
+		},
+	}
+
+	chID, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if chID != "CFRESH" {
+		t.Errorf("channelID = %q; want CFRESH (stale cache → scan)", chID)
+	}
+	if !api.channelInfoCalled {
+		t.Error("ChannelInfo must be called to probe the cached ID")
+	}
+	if !api.findChannelCalled {
+		t.Error("FindChannelByName must be called after the cached ID fails to resolve")
+	}
+}
+
+// TestResolveSlack_PerSandbox_NameTaken_RateLimited_ErrorMessage verifies the
+// error-message fix: when the scan is rate-limited, the error must mention rate
+// limiting + channelOverride and must NOT advise granting channels:read.
+func TestResolveSlack_PerSandbox_NameTaken_RateLimited_ErrorMessage(t *testing.T) {
+	p := profileWithSlack(boolPtrCreate(true), true, "")
+	api := &fakeSlackAPI{
+		createChannelErr: &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		findChannelErr:   &slack.SlackAPIError{Method: "conversations.list", Code: "ratelimited"},
+	}
+	ssmStore := &fakeSSMParamStore{
+		params: map[string]string{"/km/slack/invite-email": "invite@example.com"},
+	}
+
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	if err == nil {
+		t.Fatal("expected an error when the scan is rate-limited")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "channels:read") {
+		t.Errorf("rate-limit error must NOT mention channels:read; got: %v", msg)
+	}
+	if !strings.Contains(strings.ToLower(msg), "rate") {
+		t.Errorf("rate-limit error should mention rate limiting; got: %v", msg)
+	}
+	if !strings.Contains(msg, "channelOverride") {
+		t.Errorf("rate-limit error should mention channelOverride; got: %v", msg)
+	}
+}
+
+// TestResolveSlack_PerSandbox_CreateSuccess_CachesByName verifies a freshly
+// created channel is written to the by-name cache for future O(1) reuse.
+func TestResolveSlack_PerSandbox_CreateSuccess_CachesByName(t *testing.T) {
+	p := profileWithSlack(boolPtrCreate(true), true, "")
+	api := &fakeSlackAPI{createChannelResult: "CNEWLY"}
+	ssmStore := &fakeSSMParamStore{
+		params: map[string]string{"/km/slack/invite-email": "invite@example.com"},
+	}
+
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cacheKey := "/km/slack/channel-id-by-name/sb-demo"
+	if got := ssmStore.params[cacheKey]; got != "CNEWLY" {
+		t.Errorf("created channel not cached: %s = %q; want CNEWLY", cacheKey, got)
+	}
+}
+
 // Renamed from TestResolveSlack_PerSandbox_InviteFails_Error — invite failure
 // is now non-fatal so a healthy channel + bot doesn't get blocked by a
 // transient cross-workspace invite glitch. Operator can re-invite manually.
@@ -496,7 +659,7 @@ func TestResolveSlack_InvalidOverrideID_Error(t *testing.T) {
 // runStep11dInject tests — Phase 67 SSM Parameter Store path
 //
 // Replaces the prior SendCommand tests after the SCP-bypass refactor. The new
-// step writes /sandbox/{id}/slack-channel-id and reads /km/slack/bridge-url
+// step writes /km/sandbox/{id}/slack-channel-id and reads /km/slack/bridge-url
 // from SSM Parameter Store; the sandbox bootstrap (pkg/compiler/userdata.go)
 // is responsible for picking these up at boot.
 // ─────────────────────────────────────────────────────────────────────────
@@ -551,7 +714,7 @@ func TestStep11d_Success_WritesChannelIDParam(t *testing.T) {
 	if len(put.calls) != 1 {
 		t.Fatalf("expected 1 PutParameter call, got %d", len(put.calls))
 	}
-	wantName := "/sandbox/sb-test/slack-channel-id"
+	wantName := "/km/sandbox/sb-test/slack-channel-id"
 	if put.calls[0].Name != wantName {
 		t.Errorf("PutParameter Name: got %q, want %q", put.calls[0].Name, wantName)
 	}

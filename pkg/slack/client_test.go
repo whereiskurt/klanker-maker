@@ -18,6 +18,10 @@ import (
 func init() {
 	// Shrink BridgeBackoff to milliseconds so retry tests run fast.
 	slack.BridgeBackoff = []time.Duration{1 * time.Millisecond, 1 * time.Millisecond, 1 * time.Millisecond}
+	// Shrink the Slack rate-limit backoff so 429/ratelimited retry tests don't
+	// actually sleep for real seconds.
+	slack.SlackRetryAfterDefault = time.Millisecond
+	slack.SlackRetryAfterCap = time.Millisecond
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -311,6 +315,164 @@ func TestClient_AuthHeader_Bearer(t *testing.T) {
 
 	if !strings.HasPrefix(capturedAuth, "Bearer xoxb-test") {
 		t.Errorf("Authorization = %q; want 'Bearer xoxb-test'", capturedAuth)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// FindChannelByName + rate-limit tests
+// ────────────────────────────────────────────────────────────────────────────
+
+// listPage is a conversations.list response page builder for the fake server.
+func listPage(channels []map[string]any, nextCursor string) map[string]any {
+	page := map[string]any{
+		"ok":       true,
+		"channels": channels,
+	}
+	page["response_metadata"] = map[string]any{"next_cursor": nextCursor}
+	return page
+}
+
+// TestFindChannelByName_MatchOnLastPage verifies the scan paginates through
+// multiple pages (following next_cursor) and finds a channel that sorts LAST —
+// the real-world failure shape where a freshly-created per-sandbox channel is at
+// the very end of conversations.list.
+func TestFindChannelByName_MatchOnLastPage(t *testing.T) {
+	var pageCount int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		json.Unmarshal(body, &req)
+		cursor, _ := req["cursor"].(string)
+		atomic.AddInt32(&pageCount, 1)
+
+		w.Header().Set("Content-Type", "application/json")
+		switch cursor {
+		case "": // page 1 — no match, has next
+			json.NewEncoder(w).Encode(listPage([]map[string]any{
+				{"id": "C1", "name": "general"},
+				{"id": "C2", "name": "random"},
+			}, "CURSOR2"))
+		case "CURSOR2": // page 2 — no match, has next
+			json.NewEncoder(w).Encode(listPage([]map[string]any{
+				{"id": "C3", "name": "eng"},
+			}, "CURSOR3"))
+		default: // page 3 (last) — the target, sorts last
+			json.NewEncoder(w).Encode(listPage([]map[string]any{
+				{"id": "CTARGET", "name": "sec-kph-desk1"},
+			}, ""))
+		}
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	id, err := c.FindChannelByName(context.Background(), "sec-kph-desk1")
+	if err != nil {
+		t.Fatalf("FindChannelByName: %v", err)
+	}
+	if id != "CTARGET" {
+		t.Errorf("id = %q; want CTARGET", id)
+	}
+	if got := atomic.LoadInt32(&pageCount); got != 3 {
+		t.Errorf("page count = %d; want 3 (must walk all pages)", got)
+	}
+}
+
+// TestFindChannelByName_RetriesOnRateLimit verifies that a ratelimited page
+// mid-scan is retried (per the new callRaw backoff) rather than aborting the
+// whole scan. Page 2 returns HTTP 429 once, then succeeds on retry.
+func TestFindChannelByName_RetriesOnRateLimit(t *testing.T) {
+	var page2Hits int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		json.Unmarshal(body, &req)
+		cursor, _ := req["cursor"].(string)
+
+		w.Header().Set("Content-Type", "application/json")
+		switch cursor {
+		case "": // page 1
+			json.NewEncoder(w).Encode(listPage([]map[string]any{{"id": "C1", "name": "general"}}, "CURSOR2"))
+		default: // page 2 — rate-limit on first hit, succeed on retry
+			if atomic.AddInt32(&page2Hits, 1) == 1 {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				w.Write(slackErr("ratelimited"))
+				return
+			}
+			json.NewEncoder(w).Encode(listPage([]map[string]any{{"id": "CTARGET", "name": "sb-demo"}}, ""))
+		}
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	id, err := c.FindChannelByName(context.Background(), "sb-demo")
+	if err != nil {
+		t.Fatalf("FindChannelByName should recover from a transient ratelimit: %v", err)
+	}
+	if id != "CTARGET" {
+		t.Errorf("id = %q; want CTARGET", id)
+	}
+	if got := atomic.LoadInt32(&page2Hits); got != 2 {
+		t.Errorf("page 2 hits = %d; want 2 (one ratelimited + one retry)", got)
+	}
+}
+
+// TestFindChannelByName_RateLimitExhausted verifies that when Slack keeps
+// returning ratelimited past the retry budget, the call surfaces a
+// *SlackAPIError{Code:"ratelimited"} (so callers can give rate-limit-specific
+// guidance) rather than spinning forever.
+func TestFindChannelByName_RateLimitExhausted(t *testing.T) {
+	var hits int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write(slackErr("ratelimited"))
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	_, err := c.FindChannelByName(context.Background(), "sb-demo")
+	if err == nil {
+		t.Fatal("expected ratelimited error after exhausting retries")
+	}
+	apiErr, ok := err.(*slack.SlackAPIError)
+	if !ok {
+		t.Fatalf("expected *SlackAPIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != "ratelimited" {
+		t.Errorf("Code = %q; want ratelimited", apiErr.Code)
+	}
+	if got := atomic.LoadInt32(&hits); got != int32(slack.SlackRateLimitMaxAttempts) {
+		t.Errorf("request count = %d; want %d (SlackRateLimitMaxAttempts)", got, slack.SlackRateLimitMaxAttempts)
+	}
+}
+
+// TestCallJSON_RateLimitBodyOn200 verifies the body-based ratelimit signal
+// (HTTP 200 with ok:false,error:"ratelimited") is also retried, not just HTTP 429.
+func TestCallJSON_RateLimitBodyOn200(t *testing.T) {
+	var hits int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if atomic.AddInt32(&hits, 1) == 1 {
+			// 200 OK but ratelimited in the body — the tiered-method shape.
+			w.Write(slackErr("ratelimited"))
+			return
+		}
+		w.Write(slackOK(map[string]any{"channel": map[string]any{"id": "CXYZ"}}))
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	id, err := c.CreateChannel(context.Background(), "sb-demo")
+	if err != nil {
+		t.Fatalf("CreateChannel should retry a 200/ratelimited body: %v", err)
+	}
+	if id != "CXYZ" {
+		t.Errorf("id = %q; want CXYZ", id)
+	}
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Errorf("hits = %d; want 2", got)
 	}
 }
 

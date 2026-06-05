@@ -1,7 +1,9 @@
-// Tests for checkOrphanedArtifacts (orphan artifacts/{sandbox-id}/ S3 prefix sweep).
+// Tests for checkOrphanedArtifacts (orphan artifacts/{sandbox-id}/ S3 prefix sweep)
+// and checkS3LifecyclePolicy (transient-prefix expiry guardrail).
 //
 // fakeS3List is reused from doctor_slack_transcript_test.go since both checks
 // share the same kmaws.S3CleanupAPI surface (ListObjectsV2 + DeleteObjects).
+// mockS3Lifecycle is defined in doctor_test.go (Wave 1 infrastructure).
 package cmd
 
 import (
@@ -13,6 +15,7 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
 )
 
 // TestDoctor_OrphanedArtifacts_NilDeps_Skipped: nil S3 client OR nil
@@ -207,5 +210,232 @@ func TestDoctor_OrphanedArtifacts_ListError_Warn(t *testing.T) {
 	}
 	if !strings.Contains(r.Message, "AccessDenied") {
 		t.Errorf("expected error text in message, got: %s", r.Message)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// checkS3LifecyclePolicy tests (DBG-S3 / DBG-S3-SET)
+// ---------------------------------------------------------------------------
+
+// noSuchLifecycleErr simulates the AWS API error for GetBucketLifecycleConfiguration
+// when no lifecycle policy exists on the bucket. Implements smithy.APIError so
+// errors.As with *smithy.GenericAPIError works correctly in tests.
+type noSuchLifecycleConfigErr struct {
+	smithy.GenericAPIError
+}
+
+func newNoSuchLifecycleErr() *noSuchLifecycleConfigErr {
+	return &noSuchLifecycleConfigErr{
+		GenericAPIError: smithy.GenericAPIError{Code: "NoSuchLifecycleConfiguration"},
+	}
+}
+
+// TestDoctor_S3LifecyclePolicy_NilClient_Skipped: nil client → SKIPPED.
+func TestDoctor_S3LifecyclePolicy_NilClient_Skipped(t *testing.T) {
+	r := checkS3LifecyclePolicy(context.Background(), nil, "bucket", 30, false, false)
+	if r.Status != CheckSkipped {
+		t.Fatalf("expected SKIPPED for nil client, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// TestDoctor_S3LifecyclePolicy_EmptyBucket_Skipped: empty bucket → SKIPPED.
+func TestDoctor_S3LifecyclePolicy_EmptyBucket_Skipped(t *testing.T) {
+	m := &mockS3Lifecycle{}
+	r := checkS3LifecyclePolicy(context.Background(), m, "", 30, false, false)
+	if r.Status != CheckSkipped {
+		t.Fatalf("expected SKIPPED for empty bucket, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// TestDoctor_S3LifecyclePolicy_Missing: GetBucketLifecycleConfiguration returns
+// NoSuchLifecycleConfiguration → WARN listing all four uncovered transient
+// prefixes; no Put call because dryRun=true.
+func TestDoctor_S3LifecyclePolicy_Missing(t *testing.T) {
+	putCalls := 0
+	m := &mockS3Lifecycle{
+		getLifecycleFn: func(_ context.Context, _ *s3.GetBucketLifecycleConfigurationInput, _ ...func(*s3.Options)) (*s3.GetBucketLifecycleConfigurationOutput, error) {
+			return nil, newNoSuchLifecycleErr()
+		},
+		putLifecycleFn: func(_ context.Context, _ *s3.PutBucketLifecycleConfigurationInput, _ ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error) {
+			putCalls++
+			return &s3.PutBucketLifecycleConfigurationOutput{}, nil
+		},
+	}
+	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, true, false)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN for missing lifecycle, got %s: %s", r.Status, r.Message)
+	}
+	if putCalls != 0 {
+		t.Errorf("dryRun=true must NOT call PutBucketLifecycleConfiguration; got %d calls", putCalls)
+	}
+	// All four transient prefixes must appear in the message or remediation.
+	for _, prefix := range []string{"logs/", "remote-create/", "agent-runs/", "slack-inbound/"} {
+		if !strings.Contains(r.Message, prefix) && !strings.Contains(r.Remediation, prefix) {
+			t.Errorf("expected %q mentioned in WARN output, message=%q remediation=%q", prefix, r.Message, r.Remediation)
+		}
+	}
+}
+
+// TestDoctor_S3LifecyclePolicy_MissingNoSetFlag: --dry-run=false but
+// --set-s3-lifecycle not passed → WARN, no Put.
+func TestDoctor_S3LifecyclePolicy_MissingNoSetFlag(t *testing.T) {
+	putCalls := 0
+	m := &mockS3Lifecycle{
+		getLifecycleFn: func(_ context.Context, _ *s3.GetBucketLifecycleConfigurationInput, _ ...func(*s3.Options)) (*s3.GetBucketLifecycleConfigurationOutput, error) {
+			return nil, newNoSuchLifecycleErr()
+		},
+		putLifecycleFn: func(_ context.Context, _ *s3.PutBucketLifecycleConfigurationInput, _ ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error) {
+			putCalls++
+			return &s3.PutBucketLifecycleConfigurationOutput{}, nil
+		},
+	}
+	// dryRun=false but setLifecycle=false
+	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, false)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s: %s", r.Status, r.Message)
+	}
+	if putCalls != 0 {
+		t.Errorf("setLifecycle=false must NOT Put; got %d calls", putCalls)
+	}
+}
+
+// makeTransientRule builds a lifecycle rule for a transient prefix, using the same
+// Filter shape as checkS3LifecyclePolicy.
+func makeTransientRule(id, prefix string, days int32) s3types.LifecycleRule {
+	return s3types.LifecycleRule{
+		ID:     awssdk.String(id),
+		Status: s3types.ExpirationStatusEnabled,
+		Filter: &s3types.LifecycleRuleFilter{Prefix: awssdk.String(prefix)},
+		Expiration: &s3types.LifecycleExpiration{
+			Days: awssdk.Int32(days),
+		},
+	}
+}
+
+// TestDoctor_S3LifecyclePolicy_AlreadySet: all four transient prefixes covered
+// by existing expiry rules → CheckOK, zero Put calls (idempotent).
+func TestDoctor_S3LifecyclePolicy_AlreadySet(t *testing.T) {
+	putCalls := 0
+	existingRules := []s3types.LifecycleRule{
+		makeTransientRule("km-doctor-expire-logs-", "logs/", 30),
+		makeTransientRule("km-doctor-expire-remote-create-", "remote-create/", 30),
+		makeTransientRule("km-doctor-expire-agent-runs-", "agent-runs/", 30),
+		makeTransientRule("km-doctor-expire-slack-inbound-", "slack-inbound/", 30),
+	}
+	m := &mockS3Lifecycle{
+		getLifecycleFn: func(_ context.Context, _ *s3.GetBucketLifecycleConfigurationInput, _ ...func(*s3.Options)) (*s3.GetBucketLifecycleConfigurationOutput, error) {
+			return &s3.GetBucketLifecycleConfigurationOutput{Rules: existingRules}, nil
+		},
+		putLifecycleFn: func(_ context.Context, _ *s3.PutBucketLifecycleConfigurationInput, _ ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error) {
+			putCalls++
+			return &s3.PutBucketLifecycleConfigurationOutput{}, nil
+		},
+	}
+	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, true)
+	if r.Status != CheckOK {
+		t.Fatalf("expected OK when all prefixes already covered, got %s: %s", r.Status, r.Message)
+	}
+	if putCalls != 0 {
+		t.Errorf("idempotent: expected zero Put calls when already set, got %d", putCalls)
+	}
+}
+
+// TestDoctor_S3LifecyclePolicy_SetMergesPreservesExisting: an unrelated
+// operator rule exists + three transient prefixes are uncovered. --set-s3-lifecycle
+// must call Put exactly once; the put input must contain the unrelated rule
+// unchanged plus three new transient-prefix rules; no build-artifact prefix rule.
+func TestDoctor_S3LifecyclePolicy_SetMergesPreservesExisting(t *testing.T) {
+	// Only logs/ is covered; the other three are missing.
+	operatorRule := s3types.LifecycleRule{
+		ID:     awssdk.String("operator-custom-rule"),
+		Status: s3types.ExpirationStatusEnabled,
+		Filter: &s3types.LifecycleRuleFilter{Prefix: awssdk.String("operator-data/")},
+		Expiration: &s3types.LifecycleExpiration{
+			Days: awssdk.Int32(365),
+		},
+	}
+	coveredRule := makeTransientRule("km-doctor-expire-logs-", "logs/", 30)
+	var capturedRules []s3types.LifecycleRule
+	putCalls := 0
+	m := &mockS3Lifecycle{
+		getLifecycleFn: func(_ context.Context, _ *s3.GetBucketLifecycleConfigurationInput, _ ...func(*s3.Options)) (*s3.GetBucketLifecycleConfigurationOutput, error) {
+			return &s3.GetBucketLifecycleConfigurationOutput{
+				Rules: []s3types.LifecycleRule{operatorRule, coveredRule},
+			}, nil
+		},
+		putLifecycleFn: func(_ context.Context, input *s3.PutBucketLifecycleConfigurationInput, _ ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error) {
+			putCalls++
+			if input.LifecycleConfiguration != nil {
+				capturedRules = input.LifecycleConfiguration.Rules
+			}
+			return &s3.PutBucketLifecycleConfigurationOutput{}, nil
+		},
+	}
+	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, true)
+	if r.Status != CheckOK {
+		t.Fatalf("expected OK after successful set, got %s: %s", r.Status, r.Message)
+	}
+	if putCalls != 1 {
+		t.Fatalf("expected exactly 1 Put call, got %d", putCalls)
+	}
+
+	// Total rules: 2 existing (operator + logs) + 3 new (remote-create, agent-runs, slack-inbound).
+	if len(capturedRules) != 5 {
+		t.Errorf("expected 5 rules in Put (2 existing + 3 new), got %d", len(capturedRules))
+	}
+
+	// Operator rule must be present unchanged.
+	operatorFound := false
+	for _, rule := range capturedRules {
+		if rule.ID != nil && *rule.ID == "operator-custom-rule" {
+			operatorFound = true
+		}
+	}
+	if !operatorFound {
+		t.Error("operator-custom-rule must be preserved in merged Put")
+	}
+
+	// Build-artifact prefixes (toolchain/, sidecars/, rsync/) must NOT appear.
+	for _, rule := range capturedRules {
+		var prefix string
+		if rule.Filter != nil && rule.Filter.Prefix != nil {
+			prefix = *rule.Filter.Prefix
+		} else if rule.Prefix != nil {
+			prefix = *rule.Prefix
+		}
+		for _, forbidden := range []string{"toolchain/", "sidecars/", "rsync/"} {
+			if prefix == forbidden {
+				t.Errorf("build-artifact prefix %q must NOT get a lifecycle rule", forbidden)
+			}
+		}
+	}
+}
+
+// TestDoctor_S3LifecyclePolicy_Idempotent: simulate a second run after a
+// successful --set-s3-lifecycle. The Get returns all four transient rules →
+// OK with zero Put calls.
+func TestDoctor_S3LifecyclePolicy_Idempotent(t *testing.T) {
+	// After first run all four transient prefixes are set.
+	transientPrefixes := []string{"logs/", "remote-create/", "agent-runs/", "slack-inbound/"}
+	var rules []s3types.LifecycleRule
+	for _, p := range transientPrefixes {
+		rules = append(rules, makeTransientRule("km-doctor-expire-"+strings.ReplaceAll(p, "/", "-"), p, 30))
+	}
+	putCalls := 0
+	m := &mockS3Lifecycle{
+		getLifecycleFn: func(_ context.Context, _ *s3.GetBucketLifecycleConfigurationInput, _ ...func(*s3.Options)) (*s3.GetBucketLifecycleConfigurationOutput, error) {
+			return &s3.GetBucketLifecycleConfigurationOutput{Rules: rules}, nil
+		},
+		putLifecycleFn: func(_ context.Context, _ *s3.PutBucketLifecycleConfigurationInput, _ ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error) {
+			putCalls++
+			return &s3.PutBucketLifecycleConfigurationOutput{}, nil
+		},
+	}
+	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, true)
+	if r.Status != CheckOK {
+		t.Fatalf("expected OK on second run (idempotent), got %s: %s", r.Status, r.Message)
+	}
+	if putCalls != 0 {
+		t.Errorf("idempotent second run must not Put; got %d calls", putCalls)
 	}
 }

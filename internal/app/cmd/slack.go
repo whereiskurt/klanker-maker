@@ -293,6 +293,11 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 			// reuse and must surface the situation clearly.
 			existingID, lookupErr := api.FindChannelByName(ctx, chName)
 			if lookupErr != nil {
+				var apierr *kmslack.SlackAPIError
+				if errors.As(lookupErr, &apierr) && apierr.Code == "ratelimited" {
+					return fmt.Errorf("channel %q exists but resolving its ID timed out: Slack rate-limited conversations.list while scanning the workspace. "+
+						"Retry shortly, or pick a different name with --shared-channel: %w", chName, lookupErr)
+				}
 				return fmt.Errorf("channel %q exists (name_taken) but lookup via conversations.list failed: %w\n"+
 					"Either grant the bot the channels:read scope and re-run, or pick a different name with --shared-channel", chName, lookupErr)
 			}
