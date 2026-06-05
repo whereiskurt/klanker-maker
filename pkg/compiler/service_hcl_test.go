@@ -733,3 +733,62 @@ func TestBoolPtrHCLTemplateFunc(t *testing.T) {
 		t.Errorf("false case: got %q, want \"false\"", got)
 	}
 }
+
+// ============================================================
+// Phase 94-05: ResourcePrefix log-group path substitution (ECS)
+// ============================================================
+
+// TestECSCWLogGroupResourcePrefix verifies that the ECS audit-log sidecar's
+// CW_LOG_GROUP and awslogs-group render with the dynamic {prefix} from
+// KM_RESOURCE_PREFIX, not the hardcoded /km/ path. Tests both "kph" (non-default)
+// and "km" (default, for byte-identity proof).
+func TestECSCWLogGroupResourcePrefix(t *testing.T) {
+	cases := []struct {
+		prefix          string
+		sandboxID       string
+		wantCWLogGroup  string
+		wantAwslogsGrp  string
+	}{
+		{
+			prefix:         "kph",
+			sandboxID:      "sb-kph-001",
+			wantCWLogGroup: "/kph/sandboxes/sb-kph-001/",
+			wantAwslogsGrp: "/kph/sidecars/sb-kph-001",
+		},
+		{
+			prefix:         "km",
+			sandboxID:      "sb-km-001",
+			wantCWLogGroup: "/km/sandboxes/sb-km-001/",
+			wantAwslogsGrp: "/km/sidecars/sb-km-001",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run("prefix="+tc.prefix, func(t *testing.T) {
+			t.Setenv("KM_RESOURCE_PREFIX", tc.prefix)
+
+			p := baseECSProfile()
+			out, err := generateECSServiceHCL(p, tc.sandboxID, false, nil, baseECSNetwork())
+			if err != nil {
+				t.Fatalf("generateECSServiceHCL failed: %v", err)
+			}
+
+			if !strings.Contains(out, tc.wantCWLogGroup) {
+				t.Errorf("CW_LOG_GROUP: want %q in ECS service.hcl, not found.\nOutput snippet:\n%s",
+					tc.wantCWLogGroup, extractECSLines(out, "CW_LOG_GROUP"))
+			}
+			if !strings.Contains(out, tc.wantAwslogsGrp) {
+				t.Errorf("awslogs-group: want %q in ECS service.hcl, not found.\nOutput snippet:\n%s",
+					tc.wantAwslogsGrp, extractECSLines(out, "awslogs-group"))
+			}
+
+			// Guard: hardcoded /km/ paths must NOT appear when prefix != "km".
+			if tc.prefix != "km" {
+				if strings.Contains(out, `"/km/sandboxes/`) || strings.Contains(out, `"/km/sidecars/`) {
+					t.Errorf("found hardcoded /km/ path in output for prefix=%q (should use /%s/)", tc.prefix, tc.prefix)
+				}
+			}
+		})
+	}
+}

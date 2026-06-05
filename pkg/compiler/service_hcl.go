@@ -352,13 +352,13 @@ const ecsServiceHCLTemplate = `locals {
         environment = [
           { name = "SANDBOX_ID",      value = "{{ .SandboxID }}" },
           { name = "AUDIT_LOG_DEST",  value = "cloudwatch" },
-          { name = "CW_LOG_GROUP",    value = "/km/sandboxes/{{ .SandboxID }}/" }, {{/* TODO(plan-04): replace /km/ with dynamic prefix from ResourcePrefix field */}}
+          { name = "CW_LOG_GROUP",    value = "/{{ .ResourcePrefix }}/sandboxes/{{ .SandboxID }}/" },
           { name = "AWS_REGION",      value = "{{ .Region }}" },
         ]
         log_configuration = {
           log_driver = "awslogs"
           options = {
-            "awslogs-group"         = "/km/sidecars/{{ .SandboxID }}" {{/* TODO(plan-04): replace /km/ with dynamic prefix */}}
+            "awslogs-group"         = "/{{ .ResourcePrefix }}/sidecars/{{ .SandboxID }}"
             "awslogs-region"        = "{{ .Region }}"
             "awslogs-stream-prefix" = "audit-log"
           }
@@ -533,6 +533,7 @@ type ec2HCLParams struct {
 type ecsHCLParams struct {
 	ProfileName           string
 	SandboxID             string
+	ResourcePrefix        string
 	Region                string
 	RegionLabel           string
 	TaskCPU               int
@@ -978,9 +979,17 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	// container image was created in Phase 36.
 	mainImage := sidecarImage("sandbox")
 
+	// Derive the resource prefix early so it can be used in params construction
+	// and re-used in the GitHub token path below (keeping both derivations consistent).
+	ecsResourcePrefix := os.Getenv("KM_RESOURCE_PREFIX")
+	if ecsResourcePrefix == "" {
+		ecsResourcePrefix = "km"
+	}
+
 	params := ecsHCLParams{
 		ProfileName:           p.Metadata.Name,
 		SandboxID:             sandboxID,
+		ResourcePrefix:        ecsResourcePrefix,
 		Region:                p.Spec.Runtime.Region,
 		RegionLabel:           network.RegionLabel,
 		TaskCPU:               ecsDefaultCPU,
@@ -1019,10 +1028,6 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	// Empty allowedRepos is treated as deny-by-default (same as nil github config).
 	if p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
 		params.HasGitHub = true
-		ecsResourcePrefix := os.Getenv("KM_RESOURCE_PREFIX")
-		if ecsResourcePrefix == "" {
-			ecsResourcePrefix = "km"
-		}
 		params.GitHubSSMPath = fmt.Sprintf("/%s/sandbox/%s/github-token", ecsResourcePrefix, sandboxID)
 		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
 		compiledPerms := pkggithub.CompilePermissions(nil)
