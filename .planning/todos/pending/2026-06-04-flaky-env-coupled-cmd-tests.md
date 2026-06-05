@@ -28,10 +28,16 @@ which is why it reads as "flaky":
   a browser for the OAuth flow — `✓ Opened OAuth URL in your default browser`).
 - Another run failed a different 12.
 
-## Observed offenders (union across runs — not exhaustive)
+## Observed offenders (union across 3 runs — set varies run-to-run)
+
+The failing set is non-deterministic: observed runs failed 1, 12, and 20 tests
+respectively. Largest observed run (20):
 
 - `TestRunAgentAuthClaude_TeesAndCleans` (agent_auth_test.go) — invokes real `claude auth status` / browser OAuth
 - `TestEmailRead_EncryptedMessageAutoDecrypts`
+- `TestEmailSend_BodyFromStdin`
+- `TestEmailSend_SuccessNoAttachments`
+- `TestEmailSend_TwoAttachments`
 - `TestLoadEFSOutputs_NotExist`
 - `TestListCmd_EmptyStateBucketError`
 - `TestStatusCmd_EmptyStateBucketError`
@@ -43,6 +49,24 @@ which is why it reads as "flaky":
 - `TestShellCmd_UnknownSubstrate`
 - `TestShellCmd_MissingInstanceID`
 - `TestLearnOutputPath`
+- `TestApplyLifecycleOverrides_RunCreateRemoteSignature` *(0.00s — instant fail)*
+- `TestAtList_WithRecords` *(0.00s — instant fail)*
+- `TestCreateDockerWritesComposeFile` *(0.00s — instant fail)*
+- `TestRunDestroy_GitHubTokenCleanup` *(0.00s — instant fail)*
+
+### Two distinct failure modes observed
+
+1. **Env-coupled (sub-second to multi-second runtime):** assert "missing config →
+   error" but hit the real AWS/lister path + ambient `km-config.yaml`/`KM_*` env, so
+   the command succeeds and the error assertion fails. (See the
+   `TestListCmd_EmptyStateBucketError` evidence above.)
+2. **Instant fail (0.00s):** `TestApplyLifecycleOverrides_…`, `TestAtList_WithRecords`,
+   `TestCreateDockerWritesComposeFile`, `TestRunDestroy_GitHubTokenCleanup` fail in
+   0.00s — too fast to be network. Likely **test-ordering / shared-global-state**
+   pollution under full-suite parallelism (a global mutated by an earlier test).
+   These pass when run in smaller `-run` subsets. Investigate with
+   `go test -run <one> -count=1` (isolated) vs full-suite, and look for package-level
+   `var`/`init()` state or `os.Setenv` without cleanup.
 
 ## NOT in scope of this todo / confirmed unrelated
 
