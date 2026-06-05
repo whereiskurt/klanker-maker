@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: "Completed 94-02-PLAN.md (checkStaleLogGroups: four-family log group orphan detection + retention)"
-last_updated: "2026-06-05T00:53:19.284Z"
+stopped_at: "Completed 94-03-PLAN.md (checkOrphanedDDBRows: four-table DDB orphan scan with AI-preservation and status guard)"
+last_updated: "2026-06-05T01:04:15.088Z"
 last_activity: 2026-06-05
 progress:
   total_phases: 109
   completed_phases: 95
   total_plans: 479
-  completed_plans: 438
+  completed_plans: 439
   percent: 91
 ---
 
@@ -471,6 +471,7 @@ Progress: [█████████░] 91%
 | Phase 93-km-desktop P06 | 363 | 3 tasks | 8 files |
 | Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P01 | 13min | 3 tasks | 4 files |
 | Phase 94 P02 | 10min | 2 tasks | 3 files |
+| Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P03 | 7min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1357,6 +1358,9 @@ Recent decisions affecting current work:
 - [Phase 94-01]: Guardrail flags (SetLogRetention, SetS3Lifecycle) excluded from --with-deletes fan-out per design — explicit opt-in required
 - [Phase 94-01]: Three new narrow interfaces (CWLogsCleanupAPI, DDBScanDeleteAPI, S3LifecycleAPI) follow existing SSMDeleterAPI/S3CleanupAPI narrow-interface convention
 - [Phase 94-02]: logGroupFilterEntry named as package-level type to avoid Go anonymous-struct return-type mismatch; applyLogRetention fetches management groups independently to avoid mixing with sandbox-ID extraction
+- [Phase 94]: BUDGET#ai# rows preserved unconditionally via HasPrefix guard in scanBudgetsTable (AI spend history)
+- [Phase 94]: sandboxDeletableStatuses map restricts sandboxes purge to failed/nocap statuses only
+- [Phase 94]: DDB reserved word 'status' handled via ExpressionAttributeNames in sandboxes ProjectionExpression
 
 ### Roadmap Evolution
 
@@ -1476,6 +1480,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-05T00:53:19.275Z
-Stopped at: Completed 94-02-PLAN.md (checkStaleLogGroups: four-family log group orphan detection + retention)
+Last session: 2026-06-05T01:04:15.078Z
+Stopped at: Completed 94-03-PLAN.md (checkOrphanedDDBRows: four-table DDB orphan scan with AI-preservation and status guard)
 Resume file: None
