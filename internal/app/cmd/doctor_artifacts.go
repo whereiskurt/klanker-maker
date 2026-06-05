@@ -1,4 +1,4 @@
-// Package cmd — orphaned-S3-artifacts detection for `km doctor`.
+// Package cmd — orphaned-S3-artifacts detection and S3 lifecycle guardrail for `km doctor`.
 //
 // km create uploads userdata, the rendered profile, and runtime artifacts to
 // s3://{ArtifactsBucket}/artifacts/{sandbox-id}/... at provisioning time.
@@ -12,15 +12,22 @@
 // CommonPrefixes under "artifacts/", intersect with live sandbox IDs from
 // DynamoDB, and warn (or delete, when --dry-run=false --delete-s3) on any
 // prefix whose sandbox is gone.
+//
+// checkS3LifecyclePolicy detects the absent expiry rule on the artifacts
+// bucket's transient prefixes (logs/, remote-create/, agent-runs/,
+// slack-inbound/), and installs merge-preserving expiry rules when
+// --set-s3-lifecycle is given without --dry-run.
 package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	smithy "github.com/aws/smithy-go"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -220,4 +227,176 @@ func checkOrphanedArtifacts(
 		Status:  CheckWarn,
 		Message: fmt.Sprintf("%d stale artifact prefix(es) (%d deleted, %d skipped, %d objects total)", len(stale), deleted, skipped, objectsDeleted),
 	}
+}
+
+// transientPrefixes are the S3 prefixes on the artifacts bucket that accumulate
+// transient per-run data. They must expire to prevent unbounded bucket growth.
+// Build-artifact prefixes (toolchain/, sidecars/, rsync/) are intentionally
+// absent — we must never expire operator-built binaries.
+var transientPrefixes = []string{"logs/", "remote-create/", "agent-runs/", "slack-inbound/"}
+
+// checkS3LifecyclePolicy inspects the artifacts bucket's lifecycle configuration
+// and warns when one or more transient prefixes lack an expiry rule. When
+// setLifecycle is true and dryRun is false, it merges new rules into the
+// existing configuration and Puts the result (idempotent via stable rule IDs).
+//
+// Existing operator rules are NEVER removed or modified — the Put includes them
+// unchanged. Build-artifact prefixes are never given expiry rules.
+func checkS3LifecyclePolicy(
+	ctx context.Context,
+	client S3LifecycleAPI,
+	bucket string,
+	expireDays int32,
+	dryRun bool,
+	setLifecycle bool,
+) CheckResult {
+	name := "S3 lifecycle expiry (transient prefixes)"
+	if client == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "S3 lifecycle client not configured",
+		}
+	}
+	if bucket == "" {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "artifacts bucket not configured",
+		}
+	}
+
+	// Step 1: Fetch existing lifecycle configuration.
+	// NoSuchLifecycleConfiguration (HTTP 404, error code) means "no rules" — treat as empty.
+	var existingRules []s3types.LifecycleRule
+	out, err := client.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{
+		Bucket: awssdk.String(bucket),
+	})
+	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchLifecycleConfiguration" {
+			// No lifecycle config exists — existingRules stays nil (empty)
+		} else {
+			return CheckResult{
+				Name:    name,
+				Status:  CheckWarn,
+				Message: fmt.Sprintf("GetBucketLifecycleConfiguration: %v", err),
+			}
+		}
+	} else {
+		existingRules = out.Rules
+	}
+
+	// Step 2: Determine which transient prefixes are uncovered.
+	// A prefix is "covered" if an existing rule has that prefix in its Filter
+	// AND has a non-nil Expiration set (any positive Days or Date).
+	coveredSet := make(map[string]bool)
+	for _, rule := range existingRules {
+		if rule.Expiration == nil {
+			continue
+		}
+		prefix := lifecycleRulePrefix(rule)
+		if prefix != "" {
+			coveredSet[prefix] = true
+		}
+	}
+
+	var uncovered []string
+	for _, p := range transientPrefixes {
+		if !coveredSet[p] {
+			uncovered = append(uncovered, p)
+		}
+	}
+
+	// Step 3: All covered → OK (idempotent).
+	if len(uncovered) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckOK,
+			Message: fmt.Sprintf("all %d transient prefix(es) have expiry rules on %s", len(transientPrefixes), bucket),
+		}
+	}
+
+	// Step 4: Covered subset missing and operator hasn't opted in → WARN.
+	if dryRun || !setLifecycle {
+		hintFlag := "--set-s3-lifecycle"
+		if dryRun {
+			hintFlag = "--dry-run=false --set-s3-lifecycle"
+		}
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("%d transient prefix(es) on %s lack expiry rules: %s", len(uncovered), bucket, strings.Join(uncovered, ", ")),
+			Remediation: fmt.Sprintf("use %s to install expiry rules (expire after %d days)", hintFlag, expireDays),
+		}
+	}
+
+	// Step 5: Merge and Put.
+	// De-dup by rule ID: existing rules keyed by ID win; new rules for uncovered
+	// prefixes are appended (their deterministic IDs differ from any existing rule
+	// since they are prefixed "km-doctor-expire-").
+	mergedRules := make([]s3types.LifecycleRule, len(existingRules))
+	copy(mergedRules, existingRules)
+
+	// Build a set of existing rule IDs for de-dup.
+	existingIDs := make(map[string]bool, len(existingRules))
+	for _, r := range existingRules {
+		if r.ID != nil {
+			existingIDs[*r.ID] = true
+		}
+	}
+
+	newRulesAdded := 0
+	for _, p := range uncovered {
+		ruleID := "km-doctor-expire-" + strings.ReplaceAll(p, "/", "")
+		if existingIDs[ruleID] {
+			// Already present by ID (partial prior run) — skip.
+			continue
+		}
+		mergedRules = append(mergedRules, s3types.LifecycleRule{
+			ID:     awssdk.String(ruleID),
+			Status: s3types.ExpirationStatusEnabled,
+			Filter: &s3types.LifecycleRuleFilter{
+				Prefix: awssdk.String(p),
+			},
+			Expiration: &s3types.LifecycleExpiration{
+				Days: awssdk.Int32(expireDays),
+			},
+		})
+		newRulesAdded++
+	}
+
+	_, putErr := client.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
+		Bucket: awssdk.String(bucket),
+		LifecycleConfiguration: &s3types.BucketLifecycleConfiguration{
+			Rules: mergedRules,
+		},
+	})
+	if putErr != nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("PutBucketLifecycleConfiguration failed: %v", putErr),
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("installed %d transient expiry rule(s) on %s (expire after %d days)", newRulesAdded, bucket, expireDays),
+	}
+}
+
+// lifecycleRulePrefix extracts the S3 prefix from a lifecycle rule's Filter.
+// Returns empty string if the rule has no prefix filter.
+func lifecycleRulePrefix(rule s3types.LifecycleRule) string {
+	// Check modern Filter field first.
+	if rule.Filter != nil && rule.Filter.Prefix != nil {
+		return *rule.Filter.Prefix
+	}
+	// Also check the deprecated top-level Prefix field for compatibility.
+	if rule.Prefix != nil {
+		return *rule.Prefix
+	}
+	return ""
 }
