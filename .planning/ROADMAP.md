@@ -2161,7 +2161,9 @@ Plans:
 
 **Requirements**: SLACK-FED-CFG, SLACK-FED-PLUMB, SLACK-FED-RELAY, SLACK-FED-LOOP, SLACK-FED-VERIFY, SLACK-FED-DOCTOR, SLACK-FED-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 95)
 **Depends on:** Phase 94
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 95 to break down)
+- [ ] 95-01-PLAN.md — Config key `slack.peer_bridges` + merge-list + init.go env export + TF/terragrunt plumbing to the bridge Lambda (SLACK-FED-CFG, SLACK-FED-PLUMB)
+- [ ] 95-02-PLAN.md — `PeerRelayer`/`HTTPPeerRelayer` + four-row broadcast-on-miss decision table + bridge wiring; nil-Relayer == today (SLACK-FED-RELAY, SLACK-FED-LOOP, SLACK-FED-VERIFY)
+- [ ] 95-03-PLAN.md — `km doctor` peer-bridge checks + docs/CLAUDE.md + manual two-install E2E UAT (SLACK-FED-DOCTOR, SLACK-FED-E2E)
