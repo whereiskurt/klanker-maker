@@ -2965,6 +2965,31 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkStaleLogGroups(ctx, cwLogsCleanup, listerForCleanup, dryRun, deleteLogs, setLogRetention, retentionDays, logsResourcePrefix)
 	})
 
+	// Orphaned DynamoDB rows check (Phase 94-03).
+	// Scans budgets / identities / slack-threads / sandboxes for rows whose
+	// sandbox-id is gone from the active set. AI spend rows (BUDGET#ai#) are
+	// never deleted. sandboxes rows are deleted only for status∈{failed,nocap}.
+	// Deletion gated on --delete-ddb-rows.
+	ddbScanDelete := deps.DDBScanDeleteClient
+	deleteDDBRows := deps.DeleteDDBRows
+	budgetsTbl := cfg.GetBudgetTableName()
+	if budgetsTbl == "" {
+		budgetsTbl = cfg.GetResourcePrefix() + "-budgets"
+	}
+	identitiesTbl := cfg.GetIdentityTableName()
+	if identitiesTbl == "" {
+		identitiesTbl = cfg.GetResourcePrefix() + "-identities"
+	}
+	slackThreadsTbl := cfg.GetSlackThreadsTableName()
+	sandboxesTbl := cfg.GetSandboxTableName()
+	if sandboxesTbl == "" {
+		sandboxesTbl = cfg.GetResourcePrefix() + "-sandboxes"
+	}
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkOrphanedDDBRows(ctx, ddbScanDelete, listerForCleanup, dryRun, deleteDDBRows,
+			budgetsTbl, identitiesTbl, slackThreadsTbl, sandboxesTbl)
+	})
+
 	// Stale per-sandbox Lambdas check (budget-enforcer + github-token-refresher
 	// for destroyed sandboxes). Deletion gated on --delete-lambdas opt-in.
 	lambdaCleanup := deps.LambdaCleanup
