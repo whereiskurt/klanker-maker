@@ -160,9 +160,49 @@ Mirror the existing `doctor_*_test.go` table-driven style with mocked APIs:
 2. Exact DynamoDB key schemas for `{prefix}-budgets`, `-identities`,
    `-slack-threads`, `-sandboxes` — derived from `pkg/aws` table definitions.
 
+## Root-cause source fix (added 2026-06-04 — scope expansion)
+
+The doctor checks above are a *safety net*; they reclaim the leak but don't stop
+it. Research for this phase found the leak's root cause: the per-sandbox
+CloudWatch log groups are **created** with a hardcoded `km-`/`/km/` prefix while
+teardown (`destroy.go` / `ttl-handler` / `pkg/aws/cloudwatch.go`) **deletes** using
+the dynamic `{resource_prefix}`. On the default `km` install the two match and
+teardown works; on any non-default-prefix install (e.g. `kph`) they never match,
+so every group leaks. This is the `project_teardown_prefix_asymmetry` issue —
+everything else already migrated to `resource_prefix`; these are the stragglers.
+
+**The fix (finish the migration — no-op on the default `km` install):**
+
+| Location | Hardcoded | → |
+|---|---|---|
+| `infra/modules/budget-enforcer/v1.0.0/main.tf:260` | `/aws/lambda/km-budget-enforcer-${var.sandbox_id}` | `${var.resource_prefix}-` |
+| `infra/modules/github-token/v1.0.0/main.tf:159` (+:14 cosmetic) | `/aws/lambda/km-github-token-refresher-…` | `${var.resource_prefix}-` |
+| `pkg/compiler/userdata.go:1197` | `CW_LOG_GROUP=/km/sandboxes/{{ .SandboxID }}/` | `/{{ .ResourcePrefix }}/sandboxes/…` |
+| `pkg/compiler/service_hcl.go:355,361` | `/km/sandboxes/…`, `/km/sidecars/…` | dynamic (existing `TODO(plan-04)`) |
+| `infra/modules/create-handler/v1.0.0/main.tf:41-42` | IAM log-group ARN `/km/sandboxes/*` | `/${var.resource_prefix}/sandboxes/*` (lockstep — else create-handler loses log-write perm) |
+
+**Interaction with detection:** `checkStaleLogGroups` must match BOTH the legacy
+`km-`/`/km/` names (existing orphans) AND the new `{prefix}-`/`/{prefix}/` names,
+deduped by name. On the default install both collapse to the same `km` set.
+
+**Coupling to verify, not assume:** the SCP module references role-name patterns
+`km-budget-enforcer-*` / `km-github-token-refresher-*` (`scp/v1.0.0/main.tf`). The
+Lambda *role* names are already `${var.resource_prefix}-…`, so those SCP patterns
+are a separate pre-existing `km`-hardcode — the plan notes it and fixes it only if
+confirmed load-bearing for non-default installs; no silent scope creep.
+
+**Safety guarantee:** byte-identical compiled output for a `km`-prefix fixture
+(asserted in tests) so the default install is provably unaffected.
+
 ## Rollout
 
-Operator-side binary change only (`km doctor`). No Lambda/terragrunt deploy required:
-`make build`, then `km doctor` to detect, `km doctor --dry-run=false --delete-logs
---delete-ddb-rows` to reclaim, and `km doctor --dry-run=false --set-log-retention
---set-s3-lifecycle` to install the guardrails.
+**Two parts.**
+
+1. **Doctor checks** — operator-side binary only: `make build`, then `km doctor`
+   to detect, `km doctor --dry-run=false --delete-logs --delete-ddb-rows` to
+   reclaim, and `km doctor --dry-run=false --set-log-retention --set-s3-lifecycle`
+   to install the guardrails.
+2. **Root-cause prefix fix** — touches TF modules + the compiler, so it needs a
+   deploy: `make build-lambdas` (clean) + `km init --dry-run=false`. Existing
+   sandboxes do NOT retroactively rename (they keep legacy `km-` groups, which the
+   doctor check still reclaims on teardown). No-op on the default `km` install.
