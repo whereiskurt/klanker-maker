@@ -895,6 +895,22 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			os.Setenv("KM_SLACK_REACT_ALWAYS", yamlSlackReactAlways) //nolint:errcheck
 		}
 	}
+
+	// Phase 95: KM_SLACK_PEER_BRIDGES — comma-joined list of sibling bridge /events URLs.
+	// Consumed by infra/live/use1/lambda-slack-bridge/terragrunt.hcl
+	// get_env("KM_SLACK_PEER_BRIDGES", ""). Only export when the operator has explicitly
+	// set slack.peer_bridges in km-config.yaml. Empty list => omit => terragrunt default ""
+	// applies => federation off. env-wins semantics: when the env var is already set to a
+	// DIFFERENT value, emit a drift WARN and do NOT overwrite it. strings.Join used instead
+	// of strconv.FormatBool since the value is a []string, not a *bool.
+	if len(cfg.Slack.PeerBridges) > 0 {
+		yamlPeerBridges := strings.Join(cfg.Slack.PeerBridges, ",")
+		if envVal := os.Getenv("KM_SLACK_PEER_BRIDGES"); envVal != "" && envVal != yamlPeerBridges {
+			fmt.Fprintf(os.Stderr, "WARN: KM_SLACK_PEER_BRIDGES=%s (env) overrides km-config.yaml slack.peer_bridges=%s\n", envVal, yamlPeerBridges)
+		} else if envVal == "" {
+			os.Setenv("KM_SLACK_PEER_BRIDGES", yamlPeerBridges) //nolint:errcheck
+		}
+	}
 }
 
 // EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at
