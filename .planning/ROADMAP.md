@@ -2161,7 +2161,7 @@ Plans:
 
 **Requirements**: SLACK-FED-CFG, SLACK-FED-PLUMB, SLACK-FED-RELAY, SLACK-FED-LOOP, SLACK-FED-VERIFY, SLACK-FED-DOCTOR, SLACK-FED-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 95)
 **Depends on:** Phase 94
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 95-01-PLAN.md — Config key `slack.peer_bridges` + merge-list + init.go env export + TF/terragrunt plumbing to the bridge Lambda (SLACK-FED-CFG, SLACK-FED-PLUMB)

@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 95-01-PLAN.md (slack.peer_bridges config field + KM_SLACK_PEER_BRIDGES init export + TF plumbing)
-last_updated: "2026-06-05T06:11:58.424Z"
+stopped_at: Completed 95-02-PLAN.md (relay engine + handler wiring + main.go cold-start parsing)
+last_updated: "2026-06-05T06:20:35.409Z"
 last_activity: 2026-06-05
 progress:
   total_phases: 110
   completed_phases: 96
   total_plans: 482
-  completed_plans: 442
+  completed_plans: 443
   percent: 91
 ---
 
@@ -475,6 +475,7 @@ Progress: [█████████░] 91%
 | Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P04 | 612 | 2 tasks | 3 files |
 | Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P05 | 6min | 3 tasks | 11 files |
 | Phase 95-slack-federated-bridge-relay-one-app-many-prefixes P01 | 259s | 3 tasks | 7 files |
+| Phase 95-slack-federated-bridge-relay-one-app-many-prefixes P02 | 316 | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1369,6 +1370,9 @@ Recent decisions affecting current work:
 - [Phase 94-05]: create-handler IAM ARNs moved in lockstep with audit path (/km/sandboxes/* → /{prefix}/sandboxes/*) — without this the Lambda loses log-write permission
 - [Phase 94-05]: SCP v1.0.0 ELSE branch: no resource_prefix var; module unused (live uses v2.0.0 wildcard patterns); added inline comment, no logic change
 - [Phase 95-slack-federated-bridge-relay-one-app-many-prefixes]: Use []string + GetStringSlice for PeerBridges (not *bool tri-state); nil == federation off; merge-list entry is CRITICAL to prevent silent viper drop
+- [Phase 95]: Broadcast synchronous (WaitGroup.Wait) to prevent Lambda freeze from dropping in-flight relay goroutines
+- [Phase 95]: X-KM-Relayed:1 single-header loop guard — relayed miss is TERMINAL, never re-relayed; loops structurally impossible
+- [Phase 95]: nil Relayer == federation off == today (byte-identical nil-invariant protected by explicit test)
 
 ### Roadmap Evolution
 
@@ -1489,6 +1493,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-05T06:11:58.415Z
-Stopped at: Completed 95-01-PLAN.md (slack.peer_bridges config field + KM_SLACK_PEER_BRIDGES init export + TF plumbing)
+Last session: 2026-06-05T06:20:35.400Z
+Stopped at: Completed 95-02-PLAN.md (relay engine + handler wiring + main.go cold-start parsing)
 Resume file: None
