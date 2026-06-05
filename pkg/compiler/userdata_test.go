@@ -45,7 +45,6 @@ func TestIMDSTokenTTL(t *testing.T) {
 	}
 }
 
-
 // ============================================================
 // Claude Code OTEL telemetry env var injection tests (OTEL-01, OTEL-06, OTEL-07)
 // ============================================================
@@ -262,7 +261,6 @@ func TestUserDataIPTablesNoDNATForOTLP(t *testing.T) {
 		}
 	}
 }
-
 
 // TestSpotPollLoopPresent verifies spot poll loop is included when useSpot=true.
 func TestSpotPollLoopPresent(t *testing.T) {
@@ -879,7 +877,7 @@ func TestUserDataAdditionalVolumeWaitMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
-	want := "[km-bootstrap] Waiting for additional volume to attach"
+	want := "(AWS BDM /dev/sdf) to attach"
 	if !strings.Contains(out, want) {
 		t.Errorf("expected %q in user-data when additionalVolume is set\ngot (first 3000 chars):\n%s", want, out[:min(3000, len(out))])
 	}
@@ -2094,8 +2092,8 @@ func TestUserdataAdditionalSnapshots_LoopOrder(t *testing.T) {
 	}
 
 	// Assert exactly 3 occurrences of the section header marker (one per mount block).
-	// The template renders: "# 2.6. Additional EBS volume: format and mount ({{ .Label }})"
-	const sectionMarker = "Additional EBS volume: format and mount ("
+	// The template renders: "# 2.6. Additional EBS volume: resolve, format (if blank) and mount ({{ .Label }})"
+	const sectionMarker = "Additional EBS volume: resolve, format (if blank) and mount ("
 	count := strings.Count(got, sectionMarker)
 	if count != 3 {
 		t.Errorf("expected 3 mount section blocks (got %d); marker=%q", count, sectionMarker)
@@ -2113,12 +2111,13 @@ func TestUserdataAdditionalSnapshots_LoopOrder(t *testing.T) {
 		t.Errorf("mount blocks not in declaration order: /data@%d /opt/models@%d /opt/cache@%d", idxData, idxModels, idxCache)
 	}
 
-	// Assert each device letter appears exactly once in the device probe list.
+	// Assert each device letter is resolved by BDM name exactly once (the old
+	// /dev/xvdX /dev/sdX /dev/nvme1n1 guess was replaced by resolve_ebs_device).
 	for _, letter := range []string{"f", "g", "h"} {
-		probe := fmt.Sprintf("/dev/xvd%s /dev/sd%s", letter, letter)
+		probe := fmt.Sprintf("resolve_ebs_device %q", letter)
 		c := strings.Count(got, probe)
 		if c != 1 {
-			t.Errorf("expected device probe for letter %q exactly once, got %d: probe=%q", letter, c, probe)
+			t.Errorf("expected resolve_ebs_device for letter %q exactly once, got %d: probe=%q", letter, c, probe)
 		}
 	}
 
@@ -2145,7 +2144,7 @@ func TestUserdataBackwardCompat_ZeroDiffNoSnapshots(t *testing.T) {
 	}
 
 	// The additional EBS section header must not appear.
-	const sectionHeader = "Additional EBS volume: format and mount ("
+	const sectionHeader = "Additional EBS volume: resolve, format (if blank) and mount ("
 	if strings.Contains(got, sectionHeader) {
 		t.Error("rendered userdata MUST NOT contain mount section header when no additional volumes/snapshots are configured")
 	}
@@ -2522,5 +2521,74 @@ func TestUserdataCWLogGroupResourcePrefix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestUserdata_AdditionalVolumeBDMResolution — ADDITIONAL_SNAPSHOTS_UBUNTU_MOUNT_FIX.
+// On Ubuntu (no /dev/sdX udev symlinks, no ebsnvme-id), the old mount block fell
+// back to guessing /dev/nvme1n1 / /dev/nvme2n1, which mounted multi-volume
+// sandboxes to the wrong points. A profile with BOTH an additionalVolume (letter
+// f) and an additionalSnapshots entry (letter g) must render the BDM-name
+// resolver, embed the vendored ebsnvme-id, and use claim-tracking +
+// partition-descent + preserve-data instead of the NVMe-index guess.
+func TestUserdata_AdditionalVolumeBDMResolution(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
+		Size:       30,
+		MountPoint: "/data",
+	}
+	p.Spec.Runtime.AdditionalSnapshots = []profile.AdditionalSnapshotSpec{
+		{SnapshotID: "snap-0e27b39b19662f30a", MountPoint: "/repos"},
+	}
+
+	out, err := generateUserData(p, "sb-bdm", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData: %v", err)
+	}
+
+	mustContain := map[string]string{
+		"resolver helper defined":         "resolve_ebs_device() {",
+		"resolver used for additionalVol": `resolve_ebs_device "f"`,
+		"resolver used for snapshot":      `resolve_ebs_device "g"`,
+		"ebsnvme-id provisioned (Ubuntu)": "/opt/km/bin/km-ebsnvme-id.py",
+		"vendored AWS script embedded":    "NVME_ADMIN_IDENTIFY",
+		"AL2023 system tool preferred":    `command -v ebsnvme-id`,
+		"claim-tracking guard":            `mount | grep -q "^$cand "`,
+		"partition descent":               "MOUNT_SRC=",
+		"runs local ioctl (no network)":   "no network",
+	}
+	for what, sub := range mustContain {
+		if !strings.Contains(out, sub) {
+			t.Errorf("missing %s: expected userdata to contain %q", what, sub)
+		}
+	}
+
+	// preserve-data: mkfs only happens under the "no filesystem" guard.
+	if !strings.Contains(out, `if ! blkid "$DEVICE" >/dev/null 2>&1; then`) {
+		t.Errorf("mkfs is not gated behind a blkid check — preserve-data invariant at risk")
+	}
+
+	// The broken NVMe-index guess must be gone from the mount path.
+	if strings.Contains(out, "/dev/nvme1n1 /dev/nvme2n1") {
+		t.Errorf("userdata still contains the old /dev/nvme1n1 /dev/nvme2n1 fallback guess")
+	}
+}
+
+// TestUserdata_NoAdditionalVolume_NoResolver — the resolver + embedded ebsnvme-id
+// must NOT bloat profiles that declare no additional volumes.
+func TestUserdata_NoAdditionalVolume_NoResolver(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Runtime.AdditionalVolume = nil
+	p.Spec.Runtime.AdditionalSnapshots = nil
+
+	out, err := generateUserData(p, "sb-novol", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData: %v", err)
+	}
+	if strings.Contains(out, "resolve_ebs_device() {") {
+		t.Errorf("resolver emitted for a profile with no additional volumes")
+	}
+	if strings.Contains(out, "km-ebsnvme-id.py") {
+		t.Errorf("ebsnvme-id embedded for a profile with no additional volumes")
 	}
 }

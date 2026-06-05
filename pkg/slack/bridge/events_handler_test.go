@@ -1325,3 +1325,59 @@ func TestEventsHandler_ReactAlways_PerSandboxOverride(t *testing.T) {
 		})
 	}
 }
+
+// TestEventsHandler_MentionOnly_PerSandboxOverride verifies the per-sandbox
+// mention_only override: when FetchByChannel returns SandboxRoutingInfo with
+// MentionOnly non-nil, the per-sandbox value wins over the install-level
+// h.MentionOnly. (Wires notification.slack.inbound.mentionOnly through to the
+// bridge, mirroring the Phase 91.5 react_always override.)
+func TestEventsHandler_MentionOnly_PerSandboxOverride(t *testing.T) {
+	now := time.Now()
+	boolPtr := func(b bool) *bool { return &b }
+	const botUID = "UBOT123"
+
+	tests := []struct {
+		name        string
+		installMO   bool   // h.MentionOnly
+		perSbMO     *bool  // info.MentionOnly
+		text        string // top-level message text
+		wantSkipped bool
+	}{
+		{"install=false, per-sb nil, no mention → dispatched (install chatty)", false, nil, "hello", false},
+		{"install=true, per-sb nil, no mention → skipped (install polite)", true, nil, "hello", true},
+		{"install=true, per-sb=&false, no mention → dispatched (per-sb forces chatty)", true, boolPtr(false), "hello", false},
+		{"install=false, per-sb=&true, no mention → skipped (per-sb forces polite)", false, boolPtr(true), "hello", true},
+		{"install=false, per-sb=&true, WITH mention → dispatched", false, boolPtr(true), "yo <@UBOT123>", false},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, sqs, _, _, sandboxes, _, _ := newHandler(now)
+			h.MentionOnly = tc.installMO
+			h.BotUserID = &fakeBotUserID{uid: botUID}
+			sandboxes.info.MentionOnly = tc.perSbMO
+
+			body := fmt.Sprintf(
+				`{"type":"event_callback","event_id":%q,"event":{"type":"message","channel":"C1","user":"U1","text":%q,"ts":"%d.0"}}`,
+				fmt.Sprintf("EMO-%d", i), tc.text, 800+i,
+			)
+			tsHdr, sigHdr := signSlackPayload(t, body, now)
+			resp := h.Handle(context.Background(), EventsRequest{
+				Headers: map[string]string{
+					"x-slack-request-timestamp": tsHdr,
+					"x-slack-signature":         sigHdr,
+				},
+				Body: body,
+			})
+			if resp.StatusCode != 200 {
+				t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+			}
+			if tc.wantSkipped && len(sqs.sends) != 0 {
+				t.Errorf("expected skip (no SQS write), got %d sends", len(sqs.sends))
+			}
+			if !tc.wantSkipped && len(sqs.sends) != 1 {
+				t.Errorf("expected dispatch (1 SQS write), got %d sends", len(sqs.sends))
+			}
+		})
+	}
+}

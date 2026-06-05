@@ -179,19 +179,40 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		return EventsResponse{StatusCode: 200, Body: "ok"}
 	}
 
-	// 4b. Mention-only filter (Phase 91). When MentionOnly is set, skip messages
-	// that do not @-mention the bot. Placed BEFORE dedup (step 5) so non-mention
-	// messages don't consume a nonce slot. Fail-open on BotUserID fetch error
-	// to match isBotLoop's fail-open policy.
+	// 5. Resolve channel → sandbox FIRST. Doing this before dedup means the
+	// mention-only filter below can see the per-sandbox info.MentionOnly override,
+	// and an unknown channel is dropped before consuming a dedup nonce. Dedup
+	// (step 6) runs AFTER the mention filter so non-mention messages in a
+	// mention-only channel never consume a nonce — preserving the Phase 91
+	// polite-bot efficiency in noisy shared channels. (A Slack retry re-runs this
+	// FetchByChannel before being deduped, but retries are rare.)
+	info, err := h.Sandboxes.FetchByChannel(ctx, msg.Channel)
+	if err != nil {
+		h.log().Error("events: channel lookup", "err", err, "channel", msg.Channel)
+		return EventsResponse{StatusCode: 200, Body: "ok"} // 200 to prevent retry storm
+	}
+	if info.SandboxID == "" || info.QueueURL == "" {
+		h.log().Warn("events: unknown channel or inbound disabled", "channel", msg.Channel)
+		return EventsResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// 5b. Mention-only filter (Phase 91; per-sandbox override). When mention-only
+	// is in effect, skip messages that do not @-mention the bot. Runs AFTER
+	// FetchByChannel so the per-sandbox info.MentionOnly tri-state can override the
+	// install-level h.MentionOnly, and BEFORE dedup/upsert/enqueue so a filtered
+	// message consumes no nonce, engages no thread, and dispatches nothing.
+	// Fail-open on BotUserID fetch error to match isBotLoop's policy.
 	//
-	// Phase 91.3: thread-bypass. When the message is a reply in a thread the
-	// bot is already engaged with (a (channel, thread_ts) row exists in
-	// km-slack-threads with sandbox_id set), skip the mention requirement.
-	// Threads are 1:1 conversations with the bot by construction — once the
-	// first mention has dispatched and the upsert lands, every subsequent
-	// reply in that thread is logically directed at the bot. Fail-open on
-	// LookupSandbox error to match isBotLoop's policy.
-	if h.MentionOnly {
+	// Phase 91.3 thread-bypass: when the message is a reply in a thread the bot is
+	// already engaged with (a (channel, thread_ts) row exists in km-slack-threads
+	// with sandbox_id set), skip the mention requirement. Threads are 1:1
+	// conversations with the bot — once the first mention has dispatched and the
+	// upsert lands, every subsequent reply is logically directed at the bot.
+	effectiveMentionOnly := h.MentionOnly
+	if info.MentionOnly != nil {
+		effectiveMentionOnly = *info.MentionOnly
+	}
+	if effectiveMentionOnly {
 		bypassed := false
 		if msg.ThreadTS != "" {
 			sb, lookupErr := h.Threads.LookupSandbox(ctx, msg.Channel, msg.ThreadTS)
@@ -210,13 +231,14 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 				h.log().Warn("events: mention-only: bot_user_id fetch failed; falling open (allow)", "err", err)
 			} else if uid != "" && !strings.Contains(msg.Text, "<@"+uid+">") {
 				h.log().Debug("events: mention-only: skipping non-mention message",
-					"channel", msg.Channel, "ts", msg.TS)
+					"channel", msg.Channel, "ts", msg.TS, "per_sandbox_override", info.MentionOnly != nil)
 				return EventsResponse{StatusCode: 200, Body: "ok"}
 			}
 		}
 	}
 
-	// 5. Dedup event_id
+	// 6. Dedup event_id — after the mention filter (so filtered messages don't
+	// consume a nonce) and before the upsert/enqueue (so duplicates are dropped).
 	if env.EventID != "" {
 		seen, err := h.Nonces.CheckAndStore(ctx, EventNoncePrefix+env.EventID, EventNonceTTL)
 		if err != nil {
@@ -225,17 +247,6 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		} else if seen {
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
-	}
-
-	// 6. Resolve channel → sandbox
-	info, err := h.Sandboxes.FetchByChannel(ctx, msg.Channel)
-	if err != nil {
-		h.log().Error("events: channel lookup", "err", err, "channel", msg.Channel)
-		return EventsResponse{StatusCode: 200, Body: "ok"} // 200 to prevent retry storm
-	}
-	if info.SandboxID == "" || info.QueueURL == "" {
-		h.log().Warn("events: unknown channel or inbound disabled", "channel", msg.Channel)
-		return EventsResponse{StatusCode: 200, Body: "ok"}
 	}
 
 	// 7. Determine thread anchor: top-level posts use msg.TS as the new thread_ts.

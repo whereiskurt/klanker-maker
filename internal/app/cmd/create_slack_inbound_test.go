@@ -375,3 +375,44 @@ func TestCreate_SlackInboundReactAlwaysOverride(t *testing.T) {
 		})
 	}
 }
+
+// TestCreate_SlackInboundMentionOnlyOverride — per-sandbox mention_only wiring.
+// When the profile sets notification.slack.inbound.mentionOnly explicitly,
+// provisionSlackInboundQueue MUST write slack_mention_only="true"|"false" to the
+// km-sandboxes row; when nil the attribute MUST NOT be written so the bridge
+// falls back to the install-level KM_SLACK_MENTION_ONLY default.
+func TestCreate_SlackInboundMentionOnlyOverride(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+	tests := []struct {
+		name      string
+		mentionMO *bool
+		wantAttr  bool
+		wantValue string
+	}{
+		{"nil → no write (install default applies)", nil, false, ""},
+		{"&true → writes slack_mention_only=true", boolPtr(true), true, "true"},
+		{"&false → writes slack_mention_only=false", boolPtr(false), true, "false"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &fakeSQS{}
+			deps, state := makeDeps(t, true, fs, nil, nil)
+			deps.Profile.Spec.Notification.Slack.Inbound.MentionOnly = tc.mentionMO
+
+			if _, err := provisionSlackInboundQueue(context.Background(), deps); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			got, present := state.ddbAttrs["slack_mention_only"]
+			if tc.wantAttr && !present {
+				t.Fatalf("expected slack_mention_only write; attrs=%v", state.ddbAttrs)
+			}
+			if !tc.wantAttr && present {
+				t.Fatalf("expected NO slack_mention_only write (install default); got %q", got)
+			}
+			if tc.wantAttr && got != tc.wantValue {
+				t.Errorf("slack_mention_only: got %q want %q", got, tc.wantValue)
+			}
+		})
+	}
+}
