@@ -69,6 +69,14 @@ type EventsHandler struct {
 	// existing thread) dispatch silently. Wired from KM_SLACK_REACT_ALWAYS env
 	// var at cold-start (defaults to true when env is unset or "true").
 	ReactAlways bool
+
+	// Phase 95: federated relay. When non-nil and FetchByChannel returns empty
+	// (unknown channel), Broadcast is called with the verbatim request body and
+	// Slack headers so a sibling km-install can process the event locally.
+	// nil => federation off => unknown-channel path returns 200 as today
+	// (byte-identical — the nil-invariant MUST be maintained; see
+	// TestEventsHandler_NilRelayer_MissReturns200).
+	Relayer PeerRelayer
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -192,9 +200,39 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		return EventsResponse{StatusCode: 200, Body: "ok"} // 200 to prevent retry storm
 	}
 	if info.SandboxID == "" || info.QueueURL == "" {
-		h.log().Warn("events: unknown channel or inbound disabled", "channel", msg.Channel)
+		// Phase 95: broadcast-on-miss / drop-on-relay decision table.
+		// The relay marker is read from req.Headers (keys already lowercased by
+		// the adapter in main.go lowercaseHeaders). This check runs AFTER
+		// verifySlackSignature so the loop guard is authenticated.
+		//
+		// Decision table:
+		//   | X-KM-Relayed? | Owns channel? | Action                              |
+		//   |---------------|---------------|-------------------------------------|
+		//   | absent        | yes           | (falls through — handled above)     |
+		//   | absent        | no            | broadcast to all peers, return 200  |
+		//   | present       | yes           | (falls through — handled above)     |
+		//   | present       | no            | drop (TERMINAL — no re-relay), 200  |
+		if req.Headers["x-km-relayed"] != "" {
+			// TERMINAL: relayed request + no owner => drop, never re-relay.
+			// Loops structurally impossible by this single-hop terminal guard.
+			h.log().Warn("events: relay miss — no owner for relayed message",
+				"channel", msg.Channel, "event", "slack_relay_no_owner")
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
+		if h.Relayer != nil {
+			// Broadcast raw event to all peer bridges (synchronous, bounded ~2.5s).
+			// The caller returns 200 regardless — a partial broadcast is better
+			// than dropping the event entirely.
+			if err := h.Relayer.Broadcast(ctx, req.Body, req.Headers); err != nil {
+				h.log().Warn("events: relay broadcast partial failure", "err", err,
+					"channel", msg.Channel)
+			}
+		} else {
+			h.log().Warn("events: unknown channel or inbound disabled", "channel", msg.Channel)
+		}
 		return EventsResponse{StatusCode: 200, Body: "ok"}
 	}
+	// present+yes: process locally (fall through — today's path unchanged).
 
 	// 5b. Mention-only filter (Phase 91; per-sandbox override). When mention-only
 	// is in effect, skip messages that do not @-mention the bot. Runs AFTER

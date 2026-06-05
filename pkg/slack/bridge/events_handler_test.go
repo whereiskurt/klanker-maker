@@ -1381,3 +1381,181 @@ func TestEventsHandler_MentionOnly_PerSandboxOverride(t *testing.T) {
 		})
 	}
 }
+
+// ── Phase 95: Federated relay decision table ─────────────────────────────────
+
+// fakePeerRelayer is a test double for PeerRelayer.
+// Records all Broadcast calls for assertion and returns a configurable error.
+type fakePeerRelayer struct {
+	mu    sync.Mutex
+	calls []fakeRelayCall
+	err   error
+}
+
+type fakeRelayCall struct {
+	body    string
+	headers map[string]string
+}
+
+func (f *fakePeerRelayer) Broadcast(ctx context.Context, rawBody string, h map[string]string) error {
+	f.mu.Lock()
+	f.calls = append(f.calls, fakeRelayCall{rawBody, h})
+	f.mu.Unlock()
+	return f.err
+}
+
+func (f *fakePeerRelayer) snapshot() []fakeRelayCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]fakeRelayCall, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+// TestEventsHandler_FederatedRelay exercises the four-row decision table at the
+// FetchByChannel miss site (Phase 95). The table:
+//
+//	| X-KM-Relayed? | Owns channel? | Action                               |
+//	|---------------|---------------|--------------------------------------|
+//	| absent        | yes           | process locally; Relayer NOT invoked |
+//	| absent        | no            | Broadcast called once; returns 200   |
+//	| present       | yes           | process locally; Relayer NOT invoked |
+//	| present       | no            | drop (slack_relay_no_owner); Relayer NOT invoked (loop guard) |
+func TestEventsHandler_FederatedRelay(t *testing.T) {
+	now := time.Now()
+
+	makeBody := func(eventID, channel string) string {
+		return fmt.Sprintf(
+			`{"type":"event_callback","event_id":%q,"event":{"type":"message","channel":%q,"user":"U1","text":"hello","ts":"1.0"}}`,
+			eventID, channel,
+		)
+	}
+
+	tests := []struct {
+		name          string
+		relayed       bool // true = set X-KM-Relayed: 1
+		owns          bool // true = FetchByChannel returns a valid sandbox
+		wantBroadcast int  // expected number of Relayer.Broadcast calls
+		wantSQS       int  // expected number of SQS sends
+	}{
+		{
+			name:          "absent+owns → process locally; relayer NOT invoked",
+			relayed:       false,
+			owns:          true,
+			wantBroadcast: 0,
+			wantSQS:       1,
+		},
+		{
+			name:          "absent+miss → Broadcast called once; returns 200",
+			relayed:       false,
+			owns:          false,
+			wantBroadcast: 1,
+			wantSQS:       0,
+		},
+		{
+			name:          "present+owns → process locally; relayer NOT invoked",
+			relayed:       true,
+			owns:          true,
+			wantBroadcast: 0,
+			wantSQS:       1,
+		},
+		{
+			name:          "present+miss → drop (loop guard); relayer NOT invoked",
+			relayed:       true,
+			owns:          false,
+			wantBroadcast: 0, // CRITICAL: relayer must NEVER be called on relayed miss
+			wantSQS:       0,
+		},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, sqs, _, _, sandboxes, _, _ := newHandler(now)
+
+			relayer := &fakePeerRelayer{}
+			h.Relayer = relayer
+
+			// Configure owns-channel via the sandboxes stub.
+			if tc.owns {
+				sandboxes.info = SandboxRoutingInfo{
+					SandboxID: "sb-abc123",
+					QueueURL:  "https://sqs.example/queue.fifo",
+				}
+			} else {
+				sandboxes.info = SandboxRoutingInfo{} // empty = unknown channel
+			}
+
+			body := makeBody(fmt.Sprintf("EFED-%d", i), "C1")
+			tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+			hdrs := map[string]string{
+				"x-slack-request-timestamp": tsHdr,
+				"x-slack-signature":         sigHdr,
+			}
+			if tc.relayed {
+				hdrs["x-km-relayed"] = "1"
+			}
+
+			resp := h.Handle(context.Background(), EventsRequest{
+				Headers: hdrs,
+				Body:    body,
+			})
+
+			if resp.StatusCode != 200 {
+				t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+			}
+
+			calls := relayer.snapshot()
+			if len(calls) != tc.wantBroadcast {
+				t.Errorf("Relayer.Broadcast calls: got %d, want %d", len(calls), tc.wantBroadcast)
+			}
+
+			if len(sqs.sends) != tc.wantSQS {
+				t.Errorf("SQS sends: got %d, want %d", len(sqs.sends), tc.wantSQS)
+			}
+
+			// Loop-impossibility assertion: on relayed+miss, relayer is strictly NOT invoked.
+			if tc.relayed && !tc.owns && len(calls) != 0 {
+				t.Errorf("LOOP GUARD VIOLATED: relayer was invoked on a relayed miss (calls=%d); loops now possible", len(calls))
+			}
+
+			// When broadcast is expected, verify the original body was forwarded.
+			if tc.wantBroadcast > 0 && len(calls) == 1 {
+				if calls[0].body != body {
+					t.Errorf("Broadcast received wrong body: got %q, want %q", calls[0].body, body)
+				}
+			}
+		})
+	}
+}
+
+// TestEventsHandler_NilRelayer_MissReturns200 is the hard nil-invariant assertion:
+// when EventsHandler.Relayer is nil and FetchByChannel returns no owner (miss),
+// Handle MUST return 200 without broadcasting — byte-identical to today's behavior.
+func TestEventsHandler_NilRelayer_MissReturns200(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, sandboxes, _, _ := newHandler(now)
+
+	// Explicitly nil Relayer — federation off.
+	h.Relayer = nil
+
+	// Unknown channel (miss).
+	sandboxes.info = SandboxRoutingInfo{}
+
+	body := `{"type":"event_callback","event_id":"ENILREL","event":{"type":"message","channel":"C-unknown","user":"U1","text":"hello","ts":"1.0"}}`
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+		Body: body,
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("nil Relayer + miss: expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+	}
+	if len(sqs.sends) != 0 {
+		t.Errorf("nil Relayer + miss: expected no SQS sends, got %d", len(sqs.sends))
+	}
+}
