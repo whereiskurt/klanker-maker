@@ -16,9 +16,13 @@ import (
 
 // Slack Block Kit structural limits.
 const (
-	maxBlocks      = 50   // Slack hard cap: chat.postMessage allows at most 50 blocks
-	maxHeaderChars = 150  // plain_text header text limit
+	maxBlocks       = 50   // Slack hard cap: chat.postMessage allows at most 50 blocks
+	maxHeaderChars  = 150  // plain_text header text limit
 	maxSectionChars = 3000 // mrkdwn section text limit
+	// fenceReserve is the headroom (chars) left below maxSectionChars when a
+	// section contains a ``` fence, so rebalanceFences' re-fence markers
+	// ("```\n" prefix + "\n```" suffix = 8 chars) can't push a chunk over the cap.
+	fenceReserve = 10
 )
 
 // Typed structs for Block Kit JSON elements.
@@ -102,13 +106,28 @@ func renderBlocks(input string) (blocksJSON, fallbackText string, ok bool) {
 	var pendingSection strings.Builder
 
 	flushSection := func() {
-		text := strings.TrimSpace(pendingSection.String())
+		raw := strings.TrimSpace(pendingSection.String())
 		pendingSection.Reset()
-		if text == "" {
+		if raw == "" {
 			return
 		}
-		// Split on 3000-char boundary if needed.
-		chunks := splitSection(text, maxSectionChars)
+		// Mrkdwnify the WHOLE accumulated section in one pass so multi-line
+		// transforms (fencePipeTables) see contiguous runs. The old per-line
+		// Mrkdwnify (in the ordinary-line branch) fed the fencer one line at a
+		// time, so a pipe-table run was never detected on the default blocks
+		// path and rendered as literal `|` text. Mrkdwnify is idempotent, so the
+		// H2/H3 *bold* prefix already written into pendingSection survives.
+		text := Mrkdwnify(raw)
+		// Split on the 3000-char boundary if needed, then rebalance so a split
+		// never leaves a code fence (incl. a fenced table) open across chunks
+		// (§3.2). Only when the section actually contains a fence do we reserve
+		// headroom for the re-fence markers rebalanceFences may add, so ordinary
+		// (non-fenced) sections keep their exact existing split behaviour.
+		budget := maxSectionChars
+		if strings.Contains(text, "```") {
+			budget = maxSectionChars - fenceReserve
+		}
+		chunks := rebalanceFences(splitSection(text, budget))
 		for _, chunk := range chunks {
 			blocks = append(blocks, blockSection{
 				Type: "section",
@@ -117,9 +136,35 @@ func renderBlocks(input string) (blocksJSON, fallbackText string, ok bool) {
 		}
 	}
 
+	// inCodeFence tracks whether we're inside a ``` fenced block in the INPUT.
+	// Lines within a fence (and the ``` delimiters themselves) are accumulated
+	// verbatim and never interpreted as structural (#, ---, tool lines), so a
+	// fenced code sample that contains those characters isn't split apart (§3.3).
+	inCodeFence := false
+
 	for _, rawLine := range lines {
 		// Remove trailing \r if present (Windows line endings).
 		line := strings.TrimRight(rawLine, "\r")
+
+		// Code-fence handling: a ``` delimiter toggles fence state; while a fence
+		// is open, every line (and both delimiters) is ordinary accumulation.
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inCodeFence = !inCodeFence
+			if pendingSection.Len() > 0 {
+				pendingSection.WriteByte('\n')
+			}
+			pendingSection.WriteString(line)
+			fallbackLines = append(fallbackLines, stripForFallback(line))
+			continue
+		}
+		if inCodeFence {
+			if pendingSection.Len() > 0 {
+				pendingSection.WriteByte('\n')
+			}
+			pendingSection.WriteString(line)
+			fallbackLines = append(fallbackLines, stripForFallback(line))
+			continue
+		}
 
 		// 1. Horizontal rule → divider.
 		if reBlockHRule.MatchString(line) {
@@ -170,14 +215,14 @@ func renderBlocks(input string) (blocksJSON, fallbackText string, ok bool) {
 			continue
 		}
 
-		// 5. Ordinary line: accumulate into pending section (with inline mrkdwn).
+		// 5. Ordinary line: accumulate the RAW line. Mrkdwnify runs once over the
+		// whole section at flush time (see flushSection) so multi-line transforms
+		// (fencePipeTables) see the full run.
 		if pendingSection.Len() > 0 {
 			// We already have some content — separate from previous with a newline.
 			pendingSection.WriteByte('\n')
 		}
-		// Apply Mrkdwnify inline transforms to text segments.
-		mrkdwn := Mrkdwnify(line)
-		pendingSection.WriteString(mrkdwn)
+		pendingSection.WriteString(line)
 		// For fallback: strip all markup from the line.
 		fallbackLines = append(fallbackLines, stripForFallback(line))
 	}
@@ -253,6 +298,34 @@ func splitSection(text string, maxLen int) []string {
 		chunks = append(chunks, text)
 	}
 	return chunks
+}
+
+// rebalanceFences ensures every chunk is independently balanced with respect to
+// ``` code fences. When splitSection cuts a fenced block (e.g. a large table)
+// across chunks, the fence is closed at the end of the chunk that opened it and
+// reopened at the start of the next, so each section block renders a balanced
+// fence instead of leaking an unclosed ``` into the rest of the message. The
+// flushSection caller reserves fenceReserve chars of headroom when a fence is
+// present so the added markers can't push a chunk past the Slack section cap.
+// §3.2.
+func rebalanceFences(chunks []string) []string {
+	out := make([]string, 0, len(chunks))
+	reopen := false
+	for _, c := range chunks {
+		if reopen {
+			c = "```\n" + c
+			reopen = false
+		}
+		if strings.Count(c, "```")%2 == 1 {
+			// Fence left open at the end of this chunk: close it here, reopen next.
+			c = strings.TrimRight(c, "\n") + "\n```"
+			reopen = true
+		}
+		if strings.TrimSpace(c) != "" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // stripHeaderMarkup removes backticks, asterisks, and underscores from a header

@@ -16,6 +16,7 @@ package slack
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -386,5 +387,152 @@ func TestBlocksCorpus(t *testing.T) {
 				t.Errorf("blocks mismatch:\n  got:  %s\n  want: %s", gotJ, wantJ)
 			}
 		})
+	}
+}
+
+// --- Slack markdown improvement plan: default-blocks-path table fencing ---
+// These cover the regression where renderBlocks called Mrkdwnify per-line, so
+// fencePipeTables (which needs >=2 consecutive pipe lines in one call) never
+// fired on the default blocks path and GFM tables rendered as literal `|` text.
+
+// sectionTexts returns the mrkdwn text of every section block in the rendered
+// output, in order.
+func sectionTexts(t *testing.T, input string) []string {
+	t.Helper()
+	bj, _, ok := RenderBlocks(input)
+	if !ok {
+		t.Fatalf("RenderBlocks ok=false for input %q", input)
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal([]byte(bj), &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var out []string
+	for _, b := range blocks {
+		if b["type"] != "section" {
+			continue
+		}
+		txt, _ := b["text"].(map[string]any)
+		s, _ := txt["text"].(string)
+		out = append(out, s)
+	}
+	return out
+}
+
+// Case 1: a 2-col GFM table (header + separator + rows) on the default blocks
+// path is wrapped in a single ```-fenced block.
+func TestBlocks_PipeTableFenced(t *testing.T) {
+	input := "Here are the results:\n\n" +
+		"| Folder | Count |\n" +
+		"|--------|-------|\n" +
+		"| vendor | 189 |\n" +
+		"| build  | 216 |\n"
+	joined := strings.Join(sectionTexts(t, input), "\n")
+	if c := strings.Count(joined, "```"); c < 2 {
+		t.Fatalf("expected the table to be wrapped in a ``` fence (>=2 markers); got %d in:\n%s", c, joined)
+	}
+	if strings.Count(joined, "```")%2 != 0 {
+		t.Fatalf("unbalanced ``` fence in rendered section:\n%s", joined)
+	}
+	for _, row := range []string{"| vendor | 189 |", "| build  | 216 |"} {
+		if !strings.Contains(joined, row) {
+			t.Errorf("fenced section missing table row %q:\n%s", row, joined)
+		}
+	}
+}
+
+// Case 2: the screenshot case — table cells the agent pre-backticked (`.git`)
+// stay literal inside the fence rather than rendering as inline code chips.
+func TestBlocks_PipeTableBacktickedCells(t *testing.T) {
+	input := "| Path | Size |\n" +
+		"|------|------|\n" +
+		"| `.git` | 130G |\n" +
+		"| `.cache` | 12G |\n"
+	joined := strings.Join(sectionTexts(t, input), "\n")
+	if c := strings.Count(joined, "```"); c < 2 || c%2 != 0 {
+		t.Fatalf("expected a balanced ``` fence around the table; got %d markers:\n%s", c, joined)
+	}
+	// The pre-backticked cell text is carried verbatim inside the fence.
+	if !strings.Contains(joined, "`.git`") {
+		t.Errorf("expected `.git` cell text preserved inside the fence:\n%s", joined)
+	}
+}
+
+// Case 3: H2 heading immediately followed by a table — heading is one bold line,
+// the table is fenced, and Mrkdwnify is idempotent (rendering twice is stable).
+func TestBlocks_H2ThenTableIdempotent(t *testing.T) {
+	input := "## Disk usage\n" +
+		"| Path | Size |\n" +
+		"|------|------|\n" +
+		"| /data | 30G |\n" +
+		"| /repos | 130G |\n"
+	first := strings.Join(sectionTexts(t, input), "\n")
+	if !strings.Contains(first, "*Disk usage*") {
+		t.Errorf("expected bold H2 heading *Disk usage*:\n%s", first)
+	}
+	if c := strings.Count(first, "```"); c < 2 || c%2 != 0 {
+		t.Errorf("expected balanced ``` fence around table after heading; got %d:\n%s", c, first)
+	}
+	// Idempotence: Mrkdwnify over the already-rendered section text is stable.
+	if got := Mrkdwnify(first); got != first {
+		t.Errorf("Mrkdwnify not idempotent over rendered section:\n got:  %q\n want: %q", got, first)
+	}
+}
+
+// Case 6: a prose paragraph with a single inline pipe is NOT fenced (the >=2
+// consecutive-pipe-line rule must still hold — regression guard).
+func TestBlocks_InlinePipeNotFenced(t *testing.T) {
+	input := "Run `a | b` to pipe the output, then check the log.\n"
+	joined := strings.Join(sectionTexts(t, input), "\n")
+	if strings.Contains(joined, "```") {
+		t.Errorf("single inline pipe must not be fenced as a table:\n%s", joined)
+	}
+}
+
+// Case 5 (§3.3): a fenced code block in the INPUT that contains #, ---, or a
+// tool-line prefix must not be split into header/divider/context blocks.
+func TestBlocks_CodeFenceWithStructuralChars(t *testing.T) {
+	input := "Example:\n\n" +
+		"```\n" +
+		"# a comment, not an H1\n" +
+		"--- not a divider\n" +
+		"🔧 not a tool line\n" +
+		"```\n"
+	bj, _, ok := RenderBlocks(input)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal([]byte(bj), &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for i, b := range blocks {
+		switch b["type"] {
+		case "header", "divider", "context":
+			t.Errorf("block %d is %q — fenced content was misinterpreted as structural", i, b["type"])
+		}
+	}
+	joined := strings.Join(sectionTexts(t, input), "\n")
+	if c := strings.Count(joined, "```"); c%2 != 0 {
+		t.Errorf("input code fence left unbalanced in output (%d markers):\n%s", c, joined)
+	}
+}
+
+// Case 4 (§3.2): a table larger than the section cap does not produce an
+// unbalanced ``` fence across the split section blocks.
+func TestBlocks_LargeTableBalancedFences(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("| Key | Value |\n|-----|-------|\n")
+	for i := 0; i < 400; i++ {
+		fmt.Fprintf(&b, "| key-%03d | %s |\n", i, strings.Repeat("x", 12))
+	}
+	texts := sectionTexts(t, b.String())
+	for i, s := range texts {
+		if strings.Count(s, "```")%2 != 0 {
+			t.Errorf("section %d has an unbalanced ``` fence (len=%d):\n%.200s", i, len(s), s)
+		}
+		if len(s) > maxSectionChars {
+			t.Errorf("section %d len=%d exceeds Slack cap %d (re-fence headroom failed)", i, len(s), maxSectionChars)
+		}
 	}
 }
