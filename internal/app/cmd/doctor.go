@@ -2395,6 +2395,10 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var deleteSSH bool
 	var deleteSSM bool
 	var deleteStateDigests bool
+	var deleteLogs bool
+	var deleteDDBRows bool
+	var setLogRetention bool
+	var setS3Lifecycle bool
 	var withDeletes bool
 	var backfillTags bool
 	var ignorePrefixes []string
@@ -2454,8 +2458,12 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 				deleteSSH = true
 				deleteSSM = true
 				deleteStateDigests = true
+				// Phase 94: --with-deletes implies the two delete flags only.
+				// Guardrail flags (setLogRetention, setS3Lifecycle) stay explicit opt-in.
+				deleteLogs = true
+				deleteDDBRows = true
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests, ignorePrefixes)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests, deleteLogs, deleteDDBRows, setLogRetention, setS3Lifecycle, ignorePrefixes)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
@@ -2478,8 +2486,21 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"With --dry-run=false, delete per-sandbox SSM parameters (signing-key, encryption-key, safe-phrase, github-token) whose sandbox row is gone from DynamoDB. Explicit opt-in required because these parameters contain cryptographic secrets.")
 	cmd.Flags().BoolVar(&deleteStateDigests, "delete-state-digests", false,
 		"With --dry-run=false, delete orphan DDB lock rows where the S3 state object is definitively gone (HeadObject returns NotFound). Generic errors — network, 5xx, throttling — NEVER trigger deletion (logged as 'could not verify'). Live S3 + stale MD5 mismatches are reported but NEVER deleted by this flag.")
+	// Phase 94 flags.
+	cmd.Flags().BoolVar(&deleteLogs, "delete-logs", false,
+		"With --dry-run=false, delete orphaned CloudWatch log groups for destroyed sandboxes "+
+			"(budget-enforcer, github-token-refresher, and sandbox audit-log groups). Implied by --with-deletes.")
+	cmd.Flags().BoolVar(&deleteDDBRows, "delete-ddb-rows", false,
+		"With --dry-run=false, delete DynamoDB rows in budgets/identities/slack-threads for "+
+			"sandboxes whose record is gone from km-sandboxes, and status=failed rows in km-sandboxes. Implied by --with-deletes.")
+	cmd.Flags().BoolVar(&setLogRetention, "set-log-retention", false,
+		"With --dry-run=false, set a retention policy (default 30 days, configurable via doctor_log_retention_days in km-config.yaml) on management and "+
+			"sandbox log groups that currently have no retention. Idempotent no-op if already set.")
+	cmd.Flags().BoolVar(&setS3Lifecycle, "set-s3-lifecycle", false,
+		"With --dry-run=false, install an S3 lifecycle rule expiring transient artifact "+
+			"prefixes (logs/, remote-create/, agent-runs/, slack-inbound/) after N days (default 30, configurable via doctor_s3_expire_days). Idempotent; preserves unrelated rules.")
 	cmd.Flags().BoolVar(&withDeletes, "with-deletes", false,
-		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh --delete-ssm --delete-state-digests. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
+		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh --delete-ssm --delete-state-digests --delete-logs --delete-ddb-rows. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
 	cmd.Flags().BoolVar(&backfillTags, "backfill-tags", false,
 		"Retrofit km:resource-prefix tag onto pre-Phase-82 resources. Uses tag:GetResources(km:sandbox-id=*) filtered by this install's DDB sandbox table. Default --dry-run=true — pass --dry-run=false to apply.")
 	cmd.Flags().StringSliceVar(&ignorePrefixes, "ignore-prefix", nil,
@@ -2488,7 +2509,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests bool, ignorePrefixes []string) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests, deleteLogs, deleteDDBRows, setLogRetention, setS3Lifecycle bool, ignorePrefixes []string) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -2520,6 +2541,11 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	deps.DeleteSSH = deleteSSH
 	deps.DeleteSSM = deleteSSM
 	deps.DeleteStateDigests = deleteStateDigests
+	// Phase 94 — leaked-debris cleanup flags.
+	deps.DeleteLogs = deleteLogs
+	deps.DeleteDDBRows = deleteDDBRows
+	deps.SetLogRetention = setLogRetention
+	deps.SetS3Lifecycle = setS3Lifecycle
 
 	// Merge ignore-prefixes: km-config.yaml doctor_ignore_prefixes + --ignore-prefix
 	// flag, minus the local prefix (never ignore yourself). Preserves any value a

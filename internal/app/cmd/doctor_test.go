@@ -785,6 +785,36 @@ func TestDoctorCmd_DeleteStateDigestsAlone_DoesNotImplyOthers(t *testing.T) {
 	}
 }
 
+// TestDoctorFlags_WithDeletesImpliesNewFlags asserts that --with-deletes sets
+// DeleteLogs=true and DeleteDDBRows=true (Phase 94), while the guardrail flags
+// SetLogRetention and SetS3Lifecycle remain false (they are never implied by
+// --with-deletes — those must be set explicitly).
+func TestDoctorFlags_WithDeletesImpliesNewFlags(t *testing.T) {
+	deps := allOKDeps()
+	cmd := NewDoctorCmdWithDeps(minimalConfig(), deps)
+	cmd.SetOut(new(nopWriter))
+	if err := cmd.Flags().Set("with-deletes", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.RunE(cmd, []string{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// --with-deletes must imply both delete flags.
+	if !deps.DeleteLogs {
+		t.Error("--with-deletes should set DeleteLogs=true")
+	}
+	if !deps.DeleteDDBRows {
+		t.Error("--with-deletes should set DeleteDDBRows=true")
+	}
+	// Guardrail flags must NOT be implied by --with-deletes.
+	if deps.SetLogRetention {
+		t.Error("--with-deletes must NOT set SetLogRetention=true (explicit opt-in only)")
+	}
+	if deps.SetS3Lifecycle {
+		t.Error("--with-deletes must NOT set SetS3Lifecycle=true (explicit opt-in only)")
+	}
+}
+
 func TestDoctorCmd_AllChecksPass_ExitZero(t *testing.T) {
 	deps := allOKDeps()
 	cmd := NewDoctorCmdWithDeps(minimalConfig(), deps)
