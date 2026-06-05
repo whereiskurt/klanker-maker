@@ -28,13 +28,31 @@ destroyed sandboxes left a trail of unbounded-growth debris.
 3. **S3 lifecycle** — artifacts bucket has no expiry rule on transient prefixes
    (`logs/`, `remote-create/`, `agent-runs/`, `slack-inbound/`).
 
-**OUT of scope:** orphan EBS snapshots (manual operator backups, too risky to
-auto-touch). Changing the teardown path (`km destroy` / ttl-handler) — this phase
-is the `km doctor`-side detection/reclamation/prevention only.
+**ALSO IN scope (added 2026-06-04 — root-cause source fix):** finish the
+`resource_prefix` migration so the leak stops at the source, not just the doctor
+safety net. The per-sandbox Lambda log groups and the sandbox/sidecar audit log
+groups are CREATED with a hardcoded `km-`/`/km/` prefix while teardown
+(`destroy.go`/`ttl-handler`/`pkg/aws/cloudwatch.go`) DELETES using the dynamic
+`{resource_prefix}` — so on any non-default-prefix install (e.g. `kph`) the names
+never match and teardown silently leaks every group. This is the
+`project_teardown_prefix_asymmetry` issue. See the "Root-cause prefix fix" section
+in <decisions>.
 
-**Deployment surface:** operator-side binary change only (`km doctor`). No
-Lambda/terragrunt deploy — `make build` and run. Overlaps the known teardown gaps
-in the `project_ttl_handler_ignores_retain_and_lock` memory.
+**OUT of scope:** orphan EBS snapshots (manual operator backups, too risky to
+auto-touch). Adding NEW destroy-time deletion logic — the source fix makes the
+EXISTING teardown code match (by fixing creation names); it does not add new
+cleanup paths.
+
+**Deployment surface:** TWO parts. (1) The doctor checks are operator-side binary
+only (`make build`, run `km doctor`). (2) The root-cause prefix fix touches TF
+modules (budget-enforcer, github-token, create-handler) + the compiler, so it
+requires `make build-lambdas` (clean) + `km init --dry-run=false` to deploy, and
+existing sandboxes do NOT retroactively rename (they keep their legacy `km-`
+groups, which the doctor check still reclaims). The prefix fix is a **no-op on the
+default `km` install** (`km`→`km`); it only changes behavior for non-default
+multi-installs. Overlaps the known teardown gaps in the
+`project_ttl_handler_ignores_retain_and_lock` and `project_teardown_prefix_asymmetry`
+memories.
 </domain>
 
 <decisions>
@@ -65,9 +83,34 @@ in the `project_ttl_handler_ignores_retain_and_lock` memory.
   PutRetentionPolicy), `DDBScanDeleteAPI` (Scan, BatchWriteItem/DeleteItem),
   `S3LifecycleAPI` (Get/PutBucketLifecycleConfiguration).
 
+### Root-cause prefix fix (Wave 5 — added 2026-06-04)
+Finish the `resource_prefix` migration for the per-sandbox CloudWatch log groups so
+new sandboxes are correctly namespaced and the existing teardown code matches them.
+Everything is ALREADY dynamic except these spots (change `km-`/`/km/` → dynamic):
+- `infra/modules/budget-enforcer/v1.0.0/main.tf:260` — `/aws/lambda/km-budget-enforcer-${var.sandbox_id}` → `/aws/lambda/${var.resource_prefix}-budget-enforcer-${var.sandbox_id}`
+- `infra/modules/github-token/v1.0.0/main.tf:159` — `/aws/lambda/km-github-token-refresher-...` → `${var.resource_prefix}-...` (and :14 KMS description, cosmetic)
+- `pkg/compiler/userdata.go:1197` — `CW_LOG_GROUP=/km/sandboxes/{{ .SandboxID }}/` → `/{{ .ResourcePrefix }}/sandboxes/{{ .SandboxID }}/` (`.ResourcePrefix` already in scope, used at userdata.go:286)
+- `pkg/compiler/service_hcl.go:355` — `/km/sandboxes/{{ .SandboxID }}/` → dynamic (has existing `TODO(plan-04)`)
+- `pkg/compiler/service_hcl.go:361` — `/km/sidecars/{{ .SandboxID }}` → dynamic
+- `infra/modules/create-handler/v1.0.0/main.tf:41-42` — IAM log-group ARNs `/km/sandboxes/*` → `/${var.resource_prefix}/sandboxes/*` **(MUST change in lockstep or the create-handler loses log-write permission after the path moves)**
+- COUPLING TO VERIFY in the plan: the SCP module references role-name patterns
+  `km-budget-enforcer-*` / `km-github-token-refresher-*` (scp/v1.0.0/main.tf:23,31).
+  The Lambda ROLE names are already `${var.resource_prefix}-...`, so those SCP
+  patterns are a SEPARATE pre-existing `km`-hardcode — note it, fix only if the
+  plan confirms it's load-bearing for non-default installs; do not silently widen scope.
+- Guarantee: a no-op diff on the default `km` install (`km`→`km`). Verify by
+  asserting compiled output byte-identity for a `km`-prefix fixture.
+
 ### Detection rules
-- **Log groups:** enumerate the three name templates, extract `{id}`, orphan =
-  id ∉ active sandboxes.
+- **Log groups:** enumerate the name templates, extract `{id}`, orphan = id ∉
+  active sandboxes. **Match BOTH the legacy literal `km-`/`/km/` names (existing
+  orphans on non-default installs) AND the new `{resource_prefix}-`/`/{prefix}/`
+  names (post-fix sandboxes), deduped by log-group name** — on the default install
+  both collapse to the same `km` set. Four families: `…/km-budget-enforcer-{id}`,
+  `…/km-github-token-refresher-{id}`, `/km/sandboxes/{id}/`, `/km/sidecars/{id}`
+  (plus their `{prefix}-`/`/{prefix}/` twins). Management Lambda groups
+  (`/aws/lambda/{prefix}-{create-handler,email-handler,slack-bridge,ttl-handler}`)
+  are NEVER deleted — only eligible for `--set-log-retention`.
 - **DDB rows:** scan four tables, extract sandbox-id, orphan = id ∉ active set.
   - `{prefix}-budgets`: **only per-sandbox rows.** AI-model rows
     (`BUDGET#ai#{modelID}`, the Phase 88 metering shape) are explicitly preserved.
@@ -139,8 +182,11 @@ in the `project_ttl_handler_ignores_retain_and_lock` memory.
 ## Deferred / Out of Scope
 
 - Orphan EBS snapshot detection/deletion (manual operator backups — risky).
-- Changing teardown (`km destroy` / ttl-handler) to clean up at destroy-time
-  (separate concern; this phase is the doctor-side safety net).
+- Adding NEW destroy-time deletion logic to `km destroy` / ttl-handler (the
+  root-cause fix makes the EXISTING teardown match by fixing creation names; no new
+  cleanup path is added).
+- Retroactively renaming existing sandboxes' `km-` log groups (they keep legacy
+  names; doctor reclaims them at teardown via the both-names match).
 - TTL attributes on DDB tables as a native expiry mechanism (schema change).
 - Per-install configurable S3 transient-prefix list (YAGNI until needed).
 
