@@ -229,7 +229,7 @@ resource "aws_lambda_function" "budget_enforcer" {
 
   environment {
     variables = {
-      KM_BUDGET_TABLE  = var.budget_table_name
+      KM_BUDGET_TABLE = var.budget_table_name
       # Binary reads KM_SANDBOX_TABLE_NAME (cmd/budget-enforcer/main.go).
       # Was set as KM_SANDBOX_TABLE — close but wrong, off by the _NAME
       # suffix — so the binary fell back to its hardcoded km-sandboxes
@@ -257,7 +257,7 @@ resource "aws_lambda_function" "budget_enforcer" {
 
 # CloudWatch Log Group for Lambda logs (30-day retention)
 resource "aws_cloudwatch_log_group" "budget_enforcer" {
-  name              = "/aws/lambda/km-budget-enforcer-${var.sandbox_id}"
+  name              = "/aws/lambda/${var.resource_prefix}-budget-enforcer-${var.sandbox_id}"
   retention_in_days = 30
 
   tags = {
