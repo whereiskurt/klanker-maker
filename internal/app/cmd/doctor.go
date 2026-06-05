@@ -2952,6 +2952,19 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkStaleSSMParameters(ctx, ssmReaderForCleanup, ssmDeleterForCleanup, listerForCleanup, dryRun, deleteSSM, ssmParamPrefix)
 	})
 
+	// Stale per-sandbox CloudWatch log groups check (Phase 94-02).
+	// Covers all four log-group families under both legacy km- and dynamic
+	// {prefix} names; deletion gated on --delete-logs; retention guardrail
+	// gated on --set-log-retention.
+	cwLogsCleanup := deps.CWLogsCleanupClient
+	deleteLogs := deps.DeleteLogs
+	setLogRetention := deps.SetLogRetention
+	retentionDays := int32(cfg.GetDoctorLogRetentionDays())
+	logsResourcePrefix := cfg.GetResourcePrefix()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkStaleLogGroups(ctx, cwLogsCleanup, listerForCleanup, dryRun, deleteLogs, setLogRetention, retentionDays, logsResourcePrefix)
+	})
+
 	// Stale per-sandbox Lambdas check (budget-enforcer + github-token-refresher
 	// for destroyed sandboxes). Deletion gated on --delete-lambdas opt-in.
 	lambdaCleanup := deps.LambdaCleanup
