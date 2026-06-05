@@ -644,6 +644,7 @@ func (c *testConfig) GetResourcePrefix() string         { return "km" }
 func (c *testConfig) GetDoctorIgnorePrefixes() []string { return nil }
 func (c *testConfig) GetEmailDomain() string            { return "sandboxes.klankermaker.ai" }
 func (c *testConfig) GetSsmPrefix() string              { return "/km/" }
+func (c *testConfig) GetSlackPeerBridges() []string     { return nil }
 func (c *testConfig) GetSlackThreadsTableName() string  { return "km-slack-threads" }
 func (c *testConfig) GetSandboxTableName() string       { return "km-sandboxes" }
 func (c *testConfig) GetClusterRoleNames() []string     { return nil }
@@ -982,6 +983,7 @@ func (c *testDoctorConfig) GetResourcePrefix() string         { return "km" }
 func (c *testDoctorConfig) GetDoctorIgnorePrefixes() []string { return nil }
 func (c *testDoctorConfig) GetEmailDomain() string            { return "sandboxes.klankermaker.ai" }
 func (c *testDoctorConfig) GetSsmPrefix() string              { return "/km/" }
+func (c *testDoctorConfig) GetSlackPeerBridges() []string     { return nil }
 func (c *testDoctorConfig) GetSlackThreadsTableName() string  { return "km-slack-threads" }
 func (c *testDoctorConfig) GetSandboxTableName() string       { return "km-sandboxes" }
 func (c *testDoctorConfig) GetClusterRoleNames() []string     { return nil }

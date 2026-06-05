@@ -249,6 +249,9 @@ type DoctorConfigProvider interface {
 	GetEmailDomain() string
 	// GetSsmPrefix returns the SSM parameter prefix "/{prefix}/".
 	GetSsmPrefix() string
+	// GetSlackPeerBridges returns the Phase 95 federated relay peer URL list from
+	// km-config.yaml slack.peer_bridges. Nil or empty means federation is off.
+	GetSlackPeerBridges() []string
 	// GetSlackThreadsTableName returns the Phase-67 Slack-threads table name.
 	GetSlackThreadsTableName() string
 	// GetSandboxTableName returns the DynamoDB sandboxes table name (Phase 66).
@@ -287,6 +290,7 @@ func (a *appConfigAdapter) GetResourcePrefix() string         { return a.cfg.Get
 func (a *appConfigAdapter) GetDoctorIgnorePrefixes() []string { return a.cfg.GetDoctorIgnorePrefixes() }
 func (a *appConfigAdapter) GetEmailDomain() string            { return a.cfg.GetEmailDomain() }
 func (a *appConfigAdapter) GetSsmPrefix() string              { return a.cfg.GetSsmPrefix() }
+func (a *appConfigAdapter) GetSlackPeerBridges() []string     { return a.cfg.Slack.PeerBridges }
 func (a *appConfigAdapter) GetSlackThreadsTableName() string  { return a.cfg.GetSlackThreadsTableName() }
 func (a *appConfigAdapter) GetSandboxTableName() string       { return a.cfg.GetSandboxTableName() }
 func (a *appConfigAdapter) GetClusterRoleNames() []string {
@@ -3173,6 +3177,22 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	}
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		r := checkSlackBotUserIDCached(ctx, cfg.GetSsmPrefix(), getUID)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
+	// Phase 95 — federated relay peer-bridge validation.
+	// Fetch the own bridge URL from SSM so the self-loop check has something to compare
+	// against. Pass "" when the SSM store is unavailable — the check degrades gracefully.
+	peerBridges := cfg.GetSlackPeerBridges()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		var ownBridgeURL string
+		if slackSSMStore != nil {
+			ownBridgeURL, _ = slackSSMStore.Get(ctx, cfg.GetSsmPrefix()+"slack/bridge-url", false)
+		}
+		r := checkSlackPeerBridges(peerBridges, ownBridgeURL)
 		if r.Status == CheckError {
 			r.Status = CheckWarn
 		}
