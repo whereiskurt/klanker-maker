@@ -128,3 +128,10 @@ variable "slack_react_always" {
   type        = string
   default     = "true"
 }
+
+# Phase 95: federated relay peer URLs (comma-joined). Empty => federation off.
+variable "slack_peer_bridges" {
+  description = "Comma-joined /events URLs of sibling km installs for federated relay (Phase 95). Empty string = federation off."
+  type        = string
+  default     = ""
+}
