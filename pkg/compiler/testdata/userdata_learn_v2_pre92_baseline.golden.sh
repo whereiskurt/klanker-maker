@@ -1650,6 +1650,7 @@ while true; do
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
         export KM_CODEX_RUN_ID='$RUN_ID'
         export KM_SLACK_THREAD_TS='$THREAD_TS'
+        cd /workspace 2>/dev/null || true
         codex exec resume '$CLAUDE_SESSION' \"\$(cat '$PROMPT_FILE')\" \
           --json --dangerously-bypass-approvals-and-sandbox \
           > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
@@ -1662,6 +1663,7 @@ while true; do
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
         export KM_CODEX_RUN_ID='$RUN_ID'
         export KM_SLACK_THREAD_TS='$THREAD_TS'
+        cd /workspace 2>/dev/null || true
         codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
           > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
         echo \$? > '$RUN_DIR/exit_code'
@@ -1683,6 +1685,7 @@ while true; do
       # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
       export PATH=\"/home/sandbox/.local/bin:\$PATH\"
       export KM_SLACK_THREAD_TS='$THREAD_TS'
+      cd /workspace 2>/dev/null || true
       claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
         --dangerously-skip-permissions $RESUME_ARG \
         > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'

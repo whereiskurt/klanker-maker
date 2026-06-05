@@ -233,6 +233,24 @@ func TestUserdata_PollerPostsResultToSlack(t *testing.T) {
 	}
 }
 
+// TestUserdata_PollerAgentRunsInWorkspace — the inbound poller dispatches the
+// agent via `sudo -u sandbox bash -lc`, which inherits the root systemd cwd (/).
+// Every other agent path (queue-runner, interactive `km agent run`) cd's to
+// /workspace first; the poller must do the same so Slack-triggered turns start
+// in the work tree, not /. Asserts the cd appears in all three dispatch blocks
+// (claude, codex resume, codex first-turn).
+func TestUserdata_PollerAgentRunsInWorkspace(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	out := compileInboundUserData(t, p)
+	poller := extractSlackInboundPoller(t, out)
+
+	const cd = "cd /workspace 2>/dev/null || true"
+	if n := strings.Count(poller, cd); n != 3 {
+		t.Fatalf("expected %q before each of the 3 agent dispatch blocks (claude + codex resume + codex first-turn); got %d occurrence(s)\n%s",
+			cd, n, abbreviateUD(poller))
+	}
+}
+
 // TestSlackInboundPoller_ReplyPost_RenderFlag — Phase 74 Task 6 (HOOK-01 inbound).
 // Plan 02 Task 4 flipped the Phase 68 transcript-streaming hook
 // (_km_stream_drain) to --render "${KM_SLACK_RENDER:-blocks}" so per-turn
