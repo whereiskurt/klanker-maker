@@ -1559,3 +1559,35 @@ func TestEventsHandler_NilRelayer_MissReturns200(t *testing.T) {
 		t.Errorf("nil Relayer + miss: expected no SQS sends, got %d", len(sqs.sends))
 	}
 }
+
+// TestVerifySlackSignature_Relayed proves SLACK-FED-VERIFY: a request forwarded
+// by HTTPPeerRelayer with the original body + X-Slack-Request-Timestamp +
+// X-Slack-Signature passes verifySlackSignature on the receiving peer with the
+// shared signing secret. This is a structural guarantee — the HMAC covers the
+// (timestamp, body) pair unchanged, so forwarding them verbatim is sufficient.
+func TestVerifySlackSignature_Relayed(t *testing.T) {
+	const sharedSecret = "test-signing-secret-32-chars-aaaa" // same as testSigningSecret
+	rawBody := `{"type":"event_callback","event":{"type":"message","text":"hello"}}`
+	now := time.Now()
+
+	// Compute the original Slack signature (as Slack would).
+	tsHdr, sigHdr := signSlackPayload(t, rawBody, now)
+
+	// Verify that forwarding (body, tsHdr, sigHdr) verbatim passes the HMAC check.
+	// This is exactly what HTTPPeerRelayer does: it copies these headers onto the
+	// outbound request without modification.
+	if err := verifySlackSignature(sharedSecret, tsHdr, rawBody, sigHdr, now); err != nil {
+		t.Fatalf("relayed request failed verifySlackSignature: %v", err)
+	}
+
+	// Sanity: mutating the body must fail (ensures we're actually checking the HMAC).
+	if err := verifySlackSignature(sharedSecret, tsHdr, rawBody+"tampered", sigHdr, now); err == nil {
+		t.Fatal("expected signature mismatch for tampered body; got nil error")
+	}
+
+	// Sanity: a stale timestamp (>5 min) must fail regardless of HMAC correctness.
+	staleTS, staleSig := signSlackPayload(t, rawBody, now.Add(-6*time.Minute))
+	if err := verifySlackSignature(sharedSecret, staleTS, rawBody, staleSig, now); err == nil {
+		t.Fatal("expected stale-timestamp error; got nil")
+	}
+}
