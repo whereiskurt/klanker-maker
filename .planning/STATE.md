@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: "Completed 94-03-PLAN.md (checkOrphanedDDBRows: four-table DDB orphan scan with AI-preservation and status guard)"
-last_updated: "2026-06-05T01:04:15.088Z"
+stopped_at: "Completed 94-04-PLAN.md (checkS3LifecyclePolicy: S3 lifecycle expiry guardrail for transient prefixes with merge-preserving --set-s3-lifecycle)"
+last_updated: "2026-06-05T01:34:23.004Z"
 last_activity: 2026-06-05
 progress:
   total_phases: 109
   completed_phases: 95
   total_plans: 479
-  completed_plans: 439
+  completed_plans: 440
   percent: 91
 ---
 
@@ -472,6 +472,7 @@ Progress: [█████████░] 91%
 | Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P01 | 13min | 3 tasks | 4 files |
 | Phase 94 P02 | 10min | 2 tasks | 3 files |
 | Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P03 | 7min | 2 tasks | 3 files |
+| Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P04 | 612 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1361,6 +1362,8 @@ Recent decisions affecting current work:
 - [Phase 94]: BUDGET#ai# rows preserved unconditionally via HasPrefix guard in scanBudgetsTable (AI spend history)
 - [Phase 94]: sandboxDeletableStatuses map restricts sandboxes purge to failed/nocap statuses only
 - [Phase 94]: DDB reserved word 'status' handled via ExpressionAttributeNames in sandboxes ProjectionExpression
+- [Phase 94]: smithy.APIError.ErrorCode() pattern for NoSuchLifecycleConfiguration detection (no typed error struct in sdk v1.97.1)
+- [Phase 94]: LifecycleRuleFilter.Prefix struct field (not union member) for lifecycle rule filter; deprecated rule.Prefix also checked for coverage scan
 
 ### Roadmap Evolution
 
@@ -1480,6 +1483,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-05T01:04:15.078Z
-Stopped at: Completed 94-03-PLAN.md (checkOrphanedDDBRows: four-table DDB orphan scan with AI-preservation and status guard)
+Last session: 2026-06-05T01:34:22.994Z
+Stopped at: Completed 94-04-PLAN.md (checkS3LifecyclePolicy: S3 lifecycle expiry guardrail for transient prefixes with merge-preserving --set-s3-lifecycle)
 Resume file: None
