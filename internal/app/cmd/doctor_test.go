@@ -633,6 +633,8 @@ func (c *testConfig) GetIdentityTableName() string     { return "" }
 func (c *testConfig) GetAWSProfile() string            { return "" }
 func (c *testConfig) GetArtifactsBucket() string       { return "" }
 func (c *testConfig) GetDoctorStaleAMIDays() int       { return 30 }
+func (c *testConfig) GetDoctorLogRetentionDays() int   { return 30 }
+func (c *testConfig) GetDoctorS3ExpireDays() int       { return 30 }
 func (c *testConfig) GetProfileSearchPaths() []string  { return nil }
 func (c *testConfig) GetSlackStreamMessagesTableName() string {
 	return "km-slack-stream-messages"

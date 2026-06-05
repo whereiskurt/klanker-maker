@@ -175,6 +175,17 @@ type Config struct {
 	// currently uses it. Maps to km-config.yaml key doctor_stale_ami_days. Defaults to 30.
 	DoctorStaleAMIDays int
 
+	// DoctorLogRetentionDays is the retention period (in days) applied by `km doctor`
+	// when the --set-log-retention flag sets a retention policy on CloudWatch log groups
+	// that currently have none. Maps to km-config.yaml key doctor_log_retention_days. Defaults to 30.
+	DoctorLogRetentionDays int
+
+	// DoctorS3ExpireDays is the expiry period (in days) used by `km doctor` when the
+	// --set-s3-lifecycle flag installs an S3 lifecycle rule expiring transient artifact
+	// prefixes (logs/, remote-create/, agent-runs/, slack-inbound/). Maps to
+	// km-config.yaml key doctor_s3_expire_days. Defaults to 30.
+	DoctorS3ExpireDays int
+
 	// DoctorIgnorePrefixes lists sibling resource_prefix values (other km installs
 	// sharing this AWS account) that `km doctor` should treat as KNOWN — their
 	// cross-install resources (SCPs, SES rules, sandbox-secrets KMS aliases) are
@@ -299,6 +310,8 @@ func Load() (*Config, error) {
 	v.SetDefault("schedules_table_name", "")
 	v.SetDefault("create_handler_lambda_arn", "")
 	v.SetDefault("doctor_stale_ami_days", 30)
+	v.SetDefault("doctor_log_retention_days", 30)
+	v.SetDefault("doctor_s3_expire_days", 30)
 	v.SetDefault("slack_threads_table_name", "")
 	v.SetDefault("slack_stream_messages_table_name", "")
 	v.SetDefault("resource_prefix", "km")
@@ -373,6 +386,8 @@ func Load() (*Config, error) {
 			"ttl_lambda_arn",
 			"scheduler_role_arn",
 			"doctor_stale_ami_days",
+			"doctor_log_retention_days",
+			"doctor_s3_expire_days",
 			"doctor_ignore_prefixes",
 			"slack_threads_table_name",
 			"slack_stream_messages_table_name",
@@ -440,6 +455,8 @@ func Load() (*Config, error) {
 		SchedulesTableName:           v.GetString("schedules_table_name"),
 		CreateHandlerLambdaARN:       v.GetString("create_handler_lambda_arn"),
 		DoctorStaleAMIDays:           v.GetInt("doctor_stale_ami_days"),
+		DoctorLogRetentionDays:       v.GetInt("doctor_log_retention_days"),
+		DoctorS3ExpireDays:           v.GetInt("doctor_s3_expire_days"),
 		DoctorIgnorePrefixes:         v.GetStringSlice("doctor_ignore_prefixes"),
 		SlackThreadsTableName:        v.GetString("slack_threads_table_name"),
 		SlackStreamMessagesTableName: v.GetString("slack_stream_messages_table_name"),
@@ -494,6 +511,14 @@ func Load() (*Config, error) {
 	// which is almost certainly operator misconfiguration. Fall back to the default.
 	if cfg.DoctorStaleAMIDays <= 0 {
 		cfg.DoctorStaleAMIDays = 30
+	}
+	// Clamp DoctorLogRetentionDays: zero or negative would be meaningless. Fall back to 30.
+	if cfg.DoctorLogRetentionDays <= 0 {
+		cfg.DoctorLogRetentionDays = 30
+	}
+	// Clamp DoctorS3ExpireDays: zero or negative would be meaningless. Fall back to 30.
+	if cfg.DoctorS3ExpireDays <= 0 {
+		cfg.DoctorS3ExpireDays = 30
 	}
 
 	// Gap #2b (Phase 84.4.1.1): reject obvious placeholder artifacts_bucket values

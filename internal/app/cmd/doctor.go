@@ -196,6 +196,13 @@ type DoctorConfigProvider interface {
 	// GetDoctorStaleAMIDays returns the threshold in days for the stale-AMI check.
 	// Default is 30 (set in Config.DoctorStaleAMIDays by Plan 02).
 	GetDoctorStaleAMIDays() int
+	// GetDoctorLogRetentionDays returns the retention period in days applied by
+	// --set-log-retention to CloudWatch log groups lacking a retention policy.
+	// Default is 30 (km-config.yaml key: doctor_log_retention_days).
+	GetDoctorLogRetentionDays() int
+	// GetDoctorS3ExpireDays returns the expiry period in days used by --set-s3-lifecycle
+	// to expire transient artifact prefixes. Default is 30 (km-config.yaml key: doctor_s3_expire_days).
+	GetDoctorS3ExpireDays() int
 	// GetProfileSearchPaths returns the list of directories searched for profile YAML files.
 	// Used by checkStaleAMIs to skip AMIs that are still referenced by a profile.
 	GetProfileSearchPaths() []string
@@ -239,6 +246,8 @@ func (a *appConfigAdapter) GetIdentityTableName() string     { return a.cfg.Iden
 func (a *appConfigAdapter) GetAWSProfile() string            { return a.cfg.AWSProfile }
 func (a *appConfigAdapter) GetArtifactsBucket() string       { return a.cfg.ArtifactsBucket }
 func (a *appConfigAdapter) GetDoctorStaleAMIDays() int       { return a.cfg.DoctorStaleAMIDays }
+func (a *appConfigAdapter) GetDoctorLogRetentionDays() int   { return a.cfg.DoctorLogRetentionDays }
+func (a *appConfigAdapter) GetDoctorS3ExpireDays() int       { return a.cfg.DoctorS3ExpireDays }
 func (a *appConfigAdapter) GetProfileSearchPaths() []string  { return a.cfg.ProfileSearchPaths }
 func (a *appConfigAdapter) GetSlackStreamMessagesTableName() string {
 	return a.cfg.GetSlackStreamMessagesTableName()
