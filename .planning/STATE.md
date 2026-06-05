@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: "Completed 93-06-PLAN.md (operator deliverables: profile, skill, docs)"
-last_updated: "2026-06-02T21:14:17.747Z"
-last_activity: 2026-06-02
+stopped_at: "Completed 94-01-PLAN.md (shared infra: interfaces, flags, config knobs)"
+last_updated: "2026-06-05T00:39:58.907Z"
+last_activity: 2026-06-05
 progress:
-  total_phases: 108
+  total_phases: 109
   completed_phases: 95
-  total_plans: 474
-  completed_plans: 436
+  total_plans: 479
+  completed_plans: 437
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 92-00 — all 3 tasks done; pre-Phase-92 byte-identity baselines captured,
 Total Plans in Phase: 7 (92-00 → 92-06)
 Current Plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 Status: in-progress
-Last activity: 2026-06-02
+Last activity: 2026-06-05
 
 Wave 1 UNBLOCKED: both byte-identity baselines (userdata + IAM HCL) committed before any Wave 1 source change.
 
@@ -469,6 +469,7 @@ Progress: [█████████░] 91%
 | Phase 93 P05 | 336 | 2 tasks | 4 files |
 | Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward P04 | 10min | 1 tasks | 2 files |
 | Phase 93-km-desktop P06 | 363 | 3 tasks | 8 files |
+| Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P01 | 13min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1352,6 +1353,8 @@ Recent decisions affecting current work:
 - [Phase 93-km-desktop-kasmvnc-backed-browser-xfce-remote-session-over-ssm-port-forward]: desktop-creds.txt S3 upload in runCreateRemote mirrors vscode-pubkey.txt; Lambda subprocess uses KM_DESKTOP_KASM_USER/PASS env vars instead of re-generating
 - [Phase 93-06]: profiles/desktop.yaml uses ubuntu-24.04 AMI, kiosk mode, firefox browser; schema required sourceAccess + allowedHosts added
 - [Phase 93-06]: Plugin version bumped 0.3.0→0.4.0 in lockstep across plugin.json + marketplace.json
+- [Phase 94-01]: Guardrail flags (SetLogRetention, SetS3Lifecycle) excluded from --with-deletes fan-out per design — explicit opt-in required
+- [Phase 94-01]: Three new narrow interfaces (CWLogsCleanupAPI, DDBScanDeleteAPI, S3LifecycleAPI) follow existing SSMDeleterAPI/S3CleanupAPI narrow-interface convention
 
 ### Roadmap Evolution
 
@@ -1471,6 +1474,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-02T21:14:17.736Z
-Stopped at: Completed 93-06-PLAN.md (operator deliverables: profile, skill, docs)
+Last session: 2026-06-05T00:39:58.898Z
+Stopped at: Completed 94-01-PLAN.md (shared infra: interfaces, flags, config knobs)
 Resume file: None
