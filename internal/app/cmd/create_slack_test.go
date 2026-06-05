@@ -659,7 +659,7 @@ func TestResolveSlack_InvalidOverrideID_Error(t *testing.T) {
 // runStep11dInject tests — Phase 67 SSM Parameter Store path
 //
 // Replaces the prior SendCommand tests after the SCP-bypass refactor. The new
-// step writes /sandbox/{id}/slack-channel-id and reads /km/slack/bridge-url
+// step writes /km/sandbox/{id}/slack-channel-id and reads /km/slack/bridge-url
 // from SSM Parameter Store; the sandbox bootstrap (pkg/compiler/userdata.go)
 // is responsible for picking these up at boot.
 // ─────────────────────────────────────────────────────────────────────────
@@ -714,7 +714,7 @@ func TestStep11d_Success_WritesChannelIDParam(t *testing.T) {
 	if len(put.calls) != 1 {
 		t.Fatalf("expected 1 PutParameter call, got %d", len(put.calls))
 	}
-	wantName := "/sandbox/sb-test/slack-channel-id"
+	wantName := "/km/sandbox/sb-test/slack-channel-id"
 	if put.calls[0].Name != wantName {
 		t.Errorf("PutParameter Name: got %q, want %q", put.calls[0].Name, wantName)
 	}
