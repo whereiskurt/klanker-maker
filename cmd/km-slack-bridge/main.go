@@ -261,6 +261,26 @@ func wireEventsHandler() {
 	// Phase 91: polite-bot mode. Read at cold-start; constant for Lambda lifetime.
 	WireMentionOnly(eventsHandler, botUserIDFetcher)
 
+	// Phase 95: federated relay. Parse KM_SLACK_PEER_BRIDGES; build HTTPPeerRelayer.
+	// nil Relayer => federation off => byte-identical to today's handle path.
+	// KM_SLACK_PEER_BRIDGES is set by the lambda-slack-bridge Terraform module
+	// (var.slack_peer_bridges) from km-config.yaml slack.peer_bridges.
+	if raw := os.Getenv("KM_SLACK_PEER_BRIDGES"); raw != "" {
+		var peers []string
+		for _, u := range strings.Split(raw, ",") {
+			if u = strings.TrimSpace(u); u != "" {
+				peers = append(peers, u)
+			}
+		}
+		if len(peers) > 0 {
+			eventsHandler.Relayer = &bridge.HTTPPeerRelayer{
+				PeerURLs:   peers,
+				HTTPClient: initHTTPClient, // reuse existing shared client
+			}
+			slog.Info("km-slack-bridge: federated relay enabled", "peer_count", len(peers))
+		}
+	}
+
 	// Wire DDBPauseHinter to eventsHandler.PauseHinter.
 	postHintFn := bridge.PostHintFunc(func(ctx context.Context, channelID, threadTS, text string) error {
 		_, err := initPoster.PostMessage(ctx, channelID, "", text, threadTS)

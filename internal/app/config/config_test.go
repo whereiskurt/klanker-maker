@@ -872,6 +872,66 @@ region: us-east-1
 	}
 }
 
+// TestLoadSlackPeerBridges_Set verifies Phase 95 nested key slack.peer_bridges
+// loads from yaml end-to-end (catches the merge-loop allowlist footgun).
+// Asserts len==2 specifically — not just non-nil — to make the merge-list
+// footgun visible: if "slack.peer_bridges" is missing from the v2→v merge-list,
+// cfg.Slack.PeerBridges stays nil even when the key is present in km-config.yaml.
+func TestLoadSlackPeerBridges_Set(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+slack:
+    peer_bridges:
+      - https://abc123.lambda-url.us-east-1.on.aws/events
+      - https://def456.lambda-url.us-east-1.on.aws/events
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.PeerBridges == nil {
+		t.Fatal("Slack.PeerBridges is nil; expected non-nil from yaml load (merge-loop must include slack.peer_bridges)")
+	}
+	if len(cfg.Slack.PeerBridges) != 2 {
+		t.Errorf("Slack.PeerBridges: got len=%d, want 2; values=%v", len(cfg.Slack.PeerBridges), cfg.Slack.PeerBridges)
+	}
+	if cfg.Slack.PeerBridges[0] != "https://abc123.lambda-url.us-east-1.on.aws/events" {
+		t.Errorf("Slack.PeerBridges[0]: got %q, want abc123 URL", cfg.Slack.PeerBridges[0])
+	}
+	if cfg.Slack.PeerBridges[1] != "https://def456.lambda-url.us-east-1.on.aws/events" {
+		t.Errorf("Slack.PeerBridges[1]: got %q, want def456 URL", cfg.Slack.PeerBridges[1])
+	}
+}
+
+// TestLoadSlackPeerBridges_Absent verifies that omitting slack.peer_bridges from
+// yaml yields a nil slice — the "federation off" sentinel for EventsHandler.Relayer.
+func TestLoadSlackPeerBridges_Absent(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.PeerBridges != nil {
+		t.Errorf("Slack.PeerBridges: got %v, want nil (key absent => federation off)", cfg.Slack.PeerBridges)
+	}
+}
+
 // TestDoctorRetentionAndExpireDays verifies the five-touchpoint pattern for the two
 // Phase 94 config knobs: doctor_log_retention_days and doctor_s3_expire_days.
 func TestDoctorRetentionAndExpireDays(t *testing.T) {

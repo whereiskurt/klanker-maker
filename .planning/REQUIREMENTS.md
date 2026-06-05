@@ -523,6 +523,29 @@ plan-checker traceability following the Phase 84.2/84.3/89/93 pattern. Feature:
 
 ---
 
+## Phase 95 — Synthetic IDs (phase-local)
+
+These IDs are phase-local and synthetic — they derive from the Phase 95 design
+spec (`docs/superpowers/specs/2026-06-05-slack-federated-bridge-relay-design.md`)
+and the Phase 95 ROADMAP entry's success criteria. The ROADMAP entry recorded
+these IDs directly (SLACK-FED-*); they are minted here for plan-checker
+traceability following the Phase 84.2/84.3/89/93/94 pattern. Feature: one Slack
+App serving many `resource_prefix` installs/operators in one AWS account via a
+static per-install `slack.peer_bridges` list + single-hop broadcast-on-miss relay.
+
+| ID | Description | Status |
+|----|-------------|--------|
+| SLACK-FED-CFG | `slack.peer_bridges []string` in `km-config.yaml`: `SlackConfig.PeerBridges` struct field, v2→v merge-list entry, tri-state population from `v.GetStringSlice`; absent ⇒ nil ⇒ federation off | Planned |
+| SLACK-FED-PLUMB | `init.go` exports `KM_SLACK_PEER_BRIDGES` (comma-joined) when set, with env-wins drift WARN; terragrunt.hcl `get_env` → TF `slack_peer_bridges` var → Lambda `KM_SLACK_PEER_BRIDGES` env; bridge parses env into peer URL slice | Planned |
+| SLACK-FED-RELAY | `PeerRelayer`/`HTTPPeerRelayer` (`pkg/slack/bridge/relayer.go`) broadcasts verbatim body + `X-Slack-Signature` + `X-Slack-Request-Timestamp` + `X-KM-Relayed:1` to all peers in parallel, bounded context (~2.5s), synchronous before 200; failing peer logged non-fatal; injected into `EventsHandler` (nil ⇒ off) | Planned |
+| SLACK-FED-LOOP | Decision table at the `FetchByChannel` miss site: {relayed?, hit?} → {process, broadcast, drop}; relayed request is terminal (processed-if-owned else dropped `slack_relay_no_owner`), NEVER re-relayed; loop structurally impossible | Planned |
+| SLACK-FED-VERIFY | A relayed request passes the peer's `verifySlackSignature` with the shared signing secret (forwarded body+timestamp unchanged, ±5-min window); peer's normal `/events` path takes over unchanged | Planned |
+| SLACK-FED-DOCTOR | `km doctor` WARNs on malformed `peer_bridges` URL, self-loop (URL == own bridge), and empty `peer_bridges` on the Slack Request-URL host install | Planned |
+| SLACK-FED-E2E | Two installs in one account/region: message in install B's per-sandbox channel delivered to install A's bridge is relayed to + processed by install B (B's SQS enqueue + 👀); correctness invariant = channel-name uniqueness across installs | Planned |
+| SLACK-FED-UAT | Live cross-install relay with one real Slack App + two installs (manual; requires real AWS + Slack) | Planned |
+
+---
+
 *Last updated: 2026-06-02 — Phase 93 synthetic IDs added for plan-checker traceability (15 IDs covering schema, helper, validation, compiler/userdata, credential, CLI, security, profile example, skill, docs, tests)*
 
 ---

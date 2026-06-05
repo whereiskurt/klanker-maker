@@ -1964,3 +1964,134 @@ The following capabilities are explicitly deferred to a future phase:
 - **Display-name mention detection** (`@klankermaker` typed without Slack canonicalising to
   `<@U...>`) — Slack canonicalises on send so this is not expected to be a gap in practice
 - **Reactions-as-actions integration** — different phase
+
+---
+
+## Phase 95: Federated bridge relay — one Slack App, many km installs
+
+**Problem:** Slack requires one canonical Request URL per App. With multiple km installs
+(different `resource_prefix` values) in a single AWS account/region, each install has its
+own bridge Lambda URL. Only one install can be the Slack App's registered "front door"
+— messages for sandboxes owned by the other installs are silently dropped at the front door.
+
+**Solution:** A static relay list. The front-door install broadcasts any unknown-channel event
+to sibling install bridges. Each peer processes the event if it owns the channel; drops it
+(logging `slack_relay_no_owner`) if not. A single `X-KM-Relayed: 1` header is the complete
+loop guard — relayed requests are terminal and are never re-broadcast.
+
+### How it works
+
+```
+Slack App  →  install-A bridge (front door)
+                 ├── channel owned by A?  → process locally (today's path)
+                 └── channel unknown?    → broadcast to [B, C, ...]
+                                              ├── B owns it?  → process + enqueue + 👀 react
+                                              └── C owns it?  → process + enqueue + 👀 react
+```
+
+- **Single-hop only.** The `X-KM-Relayed: 1` header prevents any peer from re-relaying.
+  A relayed request that arrives at a bridge that doesn't own the channel is dropped with
+  `event_type=slack_relay_no_owner` in CloudWatch.
+- **Synchronous, bounded.** The front-door bridge POSTs to all peers in parallel inside a
+  ~2.5-second context window before returning `200` to Slack. Slack's 3-second ack window
+  is honoured. A failing peer is logged (WARN) and non-fatal — the front door always returns
+  200 regardless.
+- **Verbatim forwarding.** Body, `X-Slack-Signature`, and `X-Slack-Request-Timestamp` are
+  forwarded unchanged. Each peer validates the Slack HMAC with the shared signing secret
+  (same credential stored per-install in its own SSM prefix).
+
+### Config: `slack.peer_bridges`
+
+Each install lists the `/events` URLs of SIBLING installs (not itself) in `km-config.yaml`.
+For symmetry, set the list on every install so bi-directional routing works regardless of
+which install gets the message.
+
+```yaml
+# Install A: km-config.yaml (the Slack App Request URL points here — A is the front door)
+slack:
+  peer_bridges:
+    - https://def456.lambda-url.us-east-1.on.aws/events   # install B
+    - https://ghi789.lambda-url.us-east-1.on.aws/events   # install C (if applicable)
+
+# Install B: km-config.yaml
+slack:
+  peer_bridges:
+    - https://abc123.lambda-url.us-east-1.on.aws/events   # install A (front door)
+    - https://ghi789.lambda-url.us-east-1.on.aws/events   # install C (if applicable)
+```
+
+**Key:** `slack.peer_bridges` is a list of strings. Absent or empty means federation is off
+— the install behaves exactly as before Phase 95 (unknown channels return `200` locally;
+no relay occurs). `KM_SLACK_PEER_BRIDGES` is the comma-joined Lambda env var produced by
+`km init`.
+
+### Operator setup flow
+
+1. **Create ONE Slack App.** Obtain its `xoxb-...` bot token and signing secret.
+
+2. **`km slack init` on every install.** Paste the SAME `xoxb-...` + signing secret into
+   each install's `km slack init`. Credentials are stored per-install in each install's own
+   SSM prefix — no shared SSM paths; no coordination between installs.
+
+3. **Set the App's Request URL to the front-door install's bridge `/events` URL.**
+   (`api.slack.com/apps → Event Subscriptions → Request URL`)
+
+4. **Set `slack.peer_bridges` in `km-config.yaml` for each install** (omit self, list
+   siblings; see YAML example above).
+
+5. **Deploy the env change on each install:**
+   ```bash
+   make build-lambdas    # clean rebuild (avoids stale zip pitfall)
+   km init --dry-run=false
+   ```
+   **Use `km init --dry-run=false`, NOT `km init --sidecars`.** The `--sidecars` flag only
+   rebuilds binaries and forces a Lambda cold-start — it does NOT update the Lambda
+   `environment.variables` Terraform block where `KM_SLACK_PEER_BRIDGES` lives. A full
+   `km init` (terragrunt apply) is required.
+
+6. **Verify the env var reached the Lambda:**
+   ```bash
+   aws lambda get-function-configuration \
+     --function-name {prefix}-slack-bridge \
+     --query 'Environment.Variables.KM_SLACK_PEER_BRIDGES' \
+     --output text
+   ```
+
+7. **Run `km doctor`** — the peer-bridge check (`slack peer bridges`) reports `OK` when
+   the list is non-empty, well-formed, and contains no self-loops.
+
+### Correctness invariants
+
+- **Channel/alias uniqueness is required.** Each sandbox's per-sandbox `#sb-{id}` channel
+  is owned by exactly one install (the one that created the sandbox). Per-sandbox channel
+  names are auto-generated from the sandbox ID and are safe by construction.
+- **Shared `#km-notifications` (or any manually named channel) must be registered only
+  once.** Do not configure the same shared channel alias in multiple installs — routing
+  to the wrong sandbox is undefined behaviour.
+- **`url_verification` events are never relayed.** Slack sends `url_verification` once
+  during App setup; it is handled immediately by the front-door bridge before reaching the
+  relay injection point. Peer bridges never see it.
+
+### `km doctor` peer-bridge checks
+
+`km doctor` runs `slack peer bridges` as a WARN-level check (never hard-fails doctor):
+
+| Condition | Result |
+|-----------|--------|
+| `slack.peer_bridges` absent/empty | SKIPPED — federation off |
+| Any entry fails URL parse | WARN — malformed URL |
+| Any entry equals this install's own bridge URL | WARN — self-loop detected |
+| All entries valid and distinct | OK |
+
+Remediation for WARN: edit `km-config.yaml slack.peer_bridges`, then `km init --dry-run=false`.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `km doctor` reports `slack peer bridges` WARN (malformed) | Check `slack.peer_bridges` entries in `km-config.yaml` — each must be a full `https://` URL ending in `/events`. Run `km init --dry-run=false` after fixing. |
+| `km doctor` reports `slack peer bridges` WARN (self-loop) | Remove this install's own bridge URL from `slack.peer_bridges`. The list must contain only sibling install URLs. |
+| Front-door CloudWatch shows `slack_relay_no_owner` | A relayed event arrived at a peer that doesn't own the channel. Check that the sandbox's owning install has been created with `km create` and the channel row exists in DynamoDB. |
+| `KM_SLACK_PEER_BRIDGES` absent in Lambda env | Ran `km init --sidecars` instead of `km init --dry-run=false`. Re-deploy: `make build-lambdas && km init --dry-run=false`. |
+| Relay is slow (>3s) and Slack retries | Peer bridge is unhealthy or unreachable. Check peer CloudWatch logs. Failing peers are non-fatal (logged WARN) but add latency to the front-door response. |
+| Messages delivered twice | A channel alias is configured on more than one install. Ensure channel/alias uniqueness across all installs. |

@@ -108,6 +108,13 @@ inputs = {
   # Set km-config slack.react_always: false to flip to first-only reactions.
   slack_react_always = get_env("KM_SLACK_REACT_ALWAYS", "true")
 
+  # Phase 95 — federated relay peer list. Comma-joined /events URLs of sibling
+  # km installs. Populated by ExportTerragruntEnvVars from km-config.yaml
+  # slack.peer_bridges []string. Empty/absent => no relay (federation off).
+  # Requires km init --dry-run=false to deploy (km init --sidecars does NOT
+  # update the Lambda environment.variables block — terragrunt apply required).
+  slack_peer_bridges = get_env("KM_SLACK_PEER_BRIDGES", "")
+
   tags = {
     "km:component" = "slack-bridge"
     "km:managed"   = "true"

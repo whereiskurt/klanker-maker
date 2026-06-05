@@ -35,6 +35,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Inject SOPS-encrypted secrets into a sandbox | `docs/sandbox-secrets.md` (Phase 89) |
 | Post to Slack from inside a sandbox (incl. transcript streaming, inbound, attachments) | `klanker:slack` skill |
 | Polite-bot mode, `KM_SLACK_MENTION_ONLY`, per-channel @-mention-only inbound | `docs/slack-notifications.md` § Phase 91 |
+| Federated bridge relay — one Slack App across multiple km installs | `docs/slack-notifications.md` § Phase 95 |
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |
@@ -425,3 +426,25 @@ km destroy <sandbox-id> --remote --yes && km create <profile>   # existing sandb
 ```
 
 See `docs/slack-notifications.md` § Phase 91 for the full operator guide and troubleshooting.
+
+### Phase 95: Federated bridge relay — one Slack App, many km installs
+
+Adds opt-in static relay so a single Slack App registration serves multiple km installs.
+Slack delivers all events to one "front door" install; that install broadcasts unknown-channel
+events to peer bridges until the owning install processes them.
+
+- `slack.peer_bridges: []string` — list of sibling install `/events` URLs in `km-config.yaml`.
+  Absent or empty = federation off = byte-identical behaviour to pre-Phase-95.
+- `KM_SLACK_PEER_BRIDGES` — comma-joined Lambda env var written by `km init`. Only updated on
+  a full `km init --dry-run=false` (NOT `km init --sidecars` — env-block change requires full
+  terragrunt apply).
+- **Deploy sequence:** `make build-lambdas` (clean) then `km init --dry-run=false` on each
+  install where `slack.peer_bridges` changed.
+- **Loop guard:** `X-KM-Relayed: 1` header makes relayed requests terminal — never re-relayed.
+- **`km doctor`:** `slack peer bridges` warns on malformed peer URL or self-loop (peer URL ==
+  own bridge URL); skips when the list is absent/empty.
+- **Correctness invariant:** channel name/alias uniqueness across all installs is required.
+  Per-sandbox `#sb-{id}` channels are safe by construction; shared named channels must be
+  registered on exactly one install.
+
+See `docs/slack-notifications.md` § Phase 95 for the full operator guide, setup flow, and troubleshooting.

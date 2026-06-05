@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -569,4 +570,63 @@ func fetchSlackBotScopes(ctx context.Context, botToken string) ([]string, error)
 		}
 	}
 	return scopes, nil
+}
+
+// checkSlackPeerBridges validates the Phase 95 federated relay peer list.
+//
+// Returns:
+//   - SKIPPED: peerBridges is nil or empty — federation is not configured.
+//   - WARN:    any entry is malformed (url.Parse error or empty scheme/host).
+//   - WARN:    any entry equals ownBridgeURL — self-loop detected.
+//   - OK:      all entries are well-formed and none is a self-loop.
+//
+// ownBridgeURL is the install's own bridge /events endpoint (from SSM
+// {prefix}slack/bridge-url). Pass "" when the bridge URL is unavailable —
+// the self-loop check is simply skipped in that case.
+func checkSlackPeerBridges(peerBridges []string, ownBridgeURL string) CheckResult {
+	name := "Slack peer bridges"
+	if len(peerBridges) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "slack.peer_bridges not set — federation off",
+		}
+	}
+
+	var malformed, selfLoop []string
+	for _, raw := range peerBridges {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			malformed = append(malformed, raw)
+			continue
+		}
+		if ownBridgeURL != "" && raw == ownBridgeURL {
+			selfLoop = append(selfLoop, raw)
+		}
+	}
+
+	if len(malformed) > 0 {
+		return CheckResult{
+			Name:   name,
+			Status: CheckWarn,
+			Message: fmt.Sprintf("malformed peer_bridges URL(s): %s — check km-config.yaml slack.peer_bridges",
+				strings.Join(malformed, ", ")),
+			Remediation: "Edit km-config.yaml slack.peer_bridges to list well-formed https:// /events URLs for each sibling km install. Run `km init --dry-run=false` to deploy the updated Lambda env.",
+		}
+	}
+	if len(selfLoop) > 0 {
+		return CheckResult{
+			Name:   name,
+			Status: CheckWarn,
+			Message: fmt.Sprintf("self-loop detected in slack.peer_bridges: %s is this install's own bridge URL — remove it",
+				strings.Join(selfLoop, ", ")),
+			Remediation: "Remove this install's own bridge URL from km-config.yaml slack.peer_bridges. Each entry should be a SIBLING install's /events URL. Run `km init --dry-run=false` after fixing.",
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("slack.peer_bridges configured: %d peer(s); no malformed URLs or self-loops detected", len(peerBridges)),
+	}
 }
