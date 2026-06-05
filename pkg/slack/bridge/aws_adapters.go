@@ -1005,6 +1005,23 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 			info.ReactAlways = &f
 		}
 	}
+	// Per-sandbox mention_only override. Same tri-state contract as react_always:
+	// written by create_slack_inbound.go only when the profile sets
+	// notification.slack.inbound.mentionOnly explicitly; absence leaves
+	// info.MentionOnly nil so the handler falls back to the install-level default.
+	if v, ok := item["slack_mention_only"].(*dynamodbtypes.AttributeValueMemberBOOL); ok {
+		b := v.Value
+		info.MentionOnly = &b
+	} else if v, ok := item["slack_mention_only"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		switch v.Value {
+		case "true":
+			t := true
+			info.MentionOnly = &t
+		case "false":
+			f := false
+			info.MentionOnly = &f
+		}
+	}
 	return info, nil
 }
 

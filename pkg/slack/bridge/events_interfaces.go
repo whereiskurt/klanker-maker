@@ -46,6 +46,13 @@ type SandboxRoutingInfo struct {
 	//   &true  → react on every dispatch for this sandbox
 	//   &false → react only on top-level engagement messages for this sandbox
 	ReactAlways *bool
+	// Per-sandbox override of the install-level KM_SLACK_MENTION_ONLY. Tri-state
+	// via *bool — written by create_slack_inbound.go from the profile's
+	// notification.slack.inbound.mentionOnly field only when explicitly set, so:
+	//   nil    → row has no slack_mention_only attribute → use install default
+	//   &true  → this sandbox requires an @-mention (with thread-bypass)
+	//   &false → this sandbox dispatches every message (chatty), ignoring mentions
+	MentionOnly *bool
 }
 
 // SigningSecretFetcher returns the Slack signing secret used for HMAC

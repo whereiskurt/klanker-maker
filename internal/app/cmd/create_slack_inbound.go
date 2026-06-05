@@ -146,6 +146,25 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 		}
 	}
 
+	// Per-sandbox mention_only override. Same contract as react_always above:
+	// write slack_mention_only to the km-sandboxes row ONLY when the profile
+	// explicitly sets notification.slack.inbound.mentionOnly, so the bridge can
+	// override its install-level KM_SLACK_MENTION_ONLY for this sandbox. Absent
+	// attribute → bridge uses the install-level default. Non-fatal on failure.
+	if inbound.MentionOnly != nil {
+		v := "false"
+		if *inbound.MentionOnly {
+			v = "true"
+		}
+		if updateErr := deps.UpdateSandboxAttr(ctx, deps.SandboxID, "slack_mention_only", v); updateErr != nil {
+			log.Warn().Err(updateErr).Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("persist slack_mention_only per-sandbox override failed; sandbox will use install-level default")
+		} else {
+			log.Info().Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("Slack: persisted per-sandbox mention_only override")
+		}
+	}
+
 	// Publish queue URL to SSM Parameter Store. The sandbox poller reads
 	// /sandbox/{id}/slack-inbound-queue-url at startup with a retry/backoff
 	// fallback when KM_SLACK_INBOUND_QUEUE_URL is empty. SSM SendCommand is
