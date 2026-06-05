@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: "Completed 94-05-PLAN.md (ResourcePrefix migration for per-sandbox CW log groups: TF modules + compiler + byte-identity tests)"
-last_updated: "2026-06-05T01:55:31.726Z"
+stopped_at: Completed 95-01-PLAN.md (slack.peer_bridges config field + KM_SLACK_PEER_BRIDGES init export + TF plumbing)
+last_updated: "2026-06-05T06:11:58.424Z"
 last_activity: 2026-06-05
 progress:
-  total_phases: 109
+  total_phases: 110
   completed_phases: 96
-  total_plans: 479
-  completed_plans: 441
+  total_plans: 482
+  completed_plans: 442
   percent: 91
 ---
 
@@ -474,6 +474,7 @@ Progress: [█████████░] 91%
 | Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P03 | 7min | 2 tasks | 3 files |
 | Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P04 | 612 | 2 tasks | 3 files |
 | Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P05 | 6min | 3 tasks | 11 files |
+| Phase 95-slack-federated-bridge-relay-one-app-many-prefixes P01 | 259s | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1367,6 +1368,7 @@ Recent decisions affecting current work:
 - [Phase 94]: LifecycleRuleFilter.Prefix struct field (not union member) for lifecycle rule filter; deprecated rule.Prefix also checked for coverage scan
 - [Phase 94-05]: create-handler IAM ARNs moved in lockstep with audit path (/km/sandboxes/* → /{prefix}/sandboxes/*) — without this the Lambda loses log-write permission
 - [Phase 94-05]: SCP v1.0.0 ELSE branch: no resource_prefix var; module unused (live uses v2.0.0 wildcard patterns); added inline comment, no logic change
+- [Phase 95-slack-federated-bridge-relay-one-app-many-prefixes]: Use []string + GetStringSlice for PeerBridges (not *bool tri-state); nil == federation off; merge-list entry is CRITICAL to prevent silent viper drop
 
 ### Roadmap Evolution
 
@@ -1487,6 +1489,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-05T01:47:19.682Z
-Stopped at: Completed 94-05-PLAN.md (ResourcePrefix migration for per-sandbox CW log groups: TF modules + compiler + byte-identity tests)
+Last session: 2026-06-05T06:11:58.415Z
+Stopped at: Completed 95-01-PLAN.md (slack.peer_bridges config field + KM_SLACK_PEER_BRIDGES init export + TF plumbing)
 Resume file: None
