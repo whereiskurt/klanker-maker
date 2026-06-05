@@ -41,6 +41,17 @@ type SlackConfig struct {
 	// Maps to km-config.yaml key slack.react_always. Exported as
 	// KM_SLACK_REACT_ALWAYS for the bridge Lambda environment block.
 	ReactAlways *bool `mapstructure:"react_always" yaml:"react_always,omitempty"`
+
+	// PeerBridges is the Phase 95 federated relay peer list — a []string of sibling
+	// km install bridge /events URLs. Exported as KM_SLACK_PEER_BRIDGES (comma-joined)
+	// by ExportTerragruntEnvVars for infra/live/use1/lambda-slack-bridge/terragrunt.hcl
+	// get_env("KM_SLACK_PEER_BRIDGES", "").
+	//   nil   → key absent from yaml; federation off (EventsHandler.Relayer stays nil)
+	//   []URL → broadcast unknown-channel events to all peers (Plan 02 relay logic)
+	// Uses []string directly — NOT the *bool tri-state. Empty explicitly-set slice
+	// is also treated as "federation off" by the len>0 gate in ExportTerragruntEnvVars.
+	// Maps to km-config.yaml key slack.peer_bridges (Phase 95).
+	PeerBridges []string `mapstructure:"peer_bridges" yaml:"peer_bridges,omitempty"`
 }
 
 type ClusterConfig struct {
@@ -399,6 +410,11 @@ func Load() (*Config, error) {
 			"slack.mention_only",
 			// Phase 91.4: nested key for the first-only reactor install-level default.
 			"slack.react_always",
+			// Phase 95: federated relay peer list. CRITICAL: without this entry,
+			// v2.Get("slack.peer_bridges") is never merged into v and the field
+			// stays nil regardless of what is in km-config.yaml (the known
+			// project_config_key_merge_list footgun).
+			"slack.peer_bridges",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -488,6 +504,15 @@ func Load() (*Config, error) {
 	if v.IsSet("slack.react_always") {
 		val := v.GetBool("slack.react_always")
 		cfg.Slack.ReactAlways = &val
+	}
+
+	// Phase 95: slack.peer_bridges is a []string federated relay peer list.
+	// Only populated when explicitly set — absent yaml key => nil slice =>
+	// federation off (EventsHandler.Relayer stays nil). Uses GetStringSlice
+	// directly; NOT the *bool tri-state. nil slice is the "federation off"
+	// sentinel — no pointer indirection needed for []string.
+	if v.IsSet("slack.peer_bridges") {
+		cfg.Slack.PeerBridges = v.GetStringSlice("slack.peer_bridges")
 	}
 
 	// Clusters is a structured slice — viper's UnmarshalKey handles the
