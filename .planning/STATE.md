@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 95-02-PLAN.md (relay engine + handler wiring + main.go cold-start parsing)
-last_updated: "2026-06-05T06:20:35.409Z"
+stopped_at: "Checkpoint: 95-03 Task 3 (SLACK-FED-E2E manual UAT) awaiting operator verification"
+last_updated: "2026-06-05T06:23:57.191Z"
 last_activity: 2026-06-05
 progress:
   total_phases: 110
-  completed_phases: 96
+  completed_phases: 97
   total_plans: 482
-  completed_plans: 443
+  completed_plans: 444
   percent: 91
 ---
 
@@ -476,6 +476,7 @@ Progress: [█████████░] 91%
 | Phase 94-km-doctor-leaked-per-sandbox-debris-cleanup-log-groups-ddb-rows-s3-lifecycle P05 | 6min | 3 tasks | 11 files |
 | Phase 95-slack-federated-bridge-relay-one-app-many-prefixes P01 | 259s | 3 tasks | 7 files |
 | Phase 95-slack-federated-bridge-relay-one-app-many-prefixes P02 | 316 | 3 tasks | 6 files |
+| Phase 95-slack-federated-bridge-relay-one-app-many-prefixes P03 | 7min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1373,6 +1374,8 @@ Recent decisions affecting current work:
 - [Phase 95]: Broadcast synchronous (WaitGroup.Wait) to prevent Lambda freeze from dropping in-flight relay goroutines
 - [Phase 95]: X-KM-Relayed:1 single-header loop guard — relayed miss is TERMINAL, never re-relayed; loops structurally impossible
 - [Phase 95]: nil Relayer == federation off == today (byte-identical nil-invariant protected by explicit test)
+- [Phase 95-03]: checkSlackPeerBridges is a pure function accepting raw strings; ownBridgeURL resolved lazily in doctor.go wiring closure for testability
+- [Phase 95-03]: SLACK-FED-E2E is a manual UAT checkpoint: cannot be automated (needs real Slack App + two live km installs)
 
 ### Roadmap Evolution
 
@@ -1493,6 +1496,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-05T06:20:35.400Z
-Stopped at: Completed 95-02-PLAN.md (relay engine + handler wiring + main.go cold-start parsing)
+Last session: 2026-06-05T06:23:57.183Z
+Stopped at: Checkpoint: 95-03 Task 3 (SLACK-FED-E2E manual UAT) awaiting operator verification
 Resume file: None
