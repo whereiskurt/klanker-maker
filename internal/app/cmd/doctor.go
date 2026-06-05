@@ -174,6 +174,37 @@ type SESGetEmailIdentityAPI interface {
 	GetEmailIdentity(ctx context.Context, params *sesv2.GetEmailIdentityInput, optFns ...func(*sesv2.Options)) (*sesv2.GetEmailIdentityOutput, error)
 }
 
+// CWLogsCleanupAPI covers CloudWatch Logs operations for doctor_log_groups.go.
+// The real *cloudwatchlogs.Client satisfies this interface.
+type CWLogsCleanupAPI interface {
+	DescribeLogGroups(ctx context.Context, input *cloudwatchlogs.DescribeLogGroupsInput,
+		optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogGroupsOutput, error)
+	DeleteLogGroup(ctx context.Context, input *cloudwatchlogs.DeleteLogGroupInput,
+		optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DeleteLogGroupOutput, error)
+	PutRetentionPolicy(ctx context.Context, input *cloudwatchlogs.PutRetentionPolicyInput,
+		optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutRetentionPolicyOutput, error)
+}
+
+// DDBScanDeleteAPI covers DynamoDB operations for doctor_ddb_rows.go.
+// The real *dynamodb.Client satisfies this interface.
+type DDBScanDeleteAPI interface {
+	Scan(ctx context.Context, input *dynamodb.ScanInput,
+		optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
+	DeleteItem(ctx context.Context, input *dynamodb.DeleteItemInput,
+		optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
+	BatchWriteItem(ctx context.Context, input *dynamodb.BatchWriteItemInput,
+		optFns ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error)
+}
+
+// S3LifecycleAPI covers S3 lifecycle operations for checkS3LifecyclePolicy.
+// The real *s3.Client satisfies this interface.
+type S3LifecycleAPI interface {
+	GetBucketLifecycleConfiguration(ctx context.Context, input *s3.GetBucketLifecycleConfigurationInput,
+		optFns ...func(*s3.Options)) (*s3.GetBucketLifecycleConfigurationOutput, error)
+	PutBucketLifecycleConfiguration(ctx context.Context, input *s3.PutBucketLifecycleConfigurationInput,
+		optFns ...func(*s3.Options)) (*s3.PutBucketLifecycleConfigurationOutput, error)
+}
+
 // DoctorConfigProvider abstracts config fields consumed by doctor checks.
 // Both *config.Config (production) and test stubs implement this interface.
 type DoctorConfigProvider interface {
@@ -442,6 +473,29 @@ type DoctorDeps struct {
 	// CodexFetchProfile returns the parsed SandboxProfile for a given sandbox ID.
 	// Wraps downloadProfileFromS3 + profile.Parse in production.
 	CodexFetchProfile ProfileFetcherFunc
+
+	// Phase 94 — leaked-debris cleanup clients.
+	// CWLogsCleanupClient is used by checkStaleLogGroups to enumerate and delete orphaned
+	// per-sandbox CloudWatch log groups and to apply --set-log-retention policies.
+	// Nil causes the check to be skipped.
+	CWLogsCleanupClient CWLogsCleanupAPI
+	// DDBScanDeleteClient is used by checkOrphanedDDBRows to scan and delete orphaned rows
+	// in the budgets/identities/slack-threads/sandboxes tables. Nil = skipped.
+	DDBScanDeleteClient DDBScanDeleteAPI
+	// S3LifecycleClient is used by checkS3LifecyclePolicy to inspect and update the
+	// lifecycle configuration on the artifacts bucket. Nil = skipped.
+	S3LifecycleClient S3LifecycleAPI
+	// Phase 94 — deletion / guardrail opt-ins (honored only with DryRun=false).
+	// DeleteLogs opts checkStaleLogGroups into deleting orphaned log groups.
+	DeleteLogs bool
+	// DeleteDDBRows opts checkOrphanedDDBRows into deleting orphaned DDB rows.
+	DeleteDDBRows bool
+	// SetLogRetention opts checkStaleLogGroups into applying a retention policy to log
+	// groups that currently have none. Idempotent no-op if already set.
+	SetLogRetention bool
+	// SetS3Lifecycle opts checkS3LifecyclePolicy into installing an S3 lifecycle rule
+	// expiring transient artifact prefixes. Idempotent; preserves unrelated rules.
+	SetS3Lifecycle bool
 }
 
 // =============================================================================
@@ -3446,6 +3500,14 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 		}
 		return profilepkg.Parse(profileBytes)
 	}
+
+	// Phase 94 — leaked-debris cleanup clients.
+	// All three underlying SDK constructors are already imported and used elsewhere in this
+	// function (cloudwatchlogs.NewFromConfig at CWFilterClient above, dynamodb.NewFromConfig
+	// at DynamoClient, s3.NewFromConfig at S3Client). Reuse the same awsCfg.
+	deps.CWLogsCleanupClient = cloudwatchlogs.NewFromConfig(awsCfg)
+	deps.DDBScanDeleteClient = dynamodb.NewFromConfig(awsCfg)
+	deps.S3LifecycleClient = s3.NewFromConfig(awsCfg)
 
 	return deps
 }
