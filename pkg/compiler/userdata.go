@@ -186,50 +186,102 @@ mount -o remount,bind,ro "{{ . }}"
 {{- end }}
 echo "[km-bootstrap] Read-only bind mounts applied"
 {{- end }}
+{{- if .AdditionalVolumeMounts }}
+
+# ============================================================
+# 2.6.0. EBS device resolver (shared by all additional-volume mounts)
+# ============================================================
+# On Nitro, EBS volumes appear as /dev/nvmeXn1 with no stable mapping to the AWS
+# block-device-mapping name (sdf, sdg, …) requested at attach time. AL2023 ships
+# the AWS udev rules + ebsnvme-id; Ubuntu ships neither (and has no /dev/sdX
+# symlink), so the old "guess /dev/nvme1n1/nvme2n1" probe mounted multi-volume
+# Ubuntu sandboxes to the wrong points or orphaned them. Resolve by BDM name
+# instead. ebsnvme-id runs a local NVMe ioctl — no network — so it is safe under
+# the sandbox's 53/443-only egress SG.
+if command -v ebsnvme-id >/dev/null 2>&1; then
+  KM_EBSNVME="ebsnvme-id"                                 # AL2023: system tool (basename auto-adds 'id')
+elif command -v python3 >/dev/null 2>&1; then
+  mkdir -p /opt/km/bin
+  cat > /opt/km/bin/km-ebsnvme-id.py << 'KM_EBSNVME_EOF'
+{{ .EbsnvmeIDScript }}
+KM_EBSNVME_EOF
+  chmod 0755 /opt/km/bin/km-ebsnvme-id.py
+  KM_EBSNVME="python3 /opt/km/bin/km-ebsnvme-id.py id"    # Ubuntu: vendored AWS ebsnvme-id (MIT)
+else
+  KM_EBSNVME=""
+  echo "[km-bootstrap] WARNING: neither ebsnvme-id nor python3 present — EBS BDM resolution unavailable"
+fi
+
+# resolve_ebs_device <letter> — echo the /dev node for AWS BDM name sd<letter>,
+# or nothing if unresolved. Tries classic/AL2023 symlinks first, then matches the
+# BDM name embedded in each NVMe controller's vendor data.
+resolve_ebs_device() {
+  want_letter="$1"
+  for d in "/dev/sd${want_letter}" "/dev/xvd${want_letter}"; do
+    [ -b "$d" ] && { echo "$d"; return 0; }
+  done
+  [ -n "$KM_EBSNVME" ] || return 1
+  for n in /dev/nvme*n1; do
+    [ -b "$n" ] || continue
+    bdm=$($KM_EBSNVME -b "$n" 2>/dev/null || true)
+    bdm="${bdm#/dev/}"; bdm="${bdm#xvd}"; bdm="${bdm#sd}"
+    [ "$bdm" = "$want_letter" ] && { echo "$n"; return 0; }
+  done
+  return 1
+}
+{{- end }}
 {{- range .AdditionalVolumeMounts }}
 
 # ============================================================
-# 2.6. Additional EBS volume: format and mount ({{ .Label }})
+# 2.6. Additional EBS volume: resolve, format (if blank) and mount ({{ .Label }})
 # ============================================================
-echo "[km-bootstrap] Waiting for {{ .Label }} to attach (target /dev/sd{{ .DeviceLetter }})..."
+echo "[km-bootstrap] Waiting for {{ .Label }} (AWS BDM /dev/sd{{ .DeviceLetter }}) to attach..."
 DEVICE=""
 for i in $(seq 1 30); do
-  # AL2023: udev creates /dev/xvd{X} symlink automatically from /dev/sd{X} attachment
-  # Ubuntu/other: fall through to direct NVMe probe
-  for dev in /dev/xvd{{ .DeviceLetter }} /dev/sd{{ .DeviceLetter }} /dev/nvme1n1 /dev/nvme2n1; do
-    if [ -b "$dev" ]; then
-      # Verify it's not the root device
-      ROOT_DEV=$(lsblk -no PKNAME $(df / | tail -1 | awk '{print $1}') 2>/dev/null || echo "")
-      DEV_BASE=$(basename "$dev")
-      if [ "$DEV_BASE" != "$ROOT_DEV" ] && ! df / 2>/dev/null | grep -q "$dev"; then
-        DEVICE="$dev"
-        break 2
-      fi
+  cand=$(resolve_ebs_device "{{ .DeviceLetter }}" || true)
+  if [ -n "$cand" ] && [ -b "$cand" ]; then
+    # Claim-tracking: never re-grab a device an earlier mount block already took.
+    if ! mount | grep -q "^$cand "; then
+      DEVICE="$cand"
+      break
     fi
-  done
+  fi
   sleep 2
 done
 
 if [ -n "$DEVICE" ]; then
-  # Format only if no filesystem exists (idempotent; snapshot-restored ext4/xfs/btrfs preserved)
-  if ! blkid "$DEVICE" &>/dev/null; then
-    echo "[km-bootstrap] Formatting $DEVICE as ext4..."
+  # Preserve existing data: only mkfs when there is NO filesystem AND no partition
+  # table. A snapshot of a partitioned disk keeps its fs on a child partition.
+  if ! blkid "$DEVICE" >/dev/null 2>&1; then
+    echo "[km-bootstrap] Formatting blank $DEVICE as ext4..."
     mkfs.ext4 -F "$DEVICE"
+    MOUNT_SRC="$DEVICE"
+  else
+    DEV_FSTYPE=$(blkid -s TYPE -o value "$DEVICE" 2>/dev/null || true)
+    if [ -z "$DEV_FSTYPE" ]; then
+      # Partition table but no top-level fs → descend to the first child partition.
+      PART=$(lsblk -nro NAME,FSTYPE "$DEVICE" 2>/dev/null | awk 'NF==2 && $2!="" {print "/dev/"$1; exit}')
+      MOUNT_SRC="${PART:-$DEVICE}"
+    else
+      MOUNT_SRC="$DEVICE"
+    fi
   fi
-  # Phase 87 — detect FS type for fstab; defaults to ext4 for blank-formatted volumes.
-  FSTYPE=$(blkid -s TYPE -o value "$DEVICE")
+  FSTYPE=$(blkid -s TYPE -o value "$MOUNT_SRC" 2>/dev/null || true)
   [ -z "$FSTYPE" ] && FSTYPE=ext4
+  UUID=$(blkid -s UUID -o value "$MOUNT_SRC" 2>/dev/null || true)
   mkdir -p "{{ .MountPoint }}"
-  # Mount and add to fstab for persistence across reboots
-  DEVICE_UUID=$(blkid -s UUID -o value "$DEVICE")
-  if [ -n "$DEVICE_UUID" ] && ! grep -q "$DEVICE_UUID" /etc/fstab 2>/dev/null; then
-    echo "UUID=${DEVICE_UUID} {{ .MountPoint }} ${FSTYPE} defaults,nofail 0 2" >> /etc/fstab
+  if [ -n "$UUID" ]; then
+    grep -q "$UUID" /etc/fstab 2>/dev/null || \
+      echo "UUID=${UUID} {{ .MountPoint }} ${FSTYPE} defaults,nofail 0 2" >> /etc/fstab
+    mount -a
+  else
+    # No UUID resolvable — mount the source directly so the volume still comes up.
+    mount "$MOUNT_SRC" "{{ .MountPoint }}" || true
   fi
-  mount -a
   chown sandbox:sandbox "{{ .MountPoint }}" 2>/dev/null || true
-  echo "[km-bootstrap] {{ .Label }} mounted at {{ .MountPoint }}"
+  echo "[km-bootstrap] {{ .Label }} ($DEVICE -> $MOUNT_SRC) mounted at {{ .MountPoint }}"
 else
-  echo "[km-bootstrap] WARNING: {{ .Label }} device /dev/sd{{ .DeviceLetter }} not found after 60s"
+  echo "[km-bootstrap] WARNING: {{ .Label }} (AWS BDM /dev/sd{{ .DeviceLetter }}) not found after 60s"
 fi
 {{- end }}
 {{- if .EFSFilesystemID }}
@@ -3932,12 +3984,12 @@ func idleActionFromProfile(p *profile.SandboxProfile) string {
 
 // userDataParams holds the template parameters for user-data generation.
 type userDataParams struct {
-	SandboxID          string
+	SandboxID string
 	// ResourcePrefix is the bare km-config.yaml resource_prefix (e.g. "km",
 	// "kph"). Exported into the sandbox env as KM_RESOURCE_PREFIX so
 	// sandbox-side binaries (km-slack, km-send) can scope SSM paths the same
 	// way the operator did at create time.
-	ResourcePrefix     string
+	ResourcePrefix string
 	// SsmPrefix is the SSM key namespace root including leading and trailing
 	// slashes (e.g. "/km/" or "/kph/"). Equals "/" + ResourcePrefix + "/".
 	// Used to interpolate every per-sandbox SSM path the userdata template
@@ -3950,9 +4002,9 @@ type userDataParams struct {
 	HasAllowedRefs     bool   // true when allowedRefs is non-empty
 	AllowedRefs        string // colon-separated list for KM_ALLOWED_REFS env var
 	AllowedDNSSuffixes string // comma-separated, from profile.Network.Egress.AllowedDNSSuffixes
-	AllowedHTTPHosts     string // comma-separated, from profile.Network.Egress.AllowedHosts
-	GitHubAllowedRepos   string // comma-separated GitHub repos from profile.sourceAccess.github.allowedRepos
-	KMArtifactsBucket    string // from config env var KM_ARTIFACTS_BUCKET
+	AllowedHTTPHosts   string // comma-separated, from profile.Network.Egress.AllowedHosts
+	GitHubAllowedRepos string // comma-separated GitHub repos from profile.sourceAccess.github.allowedRepos
+	KMArtifactsBucket  string // from config env var KM_ARTIFACTS_BUCKET
 	// Filesystem enforcement (section 2.5)
 	ReadOnlyPaths []string
 	WritablePaths []string
@@ -3961,14 +4013,14 @@ type userDataParams struct {
 	ArtifactPaths     []string
 	ArtifactMaxSizeMB int
 	// Email fields (MAIL-02 through MAIL-05)
-	SandboxEmail         string // {sandbox-id}@{emailDomain} (config-derived)
-	EmailDomain          string // e.g. "sandboxes.klankermaker.ai"
-	Alias                string // optional human-friendly alias (e.g. "orc-1")
-	AliasEmail           string // {alias}@{emailDomain} — set when Alias is non-empty
-	AllowedSenders       string // colon-separated allowedSenders patterns from profile (empty = no filtering)
-	NotificationsEmail   string // notifications@{emailDomain} — from address for spot notifications
-	OperatorEmail        string // from KM_OPERATOR_EMAIL env var — for spot notification
-	AWSRegion            string // from IMDS region — for spot notification ses send-email CLI call
+	SandboxEmail       string // {sandbox-id}@{emailDomain} (config-derived)
+	EmailDomain        string // e.g. "sandboxes.klankermaker.ai"
+	Alias              string // optional human-friendly alias (e.g. "orc-1")
+	AliasEmail         string // {alias}@{emailDomain} — set when Alias is non-empty
+	AllowedSenders     string // colon-separated allowedSenders patterns from profile (empty = no filtering)
+	NotificationsEmail string // notifications@{emailDomain} — from address for spot notifications
+	OperatorEmail      string // from KM_OPERATOR_EMAIL env var — for spot notification
+	AWSRegion          string // from IMDS region — for spot notification ses send-email CLI call
 	// Budget enforcement fields (BUDG-03, BUDG-07)
 	BudgetEnabled bool   // true when profile.spec.budget is set
 	BudgetTable   string // DynamoDB table name from KM_BUDGET_TABLE env var
@@ -4021,6 +4073,11 @@ type userDataParams struct {
 	// Includes legacy AdditionalVolume (when set) and each AdditionalSnapshots entry, in declaration order.
 	// When empty, no mount blocks are rendered (backward compatible with pre-Phase-87).
 	AdditionalVolumeMounts []AdditionalVolumeMountEntry
+	// EbsnvmeIDScript is AWS's vendored ebsnvme-id (MIT), embedded into the mount
+	// block so Ubuntu (which lacks ebsnvme-id + the AWS udev symlinks) can resolve
+	// an EBS volume's block-device-mapping letter to its Nitro NVMe node. Only
+	// referenced when AdditionalVolumeMounts is non-empty.
+	EbsnvmeIDScript string
 	// EFS shared filesystem mount (Phase 43)
 	// EFSFilesystemID is non-empty when the profile has mountEFS:true AND EFS is initialized.
 	EFSFilesystemID string
@@ -4432,14 +4489,15 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		SandboxID:          sandboxID,
 		ResourcePrefix:     resourcePrefix,
 		SsmPrefix:          ssmPrefix,
+		EbsnvmeIDScript:    ebsnvmeIDScript,
 		SecretPaths:        secretPaths,
 		HasGitHub:          p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0,
 		HasAllowedRefs:     joinAllowedRefs(p) != "",
 		AllowedRefs:        joinAllowedRefs(p),
-		AllowedDNSSuffixes:  strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
-		AllowedHTTPHosts:    strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
-		GitHubAllowedRepos:  joinGitHubAllowedRepos(p),
-		KMArtifactsBucket:   artifactsBucket,
+		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
+		AllowedHTTPHosts:   strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
+		GitHubAllowedRepos: joinGitHubAllowedRepos(p),
+		KMArtifactsBucket:  artifactsBucket,
 		UseSpot:            useSpot,
 		// Email fields — every sandbox gets an email identity.
 		SandboxEmail:       sandboxID + "@" + emailDomain,
