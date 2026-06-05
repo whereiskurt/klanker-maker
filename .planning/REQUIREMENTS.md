@@ -518,6 +518,7 @@ plan-checker traceability following the Phase 84.2/84.3/89/93 pattern. Feature:
 | DBG-S3-SET | `--set-s3-lifecycle` installs transient-only expiry rules, preserves existing/unrelated rules, never touches build-artifact prefixes, idempotent | Planned |
 | DBG-PAGE | Full pagination on `DescribeLogGroups` (NextToken) and DynamoDB `Scan` (LastEvaluatedKey) | Planned |
 | DBG-MULTI | `--ignore-prefix` / `doctor_ignore_prefixes` + active-set diff isolate sibling installs | Planned |
+| DBG-SRCFIX | Root-cause prefix fix: per-sandbox log groups CREATED with dynamic `{resource_prefix}` (not hardcoded `km-`/`/km/`) in budget-enforcer/github-token/create-handler TF modules + userdata.go/service_hcl.go, so teardown matches on non-default installs; byte-identical compiled output on the default `km` install; `checkStaleLogGroups` matches both legacy and new names | Planned |
 | DBG-UAT | Live reclamation against the `kph` install (manual; requires real AWS account) | Planned |
 
 ---
