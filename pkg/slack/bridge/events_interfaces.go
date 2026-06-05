@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+// PeerRelayer broadcasts a raw Slack Events API request to sibling km-install bridges.
+// Used by EventsHandler when FetchByChannel finds no local owner (Phase 95).
+// Implementations MUST:
+//   - Forward the verbatim body unchanged (Slack HMAC covers body+timestamp).
+//   - Include X-Slack-Signature, X-Slack-Request-Timestamp from slackHeaders.
+//   - Add X-KM-Relayed: 1 to the forwarded request.
+//   - POST to all peers in parallel, bounded by a ~2.5s context.
+//   - Return nil when ALL peers succeed, or an error summarizing failures.
+//   - Always return promptly (the caller returns 200 regardless).
+type PeerRelayer interface {
+	Broadcast(ctx context.Context, rawBody string, slackHeaders map[string]string) error
+}
+
 // SQSSender sends a single message to a FIFO SQS queue.
 type SQSSender interface {
 	Send(ctx context.Context, queueURL, body, groupID, deduplicationID string) error
