@@ -3,6 +3,8 @@ package bridge
 import (
 	"context"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
 // SandboxChannelInfo is the minimal per-sandbox channel information returned
@@ -48,6 +50,12 @@ type PeerRelayer interface {
 // for the router reply (Phase 96).
 type RunningChannelLister interface {
 	ListRunning(ctx context.Context) ([]SandboxChannelInfo, error)
+}
+
+// DDBScanAPI is the narrow DynamoDB interface required by DDBRunningChannelLister.
+// *dynamodb.Client satisfies this interface.
+type DDBScanAPI interface {
+	Scan(ctx context.Context, in *dynamodb.ScanInput, opts ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
 }
 
 // SQSSender sends a single message to a FIFO SQS queue.
