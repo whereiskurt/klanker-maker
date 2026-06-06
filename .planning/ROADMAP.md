@@ -2208,7 +2208,7 @@ Plans:
 
 **Requirements**: GH-APP-SCOPE, GH-BRIDGE-VERIFY, GH-BRIDGE-AUTH, GH-BRIDGE-ROUTE, GH-INBOUND-Q, GH-POLLER, GH-HELPER, GH-PROFILE, GH-CLI, GH-DOCTOR, GH-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 97)
 **Depends on:** Phase 96
-**Plans:** 6/6 plans complete
+**Plans:** 7 plans (6 original + 1 gap-closure for GH-BRIDGE-DEPLOY)
 
 Plans:
 - [ ] 97-01-PLAN.md — github: config block, KM_GITHUB_REPOS JSON env export, km github init/manifest/status (GH-CLI, GH-APP-SCOPE)
@@ -2217,6 +2217,7 @@ Plans:
 - [ ] 97-04-PLAN.md — km-github-bridge Lambda (HMAC verify, auth, resolve, warm/cold dispatch, ACK) + TF module (GH-BRIDGE-VERIFY, GH-BRIDGE-AUTH, GH-BRIDGE-ROUTE, GH-APP-SCOPE)
 - [ ] 97-05-PLAN.md — source-aware github poller + km-github comment/review helper (GH-POLLER, GH-HELPER)
 - [ ] 97-06-PLAN.md — km doctor GitHub checks + runbook + manual E2E (GH-DOCTOR, GH-E2E)
+- [ ] 97-07-PLAN.md — gap-closure: wire km-github-bridge into deploy path (live terragrunt unit + init.go module list) (GH-BRIDGE-DEPLOY, GH-BRIDGE-ROUTE)
 
 ### Phase 98: GitHub bridge expansion — richer write-backs, thread continuity, shared-alias
 
