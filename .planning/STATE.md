@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 96-slack-default-router-orphan-channel-mention-reply 96-01-PLAN.md
-last_updated: "2026-06-06T03:19:12.842Z"
+stopped_at: Completed 96-slack-default-router-orphan-channel-mention-reply 96-02-PLAN.md
+last_updated: "2026-06-06T03:30:01.592Z"
 last_activity: 2026-06-06
 progress:
   total_phases: 111
   completed_phases: 97
   total_plans: 485
-  completed_plans: 445
+  completed_plans: 446
   percent: 91
 ---
 
@@ -478,6 +478,7 @@ Progress: [█████████░] 91%
 | Phase 95-slack-federated-bridge-relay-one-app-many-prefixes P02 | 316 | 3 tasks | 6 files |
 | Phase 95-slack-federated-bridge-relay-one-app-many-prefixes P03 | 7min | 2 tasks | 5 files |
 | Phase 96-slack-default-router-orphan-channel-mention-reply P01 | 274s | 3 tasks | 7 files |
+| Phase 96-slack-default-router-orphan-channel-mention-reply P02 | 8min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1378,6 +1379,9 @@ Recent decisions affecting current work:
 - [Phase 95-03]: checkSlackPeerBridges is a pure function accepting raw strings; ownBridgeURL resolved lazily in doctor.go wiring closure for testability
 - [Phase 95-03]: SLACK-FED-E2E is a manual UAT checkpoint: cannot be automated (needs real Slack App + two live km installs)
 - [Phase 96]: DefaultRouter follows *bool tri-state (nil=absent=dormant) mirroring MentionOnly/ReactAlways; dynamodb:Scan added to existing sandboxes-pause-hint IAM policy (not new resource)
+- [Phase 96-02]: Rollout-safety LOCKED: any legacy 'ok', HTTP error, or timeout in Broadcast maps to Claimed:true — mixed-version fleets never produce false orphan replies
+- [Phase 96-02]: peerRelayResponse as package-private struct shared between relayer.go and events_handler.go (same package, no export needed)
+- [Phase 96-02]: Relayed-owned response gated at final return via req.Headers check — clean separation from non-relayed front-door path without threading isRelayed through steps 5-10
 
 ### Roadmap Evolution
 
@@ -1499,6 +1503,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-06T03:19:12.831Z
-Stopped at: Completed 96-slack-default-router-orphan-channel-mention-reply 96-01-PLAN.md
+Last session: 2026-06-06T03:30:01.583Z
+Stopped at: Completed 96-slack-default-router-orphan-channel-mention-reply 96-02-PLAN.md
 Resume file: None
