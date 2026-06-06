@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 97-01-PLAN.md
-last_updated: "2026-06-06T19:28:04.439Z"
+stopped_at: Completed 97-04-PLAN.md
+last_updated: "2026-06-06T19:51:11.692Z"
 last_activity: 2026-06-06
 progress:
   total_phases: 113
   completed_phases: 98
   total_plans: 491
-  completed_plans: 450
+  completed_plans: 451
   percent: 91
 ---
 
@@ -483,6 +483,7 @@ Progress: [█████████░] 91%
 | Phase 97-github-comment-trigger-mvp P02 | 527 | 3 tasks | 11 files |
 | Phase 97 P03 | 13m44s | 3 tasks | 16 files |
 | Phase 97-github-comment-trigger-mvp P01 | 801 | 3 tasks | 9 files |
+| Phase 97 P04 | 605s | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -1395,6 +1396,9 @@ Recent decisions affecting current work:
 - [Phase 97-01]: JSON-encode github.repos as KM_GITHUB_REPOS (single env var) vs numbered keys — Lambda-parseable, self-describing, no bespoke decode logic
 - [Phase 97-01]: Add json tags to GithubRepoEntry alongside mapstructure+yaml so json.Marshal produces snake_case keys matching yaml surface
 - [Phase 97-01]: Replace km github shortcut with km github init/manifest/status command tree; km configure github --setup still works for App credential setup
+- [Phase 97]: Resolve() uses exact-before-glob two-pass: pass1=exact, pass2=glob; ensures order-independence for exact matches
+- [Phase 97]: 200-on-internal-error invariant in Handle(); GitHub redelivers 5xx with NEW delivery GUID bypassing dedup
+- [Phase 97]: KM_GITHUB_REPOS as JSON env var (list-of-objects): {repos:[...], default_profile} serialized to single string
 
 ### Roadmap Evolution
 
@@ -1518,6 +1522,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-06T19:28:04.428Z
-Stopped at: Completed 97-01-PLAN.md
+Last session: 2026-06-06T19:51:11.683Z
+Stopped at: Completed 97-04-PLAN.md
 Resume file: None
