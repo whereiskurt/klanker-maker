@@ -2189,3 +2189,43 @@ Plans:
 - [ ] 96-01-PLAN.md — Config + plumbing: slack.default_router struct/merge-list/population, KM_SLACK_DEFAULT_ROUTER export + drift WARN, terragrunt/TF var/Lambda env, dynamodb:Scan IAM grant
 - [ ] 96-02-PLAN.md — Scatter-gather contract: Broadcast → []PeerClaimResult (legacy/error→claimed:true), DDBRunningChannelLister Scan adapter, peer-side relayed-request {claimed,channels} response
 - [ ] 96-03-PLAN.md — Front-door orphan reply: tally + gated threaded reply (default_router+mention+cooldown), nonces-table cooldown, main.go wiring, docs/CLAUDE.md, manual E2E checkpoint
+
+### Phase 97: GitHub comment-trigger MVP — @-mention dispatch to a per-repo sandbox (PR review)
+
+**Goal:** Let an operator invoke the existing `klanker-maker` GitHub App by **@-mentioning the bot in a PR/issue comment** and have the platform dispatch the free-form request to an **aliased per-repo sandbox** — creating it cold if absent — where Claude reviews the PR and posts back a review via a new sandbox-side `km-github` helper. The GitHub-shaped twin of the Slack inbound path (Phase 67/91/95/96): a new `km-github-bridge` Lambda verifies `X-Hub-Signature-256` over the **raw body** (constant-time), drops non-`created` / `comment.user.type==Bot` events (loop guard), dedupes on `X-GitHub-Delivery` via the existing nonces table, detects an @-mention of the cached bot-login, **authorizes** `sender.login` against a deny-by-default per-repo allowlist, resolves `owner/repo → {alias, profile}` from a new `github.repos:` block in `km-config.yaml` (exact-before-glob, alias defaults to `gh-{owner}-{repo}`), looks up the sandbox via the `alias-index` GSI, and either **enqueues** to the per-sandbox `github-inbound` FIFO (warm) or **publishes a `SandboxCreate` EventBridge event carrying the pending prompt** (cold, via the Phase 86 prompt-queue) — then mints an installation token (reusing `pkg/github/token.go`), posts a 👀 reaction, and returns 200 inside the ~10s webhook window. A new `spec.notification.github.inbound.enabled` profile field provisions the per-sandbox `github-inbound` queue + makes the sandbox poller source-aware; the poller builds a GitHub context preamble (repo/PR/branch/head + worktree-per-PR guidance) and dispatches to the agent. The `km-github` helper (`comment`, `review` verbs) uses the per-sandbox installation token (SSM `{prefix}sandbox/{id}/github-token`, scoped via `sourceAccess.github.allowedRepos`). Ships a lean built-in `github-review` profile and `km github init/manifest/status` operator commands + `km doctor` checks. **Extends the existing App** (adds `issues`/`pull_requests`/`contents`/`checks` write scopes + the `issue_comment` webhook subscription in one reconfigure — the check/PR-create *verbs* land in Phase 98). Absent `github:` config ⇒ feature fully dormant. Deploy: `make build-lambdas` + `km init --dry-run=false` (new Lambda + EventBridge + env block need a full apply) + `km init --sidecars` (schema field for create-handler); existing sandboxes need `km destroy && km create`. Design spec: `docs/superpowers/specs/2026-06-06-github-app-bridge-pr-review-design.md`.
+
+**Success Criteria** (what must be TRUE):
+  1. With no `github:` block in `km-config.yaml`, the platform behaves byte-identically to today (no bridge dispatch path active; no new Slack-style env on existing Lambdas).
+  2. The `km-github-bridge` rejects any request whose `X-Hub-Signature-256` does not match an HMAC-SHA256 of the raw body under the webhook secret (constant-time compare), and accepts a correctly-signed one.
+  3. The bridge drops events with `action != "created"`, with `comment.user.type == "Bot"`, or whose `X-GitHub-Delivery` GUID was already seen (nonces TTL) — no double-dispatch on redelivery, no self-trigger loop.
+  4. An `issue_comment` on a PR that @-mentions the bot from an **allowlisted** `sender.login` resolves `owner/repo → {alias, profile}` and dispatches; a comment from a **non-allowlisted** login is silently ignored (no reaction, no comment, no dispatch).
+  5. Warm path: when the resolved alias maps to a running sandbox (`alias-index`), the bridge enqueues the `{source:github,…}` envelope to that sandbox's `github-inbound` FIFO and the source-aware poller dispatches it to the agent.
+  6. Cold path: when no sandbox exists for the alias, the bridge publishes a `SandboxCreate` event carrying the pending prompt; create-handler provisions the sandbox (queue + poller + write-scoped token) and the carried prompt is drained on first boot.
+  7. `spec.notification.github.inbound.enabled: true` round-trips through the schema and `km create` provisions the `github-inbound` queue (DDB attr `github_inbound_queue_url` + SSM + env var); `false`/absent leaves zero SQS/DDB/SSM artifacts.
+  8. `github.repos:` round-trips through config load (merge-list regression) and `km init` exports it to the bridge Lambda env with the env-wins drift WARN.
+  9. End-to-end: `@klanker-maker review this PR` on a real PR ⇒ 👀 reaction within the ack window ⇒ Claude runs in the per-repo sandbox ⇒ a PR review comment is posted by the bot via `km-github review`.
+ 10. `km github init/manifest/status` manage the App config (`/km/config/github/{webhook-secret,bot-login,bridge-url}`); `km doctor` reports GitHub bridge health (App configured, secret present, bot-login cached, bridge URL, repo-allowlist resolvability).
+
+**Requirements**: GH-APP-SCOPE, GH-BRIDGE-VERIFY, GH-BRIDGE-AUTH, GH-BRIDGE-ROUTE, GH-INBOUND-Q, GH-POLLER, GH-HELPER, GH-PROFILE, GH-CLI, GH-DOCTOR, GH-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 97)
+**Depends on:** Phase 96
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 97 to break down)
+
+### Phase 98: GitHub bridge expansion — richer write-backs, thread continuity, shared-alias
+
+**Goal:** Build on Phase 97. Extend the `km-github` helper with the remaining write verbs — `km-github check` (check-run pass/fail + summary, CI-style gating), `km-github pr create` (open a PR / push a new branch, e.g. turning an issue @-mention into a PR), and harden the push-commit path (the App write scopes already landed in Phase 97). Add **thread/session continuity**: a `(repo, number) → {sandbox_id, agent_session_id}` mapping (generalize `km-slack-threads` or a sibling `km-github-threads` table) so follow-up @-mentions in the same PR/issue continue the **same agent session**, plus a thread-bypass so replies in a known thread skip the re-mention requirement (mirrors Phase 91.3). Add **shared-alias across repos**: let several `github.repos:` entries point at one sandbox alias for a single larger shared box, with worktree-per-PR isolation and `km doctor` overlap/collision warnings. Optionally widen the trigger surface (deferred from 97): `pull_request_review_comment` inline-diff comments. Design spec: `docs/superpowers/specs/2026-06-06-github-app-bridge-pr-review-design.md`.
+
+**Success Criteria** (what must be TRUE):
+  1. `km-github check` posts a check run (name + conclusion + summary) visible on the PR; `km-github pr create` opens a PR from a new branch and returns its URL.
+  2. A follow-up @-mention in a PR/issue whose `(repo, number)` is already mapped continues the same agent session (no fresh session), and a reply in a known thread dispatches without requiring a re-@-mention.
+  3. Multiple `github.repos:` entries pointing at one shared alias all dispatch to the same sandbox; concurrent PRs are isolated via worktree-per-PR; `km doctor` warns on match overlap / alias collisions.
+  4. All Phase 97 success criteria continue to hold (no regression to the comment-trigger MVP).
+
+**Requirements**: GH-X-CHECK, GH-X-PRCREATE, GH-X-PUSH, GH-X-CONTINUITY, GH-X-THREADBYPASS, GH-X-SHARED, GH-X-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
+**Depends on:** Phase 97
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 98 to break down)
