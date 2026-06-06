@@ -607,11 +607,12 @@ expansion of the Phase 97 comment-trigger MVP.
 | GH-X-CONTINUITY | `(repo, number) → {sandbox_id, agent_session_id}` mapping (generalize `km-slack-threads` or sibling `km-github-threads`) so follow-up @-mentions in the same PR/issue continue the same agent session | Planned |
 | GH-X-THREADBYPASS | Replies in a known PR/issue thread dispatch without requiring a re-@-mention (mirrors Phase 91.3 thread-bypass) | Planned |
 | GH-X-SHARED | Multiple `github.repos:` entries may point at one shared alias (single larger sandbox), with worktree-per-PR isolation; `km doctor` warns on match overlap / alias collisions | Planned |
-| GH-X-E2E | Follow-up @-mention continues the session; check run + opened PR visible; shared-alias dispatch across two repos to one sandbox (manual; real AWS + GitHub) | Planned |
+| GH-X-RESUME | Warm-path alias lookup that finds a `stopped`/`paused` sandbox auto-resumes it (bridge gains resume IAM, e.g. `ec2:StartInstances`); request is enqueued and drained after boot, respecting the ~10s ack window; enables "configure-once, stop, GitHub wakes it" workflow. (Phase 97 today: warm path is status-agnostic — enqueues to the stopped box and nothing drains it; cold path never fires because the stopped row holds the alias.) | Planned |
+| GH-X-E2E | Follow-up @-mention continues the session; check run + opened PR visible; shared-alias dispatch across two repos to one sandbox; stopped-alias @-mention auto-resumes and processes (manual; real AWS + GitHub) | Planned |
 
 ---
 
-*Last updated: 2026-06-06 — Phase 97 (GH-APP-SCOPE..GH-E2E, 11 IDs) and Phase 98 (GH-X-CHECK..GH-X-E2E, 7 IDs) synthetic IDs added: GitHub App comment-trigger bridge MVP + expansion*
+*Last updated: 2026-06-06 — Phase 97 (GH-APP-SCOPE..GH-E2E, 11 IDs) and Phase 98 (GH-X-CHECK..GH-X-E2E, 8 IDs incl. GH-X-RESUME stopped-sandbox auto-resume) synthetic IDs added: GitHub App comment-trigger bridge MVP + expansion*
 
 *Last updated: 2026-06-02 — Phase 93 synthetic IDs added for plan-checker traceability (15 IDs covering schema, helper, validation, compiler/userdata, credential, CLI, security, profile example, skill, docs, tests)*
 
