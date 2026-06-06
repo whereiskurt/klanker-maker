@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 97-05-PLAN.md
-last_updated: "2026-06-06T19:56:19.063Z"
+stopped_at: Completed 97-06-PLAN.md (2/3 tasks; awaiting E2E checkpoint)
+last_updated: "2026-06-06T20:17:14.370Z"
 last_activity: 2026-06-06
 progress:
   total_phases: 113
-  completed_phases: 98
+  completed_phases: 99
   total_plans: 491
-  completed_plans: 452
+  completed_plans: 453
   percent: 91
 ---
 
@@ -485,6 +485,7 @@ Progress: [█████████░] 91%
 | Phase 97-github-comment-trigger-mvp P01 | 801 | 3 tasks | 9 files |
 | Phase 97 P04 | 605s | 3 tasks | 13 files |
 | Phase 97-github-comment-trigger-mvp P05 | 868 | 2 tasks | 4 files |
+| Phase 97 P06 | 1042s | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1403,6 +1404,8 @@ Recent decisions affecting current work:
 - [Phase 97]: Separate binary cmd/km-github mirrors cmd/km-slack pattern; deployed via conditional S3 download in userdata
 - [Phase 97]: GitHub context preamble includes worktree-per-PR guidance for concurrent PR review in long-lived sandboxes
 - [Phase 97]: APPROVE needs no body; COMMENT/REQUEST_CHANGES require body — validated before HTTP call
+- [Phase 97]: GitHub bridge doctor checks are WARN-level (not ERROR) — GitHub is opt-in; silent-skip when github.repos empty + SSM probe absent
+- [Phase 97]: checkGitHubReposResolvable is a pure config function (no AWS calls) for fast overlap + missing-profile detection
 
 ### Roadmap Evolution
 
@@ -1526,6 +1529,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-06T19:56:19.052Z
-Stopped at: Completed 97-05-PLAN.md
+Last session: 2026-06-06T20:17:14.360Z
+Stopped at: Completed 97-06-PLAN.md (2/3 tasks; awaiting E2E checkpoint)
 Resume file: None

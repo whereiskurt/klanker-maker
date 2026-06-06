@@ -1,5 +1,17 @@
 # Deferred Items — Phase 97
 
+## Pre-existing failing test (out of scope for Plan 06)
+
+**Test:** `TestGoSourceNamesUseResourcePrefix` in `pkg/hygiene/`
+
+**Issue:** 5 hardcoded `km-` name-construction sites in `doctor_artifacts.go:351`,
+`doctor_log_groups.go:62,68,74,80` not in the hygiene allowlist. These are pre-existing
+(verified via `git stash` before Plan 06 work). All sites are in files not touched by Plan 06.
+
+**Status:** Pre-existing; not caused by Plan 06 changes. Deferred to a hygiene cleanup plan.
+
+---
+
 ## Pre-existing failing test (out of scope for Plan 01)
 
 **Test:** `TestRunDestroy_GitHubTokenCleanup` in `internal/app/cmd/destroy_test.go:17`
