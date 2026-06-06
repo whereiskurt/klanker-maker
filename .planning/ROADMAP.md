@@ -2183,7 +2183,9 @@ Plans:
 
 **Requirements**: SLACK-RTR-CFG, SLACK-RTR-GATHER, SLACK-RTR-ORPHAN, SLACK-RTR-REPLY, SLACK-RTR-COOLDOWN, SLACK-RTR-SAFE, SLACK-RTR-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 96)
 **Depends on:** Phase 95
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 96 to break down)
+- [ ] 96-01-PLAN.md — Config + plumbing: slack.default_router struct/merge-list/population, KM_SLACK_DEFAULT_ROUTER export + drift WARN, terragrunt/TF var/Lambda env, dynamodb:Scan IAM grant
+- [ ] 96-02-PLAN.md — Scatter-gather contract: Broadcast → []PeerClaimResult (legacy/error→claimed:true), DDBRunningChannelLister Scan adapter, peer-side relayed-request {claimed,channels} response
+- [ ] 96-03-PLAN.md — Front-door orphan reply: tally + gated threaded reply (default_router+mention+cooldown), nonces-table cooldown, main.go wiring, docs/CLAUDE.md, manual E2E checkpoint
