@@ -648,6 +648,8 @@ func (c *testConfig) GetSlackPeerBridges() []string     { return nil }
 func (c *testConfig) GetSlackThreadsTableName() string  { return "km-slack-threads" }
 func (c *testConfig) GetSandboxTableName() string       { return "km-sandboxes" }
 func (c *testConfig) GetClusterRoleNames() []string     { return nil }
+func (c *testConfig) GetGithubRepos() []appcfg.GithubRepoEntry { return nil }
+func (c *testConfig) GetGithubDefaultProfile() string          { return "" }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -987,6 +989,8 @@ func (c *testDoctorConfig) GetSlackPeerBridges() []string     { return nil }
 func (c *testDoctorConfig) GetSlackThreadsTableName() string  { return "km-slack-threads" }
 func (c *testDoctorConfig) GetSandboxTableName() string       { return "km-sandboxes" }
 func (c *testDoctorConfig) GetClusterRoleNames() []string     { return nil }
+func (c *testDoctorConfig) GetGithubRepos() []appcfg.GithubRepoEntry { return nil }
+func (c *testDoctorConfig) GetGithubDefaultProfile() string          { return "" }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{
