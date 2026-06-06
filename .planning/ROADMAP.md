@@ -2183,7 +2183,7 @@ Plans:
 
 **Requirements**: SLACK-RTR-CFG, SLACK-RTR-GATHER, SLACK-RTR-ORPHAN, SLACK-RTR-REPLY, SLACK-RTR-COOLDOWN, SLACK-RTR-SAFE, SLACK-RTR-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 96)
 **Depends on:** Phase 95
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 96-01-PLAN.md — Config + plumbing: slack.default_router struct/merge-list/population, KM_SLACK_DEFAULT_ROUTER export + drift WARN, terragrunt/TF var/Lambda env, dynamodb:Scan IAM grant
