@@ -122,23 +122,24 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		status = "running" // backward compat: old metadata without status field
 	}
 	return SandboxRecord{
-		SandboxID:            meta.SandboxID,
-		Profile:              meta.ProfileName,
-		Substrate:            meta.Substrate,
-		Region:               meta.Region,
-		Status:               status,
-		CreatedAt:            meta.CreatedAt,
-		TTLExpiry:            meta.TTLExpiry,
-		TTLRemaining:         computeTTLRemaining(meta.TTLExpiry),
-		IdleTimeout:          meta.IdleTimeout,
-		Alias:                meta.Alias,
-		ClonedFrom:           meta.ClonedFrom,
-		Locked:               meta.Locked,
-		TeardownPolicy:       meta.TeardownPolicy,
-		SlackChannelID:       meta.SlackChannelID,
-		SlackInboundQueueURL: meta.SlackInboundQueueURL,
-		FailureReason:        meta.FailureReason,
-		FailedAt:             meta.FailedAt,
+		SandboxID:             meta.SandboxID,
+		Profile:               meta.ProfileName,
+		Substrate:             meta.Substrate,
+		Region:                meta.Region,
+		Status:                status,
+		CreatedAt:             meta.CreatedAt,
+		TTLExpiry:             meta.TTLExpiry,
+		TTLRemaining:          computeTTLRemaining(meta.TTLExpiry),
+		IdleTimeout:           meta.IdleTimeout,
+		Alias:                 meta.Alias,
+		ClonedFrom:            meta.ClonedFrom,
+		Locked:                meta.Locked,
+		TeardownPolicy:        meta.TeardownPolicy,
+		SlackChannelID:        meta.SlackChannelID,
+		SlackInboundQueueURL:  meta.SlackInboundQueueURL,
+		GithubInboundQueueURL: meta.GithubInboundQueueURL,
+		FailureReason:         meta.FailureReason,
+		FailedAt:              meta.FailedAt,
 	}
 }
 
@@ -288,6 +289,17 @@ func readTriStateBool(item map[string]dynamodbtypes.AttributeValue, key string) 
 	return nil
 }
 
+// unmarshalGitHubFields reads Phase 97 GitHub inbound fields from a raw DynamoDB
+// item into SandboxMetadata. Called by ReadSandboxMetadataDynamo and
+// ListAllSandboxesByDynamo after toSandboxMetadata() + unmarshalSlackFields().
+func unmarshalGitHubFields(item map[string]dynamodbtypes.AttributeValue, meta *SandboxMetadata) {
+	if v, ok := item["github_inbound_queue_url"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			meta.GithubInboundQueueURL = sv.Value
+		}
+	}
+}
+
 // unmarshalFailureFields reads Phase 77 failure-discoverability fields from a raw
 // DynamoDB item into SandboxMetadata. Called by ReadSandboxMetadataDynamo and
 // ListAllSandboxesByDynamo after toSandboxMetadata().
@@ -402,6 +414,14 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 		item["slack_react_always"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: *meta.SlackReactAlways}
 	}
 
+	// Phase 97 — GitHub inbound metadata. Symmetric with unmarshalGitHubFields.
+	// Must be emitted here or read-modify-write paths (resume/extend/ttl-handler)
+	// silently strip the queue URL on the next full-row PutItem (the
+	// project_sandboxmetadata_lossy_roundtrip footgun).
+	if meta.GithubInboundQueueURL != "" {
+		item["github_inbound_queue_url"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.GithubInboundQueueURL}
+	}
+
 	// Phase 77 — failure discoverability. Only written when failure_reason is
 	// non-empty (i.e. sandbox failed). Symmetric with unmarshalFailureFields.
 	if meta.FailureReason != "" {
@@ -445,6 +465,7 @@ func ReadSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI, t
 	}
 
 	unmarshalSlackFields(out.Item, meta)
+	unmarshalGitHubFields(out.Item, meta)
 	unmarshalFailureFields(out.Item, meta)
 	return meta, nil
 }
@@ -510,6 +531,7 @@ func ListAllSandboxesByDynamo(ctx context.Context, client SandboxMetadataAPI, ta
 				continue
 			}
 			unmarshalSlackFields(item, meta)
+			unmarshalGitHubFields(item, meta)
 			unmarshalFailureFields(item, meta)
 			records = append(records, metadataToRecord(meta))
 		}
@@ -553,6 +575,7 @@ func ListAllSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI
 				continue
 			}
 			unmarshalSlackFields(item, meta)
+			unmarshalGitHubFields(item, meta)
 			unmarshalFailureFields(item, meta)
 			metas = append(metas, *meta)
 		}

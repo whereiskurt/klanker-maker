@@ -55,6 +55,12 @@ type CreateEvent struct {
 	ComputeBudget  float64 `json:"compute_budget,omitempty"`
 	AIBudget       float64 `json:"ai_budget,omitempty"`
 	NoBedrock      bool    `json:"no_bedrock,omitempty"`
+
+	// GithubEnvelope carries the JSON-serialized GitHub webhook envelope for
+	// cold-create correction (Phase 97, Pitfall 1 fix). Matches the same field
+	// on SandboxCreateDetail. After provisioning, this is drained into the new
+	// sandbox's github-inbound FIFO queue. Empty for non-github creates (dormant).
+	GithubEnvelope string `json:"github_envelope,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download files.

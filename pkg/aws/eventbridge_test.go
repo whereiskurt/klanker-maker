@@ -2,6 +2,7 @@ package aws_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -113,6 +114,66 @@ func TestPutSandboxCreateEvent_ClientError(t *testing.T) {
 			t.Errorf("expected error to contain %q, got: %v", sdkErr.Error(), err)
 		}
 	}
+}
+
+// TestSandboxCreateDetail_GithubEnvelope verifies that GithubEnvelope round-trips
+// through JSON marshal/unmarshal and that an empty envelope is omitted from JSON.
+func TestSandboxCreateDetail_GithubEnvelope(t *testing.T) {
+	t.Run("non-empty envelope survives marshal", func(t *testing.T) {
+		detail := kmaws.SandboxCreateDetail{
+			SandboxID:      "sb-github-001",
+			ArtifactBucket: "km-artifacts",
+			ArtifactPrefix: "remote-create/sb-github-001",
+			GithubEnvelope: `{"source":"github","action":"created","pr":42}`,
+		}
+		b, err := json.Marshal(detail)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !containsStr(string(b), "github_envelope") {
+			t.Errorf("expected github_envelope in JSON, got: %s", b)
+		}
+		if !containsStr(string(b), "pr") {
+			t.Errorf("expected envelope content in JSON, got: %s", b)
+		}
+	})
+	t.Run("empty envelope is omitted from JSON", func(t *testing.T) {
+		detail := kmaws.SandboxCreateDetail{
+			SandboxID:      "sb-no-github",
+			ArtifactBucket: "km-artifacts",
+			ArtifactPrefix: "remote-create/sb-no-github",
+		}
+		b, err := json.Marshal(detail)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if containsStr(string(b), "github_envelope") {
+			t.Errorf("expected github_envelope absent when empty, got: %s", b)
+		}
+	})
+	t.Run("envelope survives PutSandboxCreateEvent round-trip", func(t *testing.T) {
+		mock := &mockEventBridgeAPI{}
+		envelope := `{"source":"github","action":"review_requested"}`
+		detail := kmaws.SandboxCreateDetail{
+			SandboxID:      "sb-envelope",
+			ArtifactBucket: "km-artifacts",
+			ArtifactPrefix: "remote-create/sb-envelope",
+			GithubEnvelope: envelope,
+		}
+		if err := kmaws.PutSandboxCreateEvent(context.Background(), mock, detail); err != nil {
+			t.Fatalf("PutSandboxCreateEvent: %v", err)
+		}
+		if !mock.putEventsCalled || len(mock.putEventsInput.Entries) == 0 {
+			t.Fatal("PutEvents not called")
+		}
+		detailStr := *mock.putEventsInput.Entries[0].Detail
+		if !containsStr(detailStr, "github_envelope") {
+			t.Errorf("Detail JSON missing github_envelope: %s", detailStr)
+		}
+		if !containsStr(detailStr, "review_requested") {
+			t.Errorf("Detail JSON missing envelope content: %s", detailStr)
+		}
+	})
 }
 
 // containsStr is a simple helper for substring checks.

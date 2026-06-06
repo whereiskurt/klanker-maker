@@ -85,6 +85,25 @@ type NotificationSpec struct {
 	// Slack configures Slack delivery of notifications (incl. inbound chat,
 	// transcript streaming, and auto-invites).
 	Slack *NotificationSlackSpec `json:"slack,omitempty" yaml:"slack,omitempty"`
+	// Github configures GitHub comment-trigger inbound dispatch (Phase 97).
+	// When nil (absent), no GitHub inbound queue is provisioned (dormant invariant).
+	Github *NotificationGitHubSpec `json:"github,omitempty" yaml:"github,omitempty"`
+}
+
+// NotificationGitHubSpec configures GitHub comment-trigger inbound dispatch.
+// Phase 97: per-sandbox FIFO queue provisioned by km create when enabled=true.
+type NotificationGitHubSpec struct {
+	// Inbound configures the per-sandbox GitHub inbound FIFO queue.
+	Inbound *NotificationGitHubInboundSpec `json:"inbound,omitempty" yaml:"inbound,omitempty"`
+}
+
+// NotificationGitHubInboundSpec configures GitHub comment-trigger dispatch.
+// Mirrors NotificationSlackInboundSpec (:147) — tri-state *bool enabled field.
+type NotificationGitHubInboundSpec struct {
+	// Enabled provisions the per-sandbox github-inbound FIFO queue at km create.
+	// nil = default false (dormant — zero SQS/DDB/SSM artifacts).
+	// &true = provision queue; &false = explicit disable (same as nil in practice).
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
 // NotificationEventsSpec gates which hook events fire a notification.
