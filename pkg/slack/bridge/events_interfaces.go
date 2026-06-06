@@ -58,6 +58,16 @@ type DDBScanAPI interface {
 	Scan(ctx context.Context, in *dynamodb.ScanInput, opts ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
 }
 
+// RouterCooldownStore gates the per-channel router-reply cooldown.
+// Reserve returns nil on first call (reply is permitted; cooldown begins) or
+// ErrNonceReplayed when the cooldown window is still active (suppress the reply).
+//
+// Implementation: DynamoNonceStore.Reserve with a "router-cooldown:{channelID}"
+// key and a TTL of 3600s. No new table — reuses km-slack-bridge-nonces (Phase 96).
+type RouterCooldownStore interface {
+	Reserve(ctx context.Context, channelID string, cooldownSeconds int) error
+}
+
 // SQSSender sends a single message to a FIFO SQS queue.
 type SQSSender interface {
 	Send(ctx context.Context, queueURL, body, groupID, deduplicationID string) error
