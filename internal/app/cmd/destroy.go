@@ -369,6 +369,7 @@ locals {
 		cleanupGitHubTokenResources(ctx, awsCfg, sandboxID, cfg.GetResourcePrefix())
 	}
 	// Always attempt SSM cleanup (parameter may exist even if github-token dir is gone).
+	// SSM path format: /sandbox/%s/github-token (scoped under /{prefix} by SandboxParameterPath).
 	githubTokenParam := awspkg.SandboxParameterPath(cfg.GetResourcePrefix(), sandboxID, "github-token")
 	if _, delErr := ssmClient.DeleteParameter(ctx, &ssm.DeleteParameterInput{
 		Name: aws.String(githubTokenParam),
