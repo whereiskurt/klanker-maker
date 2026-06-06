@@ -79,22 +79,23 @@ type ClusterConfig struct {
 // bridge Lambda to resolve which sandbox to dispatch a PR comment to.
 //
 // Fields mirror the km-config.yaml github.repos list-of-objects shape.
+// json tags match the yaml keys so KM_GITHUB_REPOS JSON is self-describing.
 type GithubRepoEntry struct {
 	// Match is the "owner/repo" string matched against the incoming webhook's
 	// repository.full_name field. Exact match only (no glob in Wave 1).
-	Match string `mapstructure:"match" yaml:"match"`
+	Match string `mapstructure:"match" yaml:"match" json:"match"`
 
 	// Alias is the sandbox alias used when creating a cold sandbox for this repo
 	// (km create --alias <alias>). Optional — falls back to DefaultProfile if absent.
-	Alias string `mapstructure:"alias" yaml:"alias,omitempty"`
+	Alias string `mapstructure:"alias" yaml:"alias,omitempty" json:"alias,omitempty"`
 
 	// Profile is the path to the SandboxProfile YAML file for this repo's sandbox.
 	// Optional — falls back to GithubConfig.DefaultProfile when absent.
-	Profile string `mapstructure:"profile" yaml:"profile,omitempty"`
+	Profile string `mapstructure:"profile" yaml:"profile,omitempty" json:"profile,omitempty"`
 
 	// Allow is a supplemental network allowlist for this repo's sandbox.
 	// Optional — sandbox profile's own allowlist is always the primary source.
-	Allow []string `mapstructure:"allow" yaml:"allow,omitempty"`
+	Allow []string `mapstructure:"allow" yaml:"allow,omitempty" json:"allow,omitempty"`
 }
 
 // GithubConfig holds install-level GitHub defaults that flow into the bridge

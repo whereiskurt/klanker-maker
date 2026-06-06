@@ -927,6 +927,34 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			os.Setenv("KM_SLACK_DEFAULT_ROUTER", yamlSlackDefaultRouter) //nolint:errcheck
 		}
 	}
+
+	// Phase 97: KM_GITHUB_REPOS — JSON-encoded repository-to-sandbox mapping.
+	// Consumed by the GitHub bridge Lambda to resolve which sandbox to dispatch
+	// a PR comment to. Gate: only export when at least one repo entry is configured
+	// (len > 0) — absent github: block leaves KM_GITHUB_REPOS unset (dormant
+	// byte-identity, no new env on existing Lambdas). env-wins: when the env var
+	// is already set to a DIFFERENT value, emit a drift WARN and do NOT overwrite.
+	// Value is JSON-marshalled so the Lambda can parse the structured map without
+	// bespoke split/decode logic. Struct kept inline; no new config helper needed.
+	if len(cfg.Github.Repos) > 0 {
+		type githubExportPayload struct {
+			Repos          []config.GithubRepoEntry `json:"repos"`
+			DefaultProfile string                   `json:"default_profile,omitempty"`
+		}
+		payload := githubExportPayload{
+			Repos:          cfg.Github.Repos,
+			DefaultProfile: cfg.Github.DefaultProfile,
+		}
+		jsonBytes, err := json.Marshal(payload)
+		if err == nil {
+			yamlGithubRepos := string(jsonBytes)
+			if envVal := os.Getenv("KM_GITHUB_REPOS"); envVal != "" && envVal != yamlGithubRepos {
+				fmt.Fprintf(os.Stderr, "WARN: KM_GITHUB_REPOS=%s (env) overrides km-config.yaml github.repos=%s\n", envVal, yamlGithubRepos)
+			} else if envVal == "" {
+				os.Setenv("KM_GITHUB_REPOS", yamlGithubRepos) //nolint:errcheck
+			}
+		}
+	}
 }
 
 // EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at
