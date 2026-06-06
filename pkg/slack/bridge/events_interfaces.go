@@ -5,17 +5,49 @@ import (
 	"time"
 )
 
+// SandboxChannelInfo is the minimal per-sandbox channel information returned
+// by RunningChannelLister and included in PeerClaimResult for non-owner peers.
+// Used by the scatter-gather router to build the channel list in the orphan reply (Phase 96).
+type SandboxChannelInfo struct {
+	ID      string `json:"id"`
+	Alias   string `json:"alias"`
+	Profile string `json:"profile"`
+}
+
+// PeerClaimResult is the per-peer result of a scatter-gather Broadcast call.
+// Claimed:true means the peer owns (or conservatively claims) the channel.
+// Claimed:false means the peer does not own the channel; Channels lists the
+// peer's currently running sandboxes with bound Slack channels.
+//
+// Rollout safety (LOCKED): any legacy/error/unparseable/timeout peer response
+// is treated as Claimed:true to prevent false orphan detection in a mixed-version fleet.
+type PeerClaimResult struct {
+	PeerURL  string             // for logging
+	Claimed  bool               // true = peer owns the channel (or legacy/error)
+	Channels []SandboxChannelInfo // only populated when Claimed=false
+}
+
 // PeerRelayer broadcasts a raw Slack Events API request to sibling km-install bridges.
-// Used by EventsHandler when FetchByChannel finds no local owner (Phase 95).
+// Used by EventsHandler when FetchByChannel finds no local owner (Phase 95+96).
 // Implementations MUST:
 //   - Forward the verbatim body unchanged (Slack HMAC covers body+timestamp).
 //   - Include X-Slack-Signature, X-Slack-Request-Timestamp from slackHeaders.
 //   - Add X-KM-Relayed: 1 to the forwarded request.
 //   - POST to all peers in parallel, bounded by a ~2.5s context.
-//   - Return nil when ALL peers succeed, or an error summarizing failures.
+//   - Return one PeerClaimResult per peer; legacy/error/timeout => Claimed:true.
 //   - Always return promptly (the caller returns 200 regardless).
+//
+// Phase 96: return type changed from error to ([]PeerClaimResult, error) to
+// support claim-aware scatter-gather. The caller tallies results to detect orphan channels.
 type PeerRelayer interface {
-	Broadcast(ctx context.Context, rawBody string, slackHeaders map[string]string) error
+	Broadcast(ctx context.Context, rawBody string, slackHeaders map[string]string) ([]PeerClaimResult, error)
+}
+
+// RunningChannelLister enumerates sandboxes with state=running and a bound
+// Slack channel. Used by the scatter-gather handler to build the channel list
+// for the router reply (Phase 96).
+type RunningChannelLister interface {
+	ListRunning(ctx context.Context) ([]SandboxChannelInfo, error)
 }
 
 // SQSSender sends a single message to a FIFO SQS queue.

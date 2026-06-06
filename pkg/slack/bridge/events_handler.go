@@ -77,6 +77,12 @@ type EventsHandler struct {
 	// (byte-identical — the nil-invariant MUST be maintained; see
 	// TestEventsHandler_NilRelayer_MissReturns200).
 	Relayer PeerRelayer
+
+	// Phase 96: RunningChannels lists this install's running sandboxes with bound
+	// Slack channels. Used by the peer-side relayed-miss path to return
+	// {claimed:false, channels:[...]} to the front door. Optional — nil means
+	// the list is empty (safe, no panic).
+	RunningChannels RunningChannelLister
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -214,19 +220,45 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		//   | present       | no            | drop (TERMINAL — no re-relay), 200  |
 		if req.Headers["x-km-relayed"] != "" {
 			// TERMINAL: relayed request + no owner => drop, never re-relay.
-			// Loops structurally impossible by this single-hop terminal guard.
+			// Phase 96: return {claimed:false, channels:[...]} so the front door
+			// can tally cross-install running channels for the orphan reply.
 			h.log().Warn("events: relay miss — no owner for relayed message",
 				"channel", msg.Channel, "event", "slack_relay_no_owner")
-			return EventsResponse{StatusCode: 200, Body: "ok"}
+			var runningChannels []SandboxChannelInfo
+			if h.RunningChannels != nil {
+				if listed, listErr := h.RunningChannels.ListRunning(ctx); listErr != nil {
+					h.log().Warn("events: relay miss: running channels list failed", "err", listErr)
+				} else {
+					runningChannels = listed
+				}
+			}
+			if runningChannels == nil {
+				runningChannels = []SandboxChannelInfo{}
+			}
+			missResp := peerRelayResponse{Claimed: false, Channels: runningChannels}
+			missBody, marshalErr := json.Marshal(missResp)
+			if marshalErr != nil {
+				h.log().Warn("events: relay miss: json marshal failed; falling back", "err", marshalErr)
+				return EventsResponse{StatusCode: 200, Body: "ok"}
+			}
+			return EventsResponse{
+				StatusCode: 200,
+				Body:       string(missBody),
+				Headers:    map[string]string{"content-type": "application/json"},
+			}
 		}
 		if h.Relayer != nil {
 			// Broadcast raw event to all peer bridges (synchronous, bounded ~2.5s).
+			// Phase 96: capture []PeerClaimResult for future orphan-reply tally.
 			// The caller returns 200 regardless — a partial broadcast is better
 			// than dropping the event entirely.
-			if err := h.Relayer.Broadcast(ctx, req.Body, req.Headers); err != nil {
-				h.log().Warn("events: relay broadcast partial failure", "err", err,
+			claimResults, broadcastErr := h.Relayer.Broadcast(ctx, req.Body, req.Headers)
+			if broadcastErr != nil {
+				h.log().Warn("events: relay broadcast partial failure", "err", broadcastErr,
 					"channel", msg.Channel)
 			}
+			// Phase 96 Plan 03: tally claims + orphan reply goes here.
+			_ = claimResults
 		} else {
 			h.log().Warn("events: unknown channel or inbound disabled", "channel", msg.Channel)
 		}

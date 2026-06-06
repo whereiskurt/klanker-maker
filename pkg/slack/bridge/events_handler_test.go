@@ -1385,11 +1385,13 @@ func TestEventsHandler_MentionOnly_PerSandboxOverride(t *testing.T) {
 // ── Phase 95: Federated relay decision table ─────────────────────────────────
 
 // fakePeerRelayer is a test double for PeerRelayer.
-// Records all Broadcast calls for assertion and returns a configurable error.
+// Records all Broadcast calls for assertion and returns configurable results.
+// Phase 96: updated to return ([]PeerClaimResult, error) for scatter-gather.
 type fakePeerRelayer struct {
-	mu    sync.Mutex
-	calls []fakeRelayCall
-	err   error
+	mu      sync.Mutex
+	calls   []fakeRelayCall
+	err     error
+	results []PeerClaimResult // configurable results; nil => return empty slice
 }
 
 type fakeRelayCall struct {
@@ -1397,11 +1399,15 @@ type fakeRelayCall struct {
 	headers map[string]string
 }
 
-func (f *fakePeerRelayer) Broadcast(ctx context.Context, rawBody string, h map[string]string) error {
+func (f *fakePeerRelayer) Broadcast(ctx context.Context, rawBody string, h map[string]string) ([]PeerClaimResult, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, fakeRelayCall{rawBody, h})
+	results := f.results
 	f.mu.Unlock()
-	return f.err
+	if results == nil {
+		results = []PeerClaimResult{}
+	}
+	return results, f.err
 }
 
 func (f *fakePeerRelayer) snapshot() []fakeRelayCall {
