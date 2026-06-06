@@ -2095,3 +2095,137 @@ Remediation for WARN: edit `km-config.yaml slack.peer_bridges`, then `km init --
 | `KM_SLACK_PEER_BRIDGES` absent in Lambda env | Ran `km init --sidecars` instead of `km init --dry-run=false`. Re-deploy: `make build-lambdas && km init --dry-run=false`. |
 | Relay is slow (>3s) and Slack retries | Peer bridge is unhealthy or unreachable. Check peer CloudWatch logs. Failing peers are non-fatal (logged WARN) but add latency to the front-door response. |
 | Messages delivered twice | A channel alias is configured on more than one install. Ensure channel/alias uniqueness across all installs. |
+
+---
+
+## Phase 96 — Default router (orphan-channel @-mention reply)
+
+### What it does
+
+When a user @-mentions the shared bot in a Slack channel that **no install owns**
+(a true orphan channel), the designated front-door install posts a single threaded
+reply explaining the naming convention and listing currently running sandbox channels
+aggregated from all installs:
+
+```
+No sandbox is bound to this channel. To work with a bot, join one of its channels —
+they're named `#sb-{alias}-{profile}`. Currently running:
+• <#C012345ABC> — orc (patch)
+• <#C678901DEF> — wrkr (hardened)
+```
+
+When no sandboxes are running the reply uses a guidance-only variant (no channel
+mentions, just the naming convention and a prompt to ask an operator).
+
+### Enabling it
+
+Only the **front-door install** (the one that receives raw Slack events) should
+enable this feature. Add one line to `km-config.yaml`:
+
+```yaml
+slack:
+  default_router: true   # Enable orphan-channel reply on this install only.
+```
+
+Leave it absent or `false` on every other install — setting it on a non-front-door
+install is a no-op because only the front door receives raw Slack events.
+
+### How it works: claim-aware scatter-gather
+
+1. The front door calls `FetchByChannel` — the channel has no owner locally.
+2. `Broadcast` fans the event out to all peer installs (Phase 95 relay).
+3. Each peer returns `{ claimed: false, channels: [...] }` listing its running
+   sandboxes (or `{ claimed: true }` if it owns the channel).
+4. **Claim tally**: if ANY peer returns `claimed:true`, the owner handled it — no
+   router reply is posted.
+5. **Zero claims = true orphan**. The reply gates then apply in order:
+   - `default_router: true` on the front door.
+   - The message must @-mention the bot (`<@{bot_user_id}>` in text).
+   - The per-channel cooldown must be clear (3600 s via the nonces table).
+6. The reply is posted synchronously (not in a goroutine — Lambda freeze safety).
+
+**Rollout safety (mixed-version fleets):** a Phase-95 peer returns a legacy plain
+`"ok"` body. The front door treats any non-JSON / HTTP-error response as
+`claimed:true` (conservative). A mixed fleet never produces a false orphan reply;
+the only downside is that legacy peers' running channels are absent from the list
+until all installs are upgraded.
+
+### Cooldown
+
+Each orphan channel gets a per-channel cooldown of **3600 s (1 h)** from the first
+reply. The cooldown reuses the `km-slack-bridge-nonces` DynamoDB table with a
+`router-cooldown:{channel_id}` TTL key — no new infrastructure or IAM grants
+required (the bridge Lambda already has write access to the nonces table).
+
+A second @-mention within the cooldown window is silently ignored. After the TTL
+expires the bot will reply again.
+
+### Scope and limitations
+
+- **Member channels only.** The bot can only reply to channels it has been invited
+  to (`chat:write` scope, no `chat:write.public`). Non-member channels are silently
+  ignored (Slack returns `not_in_channel`).
+- **No new Slack scopes.** Phase 96 requires no additional OAuth scopes beyond
+  those already granted in Phase 91.
+- **No SandboxProfile schema change.** No sandbox recreate is needed. The feature
+  is purely a Lambda-side change.
+
+### Deploy
+
+> **Important:** `KM_SLACK_DEFAULT_ROUTER` is a Lambda `environment.variables`
+> entry. `km init --sidecars` rebuilds and cold-starts the Lambda binary but does
+> **NOT** update the `environment` block via terragrunt. You must use
+> `make build-lambdas` (clean) + `km init --dry-run=false` on every install.
+
+For a two-install setup (e.g. `km` and `km2` in `us-east-1`):
+
+```bash
+# On the front-door install (e.g. the km install):
+# 1. Edit km-config.yaml:
+#    slack:
+#      default_router: true
+
+# 2. Rebuild and redeploy ALL installs (peers need their response shape upgraded
+#    from Phase 95's plain "ok" to the JSON claim response):
+make build-lambdas   # clean rebuild — do NOT skip; stale zips are NOT redeployed
+km init --dry-run=false
+
+# On each sibling install (e.g. km2):
+make build-lambdas
+km init --dry-run=false
+
+# Verify:
+km doctor            # confirms KM_SLACK_DEFAULT_ROUTER visible in Lambda env
+```
+
+Deploy all installs **before** relying on cross-install channel lists in the reply
+(see Pitfall 6 in the Phase 96 research notes: a mixed fleet omits legacy peers'
+channels from the aggregate list, but is otherwise safe due to the rollout-safety
+rule).
+
+### Deferred items (out of scope)
+
+- **Agentic self-serve create**: instead of just naming the convention, have the
+  router spin up a new sandbox on behalf of the requester via EventBridge.
+- **Non-member channels** (`app_mention` + `chat:write.public` scope).
+- **DM fallback** (`im:write` scope).
+- **Reply caching**: cache the running-channel list to avoid a DynamoDB Scan on
+  every @-mention. The per-channel cooldown already bounds frequency to at most
+  once per hour per channel.
+
+### `km doctor` check
+
+| Condition | Result |
+|-----------|--------|
+| `KM_SLACK_DEFAULT_ROUTER=true` present in Lambda env | OK — router active |
+| `KM_SLACK_DEFAULT_ROUTER` absent or `false` | SKIPPED — router dormant (default) |
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| No router reply appears after @-mention | Check `KM_SLACK_DEFAULT_ROUTER=true` in the front-door Lambda env tab (AWS console). If absent, ran `--sidecars` — redo with `make build-lambdas && km init --dry-run=false`. |
+| Reply lists channels from this install but not from peers | Peers are still on Phase 95 code (returning legacy `"ok"`). Upgrade all installs: `make build-lambdas && km init --dry-run=false` on each. |
+| Two replies in the same channel | Two installs both have `default_router: true`. Only the designated front-door install should enable it. |
+| No reply even though cooldown should have expired | DynamoDB TTL deletion is eventually consistent (can lag by 48 h). Wait for TTL sweep, or contact AWS support. This is the DynamoDB TTL guarantee — not a bug. |
+| CloudWatch shows `events: router: orphan reply post failed` | The bot is not a member of the orphan channel. Invite it with `/invite @km-bot`. |

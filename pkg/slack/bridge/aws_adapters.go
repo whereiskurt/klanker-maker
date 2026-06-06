@@ -1339,3 +1339,78 @@ func (a *SlackFileUploaderAdapter) UploadFile(ctx context.Context, channel, thre
 	}
 	return res.FileID, res.Permalink, nil
 }
+
+// ============================================================
+// Phase 96: DDBRunningChannelLister — RunningChannelLister implementation
+// ============================================================
+
+// DDBRunningChannelLister implements RunningChannelLister by scanning the
+// km-sandboxes table for sandboxes with state=running AND a bound slack_channel_id.
+//
+// "state" is a DynamoDB reserved word; the scan uses ExpressionAttributeNames
+// {"#s": "state"} to avoid a ValidationException (PITFALL 5 in RESEARCH.md).
+//
+// Pagination: the scan loops on ExclusiveStartKey/LastEvaluatedKey until nil,
+// following the same pattern used by checkOrphanedDDBRows in Phase 94.
+//
+// The bridge Lambda's IAM policy includes dynamodb:Scan on km-sandboxes (added
+// in Phase 96 Plan 01). At typical sandbox counts (tens to low hundreds), a
+// full-table scan is acceptable; the per-channel cooldown bounds frequency.
+type DDBRunningChannelLister struct {
+	Client    DDBScanAPI
+	TableName string // e.g. "km-sandboxes"
+}
+
+// ListRunning scans km-sandboxes and returns a SandboxChannelInfo for each
+// sandbox that has state=running and a slack_channel_id attribute present.
+func (l *DDBRunningChannelLister) ListRunning(ctx context.Context) ([]SandboxChannelInfo, error) {
+	var results []SandboxChannelInfo
+	var lastKey map[string]dynamodbtypes.AttributeValue
+
+	for {
+		in := &dynamodb.ScanInput{
+			TableName: awssdk.String(l.TableName),
+			// FilterExpression: only running sandboxes with a bound Slack channel.
+			// Uses #s alias because "state" is a DynamoDB reserved word.
+			FilterExpression: awssdk.String("attribute_exists(slack_channel_id) AND #s = :running"),
+			ExpressionAttributeNames: map[string]string{
+				"#s": "state",
+			},
+			ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+				":running": &dynamodbtypes.AttributeValueMemberS{Value: "running"},
+			},
+			ProjectionExpression: awssdk.String("slack_channel_id, alias, profile_name"),
+		}
+		if lastKey != nil {
+			in.ExclusiveStartKey = lastKey
+		}
+
+		out, err := l.Client.Scan(ctx, in)
+		if err != nil {
+			return nil, fmt.Errorf("running-channels scan: %w", err)
+		}
+
+		for _, item := range out.Items {
+			info := SandboxChannelInfo{}
+			if v, ok := item["slack_channel_id"].(*dynamodbtypes.AttributeValueMemberS); ok {
+				info.ID = v.Value
+			}
+			if v, ok := item["alias"].(*dynamodbtypes.AttributeValueMemberS); ok {
+				info.Alias = v.Value
+			}
+			if v, ok := item["profile_name"].(*dynamodbtypes.AttributeValueMemberS); ok {
+				info.Profile = v.Value
+			}
+			if info.ID != "" {
+				results = append(results, info)
+			}
+		}
+
+		lastKey = out.LastEvaluatedKey
+		if len(lastKey) == 0 {
+			break
+		}
+	}
+
+	return results, nil
+}

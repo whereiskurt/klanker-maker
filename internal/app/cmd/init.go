@@ -911,6 +911,22 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			os.Setenv("KM_SLACK_PEER_BRIDGES", yamlPeerBridges) //nolint:errcheck
 		}
 	}
+
+	// Phase 96: KM_SLACK_DEFAULT_ROUTER — front-door orphan-channel router toggle.
+	// Consumed by infra/live/use1/lambda-slack-bridge/terragrunt.hcl
+	// get_env("KM_SLACK_DEFAULT_ROUTER", "false"). Only export when the operator has
+	// explicitly set slack.default_router in km-config.yaml (nil => omit => terragrunt
+	// default "false" applies => router dormant, Phase 95 byte-identical). env-wins:
+	// when the env var is already set to a DIFFERENT value, emit a drift WARN and do
+	// NOT overwrite it. Mirrors the MentionOnly / ReactAlways *bool pattern exactly.
+	if cfg.Slack.DefaultRouter != nil {
+		yamlSlackDefaultRouter := strconv.FormatBool(*cfg.Slack.DefaultRouter)
+		if envVal := os.Getenv("KM_SLACK_DEFAULT_ROUTER"); envVal != "" && envVal != yamlSlackDefaultRouter {
+			fmt.Fprintf(os.Stderr, "WARN: KM_SLACK_DEFAULT_ROUTER=%s (env) overrides km-config.yaml slack.default_router=%s\n", envVal, yamlSlackDefaultRouter)
+		} else if envVal == "" {
+			os.Setenv("KM_SLACK_DEFAULT_ROUTER", yamlSlackDefaultRouter) //nolint:errcheck
+		}
+	}
 }
 
 // EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at

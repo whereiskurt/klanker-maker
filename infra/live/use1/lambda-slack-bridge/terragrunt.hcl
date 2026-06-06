@@ -115,6 +115,11 @@ inputs = {
   # update the Lambda environment.variables block — terragrunt apply required).
   slack_peer_bridges = get_env("KM_SLACK_PEER_BRIDGES", "")
 
+  # Phase 96 — default-router toggle. Operator sets slack.default_router: true
+  # in km-config.yaml for the front-door install only. Default false = dormant.
+  # Requires km init --dry-run=false (NOT --sidecars) — same constraint as mention_only.
+  slack_default_router = get_env("KM_SLACK_DEFAULT_ROUTER", "false")
+
   tags = {
     "km:component" = "slack-bridge"
     "km:managed"   = "true"

@@ -18,6 +18,16 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
 - Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
 
+**Phase 96 (2026-06-05) — Slack default router: orphan-channel @-mention reply (complete):**
+- When the shared bot is @-mentioned in a channel no install owns, the front-door install posts ONE threaded reply naming the `#sb-{alias}-{profile}` convention and listing running sandbox channels across all installs as `<#CID>` Slack mentions. Empty aggregate list → guidance-only variant.
+- **Dormant by default.** Set `slack.default_router: true` in `km-config.yaml` on the **front-door install only**. Absent or false → byte-identical to Phase 95 (no reply, no extra calls).
+- Mechanism: claim-aware scatter-gather (Phase 95 relay upgraded); zero claims = true orphan; any `claimed:true` from any peer → owner handled it, no reply. Legacy Phase-95 peer responses treated as `claimed:true` (rollout-safe mixed fleet).
+- Cooldown: 3600 s per channel via the nonces table (`router-cooldown:{channel}` TTL key) — no new infrastructure.
+- No new Slack OAuth scopes. No SandboxProfile schema change. No sandbox recreate needed.
+- **Deploy:** `make build-lambdas` (clean) + `km init --dry-run=false` on **ALL installs** (NOT `--sidecars` — env-block + IAM require a full terragrunt apply). See `docs/slack-notifications.md` § Phase 96.
+- Deferred: agentic self-serve create, non-member channels (`app_mention` + `chat:write.public`), DM fallback (`im:write`).
+- See `docs/slack-notifications.md` § Phase 96 for the full operator guide, deploy instructions, and troubleshooting.
+
 **Phase 93 (2026-06-02) — `km desktop` (KasmVNC remote browser/XFCE) + Ubuntu OS-aware bootstrap (complete):**
 - `km desktop start|status <id>` — KasmVNC graphical session in the operator's local browser over an SSM port-forward (loopback `127.0.0.1:8444`, SSM-only, no public/SG change). Mirrors `km vscode`. New `spec.runtime.desktop` block (`enabled` default **false**, `mode: kiosk|full`, `browsers ⊆ {firefox,chromium,chrome,brave}`, `geometry`). Engine: KasmVNC. **Ubuntu 24.04/22.04 only** (`km validate` errors on desktop+non-Ubuntu AMI). See `docs/desktop.md` / `klanker:desktop` skill.
 - **The EC2 userdata bootstrap is now OS-aware** (`pkg/compiler/userdata.go` + the >12KB stub in `compiler.go`): was Amazon-Linux-only; Ubuntu needs apt-over-HTTPS (SG allows only 443, not port 80), `ForceIPv4`, AWS-CLI install via python3 (no `unzip`), `ssh.service`, and `systemd-resolved` stopped for the eBPF resolver on `:53`. AL2023 path unchanged. Both `proxy` and `ebpf`/`both` enforcement verified on Ubuntu. Desktop install runs BEFORE network enforcement, so the `spec.network` allowlist does not gate it. Details: `.planning/phases/93-*/93-UAT.md` and [[project_ubuntu_userdata_constraints]].
@@ -36,6 +46,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Post to Slack from inside a sandbox (incl. transcript streaming, inbound, attachments) | `klanker:slack` skill |
 | Polite-bot mode, `KM_SLACK_MENTION_ONLY`, per-channel @-mention-only inbound | `docs/slack-notifications.md` § Phase 91 |
 | Federated bridge relay — one Slack App across multiple km installs | `docs/slack-notifications.md` § Phase 95 |
+| Default router: orphan-channel @-mention reply, `slack.default_router`, cooldown | `docs/slack-notifications.md` § Phase 96 |
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |

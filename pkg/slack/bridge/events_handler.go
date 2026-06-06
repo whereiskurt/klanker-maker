@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -77,6 +78,36 @@ type EventsHandler struct {
 	// (byte-identical — the nil-invariant MUST be maintained; see
 	// TestEventsHandler_NilRelayer_MissReturns200).
 	Relayer PeerRelayer
+
+	// Phase 96: RunningChannels lists this install's running sandboxes with bound
+	// Slack channels. Used by the peer-side relayed-miss path to return
+	// {claimed:false, channels:[...]} to the front door, and by the front-door
+	// orphan-reply path to aggregate the local channel list. Optional — nil means
+	// the list is empty (safe, no panic).
+	RunningChannels RunningChannelLister
+
+	// Phase 96: DefaultRouter, when true, enables the front-door orphan-channel
+	// reply. On a FetchByChannel miss + zero peer claims + bot @-mention + cooldown
+	// clear, Handle posts exactly one threaded reply listing running sandbox channels
+	// aggregated from this install + all peers, then returns 200.
+	//
+	// Default false (zero value) = dormant — byte-identical to Phase 95.
+	// Set from KM_SLACK_DEFAULT_ROUTER env var at Lambda cold-start.
+	//
+	// HARD invariants:
+	//   - DefaultRouter=false (or nil Relayer) => NO reply; Phase 95 byte-identical.
+	//   - Any Claimed:true in the scatter-gather => NO reply (owner handled it).
+	//   - Non-mention message in an orphan channel => NO reply.
+	//   - Bot's own reply is dropped by isBotLoop BEFORE the miss site — structural
+	//     guarantee, never re-triggers the router.
+	DefaultRouter bool
+
+	// Phase 96: RouterCooldown gates the per-channel reply frequency. When non-nil,
+	// Reserve("router-cooldown:{channel}", 3600) is called before posting; if
+	// ErrNonceReplayed is returned the reply is suppressed for that window. When nil,
+	// no cooldown is applied (not recommended in production; main.go always wires it
+	// together with DefaultRouter=true).
+	RouterCooldown RouterCooldownStore
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -214,18 +245,54 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		//   | present       | no            | drop (TERMINAL — no re-relay), 200  |
 		if req.Headers["x-km-relayed"] != "" {
 			// TERMINAL: relayed request + no owner => drop, never re-relay.
-			// Loops structurally impossible by this single-hop terminal guard.
+			// Phase 96: return {claimed:false, channels:[...]} so the front door
+			// can tally cross-install running channels for the orphan reply.
 			h.log().Warn("events: relay miss — no owner for relayed message",
 				"channel", msg.Channel, "event", "slack_relay_no_owner")
-			return EventsResponse{StatusCode: 200, Body: "ok"}
+			var runningChannels []SandboxChannelInfo
+			if h.RunningChannels != nil {
+				if listed, listErr := h.RunningChannels.ListRunning(ctx); listErr != nil {
+					h.log().Warn("events: relay miss: running channels list failed", "err", listErr)
+				} else {
+					runningChannels = listed
+				}
+			}
+			if runningChannels == nil {
+				runningChannels = []SandboxChannelInfo{}
+			}
+			missResp := peerRelayResponse{Claimed: false, Channels: runningChannels}
+			missBody, marshalErr := json.Marshal(missResp)
+			if marshalErr != nil {
+				h.log().Warn("events: relay miss: json marshal failed; falling back", "err", marshalErr)
+				return EventsResponse{StatusCode: 200, Body: "ok"}
+			}
+			return EventsResponse{
+				StatusCode: 200,
+				Body:       string(missBody),
+				Headers:    map[string]string{"content-type": "application/json"},
+			}
 		}
 		if h.Relayer != nil {
 			// Broadcast raw event to all peer bridges (synchronous, bounded ~2.5s).
+			// Phase 96: capture []PeerClaimResult and tally claims for orphan detection.
 			// The caller returns 200 regardless — a partial broadcast is better
 			// than dropping the event entirely.
-			if err := h.Relayer.Broadcast(ctx, req.Body, req.Headers); err != nil {
-				h.log().Warn("events: relay broadcast partial failure", "err", err,
+			claimResults, broadcastErr := h.Relayer.Broadcast(ctx, req.Body, req.Headers)
+			if broadcastErr != nil {
+				h.log().Warn("events: relay broadcast partial failure", "err", broadcastErr,
 					"channel", msg.Channel)
+			}
+			// Phase 96: claim-aware orphan reply.
+			// Tally: any claimed:true => owner handled it, no router reply needed.
+			anyClaimed := false
+			for _, r := range claimResults {
+				if r.Claimed {
+					anyClaimed = true
+					break
+				}
+			}
+			if !anyClaimed {
+				h.maybePostOrphanReply(ctx, msg, claimResults)
 			}
 		} else {
 			h.log().Warn("events: unknown channel or inbound disabled", "channel", msg.Channel)
@@ -448,6 +515,22 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		}
 	}
 
+	// Phase 96: relayed-owned path. When the request carried x-km-relayed (peer
+	// sent it to us) and we own the channel, return {claimed:true} so the front
+	// door knows we handled it. Non-relayed (front-door) owned responses keep
+	// their existing plain "ok" body — Plan 03 changes the miss path only.
+	if req.Headers["x-km-relayed"] != "" {
+		ownedResp := peerRelayResponse{Claimed: true}
+		ownedBody, marshalErr := json.Marshal(ownedResp)
+		if marshalErr == nil {
+			return EventsResponse{
+				StatusCode: 200,
+				Body:       string(ownedBody),
+				Headers:    map[string]string{"content-type": "application/json"},
+			}
+		}
+	}
+
 	return EventsResponse{StatusCode: 200, Body: "ok"}
 }
 
@@ -492,6 +575,130 @@ func (h *EventsHandler) isBotLoop(ctx context.Context, m slackMessageEvent) bool
 		return false // fail open — let dedup catch loops
 	}
 	return botUID != "" && m.User == botUID
+}
+
+// maybePostOrphanReply posts exactly one threaded reply in an orphan channel
+// (a channel not owned by any install) when all gates pass:
+//
+//  1. h.DefaultRouter must be true (default false = dormant).
+//  2. msg.Channel must be non-empty (defensive guard).
+//  3. The message must @-mention the bot (`<@{bot_user_id}>` in msg.Text).
+//  4. Per-channel cooldown must be clear (RouterCooldownStore.Reserve returns nil).
+//
+// Reply content: a threaded message listing running sandbox channels aggregated from
+// this install's h.RunningChannels.ListRunning plus every peer's result.Channels,
+// rendered as `<#CID>` Slack mentions. When the aggregate list is empty, the reply
+// uses a guidance-only variant (no channel mentions, naming convention only).
+//
+// The reply is posted SYNCHRONOUSLY before returning (NOT in a goroutine) because
+// AWS Lambda freezes the execution environment when Handle returns — see PITFALL 3
+// in 96-RESEARCH.md. A bounded 5-second context caps the Slack API call.
+//
+// On any gate failure or error, the method returns silently; Handle continues to
+// return 200 regardless of what this method does.
+func (h *EventsHandler) maybePostOrphanReply(ctx context.Context, msg slackMessageEvent, peerResults []PeerClaimResult) {
+	// Gate 1: DefaultRouter feature flag.
+	if !h.DefaultRouter {
+		return
+	}
+	// Gate 2: Non-empty channel (defensive).
+	if msg.Channel == "" {
+		return
+	}
+	// Gate 3: Bot @-mention required.
+	uid, fetchErr := h.BotUserID.Fetch(ctx)
+	if fetchErr != nil {
+		h.log().Warn("events: router: bot_user_id fetch failed; skipping orphan reply", "err", fetchErr)
+		return
+	}
+	if uid == "" || !strings.Contains(msg.Text, "<@"+uid+">") {
+		return // not a mention — silent
+	}
+	// Gate 4: Per-channel cooldown.
+	if h.RouterCooldown != nil {
+		cooldownErr := h.RouterCooldown.Reserve(ctx, msg.Channel, 3600)
+		if cooldownErr != nil {
+			if errors.Is(cooldownErr, ErrNonceReplayed) {
+				h.log().Debug("events: router: cooldown active; suppressing orphan reply",
+					"channel", msg.Channel)
+			} else {
+				h.log().Warn("events: router: cooldown Reserve failed; skipping reply",
+					"channel", msg.Channel, "err", cooldownErr)
+			}
+			return
+		}
+	}
+
+	// Build aggregate channel list: front door's own running channels + all peers' channels.
+	seen := make(map[string]bool)
+	var channels []SandboxChannelInfo
+	if h.RunningChannels != nil {
+		local, listErr := h.RunningChannels.ListRunning(ctx)
+		if listErr != nil {
+			h.log().Warn("events: router: local running channels list failed; continuing with peers only", "err", listErr)
+		} else {
+			for _, ch := range local {
+				if ch.ID != "" && !seen[ch.ID] {
+					seen[ch.ID] = true
+					channels = append(channels, ch)
+				}
+			}
+		}
+	}
+	for _, pr := range peerResults {
+		for _, ch := range pr.Channels {
+			if ch.ID != "" && !seen[ch.ID] {
+				seen[ch.ID] = true
+				channels = append(channels, ch)
+			}
+		}
+	}
+
+	// Build reply text.
+	var text string
+	convention := "they're named `#sb-{alias}-{profile}`"
+	if len(channels) == 0 {
+		text = "No sandbox is bound to this channel. To work with a bot, join one of its channels — " +
+			convention + ". None are currently running; ask an operator to create one with `km create`."
+	} else {
+		var sb strings.Builder
+		sb.WriteString("No sandbox is bound to this channel. To work with a bot, join one of its channels — ")
+		sb.WriteString(convention)
+		sb.WriteString(". Currently running:\n")
+		for _, ch := range channels {
+			sb.WriteString("• <#")
+			sb.WriteString(ch.ID)
+			sb.WriteString(">")
+			if ch.Alias != "" || ch.Profile != "" {
+				sb.WriteString(" — ")
+				if ch.Alias != "" {
+					sb.WriteString(ch.Alias)
+				}
+				if ch.Profile != "" {
+					sb.WriteString(" (")
+					sb.WriteString(ch.Profile)
+					sb.WriteString(")")
+				}
+			}
+			sb.WriteString("\n")
+		}
+		text = strings.TrimRight(sb.String(), "\n")
+	}
+
+	// Thread anchor: top-level posts use msg.TS; replies in a thread use msg.ThreadTS.
+	replyThreadTS := msg.ThreadTS
+	if replyThreadTS == "" {
+		replyThreadTS = msg.TS
+	}
+
+	// Post SYNCHRONOUSLY with a bounded context (PITFALL 3: no goroutine in Lambda).
+	replyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := h.Slack.PostMessage(replyCtx, msg.Channel, "", text, replyThreadTS); err != nil {
+		h.log().Warn("events: router: orphan reply post failed", "channel", msg.Channel, "err", err)
+	} else {
+		h.log().Info("events: router: orphan reply posted", "channel", msg.Channel, "thread_ts", replyThreadTS, "channels_listed", len(channels))
+	}
 }
 
 // verifySlackSignature verifies the HMAC + timestamp window per Slack docs.

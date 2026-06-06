@@ -7,9 +7,10 @@
 // moves to DynamoDB for O(1) reads, atomic locking, and GSI alias resolution.
 //
 // Table key design:
-//   sandbox_id (S) — hash key (no sort key)
-//   alias-index GSI: alias (S) → sandbox_id, for O(1) alias resolution
-//   TTL attribute: ttl_expiry (N, Unix epoch seconds) — native DynamoDB TTL
+//
+//	sandbox_id (S) — hash key (no sort key)
+//	alias-index GSI: alias (S) → sandbox_id, for O(1) alias resolution
+//	TTL attribute: ttl_expiry (N, Unix epoch seconds) — native DynamoDB TTL
 package aws
 
 import (
@@ -43,17 +44,17 @@ type SandboxMetadataAPI interface {
 // Uses explicit dynamodbav tags — does NOT rely on json tag fallback (research Pitfall 1).
 // TTLExpiry is stored as an int64 epoch (Number type) for native DynamoDB TTL support.
 type sandboxItemDynamo struct {
-	SandboxID    string `dynamodbav:"sandbox_id"`
-	ProfileName  string `dynamodbav:"profile_name"`
-	Substrate    string `dynamodbav:"substrate"`
-	Region       string `dynamodbav:"region"`
-	Status       string `dynamodbav:"status,omitempty"`
-	CreatedAt    string `dynamodbav:"created_at"`
-	IdleTimeout  string `dynamodbav:"idle_timeout,omitempty"`
-	MaxLifetime  string `dynamodbav:"max_lifetime,omitempty"`
-	CreatedBy    string `dynamodbav:"created_by,omitempty"`
-	Alias        string `dynamodbav:"alias,omitempty"`
-	ClonedFrom   string `dynamodbav:"cloned_from,omitempty"`
+	SandboxID      string `dynamodbav:"sandbox_id"`
+	ProfileName    string `dynamodbav:"profile_name"`
+	Substrate      string `dynamodbav:"substrate"`
+	Region         string `dynamodbav:"region"`
+	Status         string `dynamodbav:"status,omitempty"`
+	CreatedAt      string `dynamodbav:"created_at"`
+	IdleTimeout    string `dynamodbav:"idle_timeout,omitempty"`
+	MaxLifetime    string `dynamodbav:"max_lifetime,omitempty"`
+	CreatedBy      string `dynamodbav:"created_by,omitempty"`
+	Alias          string `dynamodbav:"alias,omitempty"`
+	ClonedFrom     string `dynamodbav:"cloned_from,omitempty"`
 	Locked         bool   `dynamodbav:"locked,omitempty"`
 	LockedAt       string `dynamodbav:"locked_at,omitempty"`
 	TeardownPolicy string `dynamodbav:"teardown_policy,omitempty"`
@@ -72,15 +73,15 @@ func (d *sandboxItemDynamo) toSandboxMetadata() (*SandboxMetadata, error) {
 	}
 
 	meta := &SandboxMetadata{
-		SandboxID:   d.SandboxID,
-		ProfileName: d.ProfileName,
-		Substrate:   d.Substrate,
-		Region:      d.Region,
-		Status:      d.Status,
-		CreatedAt:   createdAt,
-		IdleTimeout: d.IdleTimeout,
-		MaxLifetime: d.MaxLifetime,
-		CreatedBy:   d.CreatedBy,
+		SandboxID:      d.SandboxID,
+		ProfileName:    d.ProfileName,
+		Substrate:      d.Substrate,
+		Region:         d.Region,
+		Status:         d.Status,
+		CreatedAt:      createdAt,
+		IdleTimeout:    d.IdleTimeout,
+		MaxLifetime:    d.MaxLifetime,
+		CreatedBy:      d.CreatedBy,
 		Alias:          d.Alias,
 		ClonedFrom:     d.ClonedFrom,
 		Locked:         d.Locked,
@@ -258,6 +259,33 @@ func unmarshalSlackFields(item map[string]dynamodbtypes.AttributeValue, meta *Sa
 			meta.SlackInboundQueueURL = sv.Value
 		}
 	}
+	// Phase 91.5 per-sandbox overrides. create_slack_inbound.go writes these as
+	// strings ("true"/"false") via UpdateSandboxAttr; marshalSandboxItem writes
+	// BOOL. Tolerate both so the round-trip survives regardless of the writer.
+	meta.SlackMentionOnly = readTriStateBool(item, "slack_mention_only")
+	meta.SlackReactAlways = readTriStateBool(item, "slack_react_always")
+}
+
+// readTriStateBool reads a tri-state *bool DynamoDB attribute that may have been
+// written either as a native BOOL (marshalSandboxItem) or as a string
+// "true"/"false" (UpdateSandboxAttr in create_slack_inbound.go). Returns nil when
+// the attribute is absent or unrecognised — nil signals "fall back to default".
+func readTriStateBool(item map[string]dynamodbtypes.AttributeValue, key string) *bool {
+	switch v := item[key].(type) {
+	case *dynamodbtypes.AttributeValueMemberBOOL:
+		b := v.Value
+		return &b
+	case *dynamodbtypes.AttributeValueMemberS:
+		switch v.Value {
+		case "true":
+			b := true
+			return &b
+		case "false":
+			b := false
+			return &b
+		}
+	}
+	return nil
 }
 
 // unmarshalFailureFields reads Phase 77 failure-discoverability fields from a raw
@@ -359,6 +387,19 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 	// line ~254.
 	if meta.SlackInboundQueueURL != "" {
 		item["slack_inbound_queue_url"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.SlackInboundQueueURL}
+	}
+
+	// Phase 91.5 per-sandbox overrides. Only written when explicitly set (nil =
+	// omit = "fall back to install default"). Same nil/&true/&false round-trip
+	// semantics as slack_archive_on_destroy above. Written as BOOL; the bridge's
+	// FetchByChannel and unmarshalSlackFields both tolerate BOOL or string. Must
+	// be emitted here or read-modify-write paths (resume/extend/ttl-handler)
+	// silently strip the override on the next full-row PutItem.
+	if meta.SlackMentionOnly != nil {
+		item["slack_mention_only"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: *meta.SlackMentionOnly}
+	}
+	if meta.SlackReactAlways != nil {
+		item["slack_react_always"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: *meta.SlackReactAlways}
 	}
 
 	// Phase 77 — failure discoverability. Only written when failure_reason is
@@ -686,6 +727,48 @@ func UpdateSandboxStatusAndClearTTL(ctx context.Context, client SandboxMetadataA
 	})
 	if err != nil {
 		return fmt.Errorf("update status and clear TTL for sandbox %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
+// UpdateSandboxTTLDynamo bumps ONLY the TTL-related attributes (ttl_expiry,
+// expires_at) on an existing km-sandboxes row via a targeted UpdateItem, leaving
+// every other attribute untouched.
+//
+// This replaces the historical "ReadSandboxMetadataDynamo → mutate →
+// WriteSandboxMetadataDynamo (full-row PutItem)" pattern used by resume's TTL
+// recreation, which silently clobbered any attribute not carried by
+// SandboxMetadata (e.g. the Phase 91.5 per-sandbox Slack overrides) — observed as
+// a sandbox losing `mentionOnly: true` and reverting to 👀-on-everything after a
+// pause/resume cycle.
+//
+// ttl_expiry (native DynamoDB TTL, Number) is SET only when teardownPolicy is
+// neither "stop" nor "retain" — mirroring marshalSandboxItem — and REMOVEd
+// otherwise so a previously-set value can't auto-reap a stop/retain sandbox.
+// expires_at (display-only String) is always SET. Neither attribute name is a
+// DynamoDB reserved word, so no ExpressionAttributeNames aliasing is needed.
+func UpdateSandboxTTLDynamo(ctx context.Context, client SandboxMetadataAPI, tableName, sandboxID string, newExpiry time.Time, teardownPolicy string) error {
+	eav := map[string]dynamodbtypes.AttributeValue{
+		":ea": &dynamodbtypes.AttributeValueMemberS{Value: newExpiry.UTC().Format(time.RFC3339)},
+	}
+	expr := "SET expires_at = :ea"
+	if teardownPolicy != "stop" && teardownPolicy != "retain" {
+		expr += ", ttl_expiry = :te"
+		eav[":te"] = &dynamodbtypes.AttributeValueMemberN{Value: strconv.FormatInt(newExpiry.Unix(), 10)}
+	} else {
+		expr += " REMOVE ttl_expiry"
+	}
+
+	_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		UpdateExpression:          awssdk.String(expr),
+		ExpressionAttributeValues: eav,
+	})
+	if err != nil {
+		return fmt.Errorf("update TTL for sandbox %s: %w", sandboxID, err)
 	}
 	return nil
 }

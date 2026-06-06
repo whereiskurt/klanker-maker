@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -778,13 +780,13 @@ func TestMarshalSlackFields_OmitWhenEmpty(t *testing.T) {
 func TestSlackArchiveOnDestroy_NilRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	meta := &kmaws.SandboxMetadata{
-		SandboxID:            "sb-arch01",
-		ProfileName:          "dev",
-		Substrate:            "ec2",
-		Region:               "us-east-1",
-		CreatedAt:            now,
-		SlackChannelID:       "C0111",
-		SlackPerSandbox:      true,
+		SandboxID:             "sb-arch01",
+		ProfileName:           "dev",
+		Substrate:             "ec2",
+		Region:                "us-east-1",
+		CreatedAt:             now,
+		SlackChannelID:        "C0111",
+		SlackPerSandbox:       true,
 		SlackArchiveOnDestroy: nil, // default: archive
 	}
 
@@ -806,13 +808,13 @@ func TestSlackArchiveOnDestroy_TrueRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	tru := true
 	meta := &kmaws.SandboxMetadata{
-		SandboxID:            "sb-arch02",
-		ProfileName:          "dev",
-		Substrate:            "ec2",
-		Region:               "us-east-1",
-		CreatedAt:            now,
-		SlackChannelID:       "C0222",
-		SlackPerSandbox:      true,
+		SandboxID:             "sb-arch02",
+		ProfileName:           "dev",
+		Substrate:             "ec2",
+		Region:                "us-east-1",
+		CreatedAt:             now,
+		SlackChannelID:        "C0222",
+		SlackPerSandbox:       true,
 		SlackArchiveOnDestroy: &tru,
 	}
 
@@ -838,13 +840,13 @@ func TestSlackArchiveOnDestroy_FalseRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	fls := false
 	meta := &kmaws.SandboxMetadata{
-		SandboxID:            "sb-arch03",
-		ProfileName:          "dev",
-		Substrate:            "ec2",
-		Region:               "us-east-1",
-		CreatedAt:            now,
-		SlackChannelID:       "C0333",
-		SlackPerSandbox:      true,
+		SandboxID:             "sb-arch03",
+		ProfileName:           "dev",
+		Substrate:             "ec2",
+		Region:                "us-east-1",
+		CreatedAt:             now,
+		SlackChannelID:        "C0333",
+		SlackPerSandbox:       true,
 		SlackArchiveOnDestroy: &fls,
 	}
 
@@ -865,6 +867,216 @@ func TestSlackArchiveOnDestroy_FalseRoundTrip(t *testing.T) {
 	}
 }
 
+// ---- Phase 91.5 per-sandbox override round-trip (resume/extend/ttl-handler bug) ----
+//
+// slack_mention_only and slack_react_always are written at km create
+// (create_slack_inbound.go) as standalone DDB attributes. Any read-modify-write
+// path — resume.go TTL recreation, extend.go, the ttl-handler Lambda — reads the
+// row into SandboxMetadata, mutates it, and PutItems the whole row back. If the
+// struct does not round-trip these two attributes they are silently stripped, so
+// the bridge's FetchByChannel falls back to install-level defaults (mention_only
+// off, react_always on → 👀 on every message). These tests lock the round-trip.
+
+// TestSlackMentionOnly_NilRoundTrip: nil pointer → attribute omitted (absence
+// means "fall back to install-level KM_SLACK_MENTION_ONLY").
+func TestSlackMentionOnly_NilRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:        "sb-mo-nil",
+		ProfileName:      "dev",
+		Substrate:        "ec2",
+		Region:           "us-east-1",
+		CreatedAt:        now,
+		SlackChannelID:   "C0M01",
+		SlackMentionOnly: nil,
+	}
+	item := mustMarshalSandboxItemFull(t, meta)
+	if _, ok := item["slack_mention_only"]; ok {
+		t.Error("slack_mention_only should be omitted when nil")
+	}
+}
+
+// TestSlackMentionOnly_TrueRoundTrip: &true survives marshal → unmarshal.
+func TestSlackMentionOnly_TrueRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	tru := true
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:        "sb-mo-true",
+		ProfileName:      "dev",
+		Substrate:        "ec2",
+		Region:           "us-east-1",
+		CreatedAt:        now,
+		SlackChannelID:   "C0M02",
+		SlackMentionOnly: &tru,
+	}
+	item := mustMarshalSandboxItemFull(t, meta)
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(),
+		&mockSandboxMetadataAPI{getItemOutput: &dynamodb.GetItemOutput{Item: item}},
+		"km-sandboxes", "sb-mo-true")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.SlackMentionOnly == nil || !*got.SlackMentionOnly {
+		t.Errorf("SlackMentionOnly round-trip: got %v, want &true", got.SlackMentionOnly)
+	}
+}
+
+// TestSlackMentionOnly_FalseRoundTrip: &false (explicit chatty override) must
+// survive — it is NOT the same as nil/absent.
+func TestSlackMentionOnly_FalseRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	fls := false
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:        "sb-mo-false",
+		ProfileName:      "dev",
+		Substrate:        "ec2",
+		Region:           "us-east-1",
+		CreatedAt:        now,
+		SlackChannelID:   "C0M03",
+		SlackMentionOnly: &fls,
+	}
+	item := mustMarshalSandboxItemFull(t, meta)
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(),
+		&mockSandboxMetadataAPI{getItemOutput: &dynamodb.GetItemOutput{Item: item}},
+		"km-sandboxes", "sb-mo-false")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.SlackMentionOnly == nil || *got.SlackMentionOnly {
+		t.Errorf("SlackMentionOnly round-trip: got %v, want &false", got.SlackMentionOnly)
+	}
+}
+
+// TestSlackReactAlways_NilRoundTrip: nil pointer → attribute omitted.
+func TestSlackReactAlways_NilRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:        "sb-ra-nil",
+		ProfileName:      "dev",
+		Substrate:        "ec2",
+		Region:           "us-east-1",
+		CreatedAt:        now,
+		SlackChannelID:   "C0R01",
+		SlackReactAlways: nil,
+	}
+	item := mustMarshalSandboxItemFull(t, meta)
+	if _, ok := item["slack_react_always"]; ok {
+		t.Error("slack_react_always should be omitted when nil")
+	}
+}
+
+// TestSlackReactAlways_TrueRoundTrip: &true survives marshal → unmarshal.
+func TestSlackReactAlways_TrueRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	tru := true
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:        "sb-ra-true",
+		ProfileName:      "dev",
+		Substrate:        "ec2",
+		Region:           "us-east-1",
+		CreatedAt:        now,
+		SlackChannelID:   "C0R02",
+		SlackReactAlways: &tru,
+	}
+	item := mustMarshalSandboxItemFull(t, meta)
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(),
+		&mockSandboxMetadataAPI{getItemOutput: &dynamodb.GetItemOutput{Item: item}},
+		"km-sandboxes", "sb-ra-true")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.SlackReactAlways == nil || !*got.SlackReactAlways {
+		t.Errorf("SlackReactAlways round-trip: got %v, want &true", got.SlackReactAlways)
+	}
+}
+
+// TestSlackReactAlways_FalseRoundTrip: &false (explicit first-only override) must
+// survive a read-modify-write — this is the resume-reversion bug under test.
+func TestSlackReactAlways_FalseRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	fls := false
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:        "sb-ra-false",
+		ProfileName:      "dev",
+		Substrate:        "ec2",
+		Region:           "us-east-1",
+		CreatedAt:        now,
+		SlackChannelID:   "C0R03",
+		SlackReactAlways: &fls,
+	}
+	item := mustMarshalSandboxItemFull(t, meta)
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(),
+		&mockSandboxMetadataAPI{getItemOutput: &dynamodb.GetItemOutput{Item: item}},
+		"km-sandboxes", "sb-ra-false")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.SlackReactAlways == nil || *got.SlackReactAlways {
+		t.Errorf("SlackReactAlways round-trip: got %v, want &false", got.SlackReactAlways)
+	}
+}
+
+// ---- Fix A: UpdateSandboxTTLDynamo — targeted TTL UpdateItem (resume/extend) ----
+//
+// The resume/extend TTL-recreation path historically did a full-row PutItem to
+// bump expiry, which clobbered attributes not carried by SandboxMetadata.
+// UpdateSandboxTTLDynamo issues a targeted UpdateItem touching only ttl_expiry /
+// expires_at so unrelated attributes (Slack overrides, etc.) are never rewritten.
+
+// TestUpdateSandboxTTLDynamo_DestroyPolicy_SetsTTLAndExpiresAt verifies that for
+// a destroy-policy sandbox the helper SETs both ttl_expiry (native TTL, Number)
+// and expires_at (display, String) via a single UpdateItem — never a PutItem.
+func TestUpdateSandboxTTLDynamo_DestroyPolicy_SetsTTLAndExpiresAt(t *testing.T) {
+	newExpiry := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	mock := &mockSandboxMetadataAPI{updateItemOutput: &dynamodb.UpdateItemOutput{}}
+
+	if err := kmaws.UpdateSandboxTTLDynamo(context.Background(), mock, "km-sandboxes", "sb-ttl-d", newExpiry, "destroy"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if mock.putItemInput != nil {
+		t.Fatal("UpdateSandboxTTLDynamo must NOT call PutItem (full-row overwrite drops unrelated attributes)")
+	}
+	if mock.updateItemInput == nil {
+		t.Fatal("UpdateItem was not called")
+	}
+	expr := awssdk.ToString(mock.updateItemInput.UpdateExpression)
+	if !strings.Contains(expr, "ttl_expiry") || !strings.Contains(expr, "expires_at") {
+		t.Errorf("UpdateExpression %q must SET both ttl_expiry and expires_at", expr)
+	}
+	te, ok := mock.updateItemInput.ExpressionAttributeValues[":te"].(*dynamodbtypes.AttributeValueMemberN)
+	if !ok {
+		t.Fatalf("ttl_expiry value must be a Number (N) for native DynamoDB TTL, got %T", mock.updateItemInput.ExpressionAttributeValues[":te"])
+	}
+	if te.Value != strconv.FormatInt(newExpiry.Unix(), 10) {
+		t.Errorf(":te = %q, want %q", te.Value, strconv.FormatInt(newExpiry.Unix(), 10))
+	}
+}
+
+// TestUpdateSandboxTTLDynamo_StopPolicy_RemovesTTL verifies that for a stop/retain
+// sandbox the helper REMOVEs ttl_expiry (so native TTL can't auto-delete it) while
+// still updating the display-only expires_at — matching marshalSandboxItem's guard.
+func TestUpdateSandboxTTLDynamo_StopPolicy_RemovesTTL(t *testing.T) {
+	newExpiry := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	mock := &mockSandboxMetadataAPI{updateItemOutput: &dynamodb.UpdateItemOutput{}}
+
+	if err := kmaws.UpdateSandboxTTLDynamo(context.Background(), mock, "km-sandboxes", "sb-ttl-s", newExpiry, "stop"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if mock.updateItemInput == nil {
+		t.Fatal("UpdateItem was not called")
+	}
+	expr := awssdk.ToString(mock.updateItemInput.UpdateExpression)
+	if !strings.Contains(expr, "REMOVE") || !strings.Contains(expr, "ttl_expiry") {
+		t.Errorf("UpdateExpression %q must REMOVE ttl_expiry for stop policy", expr)
+	}
+	if !strings.Contains(expr, "expires_at") {
+		t.Errorf("UpdateExpression %q must still SET expires_at", expr)
+	}
+	if _, present := mock.updateItemInput.ExpressionAttributeValues[":te"]; present {
+		t.Error(":te (ttl_expiry value) must NOT be present when ttl_expiry is REMOVEd")
+	}
+}
+
 // mustMarshalSandboxItemFull calls the real marshalSandboxItem exported function via
 // WriteSandboxMetadataDynamo so we can capture the item map.
 // It uses the existing mock and reads back the captured item from PutItem.
@@ -880,11 +1092,11 @@ func mustMarshalSandboxItemFull(t *testing.T, meta *kmaws.SandboxMetadata) map[s
 // ---- Phase 77: UpdateSandboxStatusAndReasonDynamo tests ----
 
 // TestUpdateSandboxStatusAndReasonDynamo_RoundTrip verifies:
-// 1. The helper issues one UpdateItem with an expression containing
-//    failure_reason and failed_at.
-// 2. :reason and :ts expression-attribute values match the inputs.
-// 3. ReadSandboxMetadataDynamo correctly populates FailureReason and FailedAt
-//    when the DDB item carries those attributes.
+//  1. The helper issues one UpdateItem with an expression containing
+//     failure_reason and failed_at.
+//  2. :reason and :ts expression-attribute values match the inputs.
+//  3. ReadSandboxMetadataDynamo correctly populates FailureReason and FailedAt
+//     when the DDB item carries those attributes.
 func TestUpdateSandboxStatusAndReasonDynamo_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	failedAt := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
@@ -1130,4 +1342,3 @@ func contains(s, sub string) bool {
 			return false
 		}())
 }
-

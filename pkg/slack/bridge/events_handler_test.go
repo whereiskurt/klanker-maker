@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1385,11 +1386,13 @@ func TestEventsHandler_MentionOnly_PerSandboxOverride(t *testing.T) {
 // ── Phase 95: Federated relay decision table ─────────────────────────────────
 
 // fakePeerRelayer is a test double for PeerRelayer.
-// Records all Broadcast calls for assertion and returns a configurable error.
+// Records all Broadcast calls for assertion and returns configurable results.
+// Phase 96: updated to return ([]PeerClaimResult, error) for scatter-gather.
 type fakePeerRelayer struct {
-	mu    sync.Mutex
-	calls []fakeRelayCall
-	err   error
+	mu      sync.Mutex
+	calls   []fakeRelayCall
+	err     error
+	results []PeerClaimResult // configurable results; nil => return empty slice
 }
 
 type fakeRelayCall struct {
@@ -1397,11 +1400,15 @@ type fakeRelayCall struct {
 	headers map[string]string
 }
 
-func (f *fakePeerRelayer) Broadcast(ctx context.Context, rawBody string, h map[string]string) error {
+func (f *fakePeerRelayer) Broadcast(ctx context.Context, rawBody string, h map[string]string) ([]PeerClaimResult, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, fakeRelayCall{rawBody, h})
+	results := f.results
 	f.mu.Unlock()
-	return f.err
+	if results == nil {
+		results = []PeerClaimResult{}
+	}
+	return results, f.err
 }
 
 func (f *fakePeerRelayer) snapshot() []fakeRelayCall {
@@ -1589,5 +1596,608 @@ func TestVerifySlackSignature_Relayed(t *testing.T) {
 	staleTS, staleSig := signSlackPayload(t, rawBody, now.Add(-6*time.Minute))
 	if err := verifySlackSignature(sharedSecret, staleTS, rawBody, staleSig, now); err == nil {
 		t.Fatal("expected stale-timestamp error; got nil")
+	}
+}
+
+// ── Phase 96: Relayed-request peer-side responses ────────────────────────────
+
+// fakeRunningChannelLister is a test double for RunningChannelLister.
+type fakeRunningChannelLister struct {
+	channels []SandboxChannelInfo
+	err      error
+}
+
+func (f *fakeRunningChannelLister) ListRunning(ctx context.Context) ([]SandboxChannelInfo, error) {
+	return f.channels, f.err
+}
+
+// relayedMissBody builds a request body for an unknown channel with x-km-relayed header.
+func relayedMissBody(eventID, channel string) string {
+	return fmt.Sprintf(
+		`{"type":"event_callback","event_id":%q,"event":{"type":"message","channel":%q,"user":"U1","text":"hello","ts":"1.0"}}`,
+		eventID, channel,
+	)
+}
+
+// TestEventsHandler_RelayedMiss_ReturnsChannels verifies that a relayed request
+// for an UNOWNED channel returns 200 with {claimed:false, channels:[...]} JSON.
+func TestEventsHandler_RelayedMiss_ReturnsChannels(t *testing.T) {
+	now := time.Now()
+	h, _, _, _, sandboxes, _, _ := newHandler(now)
+
+	// Unknown channel
+	sandboxes.info = SandboxRoutingInfo{}
+
+	// Wire RunningChannels lister
+	h.RunningChannels = &fakeRunningChannelLister{
+		channels: []SandboxChannelInfo{
+			{ID: "C1", Alias: "orc", Profile: "patch"},
+		},
+	}
+
+	body := relayedMissBody("ERELAYEDMISS1", "C-unknown")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+			"x-km-relayed":              "1",
+		},
+		Body: body,
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+	}
+
+	// Content-Type must be application/json
+	if ct := resp.Headers["content-type"]; ct != "application/json" {
+		t.Errorf("content-type: got %q, want application/json", ct)
+	}
+
+	// Parse and assert response body
+	var parsed peerRelayResponse
+	if err := json.Unmarshal([]byte(resp.Body), &parsed); err != nil {
+		t.Fatalf("unmarshal response body: %v (body=%s)", err, resp.Body)
+	}
+	if parsed.Claimed {
+		t.Error("expected claimed:false for relayed miss, got true")
+	}
+	if len(parsed.Channels) != 1 {
+		t.Fatalf("expected 1 channel, got %d: %+v", len(parsed.Channels), parsed.Channels)
+	}
+	if parsed.Channels[0].ID != "C1" || parsed.Channels[0].Alias != "orc" || parsed.Channels[0].Profile != "patch" {
+		t.Errorf("unexpected channel info: %+v", parsed.Channels[0])
+	}
+}
+
+// TestEventsHandler_RelayedMiss_NilLister verifies that a relayed miss with
+// RunningChannels==nil returns {claimed:false, channels:[]} without panicking.
+func TestEventsHandler_RelayedMiss_NilLister(t *testing.T) {
+	now := time.Now()
+	h, _, _, _, sandboxes, _, _ := newHandler(now)
+
+	// Unknown channel + nil lister
+	sandboxes.info = SandboxRoutingInfo{}
+	h.RunningChannels = nil
+
+	body := relayedMissBody("ERELAYEDMISSNL", "C-unknown")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+			"x-km-relayed":              "1",
+		},
+		Body: body,
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var parsed peerRelayResponse
+	if err := json.Unmarshal([]byte(resp.Body), &parsed); err != nil {
+		// Acceptable: could be plain "ok" fallback or valid JSON with empty channels.
+		// The critical requirement is: no panic + 200.
+		return
+	}
+	if parsed.Claimed {
+		t.Error("expected claimed:false for relayed miss, got true")
+	}
+}
+
+// TestEventsHandler_RelayedOwned_ReturnsClaimedTrue verifies that a relayed
+// request for an OWNED channel returns {claimed:true} with application/json.
+func TestEventsHandler_RelayedOwned_ReturnsClaimedTrue(t *testing.T) {
+	now := time.Now()
+	h, _, _, _, sandboxes, _, _ := newHandler(now)
+
+	// Owned channel
+	sandboxes.info = SandboxRoutingInfo{
+		SandboxID: "sb-abc123",
+		QueueURL:  "https://sqs.example/queue.fifo",
+	}
+
+	body := relayedMissBody("ERELAYEDOWNED1", "C-owned")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+			"x-km-relayed":              "1",
+		},
+		Body: body,
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+	}
+
+	// Content-Type must be application/json for relayed-owned response
+	if ct := resp.Headers["content-type"]; ct != "application/json" {
+		t.Errorf("content-type: got %q, want application/json", ct)
+	}
+
+	var parsed peerRelayResponse
+	if err := json.Unmarshal([]byte(resp.Body), &parsed); err != nil {
+		t.Fatalf("unmarshal response body: %v (body=%s)", err, resp.Body)
+	}
+	if !parsed.Claimed {
+		t.Error("expected claimed:true for relayed owned, got false")
+	}
+}
+
+// TestEventsHandler_NonRelayed_FrontDoor_Unaffected verifies that a non-relayed
+// (front-door) request still returns 200 "ok" (Plan 03 changes this path).
+func TestEventsHandler_NonRelayed_FrontDoor_Unaffected(t *testing.T) {
+	now := time.Now()
+	h, _, _, _, sandboxes, _, _ := newHandler(now)
+
+	// Unknown channel — will trigger relay broadcast path
+	sandboxes.info = SandboxRoutingInfo{}
+	h.Relayer = nil // no relay configured
+
+	body := relayedMissBody("ENONRELAYED1", "C-unknown")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+			// No x-km-relayed header = front-door request
+		},
+		Body: body,
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+	}
+	// Front-door miss still returns plain "ok" (Plan 03 owns the orphan-reply path)
+	if resp.Body != "ok" {
+		t.Errorf("expected body 'ok' for front-door miss, got %q", resp.Body)
+	}
+}
+
+// ── Phase 96 Plan 03: Front-door orphan reply ─────────────────────────────────
+
+// fakeCooldownStore is a test double for RouterCooldownStore.
+// Returns configurable nil (permit) or ErrNonceReplayed (suppress).
+type fakeCooldownStore struct {
+	mu      sync.Mutex
+	calls   []string // channelIDs passed to Reserve
+	nextErr error    // err to return on Reserve; nil = permit
+}
+
+func (f *fakeCooldownStore) Reserve(ctx context.Context, channelID string, cooldownSeconds int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, channelID)
+	return f.nextErr
+}
+
+func (f *fakeCooldownStore) snapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+// buildOrphanBody builds a signed event body for an @-mention of the bot in an
+// orphan channel (no sandbox bound). eventID, channel, ts, mentionUID are configurable.
+func buildOrphanBody(t *testing.T, channel, ts, eventID, mentionUID string) string {
+	t.Helper()
+	text := "hey <@" + mentionUID + "> what is running?"
+	event := map[string]any{
+		"type":    "message",
+		"channel": channel,
+		"user":    "U_HUMAN",
+		"text":    text,
+		"ts":      ts,
+	}
+	eventBytes, _ := json.Marshal(event)
+	outer := map[string]any{
+		"type":     "event_callback",
+		"event_id": eventID,
+		"event":    json.RawMessage(eventBytes),
+	}
+	b, _ := json.Marshal(outer)
+	return string(b)
+}
+
+// buildOrphanBodyWithText builds a body with arbitrary text (for non-mention tests).
+func buildOrphanBodyWithText(t *testing.T, channel, ts, eventID, text string) string {
+	t.Helper()
+	event := map[string]any{
+		"type":    "message",
+		"channel": channel,
+		"user":    "U_HUMAN",
+		"text":    text,
+		"ts":      ts,
+	}
+	eventBytes, _ := json.Marshal(event)
+	outer := map[string]any{
+		"type":     "event_callback",
+		"event_id": eventID,
+		"event":    json.RawMessage(eventBytes),
+	}
+	b, _ := json.Marshal(outer)
+	return string(b)
+}
+
+// newOrphanHandler returns an EventsHandler configured as a front-door with
+// DefaultRouter=true, a non-empty RunningChannels lister, a permitting cooldown,
+// and a relayer that returns the provided peer results. The sandboxes stub is set
+// to miss (no owner). The BotUserID returns "UBOT123".
+func newOrphanHandler(now time.Time, peerResults []PeerClaimResult, localChannels []SandboxChannelInfo) (
+	*EventsHandler, *fakeSlackPoster, *fakePeerRelayer, *fakeCooldownStore,
+) {
+	poster := &fakeSlackPoster{}
+	cooldown := &fakeCooldownStore{}
+	relayer := &fakePeerRelayer{results: peerResults}
+	lister := &fakeRunningChannelLister{channels: localChannels}
+
+	h := &EventsHandler{
+		SigningSecret:   &fakeSigningSecret{secret: testSigningSecret},
+		BotUserID:       &fakeBotUserID{uid: "UBOT123"},
+		Nonces:          &fakeNonces{},
+		Sandboxes:       &fakeSandboxes{info: SandboxRoutingInfo{}}, // miss
+		Threads:         &fakeThreads{},
+		SQS:             &fakeSQS{},
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Now:             func() time.Time { return now },
+		Slack:           poster,
+		Relayer:         relayer,
+		RunningChannels: lister,
+		RouterCooldown:  cooldown,
+		DefaultRouter:   true,
+	}
+	return h, poster, relayer, cooldown
+}
+
+// TestEventsHandler_DefaultRouter_OrphanReply verifies the full happy path:
+// front-door miss + all peers unclaimed + bot @-mention + cooldown clear =>
+// exactly one threaded PostMessage containing both local and peer channels.
+func TestEventsHandler_DefaultRouter_OrphanReply(t *testing.T) {
+	now := time.Now()
+
+	localChannels := []SandboxChannelInfo{
+		{ID: "C1", Alias: "orc", Profile: "patch"},
+	}
+	peerChannels := []SandboxChannelInfo{
+		{ID: "C2", Alias: "wrkr", Profile: "hardened"},
+	}
+	peerResults := []PeerClaimResult{
+		{PeerURL: "https://peer1.example.com/events", Claimed: false, Channels: peerChannels},
+	}
+
+	h, poster, _, _ := newOrphanHandler(now, peerResults, localChannels)
+
+	body := buildOrphanBody(t, "C-orphan", "1.0", "E-ORPHAN1", "UBOT123")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+		Body: body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+	}
+
+	msgs := poster.msgs
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 PostMessage call, got %d: %+v", len(msgs), msgs)
+	}
+	m := msgs[0]
+	if m.channel != "C-orphan" {
+		t.Errorf("PostMessage channel: got %q, want C-orphan", m.channel)
+	}
+	if m.threadTS != "1.0" {
+		t.Errorf("PostMessage threadTS: got %q, want 1.0 (msg.TS)", m.threadTS)
+	}
+	if !strings.Contains(m.body, "<#C1>") {
+		t.Errorf("reply body should contain local channel <#C1>; got: %q", m.body)
+	}
+	if !strings.Contains(m.body, "<#C2>") {
+		t.Errorf("reply body should contain peer channel <#C2>; got: %q", m.body)
+	}
+	if !strings.Contains(m.body, "#sb-{alias}-{profile}") {
+		t.Errorf("reply body should explain naming convention; got: %q", m.body)
+	}
+}
+
+// TestEventsHandler_DefaultRouter_ClaimShortCircuit verifies that any peer
+// returning Claimed:true suppresses the orphan reply (owner handled it).
+func TestEventsHandler_DefaultRouter_ClaimShortCircuit(t *testing.T) {
+	now := time.Now()
+
+	peerResults := []PeerClaimResult{
+		{PeerURL: "https://peer1.example.com/events", Claimed: true}, // owner!
+		{PeerURL: "https://peer2.example.com/events", Claimed: false, Channels: []SandboxChannelInfo{{ID: "C2"}}},
+	}
+	h, poster, _, _ := newOrphanHandler(now, peerResults, nil)
+
+	body := buildOrphanBody(t, "C-orphan", "2.0", "E-CLAIM1", "UBOT123")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+		Body: body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if len(poster.msgs) != 0 {
+		t.Errorf("expected NO PostMessage when a peer claims ownership; got %d calls", len(poster.msgs))
+	}
+}
+
+// TestEventsHandler_DefaultRouter_NonMention verifies that a message with no
+// @-mention of the bot does NOT trigger the orphan reply.
+func TestEventsHandler_DefaultRouter_NonMention(t *testing.T) {
+	now := time.Now()
+
+	peerResults := []PeerClaimResult{
+		{PeerURL: "https://peer1.example.com/events", Claimed: false},
+	}
+	h, poster, _, _ := newOrphanHandler(now, peerResults, nil)
+
+	// Plain text, no mention of UBOT123
+	body := buildOrphanBodyWithText(t, "C-orphan", "3.0", "E-NOMENTION1", "hello world")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+		Body: body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if len(poster.msgs) != 0 {
+		t.Errorf("expected NO PostMessage for non-mention; got %d", len(poster.msgs))
+	}
+}
+
+// TestEventsHandler_DefaultRouter_Off verifies that with DefaultRouter=false
+// (the zero-value default), the handler returns 200 without posting — Phase 95
+// byte-identical behavior. Paired with TestEventsHandler_NilRelayer_MissReturns200.
+func TestEventsHandler_DefaultRouter_Off(t *testing.T) {
+	now := time.Now()
+
+	peerResults := []PeerClaimResult{
+		{PeerURL: "https://peer1.example.com/events", Claimed: false, Channels: []SandboxChannelInfo{{ID: "C1"}}},
+	}
+	h, poster, _, _ := newOrphanHandler(now, peerResults, nil)
+	// Explicitly disable the router (also the zero value).
+	h.DefaultRouter = false
+
+	body := buildOrphanBody(t, "C-orphan", "4.0", "E-DROFF1", "UBOT123")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+		Body: body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+	}
+	if resp.Body != "ok" {
+		t.Errorf("expected body 'ok' (Phase 95 byte-identical), got %q", resp.Body)
+	}
+	if len(poster.msgs) != 0 {
+		t.Errorf("expected NO PostMessage when DefaultRouter=false; got %d", len(poster.msgs))
+	}
+}
+
+// TestEventsHandler_DefaultRouter_EmptyList verifies that when there are zero
+// claims but also zero running channels (front door + peers all empty), the handler
+// posts the guidance-only variant (no <#CID> mentions).
+func TestEventsHandler_DefaultRouter_EmptyList(t *testing.T) {
+	now := time.Now()
+
+	// Peers return no channels; local lister returns empty.
+	peerResults := []PeerClaimResult{
+		{PeerURL: "https://peer1.example.com/events", Claimed: false, Channels: nil},
+	}
+	h, poster, _, _ := newOrphanHandler(now, peerResults, nil)
+
+	body := buildOrphanBody(t, "C-orphan", "5.0", "E-EMPTY1", "UBOT123")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+		Body: body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	msgs := poster.msgs
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 PostMessage (guidance-only variant), got %d", len(msgs))
+	}
+	m := msgs[0]
+	// Guidance-only: no <#CID> mentions.
+	if strings.Contains(m.body, "<#") {
+		t.Errorf("guidance-only variant must NOT contain <#CID> mentions; got: %q", m.body)
+	}
+	// Must still explain naming convention.
+	if !strings.Contains(m.body, "#sb-{alias}-{profile}") {
+		t.Errorf("guidance-only variant must explain naming convention; got: %q", m.body)
+	}
+}
+
+// TestEventsHandler_RouterCooldown_Suppress verifies that when the cooldown store
+// returns ErrNonceReplayed, the handler suppresses the orphan reply.
+func TestEventsHandler_RouterCooldown_Suppress(t *testing.T) {
+	now := time.Now()
+
+	peerResults := []PeerClaimResult{
+		{PeerURL: "https://peer1.example.com/events", Claimed: false},
+	}
+	h, poster, _, cooldown := newOrphanHandler(now, peerResults, []SandboxChannelInfo{{ID: "C1"}})
+	// Simulate cooldown active.
+	cooldown.nextErr = ErrNonceReplayed
+
+	body := buildOrphanBody(t, "C-orphan", "6.0", "E-CDSUPP1", "UBOT123")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+		Body: body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if len(poster.msgs) != 0 {
+		t.Errorf("expected NO PostMessage when cooldown active; got %d", len(poster.msgs))
+	}
+	// Cooldown was checked.
+	if calls := cooldown.snapshot(); len(calls) != 1 {
+		t.Errorf("expected 1 cooldown Reserve call, got %d", len(calls))
+	}
+}
+
+// TestEventsHandler_RouterCooldown_Allow verifies that when the cooldown store
+// returns nil (first call, cooldown clear), the handler posts the orphan reply.
+func TestEventsHandler_RouterCooldown_Allow(t *testing.T) {
+	now := time.Now()
+
+	peerResults := []PeerClaimResult{
+		{PeerURL: "https://peer1.example.com/events", Claimed: false},
+	}
+	h, poster, _, cooldown := newOrphanHandler(now, peerResults, []SandboxChannelInfo{{ID: "C1"}})
+	// Cooldown clear (nil = first call).
+	cooldown.nextErr = nil
+
+	body := buildOrphanBody(t, "C-orphan", "7.0", "E-CDALLOW1", "UBOT123")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+		Body: body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if len(poster.msgs) != 1 {
+		t.Errorf("expected exactly 1 PostMessage when cooldown clear; got %d", len(poster.msgs))
+	}
+}
+
+// TestEventsHandler_DefaultRouter_BotLoopNoRetrigger verifies that a message with
+// BotID set (the bot's own reply) is dropped by isBotLoop BEFORE reaching the miss
+// site — so Broadcast and PostMessage are never called. This is the structural
+// anti-loop guarantee.
+func TestEventsHandler_DefaultRouter_BotLoopNoRetrigger(t *testing.T) {
+	now := time.Now()
+
+	h, poster, relayer, _ := newOrphanHandler(now, nil, nil)
+
+	// Build a bot-loop message (bot_id set) in the orphan channel.
+	// The orphan channel has no owner — if isBotLoop didn't fire, Broadcast
+	// would be called and potentially trigger another reply.
+	body := buildBotMessageEventBody(t, "C-orphan", "8.0", "B_KMBOT", "I am the router reply")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+		Body: body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// isBotLoop fires at step 4, BEFORE the miss site at step 5.
+	// Broadcast must NOT be called.
+	if calls := relayer.snapshot(); len(calls) != 0 {
+		t.Errorf("LOOP GUARD: Broadcast must NOT be called for bot's own message; got %d calls", len(calls))
+	}
+	// PostMessage must NOT be called.
+	if len(poster.msgs) != 0 {
+		t.Errorf("LOOP GUARD: PostMessage must NOT be called for bot's own message; got %d", len(poster.msgs))
+	}
+}
+
+// TestEventsHandler_DefaultRouter_EmptyChannelGuard verifies that a message with
+// an empty Channel field does NOT trigger a PostMessage or panic.
+func TestEventsHandler_DefaultRouter_EmptyChannelGuard(t *testing.T) {
+	now := time.Now()
+
+	peerResults := []PeerClaimResult{
+		{PeerURL: "https://peer1.example.com/events", Claimed: false},
+	}
+	h, poster, _, _ := newOrphanHandler(now, peerResults, nil)
+
+	// Build a body with empty channel. FetchByChannel will return a miss.
+	// Empty channel must not cause panic.
+	body := buildOrphanBodyWithText(t, "", "9.0", "E-EMPTYCH1", "hey <@UBOT123>")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Handle panicked on empty channel: %v", r)
+		}
+	}()
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+		Body: body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if len(poster.msgs) != 0 {
+		t.Errorf("expected NO PostMessage for empty channel; got %d", len(poster.msgs))
 	}
 }

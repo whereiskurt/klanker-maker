@@ -52,6 +52,18 @@ type SlackConfig struct {
 	// is also treated as "federation off" by the len>0 gate in ExportTerragruntEnvVars.
 	// Maps to km-config.yaml key slack.peer_bridges (Phase 95).
 	PeerBridges []string `mapstructure:"peer_bridges" yaml:"peer_bridges,omitempty"`
+
+	// DefaultRouter is the Phase 96 front-door router toggle. Tri-state via *bool:
+	//   nil    → key absent from yaml; router off (Phase 95 byte-identical)
+	//   &true  → router on: when a message @-mentions the bot in an orphan channel
+	//            (front-door FetchByChannel miss + zero peer claims), the bridge
+	//            posts a threaded reply listing running sandbox channels.
+	//   &false → router explicitly off (same as nil but operator-visible in yaml)
+	// Meaningful only on the front-door install (the one that receives raw Slack
+	// events). Setting it on a non-front-door peer is a no-op.
+	// Maps to km-config.yaml key slack.default_router. Exported as
+	// KM_SLACK_DEFAULT_ROUTER by ExportTerragruntEnvVars (Phase 96).
+	DefaultRouter *bool `mapstructure:"default_router" yaml:"default_router,omitempty"`
 }
 
 type ClusterConfig struct {
@@ -415,6 +427,9 @@ func Load() (*Config, error) {
 			// stays nil regardless of what is in km-config.yaml (the known
 			// project_config_key_merge_list footgun).
 			"slack.peer_bridges",
+			// Phase 96: front-door router toggle. CRITICAL: without this entry,
+			// slack.default_router: true is silently ignored (project_config_key_merge_list).
+			"slack.default_router",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -513,6 +528,16 @@ func Load() (*Config, error) {
 	// sentinel — no pointer indirection needed for []string.
 	if v.IsSet("slack.peer_bridges") {
 		cfg.Slack.PeerBridges = v.GetStringSlice("slack.peer_bridges")
+	}
+
+	// Phase 96: slack.default_router is tri-state via *bool. Only populated when
+	// the operator has explicitly set the key — absent yaml key → nil pointer →
+	// ExportTerragruntEnvVars emits nothing → terragrunt.hcl get_env() default
+	// ("false") kicks in → router dormant (Phase 95 byte-identical). Set to true
+	// on the front-door install only to enable the orphan-channel threaded reply.
+	if v.IsSet("slack.default_router") {
+		val := v.GetBool("slack.default_router")
+		cfg.Slack.DefaultRouter = &val
 	}
 
 	// Clusters is a structured slice — viper's UnmarshalKey handles the

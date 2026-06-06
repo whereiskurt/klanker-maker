@@ -281,6 +281,26 @@ func wireEventsHandler() {
 		}
 	}
 
+	// Phase 96: default router. Off by default (zero value of bool); only meaningful
+	// on the designated front-door install. When KM_SLACK_DEFAULT_ROUTER=true, wire:
+	//   eventsHandler.DefaultRouter  = true
+	//   eventsHandler.RunningChannels = DDBRunningChannelLister (scan km-sandboxes)
+	//   eventsHandler.RouterCooldown  = routerCooldownAdapter wrapping nonces table
+	// When absent/false, all three fields remain zero/nil => router dormant
+	// => byte-identical to Phase 95 behavior.
+	//
+	// Deploy constraint: env-block change requires km init --dry-run=false (NOT --sidecars).
+	// See project_km_init_lambdas_doesnt_deploy and project_km_init_skips_existing_lambda_zips.
+	if os.Getenv("KM_SLACK_DEFAULT_ROUTER") == "true" {
+		eventsHandler.DefaultRouter = true
+		eventsHandler.RunningChannels = &bridge.DDBRunningChannelLister{
+			Client:    initDDB,
+			TableName: sandboxesTable,
+		}
+		eventsHandler.RouterCooldown = &routerCooldownAdapter{inner: initNonces}
+		slog.Info("km-slack-bridge: default-router enabled")
+	}
+
 	// Wire DDBPauseHinter to eventsHandler.PauseHinter.
 	postHintFn := bridge.PostHintFunc(func(ctx context.Context, channelID, threadTS, text string) error {
 		_, err := initPoster.PostMessage(ctx, channelID, "", text, threadTS)
@@ -581,4 +601,19 @@ func (n *nonceStoreAdapter) CheckAndStore(ctx context.Context, id string, ttl ti
 		return true, nil // already seen
 	}
 	return false, err // storage failure
+}
+
+// ============================================================
+// routerCooldownAdapter — bridges DynamoNonceStore to RouterCooldownStore.
+// Prefixes the per-channel key with "router-cooldown:" so router cooldown
+// entries are namespaced away from operator nonces and event dedup keys.
+// Modelled on nonceStoreAdapter above (Phase 96).
+// ============================================================
+
+type routerCooldownAdapter struct {
+	inner *bridge.DynamoNonceStore
+}
+
+func (r *routerCooldownAdapter) Reserve(ctx context.Context, channelID string, cooldownSeconds int) error {
+	return r.inner.Reserve(ctx, "router-cooldown:"+channelID, cooldownSeconds)
 }

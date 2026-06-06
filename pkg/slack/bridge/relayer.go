@@ -3,14 +3,23 @@ package bridge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
+
+// peerRelayResponse is the JSON body returned by a peer-side relayed-request handler.
+// Phase 96: peers now return structured JSON instead of plain "ok".
+// Rollout safety: if unmarshal fails (legacy "ok" or non-JSON body), the caller
+// treats the result as Claimed:true (conservative — never produce a false orphan).
+type peerRelayResponse struct {
+	Claimed  bool                `json:"claimed"`
+	Channels []SandboxChannelInfo `json:"channels,omitempty"`
+}
 
 // HTTPPeerRelayer implements PeerRelayer by POSTing the verbatim Slack event
 // to each sibling km-install bridge in parallel, bounded by a ~2.5s context.
@@ -18,6 +27,10 @@ import (
 // Phase 95: federated relay engine. A non-relayed FetchByChannel miss triggers
 // Broadcast, which fans out the raw Slack event to all sibling installs so the
 // owning peer can process it locally.
+//
+// Phase 96: Broadcast now returns ([]PeerClaimResult, error) for claim-aware
+// scatter-gather. Each peer's response is parsed; legacy/error/timeout => Claimed:true
+// (rollout safety — mixed-version fleets never produce false orphan replies).
 //
 // PITFALL (Phase 95 RESEARCH.md Pitfall 4): Broadcast MUST be synchronous.
 // AWS Lambda freezes the execution environment when Handle returns. Any
@@ -43,16 +56,15 @@ type HTTPPeerRelayer struct {
 // forwarding the verbatim body + original Slack headers lets the peer re-verify
 // with the shared signing secret (SLACK-FED-VERIFY).
 //
-// A failing peer (non-2xx response or transport error) is logged at Warn and
-// contributes an error to the aggregated return value. The caller logs Warn and
-// returns 200 regardless — a partial broadcast is better than dropping the
-// event entirely.
+// Each peer's JSON response is parsed into a PeerClaimResult. Rollout safety
+// (LOCKED): any legacy "ok" body, non-JSON body, HTTP error, or transport error
+// maps to Claimed:true (conservative — never produce a false orphan in a mixed-version fleet).
 //
 // Broadcast is SYNCHRONOUS: it calls wg.Wait() before returning so the Lambda
 // runtime is not frozen with in-flight goroutines.
-func (r *HTTPPeerRelayer) Broadcast(ctx context.Context, rawBody string, slackHeaders map[string]string) error {
+func (r *HTTPPeerRelayer) Broadcast(ctx context.Context, rawBody string, slackHeaders map[string]string) ([]PeerClaimResult, error) {
 	if len(r.PeerURLs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Derive a bounded child context (~2.5s). This is the maximum wall-clock
@@ -61,46 +73,44 @@ func (r *HTTPPeerRelayer) Broadcast(ctx context.Context, rawBody string, slackHe
 	broadcastCtx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
 	defer cancel()
 
-	type peerErr struct {
-		url string
-		err error
-	}
-
-	errCh := make(chan peerErr, len(r.PeerURLs))
+	resultCh := make(chan PeerClaimResult, len(r.PeerURLs))
 	var wg sync.WaitGroup
 
 	for _, peerURL := range r.PeerURLs {
 		wg.Add(1)
 		go func(u string) {
 			defer wg.Done()
-			if err := r.postToPeer(broadcastCtx, u, rawBody, slackHeaders); err != nil {
+			result, err := r.postToPeer(broadcastCtx, u, rawBody, slackHeaders)
+			if err != nil {
+				// Transport/context error — log and conservatively claim (uncertain ownership).
 				slog.Warn("km-slack-bridge: relay broadcast peer error",
 					"peer", u, "err", err, "event", "slack_relay_peer_error")
-				errCh <- peerErr{url: u, err: err}
+				resultCh <- PeerClaimResult{PeerURL: u, Claimed: true}
+				return
 			}
+			resultCh <- result
 		}(peerURL)
 	}
 
 	// MUST call Wait() before returning — see PITFALL 4 in RESEARCH.md.
 	wg.Wait()
-	close(errCh)
+	close(resultCh)
 
-	// Collect errors and return an aggregated summary.
-	var errs []string
-	for pe := range errCh {
-		errs = append(errs, fmt.Sprintf("%s: %v", pe.url, pe.err))
+	// Collect all results.
+	var results []PeerClaimResult
+	for res := range resultCh {
+		results = append(results, res)
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("relay broadcast failed for %d peer(s): %s", len(errs), strings.Join(errs, "; "))
-	}
-	return nil
+	return results, nil
 }
 
-// postToPeer sends a single relay POST to one peer bridge.
-func (r *HTTPPeerRelayer) postToPeer(ctx context.Context, peerURL, rawBody string, slackHeaders map[string]string) error {
+// postToPeer sends a single relay POST to one peer bridge and returns the
+// parsed PeerClaimResult. Rollout safety: any HTTP error, non-JSON body, or
+// legacy "ok" response maps to Claimed:true (conservative).
+func (r *HTTPPeerRelayer) postToPeer(ctx context.Context, peerURL, rawBody string, slackHeaders map[string]string) (PeerClaimResult, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, peerURL, bytes.NewReader([]byte(rawBody)))
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return PeerClaimResult{}, fmt.Errorf("build request: %w", err)
 	}
 
 	// Content-Type: Slack sends JSON bodies.
@@ -127,14 +137,29 @@ func (r *HTTPPeerRelayer) postToPeer(ctx context.Context, peerURL, rawBody strin
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("http do: %w", err)
+		// Transport/context error — caller will treat as Claimed:true.
+		return PeerClaimResult{}, fmt.Errorf("http do: %w", err)
 	}
 	defer resp.Body.Close()
-	// Discard response body — we only care about the status code.
-	_, _ = io.Copy(io.Discard, resp.Body)
+
+	// Phase 96: read the response body to parse the JSON claim result.
+	// Rollout safety: legacy "ok", non-JSON, or HTTP error => Claimed:true (conservative).
+	bodyBytes, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("non-2xx response: %d", resp.StatusCode)
+		// HTTP error => conservative claim (never produce a false orphan).
+		return PeerClaimResult{PeerURL: peerURL, Claimed: true}, nil
 	}
-	return nil
+
+	var parsed peerRelayResponse
+	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+		// Legacy "ok" or non-JSON body => conservative claim.
+		return PeerClaimResult{PeerURL: peerURL, Claimed: true}, nil
+	}
+
+	return PeerClaimResult{
+		PeerURL:  peerURL,
+		Claimed:  parsed.Claimed,
+		Channels: parsed.Channels,
+	}, nil
 }

@@ -176,12 +176,19 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 							cfg.GetResourcePrefix())
 						if schedErr := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); schedErr == nil {
 							fmt.Printf("  TTL schedule recreated: expires in %s\n", p.Spec.Lifecycle.TTL)
-							// Update TTL expiry in DynamoDB.
-							meta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)
-							if readErr == nil {
-								meta.TTLExpiry = &newExpiry
-								meta.ExpiresAt = &newExpiry
-								awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, meta)
+							// Update TTL expiry in DynamoDB via a TARGETED UpdateItem
+							// (ttl_expiry + expires_at only). A full-row PutItem here
+							// would clobber attributes SandboxMetadata does not carry
+							// — notably the Phase 91.5 per-sandbox Slack overrides
+							// (slack_mention_only / slack_react_always) — reverting the
+							// sandbox to install defaults on every resume. The read is
+							// only for teardown_policy, which gates native ttl_expiry.
+							teardownPolicy := ""
+							if meta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID); readErr == nil {
+								teardownPolicy = meta.TeardownPolicy
+							}
+							if ttlErr := awspkg.UpdateSandboxTTLDynamo(ctx, dynamoClient, tableName, sandboxID, newExpiry, teardownPolicy); ttlErr != nil {
+								fmt.Printf(ansiYellow+"  [warn] could not update TTL expiry in metadata: %v"+ansiReset+"\n", ttlErr)
 							}
 						} else {
 							fmt.Printf(ansiYellow+"  [warn] could not recreate TTL schedule: %v"+ansiReset+"\n", schedErr)
