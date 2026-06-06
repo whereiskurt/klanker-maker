@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 97-04-PLAN.md
-last_updated: "2026-06-06T19:51:11.692Z"
+stopped_at: Completed 97-05-PLAN.md
+last_updated: "2026-06-06T19:56:19.063Z"
 last_activity: 2026-06-06
 progress:
   total_phases: 113
   completed_phases: 98
   total_plans: 491
-  completed_plans: 451
+  completed_plans: 452
   percent: 91
 ---
 
@@ -484,6 +484,7 @@ Progress: [█████████░] 91%
 | Phase 97 P03 | 13m44s | 3 tasks | 16 files |
 | Phase 97-github-comment-trigger-mvp P01 | 801 | 3 tasks | 9 files |
 | Phase 97 P04 | 605s | 3 tasks | 13 files |
+| Phase 97-github-comment-trigger-mvp P05 | 868 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1399,6 +1400,9 @@ Recent decisions affecting current work:
 - [Phase 97]: Resolve() uses exact-before-glob two-pass: pass1=exact, pass2=glob; ensures order-independence for exact matches
 - [Phase 97]: 200-on-internal-error invariant in Handle(); GitHub redelivers 5xx with NEW delivery GUID bypassing dedup
 - [Phase 97]: KM_GITHUB_REPOS as JSON env var (list-of-objects): {repos:[...], default_profile} serialized to single string
+- [Phase 97]: Separate binary cmd/km-github mirrors cmd/km-slack pattern; deployed via conditional S3 download in userdata
+- [Phase 97]: GitHub context preamble includes worktree-per-PR guidance for concurrent PR review in long-lived sandboxes
+- [Phase 97]: APPROVE needs no body; COMMENT/REQUEST_CHANGES require body — validated before HTTP call
 
 ### Roadmap Evolution
 
@@ -1522,6 +1526,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-06T19:51:11.683Z
-Stopped at: Completed 97-04-PLAN.md
+Last session: 2026-06-06T19:56:19.052Z
+Stopped at: Completed 97-05-PLAN.md
 Resume file: None
