@@ -9,22 +9,22 @@ import "time"
 // SandboxMetadata describes a provisioned sandbox.
 // Written by km create; read by km list/status without AWS tag API calls.
 type SandboxMetadata struct {
-	SandboxID   string     `json:"sandbox_id"`
-	ProfileName string     `json:"profile_name"`
-	Substrate   string     `json:"substrate"`
-	Region      string     `json:"region"`
-	Status      string     `json:"status,omitempty"`        // "starting", "running", "failed", "killed", "reaped" (spot reclaim); empty = "running" (backward compat)
-	CreatedAt   time.Time  `json:"created_at"`
-	TTLExpiry   *time.Time `json:"ttl_expiry,omitempty"`
-	IdleTimeout string     `json:"idle_timeout,omitempty"` // e.g. "15m", from profile lifecycle.idleTimeout
-	MaxLifetime string     `json:"max_lifetime,omitempty"` // e.g. "72h", from profile lifecycle.maxLifetime; empty = no cap
-	CreatedBy   string     `json:"created_by,omitempty"`   // creation method: "cli", "email", "api", "remote"
-	Alias       string     `json:"alias,omitempty"`        // human-friendly alias (e.g. "orc", "wrkr-1")
-	ClonedFrom  string     `json:"cloned_from,omitempty"`  // source sandbox ID if this is a clone
+	SandboxID      string     `json:"sandbox_id"`
+	ProfileName    string     `json:"profile_name"`
+	Substrate      string     `json:"substrate"`
+	Region         string     `json:"region"`
+	Status         string     `json:"status,omitempty"` // "starting", "running", "failed", "killed", "reaped" (spot reclaim); empty = "running" (backward compat)
+	CreatedAt      time.Time  `json:"created_at"`
+	TTLExpiry      *time.Time `json:"ttl_expiry,omitempty"`
+	IdleTimeout    string     `json:"idle_timeout,omitempty"`    // e.g. "15m", from profile lifecycle.idleTimeout
+	MaxLifetime    string     `json:"max_lifetime,omitempty"`    // e.g. "72h", from profile lifecycle.maxLifetime; empty = no cap
+	CreatedBy      string     `json:"created_by,omitempty"`      // creation method: "cli", "email", "api", "remote"
+	Alias          string     `json:"alias,omitempty"`           // human-friendly alias (e.g. "orc", "wrkr-1")
+	ClonedFrom     string     `json:"cloned_from,omitempty"`     // source sandbox ID if this is a clone
 	Locked         bool       `json:"locked,omitempty"`          // true when sandbox is locked by km lock
-	LockedAt       *time.Time `json:"locked_at,omitempty"`      // when the sandbox was locked
+	LockedAt       *time.Time `json:"locked_at,omitempty"`       // when the sandbox was locked
 	TeardownPolicy string     `json:"teardown_policy,omitempty"` // "destroy", "stop", or "retain" — from profile lifecycle
-	ExpiresAt      *time.Time `json:"expires_at,omitempty"`     // display-only expiry (always set when TTL configured, not used by DynamoDB native TTL)
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`      // display-only expiry (always set when TTL configured, not used by DynamoDB native TTL)
 
 	// Phase 63 — Slack notification metadata.
 	// SlackChannelID is the Slack channel ID (C...) the sandbox posts to.
@@ -46,6 +46,20 @@ type SandboxMetadata struct {
 	// Empty when notifySlackInboundEnabled was false at create time.
 	// Populated by provisionSlackInboundQueue (Plan 67-06); read by drainSlackInbound (Plan 67-07).
 	SlackInboundQueueURL string `json:"slack_inbound_queue_url,omitempty"`
+
+	// Phase 91.5 — per-sandbox Slack inbound overrides. Written at km create by
+	// create_slack_inbound.go ONLY when the profile sets the field explicitly;
+	// read by the bridge's FetchByChannel. Tri-state via *bool: nil = "fall back
+	// to the install-level default" (KM_SLACK_MENTION_ONLY / KM_SLACK_REACT_ALWAYS),
+	// &true / &false = explicit per-sandbox override.
+	//
+	// These MUST round-trip through marshal/unmarshal: every read-modify-write
+	// path (resume.go TTL recreation, extend.go, the ttl-handler Lambda) PutItems
+	// the whole row, so a struct that drops them silently reverts the sandbox to
+	// install defaults on the next lifecycle write — observed as a sandbox losing
+	// `mentionOnly: true` (and gaining 👀-on-everything) after a pause/resume.
+	SlackMentionOnly *bool `json:"slack_mention_only,omitempty"`
+	SlackReactAlways *bool `json:"slack_react_always,omitempty"`
 
 	// Phase 77 — failure discoverability. Set by the create-handler on failure
 	// (see UpdateSandboxStatusAndReasonDynamo). Reads as zero-value on records
