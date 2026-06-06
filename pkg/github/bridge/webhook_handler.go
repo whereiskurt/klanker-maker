@@ -1,0 +1,304 @@
+package bridge
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"strings"
+)
+
+const (
+	// GitHubDeliveryNoncePrefix isolates X-GitHub-Delivery GUIDs in the nonces table.
+	GitHubDeliveryNoncePrefix = "github-delivery:"
+	// GitHubDeliveryNonceTTLSeconds is the TTL for delivery GUID dedup entries.
+	// 24h window covers GitHub's redelivery window comfortably.
+	GitHubDeliveryNonceTTLSeconds = 86400
+)
+
+// WebhookRequest is the normalized inbound request to WebhookHandler.Handle.
+// Headers are expected to be lowercase-keyed (caller normalizes before passing).
+type WebhookRequest struct {
+	// Headers are the HTTP request headers, keyed by lowercase name.
+	Headers map[string]string
+	// RawBody is the verbatim request body bytes used for HMAC verification.
+	// MUST be the exact bytes received over the wire — verify before parsing.
+	RawBody []byte
+	// Body is the string representation of RawBody (convenience for JSON parse).
+	Body string
+}
+
+// WebhookResponse is the handler's HTTP response.
+type WebhookResponse struct {
+	StatusCode int
+	Body       string
+}
+
+// WebhookHandler implements the km-github-bridge event dispatch logic.
+//
+// Handle() ordering (RESEARCH Pattern 2, 11 steps):
+//  1. Verify X-Hub-Signature-256 (raw body); bad/absent → 401.
+//  2. Parse issue_comment payload; action != "created" → 200 drop.
+//  3. Loop guard: comment.user.type == "Bot" OR login == BotLogin → 200 drop.
+//  4. PR check: issue.pull_request absent → 200 drop (PR-only MVP).
+//  5. @{bot-login} mention check → else 200 drop.
+//  6. Authorize: sender.login in allowlist → else 200 SILENT (no reaction).
+//  7. Dedupe: Reserve("github-delivery:"+guid) → replayed → 200.
+//  8. Resolve owner/repo → {alias, profile, allow}.
+//  9. Lookup sandbox by alias (ResolveSandboxAliasDynamo):
+//     - Found (warm) → Enqueue to github-inbound FIFO.
+//     - Not found (cold) → PutSandboxCreateEvent with GithubEnvelope.
+//  10. Mint installation token, POST 👀 reaction SYNCHRONOUSLY; return 200.
+//
+// Critical: return 200 on internal errors (SQS/DDB failures) — GitHub redelivers
+// 5xx with a NEW X-GitHub-Delivery GUID, bypassing our dedupe (same rationale as
+// the Slack bridge; see events_handler.go:158-163).
+type WebhookHandler struct {
+	// Secret fetches the webhook signing secret from SSM (cached).
+	Secret SecretFetcher
+
+	// BotLogin fetches the bot's GitHub login (e.g. "klanker-maker[bot]") from SSM.
+	// Used for loop guard and mention detection.
+	BotLogin BotLoginFetcher
+
+	// Nonces is the delivery-GUID replay-protection store (reuses the nonces DDB table).
+	Nonces DeliveryNonceStore
+
+	// Resolver looks up a sandbox_id by alias (alias-index GSI).
+	Resolver SandboxAliasResolver
+
+	// Publisher publishes a SandboxCreate EventBridge event (cold path).
+	Publisher EventBridgePublisher
+
+	// SQS enqueues messages to the per-sandbox github-inbound FIFO queue (warm path).
+	SQS SQSSender
+
+	// Reactor posts the 👀 reaction on the originating comment.
+	Reactor GitHubReactor
+
+	// Entries is the parsed github.repos config (set at cold-start from KM_GITHUB_REPOS).
+	Entries []RepoEntry
+
+	// DefaultProfile is the fallback profile when a matched entry has no Profile set.
+	DefaultProfile string
+
+	// ResourcePrefix is the km resource_prefix for FIFO queue name derivation.
+	ResourcePrefix string
+
+	// SandboxesTable is the DynamoDB km-sandboxes table name.
+	SandboxesTable string
+
+	// Logger; defaults to slog.Default() when nil.
+	Logger *slog.Logger
+}
+
+func (h *WebhookHandler) log() *slog.Logger {
+	if h.Logger != nil {
+		return h.Logger
+	}
+	return slog.Default()
+}
+
+// Handle processes one inbound GitHub webhook request.
+// See struct-level doc for the 11-step ordering.
+func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) WebhookResponse {
+	// ── Step 1: Verify signature ────────────────────────────────────────────
+	secret, err := h.Secret.Fetch(ctx)
+	if err != nil {
+		// Internal error fetching secret — log and 200 (NOT 500) per Pitfall 3.
+		h.log().Error("github-bridge: fetch webhook secret", "err", err)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+	sigHeader := req.Headers["x-hub-signature-256"]
+	if err := VerifyGitHubSignature(secret, sigHeader, req.RawBody); err != nil {
+		h.log().Warn("github-bridge: signature check failed", "err", err)
+		return WebhookResponse{StatusCode: 401, Body: "unauthorized"}
+	}
+
+	// Only process issue_comment events (the X-GitHub-Event header).
+	eventType := req.Headers["x-github-event"]
+	if eventType != "issue_comment" {
+		h.log().Info("github-bridge: ignoring non-issue_comment event", "event", eventType)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// ── Step 2: Parse payload ────────────────────────────────────────────────
+	var payload IssueCommentPayload
+	if err := json.Unmarshal(req.RawBody, &payload); err != nil {
+		h.log().Warn("github-bridge: malformed payload", "err", err)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+	if payload.Action != "created" {
+		h.log().Info("github-bridge: ignoring action", "action", payload.Action)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// ── Step 3: Loop guard ───────────────────────────────────────────────────
+	botLogin, err := h.BotLogin.Fetch(ctx)
+	if err != nil {
+		h.log().Error("github-bridge: fetch bot-login", "err", err)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+	if isGitHubBotLoop(payload.Comment.User, botLogin) {
+		h.log().Debug("github-bridge: bot-loop filter matched",
+			"user_type", payload.Comment.User.Type,
+			"login", payload.Comment.User.Login)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// ── Step 4: PR-only filter ───────────────────────────────────────────────
+	if payload.Issue.PullRequest == nil {
+		h.log().Info("github-bridge: issue comment (not PR), dropping",
+			"issue", payload.Issue.Number)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// ── Step 5: @-mention filter ─────────────────────────────────────────────
+	if !ContainsMention(payload.Comment.Body, botLogin) {
+		h.log().Info("github-bridge: no mention, dropping",
+			"repo", payload.Repository.FullName)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// ── Step 6: Authorize sender ─────────────────────────────────────────────
+	alias, profile, allow, matched := Resolve(payload.Repository.FullName, h.Entries, h.DefaultProfile)
+	if !matched {
+		h.log().Info("github-bridge: no repo config, silent drop",
+			"repo", payload.Repository.FullName)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+	if !isInAllowlist(payload.Comment.User.Login, allow) {
+		// Silent — no reaction, no comment, invisible to unauthorized users.
+		h.log().Info("github-bridge: sender not in allowlist, silent drop",
+			"sender", payload.Comment.User.Login, "repo", payload.Repository.FullName)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// ── Step 7: Dedupe delivery GUID ─────────────────────────────────────────
+	deliveryGUID := req.Headers["x-github-delivery"]
+	if deliveryGUID != "" {
+		nonceKey := GitHubDeliveryNoncePrefix + deliveryGUID
+		replayed, err := h.Nonces.CheckAndStore(ctx, nonceKey, GitHubDeliveryNonceTTLSeconds)
+		if err != nil {
+			h.log().Error("github-bridge: nonce store error", "err", err)
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+		}
+		if replayed {
+			h.log().Info("github-bridge: replayed delivery", "guid", deliveryGUID)
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+		}
+	}
+
+	// ── Steps 8–9: Resolve alias + dispatch ──────────────────────────────────
+	promptBody := ExtractMentionBody(payload.Comment.Body, botLogin)
+
+	env := GitHubEnvelope{
+		Source:        "github",
+		Repo:          payload.Repository.FullName,
+		Number:        payload.Issue.Number,
+		Kind:          "issue_comment",
+		CommentID:     payload.Comment.ID,
+		HTMLURL:       payload.Comment.HTMLURL,
+		Sender:        payload.Comment.User.Login,
+		Body:          promptBody,
+		InstallID:     InstallIDString(payload.Installation.ID),
+		DefaultBranch: payload.Repository.DefaultBranch,
+	}
+
+	envJSON, err := json.Marshal(env)
+	if err != nil {
+		h.log().Error("github-bridge: marshal envelope", "err", err)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	sandboxID, resolveErr := h.Resolver.ResolveByAlias(ctx, alias)
+	if resolveErr != nil {
+		// Cold path — no running sandbox with this alias; publish SandboxCreate.
+		h.log().Info("github-bridge: cold create", "alias", alias, "profile", profile,
+			"resolve_err", resolveErr)
+		if pubErr := h.Publisher.PutSandboxCreate(ctx, alias, profile, string(envJSON)); pubErr != nil {
+			h.log().Error("github-bridge: publish SandboxCreate", "err", pubErr)
+		}
+	} else {
+		// Warm path — enqueue to per-sandbox github-inbound FIFO.
+		queueURL, qErr := h.Resolver.GitHubQueueURL(ctx, sandboxID)
+		if qErr != nil {
+			h.log().Error("github-bridge: lookup github queue URL", "sandbox_id", sandboxID, "err", qErr)
+		} else {
+			groupID := fmt.Sprintf("github-%s-%d", payload.Repository.FullName, payload.Issue.Number)
+			dedupID := fmt.Sprintf("%s-%s", deliveryGUID, groupID)
+			if sErr := h.SQS.Send(ctx, queueURL, string(envJSON), groupID, dedupID); sErr != nil {
+				h.log().Error("github-bridge: SQS enqueue", "err", sErr)
+			}
+		}
+		h.log().Info("github-bridge: warm enqueue", "alias", alias, "sandbox_id", sandboxID)
+	}
+
+	// ── Step 10: Post 👀 reaction synchronously ──────────────────────────────
+	// CRITICAL: synchronous — Lambda freezes when Handle returns (RESEARCH Pitfall 3).
+	// Errors are logged but do NOT change the 200 response.
+	if h.Reactor != nil {
+		owner := OwnerFromFullName(payload.Repository.FullName)
+		repo := RepoFromFullName(payload.Repository.FullName)
+		if rErr := h.Reactor.AddReaction(ctx,
+			InstallIDString(payload.Installation.ID),
+			owner, repo, payload.Comment.ID, "eyes"); rErr != nil {
+			h.log().Warn("github-bridge: reaction failed (non-fatal)", "err", rErr)
+		}
+	}
+
+	return WebhookResponse{StatusCode: 200, Body: "ok"}
+}
+
+// VerifyGitHubSignature verifies the HMAC-SHA256 signature per GitHub docs.
+// Pattern from RESEARCH Pattern 1 / events_handler.go:705 (constant-time).
+//
+// GitHub sends: X-Hub-Signature-256: sha256=<hex(HMAC-SHA256(rawBody, secret))>
+// No timestamp header → no skew check; replay protection via X-GitHub-Delivery dedup.
+func VerifyGitHubSignature(secret, sigHeader string, rawBody []byte) error {
+	if !strings.HasPrefix(sigHeader, "sha256=") {
+		return fmt.Errorf("github-bridge: missing or wrong-format signature header (got %q)", sigHeader)
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(rawBody)
+	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	// Constant-time compare prevents timing attacks.
+	if !hmac.Equal([]byte(expected), []byte(sigHeader)) {
+		return fmt.Errorf("github-bridge: signature mismatch")
+	}
+	return nil
+}
+
+// isGitHubBotLoop returns true when the comment author is a Bot or the
+// bot's own login (App installs show up as "{app-slug}[bot]" with type="Bot").
+func isGitHubBotLoop(u UserField, botLogin string) bool {
+	if strings.EqualFold(u.Type, "Bot") {
+		return true
+	}
+	if strings.EqualFold(u.Login, botLogin) {
+		return true
+	}
+	return false
+}
+
+// isInAllowlist reports whether login (case-insensitive) is in the allow slice.
+// Deny-by-default: empty allow list → always false.
+func isInAllowlist(login string, allow []string) bool {
+	lower := strings.ToLower(login)
+	for _, a := range allow {
+		if strings.ToLower(a) == lower {
+			return true
+		}
+	}
+	return false
+}
+
+// formatInstallID formats an int64 installation ID as a string.
+// Kept for backward compat if callers need it; prefer InstallIDString.
+func formatInstallID(id int64) string {
+	return strconv.FormatInt(id, 10)
+}
