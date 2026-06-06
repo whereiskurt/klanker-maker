@@ -932,6 +932,115 @@ region: us-east-1
 	}
 }
 
+// TestLoadSlackDefaultRouter_True verifies Phase 96 nested key slack.default_router
+// loads from yaml end-to-end (catches the merge-loop allowlist footgun).
+// If "slack.default_router" is missing from the v2→v merge-list, cfg.Slack.DefaultRouter
+// stays nil even when the key is present in km-config.yaml (project_config_key_merge_list).
+func TestLoadSlackDefaultRouter_True(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+slack:
+    default_router: true
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.DefaultRouter == nil {
+		t.Fatal("Slack.DefaultRouter is nil; expected non-nil from yaml load (merge-loop must include slack.default_router)")
+	}
+	if *cfg.Slack.DefaultRouter != true {
+		t.Errorf("Slack.DefaultRouter: got %v, want true", *cfg.Slack.DefaultRouter)
+	}
+}
+
+// TestLoadSlackDefaultRouter_False verifies explicit false in yaml loads correctly.
+func TestLoadSlackDefaultRouter_False(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+slack:
+    default_router: false
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.DefaultRouter == nil {
+		t.Fatal("Slack.DefaultRouter is nil; expected non-nil &false")
+	}
+	if *cfg.Slack.DefaultRouter != false {
+		t.Errorf("Slack.DefaultRouter: got %v, want false", *cfg.Slack.DefaultRouter)
+	}
+}
+
+// TestLoadSlackDefaultRouter_Absent verifies that omitting slack.default_router
+// from yaml yields a nil pointer — the "router off" sentinel.
+func TestLoadSlackDefaultRouter_Absent(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.DefaultRouter != nil {
+		t.Errorf("Slack.DefaultRouter: got &%v, want nil (key absent => router off)", *cfg.Slack.DefaultRouter)
+	}
+}
+
+// TestLoadSlackDefaultRouter_MergeListRegression is the merge-list footgun regression
+// test (project_config_key_merge_list): a config that sets ONLY slack.default_router:true
+// must still surface the value — must NOT be silently dropped by an absent merge-list entry.
+func TestLoadSlackDefaultRouter_MergeListRegression(t *testing.T) {
+	dir := t.TempDir()
+	// Only set slack.default_router — no other slack.* keys — to isolate the merge-list path.
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+slack:
+    default_router: true
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	// If this assertion fails, the most likely cause is that "slack.default_router"
+	// is missing from the v2→v merge-list in config.go (the known silent-drop footgun).
+	if cfg.Slack.DefaultRouter == nil {
+		t.Fatal("Slack.DefaultRouter is nil after loading a config that explicitly sets slack.default_router: true — " +
+			"check that \"slack.default_router\" is in the v2→v merge-list in config.go (project_config_key_merge_list)")
+	}
+	if *cfg.Slack.DefaultRouter != true {
+		t.Errorf("Slack.DefaultRouter: got %v, want true", *cfg.Slack.DefaultRouter)
+	}
+}
+
 // TestDoctorRetentionAndExpireDays verifies the five-touchpoint pattern for the two
 // Phase 94 config knobs: doctor_log_retention_days and doctor_s3_expire_days.
 func TestDoctorRetentionAndExpireDays(t *testing.T) {
