@@ -181,7 +181,7 @@ func defaultModuleTimeout(name string) time.Duration {
 	switch name {
 	case "network", "ses-shared-rule-set":
 		return 10 * time.Minute
-	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge":
+	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge", "lambda-github-bridge":
 		return 5 * time.Minute
 	default:
 		return 3 * time.Minute
@@ -292,6 +292,15 @@ func regionalModules(regionDir string) []regionalModule {
 			// dynamodb-identities, dynamodb-sandboxes, and dynamodb-slack-nonces.
 			name:    "lambda-slack-bridge",
 			dir:     filepath.Join(regionDir, "lambda-slack-bridge"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
+			// Phase 97 (gap GH-BRIDGE-DEPLOY): GitHub App bridge Lambda with Function URL
+			// (auth=NONE; X-Hub-Signature-256 HMAC + nonce replay provide application-layer auth).
+			// Depends on dynamodb-sandboxes (alias-index GSI) and dynamodb-slack-nonces (shared
+			// nonce table). artifacts bucket needed for cold-create EventBridge dispatch.
+			name:    "lambda-github-bridge",
+			dir:     filepath.Join(regionDir, "lambda-github-bridge"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
