@@ -1314,7 +1314,13 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			kmsKeyARN = cfg.GetPlatformKMSAlias()
 		}
 		gh := resolvedProfile.Spec.SourceAccess.GitHub
-		instID, tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, nil, cfg.GetSsmPrefix())
+		// Pass the github-inbound write permission verb set so the token can post
+		// comments and reviews back (Pitfall 6 fix — Phase 97, plan 02).
+		// CompilePermissions maps: comment→issues:write, review→pull_requests:write,
+		// push→contents:write, checks→checks:write. The result is the github-inbound
+		// write set {issues:write, pull_requests:write, contents:write, checks:write}.
+		githubWriteVerbs := []string{"comment", "review", "push", "checks"}
+		instID, tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, githubWriteVerbs, cfg.GetSsmPrefix())
 		if tokenErr != nil {
 			var ambig *ErrAmbiguousInstallation
 			switch {

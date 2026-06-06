@@ -188,12 +188,14 @@ func repoShortName(repo string) string {
 // Permission compilation
 // ============================================================
 
-// CompilePermissions maps profile permission names (clone, fetch, push) to
-// GitHub API permission map entries.
+// CompilePermissions maps profile permission names to GitHub API permission map entries.
 //
 // Mapping:
 //   - clone or fetch → contents: read
-//   - push → contents: write (supersedes read)
+//   - push           → contents: write (supersedes read)
+//   - comment        → issues: write
+//   - review         → pull_requests: write
+//   - checks         → checks: write
 func CompilePermissions(permissions []string) map[string]string {
 	result := make(map[string]string)
 	for _, p := range permissions {
@@ -205,9 +207,30 @@ func CompilePermissions(permissions []string) map[string]string {
 			if result["contents"] != "write" {
 				result["contents"] = "read"
 			}
+		case "comment":
+			result["issues"] = "write"
+		case "review":
+			result["pull_requests"] = "write"
+		case "checks":
+			result["checks"] = "write"
 		}
 	}
 	return result
+}
+
+// GitHubInboundWritePerms returns the compiled GitHub API permission map required
+// for a github-inbound sandbox that posts comments and reviews back via km-github.
+//
+// Returned map: issues:write, pull_requests:write, contents:write, checks:write.
+// This is the permission set passed to generateAndStoreGitHubToken for sandboxes
+// with spec.sourceAccess.github configured (Pitfall 6 fix — Phase 97).
+func GitHubInboundWritePerms() map[string]string {
+	return map[string]string{
+		"issues":        "write",
+		"pull_requests": "write",
+		"contents":      "write",
+		"checks":        "write",
+	}
 }
 
 // ============================================================
