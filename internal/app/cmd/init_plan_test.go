@@ -129,12 +129,12 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(out)
 }
 
-// allModuleNames is the 16-module ordered list used by RunInitPlanWithRunner.
+// allModuleNames is the 17-module ordered list used by RunInitPlanWithRunner.
 var allModuleNames = []string{
 	"network", "efs", "dynamodb-budget", "dynamodb-identities", "dynamodb-sandboxes",
 	"dynamodb-schedules", "ssm-session-doc", "s3-replication", "create-handler",
 	"ttl-handler", "email-handler", "dynamodb-slack-nonces", "dynamodb-slack-threads",
-	"dynamodb-slack-stream-messages", "lambda-slack-bridge", "ses",
+	"dynamodb-slack-stream-messages", "lambda-slack-bridge", "lambda-github-bridge", "ses",
 }
 
 // ---- PLAN-FLAG tests -----------------------------------------------------------
@@ -423,17 +423,17 @@ func TestRunInitPlan_VerboseStreamsPlan(t *testing.T) {
 // TestRunInitPlan_ModuleOrder verifies that modules are planned in the order
 // returned by RegionalModules() — same ordering contract as RunInitWithRunner.
 //
-// Expected order (as of Phase 84.2):
+// Expected order (as of Phase 97 gap GH-BRIDGE-DEPLOY):
 // network, efs, dynamodb-budget, dynamodb-identities, dynamodb-sandboxes,
 // dynamodb-schedules, ssm-session-doc, s3-replication, create-handler,
 // ttl-handler, email-handler, dynamodb-slack-nonces, dynamodb-slack-threads,
-// dynamodb-slack-stream-messages, lambda-slack-bridge, ses
+// dynamodb-slack-stream-messages, lambda-slack-bridge, lambda-github-bridge, ses
 func TestRunInitPlan_ModuleOrder(t *testing.T) {
 	repoRoot := t.TempDir()
 	mods := cmd.RegionalModules(repoRoot)
 
-	if len(mods) != 16 {
-		t.Errorf("len(mods) = %d, want 16", len(mods))
+	if len(mods) != 17 {
+		t.Errorf("len(mods) = %d, want 17", len(mods))
 	}
 	if len(mods) == 0 {
 		t.Fatal("RegionalModules returned empty list")

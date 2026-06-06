@@ -486,6 +486,77 @@ func TestRegionalModulesIncludesSlackBridge(t *testing.T) {
 	}
 }
 
+// TestRegionalModulesIncludesGitHubBridge verifies that the Phase 97 GitHub App bridge
+// module is registered in regionalModules() in the correct dependency order:
+//   - lambda-github-bridge after dynamodb-sandboxes (alias-index GSI dependency)
+//   - lambda-github-bridge after dynamodb-slack-nonces (shared nonce table dependency)
+//   - lambda-github-bridge after email-handler (consistent with artifact Lambda ordering)
+//   - lambda-github-bridge after lambda-slack-bridge (both bridges after their shared deps)
+//   - lambda-github-bridge before ses (SES is always last)
+func TestRegionalModulesIncludesGitHubBridge(t *testing.T) {
+	mods := cmd.RegionalModules(t.TempDir())
+
+	found := 0
+	sandboxesIdx := -1
+	noncesIdx := -1
+	emailIdx := -1
+	slackBridgeIdx := -1
+	githubBridgeIdx := -1
+	sesIdx := -1
+	for i, m := range mods {
+		switch m.Name {
+		case "dynamodb-sandboxes":
+			sandboxesIdx = i
+		case "dynamodb-slack-nonces":
+			noncesIdx = i
+		case "email-handler":
+			emailIdx = i
+		case "lambda-slack-bridge":
+			slackBridgeIdx = i
+		case "lambda-github-bridge":
+			found++
+			githubBridgeIdx = i
+		case "ses":
+			sesIdx = i
+		}
+	}
+
+	if found != 1 {
+		t.Fatalf("expected 1 lambda-github-bridge in regionalModules(), got %d (idx=%d)",
+			found, githubBridgeIdx)
+	}
+
+	// lambda-github-bridge must appear after dynamodb-sandboxes (alias-index GSI dependency)
+	if sandboxesIdx >= 0 && githubBridgeIdx <= sandboxesIdx {
+		t.Errorf("lambda-github-bridge (idx %d) must appear after dynamodb-sandboxes (idx %d)",
+			githubBridgeIdx, sandboxesIdx)
+	}
+
+	// lambda-github-bridge must appear after dynamodb-slack-nonces (shared nonce table dependency)
+	if noncesIdx >= 0 && githubBridgeIdx <= noncesIdx {
+		t.Errorf("lambda-github-bridge (idx %d) must appear after dynamodb-slack-nonces (idx %d)",
+			githubBridgeIdx, noncesIdx)
+	}
+
+	// lambda-github-bridge must appear after email-handler
+	if emailIdx >= 0 && githubBridgeIdx <= emailIdx {
+		t.Errorf("lambda-github-bridge (idx %d) must appear after email-handler (idx %d)",
+			githubBridgeIdx, emailIdx)
+	}
+
+	// lambda-github-bridge must appear after lambda-slack-bridge
+	if slackBridgeIdx >= 0 && githubBridgeIdx <= slackBridgeIdx {
+		t.Errorf("lambda-github-bridge (idx %d) must appear after lambda-slack-bridge (idx %d)",
+			githubBridgeIdx, slackBridgeIdx)
+	}
+
+	// lambda-github-bridge must appear before ses (SES is always last)
+	if sesIdx >= 0 && githubBridgeIdx >= sesIdx {
+		t.Errorf("lambda-github-bridge (idx %d) must appear before ses (idx %d)",
+			githubBridgeIdx, sesIdx)
+	}
+}
+
 // ──────────────────────────────────────────────
 // forceSlackBridgeColdStart tests (SLCK-13)
 // ──────────────────────────────────────────────
