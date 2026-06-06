@@ -557,6 +557,30 @@ func TestRegionalModulesIncludesGitHubBridge(t *testing.T) {
 	}
 }
 
+// TestLambdaBuildsIncludesGitHubBridge guards GH-BRIDGE-DEPLOY: `km init` builds
+// Lambda zips from a hardcoded list (buildLambdaZips). A Lambda with a live
+// terragrunt unit but missing from this list is silently never built, so apply
+// fails on filebase64sha256(missing-zip). The github bridge must be present.
+func TestLambdaBuildsIncludesGitHubBridge(t *testing.T) {
+	names := cmd.LambdaBuildNames()
+
+	want := map[string]bool{
+		"km-github-bridge": false,
+		"km-slack-bridge":  false,
+		"create-handler":   false,
+	}
+	for _, n := range names {
+		if _, ok := want[n]; ok {
+			want[n] = true
+		}
+	}
+	for n, found := range want {
+		if !found {
+			t.Errorf("LambdaBuildNames() missing %q — km init will never build its zip; got %v", n, names)
+		}
+	}
+}
+
 // ──────────────────────────────────────────────
 // forceSlackBridgeColdStart tests (SLCK-13)
 // ──────────────────────────────────────────────

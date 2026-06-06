@@ -1734,15 +1734,12 @@ type lambdaBuild struct {
 	srcDir string // Go source directory relative to repo root
 }
 
-// buildLambdaZips cross-compiles Lambda binaries for linux/arm64 and packages them as zips.
-// Skips any Lambda whose zip already exists. Equivalent to `make build-lambdas`.
-func buildLambdaZips(repoRoot string) error {
-	buildDir := filepath.Join(repoRoot, "build")
-	if err := os.MkdirAll(buildDir, 0o755); err != nil {
-		return fmt.Errorf("create build dir: %w", err)
-	}
-
-	lambdas := []lambdaBuild{
+// lambdaBuilds returns the ordered list of Lambdas that `km init` cross-compiles
+// and packages. This MUST stay in lockstep with the `build-lambdas` Makefile
+// target — a Lambda missing here is silently never built by `km init`, so its
+// terragrunt unit fails on filebase64sha256(missing-zip) at apply time.
+func lambdaBuilds() []lambdaBuild {
+	return []lambdaBuild{
 		{name: "ttl-handler", srcDir: "cmd/ttl-handler"},
 		{name: "budget-enforcer", srcDir: "cmd/budget-enforcer"},
 		{name: "github-token-refresher", srcDir: "cmd/github-token-refresher"},
@@ -1750,7 +1747,31 @@ func buildLambdaZips(repoRoot string) error {
 		{name: "create-handler", srcDir: "cmd/create-handler"},
 		// Phase 63: Slack-notify bridge Lambda — accepts signed envelopes from sandboxes.
 		{name: "km-slack-bridge", srcDir: "cmd/km-slack-bridge"},
+		// Phase 97: GitHub comment-trigger bridge Lambda — verifies webhooks, dispatches @-mentions.
+		{name: "km-github-bridge", srcDir: "cmd/km-github-bridge"},
 	}
+}
+
+// LambdaBuildNames returns the zip names `km init` builds. Exported for testing only.
+func LambdaBuildNames() []string {
+	builds := lambdaBuilds()
+	names := make([]string, len(builds))
+	for i, lb := range builds {
+		names[i] = lb.name
+	}
+	return names
+}
+
+// buildLambdaZips cross-compiles Lambda binaries for linux/arm64 and packages them as zips.
+// Always rebuilds each zip (removes any existing one first) so code changes are
+// picked up. Equivalent to `make build-lambdas`.
+func buildLambdaZips(repoRoot string) error {
+	buildDir := filepath.Join(repoRoot, "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		return fmt.Errorf("create build dir: %w", err)
+	}
+
+	lambdas := lambdaBuilds()
 
 	// Ensure terraform binary is current (version-aware cache via sidecar file).
 	// Phase 84.4.1: replaced the os.IsNotExist-only check with terraformIsCurrent
