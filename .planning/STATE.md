@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: "Completed 96-slack-default-router-orphan-channel-mention-reply 96-03-PLAN.md (checkpoint:human-verify pending)"
-last_updated: "2026-06-06T03:39:01.227Z"
+stopped_at: Completed 97-github-comment-trigger-mvp 97-02-PLAN.md
+last_updated: "2026-06-06T19:22:51.131Z"
 last_activity: 2026-06-06
 progress:
-  total_phases: 111
+  total_phases: 113
   completed_phases: 98
-  total_plans: 485
-  completed_plans: 447
+  total_plans: 491
+  completed_plans: 448
   percent: 91
 ---
 
@@ -480,6 +480,7 @@ Progress: [█████████░] 91%
 | Phase 96-slack-default-router-orphan-channel-mention-reply P01 | 274s | 3 tasks | 7 files |
 | Phase 96-slack-default-router-orphan-channel-mention-reply P02 | 8min | 3 tasks | 7 files |
 | Phase 96-slack-default-router-orphan-channel-mention-reply P03 | 314 | 3 tasks | 6 files |
+| Phase 97-github-comment-trigger-mvp P02 | 527 | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1385,6 +1386,9 @@ Recent decisions affecting current work:
 - [Phase 96-02]: Relayed-owned response gated at final return via req.Headers check — clean separation from non-relayed front-door path without threading isRelayed through steps 5-10
 - [Phase 96-slack-default-router-orphan-channel-mention-reply]: RouterCooldownStore wraps DynamoNonceStore.Reserve with router-cooldown: prefix — reuses nonces table, no new infra
 - [Phase 96-slack-default-router-orphan-channel-mention-reply]: DefaultRouter is plain bool (false zero = dormant, not *bool) for structural Phase 95 byte-identity guarantee
+- [Phase 97-02]: Added checks→checks:write verb to CompilePermissions to complete github-inbound write set without bypassing verb abstraction
+- [Phase 97-02]: GitHubInboundQueueName owned by plan 02 (not plan 03) to eliminate intra-wave compile dependency
+- [Phase 97-02]: drainGithubEnvelope is best-effort: SQS error logs warn but does not fail the create — operator can re-mention
 
 ### Roadmap Evolution
 
@@ -1508,6 +1512,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-06T03:39:01.217Z
-Stopped at: Completed 96-slack-default-router-orphan-channel-mention-reply 96-03-PLAN.md (checkpoint:human-verify pending)
+Last session: 2026-06-06T19:22:51.121Z
+Stopped at: Completed 97-github-comment-trigger-mvp 97-02-PLAN.md
 Resume file: None
