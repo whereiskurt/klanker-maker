@@ -480,6 +480,22 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		}
 	}
 
+	// Phase 96: relayed-owned path. When the request carried x-km-relayed (peer
+	// sent it to us) and we own the channel, return {claimed:true} so the front
+	// door knows we handled it. Non-relayed (front-door) owned responses keep
+	// their existing plain "ok" body — Plan 03 changes the miss path only.
+	if req.Headers["x-km-relayed"] != "" {
+		ownedResp := peerRelayResponse{Claimed: true}
+		ownedBody, marshalErr := json.Marshal(ownedResp)
+		if marshalErr == nil {
+			return EventsResponse{
+				StatusCode: 200,
+				Body:       string(ownedBody),
+				Headers:    map[string]string{"content-type": "application/json"},
+			}
+		}
+	}
+
 	return EventsResponse{StatusCode: 200, Body: "ok"}
 }
 

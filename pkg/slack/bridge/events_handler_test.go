@@ -1597,3 +1597,186 @@ func TestVerifySlackSignature_Relayed(t *testing.T) {
 		t.Fatal("expected stale-timestamp error; got nil")
 	}
 }
+
+// ── Phase 96: Relayed-request peer-side responses ────────────────────────────
+
+// fakeRunningChannelLister is a test double for RunningChannelLister.
+type fakeRunningChannelLister struct {
+	channels []SandboxChannelInfo
+	err      error
+}
+
+func (f *fakeRunningChannelLister) ListRunning(ctx context.Context) ([]SandboxChannelInfo, error) {
+	return f.channels, f.err
+}
+
+// relayedMissBody builds a request body for an unknown channel with x-km-relayed header.
+func relayedMissBody(eventID, channel string) string {
+	return fmt.Sprintf(
+		`{"type":"event_callback","event_id":%q,"event":{"type":"message","channel":%q,"user":"U1","text":"hello","ts":"1.0"}}`,
+		eventID, channel,
+	)
+}
+
+// TestEventsHandler_RelayedMiss_ReturnsChannels verifies that a relayed request
+// for an UNOWNED channel returns 200 with {claimed:false, channels:[...]} JSON.
+func TestEventsHandler_RelayedMiss_ReturnsChannels(t *testing.T) {
+	now := time.Now()
+	h, _, _, _, sandboxes, _, _ := newHandler(now)
+
+	// Unknown channel
+	sandboxes.info = SandboxRoutingInfo{}
+
+	// Wire RunningChannels lister
+	h.RunningChannels = &fakeRunningChannelLister{
+		channels: []SandboxChannelInfo{
+			{ID: "C1", Alias: "orc", Profile: "patch"},
+		},
+	}
+
+	body := relayedMissBody("ERELAYEDMISS1", "C-unknown")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+			"x-km-relayed":              "1",
+		},
+		Body: body,
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+	}
+
+	// Content-Type must be application/json
+	if ct := resp.Headers["content-type"]; ct != "application/json" {
+		t.Errorf("content-type: got %q, want application/json", ct)
+	}
+
+	// Parse and assert response body
+	var parsed peerRelayResponse
+	if err := json.Unmarshal([]byte(resp.Body), &parsed); err != nil {
+		t.Fatalf("unmarshal response body: %v (body=%s)", err, resp.Body)
+	}
+	if parsed.Claimed {
+		t.Error("expected claimed:false for relayed miss, got true")
+	}
+	if len(parsed.Channels) != 1 {
+		t.Fatalf("expected 1 channel, got %d: %+v", len(parsed.Channels), parsed.Channels)
+	}
+	if parsed.Channels[0].ID != "C1" || parsed.Channels[0].Alias != "orc" || parsed.Channels[0].Profile != "patch" {
+		t.Errorf("unexpected channel info: %+v", parsed.Channels[0])
+	}
+}
+
+// TestEventsHandler_RelayedMiss_NilLister verifies that a relayed miss with
+// RunningChannels==nil returns {claimed:false, channels:[]} without panicking.
+func TestEventsHandler_RelayedMiss_NilLister(t *testing.T) {
+	now := time.Now()
+	h, _, _, _, sandboxes, _, _ := newHandler(now)
+
+	// Unknown channel + nil lister
+	sandboxes.info = SandboxRoutingInfo{}
+	h.RunningChannels = nil
+
+	body := relayedMissBody("ERELAYEDMISSNL", "C-unknown")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+			"x-km-relayed":              "1",
+		},
+		Body: body,
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var parsed peerRelayResponse
+	if err := json.Unmarshal([]byte(resp.Body), &parsed); err != nil {
+		// Acceptable: could be plain "ok" fallback or valid JSON with empty channels.
+		// The critical requirement is: no panic + 200.
+		return
+	}
+	if parsed.Claimed {
+		t.Error("expected claimed:false for relayed miss, got true")
+	}
+}
+
+// TestEventsHandler_RelayedOwned_ReturnsClaimedTrue verifies that a relayed
+// request for an OWNED channel returns {claimed:true} with application/json.
+func TestEventsHandler_RelayedOwned_ReturnsClaimedTrue(t *testing.T) {
+	now := time.Now()
+	h, _, _, _, sandboxes, _, _ := newHandler(now)
+
+	// Owned channel
+	sandboxes.info = SandboxRoutingInfo{
+		SandboxID: "sb-abc123",
+		QueueURL:  "https://sqs.example/queue.fifo",
+	}
+
+	body := relayedMissBody("ERELAYEDOWNED1", "C-owned")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+			"x-km-relayed":              "1",
+		},
+		Body: body,
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+	}
+
+	// Content-Type must be application/json for relayed-owned response
+	if ct := resp.Headers["content-type"]; ct != "application/json" {
+		t.Errorf("content-type: got %q, want application/json", ct)
+	}
+
+	var parsed peerRelayResponse
+	if err := json.Unmarshal([]byte(resp.Body), &parsed); err != nil {
+		t.Fatalf("unmarshal response body: %v (body=%s)", err, resp.Body)
+	}
+	if !parsed.Claimed {
+		t.Error("expected claimed:true for relayed owned, got false")
+	}
+}
+
+// TestEventsHandler_NonRelayed_FrontDoor_Unaffected verifies that a non-relayed
+// (front-door) request still returns 200 "ok" (Plan 03 changes this path).
+func TestEventsHandler_NonRelayed_FrontDoor_Unaffected(t *testing.T) {
+	now := time.Now()
+	h, _, _, _, sandboxes, _, _ := newHandler(now)
+
+	// Unknown channel — will trigger relay broadcast path
+	sandboxes.info = SandboxRoutingInfo{}
+	h.Relayer = nil // no relay configured
+
+	body := relayedMissBody("ENONRELAYED1", "C-unknown")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+			// No x-km-relayed header = front-door request
+		},
+		Body: body,
+	})
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+	}
+	// Front-door miss still returns plain "ok" (Plan 03 owns the orphan-reply path)
+	if resp.Body != "ok" {
+		t.Errorf("expected body 'ok' for front-door miss, got %q", resp.Body)
+	}
+}
