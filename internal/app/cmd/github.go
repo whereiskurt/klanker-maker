@@ -84,7 +84,7 @@ type githubManifestPayload struct {
 func RunGitHubManifest(ctx context.Context, cfg *config.Config, opts GitHubManifestOpts, w io.Writer) error {
 	appName := opts.AppName
 	if appName == "" {
-		appName = fmt.Sprintf("km-%s-github-bridge", cfg.GetResourcePrefix())
+		appName = fmt.Sprintf("%s-github-bridge", cfg.GetResourcePrefix())
 	}
 
 	hookURL := opts.BridgeURL
@@ -187,7 +187,7 @@ func RunGitHubInit(ctx context.Context, ssmClient SSMWriteAPI, cfg *config.Confi
 	// Derive bot-login default when not provided.
 	botLogin := opts.BotLogin
 	if botLogin == "" {
-		botLogin = fmt.Sprintf("km-%s-github-bridge[bot]", cfg.GetResourcePrefix())
+		botLogin = fmt.Sprintf("%s-github-bridge[bot]", cfg.GetResourcePrefix())
 	}
 
 	// Write bot-login (String).
