@@ -69,6 +69,10 @@ func newConfigureGitHubCmdCore(cfg *config.Config, ssmClientPtr *SSMWriteAPI, in
 		force          bool
 		setup          bool
 		discover       bool
+		// Phase 97: bridge-specific config stored alongside App credentials.
+		webhookSecret string
+		botLogin      string
+		bridgeURL     string
 	)
 
 	cmd := &cobra.Command{
@@ -129,7 +133,8 @@ Flags:
 			}
 
 			return runConfigureGitHub(ctx, *ssmClientPtr, writer, reader,
-				nonInteractive, appClientID, privateKeyFile, installationID, account, force, cfg)
+				nonInteractive, appClientID, privateKeyFile, installationID, account,
+				webhookSecret, botLogin, bridgeURL, force, cfg)
 		},
 	}
 
@@ -149,6 +154,13 @@ Flags:
 		"One-click GitHub App creation via manifest flow (opens browser, stores credentials automatically)")
 	cmd.Flags().BoolVar(&discover, "discover", false,
 		"Auto-discover installation ID from existing App credentials in SSM")
+	// Phase 97: bridge-specific flags for webhook-secret, bot-login, bridge-url.
+	cmd.Flags().StringVar(&webhookSecret, "webhook-secret", "",
+		"Webhook secret for the GitHub App (stored as SecureString; use 'km github init' to auto-generate)")
+	cmd.Flags().StringVar(&botLogin, "bot-login", "",
+		"GitHub App bot login handle (e.g. klanker-maker[bot])")
+	cmd.Flags().StringVar(&bridgeURL, "bridge-url", "",
+		"Bridge Lambda URL for the GitHub App webhook (set after `km init` provides the function URL)")
 
 	_ = cfg // reserved for future use (e.g. KMS key from config)
 
@@ -156,8 +168,11 @@ Flags:
 }
 
 // runConfigureGitHub implements the configure github wizard logic.
+// Phase 97: webhookSecret, botLogin, bridgeURL are the new bridge-specific keys;
+// all three are optional (empty string = skip that key).
 func runConfigureGitHub(ctx context.Context, ssmClient SSMWriteAPI, out io.Writer, in io.Reader,
-	nonInteractive bool, appClientID, privateKeyFile, installationID, account string, force bool, cfg *config.Config) error {
+	nonInteractive bool, appClientID, privateKeyFile, installationID, account,
+	webhookSecret, botLogin, bridgeURL string, force bool, cfg *config.Config) error {
 
 	if nonInteractive {
 		// Validate required flags
@@ -241,6 +256,31 @@ func runConfigureGitHub(ctx context.Context, ssmClient SSMWriteAPI, out io.Write
 		return fmt.Errorf("writing installation-id to SSM: %w", err)
 	}
 	fmt.Fprintf(out, "Written: %sinstallation-id\n", ghPrefix)
+
+	// Phase 97: write bridge-specific keys when provided via --webhook-secret /
+	// --bot-login / --bridge-url flags. All three are optional — omit to skip.
+	// Prefer `km github init` for webhook-secret (auto-generates random value).
+	if webhookSecret != "" {
+		if err := putSSMParam(ctx, ssmClient, ghPrefix+"webhook-secret",
+			webhookSecret, ssmtypes.ParameterTypeSecureString, kmsKeyID, overwrite); err != nil {
+			return fmt.Errorf("writing webhook-secret to SSM: %w", err)
+		}
+		fmt.Fprintf(out, "Written: %swebhook-secret (SecureString)\n", ghPrefix)
+	}
+	if botLogin != "" {
+		if err := putSSMParam(ctx, ssmClient, ghPrefix+"bot-login",
+			botLogin, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
+			return fmt.Errorf("writing bot-login to SSM: %w", err)
+		}
+		fmt.Fprintf(out, "Written: %sbot-login (%s)\n", ghPrefix, botLogin)
+	}
+	if bridgeURL != "" {
+		if err := putSSMParam(ctx, ssmClient, ghPrefix+"bridge-url",
+			bridgeURL, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
+			return fmt.Errorf("writing bridge-url to SSM: %w", err)
+		}
+		fmt.Fprintf(out, "Written: %sbridge-url (%s)\n", ghPrefix, bridgeURL)
+	}
 
 	fmt.Fprintf(out, "GitHub App credentials stored. Run 'km create' with a profile that has sourceAccess.github to use them.\n")
 	return nil
