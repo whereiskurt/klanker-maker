@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/validate-all-profiles.sh — Phase 92 hard gate.
-# Iterates the 20-file Profile Inventory and runs `km validate` against each.
+# Iterates the 21-file Profile Inventory and runs `km validate` against each.
 # Exits non-zero on any failure. Single source of truth for the inventory.
 #
 # Usage: bash scripts/validate-all-profiles.sh
@@ -21,6 +21,7 @@ PROFILES=(
   profiles/desktop.yaml
   profiles/dc34.ami.yaml
   profiles/example-additional-snapshots.yaml
+  profiles/github-review.yaml
   profiles/goose.yaml
   profiles/learn.v2.yaml
   profiles/learn.v2.chatty.yaml
