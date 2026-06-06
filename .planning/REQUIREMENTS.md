@@ -546,6 +546,26 @@ static per-install `slack.peer_bridges` list + single-hop broadcast-on-miss rela
 
 ---
 
+## Phase 96 — Synthetic IDs (phase-local)
+
+These IDs are phase-local and synthetic — they derive from the Phase 96 design
+spec (`docs/superpowers/specs/2026-06-05-slack-default-router-design.md`) and the
+Phase 96 ROADMAP entry's success criteria (SLACK-RTR-*). Feature: a default-router
+install that replies helpfully to @-mentions in orphan channels, built on a
+claim-aware scatter-gather upgrade of the Phase 95 relay.
+
+| ID | Description | Status |
+|----|-------------|--------|
+| SLACK-RTR-CFG | `slack.default_router *bool` in `km-config.yaml`: `SlackConfig.DefaultRouter` struct field, v2→v merge-list entry, tri-state population; absent/false ⇒ router off (Phase 95 behavior) | Planned |
+| SLACK-RTR-GATHER | Relay upgraded to a claim-aware scatter-gather: relayed-request handler returns `200 {claimed:bool, channels:[…]}`; non-owner peer returns its running sandbox channels (`km-sandboxes` `state=running` + `slack_channel_id`); front door parses + tallies; legacy `"ok"`/HTTP-error ⇒ treated as `claimed:true` | Planned |
+| SLACK-RTR-ORPHAN | True-orphan detection: front-door `FetchByChannel` miss + zero peer claims ⇒ orphan; any claim ⇒ owner handled, no router action | Planned |
+| SLACK-RTR-REPLY | On orphan + bot-mention + member channel + `default_router:true`: post exactly one threaded reply listing running sandbox channels aggregated across front door + all peers as `<#CID>` mentions (guidance-only when list empty); plumbed `KM_SLACK_DEFAULT_ROUTER` env (mirrors mention_only) | Planned |
+| SLACK-RTR-COOLDOWN | Per-channel cooldown (reuse pause-hint mechanism, default 3600s): one reply per window, not per mention | Planned |
+| SLACK-RTR-SAFE | `default_router` defaults false ⇒ byte-identical to Phase 95; non-mention messages and the bot's own reply never trigger the router (existing self-message/bot-loop filter); config drift WARN on `KM_SLACK_DEFAULT_ROUTER` | Planned |
+| SLACK-RTR-E2E | Two installs + one Slack App: @-mention in an unowned member channel ⇒ one threaded reply listing both installs' running channels; repeat within cooldown ⇒ no second reply; owned channel ⇒ no router reply (manual; real AWS + Slack) | Planned |
+
+---
+
 *Last updated: 2026-06-02 — Phase 93 synthetic IDs added for plan-checker traceability (15 IDs covering schema, helper, validation, compiler/userdata, credential, CLI, security, profile example, skill, docs, tests)*
 
 ---

@@ -2167,3 +2167,23 @@ Plans:
 - [ ] 95-01-PLAN.md — Config key `slack.peer_bridges` + merge-list + init.go env export + TF/terragrunt plumbing to the bridge Lambda (SLACK-FED-CFG, SLACK-FED-PLUMB)
 - [ ] 95-02-PLAN.md — `PeerRelayer`/`HTTPPeerRelayer` + four-row broadcast-on-miss decision table + bridge wiring; nil-Relayer == today (SLACK-FED-RELAY, SLACK-FED-LOOP, SLACK-FED-VERIFY)
 - [ ] 95-03-PLAN.md — `km doctor` peer-bridge checks + docs/CLAUDE.md + manual two-install E2E UAT (SLACK-FED-DOCTOR, SLACK-FED-E2E)
+
+### Phase 96: Slack default router — helpful reply for orphan-channel @-mentions
+
+**Goal:** Builds on Phase 95. When the shared bot is @-mentioned in a channel that **no install owns** (no sandbox bound), a single designated **default-router** install posts a helpful threaded reply instead of the message being silently dropped (`slack_relay_no_owner`): it explains no sandbox is bound, shows the naming convention (`#sb-{alias}-{profile}`), and lists currently-running sandbox channels across **all** installs as `<#CID>` mentions so the human can join one. Core mechanism: upgrade Phase 95's fire-and-forget broadcast into a **claim-aware scatter-gather** — a relayed-request handler returns `200 {claimed:bool, channels:[…]}` (a non-owner peer also returns its running sandbox channels via a local `km-sandboxes` `state=running` query); the front door tallies, and **zero claims ⇒ true orphan**. Only the front door can do this (one App ⇒ only the front door receives raw Slack events), so `slack.default_router` is effectively a front-door capability toggle, plumbed exactly like `slack.mention_only` → `KM_SLACK_DEFAULT_ROUTER`. Trigger requires ALL of: the message @-mentions the bot (reuse Phase 91 mention detection), the front door misses `FetchByChannel` locally, AND zero peer claims. Reply is threaded (`thread_ts`=msg ts) with a per-channel cooldown (reuse the pause-hint cooldown, default 3600s). **Member-channels-only (v1)** — Slack delivers message events only for channels the bot is in, so in-channel `chat:write` suffices: **no new Slack scopes, no `app_mention`, no manifest change.** Rollout safety: a peer still on Phase-95 code returns the legacy plain `"ok"`; the front door treats any unparseable/legacy/error response as `claimed:true` (conservative — never post a false "no sandbox here"), so a mixed-version fleet is safe during deploy. `default_router` defaults **false** ⇒ Phase 96 dormant until opted in (byte-identical to Phase 95 when off). **Out of scope (deferred):** agentic self-serve create (`@bot spin me up a profiles/patch.yaml bot` → bridge triggers `km create` via EventBridge — the north star, separate phase), non-member channels (`app_mention`+`chat:write.public`), DM fallback (`im:write`). No SandboxProfile schema change, no sandbox recreate; deploy = `make build-lambdas` + `km init --dry-run=false` (NOT `--sidecars`), all installs before relying on cross-install lists. Design spec: `docs/superpowers/specs/2026-06-05-slack-default-router-design.md`.
+
+**Success Criteria** (what must be TRUE):
+  1. With `slack.default_router` unset/false, the bridge behaves byte-identically to Phase 95 (orphan @-mentions dropped/logged, no reply).
+  2. A relayed-request handler returns `200 {claimed:true}` when it owns the channel and `200 {claimed:false, channels:[…]}` (with its running sandbox channels) when it does not.
+  3. The front door's scatter-gather tally treats any `claimed:true` (or a legacy `"ok"` / HTTP-error response) as "owned" and posts NO router reply; only an all-`claimed:false` result is a true orphan.
+  4. On a true orphan where the message @-mentions the bot in a member channel AND `slack.default_router:true`, the front door posts exactly one threaded reply listing running sandbox channels aggregated across the front door + all peers, rendered as `<#CID>` mentions (guidance-only variant when the list is empty).
+  5. A second qualifying @-mention in the same channel within the cooldown window is suppressed (no duplicate reply); after the window it replies again.
+  6. A non-mention message in an orphan channel never triggers a reply; the bot's own reply does not re-trigger the router (existing self-message/bot-loop filter).
+  7. `slack.default_router` round-trips through config load (merge-list regression) and `km init` exports `KM_SLACK_DEFAULT_ROUTER` with the env-wins drift WARN; the value reaches the bridge Lambda env via the TF module.
+
+**Requirements**: SLACK-RTR-CFG, SLACK-RTR-GATHER, SLACK-RTR-ORPHAN, SLACK-RTR-REPLY, SLACK-RTR-COOLDOWN, SLACK-RTR-SAFE, SLACK-RTR-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 96)
+**Depends on:** Phase 95
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 96 to break down)
