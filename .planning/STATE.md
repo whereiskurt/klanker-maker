@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 97-06-PLAN.md (2/3 tasks; awaiting E2E checkpoint)
-last_updated: "2026-06-06T20:17:14.370Z"
+stopped_at: Completed 97-07-PLAN.md (GH-BRIDGE-DEPLOY gap closure)
+last_updated: "2026-06-06T22:09:33.899Z"
 last_activity: 2026-06-06
 progress:
   total_phases: 113
   completed_phases: 99
-  total_plans: 491
-  completed_plans: 453
+  total_plans: 492
+  completed_plans: 454
   percent: 91
 ---
 
@@ -486,6 +486,7 @@ Progress: [█████████░] 91%
 | Phase 97 P04 | 605s | 3 tasks | 13 files |
 | Phase 97-github-comment-trigger-mvp P05 | 868 | 2 tasks | 4 files |
 | Phase 97 P06 | 1042s | 2 tasks | 7 files |
+| Phase 97-github-comment-trigger-mvp P07 | 15 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1406,6 +1407,8 @@ Recent decisions affecting current work:
 - [Phase 97]: APPROVE needs no body; COMMENT/REQUEST_CHANGES require body — validated before HTTP call
 - [Phase 97]: GitHub bridge doctor checks are WARN-level (not ERROR) — GitHub is opt-in; silent-skip when github.repos empty + SSM probe absent
 - [Phase 97]: checkGitHubReposResolvable is a pure config function (no AWS calls) for fast overlap + missing-profile detection
+- [Phase 97-github-comment-trigger-mvp]: GitHub bridge reuses dynamodb-slack-nonces (shared nonce table) with github-delivery: key namespace — no new DynamoDB table
+- [Phase 97-github-comment-trigger-mvp]: lambda-github-bridge placed after lambda-slack-bridge in regionalModules() — all bridge Lambdas contiguous before ses
 
 ### Roadmap Evolution
 
@@ -1529,6 +1532,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-06T20:17:14.360Z
-Stopped at: Completed 97-06-PLAN.md (2/3 tasks; awaiting E2E checkpoint)
+Last session: 2026-06-06T22:09:33.886Z
+Stopped at: Completed 97-07-PLAN.md (GH-BRIDGE-DEPLOY gap closure)
 Resume file: None

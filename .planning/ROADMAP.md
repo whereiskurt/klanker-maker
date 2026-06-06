@@ -2208,7 +2208,7 @@ Plans:
 
 **Requirements**: GH-APP-SCOPE, GH-BRIDGE-VERIFY, GH-BRIDGE-AUTH, GH-BRIDGE-ROUTE, GH-INBOUND-Q, GH-POLLER, GH-HELPER, GH-PROFILE, GH-CLI, GH-DOCTOR, GH-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 97)
 **Depends on:** Phase 96
-**Plans:** 7 plans (6 original + 1 gap-closure for GH-BRIDGE-DEPLOY)
+**Plans:** 7/7 plans complete
 
 Plans:
 - [ ] 97-01-PLAN.md — github: config block, KM_GITHUB_REPOS JSON env export, km github init/manifest/status (GH-CLI, GH-APP-SCOPE)
