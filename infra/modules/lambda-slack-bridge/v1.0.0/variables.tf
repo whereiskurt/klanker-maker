@@ -135,3 +135,12 @@ variable "slack_peer_bridges" {
   type        = string
   default     = ""
 }
+
+# Phase 96: front-door router toggle. When "true", the bridge posts a threaded reply
+# in orphan channels (bot-mention + front-door miss + zero peer claims). Default "false"
+# = dormant (Phase 95 byte-identical). Meaningful only on the front-door install.
+variable "slack_default_router" {
+  description = "When 'true', the front-door bridge posts a helpful threaded reply in orphan channels after a scatter-gather finds no owner (Phase 96). Default 'false' = dormant."
+  type        = string
+  default     = "false"
+}

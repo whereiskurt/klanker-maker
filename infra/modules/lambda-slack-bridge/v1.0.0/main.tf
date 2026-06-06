@@ -187,8 +187,10 @@ resource "aws_iam_role_policy" "dynamodb_slack_threads" {
 # Policy: DynamoDB — UpdateItem on km-sandboxes for DDBPauseHinter LWT (Phase 67-05)
 # Phase 63 already grants GetItem on km-sandboxes via dynamodb_read above.
 # Phase 67 adds UpdateItem for the last_pause_hint_ts cooldown attribute.
+# Phase 96 adds Scan for DDBRunningChannelLister (running-channels enumeration for
+# the default-router orphan reply). Scan targets the base table — NOT the GSI.
 # NOTE: DynamoDB IAM does not support attribute-level scoping; the bridge code
-# only writes last_pause_hint_ts.
+# only writes last_pause_hint_ts (UpdateItem) and reads state/slack_channel_id (Scan).
 resource "aws_iam_role_policy" "dynamodb_sandboxes_pause_hint" {
   name = "${local.function_name}-dynamodb-sandboxes-pause-hint"
   role = aws_iam_role.slack_bridge.id
@@ -200,6 +202,12 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes_pause_hint" {
         Sid      = "DDBSandboxesUpdateLastPauseHint"
         Effect   = "Allow"
         Action   = ["dynamodb:UpdateItem"]
+        Resource = var.sandboxes_table_arn
+      },
+      {
+        Sid      = "DDBSandboxesScanRunningChannels"
+        Effect   = "Allow"
+        Action   = ["dynamodb:Scan"]
         Resource = var.sandboxes_table_arn
       }
     ]
@@ -329,6 +337,8 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SLACK_REACT_ALWAYS = var.slack_react_always
       # Phase 95 — federated relay peer list
       KM_SLACK_PEER_BRIDGES = var.slack_peer_bridges
+      # Phase 96 — front-door orphan-channel router toggle
+      KM_SLACK_DEFAULT_ROUTER = var.slack_default_router
     }
   }
 
