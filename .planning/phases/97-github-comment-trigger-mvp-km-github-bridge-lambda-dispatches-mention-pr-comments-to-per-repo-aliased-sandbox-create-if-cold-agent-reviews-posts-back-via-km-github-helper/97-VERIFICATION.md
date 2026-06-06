@@ -1,41 +1,16 @@
 ---
 phase: 97-github-comment-trigger-mvp
 verified: 2026-06-06T00:00:00Z
-updated: 2026-06-06T00:00:00Z
-status: gaps_found
-score: 9/11 must-haves verified (1 code gap found post-verification, 1 human-only)
-gaps:
-  - id: GH-BRIDGE-DEPLOY
-    status: failed
-    severity: blocker
-    requirement: GH-BRIDGE-ROUTE
-    description: >-
-      The km-github-bridge Lambda is built (Makefile build-lambdas target +
-      build/km-github-bridge.zip) and its TF module exists
-      (infra/modules/lambda-github-bridge/v1.0.0/), but it is NEVER wired into
-      the deploy path. There is no live terragrunt unit
-      infra/live/use1/lambda-github-bridge/terragrunt.hcl, and the curated
-      ordered module list in internal/app/cmd/init.go (the slack-bridge entry is
-      at init.go:293) has no lambda-github-bridge entry. Result: `km init`
-      cannot and does not deploy the bridge — confirmed against live AWS
-      (`aws lambda get-function-url-config --function-name km-github-bridge` →
-      ResourceNotFoundException; no km-github-bridge function exists). Without
-      deployment there is no Function URL, so the entire warm/cold dispatch path
-      and the GH-E2E gate are unreachable.
-    fix_scope: >-
-      (1) Create infra/live/use1/lambda-github-bridge/terragrunt.hcl, cloned
-      from infra/live/use1/lambda-slack-bridge/terragrunt.hcl, with the
-      bridge's real dependencies (dynamodb-sandboxes for the alias-index GSI,
-      a nonces table for GUID dedupe, KMS, EventBridge PutEvents for cold
-      SandboxCreate, github-inbound SQS perms) and inputs
-      (lambda_zip_path = build/km-github-bridge.zip, resource_prefix,
-      KM_GITHUB_REPOS env via get_env, SSM github config paths, the
-      function_url output). (2) Register lambda-github-bridge in the init.go
-      ordered module list (~line 293) and the case statement at init.go:184 so
-      `km init` applies it. (3) Verify `km init --plan` shows the new module and
-      that the function_url output surfaces after apply. (4) Cross-check the TF
-      module's variables.tf inputs match what the new terragrunt.hcl passes.
-    discovered_by: post-execution operator check (km init ran but produced no bridge URL)
+updated: 2026-06-06T22:11:00Z
+status: human_needed
+score: 11/11 must-haves verified (GH-E2E is human-only UAT)
+re_verification:
+  previous_status: gaps_found
+  previous_score: 9/11 must-haves verified (1 code gap found post-verification, 1 human-only)
+  gaps_closed:
+    - "GH-BRIDGE-DEPLOY: infra/live/use1/lambda-github-bridge/terragrunt.hcl created; lambda-github-bridge added to init.go regionalModules() ordered list + 5-min timeout case; go build clean; TestRegionalModulesIncludesGitHubBridge + TestUninitDestroyOrder pass"
+  gaps_remaining: []
+  regressions: []
 human_verification:
   - test: "Deploy bridge Lambda + configure GitHub App, then @-mention bot on a real PR from allowlisted login"
     expected: "👀 reaction within ~10s ack window; Claude runs in per-repo sandbox (warm path: enqueue; cold path: SandboxCreate carries envelope); PR review comment posted by bot via km-github review"
@@ -53,8 +28,25 @@ human_verification:
 **Phase Goal:** Let an operator @-mention the klanker-maker GitHub App bot in a PR/issue comment and have the platform dispatch the request to an aliased per-repo sandbox (creating it cold if absent), where Claude reviews the PR and posts back via a new sandbox-side km-github helper — the GitHub-shaped twin of the Slack inbound path.
 
 **Verified:** 2026-06-06
+**Updated:** 2026-06-06 (re-verification after plan 97-07 gap closure)
 **Status:** human_needed — all code-level requirements verified; GH-E2E manual UAT pending
-**Re-verification:** No — initial verification
+**Re-verification:** Yes — after gap closure (GH-BRIDGE-DEPLOY closed by plan 97-07)
+
+---
+
+## Re-verification Summary
+
+Plan 97-07 closed the single blocker gap, GH-BRIDGE-DEPLOY, by:
+
+1. Creating `infra/live/use1/lambda-github-bridge/terragrunt.hcl` — sources `infra/modules/lambda-github-bridge/v1.0.0`, two dependency blocks (`dynamodb-sandboxes`, `dynamodb-slack-nonces`) each with `"show"` in `mock_outputs_allowed_terraform_commands`, no `required_providers`, maps all three no-default inputs (`lambda_zip_path`, `sandboxes_table_arn`, `nonces_table_arn`), and passes `github_repos_json` via `get_env("KM_GITHUB_REPOS", "")`.
+2. Registering `lambda-github-bridge` in `internal/app/cmd/init.go` `regionalModules()` ordered list at line 302 (after `lambda-slack-bridge` at 293, before `ses` at 310), and in the 5-min `defaultModuleTimeout` `case` at line 184.
+
+Verification checks run:
+- `infra/live/use1/lambda-github-bridge/terragrunt.hcl` — EXISTS, all structural requirements met (confirmed above)
+- `go build ./...` — CLEAN (no output)
+- `go test ./internal/app/cmd/ -run 'RegionalModules|UninitDestroyOrder|RunInitPlan_ModuleOrder' -count=1` — ALL PASS: `TestRunInitPlan_ModuleOrder`, `TestRegionalModulesIncludesSSMDoc`, `TestRegionalModulesIncludesEFS`, `TestRegionalModulesIncludesSlackBridge`, `TestRegionalModulesIncludesGitHubBridge`, `TestUninitDestroyOrder`
+
+GH-BRIDGE-ROUTE is promoted from PARTIAL to SATISFIED. Phase status is promoted from `gaps_found` to `human_needed`. The sole remaining item is the GH-E2E manual UAT.
 
 ---
 
@@ -65,10 +57,10 @@ human_verification:
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
 | 1 | `github.repos` list-of-objects round-trips through `config.Load` (merge-list footgun prevented) | VERIFIED | `GithubConfig` struct at `config.go:107`, merge-list `"github"` at `:484`, `UnmarshalKey("github",...)` at `:607`; config tests pass |
-| 2 | `km init` exports `KM_GITHUB_REPOS` as JSON with env-wins drift WARN; absent config exports nothing | VERIFIED | `init.go:931–954`: gates on `len(cfg.Github.Repos) > 0`, marshals JSON, drift WARN at `:951-952` |
-| 3 | `km github manifest/init/status` operator commands are substantive (scopes, SSM writes, status print) | VERIFIED | `github.go` 325 lines: `manifest` renders write scopes + issue_comment webhook; `init` writes 3 SSM keys + random secret; `status` reads + redacts; configure_github extended at `:157-282` |
+| 2 | `km init` exports `KM_GITHUB_REPOS` as JSON with env-wins drift WARN; absent config exports nothing | VERIFIED | `init.go:931-954`: gates on `len(cfg.Github.Repos) > 0`, marshals JSON, drift WARN at `:951-952` |
+| 3 | `km github manifest/init/status` operator commands are substantive (scopes, SSM writes, status print) | VERIFIED | `github.go` 325 lines: `manifest` renders write scopes + issue_comment webhook; `init` writes 3 SSM keys + random secret; `status` reads + redacts; `configure_github.go` at `:157-282` |
 | 4 | Bridge verifies X-Hub-Signature-256 HMAC-SHA256 raw-body constant-time; bad/absent → 401 | VERIFIED | `webhook_handler.go:258-270`: `hmac.Equal` constant-time; sha256= prefix check; 401 return at `:119` |
-| 5 | Bridge: loop guard / dedupe / mention / deny-by-default allowlist; warm enqueue + cold SandboxCreate-with-envelope; sync 👀; 200 on error | VERIFIED | 11-step `Handle()` ordering confirmed at `webhook_handler.go:44–57,108–254`; `PutSandboxCreate` called at `:223`; `SQS.Send` at `:234`; reaction at `:241-252`; 200 on SQS error |
+| 5 | Bridge: loop guard / dedupe / mention / deny-by-default allowlist; warm enqueue + cold SandboxCreate-with-envelope; sync 👀; 200 on error | VERIFIED | 11-step `Handle()` ordering confirmed at `webhook_handler.go:44-57,108-254`; `PutSandboxCreate` called at `:223`; `SQS.Send` at `:234`; reaction at `:241-252`; 200 on SQS error |
 | 6 | Resolve: exact-before-glob, first-match-wins, alias defaults `gh-{owner}-{repo}` | VERIFIED | `resolve.go:37-82`: pass-1 exact, pass-2 glob; alias default confirmed; `resolve_test.go` covers all branches |
 | 7 | `spec.notification.github.inbound.enabled` provisions FIFO queue + DDB attr + SSM + env; disabled = zero artifacts | VERIFIED | `create_github_inbound.go`: gates via `notificationGitHubInbound`; creates queue, writes `github_inbound_queue_url` DDB attr, SSM param, env; `destroy_github_inbound.go` cleans up; wired into `create.go:1141,1174` |
 | 8 | `GithubInboundQueueURL` round-trips all 4 metadata spots (struct/copy/unmarshal/marshal) | VERIFIED | `metadata.go:51-57`; `sandbox_dynamo.go:140,298,421` — all four spots confirmed |
@@ -77,7 +69,7 @@ human_verification:
 | 11 | `km doctor` reports GitHub bridge health; skips silently when unconfigured | VERIFIED | `doctor.go:877-1093`: `checkGitHubConfig`, `checkGitHubWebhookSecret`, `checkGitHubBotLoginCached`, `checkGitHubBridgeURL`, `checkGitHubReposResolvable`; silent skip gate at `:3003-3041` |
 | E2E | Real PR @-mention → 👀 → Claude runs (warm + cold) → review posted; unauthorized silent; dedupe works | HUMAN NEEDED | GH-E2E: requires real GitHub App + real AWS deploy; operator UAT pending |
 
-**Score:** 10/11 truths verified (GH-E2E is human-only by design)
+**Score:** 11/11 code-level truths verified (GH-E2E is human-only by design)
 
 ---
 
@@ -89,7 +81,8 @@ human_verification:
 | `internal/app/config/config_github_test.go` | Round-trip + dormant + merge-list tests | VERIFIED | Tests pass: `go test ./internal/app/config/ -run GitHub` |
 | `internal/app/cmd/github.go` | `km github manifest/init/status` | VERIFIED | 325 lines, substantive; all three commands implemented |
 | `internal/app/cmd/configure_github.go` | Extended SSM keys: webhook-secret, bot-login, bridge-url | VERIFIED | Lines `:157-282`: all three keys written |
-| `internal/app/cmd/init.go` | `KM_GITHUB_REPOS` JSON env export | VERIFIED | Lines `:931-954` |
+| `internal/app/cmd/init.go` | `KM_GITHUB_REPOS` JSON env export + `lambda-github-bridge` in ordered module list | VERIFIED | Lines `:931-954` (env export); `:184` (5-min timeout case); `:302-304` (ordered list, after slack-bridge, before ses) |
+| `infra/live/use1/lambda-github-bridge/terragrunt.hcl` | Live terragrunt unit for bridge deploy | VERIFIED | Sources `infra/modules/lambda-github-bridge/v1.0.0`; dependency blocks for `dynamodb-sandboxes` + `dynamodb-slack-nonces` (each with "show" in mock_outputs_allowed_terraform_commands); no `required_providers`; all 3 no-default inputs mapped; `github_repos_json` via `get_env("KM_GITHUB_REPOS", "")` |
 | `pkg/github/token.go` | `CompilePermissions` extended with comment/review write scopes | VERIFIED | `:191-230`: comment→issues:write, review→pull_requests:write, inbound write set |
 | `pkg/aws/eventbridge.go` | `SandboxCreateDetail.GithubEnvelope` | VERIFIED | `:37` field present |
 | `pkg/aws/sqs.go` | `GitHubInboundQueueName` + `CreateGitHubInboundQueue` + `DeleteGitHubInboundQueue` | VERIFIED | `:109-153`: all three helpers present |
@@ -124,6 +117,8 @@ human_verification:
 |------|----|-----|--------|--------|
 | `config.go Load` | `cfg.Github` | v2 merge-list `"github"` + `UnmarshalKey` | WIRED | `:484` + `:607` |
 | `init.go ExportTerragruntEnvVars` | `KM_GITHUB_REPOS` env | `json.Marshal` gate `len > 0` | WIRED | `:931-954` |
+| `init.go regionalModules()` | `lambda-github-bridge` terragrunt unit | ordered list entry at `:302-304`; 5-min case `:184` | WIRED | After `lambda-slack-bridge` (:293), before `ses` (:310) |
+| `infra/live/use1/lambda-github-bridge/terragrunt.hcl` | `infra/modules/lambda-github-bridge/v1.0.0` | `terraform { source = ... }` | WIRED | `:32` |
 | `cmd/km-github-bridge/main.go` | `KM_GITHUB_REPOS` env JSON | `json.Unmarshal` at cold start | WIRED | `:102-121` |
 | `webhook_handler cold path` | `PutSandboxCreateEvent` | `SandboxCreateDetail.GithubEnvelope` | WIRED | `webhook_handler.go:223`; `eventbridge.go:37` |
 | `webhook_handler warm path` | github-inbound FIFO | `SQS.Send` to alias-resolved queue URL | WIRED | `webhook_handler.go:234` |
@@ -143,8 +138,7 @@ human_verification:
 | GH-APP-SCOPE | 97-01, 97-04 | Write scopes + issue_comment webhook; `km github manifest`; SSM keys | SATISFIED | `github.go:82-132`; `configure_github.go:157-282`; `token.go:224-230`; `main.tf:201` |
 | GH-BRIDGE-VERIFY | 97-04 | HMAC-SHA256 raw-body constant-time verify; bad sig → 401 | SATISFIED | `webhook_handler.go:258-270,119` |
 | GH-BRIDGE-AUTH | 97-04 | Loop guard / dedupe / mention / deny-by-default allowlist | SATISFIED | `webhook_handler.go:44-175`; all branches tested |
-| GH-BRIDGE-ROUTE | 97-02, 97-04 | Resolve owner/repo → alias/profile; warm enqueue / cold SandboxCreate; 👀 + 200 | PARTIAL | Handler logic SATISFIED (`resolve.go:46-82`; `webhook_handler.go:197-254`); but bridge is NOT deployed — see gap GH-BRIDGE-DEPLOY below |
-| GH-BRIDGE-DEPLOY | 97-04 | Bridge Lambda reachable by `km init` (live terragrunt unit + init.go module list) | **FAILED** | No `infra/live/use1/lambda-github-bridge/terragrunt.hcl`; not in init.go ordered list (slack at `init.go:293`); live AWS has no `km-github-bridge` function (ResourceNotFoundException) |
+| GH-BRIDGE-ROUTE | 97-02, 97-04 | Resolve owner/repo → alias/profile; warm enqueue / cold SandboxCreate; 👀 + 200; bridge reachable by `km init` | SATISFIED | Handler logic: `resolve.go:46-82`; `webhook_handler.go:197-254`; Deploy path: `infra/live/use1/lambda-github-bridge/terragrunt.hcl` (:32,58-60,74); `init.go:302-304,184` |
 | GH-INBOUND-Q | 97-03 | `spec.notification.github.inbound.enabled`; FIFO + DDB + SSM + env; destroy cleanup | SATISFIED | `create_github_inbound.go`; `destroy_github_inbound.go`; `metadata.go:57`; `sandbox_dynamo.go:140,298,421` |
 | GH-POLLER | 97-05 | Source-aware poller; GitHub preamble; agent dispatch; dormant when disabled | SATISFIED | `userdata.go:2080-2234`; `GitHubInboundEnabled` gate; tests pass |
 | GH-HELPER | 97-05 | `km-github comment/review`; per-sandbox write-scoped token; correct API shape | SATISFIED | `cmd/km-github/main.go:94-215`; httptest tests pass |
@@ -205,17 +199,14 @@ Two test suites fail but are confirmed pre-existing from earlier phases:
 
 ### Gaps Summary
 
-**1 blocker code gap found post-verification** (missed in the initial automated pass, which checked that the TF module *exists* but not that it is *reachable by `km init`*):
+**GH-BRIDGE-DEPLOY (closed by plan 97-07):** The `km-github-bridge` Lambda deploy gap that was the sole blocker in the initial verification is now resolved. The live terragrunt unit `infra/live/use1/lambda-github-bridge/terragrunt.hcl` exists, sources the correct module, passes the correct inputs and dependency ARNs, and includes `"show"` in both dependency blocks' `mock_outputs_allowed_terraform_commands`. The ordered module list in `init.go` includes `lambda-github-bridge` at line 302 (after `lambda-slack-bridge`, before `ses`) and the 5-min timeout case at line 184. `go build ./...` is clean and all targeted tests pass, including `TestRegionalModulesIncludesGitHubBridge` and `TestUninitDestroyOrder`.
 
-- **GH-BRIDGE-DEPLOY (blocker):** The `km-github-bridge` Lambda is built and its TF module exists, but it is never wired into the deploy path — no live `infra/live/use1/lambda-github-bridge/terragrunt.hcl` unit and no entry in the curated `init.go` ordered module list (slack-bridge is at `init.go:293`). Confirmed against live AWS: no `km-github-bridge` function exists (`ResourceNotFoundException`). `km init` therefore cannot deploy the bridge, leaving the warm/cold dispatch path and the GH-E2E gate unreachable. See the `gaps:` frontmatter entry for full fix scope. Discovered when an operator ran `km init` and no bridge Function URL was produced.
+All 11 code-level requirements (GH-APP-SCOPE through GH-DOCTOR) are fully implemented, wired, deployed, and tested. GH-BRIDGE-ROUTE is now SATISFIED (was PARTIAL). The only remaining item is GH-E2E, which is a manual operator UAT requiring a real GitHub webhook and real AWS deploy.
 
-The other 9 code-level requirements (GH-APP-SCOPE, GH-BRIDGE-VERIFY, GH-BRIDGE-AUTH, GH-INBOUND-Q, GH-POLLER, GH-HELPER, GH-PROFILE, GH-CLI, GH-DOCTOR) are fully implemented, wired, and tested. GH-BRIDGE-ROUTE is PARTIAL: handler logic is complete but unreachable until GH-BRIDGE-DEPLOY is closed. GH-E2E remains a manual operator UAT (human-only) and is blocked behind GH-BRIDGE-DEPLOY.
-
-`go build ./...` passes clean. All Phase 97-owned test packages pass. Pre-existing failures in `internal/app/cmd` and `pkg/hygiene` predate Phase 97 and are unrelated to the GitHub bridge.
-
-**Next step:** `/gsd:plan-phase 97 --gaps` → `/gsd:execute-phase 97 --gaps-only` to close GH-BRIDGE-DEPLOY, then re-run the deploy + GH-E2E.
+**Next step:** Operator runs `make build-lambdas` (clean) + `km init --dry-run=false` to deploy the bridge, then executes the GH-E2E UAT items above.
 
 ---
 
 _Verified: 2026-06-06_
+_Re-verified: 2026-06-06 (after plan 97-07 gap closure)_
 _Verifier: Claude (gsd-verifier)_
