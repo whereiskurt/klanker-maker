@@ -47,8 +47,8 @@ created: 2026-06-06
 | 97-01-T3 | 01 | 1 | GH-APP-SCOPE (manifest/init/status + SSM keys) | unit (mocked SSM) | `go test ./internal/app/cmd/ -run 'GitHubManifest\|GitHubInit\|GitHubStatus'` | ⬜ pending |
 | 97-02-T1 | 02 | 1 | GH-BRIDGE-ROUTE (write-scoped token perms) | unit | `go test ./pkg/github/ -run 'CompilePermissions\|Permissions'` | ⬜ pending |
 | 97-02-T2 | 02 | 1 | GH-BRIDGE-ROUTE (cold-create envelope carry) | unit | `go test ./pkg/aws/ -run 'SandboxCreate' && go test ./cmd/create-handler/` | ⬜ pending |
-| 97-02-T3 | 02 | 1 | GH-BRIDGE-ROUTE (create-handler enqueue) | unit + build | `go test ./cmd/create-handler/ && go build ./cmd/create-handler/` | ⬜ pending |
-| 97-03-T1 | 03 | 1 | GH-INBOUND-Q (profile field + DDB round-trip + SQS) | unit | `go test ./pkg/profile/ ./pkg/aws/ -run 'GitHub\|Notification\|Metadata\|InboundQueue'` | ⬜ pending |
+| 97-02-T3 | 02 | 1 | GH-BRIDGE-ROUTE (GitHubInboundQueueName helper + create-handler enqueue) | unit + build | `go test ./pkg/aws/ -run GitHubInboundQueueName && go test ./cmd/create-handler/ && go build ./cmd/create-handler/` | ⬜ pending |
+| 97-03-T1 | 03 | 1 | GH-INBOUND-Q (profile field + DDB round-trip + Create/DeleteGitHubInboundQueue; reuses plan-02 name helper) | unit | `go test ./pkg/profile/ ./pkg/aws/ -run 'GitHub\|Notification\|Metadata\|InboundQueue'` | ⬜ pending |
 | 97-03-T2 | 03 | 1 | GH-INBOUND-Q (provision/rollback/destroy) | unit (mocked deps) | `go test ./internal/app/cmd/ -run GitHubInbound` | ⬜ pending |
 | 97-03-T3 | 03 | 1 | GH-PROFILE (github-review validates) | validate | `./build/km validate profiles/github-review.yaml && bash scripts/validate-all-profiles.sh` | ⬜ pending |
 | 97-04-T1 | 04 | 2 | GH-BRIDGE-VERIFY + GH-BRIDGE-ROUTE (resolve) | unit (table) | `go test ./pkg/github/bridge/ -run 'Resolve\|Signature\|Payload'` | ⬜ pending |
@@ -76,6 +76,11 @@ mocking patterns to clone already exist in-tree:
 - `pkg/compiler/userdata_slack_inbound_test.go` — userdata render assertion template
 - `internal/app/config/config_test.go:880` `TestLoadSlackPeerBridges_Set` — merge-list footgun template
 - Test doubles: `github.MockSSMClient` (token.go:366), `GitHubAPIBaseURL` httptest var (token.go:27)
+
+**Intra-wave helper ownership:** `pkg/aws/GitHubInboundQueueName` is defined in **plan 02** (so
+`cmd/create-handler` builds standalone irrespective of Wave-1 execution order). Plan 03 reuses it for
+`Create/DeleteGitHubInboundQueue` and must NOT redefine it. Its name-format test lives in plan 02's
+`pkg/aws/sqs_test.go`; plan 03 tests the create/delete + round-trip only.
 
 ---
 
