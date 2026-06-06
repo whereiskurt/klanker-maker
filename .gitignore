@@ -45,6 +45,8 @@ dist/
 /km-slack-bridge
 /km-slack
 /km-presence
+/km-github-bridge
+/km-github
 
 /excalidraw.log
 
