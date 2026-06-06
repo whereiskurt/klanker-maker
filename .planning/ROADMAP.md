@@ -2208,10 +2208,15 @@ Plans:
 
 **Requirements**: GH-APP-SCOPE, GH-BRIDGE-VERIFY, GH-BRIDGE-AUTH, GH-BRIDGE-ROUTE, GH-INBOUND-Q, GH-POLLER, GH-HELPER, GH-PROFILE, GH-CLI, GH-DOCTOR, GH-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 97)
 **Depends on:** Phase 96
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 97 to break down)
+- [ ] 97-01-PLAN.md — github: config block, KM_GITHUB_REPOS JSON env export, km github init/manifest/status (GH-CLI, GH-APP-SCOPE)
+- [ ] 97-02-PLAN.md — write-scoped per-sandbox token + cold-create envelope carry through SandboxCreate/create-handler (GH-BRIDGE-ROUTE)
+- [ ] 97-03-PLAN.md — notification.github.inbound profile field + github-inbound FIFO provisioning + DDB round-trip + github-review profile (GH-INBOUND-Q, GH-PROFILE)
+- [ ] 97-04-PLAN.md — km-github-bridge Lambda (HMAC verify, auth, resolve, warm/cold dispatch, ACK) + TF module (GH-BRIDGE-VERIFY, GH-BRIDGE-AUTH, GH-BRIDGE-ROUTE, GH-APP-SCOPE)
+- [ ] 97-05-PLAN.md — source-aware github poller + km-github comment/review helper (GH-POLLER, GH-HELPER)
+- [ ] 97-06-PLAN.md — km doctor GitHub checks + runbook + manual E2E (GH-DOCTOR, GH-E2E)
 
 ### Phase 98: GitHub bridge expansion — richer write-backs, thread continuity, shared-alias
 
