@@ -1449,7 +1449,43 @@ func TestDeploySurfaceGitHubBridgePhase98(t *testing.T) {
 	})
 
 	// ──────────────────────────────────────────────────────────────────
-	// Sub-test 5: live unit sources v1.1.0 (not stale v1.0.0)
+	// Sub-test 5 (98-06 gap-fix): EC2 resume IAM condition regression guard
+	// Asserts that ec2:StartInstances is scoped to km:resource-prefix (the tag
+	// every km sandbox EC2 instance actually carries), NOT "km:managed" (a tag
+	// no km sandbox ever carries — the original broken condition that caused every
+	// auto-resume to 403 in live UAT on 2026-06-07).
+	// ──────────────────────────────────────────────────────────────────
+	t.Run("ec2_resume_condition_uses_resource_prefix", func(t *testing.T) {
+		mainTFPath := filepath.Join(repoRoot, "infra", "modules", "lambda-github-bridge", "v1.1.0", "main.tf")
+		content, err := os.ReadFile(mainTFPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", mainTFPath, err)
+		}
+		src := string(content)
+
+		// The condition MUST use the tag km sandbox instances actually carry.
+		if !strings.Contains(src, "aws:ResourceTag/km:resource-prefix") {
+			t.Errorf("ec2:StartInstances IAM condition must use aws:ResourceTag/km:resource-prefix — "+
+				"every km sandbox EC2 instance carries this tag; without it every auto-resume 403s. "+
+				"Got main.tf content (first 200 chars of ec2_resume block): check the ec2_resume policy")
+		}
+
+		// The condition MUST NOT regress to km:managed (the broken tag that caused the UAT 403).
+		// km sandbox instances carry km:resource-prefix, km:sandbox-id, km:label — NOT km:managed.
+		if strings.Contains(src, `"aws:ResourceTag/km:managed"`) {
+			t.Errorf("ec2:StartInstances IAM condition must NOT use aws:ResourceTag/km:managed — "+
+				"no km sandbox EC2 instance carries this tag; using it denies every auto-resume StartInstances. "+
+				"This was the live-UAT Gap A blocker (2026-06-07). Revert to km:resource-prefix.")
+		}
+
+		// ec2:StartInstances action string must still be present.
+		if !strings.Contains(src, "ec2:StartInstances") {
+			t.Errorf("ec2:StartInstances action missing from main.tf — auto-resume cannot start stopped instances")
+		}
+	})
+
+	// ──────────────────────────────────────────────────────────────────
+	// Sub-test 6: live unit sources v1.1.0 (not stale v1.0.0)
 	// ──────────────────────────────────────────────────────────────────
 	t.Run("live_unit_sources_v1_1_0", func(t *testing.T) {
 		hclPath := filepath.Join(repoRoot, "infra", "live", "use1", "lambda-github-bridge", "terragrunt.hcl")
