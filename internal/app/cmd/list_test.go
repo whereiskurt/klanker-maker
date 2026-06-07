@@ -411,6 +411,224 @@ func TestListCmd_Reset(t *testing.T) {
 	}
 }
 
+// ---- Fake AgentAuthChecker for list tests ----
+
+type fakeListAuthChecker struct {
+	claude bool
+	codex  bool
+	err    error
+	calls  int
+}
+
+func (f *fakeListAuthChecker) CheckAuth(_ context.Context, _ *kmaws.SandboxRecord) (bool, bool, error) {
+	f.calls++
+	return f.claude, f.codex, f.err
+}
+
+// runListCmdWithChecker executes km list with a fake lister AND an AgentAuthChecker.
+func runListCmdWithChecker(t *testing.T, lister cmd.SandboxLister, checker cmd.AgentAuthChecker, extraArgs ...string) (string, error) {
+	t.Helper()
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	listCmd := cmd.NewListCmdWithCheckers(cfg, lister, checker)
+	root.AddCommand(listCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+
+	args := append([]string{"list"}, extraArgs...)
+	root.SetArgs(args)
+
+	err := root.Execute()
+	return buf.String(), err
+}
+
+// TestListCmd_BannerPresent verifies that km list prints a banner line
+// for non-JSON output (even when the list is empty, even without --wide).
+func TestListCmd_BannerPresent(t *testing.T) {
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{SandboxID: "sb-banner1", Status: "running", Profile: "p", Substrate: "ecs", Region: "us-east-1"},
+		},
+	}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+
+	if !strings.Contains(out, "km list") {
+		t.Errorf("expected banner line containing 'km list', got:\n%s", out)
+	}
+}
+
+// TestListCmd_BannerSuppressedInJSON verifies that --json output is valid JSON
+// with no banner prefix.
+func TestListCmd_BannerSuppressedInJSON(t *testing.T) {
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{SandboxID: "sb-json-banner", Status: "running", Profile: "p", Substrate: "ecs", Region: "us-east-1"},
+		},
+	}
+
+	out, err := runListCmd(t, lister, "--json")
+	if err != nil {
+		t.Fatalf("list --json returned error: %v", err)
+	}
+
+	// Output must be valid JSON (banner must NOT appear)
+	var records []kmaws.SandboxRecord
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &records); err != nil {
+		t.Fatalf("--json output is not valid JSON (banner may have leaked): %v\noutput: %s", err, out)
+	}
+	// Banner must not appear anywhere in output
+	if strings.Contains(out, "km list") {
+		t.Errorf("banner 'km list' must NOT appear in --json output:\n%s", out)
+	}
+}
+
+// TestListCmd_BannerOnEmpty verifies that the banner still appears when there
+// are no sandboxes ("No running sandboxes." path).
+func TestListCmd_BannerOnEmpty(t *testing.T) {
+	lister := &fakeLister{records: []kmaws.SandboxRecord{}}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+
+	if !strings.Contains(out, "km list") {
+		t.Errorf("expected banner on empty list, got:\n%s", out)
+	}
+	if !strings.Contains(out, "No running sandboxes") {
+		t.Errorf("expected 'No running sandboxes' message, got:\n%s", out)
+	}
+}
+
+// TestListCmd_UPColumn verifies that the UP column appears in both narrow and
+// wide layouts, with uptime for running rows and '-' for non-running rows.
+func TestListCmd_UPColumn(t *testing.T) {
+	createdAt := time.Now().Add(-90 * time.Minute) // ~1h30m
+
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{SandboxID: "sb-up1", Status: "running", Profile: "p", Substrate: "ecs", Region: "us-east-1", CreatedAt: createdAt},
+			{SandboxID: "sb-up2", Status: "stopped", Profile: "p", Substrate: "ecs", Region: "us-east-1", CreatedAt: createdAt},
+		},
+	}
+
+	// Narrow layout
+	outNarrow, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+	if !strings.Contains(outNarrow, "UP") {
+		t.Errorf("narrow output missing 'UP' column header:\n%s", outNarrow)
+	}
+	// Running row should show uptime (1h...)
+	if !strings.Contains(outNarrow, "1h") {
+		t.Errorf("narrow output missing uptime '1h' for running sandbox:\n%s", outNarrow)
+	}
+
+	// Wide layout
+	outWide, err := runListCmd(t, lister, "--wide")
+	if err != nil {
+		t.Fatalf("list --wide returned error: %v", err)
+	}
+	if !strings.Contains(outWide, "UP") {
+		t.Errorf("wide output missing 'UP' column header:\n%s", outWide)
+	}
+}
+
+// TestListCmd_AuthFlag_ConcurrentFanOut verifies that --auth triggers CheckAuth
+// calls on running sandboxes and adds an AUTH column.
+func TestListCmd_AuthFlag_ConcurrentFanOut(t *testing.T) {
+	createdAt := time.Now().Add(-5 * time.Minute)
+
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{SandboxID: "sb-cl1", Status: "running", Profile: "p", Substrate: "ecs", Region: "us-east-1", CreatedAt: createdAt},
+			{SandboxID: "sb-cl2", Status: "stopped", Profile: "p", Substrate: "ecs", Region: "us-east-1", CreatedAt: createdAt},
+		},
+	}
+	checker := &fakeListAuthChecker{claude: true, codex: false}
+
+	out, err := runListCmdWithChecker(t, lister, checker, "--auth")
+	if err != nil {
+		t.Fatalf("list --auth returned error: %v\noutput: %s", err, out)
+	}
+
+	// AUTH column header must appear
+	if !strings.Contains(out, "AUTH") {
+		t.Errorf("expected 'AUTH' column header with --auth, got:\n%s", out)
+	}
+	// Running row must show cl✓
+	if !strings.Contains(out, "cl✓") {
+		t.Errorf("expected 'cl✓' for logged-in claude, got:\n%s", out)
+	}
+	// cx✗ for not-logged-in codex
+	if !strings.Contains(out, "cx✗") {
+		t.Errorf("expected 'cx✗' for logged-out codex, got:\n%s", out)
+	}
+	// CheckAuth called exactly once (only for running sandbox)
+	if checker.calls != 1 {
+		t.Errorf("expected CheckAuth called 1 time (only running sandbox), got %d", checker.calls)
+	}
+}
+
+// TestListCmd_NoAuth_ZeroSSMCalls verifies that without --auth, the checker is
+// never invoked (zero SSM calls).
+func TestListCmd_NoAuth_ZeroSSMCalls(t *testing.T) {
+	createdAt := time.Now().Add(-5 * time.Minute)
+
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{SandboxID: "sb-noauth1", Status: "running", Profile: "p", Substrate: "ecs", Region: "us-east-1", CreatedAt: createdAt},
+		},
+	}
+	checker := &fakeListAuthChecker{claude: true, codex: true}
+
+	// No --auth flag
+	out, err := runListCmdWithChecker(t, lister, checker)
+	if err != nil {
+		t.Fatalf("list without --auth returned error: %v", err)
+	}
+
+	if checker.calls != 0 {
+		t.Errorf("expected 0 CheckAuth calls without --auth, got %d\noutput: %s", checker.calls, out)
+	}
+	// AUTH column must NOT appear without --auth
+	if strings.Contains(out, "AUTH") {
+		t.Errorf("'AUTH' column must NOT appear without --auth:\n%s", out)
+	}
+}
+
+// TestListCmd_WideAloneDoesNotEnableAuth verifies that --wide alone does NOT
+// enable the AUTH column.
+func TestListCmd_WideAloneDoesNotEnableAuth(t *testing.T) {
+	createdAt := time.Now().Add(-5 * time.Minute)
+
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{SandboxID: "sb-widenoauth", Status: "running", Profile: "p", Substrate: "ecs", Region: "us-east-1", CreatedAt: createdAt},
+		},
+	}
+	checker := &fakeListAuthChecker{claude: true, codex: true}
+
+	out, err := runListCmdWithChecker(t, lister, checker, "--wide")
+	if err != nil {
+		t.Fatalf("list --wide returned error: %v", err)
+	}
+
+	if checker.calls != 0 {
+		t.Errorf("expected 0 CheckAuth calls with --wide alone, got %d", checker.calls)
+	}
+	if strings.Contains(out, "AUTH") {
+		t.Errorf("'AUTH' column must NOT appear with --wide alone (need --auth):\n%s", out)
+	}
+}
+
 func TestListCmd_LockedSandboxShowsLockIcon(t *testing.T) {
 	lister := &fakeLister{
 		records: []kmaws.SandboxRecord{
