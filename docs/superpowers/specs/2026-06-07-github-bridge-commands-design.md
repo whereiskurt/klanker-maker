@@ -42,7 +42,9 @@ No command in a comment → today's free-form behavior, byte-identical.
   command-overrides-repo; these alternatives were considered and rejected.
 - Template variables beyond `{{args}}`. The poller already prepends a repo/PR/branch
   context preamble, so templates need not restate PR metadata.
-- Per-repo command overrides. Commands are install-global for v1.
+- Per-repo command *definitions*. The command set is install-global for v1. (A
+  repo may *select* its default command via `repos[].default_command`, but cannot
+  define commands of its own.)
 
 ## Decisions (all resolved during brainstorming)
 
@@ -57,16 +59,22 @@ No command in a comment → today's free-form behavior, byte-identical.
 | D7 | Per-command allowlist | **Yes**, intersection/narrowing with `repo.allow` |
 | D8 | Where the command set is published | **SSM** `{prefix}/config/github/commands` (not a Lambda env var) |
 | D9 | Phase | **Phase 99**, separate from the in-flight Phase 98 |
+| D10 | Behavior when no `/command` is typed | **Configurable `default_command`** — per-repo overrides top-level; unset ⇒ free-form passthrough (today) |
 
 ## Config surface
 
 ```yaml
 github:
   default_profile: profiles/github-review.yaml
+  default_command: review           # applied when a comment has no /command (install-wide)
   repos:
     - match: myorg/*
       alias: gh-myorg
       allow: [alice, bob, carol]      # engagement gate: who may trigger the bot here
+    - match: myorg/infra/*
+      alias: gh-infra
+      allow: [alice]
+      default_command: explain        # per-repo override of the install-wide default
   commands:
     patch:
       description: apply the smallest fix and open a PR   # shown in /help
@@ -101,6 +109,30 @@ github:
 `commands` is a map keyed by command name (the `/name` token, without the slash).
 Reserved name: `help` (built-in; a user-defined `help` is ignored with a
 `km doctor` WARN).
+
+### Default command (D10)
+
+Two optional fields name a command to apply when a comment contains **no**
+`/command` token:
+
+| YAML key | Scope | Meaning |
+|---|---|---|
+| `github.default_command` | install-wide | Default command for every repo. |
+| `github.repos[].default_command` | per-repo | Overrides the install-wide default for that repo. |
+
+Resolution of the **effective default** for a matched repo:
+`repo.default_command || github.default_command`. When neither is set, a
+command-less comment falls back to **free-form passthrough** (today's Phase 97/98
+behavior) — the default is opt-in, never imposed.
+
+When an effective default exists, a command-less comment is treated as if that
+command had been typed: its template is expanded (with `{{args}}` = the comment
+minus the `@mention` token — there is no command token to strip), and its routing
+override and `allow` apply exactly as for an explicit invocation (including the
+`repo.allow ∩ command.allow` intersection — so a default command with its own
+`allow` still narrows; normally a default command omits `allow` to stay as
+permissive as `repo.allow`). Both `default_command` values must name a defined
+command — `km init`/`km doctor` error otherwise.
 
 ## `@file` prompt references (D4)
 
@@ -147,8 +179,10 @@ Applied in the bridge after repo resolution and the repo-allow gate:
      found `/patch` and `/review`."), no dispatch. Repeats of the *same* command
      are deduped and allowed.
    - **exactly 1 known command** → that command (continue to auth + dispatch).
-   - **0 known commands** → free-form, dispatch to the repo box (today's path) —
-     regardless of any unknown `/token`s, which ride along as part of the prompt.
+   - **0 known commands** → apply the **effective default command**
+     (`repo.default_command || github.default_command`) if one is configured;
+     otherwise free-form, dispatch to the repo box (today's path). Either way any
+     unknown `/token`s ride along as part of the prompt / `{{args}}`.
 4. **`{{args}}` extraction** — the comment body with the `@mention` token and the
    matched `/command` token removed, whitespace-normalized. Example:
    `@bot please /patch the login bug` → `{{args}}` = `please the login bug`.
@@ -183,7 +217,10 @@ parse owner/repo  → repo Resolve() → {alias, profile, repo.allow, matched}
   │    │         prompt  = expand(C.prompt, {{args}})
   │    │         alias   = C.alias   || repo.alias
   │    │         profile = C.profile || repo.profile || default_profile
-  │    └─ no command            → prompt = free-form body; target = repo's {alias, profile}
+  │    └─ no command
+  │         ├─ effective default D = repo.default_command || github.default_command
+  │         │    └─ if D set → treat as command D ({{args}} = comment − mention; auth + routing as above)
+  │         └─ else → prompt = free-form body; target = repo's {alias, profile}
   └─ feed {alias, profile, prompt} into Phase 98's warm / resume / cold-create dispatch
 ```
 
@@ -209,22 +246,29 @@ The bridge already mints an installation token and posts the 👀 ACK reaction
 
 - **Multi-command error** — `🤖 Use one command at a time — found /patch and /review.`
 - **Command not authorized** — `🤖 You're not authorized to run /deploy.`
-- **`/help`** (built-in) — lists each command's name + `description`.
+- **`/help`** (built-in) — lists each command's name + `description`, and notes the
+  effective default command for that repo (the comment is on a known repo, so `/help`
+  can resolve `repo.default_command || github.default_command`).
 
-(There is no unknown-command reply — unknown `/token`s dispatch free-form per D6.)
+(There is no unknown-command reply — unknown `/token`s dispatch free-form, or via the
+default command when one is configured, per D6/D10.)
 
 ## Plumbing & deploy
 
 - **Config struct:** `GithubConfig.Commands map[string]GithubCommandEntry`
-  (`Description, Alias, Profile, Allow, Prompt`) + getter + **the v2→v merge-list
-  entry** (the three-edit config rule — struct, construction line, merge-list).
+  (`Description, Alias, Profile, Allow, Prompt`), `GithubConfig.DefaultCommand`
+  (top-level), and `GithubRepoEntry.DefaultCommand` (per-repo) + getters + **the
+  v2→v merge-list entries** (the three-edit config rule — struct, construction line,
+  merge-list).
 - **`km init`:** resolve `@file` prompts → write assembled JSON to SSM
   `{prefix}/config/github/commands`; env-wins drift WARN on stale value.
 - **`km doctor`:** every `@file` exists/readable; every command profile resolvable
   (and cold-createable when a command sets its own alias); `help` not shadowed;
   command-alias ↔ repo-alias overlap WARN (extends the 98-03 alias-collision check);
+  every `default_command` (top-level and per-repo) names a **defined** command;
   SSM command param present when `github.commands` is configured.
-- **`km github status`:** list configured commands (name + description + target).
+- **`km github status`:** list configured commands (name + description + target),
+  and the effective default command per repo.
 - **Bridge:** built-in `/help`; read commands from SSM at cold start.
 - **Deploy:** `make build-lambdas` + `km init --dry-run=false` (bridge code +
   SSM/config). **No SandboxProfile schema change → no `km init --sidecars`, no
@@ -246,14 +290,16 @@ Pure-function tests (no AWS, table-driven, in the style of `Resolve()`):
 - template expansion (with and without `{{args}}` placeholder),
 - `@file` resolution at init (present / missing),
 - resolution precedence (override / fallback to repo / default_profile),
+- effective-default resolution (per-repo wins over top-level; unset → free-form),
 - auth intersection (in both / fails command / fails repo).
 
 Bridge-handler tests for the reply paths (multi-command error,
 command-not-authorized) and the `/help` listing, plus a lenient-unknown test
-(unknown `/token` dispatches free-form, no reply).
+(unknown `/token` dispatches free-form, no reply) and a default-command test
+(command-less comment runs the effective default with `{{args}}` = comment − mention).
 
-`km doctor` tests for `@file`-missing, profile-unresolvable, `help`-shadow, and
-alias-overlap WARNs.
+`km doctor` tests for `@file`-missing, profile-unresolvable, `help`-shadow,
+alias-overlap, and `default_command`-references-undefined WARNs.
 
 ## Open questions
 
