@@ -541,6 +541,30 @@ func TestListCmd_UPColumn(t *testing.T) {
 	}
 }
 
+// TestListCmd_UPColumn_ZeroCreatedAt guards the --tags (tag-scan) path, whose
+// records carry no CreatedAt. time.Since(time.Time{}) overflows the int64
+// Duration and saturates at ~106751d23h, which used to render as the UP value
+// for those rows. A zero CreatedAt must render "-" instead.
+func TestListCmd_UPColumn_ZeroCreatedAt(t *testing.T) {
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			// Running, but no CreatedAt — exactly what tag-scan produces.
+			{SandboxID: "sb-notime", Status: "running", Profile: "p", Substrate: "ecs", Region: "us-east-1"},
+		},
+	}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+	if strings.Contains(out, "106751") {
+		t.Errorf("UP column rendered saturated-duration garbage for zero CreatedAt:\n%s", out)
+	}
+	if strings.Contains(out, "d23h") {
+		t.Errorf("UP column rendered a multi-day uptime for zero CreatedAt:\n%s", out)
+	}
+}
+
 // TestListCmd_AuthFlag_ConcurrentFanOut verifies that --auth triggers CheckAuth
 // calls on running sandboxes and adds an AUTH column.
 func TestListCmd_AuthFlag_ConcurrentFanOut(t *testing.T) {

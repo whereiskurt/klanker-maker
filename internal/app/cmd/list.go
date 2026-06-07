@@ -462,9 +462,11 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		}
 		num := bw(fmt.Sprintf("%-*d", numWidth, localNum))
 
-		// UP column: uptime for running rows, "-" for all others.
+		// UP column: uptime for running rows, "-" for all others. The --tags
+		// (tag-scan) path leaves CreatedAt zero, which would otherwise render a
+		// garbage "106751d23h"; guard on IsZero so those rows show "-".
 		uptime := "-"
-		if r.Status == "running" {
+		if r.Status == "running" && !r.CreatedAt.IsZero() {
 			uptime = formatUptime(r.CreatedAt)
 		}
 
