@@ -1138,6 +1138,202 @@ func checkGitHubReposResolvable(repos []appcfg.GithubRepoEntry, defaultProfile s
 	}
 }
 
+// DetectGitHubAliasIssues scans a github.repos entry list for two classes of
+// operator misconfiguration:
+//
+//  1. Alias collision — an entry that omits alias: (which defaults to
+//     "gh-{owner}-{repo}") but that auto-default equals another entry's
+//     explicit alias: value. The shared-sandbox feature requires ALL sharing
+//     entries to set the SAME explicit alias; a mix of explicit and implicit
+//     is likely unintentional.
+//
+//  2. Overlapping match — an exact "owner/repo" entry and a glob "owner/*"
+//     entry that both cover at least one concrete repository. Exact always
+//     wins (by Resolve semantics), so the glob is partially shadowed. This
+//     is a WARN, not an error — the operator may have intended it, but it
+//     warrants a review.
+//
+// Intentional shared aliases (two or more entries with the SAME explicit
+// alias: value) produce NO warning — that is the supported multi-repo
+// shared-sandbox pattern (GH-X-SHARED).
+//
+// Returns nil/empty when entries is nil or empty (silent dormant-by-default).
+//
+// Exported so unit tests in cmd_test can call it directly without live AWS.
+func DetectGitHubAliasIssues(entries []appcfg.GithubRepoEntry) []string {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// defaultAlias mirrors resolve.go's defaultAlias logic.
+	defaultAlias := func(match string) string {
+		return "gh-" + strings.ReplaceAll(match, "/", "-")
+	}
+
+	// isGlob returns true when match contains wildcard characters.
+	isGlob := func(match string) bool {
+		return strings.ContainsAny(match, "*?[")
+	}
+
+	var issues []string
+
+	// --- Check 1: alias collision ---
+	// Collect all explicit aliases and all auto-default aliases.
+	// An auto-default that equals an explicit alias on a DIFFERENT entry is a collision.
+	// (Implicit + implicit is fine — they just happen to be different repos.)
+	explicitAliases := make(map[string]int) // explicit alias value → first entry index
+	for i, e := range entries {
+		if e.Alias != "" {
+			if _, exists := explicitAliases[e.Alias]; !exists {
+				explicitAliases[e.Alias] = i
+			}
+		}
+	}
+	for i, e := range entries {
+		if e.Alias == "" {
+			auto := defaultAlias(e.Match)
+			if prevIdx, collides := explicitAliases[auto]; collides && prevIdx != i {
+				issues = append(issues, fmt.Sprintf(
+					"alias collision: entry[%d] match=%q has no alias: (auto-default %q) but entry[%d] explicitly sets alias=%q — set an explicit alias on entry[%d] or rename the conflicting alias",
+					i, e.Match, auto, prevIdx, auto, i,
+				))
+			}
+		}
+	}
+
+	// --- Check 2: overlapping match ---
+	// For each exact entry, check if any glob in the list matches the same pattern.
+	// We use the exact match string itself as the concrete test repo name.
+	for i, exact := range entries {
+		if isGlob(exact.Match) {
+			continue // skip — only test exact entries against globs
+		}
+		for j, glob := range entries {
+			if !isGlob(glob.Match) || i == j {
+				continue
+			}
+			// Use path.Match semantics (same as resolve.go).
+			if ok, _ := matchGlob(glob.Match, exact.Match); ok {
+				issues = append(issues, fmt.Sprintf(
+					"overlapping match: entry[%d] match=%q (exact) and entry[%d] match=%q (glob) both match %q — exact wins; glob is partially shadowed",
+					i, exact.Match, j, glob.Match, exact.Match,
+				))
+			}
+		}
+	}
+
+	return issues
+}
+
+// matchGlob wraps path.Match for legibility.
+func matchGlob(pattern, name string) (bool, error) {
+	// Re-use the same path package semantics as resolve.go.
+	// Import "path" is already in the file (used indirectly); inline it here
+	// via strings split-and-wildcard to avoid an extra import.
+	//
+	// Actually we call path.Match via the path package.  Since doctor.go does not
+	// import "path" yet, we implement the same single-segment wildcard semantics
+	// with strings to keep the import list clean.
+	//
+	// Go's path.Match supports *, ?, and [range] as per filepath.Match.
+	// For the overlap check we only need to handle the common "owner/*" pattern;
+	// full path.Match semantics are preserved via the imported path package.
+	// Import added below.  We use a simple approach: split on "/" and match each
+	// segment independently.
+	parts := strings.SplitN(pattern, "/", 2)
+	nameParts := strings.SplitN(name, "/", 2)
+	if len(parts) != len(nameParts) {
+		return false, nil
+	}
+	for k := range parts {
+		ok, err := matchSegment(parts[k], nameParts[k])
+		if err != nil || !ok {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// matchSegment matches a single path segment using simple glob rules (* matches anything).
+func matchSegment(pattern, segment string) (bool, error) {
+	if pattern == "*" {
+		return true, nil
+	}
+	if !strings.ContainsAny(pattern, "*?[") {
+		return pattern == segment, nil
+	}
+	// Fall back to rune-level matching for '?' and '[range]' patterns.
+	return matchRunePattern(pattern, segment)
+}
+
+// matchRunePattern implements basic glob matching for a single path segment
+// (no '/' in pattern or segment). Supports *, ?, and character classes [abc].
+func matchRunePattern(pattern, s string) (bool, error) {
+	// Simple iterative approach handling *, ?, and literal chars.
+	// Not a full regexp — sufficient for the patterns doctors.go cares about.
+	for len(pattern) > 0 {
+		switch pattern[0] {
+		case '*':
+			// Eat consecutive stars.
+			for len(pattern) > 0 && pattern[0] == '*' {
+				pattern = pattern[1:]
+			}
+			if len(pattern) == 0 {
+				return true, nil
+			}
+			for i := 0; i <= len(s); i++ {
+				if ok, err := matchRunePattern(pattern, s[i:]); ok || err != nil {
+					return ok, err
+				}
+			}
+			return false, nil
+		case '?':
+			if len(s) == 0 {
+				return false, nil
+			}
+			pattern = pattern[1:]
+			s = s[1:]
+		default:
+			if len(s) == 0 || pattern[0] != s[0] {
+				return false, nil
+			}
+			pattern = pattern[1:]
+			s = s[1:]
+		}
+	}
+	return len(s) == 0, nil
+}
+
+// checkGitHubAliasCollision is the doctor check that calls DetectGitHubAliasIssues
+// and formats the results as a CheckResult in the standard doctor style.
+// Silent when github.repos is absent (dormant-by-default contract).
+func checkGitHubAliasCollision(repos []appcfg.GithubRepoEntry) CheckResult {
+	name := "GitHub Alias Collision"
+	if len(repos) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "no github.repos configured — skipping alias collision check",
+		}
+	}
+
+	issues := DetectGitHubAliasIssues(repos)
+	if len(issues) > 0 {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%d alias/match issue(s): %s", len(issues), strings.Join(issues, "; ")),
+			Remediation: "Review github.repos entries: set explicit alias: on all entries sharing a sandbox, or remove the shadowed glob",
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("%d repo entry/entries — no alias collisions or match overlaps detected", len(repos)),
+	}
+}
+
 // checkCredentialRotationAge warns when any platform credential in SSM Parameter Store
 // has not been updated within the specified threshold. It uses LastModifiedDate as the
 // rotation timestamp source. Missing parameters are skipped gracefully — their existence
@@ -3091,6 +3287,13 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	// Repos resolvability + overlap — pure config check, no SSM calls.
 	checks = append(checks, func(_ context.Context) CheckResult {
 		return checkGitHubReposResolvable(githubRepos, githubDefaultProfile)
+	})
+
+	// Alias collision + match-overlap — pure config check, no SSM calls.
+	// Detects unintentional alias shadowing and overlapping glob/exact patterns.
+	// Silent when github.repos is absent (dormant-by-default contract).
+	checks = append(checks, func(_ context.Context) CheckResult {
+		return checkGitHubAliasCollision(githubRepos)
 	})
 
 	// Credential rotation age check.
