@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 99-05-PLAN.md — doctor checks + km github status command listing + Phase 99 docs
-last_updated: "2026-06-07T23:33:32.418Z"
+stopped_at: Phase 99 SC3a gap closure — default_command now travels via SSM CommandSet envelope (95978591)
+last_updated: "2026-06-07T23:55:00.000Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 117
@@ -1440,7 +1440,7 @@ Recent decisions affecting current work:
 - [Phase 99]: No new merge-list entry for github.commands: single 'github' entry covers whole block via UnmarshalKey; documented in GithubCommandEntry godoc to prevent future regression
 - [Phase 99]: GithubCommandEntry is map[string]GithubCommandEntry (keyed by verb) for O(1) dispatch lookup and clean YAML syntax
 - [Phase 99]: Command names are case-SENSITIVE (YAML key = exact match); /help intercepted before defined-command lookup; CommandEntry is bridge-local (no internal/app/config import); RunCommandPass is the IO-free seam Plan 04 wires into Handle()
-- [Phase 99]: KM_GITHUB_DEFAULT_COMMAND env for install-wide default: bridge reads os.Getenv at cold start; Plan 03/05 writes this to Lambda env block at km init
+- [Phase 99]: KM_GITHUB_DEFAULT_COMMAND env for install-wide default: bridge reads os.Getenv at cold start; Plan 03/05 writes this to Lambda env block at km init [SUPERSEDED by SC3a gap closure 2026-06-07: nothing ever wrote KM_GITHUB_DEFAULT_COMMAND so WebhookHandler.DefaultCommand was always "" at runtime; fix folds default_command into the SSM CommandSet envelope — {"commands":{...},"default_command":"..."} — so both travel over the single SSM param (D8 single source of truth); KM_GITHUB_DEFAULT_COMMAND env read removed from main.go; committed 95978591]
 - [Phase 99]: Dormancy strict else branch: structural if/else ensures byte-identical Phase 98 path when Commands empty AND DefaultCommand empty
 - [Phase 99-03]: Open-Q-1 resolved: Config.ConfigFilePath populated from v2.ConfigFileUsed() in Load(); callers use filepath.Dir(cfg.ConfigFilePath) for @file base dir
 - [Phase 99-03]: PublishGitHubCommandsToSSM exported directly (not unexported+wrapper) for clean SSMReadWriteAPI injection in cmd_test
@@ -1576,6 +1576,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-07T23:33:32.408Z
-Stopped at: Completed 99-05-PLAN.md — doctor checks + km github status command listing + Phase 99 docs
+Last session: 2026-06-07T23:55:00Z
+Stopped at: Phase 99 SC3a gap closure — default_command now travels via SSM CommandSet envelope (commit 95978591)
 Resume file: None
