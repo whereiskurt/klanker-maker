@@ -418,3 +418,330 @@ The bridge is partially configured. Either:
 - `CLAUDE.md` § Phase 97 — feature summary and deploy notes
 - `km github init`, `km github manifest`, `km github status` — CLI commands
 - `km doctor` — platform health checks including GitHub bridge group
+
+---
+
+## Phase 98 — Richer write-backs, continuity, shared-alias, auto-resume, cold-create
+
+> **Phase 98 (2026-06-07) — GitHub bridge expansion (complete):**
+> New `km-github check` and `km-github pr create` sandbox-side verbs; thread/session
+> continuity via the `km-github-threads` DynamoDB table; shared alias (multiple repos to
+> one sandbox); stopped-sandbox auto-resume via EC2 StartInstances; and fixed cold-create
+> with S3-staged profiles and SOPS-injected Claude credentials.
+
+### New sandbox-side verbs
+
+Two new `km-github` subcommands are available in Phase 98:
+
+```bash
+# Post a GitHub check run (e.g. "analysis complete" or "review failed")
+km-github check \
+  --owner <org> \
+  --repo <name> \
+  --name "km-review" \
+  --conclusion success \
+  --summary "Code review complete — no blocking issues found." \
+  --head-sha <commit-sha>
+
+# Open a new pull request from inside a sandbox worktree
+km-github pr create \
+  --owner <org> \
+  --repo <name> \
+  --title "Fix null-pointer in auth.go" \
+  --base main \
+  --head fix/null-auth \
+  --body "Resolves the NPE identified in PR #42 review."
+# Prints the new PR URL to stdout, e.g.:
+#   https://github.com/my-org/my-service/pull/99
+```
+
+**Conclusions for `km-github check`:** `success`, `failure`, `neutral`, `cancelled`,
+`skipped`, `timed_out`, `action_required`.
+
+**Worktree-per-PR guidance:** The agent preamble instructs the sandbox to create an
+isolated git worktree for each PR it works on:
+
+```bash
+# Example: work on PR #42 in an isolated worktree
+git worktree add /workspace/pr-42 -b fix/pr-42-branch origin/main
+cd /workspace/pr-42
+# ... make changes ...
+km-github pr create --owner org --repo repo --title "..." --base main --head fix/pr-42-branch
+```
+
+This pattern prevents worktree conflicts when a shared-alias sandbox handles multiple
+repo reviews concurrently.
+
+---
+
+### Thread continuity and thread-bypass
+
+Phase 98 introduces the `km-github-threads` DynamoDB table to track per-PR agent sessions.
+
+**How it works:**
+
+1. On first dispatch to a PR (from bridge: `owner/repo#<number>`), the bridge creates a
+   thread record `{repo_key, pr_number} → {sandbox_id, agent_session_id, last_comment_id}`.
+2. On subsequent @-mentions in the SAME PR/issue thread, the bridge looks up the record and
+   re-dispatches to the same `agent_session_id` — the Claude turn continues where it left off,
+   with full prior-turn context.
+3. Thread-bypass: once a thread record exists for a PR, follow-up comments in that PR dispatch
+   WITHOUT requiring a fresh @-mention. This mirrors the Slack Phase 91.3 thread-bypass
+   behavior: threads are 1:1 conversations with the bot — re-@-mentioning was unnatural.
+
+**Table schema:**
+
+| Key | Type | Description |
+|---|---|---|
+| `repo_key` (PK) | string | `owner/repo` |
+| `pr_number` (SK) | number | PR or issue number |
+| `sandbox_id` | string | Current aliased sandbox ID |
+| `agent_session_id` | string | Claude session ID for resume |
+| `last_comment_id` | number | Last dispatched comment ID (idempotency) |
+| `ttl` | number | Unix epoch; record expires 7 days after last activity |
+
+**IAM:** The bridge Lambda has `dynamodb:GetItem`, `dynamodb:PutItem`, and
+`dynamodb:UpdateItem` on the `km-github-threads` table.
+
+---
+
+### Shared alias — multiple repos, one sandbox
+
+When two or more `github.repos` entries share the same explicit `alias`, all matching repos
+dispatch to the same sandbox. The sandbox handles them in separate git worktrees.
+
+```yaml
+github:
+  repos:
+    - match: my-org/frontend
+      alias: gh-shared        # explicit shared alias
+      profile: profiles/github-review.yaml
+      allow: [alice]
+
+    - match: my-org/backend
+      alias: gh-shared        # same alias → same sandbox
+      profile: profiles/github-review.yaml
+      allow: [alice]
+```
+
+**km doctor warnings:**
+
+| Situation | Warning |
+|---|---|
+| Entry without explicit alias whose default (`gh-{owner}-{repo}`) equals another entry's explicit alias | `alias collision: "gh-myorg-myrepo" — entry[0] default alias matches entry[1] explicit alias` |
+| Exact match entry shadowed by a glob that also covers it | `overlapping match: "org/repo" matches both entry[0] and entry[1] — entry[1] will never be reached` |
+| Two entries with the SAME explicit alias | No warning — intentional shared-sandbox pattern. |
+
+To intentionally share a sandbox across repos, always set `alias:` explicitly on all
+sharing entries. Do NOT rely on the default `gh-{owner}-{repo}` alias for shared-sandbox
+setups.
+
+---
+
+### Auto-resume — stopped sandbox woken by @-mention
+
+A stopped or paused aliased sandbox is automatically resumed when an allowlisted @-mention
+arrives.
+
+**Flow:**
+
+1. Bridge resolves `owner/repo` → alias via `github.repos`.
+2. Bridge queries the `alias-index` GSI on `km-sandboxes` — finds a STOPPED record.
+3. Bridge calls `ec2:StartInstances` on the instance (guarded by `km:managed=true` tag
+   condition on the IAM policy).
+4. Bridge enqueues the comment envelope to the sandbox's `github-inbound` FIFO queue
+   (queue URL preserved in the DDB row across stop/start cycles).
+5. After boot, the source-aware poller inside the sandbox drains the queued prompt and
+   dispatches a Claude turn — no manual `km resume` required.
+
+**Configure-once, stop, GitHub wakes it.** This pattern is ideal for cost-sensitive
+review sandboxes: configure the sandbox once, let it idle-stop after the TTL, and
+GitHub activity auto-resumes it.
+
+> Note: the bridge ensures only a SINGLE StartInstances call per delivery GUID (GUID
+> dedupe fires before the EC2 call). A sandbox already starting (state = PENDING) is
+> treated as warm — the envelope is enqueued and will drain once boot completes.
+
+CloudWatch log evidence of a successful auto-resume:
+```
+INFO  bridge: sandbox stopped; resuming alias=gh-org-repo instance_id=i-0abc123
+INFO  bridge: StartInstances OK; enqueued prompt to fifo queue
+```
+
+---
+
+### Cold-create with S3-staged profile and SOPS auth
+
+Phase 98 fixes the cold-create path that was broken in Phase 97.
+
+**What was broken:** The bridge generated a valid `sandbox_id` but used a wrong
+`artifact_prefix` (double-slash path) and the cold box couldn't self-authenticate without
+Bedrock credentials.
+
+**What Phase 98 does:**
+
+- `km init` now calls `PreStageGitHubProfiles` which uploads each `github.repos` profile to
+  `s3://<artifacts_bucket>/github-profiles/<slug>/profile.yaml` before any apply.
+- If `spec.secrets.sopsFile` is set in the profile, `km init` also uploads the SOPS-encrypted
+  secrets bundle to `s3://<artifacts_bucket>/github-profiles/<slug>/secrets.enc.yaml`.
+- The bridge generates `artifact_prefix = github-profiles/<slug>` (no double-slash).
+- The create-handler Lambda provisions the cold box using the S3-staged profile and injects
+  the SOPS bundle at boot (Phase 89 mechanism), giving the cold box Claude credentials without
+  Bedrock.
+
+**Operator step — encrypt a SOPS bundle with Claude credentials:**
+
+```bash
+# 1. Create a plaintext secrets file (NOT committed to git):
+cat > /tmp/github-review-secrets.yaml <<'EOF'
+claude:
+  # From `claude auth login` — ~/.claude/.credentials.json
+  access_token: "<your-claude-oauth-access-token>"
+  refresh_token: "<your-claude-oauth-refresh-token>"
+  # Optional: scoped to the review profile
+  organization_id: "<optional>"
+EOF
+
+# 2. Encrypt with the shared SOPS KMS key (get the key ARN from `km info`):
+SOPS_KMS_ARN=$(km info --json | jq -r '.platform.sops_kms_key_arn')
+sops --kms "$SOPS_KMS_ARN" --encrypt /tmp/github-review-secrets.yaml \
+  > profiles/github-review-secrets.enc.yaml
+
+# 3. Reference in profiles/github-review.yaml:
+cat >> profiles/github-review.yaml <<'EOF'
+spec:
+  secrets:
+    sopsFile: profiles/github-review-secrets.enc.yaml
+EOF
+
+# 4. Re-run km init to pre-stage the encrypted bundle to S3:
+km init --dry-run=false
+```
+
+The cold box decrypts the bundle at boot (KMS key ARN is in the profile) and writes the
+Claude OAuth credentials to `~/.claude/.credentials.json`. The poller can then dispatch
+Claude turns directly without Bedrock.
+
+---
+
+### Phase 98 deploy sequence (complete)
+
+This section supersedes the Phase 97 deploy sequence above. Run this in order:
+
+```bash
+# Step 1: CLEAN build of all Lambda zips.
+#   Memory: project_km_init_skips_existing_zips — must use 'make build-lambdas' not 'make build'
+#   to rebuild from the hardcoded lambdaBuilds() list. Avoids stale zips silently surviving.
+make build-lambdas
+
+# Step 2: Full terragrunt apply — new dynamodb-github-threads table + bridge IAM/env.
+#   This applies ALL modules including the new DDB table and the v1.1.0 bridge module.
+#   NOT --sidecars: env-block + IAM + new DDB table require a full terragrunt apply.
+#   Memory: feedback_km_init_full_apply — use km init --dry-run=false.
+km init --dry-run=false
+
+# Step 3: Refresh create-handler and source-aware poller binaries.
+#   --sidecars is safe here: no env-block changes, only binary refresh.
+km init --sidecars
+
+# Step 4: Verify km doctor.
+#   Expect: dynamodb-github-threads OK, lambda-github-bridge v1.1.0 IAM OK.
+#   No unexpected alias-collision WARNs for your config.
+km doctor
+
+# Step 5 (cold-create only): Encrypt and pre-stage the SOPS bundle.
+#   See "Cold-create with S3-staged profile and SOPS auth" above.
+#   Re-run 'km init --dry-run=false' after adding spec.secrets.sopsFile to the profile.
+
+# Step 6: Existing sandboxes must be recreated to gain the new queue, poller, and verbs.
+km destroy <sandbox-id> --remote --yes && km create profiles/github-review.yaml --alias <alias>
+```
+
+> **Why `km init --dry-run=false` and NOT `km init --sidecars` for Steps 2 and 5:**
+> `km init --sidecars` rebuilds binaries and forces Lambda cold-starts but does NOT apply
+> Terraform. The new `dynamodb-github-threads` table, the bridge v1.1.0 IAM grants
+> (EC2/DDB threads), and the Lambda env block (`KM_GITHUB_THREADS_TABLE`, `KM_ARTIFACTS_BUCKET`)
+> are all Terraform-managed resources — they only appear after a full `km init --dry-run=false`.
+
+---
+
+### Phase 98 troubleshooting
+
+#### Follow-up comment dispatched without agent context (continuity not working)
+
+1. Verify `km-github-threads` table exists: `aws dynamodb describe-table --table-name km-github-threads`.
+2. Check bridge Lambda env: `km github status` → look for `KM_GITHUB_THREADS_TABLE`.
+3. Confirm the table was applied: `km init --dry-run=false` re-applies if the module was skipped.
+4. Look for the thread record: the bridge logs `event=thread_created` on first dispatch and
+   `event=thread_resumed` on subsequent dispatches.
+
+#### Stopped sandbox not resuming (auto-resume not working)
+
+1. Check CloudWatch logs for `km-github-bridge` Lambda: look for `StartInstances` or
+   `bridge: sandbox stopped; resuming`.
+2. Verify the IAM policy includes `ec2:StartInstances` on the instance:
+   `aws iam simulate-principal-policy` or check the bridge Lambda role in the Console.
+3. Confirm the DDB row still carries `github_inbound_queue_url` (preserved across stop/start).
+4. If the sandbox was fully destroyed (not just stopped), no DDB row exists → cold-create
+   path fires instead.
+
+#### Cold-create: box boots but can't auth Claude (SOPS bundle missing)
+
+1. Verify the SOPS bundle was pre-staged: `aws s3 ls s3://<artifacts_bucket>/github-profiles/<slug>/`.
+2. Confirm `spec.secrets.sopsFile` is set in the profile and points to the `.enc.yaml` file.
+3. Re-run `km init --dry-run=false` after adding `sopsFile` — the pre-stage step runs on every `km init`.
+4. Confirm the SOPS KMS key ARN in the profile matches the install's KMS key (`km info`).
+
+#### km doctor WARN on alias collision for intentional shared-sandbox
+
+If you want two repos to share one sandbox (worktree-per-PR pattern), set `alias:` explicitly
+on BOTH entries. Auto-default aliases that happen to match an explicit alias trigger a
+`alias collision` WARN even if the behavior is what you want.
+
+```yaml
+# Correct: explicit shared alias on both entries → no WARN
+- match: my-org/frontend
+  alias: gh-myorg-shared
+  ...
+- match: my-org/backend
+  alias: gh-myorg-shared
+  ...
+
+# Wrong: one explicit, one auto-default → WARN "alias collision"
+- match: my-org/gh-myorg-myrepo    # auto-default: gh-myorg-gh-myorg-myrepo ← not a collision
+  ...
+- match: my-org/frontend
+  alias: gh-myorg-frontend         # explicit
+  ...
+```
+
+---
+
+### Phase 98 E2E verification checklist (GH-X-E2E)
+
+Run this checklist against a real repo where the GitHub App is installed after completing
+the deploy sequence above:
+
+**A. CONTINUITY** — @-mention the bot on a PR; after it replies, post a follow-up WITHOUT
+re-mentioning. Confirm the reply references prior-turn context and that `km-github-threads`
+has a row for `{owner/repo, pr_number}` with a non-empty `agent_session_id`.
+
+**B. WRITE-BACKS** — Trigger a request that causes the agent to run `km-github check` and
+`km-github pr create`. Confirm the check run AND the new PR appear in the GitHub UI with
+the correct conclusion and title.
+
+**C. SHARED-ALIAS** — Configure two `github.repos` entries with the same `alias:`. @-mention
+in each repo. Confirm both dispatches land on the SAME sandbox (check `km list`) in
+separate worktrees (distinct `/workspace/pr-<N>` paths visible via `km agent results`).
+
+**D. AUTO-RESUME** — Stop an aliased sandbox (`km pause <id>` or let idle-stop fire). @-mention
+its repo. Confirm CloudWatch logs show `StartInstances OK` and the prompt drains after boot
+with no manual `km resume`. Confirm no duplicate cold-create (check `km list` — only one
+sandbox for the alias).
+
+**E. COLD-CREATE** (optional but recommended) — @-mention a repo whose alias has NO sandbox.
+Confirm the create-handler provisions from the S3-staged profile, the box self-authenticates
+via the SOPS Claude credentials, and a PR review posts — fully automated.
+
+**No regression** — Confirm the Phase 97 warm-path comment-trigger review still works on a
+repo with an existing running sandbox (no code changed for the warm path).
