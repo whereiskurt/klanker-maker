@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 98-03-PLAN.md (shared-alias characterization + doctor alias-collision check)
-last_updated: "2026-06-07T14:52:22.993Z"
+stopped_at: Completed 98-01-PLAN.md (check + pr create verbs + worktree preamble)
+last_updated: "2026-06-07T14:52:51.721Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 113
   completed_phases: 99
   total_plans: 498
-  completed_plans: 456
+  completed_plans: 457
   percent: 91
 ---
 
@@ -489,6 +489,7 @@ Progress: [█████████░] 91%
 | Phase 97-github-comment-trigger-mvp P07 | 15 | 3 tasks | 5 files |
 | Phase 98-github-bridge-expansion P00 | 590 | 3 tasks | 12 files |
 | Phase 98-github-bridge-expansion P03 | 8min | 2 tasks | 3 files |
+| Phase 98-github-bridge-expansion P01 | 238s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1416,6 +1417,9 @@ Recent decisions affecting current work:
 - [Phase 98-github-bridge-expansion]: TestRegionalModulesIncludesGitHubThreads runs in normal suite untagged to continuously gate missing regionalModules() entry (prevents Phase 97 silent non-deploy footgun)
 - [Phase 98-github-bridge-expansion]: Use appcfg.GithubRepoEntry (not bridge.RepoEntry) in DetectGitHubAliasIssues — consistent with checkGitHubReposResolvable; avoids importing bridge into doctor.go
 - [Phase 98-github-bridge-expansion]: Intentional shared alias (multiple entries same explicit alias:) produces no WARN — supported GH-X-SHARED feature; only implicit-vs-explicit collision warns
+- [Phase 98-01]: checkRunOutput.Title uses check name as title (agent-friendly default, no separate flag)
+- [Phase 98-01]: runPRCreateWith receives stdout io.Writer for testability — html_url printed to stdout so agent can read new PR URL
+- [Phase 98-01]: Byte-identity golden re-captured (not test patched) for preamble expansion — intentional permanent change
 
 ### Roadmap Evolution
 
@@ -1539,6 +1543,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-07T14:52:22.982Z
-Stopped at: Completed 98-03-PLAN.md (shared-alias characterization + doctor alias-collision check)
+Last session: 2026-06-07T14:52:51.711Z
+Stopped at: Completed 98-01-PLAN.md (check + pr create verbs + worktree preamble)
 Resume file: None
