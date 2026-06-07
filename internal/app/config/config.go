@@ -369,6 +369,14 @@ type Config struct {
 	// Keys are dotted yaml paths (e.g. "region", "artifacts_bucket", "domain").
 	// Empty map when km-config.yaml is not found or key is absent in yaml.
 	YAMLDefaults map[string]string
+
+	// ConfigFilePath is the absolute path to the km-config.yaml file that was
+	// successfully loaded by Load(). Empty string when km-config.yaml was not
+	// found (first-install or Lambda env). Used by km init to derive the base
+	// directory for @file prompt resolution in github.commands entries (Phase 99 Plan 03):
+	//   configDir := filepath.Dir(cfg.ConfigFilePath)
+	// The path is populated from v2.ConfigFileUsed() after ReadInConfig succeeds.
+	ConfigFilePath string
 }
 
 // accountsYamlAuthoritativeKeys lists the viper keys for which km-config.yaml
@@ -480,8 +488,16 @@ func Load() (*Config, error) {
 			v2.AddConfigPath(repoRoot)
 		}
 	}
-	var yamlDefaults map[string]string
+	var (
+		yamlDefaults   map[string]string
+		configFilePath string
+	)
 	if err := v2.ReadInConfig(); err == nil {
+		// Capture the km-config.yaml path so callers can derive the base directory
+		// for @file resolution (Phase 99 Plan 03). v2.ConfigFileUsed() returns the
+		// absolute path after a successful ReadInConfig.
+		configFilePath = v2.ConfigFileUsed()
+
 		// Merge platform keys from v2 into v only when not already overridden by env.
 		for _, key := range []string{
 			"domain",
@@ -597,6 +613,7 @@ func Load() (*Config, error) {
 		ResourcePrefix:               v.GetString("resource_prefix"),
 		EmailSubdomain:               v.GetString("email_subdomain"),
 		YAMLDefaults:                 yamlDefaults,
+		ConfigFilePath:               configFilePath,
 	}
 
 	// ContainerSubstratesEnabled is tri-state via *bool: only populated when
