@@ -1,16 +1,10 @@
-//go:build phase98_wave0
-
 // resolve_phase98_test.go — Phase 98 characterization tests for resolve.go.
 //
-// BUILD TAG: phase98_wave0
-// This file extends the existing resolve_test.go without touching it.
 // TestResolve_SharedAlias is a GREEN characterization test (resolve.go already
-// supports shared aliases via explicit Alias field). The build tag guards it
-// here for wave isolation; once 98-02 ships this file loses its tag.
-//
-// HANDOFF TO 98-02:
-//   1. Verify TestResolve_SharedAlias passes with the existing resolve.go.
-//   2. Remove the `//go:build phase98_wave0` constraint from THIS file.
+// supports shared aliases via explicit Alias field). This pins the
+// "one sandbox handles multiple repos" contract used by the shared-alias
+// feature (one sandbox serving myorg/frontend AND myorg/backend via alias
+// "gh-shared"). Tag removed by 98-03 per plan handoff note.
 package bridge_test
 
 import (
