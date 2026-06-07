@@ -56,3 +56,25 @@ type GitHubReactor interface {
 	// content is the emoji keyword, e.g. "eyes".
 	AddReaction(ctx context.Context, installationID, owner, repo string, commentID int64, content string) error
 }
+
+// GitHubThreadStore tracks (repo, number) → {sandbox_id, agent_session_id} mappings
+// backed by the km-github-threads DynamoDB table. Enables follow-up @-mentions in the
+// same PR/issue to continue the same agent session (GH-X-CONTINUITY) and allows replies
+// in a known thread to bypass the re-@-mention requirement (GH-X-THREADBYPASS).
+//
+// Continuity data lives ONLY in km-github-threads — never in km-sandboxes — to avoid
+// the SandboxMetadata lossy round-trip footgun.
+type GitHubThreadStore interface {
+	// LookupSandbox returns the sandbox_id and agent_session_id for (repo, number).
+	// Returns ("", "", nil) when the row is absent (first dispatch, not an error).
+	LookupSandbox(ctx context.Context, repo string, number int) (sandboxID, sessionID string, err error)
+
+	// Upsert creates a new (repo, number) → sandbox_id row only if one does not
+	// already exist (attribute_not_exists condition). ConditionalCheckFailed is
+	// treated as idempotent success — the row already exists with valid data.
+	Upsert(ctx context.Context, repo string, number int, sandboxID string) error
+
+	// UpdateSession sets agent_session_id on an existing (repo, number) row.
+	// Called by the poller after each agent turn completes.
+	UpdateSession(ctx context.Context, repo string, number int, sessionID string) error
+}

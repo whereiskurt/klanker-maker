@@ -54,6 +54,14 @@ type DynamoQueryPutter interface {
 	Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
 }
 
+// DynamoGitHubThreadClient is a superset of DynamoQueryPutter that adds UpdateItem,
+// required by DynamoGitHubThreadStore.UpdateSession. Kept separate to avoid widening
+// DynamoQueryPutter (which would force all existing fakes to implement UpdateItem).
+type DynamoGitHubThreadClient interface {
+	DynamoQueryPutter
+	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+}
+
 // ErrNonceReplayed is returned by DynamoGitHubNonceStore when the key was already inserted.
 var ErrNonceReplayed = errors.New("github-bridge: delivery GUID already seen (replay)")
 
@@ -392,6 +400,106 @@ func (r *InstallationReactor) httpClient() *http.Client {
 // AddReaction mints an installation token and POSTs a reaction to the comment.
 // Returns nil on success or already-reacted (idempotent). Errors are logged
 // by the caller but do NOT change the 200 response (Pitfall 3 mitigation).
+// ============================================================
+// DynamoGitHubThreadStore — GitHubThreadStore backed by km-github-threads
+// ============================================================
+
+// DynamoGitHubThreadStore implements GitHubThreadStore using the km-github-threads
+// DynamoDB table (created in 98-00). Key: hash=repo(S), range=number(N).
+// Mirrors DDBThreadStore from pkg/slack/bridge/aws_adapters.go but uses a composite
+// key of repo (string) + number (int) instead of channel_id + thread_ts.
+//
+// Continuity data lives ONLY here — never in km-sandboxes — to sidestep the
+// SandboxMetadata lossy round-trip footgun (RESEARCH Pitfall 5).
+type DynamoGitHubThreadStore struct {
+	Client    DynamoGitHubThreadClient
+	TableName string // e.g. "km-github-threads" (from KM_GITHUB_THREADS_TABLE env var)
+}
+
+// LookupSandbox returns the sandbox_id and agent_session_id for (repo, number).
+// Returns ("", "", nil) when the row is absent — first dispatch is not an error.
+func (s *DynamoGitHubThreadStore) LookupSandbox(ctx context.Context, repo string, number int) (string, string, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: awssdk.String(s.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"repo":   &dynamodbtypes.AttributeValueMemberS{Value: repo},
+			"number": &dynamodbtypes.AttributeValueMemberN{Value: strconv.Itoa(number)},
+		},
+		ProjectionExpression: awssdk.String("sandbox_id, agent_session_id"),
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("github-threads: lookup (%s, %d): %w", repo, number, err)
+	}
+	if len(out.Item) == 0 {
+		return "", "", nil // absent → first dispatch
+	}
+
+	sandboxID := ""
+	if v, ok := out.Item["sandbox_id"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			sandboxID = sv.Value
+		}
+	}
+	sessionID := ""
+	if v, ok := out.Item["agent_session_id"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			sessionID = sv.Value
+		}
+	}
+	return sandboxID, sessionID, nil
+}
+
+// Upsert creates a new (repo, number) → sandbox_id row only if one does not already
+// exist (attribute_not_exists(repo) condition). ConditionalCheckFailed means the row
+// already exists — that is idempotent success (do NOT overwrite agent_session_id set
+// by the poller, mirroring the Slack bridge behavior).
+// ttl_expiry is set to now + 30 days.
+func (s *DynamoGitHubThreadStore) Upsert(ctx context.Context, repo string, number int, sandboxID string) error {
+	ttlExpiry := time.Now().Unix() + 30*24*3600
+
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: awssdk.String(s.TableName),
+		Item: map[string]dynamodbtypes.AttributeValue{
+			"repo":       &dynamodbtypes.AttributeValueMemberS{Value: repo},
+			"number":     &dynamodbtypes.AttributeValueMemberN{Value: strconv.Itoa(number)},
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+			"ttl_expiry": &dynamodbtypes.AttributeValueMemberN{Value: strconv.FormatInt(ttlExpiry, 10)},
+		},
+		ConditionExpression: awssdk.String("attribute_not_exists(repo)"),
+	})
+	if err != nil {
+		var condFailed *dynamodbtypes.ConditionalCheckFailedException
+		if errors.As(err, &condFailed) {
+			// Row already exists — the thread is live and sandbox_id is already set.
+			// This is the idempotent success path; do NOT overwrite.
+			return nil
+		}
+		return fmt.Errorf("github-threads: upsert (%s, %d): %w", repo, number, err)
+	}
+	return nil
+}
+
+// UpdateSession sets agent_session_id on the (repo, number) row via an UpdateItem.
+// Called by the sandbox poller after each agent turn completes so future turns resume
+// the same session.
+func (s *DynamoGitHubThreadStore) UpdateSession(ctx context.Context, repo string, number int, sessionID string) error {
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(s.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"repo":   &dynamodbtypes.AttributeValueMemberS{Value: repo},
+			"number": &dynamodbtypes.AttributeValueMemberN{Value: strconv.Itoa(number)},
+		},
+		UpdateExpression: awssdk.String("SET agent_session_id = :sid"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":sid": &dynamodbtypes.AttributeValueMemberS{Value: sessionID},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("github-threads: update-session (%s, %d): %w", repo, number, err)
+	}
+	return nil
+}
+
 func (r *InstallationReactor) AddReaction(ctx context.Context, installationID, owner, repo string, commentID int64, content string) error {
 	// Step 1: mint App JWT.
 	jwtToken, err := pkggithub.GenerateGitHubAppJWT(r.AppClientID, r.PrivateKeyPEM)

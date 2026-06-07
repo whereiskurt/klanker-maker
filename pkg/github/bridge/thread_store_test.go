@@ -1,22 +1,7 @@
-//go:build phase98_wave0
-
-// thread_store_test.go — RED unit tests for DynamoGitHubThreadStore.
+// thread_store_test.go — GREEN unit tests for DynamoGitHubThreadStore (98-02).
 //
-// BUILD TAG: phase98_wave0
-// This file is excluded from normal builds. DynamoGitHubThreadStore is NOT YET
-// IMPLEMENTED (98-02 adds it). This is the Wave 0 Nyquist gate.
-//
-// HANDOFF TO 98-02:
-//   1. Implement DynamoGitHubThreadStore in pkg/github/bridge/ with:
-//        type DynamoGitHubThreadStore struct {
-//            Client    DynamoGitHubThreadClient   // superset of DynamoQueryPutter; adds UpdateItem
-//            TableName string
-//        }
-//        func (s *DynamoGitHubThreadStore) LookupSandbox(ctx context.Context, repo string, number int) (sandboxID, sessionID string, err error)
-//        func (s *DynamoGitHubThreadStore) Upsert(ctx context.Context, repo string, number int, sandboxID string) error
-//        func (s *DynamoGitHubThreadStore) UpdateSession(ctx context.Context, repo string, number int, sessionID string) error
-//   2. Also add the GitHubThreadStore interface and DynamoGitHubThreadClient interface to interfaces.go.
-//   3. Remove the `//go:build phase98_wave0` constraint from THIS file.
+// Implements: GH-X-CONTINUITY requirement.
+// Tests: Upsert (conditional PutItem), LookupSandbox (GetItem), UpdateSession (UpdateItem).
 package bridge_test
 
 import (
