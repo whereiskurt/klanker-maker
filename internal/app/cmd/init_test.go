@@ -557,6 +557,49 @@ func TestRegionalModulesIncludesGitHubBridge(t *testing.T) {
 	}
 }
 
+// TestRegionalModulesIncludesGitHubThreads guards Phase 98 GH-X-CONTINUITY deploy:
+// the km-github-threads DynamoDB table module MUST appear in regionalModules() so
+// `km init` applies it automatically. A module with a live terragrunt unit but missing
+// from this list is silently never deployed (same Phase-97 footgun that TestRegionalModulesIncludesGitHubBridge
+// closed for the bridge Lambda). This test is RED until 98-04 adds the entry.
+//
+// Ordering requirement:
+//   - dynamodb-github-threads must appear after dynamodb-sandboxes (bridge reads both)
+//   - dynamodb-github-threads must appear before lambda-github-bridge (bridge writes to it at runtime)
+func TestRegionalModulesIncludesGitHubThreads(t *testing.T) {
+	mods := cmd.RegionalModules(t.TempDir())
+
+	githubThreadsIdx := -1
+	sandboxesIdx := -1
+	githubBridgeIdx := -1
+	for i, m := range mods {
+		switch m.Name {
+		case "dynamodb-github-threads":
+			githubThreadsIdx = i
+		case "dynamodb-sandboxes":
+			sandboxesIdx = i
+		case "lambda-github-bridge":
+			githubBridgeIdx = i
+		}
+	}
+
+	if githubThreadsIdx == -1 {
+		t.Fatal("dynamodb-github-threads not found in regionalModules() — 98-04 must add it")
+	}
+
+	// Must appear after dynamodb-sandboxes.
+	if sandboxesIdx >= 0 && githubThreadsIdx <= sandboxesIdx {
+		t.Errorf("dynamodb-github-threads (idx %d) must appear after dynamodb-sandboxes (idx %d)",
+			githubThreadsIdx, sandboxesIdx)
+	}
+
+	// Must appear before lambda-github-bridge.
+	if githubBridgeIdx >= 0 && githubThreadsIdx >= githubBridgeIdx {
+		t.Errorf("dynamodb-github-threads (idx %d) must appear before lambda-github-bridge (idx %d)",
+			githubThreadsIdx, githubBridgeIdx)
+	}
+}
+
 // TestLambdaBuildsIncludesGitHubBridge guards GH-BRIDGE-DEPLOY: `km init` builds
 // Lambda zips from a hardcoded list (buildLambdaZips). A Lambda with a live
 // terragrunt unit but missing from this list is silently never built, so apply
