@@ -908,7 +908,17 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		}
 		params.GitHubSSMPath = fmt.Sprintf("/%s/sandbox/%s/github-token", ec2ResourcePrefix, sandboxID)
 		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
-		compiledPerms := pkggithub.CompilePermissions(nil)
+		// Gap D fix (98-06): bake the full github-inbound write permission set into the
+		// refresher schedule input so the EventBridge schedule can actually mint tokens.
+		// The old code passed nil (→ empty perms {}), so the refresher always received
+		// an empty permissions map and minted a token with no permissions at all — making
+		// every km-github call fail. Use GitHubInboundWritePerms() (the canonical set:
+		// issues:write, pull_requests:write, contents:write, checks:write). The create-
+		// time token mint already applies the 422-retry-without-contents:write robustness
+		// fix when the installation only grants contents:read; the schedule carries the
+		// full intended set and the refresher similarly benefits from the robustness fix
+		// once it is applied there too.
+		compiledPerms := pkggithub.GitHubInboundWritePerms()
 		params.GitHubPermissions = permissionsToHCL(compiledPerms)
 	}
 
@@ -1030,7 +1040,9 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		params.HasGitHub = true
 		params.GitHubSSMPath = fmt.Sprintf("/%s/sandbox/%s/github-token", ecsResourcePrefix, sandboxID)
 		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
-		compiledPerms := pkggithub.CompilePermissions(nil)
+		// Gap D fix (98-06): use full inbound write perms (not nil/empty).
+		// See the EC2 path comment above for rationale.
+		compiledPerms := pkggithub.GitHubInboundWritePerms()
 		params.GitHubPermissions = permissionsToHCL(compiledPerms)
 	}
 

@@ -2411,6 +2411,19 @@ func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedR
 					}
 				}
 				sort.Strings(owners)
+				// Gap D fix (98-06): before returning ErrAmbiguousInstallation, check
+				// whether the operator has pinned a single installation via the legacy
+				// /config/github/installation-id key. If set, that explicit pin wins
+				// over the enumerated ambiguity — the refresher schedule carries a
+				// non-empty installation_id (not the empty string that caused every
+				// km-github-token-refresher invocation to fail with ParameterNotFound).
+				pinnedOut, pinnedErr := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+					Name:           aws.String(ssmPrefix + "config/github/installation-id"),
+					WithDecryption: &withDecryption,
+				})
+				if pinnedErr == nil && pinnedOut.Parameter != nil && aws.ToString(pinnedOut.Parameter.Value) != "" {
+					return aws.ToString(pinnedOut.Parameter.Value), nil
+				}
 				return "", &ErrAmbiguousInstallation{Candidates: owners}
 			}
 			// n == 0: fall through to legacy lookup.
@@ -2483,7 +2496,33 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sa
 	perms := githubpkg.CompilePermissions(permissions)
 	token, err := githubpkg.ExchangeForInstallationToken(ctx, jwtToken, installationID, allowedRepos, perms)
 	if err != nil {
-		return "", fmt.Errorf("exchange JWT for installation token: %w", err)
+		// Gap D fix (98-06): a 422 from GitHub means at least one requested permission
+		// level is not granted by the installation (e.g. contents:write on a
+		// contents:read install). Rather than 422-ing the ENTIRE token mint (which
+		// would block all comment/review posting), retry once with a reduced permission
+		// set that drops contents:write. Comment and review verbs do not need
+		// contents:write — only push does. If the reduced set also fails, surface the
+		// error so the operator can fix the App permissions.
+		//
+		// This makes review-only sandboxes work against contents:read installations
+		// regardless of what the operator has in their githubWriteVerbs list.
+		if strings.Contains(err.Error(), "422") {
+			// Drop contents:write and retry. Keep other permissions unchanged.
+			reducedPerms := make(map[string]string, len(perms))
+			for k, v := range perms {
+				if k == "contents" && v == "write" {
+					continue // drop the over-broad contents:write
+				}
+				reducedPerms[k] = v
+			}
+			log.Warn().Str("sandbox_id", sandboxID).
+				Str("installation_id", installationID).
+				Msg("generateAndStoreGitHubToken: 422 on full permission set, retrying without contents:write")
+			token, err = githubpkg.ExchangeForInstallationToken(ctx, jwtToken, installationID, allowedRepos, reducedPerms)
+		}
+		if err != nil {
+			return "", fmt.Errorf("exchange JWT for installation token: %w", err)
+		}
 	}
 
 	if err := githubpkg.WriteTokenToSSM(ctx, ssmClient, strings.Trim(ssmPrefix, "/"), sandboxID, token, kmsKeyARN, false); err != nil {
