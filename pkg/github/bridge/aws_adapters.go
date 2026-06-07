@@ -789,6 +789,37 @@ func (s *DynamoGitHubThreadStore) UpdateSession(ctx context.Context, repo string
 	return nil
 }
 
+// InvalidateStaleSession overwrites sandbox_id and removes agent_session_id on the
+// (repo, number) row when the stored sandbox_id no longer matches the live sandbox.
+//
+// Gap E fix (98-06): a PR row from a destroyed sandbox carries a stale session ID
+// that cannot be resumed (claude exits 1: "No conversation found"). Without this
+// invalidation, every FIFO dispatch for the PR would fail, blocking the queue head.
+// The row is unconditionally overwritten — no attribute_not_exists guard — because
+// the caller has already determined that the row is stale.
+func (s *DynamoGitHubThreadStore) InvalidateStaleSession(ctx context.Context, repo string, number int, newSandboxID string) error {
+	ttlExpiry := time.Now().Unix() + 30*24*3600
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(s.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"repo":   &dynamodbtypes.AttributeValueMemberS{Value: repo},
+			"number": &dynamodbtypes.AttributeValueMemberN{Value: strconv.Itoa(number)},
+		},
+		// Overwrite sandbox_id with the current box; REMOVE stale agent_session_id so
+		// the next dispatch runs a fresh session instead of failing with --resume.
+		// Also refresh the TTL so the row doesn't expire before the next turn.
+		UpdateExpression: awssdk.String("SET sandbox_id = :sid, ttl_expiry = :ttl REMOVE agent_session_id"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":sid": &dynamodbtypes.AttributeValueMemberS{Value: newSandboxID},
+			":ttl": &dynamodbtypes.AttributeValueMemberN{Value: strconv.FormatInt(ttlExpiry, 10)},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("github-threads: invalidate-stale-session (%s, %d): %w", repo, number, err)
+	}
+	return nil
+}
+
 func (r *InstallationReactor) AddReaction(ctx context.Context, installationID, owner, repo string, commentID int64, content string) error {
 	// Step 1: mint App JWT.
 	jwtToken, err := pkggithub.GenerateGitHubAppJWT(r.AppClientID, r.PrivateKeyPEM)

@@ -115,4 +115,14 @@ type GitHubThreadStore interface {
 	// UpdateSession sets agent_session_id on an existing (repo, number) row.
 	// Called by the poller after each agent turn completes.
 	UpdateSession(ctx context.Context, repo string, number int, sessionID string) error
+
+	// InvalidateStaleSession overwrites the sandbox_id and clears agent_session_id
+	// on a (repo, number) row whose stored sandbox_id no longer matches the current
+	// live sandbox (box was recreated). This prevents a cross-box --resume that would
+	// always fail with "No conversation found" and head-of-line block the FIFO queue.
+	//
+	// Gap E fix (98-06): called by Handle() when LookupSandbox returns a sandbox_id
+	// that differs from the alias-resolved current sandbox. Non-fatal — errors are
+	// logged but do not abort dispatch.
+	InvalidateStaleSession(ctx context.Context, repo string, number int, newSandboxID string) error
 }

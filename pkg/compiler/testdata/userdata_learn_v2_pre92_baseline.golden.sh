@@ -2443,6 +2443,36 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
         > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
       echo \$? > '$RUN_DIR/exit_code'
     " || true
+
+    # Gap E fix (98-06): if --resume failed with "No conversation found" (stale or
+    # cross-box session ID), retry ONCE without --resume so the turn is not stranded.
+    # The stale session_id caused exit 1 + head-of-line blocking of the FIFO queue
+    # in the 2026-06-07 UAT (poller spun 1m36s CPU, stopped polling entirely).
+    # Detection: non-zero exit AND stderr contains the Claude "No conversation found" string.
+    RUN_EXIT_FIRST=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
+    if [ "$RUN_EXIT_FIRST" -ne 0 ] && [ -n "$RESUME_ARG" ] && \
+       grep -q "No conversation found" "$RUN_DIR/stderr.log" 2>/dev/null; then
+      echo "[km-github-inbound-poller] WARN: --resume session not found (${GITHUB_SESSION:0:8}...), retrying as fresh session — repo=$REPO PR=#$NUMBER"
+      # Clear the stale exit/output before retry.
+      rm -f "$RUN_DIR/output.json" "$RUN_DIR/exit_code"
+      # Also clear the stale DDB session row so the next dispatch doesn't retry --resume.
+      if [ -n "$REPO" ] && [ -n "$NUMBER" ]; then
+        aws dynamodb update-item \
+          --table-name "$GITHUB_THREADS_TABLE" \
+          --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
+          --update-expression "REMOVE agent_session_id" \
+          --region "$REGION" 2>/dev/null || true
+      fi
+      sudo -u sandbox bash -lc "
+        set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        cd /workspace 2>/dev/null || true
+        claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
+          --dangerously-skip-permissions \
+          > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+        echo \$? > '$RUN_DIR/exit_code'
+      " || true
+    fi
   fi
   rm -f "$PROMPT_FILE"
 

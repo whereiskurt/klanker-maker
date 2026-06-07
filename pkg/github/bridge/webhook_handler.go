@@ -184,10 +184,16 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	// If (repo, number) is already tracked in km-github-threads, skip the
 	// mention requirement. Mirrors Phase 91.3 Slack thread-bypass logic.
 	// Threads == nil → Phase 97 behavior (mention always required).
+	//
+	// threadStoredSandboxID holds the sandbox_id from the continuity row. It is
+	// compared with the alias-resolved sandbox_id in the dispatch block below;
+	// if they differ (box recreated), InvalidateStaleSession is called (Gap E fix).
 	threadKnown := false
+	threadStoredSandboxID := ""
 	if h.Threads != nil {
 		if sid, _, lookupErr := h.Threads.LookupSandbox(ctx, payload.Repository.FullName, payload.Issue.Number); lookupErr == nil && sid != "" {
 			threadKnown = true
+			threadStoredSandboxID = sid
 			h.log().Debug("github-bridge: known thread; bypassing mention check",
 				"repo", payload.Repository.FullName,
 				"number", payload.Issue.Number,
@@ -269,6 +275,24 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	if rws, ok := h.Resolver.(SandboxAliasResolverWithStatus); ok {
 		// Extended path: status-aware dispatch.
 		sandboxID, status, resolveErr := rws.ResolveByAliasWithStatus(ctx, alias)
+
+		// Gap E fix (98-06): if the continuity row holds a sandbox_id from a previous
+		// (now destroyed) box, invalidate it so the next dispatch does not carry a
+		// cross-box --resume that always fails with "No conversation found". This
+		// comparisons uses the sandbox_id stored in the thread row (threadStoredSandboxID,
+		// set in Step 4b) vs the freshly alias-resolved sandbox_id.
+		if resolveErr == nil && h.Threads != nil &&
+			threadStoredSandboxID != "" && threadStoredSandboxID != sandboxID {
+			h.log().Info("github-bridge: stale continuity row (sandbox recreated); invalidating session",
+				"stored_sandbox_id", threadStoredSandboxID,
+				"current_sandbox_id", sandboxID,
+				"repo", payload.Repository.FullName, "number", payload.Issue.Number)
+			if invErr := h.Threads.InvalidateStaleSession(ctx,
+				payload.Repository.FullName, payload.Issue.Number, sandboxID); invErr != nil {
+				h.log().Warn("github-bridge: InvalidateStaleSession failed (non-fatal)", "err", invErr)
+			}
+		}
+
 		if resolveErr != nil {
 			// Alias not found → cold-create. The alias is truly absent from DDB — no
 			// second sandbox risk (a stopped sandbox holds its alias row).
