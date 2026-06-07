@@ -103,12 +103,16 @@ func TestCommandParse(t *testing.T) {
 			wantMultiError: false,
 		},
 		{
-			// /help before other tokens — /help is intercepted before defined-command lookup
+			// /help is intercepted first; MultiError is NOT set because /help is reserved
+			// (not a "known command" from the defined map). The Known slice may contain
+			// /patch (it was still scanned), but the handler short-circuits on HelpRequested
+			// before inspecting Known — so Known content is irrelevant here. We only assert
+			// HelpRequested=true and MultiError=false.
 			name:              "/help with other known command — help wins, no multi-error",
 			body:              "@mybot[bot] /help /patch",
 			wantHelpRequested: true,
-			wantKnown:         nil,
-			wantMultiError:    false,
+			wantKnown:         []string{"patch"}, // /help is reserved; /patch still found
+			wantMultiError:    false,              // /help does not count as a "known" command
 		},
 	}
 

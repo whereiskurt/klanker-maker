@@ -28,6 +28,11 @@ type RepoEntry struct {
 	// Allow is the explicit GitHub login allowlist. Deny-by-default:
 	// a comment from a login not in this list is silently ignored.
 	Allow []string `json:"allow,omitempty"`
+
+	// DefaultCommand is the per-repo default command name. When set, command-less
+	// comments dispatch using this command's prompt+routing instead of free-form.
+	// Overrides the install-wide github.default_command. Must name a defined command.
+	DefaultCommand string `json:"default_command,omitempty"`
 }
 
 // Resolve maps a repository full name (e.g. "myorg/myrepo") to its
