@@ -1224,6 +1224,83 @@ func TestRunInitPlan_BuildsLambdaZips(t *testing.T) {
 	})
 }
 
+// TestDoctorGitHubAliasCollision exercises the DetectGitHubAliasIssues helper
+// (doctor.go). The helper is pure config-scanning logic — no AWS calls needed.
+// Four cases per the 98-03 plan behavior spec:
+//  1. Alias collision: an alias-omitting entry whose default (gh-{owner}-{repo})
+//     equals another entry's explicit alias → WARN "alias collision".
+//  2. Match overlap: an exact entry and a glob entry that both match a plausible
+//     repo (e.g. "owner/repo" + "owner/*") → WARN "overlapping match".
+//  3. Intentional shared alias: two entries with the SAME explicit alias →
+//     no warning (supported shared-sandbox feature).
+//  4. Empty config: no entries → no output (silent, dormant-by-default).
+func TestDoctorGitHubAliasCollision(t *testing.T) {
+	t.Run("alias_collision_warns", func(t *testing.T) {
+		entries := []config.GithubRepoEntry{
+			// Entry 0: no alias — default will be "gh-myorg-myrepo"
+			{Match: "myorg/myrepo", Profile: "github-review"},
+			// Entry 1: explicit alias that equals the auto-default above → collision
+			{Match: "myorg/other", Alias: "gh-myorg-myrepo", Profile: "github-review"},
+		}
+		issues := cmd.DetectGitHubAliasIssues(entries)
+		if len(issues) == 0 {
+			t.Fatal("expected alias collision WARN, got no issues")
+		}
+		found := false
+		for _, iss := range issues {
+			if strings.Contains(iss, "alias collision") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected issue containing 'alias collision'; got %v", issues)
+		}
+	})
+
+	t.Run("match_overlap_warns", func(t *testing.T) {
+		entries := []config.GithubRepoEntry{
+			// Exact entry
+			{Match: "myorg/myrepo", Alias: "gh-exact", Profile: "github-review"},
+			// Glob entry that also covers myorg/myrepo
+			{Match: "myorg/*", Alias: "gh-glob", Profile: "github-review"},
+		}
+		issues := cmd.DetectGitHubAliasIssues(entries)
+		if len(issues) == 0 {
+			t.Fatal("expected match-overlap WARN, got no issues")
+		}
+		found := false
+		for _, iss := range issues {
+			if strings.Contains(iss, "overlapping match") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected issue containing 'overlapping match'; got %v", issues)
+		}
+	})
+
+	t.Run("intentional_shared_alias_no_warn", func(t *testing.T) {
+		entries := []config.GithubRepoEntry{
+			// Both use the same EXPLICIT alias → intentional shared-sandbox, no warning
+			{Match: "myorg/frontend", Alias: "gh-shared", Profile: "github-review"},
+			{Match: "myorg/backend", Alias: "gh-shared", Profile: "github-review"},
+		}
+		issues := cmd.DetectGitHubAliasIssues(entries)
+		if len(issues) != 0 {
+			t.Errorf("intentional shared alias should produce no warnings; got %v", issues)
+		}
+	})
+
+	t.Run("empty_entries_no_output", func(t *testing.T) {
+		issues := cmd.DetectGitHubAliasIssues(nil)
+		if len(issues) != 0 {
+			t.Errorf("empty entries should produce no warnings; got %v", issues)
+		}
+	})
+}
+
 // TestFetchAndUploadSops exercises the fetchAndUploadSops helper using PATH
 // shims (executable shell scripts named aws/curl) so tests run without real
 // network access or AWS credentials.
