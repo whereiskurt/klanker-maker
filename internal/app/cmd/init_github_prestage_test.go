@@ -1,21 +1,6 @@
-//go:build phase98_wave0
-
-// init_github_prestage_test.go — RED unit tests for km init GitHub profile pre-staging.
+// init_github_prestage_test.go — Unit tests for km init GitHub profile pre-staging.
 //
-// BUILD TAG: phase98_wave0
-// This file is excluded from normal builds. preStageGitHubProfiles is NOT YET
-// IMPLEMENTED (98-04 adds it). This is the Wave 0 Nyquist gate.
-//
-// HANDOFF TO 98-04:
-//   1. Implement preStageGitHubProfiles(ctx context.Context, cfg *config.Config,
-//      artifactBucket string, uploader S3ProfileUploader) error in init.go.
-//   2. For each unique profile slug from cfg.GitHub.Repos entries, upload:
-//        s3://{artifactBucket}/github-profiles/{slug}/.km-profile.yaml
-//      Dedup: if multiple repos share the same profile slug, upload only once.
-//   3. When profile specifies spec.secrets.sopsFile, also upload:
-//        s3://{artifactBucket}/github-profiles/{slug}/.km-secrets-bundle.enc.yaml
-//   4. Export S3ProfileUploader interface (minimal: PutObject) for DI.
-//   5. Remove the `//go:build phase98_wave0` constraint from THIS file.
+// Tests: TestPreStageGitHubProfiles_* (GH-COLD-CREATE defect 3).
 package cmd_test
 
 import (

@@ -287,6 +287,15 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			// Phase 98-00: DynamoDB github-threads table mapping (repo, number) →
+			// {sandbox_id, agent_session_id} for GitHub PR thread continuity and
+			// @-mention bypass (GH-X-CONTINUITY + GH-X-THREADBYPASS). Must apply
+			// before lambda-github-bridge (bridge writes to it at runtime).
+			name:    "dynamodb-github-threads",
+			dir:     filepath.Join(regionDir, "dynamodb-github-threads"),
+			envReqs: nil,
+		},
+		{
 			// Phase 63: Slack-notify bridge Lambda with Function URL (auth=NONE;
 			// Ed25519 + nonce provide application-layer auth). Depends on
 			// dynamodb-identities, dynamodb-sandboxes, and dynamodb-slack-nonces.
@@ -312,6 +321,122 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: []string{"KM_ROUTE53_ZONE_ID"},
 		},
 	}
+}
+
+// ============================================================
+// preStageGitHubProfiles — km init GitHub profile pre-staging
+// ============================================================
+
+// GitHubRepoConfig is the config-layer representation of one github.repos entry
+// as consumed by preStageGitHubProfiles. It mirrors config.GithubRepoEntry but
+// adds SOPSFile so the pre-stage step can upload the encrypted secrets bundle
+// alongside the profile YAML.
+//
+// SOPSFile is the local path to a SOPS-encrypted secrets bundle (.enc.yaml).
+// When non-empty, PreStageGitHubProfiles also uploads the bundle so the
+// create-handler can inject it into the cold box at boot (Phase 89 mechanism).
+type GitHubRepoConfig struct {
+	Match    string
+	Alias    string
+	Profile  string
+	SOPSFile string // optional; path to SOPS-encrypted secrets bundle on disk
+}
+
+// S3ProfileUploader is the narrow S3 interface used by PreStageGitHubProfiles.
+// *s3.Client satisfies this interface.
+type S3ProfileUploader interface {
+	PutObject(ctx context.Context, bucket, key string, body []byte) error
+}
+
+// s3ProfileUploaderClient wraps *s3.Client to satisfy S3ProfileUploader.
+type s3ProfileUploaderClient struct {
+	inner *s3.Client
+}
+
+func (c *s3ProfileUploaderClient) PutObject(ctx context.Context, bucket, key string, body []byte) error {
+	_, err := c.inner.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Body:   bytes.NewReader(body),
+	})
+	return err
+}
+
+// PreStageGitHubProfiles uploads one profile YAML (and optional SOPS bundle)
+// per unique profile slug to S3 so the create-handler can fetch it during a
+// cold-create triggered by the GitHub bridge.
+//
+// For each UNIQUE profile slug across repos (deduped by slug):
+//   - uploads {artifactBucket}/github-profiles/{slug}/.km-profile.yaml
+//   - if the repo entry has a SOPSFile set: also uploads
+//     {artifactBucket}/github-profiles/{slug}/.km-secrets-bundle.enc.yaml
+//
+// Profile YAML is read from disk at profiles/{slug}.yaml relative to the
+// process working directory (km always runs from the repo root). Missing files
+// are uploaded as empty bytes rather than returning an error — the operator is
+// warned so they can stage the file manually.
+//
+// This function is called from runInit after the env-export block, gated on
+// cfg.Github.Repos being non-empty so it is dormant for installs without github.repos.
+func PreStageGitHubProfiles(ctx context.Context, repos []GitHubRepoConfig, artifactBucket string, uploader S3ProfileUploader) error {
+	if len(repos) == 0 {
+		return nil
+	}
+
+	// Dedup: track which slugs have already been uploaded.
+	uploaded := make(map[string]bool)
+
+	for _, repo := range repos {
+		slug := githubProfileSlug(repo.Profile)
+		if uploaded[slug] {
+			// Already staged — skip (dedup by slug).
+			continue
+		}
+		uploaded[slug] = true
+
+		// Read profile YAML from disk: profiles/{slug}.yaml
+		profileKey := "github-profiles/" + slug + "/.km-profile.yaml"
+		profileData := readFileOrEmpty("profiles/" + slug + ".yaml")
+		if err := uploader.PutObject(ctx, artifactBucket, profileKey, profileData); err != nil {
+			return fmt.Errorf("km init: pre-stage github profile %s: %w", slug, err)
+		}
+
+		// If the repo entry has a SOPS bundle configured, upload it too.
+		if repo.SOPSFile != "" {
+			bundleKey := "github-profiles/" + slug + "/.km-secrets-bundle.enc.yaml"
+			bundleData := readFileOrEmpty(repo.SOPSFile)
+			if err := uploader.PutObject(ctx, artifactBucket, bundleKey, bundleData); err != nil {
+				return fmt.Errorf("km init: pre-stage github sops bundle %s: %w", slug, err)
+			}
+		}
+	}
+	return nil
+}
+
+// githubProfileSlug normalises a profile name/path into a directory-safe slug.
+// Mirrors the profileSlug function in pkg/github/bridge/aws_adapters.go.
+func githubProfileSlug(profile string) string {
+	base := filepath.Base(profile)
+	for _, ext := range []string{".yaml", ".yml"} {
+		if strings.HasSuffix(strings.ToLower(base), ext) {
+			base = base[:len(base)-len(ext)]
+			break
+		}
+	}
+	return strings.ToLower(base)
+}
+
+// readFileOrEmpty reads a file and returns its bytes. When the file is missing
+// or unreadable, returns nil (zero bytes) — the upload proceeds with empty content
+// so the S3 key exists and operators can replace it manually.
+func readFileOrEmpty(path string) []byte {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// Missing files are non-fatal — warn via stderr so the operator can see the gap.
+		fmt.Fprintf(os.Stderr, "[warn] km init: pre-stage: could not read %s: %v (uploading empty placeholder)\n", path, err)
+		return nil
+	}
+	return data
 }
 
 func NewInitCmd(cfg *config.Config) *cobra.Command {

@@ -185,6 +185,39 @@ resource "aws_iam_role_policy" "sqs_send_github_inbound" {
   })
 }
 
+# Policy: EC2 — describe and start stopped sandbox instances (auto-resume path, Phase 98-04)
+# ec2:DescribeInstances scoped to "*" (Describe actions do not support resource-level conditions).
+# ec2:StartInstances scoped to all instances in the account; tag conditions available but omitted
+# for simplicity (bridge already guards via alias-index GSI lookup before calling StartInstances).
+resource "aws_iam_role_policy" "ec2_resume" {
+  name = "${local.function_name}-ec2-resume"
+  role = aws_iam_role.github_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EC2DescribeInstances"
+        Effect = "Allow"
+        Action = ["ec2:DescribeInstances"]
+        # Describe actions do not support resource-level permissions.
+        Resource = "*"
+      },
+      {
+        Sid    = "EC2StartInstances"
+        Effect = "Allow"
+        Action = ["ec2:StartInstances"]
+        Resource = "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:instance/*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/km:managed" = "true"
+          }
+        }
+      }
+    ]
+  })
+}
+
 # Policy: EventBridge — publish SandboxCreate events for cold-create dispatch
 resource "aws_iam_role_policy" "eventbridge_put_events" {
   name = "${local.function_name}-eventbridge"
