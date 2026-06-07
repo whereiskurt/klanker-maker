@@ -53,16 +53,10 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	configureCmd.AddCommand(NewConfigureGitHubCmd(cfg))
 	root.AddCommand(configureCmd)
 
-	// "km github" as a shortcut for "km configure github --setup"
-	root.AddCommand(&cobra.Command{
-		Use:   "github",
-		Short: "Shortcut for 'km configure github --setup'",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			setupCmd := NewConfigureGitHubCmd(cfg)
-			setupCmd.SetArgs(append([]string{"--setup"}, args...))
-			return setupCmd.Execute()
-		},
-	})
+	// "km github" — GitHub App bridge command tree (Phase 97).
+	// Subcommands: manifest, init, status.
+	// For the old "configure github --setup" shortcut use: km configure github --setup
+	root.AddCommand(NewGithubCmd(cfg))
 
 	root.AddCommand(NewExtendCmd(cfg))
 	root.AddCommand(NewStopCmd(cfg))

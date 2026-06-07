@@ -47,6 +47,11 @@ type SandboxRecord struct {
 	// Populated only in --wide list output.
 	ActiveThreads int `json:"active_threads,omitempty"`
 
+	// Phase 97 — GitHub inbound metadata.
+	// GithubInboundQueueURL is the SQS FIFO queue URL for inbound GitHub comment-trigger events.
+	// Empty when notification.github.inbound.enabled was false/absent at create time.
+	GithubInboundQueueURL string `json:"github_inbound_queue_url,omitempty"`
+
 	// Phase 77 — failure discoverability.
 	FailureReason string     `json:"failure_reason,omitempty"`
 	FailedAt      *time.Time `json:"failed_at,omitempty"`

@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
@@ -824,6 +825,149 @@ func (m *keyAwareS3Mock) GetObject(_ context.Context, input *s3.GetObjectInput, 
 		}
 	}
 	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(body))}, nil
+}
+
+// -----------------------------------------------------------------------
+// Phase 97 — github-inbound enqueue tests (Task 3)
+// -----------------------------------------------------------------------
+
+// mockSQSSendAPI is a narrow interface matching the SQS operations the create-handler uses.
+type mockSQSSendAPI struct {
+	getQueueURLCalled int
+	getQueueURLErr    error
+	getQueueURLOut    *sqs.GetQueueUrlOutput
+
+	sendMessageCalled int
+	sendMessageInput  *sqs.SendMessageInput
+	sendMessageErr    error
+}
+
+func (m *mockSQSSendAPI) GetQueueUrl(_ context.Context, input *sqs.GetQueueUrlInput, _ ...func(*sqs.Options)) (*sqs.GetQueueUrlOutput, error) {
+	m.getQueueURLCalled++
+	if m.getQueueURLErr != nil {
+		return nil, m.getQueueURLErr
+	}
+	if m.getQueueURLOut != nil {
+		return m.getQueueURLOut, nil
+	}
+	qName := ""
+	if input.QueueName != nil {
+		qName = *input.QueueName
+	}
+	url := "https://sqs.us-east-1.amazonaws.com/123456789012/" + qName
+	return &sqs.GetQueueUrlOutput{QueueUrl: &url}, nil
+}
+
+func (m *mockSQSSendAPI) SendMessage(_ context.Context, input *sqs.SendMessageInput, _ ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
+	m.sendMessageCalled++
+	m.sendMessageInput = input
+	if m.sendMessageErr != nil {
+		return nil, m.sendMessageErr
+	}
+	id := "msg-id-001"
+	return &sqs.SendMessageOutput{MessageId: &id}, nil
+}
+
+// TestCreateHandler_GithubEnvelope_EnqueuesAfterProvision verifies that when the
+// create event carries a non-empty GithubEnvelope, the create-handler enqueues
+// it into the sandbox's github-inbound FIFO queue after provisioning.
+func TestCreateHandler_GithubEnvelope_EnqueuesAfterProvision(t *testing.T) {
+	mockSQS := &mockSQSSendAPI{}
+	mockS3 := &mockS3GetAPI{getBody: minimalProfile}
+
+	h := &CreateHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp",
+		SQSClient:    mockSQS,
+		RunCommand: func(_ string, _ []string, _ []string) ([]byte, error) {
+			return []byte("ok"), nil
+		},
+	}
+	envelope := `{"source":"github","action":"created","pr":7}`
+	event := CreateEvent{
+		SandboxID:      "sb-ghtest",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-ghtest",
+		GithubEnvelope: envelope,
+	}
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle returned error: %v", err)
+	}
+	if mockSQS.sendMessageCalled != 1 {
+		t.Fatalf("expected 1 SendMessage call, got %d", mockSQS.sendMessageCalled)
+	}
+	if mockSQS.sendMessageInput == nil {
+		t.Fatal("expected SendMessage to be called with non-nil input")
+	}
+	if mockSQS.sendMessageInput.MessageBody == nil || *mockSQS.sendMessageInput.MessageBody != envelope {
+		t.Errorf("expected MessageBody=%q, got %v", envelope, mockSQS.sendMessageInput.MessageBody)
+	}
+	if mockSQS.sendMessageInput.MessageGroupId == nil || *mockSQS.sendMessageInput.MessageGroupId == "" {
+		t.Error("expected non-empty MessageGroupId for FIFO queue")
+	}
+	if mockSQS.sendMessageInput.MessageDeduplicationId == nil || *mockSQS.sendMessageInput.MessageDeduplicationId == "" {
+		t.Error("expected non-empty MessageDeduplicationId for FIFO queue")
+	}
+}
+
+// TestCreateHandler_GithubEnvelope_EmptyEnvelope_NoEnqueue verifies that when
+// GithubEnvelope is empty, no SQS SendMessage is called (non-github creates unaffected).
+func TestCreateHandler_GithubEnvelope_EmptyEnvelope_NoEnqueue(t *testing.T) {
+	mockSQS := &mockSQSSendAPI{}
+	mockS3 := &mockS3GetAPI{getBody: minimalProfile}
+
+	h := &CreateHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp",
+		SQSClient:    mockSQS,
+		RunCommand: func(_ string, _ []string, _ []string) ([]byte, error) {
+			return []byte("ok"), nil
+		},
+	}
+	event := CreateEvent{
+		SandboxID:      "sb-noenvelope",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-noenvelope",
+		// No GithubEnvelope
+	}
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle returned error: %v", err)
+	}
+	if mockSQS.sendMessageCalled != 0 {
+		t.Errorf("expected 0 SendMessage calls for empty envelope, got %d", mockSQS.sendMessageCalled)
+	}
+}
+
+// TestCreateHandler_GithubEnvelope_EnqueueError_NonFatal verifies that an SQS
+// SendMessage error does NOT cause Handle to fail (best-effort semantics).
+func TestCreateHandler_GithubEnvelope_EnqueueError_NonFatal(t *testing.T) {
+	mockSQS := &mockSQSSendAPI{sendMessageErr: errors.New("sqs unavailable")}
+	mockS3 := &mockS3GetAPI{getBody: minimalProfile}
+
+	h := &CreateHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp",
+		SQSClient:    mockSQS,
+		RunCommand: func(_ string, _ []string, _ []string) ([]byte, error) {
+			return []byte("ok"), nil
+		},
+	}
+	event := CreateEvent{
+		SandboxID:      "sb-sqserr",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-sqserr",
+		GithubEnvelope: `{"source":"github","pr":3}`,
+	}
+	// Handle must succeed even if SQS errors — enqueue is best-effort
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle should succeed even when enqueue fails, got: %v", err)
+	}
 }
 
 // TestCreateHandler_DesktopCredsEnv verifies the handler reads desktop-creds.txt and

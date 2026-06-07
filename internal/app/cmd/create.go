@@ -1135,6 +1135,52 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 	}
 
+	// Step 11f: Provision per-sandbox GitHub inbound SQS FIFO queue (Phase 97-03).
+	// Only runs when notification.github.inbound.enabled=true.
+	// FATAL: failure rolls back the queue; km create aborts.
+	if inbound := notificationGitHubInbound(resolvedProfile); inbound != nil && inbound.Enabled != nil && *inbound.Enabled {
+		sandboxDynamoClientForGH := dynamodbpkg.NewFromConfig(awsCfg)
+		step11fTableName := cfg.GetSandboxTableName()
+
+		sqsRegionForGH := resolvedProfile.Spec.Runtime.Region
+		if sqsRegionForGH == "" {
+			sqsRegionForGH = awsCfg.Region
+		}
+		sqsClientForGH, sqsClientGHErr := awspkg.NewSQSClient(ctx, sqsRegionForGH)
+		if sqsClientGHErr != nil {
+			return fmt.Errorf("km create: github inbound provisioning (SQS client): %w", sqsClientGHErr)
+		}
+
+		ssmClientForGH := ssm.NewFromConfig(awsCfg)
+		step11fDeps := githubInboundDeps{
+			Profile:   resolvedProfile,
+			Cfg:       cfg,
+			SandboxID: sandboxID,
+			SQS:       sqsClientForGH,
+			UpdateSandboxAttr: func(ictx context.Context, sid, attr, val string) error {
+				return awspkg.UpdateSandboxStringAttrDynamo(ictx, sandboxDynamoClientForGH, step11fTableName, sid, attr, val)
+			},
+			PutSSMParameter: func(ictx context.Context, name, val string) error {
+				_, err := ssmClientForGH.PutParameter(ictx, &ssm.PutParameterInput{
+					Name:      aws.String(name),
+					Value:     aws.String(val),
+					Type:      ssmtypes.ParameterTypeString,
+					Overwrite: aws.Bool(true),
+				})
+				return err
+			},
+		}
+
+		githubQueueURL, ghInboundErr := provisionGitHubInboundQueue(ctx, step11fDeps)
+		if ghInboundErr != nil {
+			return fmt.Errorf("km create: github inbound provisioning: %w", ghInboundErr)
+		}
+		if githubQueueURL != "" {
+			log.Info().Str("sandbox_id", sandboxID).Str("queue_url", githubQueueURL).
+				Msg("GitHub inbound queue provisioned")
+		}
+	}
+
 	// Step 12: Create EventBridge TTL schedule if TTL is configured.
 	// Auto-discover Lambda ARN if not explicitly set.
 	// Non-fatal: sandbox is provisioned; operator can re-schedule manually if this fails.
@@ -1314,7 +1360,13 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			kmsKeyARN = cfg.GetPlatformKMSAlias()
 		}
 		gh := resolvedProfile.Spec.SourceAccess.GitHub
-		instID, tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, nil, cfg.GetSsmPrefix())
+		// Pass the github-inbound write permission verb set so the token can post
+		// comments and reviews back (Pitfall 6 fix — Phase 97, plan 02).
+		// CompilePermissions maps: comment→issues:write, review→pull_requests:write,
+		// push→contents:write, checks→checks:write. The result is the github-inbound
+		// write set {issues:write, pull_requests:write, contents:write, checks:write}.
+		githubWriteVerbs := []string{"comment", "review", "push", "checks"}
+		instID, tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, githubWriteVerbs, cfg.GetSsmPrefix())
 		if tokenErr != nil {
 			var ambig *ErrAmbiguousInstallation
 			switch {

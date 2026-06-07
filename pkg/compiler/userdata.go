@@ -1111,6 +1111,14 @@ chmod +x /opt/km/bin/otelcol-contrib
 # ad-hoc invocations) resolve it without needing /opt/km/bin on PATH.
 # Internal callers in this userdata still use the absolute path.
 ln -sf /opt/km/bin/km-slack /usr/local/bin/km-slack
+{{- if .GitHubInboundEnabled }}
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-github" /opt/km/bin/km-github
+chmod +x /opt/km/bin/km-github
+# Expose km-github on /usr/local/bin so non-login shells and ad-hoc
+# invocations resolve it without needing /opt/km/bin on PATH.
+ln -sf /opt/km/bin/km-github /usr/local/bin/km-github
+echo "[km-bootstrap] km-github binary installed at /opt/km/bin/km-github"
+{{- end }}
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 
 # Download km binary for eBPF enforcer (km ebpf-attach command)
@@ -2068,6 +2076,178 @@ chmod +x /opt/km/bin/km-slack-inbound-poller
 echo "[km-bootstrap] km-slack-inbound-poller installed at /opt/km/bin/km-slack-inbound-poller"
 {{- end }}
 
+{{- if .GitHubInboundEnabled }}
+# Phase 97 Plan 05: km-github-inbound-poller — SQS long-poll dispatch to km agent run
+# Pattern: bash + systemd, inline heredoc (mirrors the mail and Slack inbound pollers).
+# Source: github envelope from bridge (plan 04); dispatches to agent with GitHub context preamble.
+cat > /opt/km/bin/km-github-inbound-poller << 'GITHUBINBOUND'
+#!/bin/bash
+set -euo pipefail
+# km-github-inbound-poller: poll SQS FIFO queue for inbound GitHub comment-trigger events
+# and dispatch each turn via km agent run with a GitHub context preamble.
+# Envelope schema: {source:"github", repo:"owner/repo", number:N, kind:"pr",
+#   comment_id:N, html_url:..., branch:..., head_sha:..., sender:..., body:...}
+
+QUEUE_URL="${KM_GITHUB_INBOUND_QUEUE_URL:-}"
+SANDBOX_ID="${KM_SANDBOX_ID:-}"
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+
+# Profile default agent (same env var as Slack poller — KM_AGENT).
+AGENT="${KM_AGENT:-claude}"
+
+# Export AWS_REGION so subprocesses (km-github comment, km-github review, aws CLI) inherit it.
+# The systemd unit's EnvironmentFile=/etc/km/notify.env uses systemd-native format
+# which doesn't include AWS_REGION; the bash fallback above sets REGION but does not
+# propagate it to spawned binaries unless explicitly exported.
+export AWS_REGION="$REGION"
+
+[ -z "$SANDBOX_ID" ] && echo "[km-github-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
+
+# Fall back to SSM Parameter Store when the env var is empty. km create writes
+# /{prefix}/sandbox/{id}/github-inbound-queue-url after the SQS FIFO queue is
+# created. The poller starts at boot and may race the create-handler write —
+# retry with backoff for up to ~5 minutes.
+PARAM_NAME="{{ .SsmPrefix }}sandbox/${SANDBOX_ID}/github-inbound-queue-url"
+if [ -z "$QUEUE_URL" ]; then
+  echo "[km-github-inbound-poller] KM_GITHUB_INBOUND_QUEUE_URL empty, reading $PARAM_NAME from SSM"
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    QUEUE_URL=$(aws ssm get-parameter \
+      --name "$PARAM_NAME" \
+      --region "$REGION" \
+      --query 'Parameter.Value' \
+      --output text 2>/dev/null || true)
+    [ -n "$QUEUE_URL" ] && [ "$QUEUE_URL" != "None" ] && break
+    QUEUE_URL=""
+    echo "[km-github-inbound-poller] $PARAM_NAME not yet available (attempt $attempt/10), sleeping 30s"
+    sleep 30
+  done
+fi
+[ -z "$QUEUE_URL" ] && echo "[km-github-inbound-poller] queue URL unavailable after retries, exiting" && exit 0
+
+echo "[km-github-inbound-poller] Starting — queue=$QUEUE_URL region=$REGION"
+
+while true; do
+  MSG=$(aws sqs receive-message \
+    --queue-url "$QUEUE_URL" \
+    --wait-time-seconds 20 \
+    --max-number-of-messages 1 \
+    --region "$REGION" \
+    --output json 2>/dev/null || true)
+
+  BODY=$(echo "$MSG" | jq -r '.Messages[0].Body // empty' 2>/dev/null || true)
+  RECEIPT=$(echo "$MSG" | jq -r '.Messages[0].ReceiptHandle // empty' 2>/dev/null || true)
+
+  [ -z "$BODY" ] && continue
+
+  # Parse envelope fields.
+  REPO=$(echo "$BODY" | jq -r '.repo // empty')
+  NUMBER=$(echo "$BODY" | jq -r '.number // empty')
+  BRANCH=$(echo "$BODY" | jq -r '.branch // empty')
+  HEAD_SHA=$(echo "$BODY" | jq -r '.head_sha // empty')
+  SENDER=$(echo "$BODY" | jq -r '.sender // empty')
+  COMMENT_BODY=$(echo "$BODY" | jq -r '.body // empty')
+  HTML_URL=$(echo "$BODY" | jq -r '.html_url // empty')
+
+  # Validate envelope.
+  if [ -z "$REPO" ] || [ -z "$NUMBER" ]; then
+    echo "[km-github-inbound-poller] WARN: malformed envelope (missing repo/number), acking: $BODY"
+    aws sqs delete-message \
+      --queue-url "$QUEUE_URL" \
+      --receipt-handle "$RECEIPT" \
+      --region "$REGION" 2>/dev/null || true
+    continue
+  fi
+
+  # Extend visibility BEFORE agent run to prevent re-delivery during long turns.
+  # GitHub PR reviews routinely run several minutes (clone + read diff + reason),
+  # so 300s was too short — the message re-appeared mid-run and a second poller
+  # iteration re-dispatched it, looping duplicate reviews. 1800s (30m) covers
+  # realistic review times. (Future: heartbeat-extend during the run for an
+  # unbounded ceiling.)
+  aws sqs change-message-visibility \
+    --queue-url "$QUEUE_URL" \
+    --receipt-handle "$RECEIPT" \
+    --visibility-timeout 1800 \
+    --region "$REGION" 2>/dev/null || true
+
+  # Build GitHub context preamble with worktree-per-PR guidance.
+  # The preamble orients the agent: repo/PR/branch/head + how to work on this PR
+  # without colliding with other concurrent PRs in a long-lived sandbox.
+  PREAMBLE="[GitHub Comment Trigger]
+Repository: $REPO
+PR: #$NUMBER
+Branch: $BRANCH
+Head SHA: $HEAD_SHA
+Sender: $SENDER
+URL: $HTML_URL
+
+Worktree guidance: For concurrent PR review in this sandbox, prefer using
+  git worktree add /workspace/pr-${NUMBER} $BRANCH
+to isolate changes per PR rather than switching branches in /workspace.
+
+--- User comment ---
+$COMMENT_BODY
+
+--- Posting your response (REQUIRED) ---
+Your reply reaches the requester ONLY if you post it to GitHub. When you finish, post
+your response to this PR by running (the per-sandbox GitHub token is already configured):
+  km-github comment --repo $REPO --number $NUMBER --body '<your full response, markdown>'
+For a formal PR review instead of a plain comment, use:
+  km-github review --repo $REPO --number $NUMBER --event COMMENT --body '<review text>'
+Do NOT only print your answer — it is discarded unless you post it with km-github."
+
+  RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+  RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
+  mkdir -p "$RUN_DIR"
+  chown sandbox:sandbox "$RUN_DIR" 2>/dev/null || true
+
+  PROMPT_FILE="$RUN_DIR/github-prompt.txt"
+  printf '%s' "$PREAMBLE" > "$PROMPT_FILE"
+  chown sandbox:sandbox "$PROMPT_FILE" 2>/dev/null || true
+
+  # Dispatch to agent (mirrors the Slack inbound poller dispatch fork).
+  EFFECTIVE_AGENT="$AGENT"
+  if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+    sudo -u sandbox bash -lc "
+      set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      cd /workspace 2>/dev/null || true
+      codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
+        > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+      echo \$? > '$RUN_DIR/exit_code'
+    " || true
+  else
+    # Claude path (default).
+    sudo -u sandbox bash -lc "
+      set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      cd /workspace 2>/dev/null || true
+      claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
+        --dangerously-skip-permissions \
+        > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+      echo \$? > '$RUN_DIR/exit_code'
+    " || true
+  fi
+  rm -f "$PROMPT_FILE"
+
+  RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
+
+  if [ "$RUN_EXIT" -eq 0 ] && [ -s "$RUN_DIR/output.json" ]; then
+    # Ack-then-log: delete message before logging so a crash can't cause duplicate dispatch.
+    aws sqs delete-message \
+      --queue-url "$QUEUE_URL" \
+      --receipt-handle "$RECEIPT" \
+      --region "$REGION" 2>/dev/null || true
+    echo "[km-github-inbound-poller] Turn complete — repo=$REPO PR=#$NUMBER sender=$SENDER"
+  else
+    echo "[km-github-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
+  fi
+done
+GITHUBINBOUND
+chmod +x /opt/km/bin/km-github-inbound-poller
+echo "[km-bootstrap] km-github-inbound-poller installed at /opt/km/bin/km-github-inbound-poller"
+{{- end }}
+
 # km-send: send Ed25519-signed email with optional attachments via SES
 cat > /opt/km/bin/km-send << 'KMSEND'
 #!/bin/bash
@@ -2365,6 +2545,28 @@ RestartSec=5
 WantedBy=multi-user.target
 SLACKINBOUNDUNIT
 echo "[km-bootstrap] km-slack-inbound-poller.service installed"
+{{- end }}
+{{- if .GitHubInboundEnabled }}
+
+cat > /etc/systemd/system/km-github-inbound-poller.service << 'GITHUBINBOUNDUNIT'
+[Unit]
+Description=Klanker Maker GitHub inbound poller — dispatches GitHub comment-trigger events to km agent run
+After=network.target
+[Service]
+User=root
+# systemd-native format env file (no 'export' prefix) — systemd rejects the
+# shell-keyword prefix used by /etc/profile.d/km-notify-env.sh. Leading '-'
+# tolerates a missing file on first boot / older AMIs.
+EnvironmentFile=-/etc/km/notify.env
+Environment=SANDBOX_ID={{ .SandboxID }}
+Environment=KM_SANDBOX_ID={{ .SandboxID }}
+ExecStart=/opt/km/bin/km-github-inbound-poller
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+GITHUBINBOUNDUNIT
+echo "[km-bootstrap] km-github-inbound-poller.service installed"
 {{- end }}
 cat > /etc/systemd/system/km-presence.service << 'UNIT'
 [Unit]
@@ -3491,15 +3693,15 @@ echo "[km-bootstrap] km-recv installed at /opt/km/bin/km-recv"
 # daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
 # picks up the freshly-written unit before enable/restart so the correct env is used.
 systemctl daemon-reload
-systemctl enable km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
-systemctl restart km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl enable km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}
+systemctl restart km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started (DNS via eBPF enforcer, not km-dns-proxy)"
 {{- else }}
 # daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
 # picks up the freshly-written unit before enable/restart so the correct env is used.
 systemctl daemon-reload
-systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
-systemctl restart km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}
+systemctl restart km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started"
 {{- end }}
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
@@ -4163,6 +4365,11 @@ type userDataParams struct {
 	// When false (the default, no profile change), the block is omitted entirely —
 	// existing sandbox userdata is byte-identical to pre-Phase-89 output.
 	SopsBundlePresent bool
+	// GitHubInboundEnabled gates conditional emission of the km-github-inbound-poller
+	// bash script, its systemd unit, the km-github binary download, and the
+	// systemctl enable/start lines.
+	// Set from profile.Spec.Notification.Github.Inbound.Enabled (Phase 97 Plan 05).
+	GitHubInboundEnabled bool
 }
 
 // parseUserDataTemplate parses the userDataTemplate and returns the compiled template.
@@ -4327,6 +4534,17 @@ func slackInboundEnabled(p *profile.SandboxProfile) bool {
 func slackTranscriptEnabled(p *profile.SandboxProfile) bool {
 	s := notifySlack(p)
 	return s != nil && s.Transcript != nil && s.Transcript.Enabled != nil && *s.Transcript.Enabled
+}
+
+// githubInboundEnabled reports whether notification.github.inbound.enabled is &true.
+// Phase 97 Plan 05: gates the km-github-inbound-poller heredoc, systemd unit,
+// km-github binary download, and systemctl enable/restart lines.
+func githubInboundEnabled(p *profile.SandboxProfile) bool {
+	if p.Spec.Notification == nil || p.Spec.Notification.Github == nil {
+		return false
+	}
+	in := p.Spec.Notification.Github.Inbound
+	return in != nil && in.Enabled != nil && *in.Enabled
 }
 
 // resolveMentionOnly returns the effective mention-only bool for the bridge,
@@ -4692,6 +4910,21 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		if slackEnabled(p) {
 			params.NotifySlackEnabled = true
 		}
+
+		// Phase 97 Plan 05: GitHub inbound — emit KM_GITHUB_INBOUND_QUEUE_URL as an
+		// empty placeholder in the notify.env so the poller always has the env slot.
+		// km create fills the real value via SSM Parameter Store after queue creation.
+		if githubInboundEnabled(p) {
+			notifyEnv["KM_GITHUB_INBOUND_QUEUE_URL"] = ""
+		}
+	}
+
+	// Phase 97 Plan 05: wire GitHubInboundEnabled for template conditionals.
+	// Gated independently of Spec.CLI — github-inbound is under spec.notification.github,
+	// not spec.cli. This means a profile without a CLI block can still enable
+	// github-inbound (e.g., a non-agent sandbox used purely as a code-review bot).
+	if githubInboundEnabled(p) {
+		params.GitHubInboundEnabled = true
 	}
 
 	// Phase 92 (Wave 5): synthesize the Claude Code settings.json from the typed

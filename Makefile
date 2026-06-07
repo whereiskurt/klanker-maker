@@ -232,6 +232,8 @@ build-lambdas: clean bump-version
 	cd build && zip -j create-handler.zip bootstrap && rm bootstrap
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o build/bootstrap ./cmd/km-slack-bridge/
 	cd build && zip -j km-slack-bridge.zip bootstrap && rm bootstrap
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o build/bootstrap ./cmd/km-github-bridge/
+	cd build && zip -j km-github-bridge.zip bootstrap && rm bootstrap
 	@echo ""
 	@echo "Lambda deployment packages built:"
 	@echo "  build/ttl-handler.zip"
@@ -240,6 +242,7 @@ build-lambdas: clean bump-version
 	@echo "  build/email-create-handler.zip"
 	@echo "  build/create-handler.zip"
 	@echo "  build/km-slack-bridge.zip"
+	@echo "  build/km-github-bridge.zip"
 
 ## build-create-handler: compile Go binaries needed for the create-handler container image
 ## Run this before `make push-create-handler`

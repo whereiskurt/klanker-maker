@@ -486,6 +486,101 @@ func TestRegionalModulesIncludesSlackBridge(t *testing.T) {
 	}
 }
 
+// TestRegionalModulesIncludesGitHubBridge verifies that the Phase 97 GitHub App bridge
+// module is registered in regionalModules() in the correct dependency order:
+//   - lambda-github-bridge after dynamodb-sandboxes (alias-index GSI dependency)
+//   - lambda-github-bridge after dynamodb-slack-nonces (shared nonce table dependency)
+//   - lambda-github-bridge after email-handler (consistent with artifact Lambda ordering)
+//   - lambda-github-bridge after lambda-slack-bridge (both bridges after their shared deps)
+//   - lambda-github-bridge before ses (SES is always last)
+func TestRegionalModulesIncludesGitHubBridge(t *testing.T) {
+	mods := cmd.RegionalModules(t.TempDir())
+
+	found := 0
+	sandboxesIdx := -1
+	noncesIdx := -1
+	emailIdx := -1
+	slackBridgeIdx := -1
+	githubBridgeIdx := -1
+	sesIdx := -1
+	for i, m := range mods {
+		switch m.Name {
+		case "dynamodb-sandboxes":
+			sandboxesIdx = i
+		case "dynamodb-slack-nonces":
+			noncesIdx = i
+		case "email-handler":
+			emailIdx = i
+		case "lambda-slack-bridge":
+			slackBridgeIdx = i
+		case "lambda-github-bridge":
+			found++
+			githubBridgeIdx = i
+		case "ses":
+			sesIdx = i
+		}
+	}
+
+	if found != 1 {
+		t.Fatalf("expected 1 lambda-github-bridge in regionalModules(), got %d (idx=%d)",
+			found, githubBridgeIdx)
+	}
+
+	// lambda-github-bridge must appear after dynamodb-sandboxes (alias-index GSI dependency)
+	if sandboxesIdx >= 0 && githubBridgeIdx <= sandboxesIdx {
+		t.Errorf("lambda-github-bridge (idx %d) must appear after dynamodb-sandboxes (idx %d)",
+			githubBridgeIdx, sandboxesIdx)
+	}
+
+	// lambda-github-bridge must appear after dynamodb-slack-nonces (shared nonce table dependency)
+	if noncesIdx >= 0 && githubBridgeIdx <= noncesIdx {
+		t.Errorf("lambda-github-bridge (idx %d) must appear after dynamodb-slack-nonces (idx %d)",
+			githubBridgeIdx, noncesIdx)
+	}
+
+	// lambda-github-bridge must appear after email-handler
+	if emailIdx >= 0 && githubBridgeIdx <= emailIdx {
+		t.Errorf("lambda-github-bridge (idx %d) must appear after email-handler (idx %d)",
+			githubBridgeIdx, emailIdx)
+	}
+
+	// lambda-github-bridge must appear after lambda-slack-bridge
+	if slackBridgeIdx >= 0 && githubBridgeIdx <= slackBridgeIdx {
+		t.Errorf("lambda-github-bridge (idx %d) must appear after lambda-slack-bridge (idx %d)",
+			githubBridgeIdx, slackBridgeIdx)
+	}
+
+	// lambda-github-bridge must appear before ses (SES is always last)
+	if sesIdx >= 0 && githubBridgeIdx >= sesIdx {
+		t.Errorf("lambda-github-bridge (idx %d) must appear before ses (idx %d)",
+			githubBridgeIdx, sesIdx)
+	}
+}
+
+// TestLambdaBuildsIncludesGitHubBridge guards GH-BRIDGE-DEPLOY: `km init` builds
+// Lambda zips from a hardcoded list (buildLambdaZips). A Lambda with a live
+// terragrunt unit but missing from this list is silently never built, so apply
+// fails on filebase64sha256(missing-zip). The github bridge must be present.
+func TestLambdaBuildsIncludesGitHubBridge(t *testing.T) {
+	names := cmd.LambdaBuildNames()
+
+	want := map[string]bool{
+		"km-github-bridge": false,
+		"km-slack-bridge":  false,
+		"create-handler":   false,
+	}
+	for _, n := range names {
+		if _, ok := want[n]; ok {
+			want[n] = true
+		}
+	}
+	for n, found := range want {
+		if !found {
+			t.Errorf("LambdaBuildNames() missing %q — km init will never build its zip; got %v", n, names)
+		}
+	}
+}
+
 // ──────────────────────────────────────────────
 // forceSlackBridgeColdStart tests (SLCK-13)
 // ──────────────────────────────────────────────
@@ -1001,6 +1096,30 @@ func TestRunInitWithRunner_FastApplyDoesNotTriggerTimeout(t *testing.T) {
 	}
 	if len(mock.applied) != 7 {
 		t.Errorf("expected all 7 fast applies to succeed, got %d", len(mock.applied))
+	}
+}
+
+// TestSidecarBuildsIncludesGitHub guards a Phase 97 deploy gap: the EC2 userdata
+// bootstrap downloads s3://<bucket>/sidecars/km-github when github inbound is
+// enabled. If km-github is missing from the sidecar upload list, the download
+// 404s and (under set -e) aborts the entire bootstrap — km-session-entry, network
+// enforcement, and the agent install never run. The helper must be uploaded.
+func TestSidecarBuildsIncludesGitHub(t *testing.T) {
+	names := cmd.SidecarBuildNames()
+
+	want := map[string]bool{
+		"km-github": false,
+		"km-slack":  false,
+	}
+	for _, n := range names {
+		if _, ok := want[n]; ok {
+			want[n] = true
+		}
+	}
+	for n, found := range want {
+		if !found {
+			t.Errorf("SidecarBuildNames() missing %q — userdata download will 404 and abort bootstrap; got %v", n, names)
+		}
 	}
 }
 

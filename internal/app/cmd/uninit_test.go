@@ -78,6 +78,7 @@ func TestUninitDestroyOrder(t *testing.T) {
 	// double-check the reverse order respects dependencies).
 	wantOrder := []string{
 		"ses",
+		"lambda-github-bridge",
 		"lambda-slack-bridge",
 		"dynamodb-slack-stream-messages",
 		"dynamodb-slack-threads",

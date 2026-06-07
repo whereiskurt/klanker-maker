@@ -74,6 +74,48 @@ type ClusterConfig struct {
 	RoleARN         string `mapstructure:"role_arn"          yaml:"role_arn"`
 }
 
+// GithubRepoEntry maps a GitHub repository (by match pattern) to a km alias,
+// a SandboxProfile, and an optional network allowlist. Used by the Phase 97
+// bridge Lambda to resolve which sandbox to dispatch a PR comment to.
+//
+// Fields mirror the km-config.yaml github.repos list-of-objects shape.
+// json tags match the yaml keys so KM_GITHUB_REPOS JSON is self-describing.
+type GithubRepoEntry struct {
+	// Match is the "owner/repo" string matched against the incoming webhook's
+	// repository.full_name field. Exact match only (no glob in Wave 1).
+	Match string `mapstructure:"match" yaml:"match" json:"match"`
+
+	// Alias is the sandbox alias used when creating a cold sandbox for this repo
+	// (km create --alias <alias>). Optional — falls back to DefaultProfile if absent.
+	Alias string `mapstructure:"alias" yaml:"alias,omitempty" json:"alias,omitempty"`
+
+	// Profile is the path to the SandboxProfile YAML file for this repo's sandbox.
+	// Optional — falls back to GithubConfig.DefaultProfile when absent.
+	Profile string `mapstructure:"profile" yaml:"profile,omitempty" json:"profile,omitempty"`
+
+	// Allow is a supplemental network allowlist for this repo's sandbox.
+	// Optional — sandbox profile's own allowlist is always the primary source.
+	Allow []string `mapstructure:"allow" yaml:"allow,omitempty" json:"allow,omitempty"`
+}
+
+// GithubConfig holds install-level GitHub defaults that flow into the bridge
+// Lambda environment via km init. Phase 97 Plan 01 adds the github: block.
+//
+// Maps to km-config.yaml key github. Absent key → zero value (no error).
+// Exported as KM_GITHUB_REPOS (JSON-encoded) by ExportTerragruntEnvVars when
+// at least one repo entry is present; absent config ⇒ dormant (nothing exported).
+type GithubConfig struct {
+	// Repos is the list of repository-to-sandbox mappings. Each entry maps a
+	// repo's full_name to a km alias + profile + optional network allowlist.
+	// Uses UnmarshalKey (structured list-of-objects) — same pattern as Clusters.
+	Repos []GithubRepoEntry `mapstructure:"repos" yaml:"repos,omitempty"`
+
+	// DefaultProfile is the fallback SandboxProfile path used when a matched
+	// repo entry has no Profile set, or when no match is found and the bridge
+	// falls through to the default case.
+	DefaultProfile string `mapstructure:"default_profile" yaml:"default_profile,omitempty"`
+}
+
 // Config holds all configuration values for the km CLI.
 type Config struct {
 	// ProfileSearchPaths is the ordered list of directories to search for profiles.
@@ -263,6 +305,12 @@ type Config struct {
 	// km-config.yaml key slack. Absent key → zero value (no error).
 	Slack SlackConfig `mapstructure:"slack" yaml:"slack,omitempty"`
 
+	// Github holds install-level GitHub App defaults (Phase 97). Repos is the
+	// list of repository-to-sandbox mappings consumed by the bridge Lambda.
+	// Maps to km-config.yaml key github. Absent key → zero value (no error).
+	// Exported as KM_GITHUB_REPOS (JSON) by ExportTerragruntEnvVars when configured.
+	Github GithubConfig `mapstructure:"github" yaml:"github,omitempty"`
+
 	// YAMLDefaults holds the raw km-config.yaml values for env-bound keys,
 	// snapshotted during Load() BEFORE viper's AutomaticEnv binds env vars into
 	// the cfg fields. Used by ExportTerragruntEnvVars to detect drift between
@@ -430,6 +478,10 @@ func Load() (*Config, error) {
 			// Phase 96: front-door router toggle. CRITICAL: without this entry,
 			// slack.default_router: true is silently ignored (project_config_key_merge_list).
 			"slack.default_router",
+			// Phase 97: github block (repos list-of-objects + default_profile). CRITICAL:
+			// without this entry, the entire github: block is silently dropped regardless
+			// of km-config.yaml content (project_config_key_merge_list footgun).
+			"github",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -545,6 +597,15 @@ func Load() (*Config, error) {
 	// ensures a non-nil empty slice when the key is absent (RESEARCH.md Pitfall 6).
 	if err := v.UnmarshalKey("clusters", &cfg.Clusters); err != nil {
 		return nil, fmt.Errorf("unmarshal clusters: %w", err)
+	}
+
+	// Phase 97: github is a structured block (list-of-objects + scalar). Use
+	// UnmarshalKey — same pattern as clusters — because repos is a list-of-objects
+	// and viper's scalar GetString/GetStringSlice can't decode it. Absent key =>
+	// zero-value GithubConfig (no error, no repos => dormant). The merge-list entry
+	// "github" above is the precondition; without it this unmarshal sees an empty map.
+	if err := v.UnmarshalKey("github", &cfg.Github); err != nil {
+		return nil, fmt.Errorf("unmarshal github: %w", err)
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it

@@ -619,6 +619,39 @@ resource "aws_iam_role_policy" "sqs_slack_inbound" {
   })
 }
 
+# Policy: SQS for Phase 97 github-inbound queue lifecycle (per-sandbox FIFO
+# queues named km-github-inbound-<sandbox-id>.fifo). km create provisions the
+# queue at create time (rollback deletes it on failure); the cold-create path
+# (create-handler drainGithubEnvelope) also SendMessages the carried github
+# envelope into it after provisioning. Scoped to the github-inbound ARN pattern.
+resource "aws_iam_role_policy" "sqs_github_inbound" {
+  name = "${var.resource_prefix}-create-handler-sqs-github-inbound"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "GitHubInboundQueueLifecycle"
+        Effect = "Allow"
+        Action = [
+          "sqs:CreateQueue",
+          "sqs:DeleteQueue",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ListQueues",
+          "sqs:SetQueueAttributes",
+          "sqs:TagQueue",
+          "sqs:SendMessage",
+        ]
+        # sqs:ListQueues is account-wide (no resource scoping); grouped here for
+        # cohesion. All other actions are scoped to the github-inbound pattern.
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-github-inbound-*.fifo"
+      }
+    ]
+  })
+}
+
 # Policy: IAM OIDC provider management for cluster-irsa module.
 # register=true branch: Terraform creates/deletes/tags aws_iam_openid_connect_provider.this[0].
 # register=false branch: Terraform reads data.aws_iam_openid_connect_provider.existing[0]

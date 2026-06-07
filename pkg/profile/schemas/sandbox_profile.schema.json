@@ -667,6 +667,24 @@
                 }
               }
             },
+            "github": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "GitHub comment-trigger inbound dispatch (Phase 97). When absent, no per-sandbox FIFO queue is provisioned (dormant invariant).",
+              "properties": {
+                "inbound": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Per-sandbox GitHub inbound FIFO queue configuration.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Provision the per-sandbox github-inbound FIFO queue at km create. Default false (absent = dormant, zero SQS/DDB/SSM artifacts)."
+                    }
+                  }
+                }
+              }
+            },
             "slack": {
               "type": "object",
               "additionalProperties": false,

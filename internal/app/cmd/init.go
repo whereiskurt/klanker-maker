@@ -181,7 +181,7 @@ func defaultModuleTimeout(name string) time.Duration {
 	switch name {
 	case "network", "ses-shared-rule-set":
 		return 10 * time.Minute
-	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge":
+	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge", "lambda-github-bridge":
 		return 5 * time.Minute
 	default:
 		return 3 * time.Minute
@@ -292,6 +292,15 @@ func regionalModules(regionDir string) []regionalModule {
 			// dynamodb-identities, dynamodb-sandboxes, and dynamodb-slack-nonces.
 			name:    "lambda-slack-bridge",
 			dir:     filepath.Join(regionDir, "lambda-slack-bridge"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
+			// Phase 97 (gap GH-BRIDGE-DEPLOY): GitHub App bridge Lambda with Function URL
+			// (auth=NONE; X-Hub-Signature-256 HMAC + nonce replay provide application-layer auth).
+			// Depends on dynamodb-sandboxes (alias-index GSI) and dynamodb-slack-nonces (shared
+			// nonce table). artifacts bucket needed for cold-create EventBridge dispatch.
+			name:    "lambda-github-bridge",
+			dir:     filepath.Join(regionDir, "lambda-github-bridge"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
@@ -925,6 +934,34 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			fmt.Fprintf(os.Stderr, "WARN: KM_SLACK_DEFAULT_ROUTER=%s (env) overrides km-config.yaml slack.default_router=%s\n", envVal, yamlSlackDefaultRouter)
 		} else if envVal == "" {
 			os.Setenv("KM_SLACK_DEFAULT_ROUTER", yamlSlackDefaultRouter) //nolint:errcheck
+		}
+	}
+
+	// Phase 97: KM_GITHUB_REPOS — JSON-encoded repository-to-sandbox mapping.
+	// Consumed by the GitHub bridge Lambda to resolve which sandbox to dispatch
+	// a PR comment to. Gate: only export when at least one repo entry is configured
+	// (len > 0) — absent github: block leaves KM_GITHUB_REPOS unset (dormant
+	// byte-identity, no new env on existing Lambdas). env-wins: when the env var
+	// is already set to a DIFFERENT value, emit a drift WARN and do NOT overwrite.
+	// Value is JSON-marshalled so the Lambda can parse the structured map without
+	// bespoke split/decode logic. Struct kept inline; no new config helper needed.
+	if len(cfg.Github.Repos) > 0 {
+		type githubExportPayload struct {
+			Repos          []config.GithubRepoEntry `json:"repos"`
+			DefaultProfile string                   `json:"default_profile,omitempty"`
+		}
+		payload := githubExportPayload{
+			Repos:          cfg.Github.Repos,
+			DefaultProfile: cfg.Github.DefaultProfile,
+		}
+		jsonBytes, err := json.Marshal(payload)
+		if err == nil {
+			yamlGithubRepos := string(jsonBytes)
+			if envVal := os.Getenv("KM_GITHUB_REPOS"); envVal != "" && envVal != yamlGithubRepos {
+				fmt.Fprintf(os.Stderr, "WARN: KM_GITHUB_REPOS=%s (env) overrides km-config.yaml github.repos=%s\n", envVal, yamlGithubRepos)
+			} else if envVal == "" {
+				os.Setenv("KM_GITHUB_REPOS", yamlGithubRepos) //nolint:errcheck
+			}
 		}
 	}
 }
@@ -1697,15 +1734,12 @@ type lambdaBuild struct {
 	srcDir string // Go source directory relative to repo root
 }
 
-// buildLambdaZips cross-compiles Lambda binaries for linux/arm64 and packages them as zips.
-// Skips any Lambda whose zip already exists. Equivalent to `make build-lambdas`.
-func buildLambdaZips(repoRoot string) error {
-	buildDir := filepath.Join(repoRoot, "build")
-	if err := os.MkdirAll(buildDir, 0o755); err != nil {
-		return fmt.Errorf("create build dir: %w", err)
-	}
-
-	lambdas := []lambdaBuild{
+// lambdaBuilds returns the ordered list of Lambdas that `km init` cross-compiles
+// and packages. This MUST stay in lockstep with the `build-lambdas` Makefile
+// target — a Lambda missing here is silently never built by `km init`, so its
+// terragrunt unit fails on filebase64sha256(missing-zip) at apply time.
+func lambdaBuilds() []lambdaBuild {
+	return []lambdaBuild{
 		{name: "ttl-handler", srcDir: "cmd/ttl-handler"},
 		{name: "budget-enforcer", srcDir: "cmd/budget-enforcer"},
 		{name: "github-token-refresher", srcDir: "cmd/github-token-refresher"},
@@ -1713,7 +1747,31 @@ func buildLambdaZips(repoRoot string) error {
 		{name: "create-handler", srcDir: "cmd/create-handler"},
 		// Phase 63: Slack-notify bridge Lambda — accepts signed envelopes from sandboxes.
 		{name: "km-slack-bridge", srcDir: "cmd/km-slack-bridge"},
+		// Phase 97: GitHub comment-trigger bridge Lambda — verifies webhooks, dispatches @-mentions.
+		{name: "km-github-bridge", srcDir: "cmd/km-github-bridge"},
 	}
+}
+
+// LambdaBuildNames returns the zip names `km init` builds. Exported for testing only.
+func LambdaBuildNames() []string {
+	builds := lambdaBuilds()
+	names := make([]string, len(builds))
+	for i, lb := range builds {
+		names[i] = lb.name
+	}
+	return names
+}
+
+// buildLambdaZips cross-compiles Lambda binaries for linux/arm64 and packages them as zips.
+// Always rebuilds each zip (removes any existing one first) so code changes are
+// picked up. Equivalent to `make build-lambdas`.
+func buildLambdaZips(repoRoot string) error {
+	buildDir := filepath.Join(repoRoot, "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		return fmt.Errorf("create build dir: %w", err)
+	}
+
+	lambdas := lambdaBuilds()
 
 	// Ensure terraform binary is current (version-aware cache via sidecar file).
 	// Phase 84.4.1: replaced the os.IsNotExist-only check with terraformIsCurrent
@@ -1875,19 +1933,43 @@ type sidecarBuild struct {
 // buildAndUploadSidecars cross-compiles sidecar binaries for linux/amd64 and uploads
 // them to s3://<bucket>/sidecars/. Also uploads the tracing config.yaml.
 // Skips upload if the S3 object already exists.
+// sidecarBuilds returns the ordered list of sidecar/helper binaries that
+// `km init` builds and uploads to s3://<bucket>/sidecars/<name>. This MUST stay
+// in lockstep with what the EC2 userdata bootstrap downloads — a binary the
+// userdata fetches but that is missing here 404s at boot and (under set -e)
+// aborts the whole bootstrap. km-github is gated in userdata on
+// GitHubInboundEnabled, so its absence only breaks github-inbound sandboxes.
+func sidecarBuilds() []sidecarBuild {
+	return []sidecarBuild{
+		{name: "dns-proxy", srcDir: "sidecars/dns-proxy"},
+		{name: "http-proxy", srcDir: "sidecars/http-proxy"},
+		{name: "audit-log", srcDir: "sidecars/audit-log/cmd"},
+		{name: "km-slack", srcDir: "cmd/km-slack"},
+		{name: "km-presence", srcDir: "cmd/km-presence"},
+		// Phase 97 — sandbox-side GitHub helper (comment/review verbs). Downloaded
+		// by userdata when notification.github.inbound.enabled. Missing upload here
+		// 404s the gated download and aborts bootstrap.
+		{name: "km-github", srcDir: "cmd/km-github"},
+	}
+}
+
+// SidecarBuildNames returns the sidecar names `km init` uploads. Exported for testing only.
+func SidecarBuildNames() []string {
+	builds := sidecarBuilds()
+	names := make([]string, len(builds))
+	for i, sc := range builds {
+		names[i] = sc.name
+	}
+	return names
+}
+
 func buildAndUploadSidecars(repoRoot, bucket string) error {
 	buildDir := filepath.Join(repoRoot, "build")
 	if err := os.MkdirAll(buildDir, 0o755); err != nil {
 		return fmt.Errorf("create build dir: %w", err)
 	}
 
-	sidecars := []sidecarBuild{
-		{name: "dns-proxy", srcDir: "sidecars/dns-proxy"},
-		{name: "http-proxy", srcDir: "sidecars/http-proxy"},
-		{name: "audit-log", srcDir: "sidecars/audit-log/cmd"},
-		{name: "km-slack", srcDir: "cmd/km-slack"},
-		{name: "km-presence", srcDir: "cmd/km-presence"},
-	}
+	sidecars := sidecarBuilds()
 
 	// Build and upload km binary for EC2 instances (linux/amd64).
 	// Instances download this at boot from s3://<bucket>/sidecars/km.

@@ -15,6 +15,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/goccy/go-yaml"
 	"github.com/rs/zerolog/log"
@@ -55,11 +57,25 @@ type CreateEvent struct {
 	ComputeBudget  float64 `json:"compute_budget,omitempty"`
 	AIBudget       float64 `json:"ai_budget,omitempty"`
 	NoBedrock      bool    `json:"no_bedrock,omitempty"`
+
+	// GithubEnvelope carries the JSON-serialized GitHub webhook envelope for
+	// cold-create correction (Phase 97, Pitfall 1 fix). Matches the same field
+	// on SandboxCreateDetail. After provisioning, this is drained into the new
+	// sandbox's github-inbound FIFO queue. Empty for non-github creates (dormant).
+	GithubEnvelope string `json:"github_envelope,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download files.
 type S3GetAPI interface {
 	GetObject(ctx context.Context, input *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
+// GithubInboundSQSAPI is the narrow SQS interface used by the github-inbound
+// enqueue step (Phase 97, Task 3). Only GetQueueUrl and SendMessage are needed.
+// *sqs.Client satisfies this interface directly.
+type GithubInboundSQSAPI interface {
+	GetQueueUrl(ctx context.Context, input *sqs.GetQueueUrlInput, optFns ...func(*sqs.Options)) (*sqs.GetQueueUrlOutput, error)
+	SendMessage(ctx context.Context, input *sqs.SendMessageInput, optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
 }
 
 // SESV2API re-exports the narrow SES interface from pkg/aws for use in this package.
@@ -78,12 +94,18 @@ type CreateHandler struct {
 	S3Client          S3GetAPI
 	SESClient         SESV2API
 	DynamoClient      DynamoAPI
-	SSMClient         awspkg.IdentitySSMAPI  // for identity key generation
+	SSMClient         awspkg.IdentitySSMAPI   // for identity key generation
 	IdentityClient    awspkg.IdentityTableAPI // for publishing identity to DynamoDB
 	TableName         string                  // DynamoDB sandbox metadata table (default: "km-sandboxes")
 	IdentityTableName string                  // DynamoDB identity table (default: "km-identities")
 	Domain            string
 	ToolchainDir      string // directory containing km, terraform, terragrunt binaries + infra/
+	// SQSClient is used to drain the carried GithubEnvelope into the per-sandbox
+	// github-inbound FIFO queue after provisioning (Phase 97, Task 3).
+	// When nil, the enqueue step is skipped — only non-nil when the event has a
+	// non-empty GithubEnvelope (dormant for non-github creates). In production,
+	// the main() function injects *sqs.Client from the shared AWS config.
+	SQSClient GithubInboundSQSAPI
 	// RunCommand is called to execute the km create subprocess.
 	// When nil, defaults to execRunCommand (os/exec-based).
 	RunCommand RunCommandFunc
@@ -383,6 +405,54 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 		}
 	}
 
+	// Step 6 (Phase 97): Drain the carried GithubEnvelope into the sandbox's
+	// github-inbound FIFO queue so the poller dispatches it on first boot.
+	// Best-effort: a failed enqueue does NOT fail the create — the operator can
+	// re-mention to trigger a new event. Non-github creates have GithubEnvelope=""
+	// so this block is entirely dormant for non-github sandboxes.
+	if event.GithubEnvelope != "" && h.SQSClient != nil {
+		if enqErr := h.drainGithubEnvelope(ctx, event.SandboxID, event.GithubEnvelope); enqErr != nil {
+			log.Warn().Err(enqErr).Str("sandbox_id", event.SandboxID).
+				Msg("failed to enqueue github envelope into github-inbound queue (non-fatal — operator can re-mention)")
+		}
+	}
+
+	return nil
+}
+
+// drainGithubEnvelope resolves the per-sandbox github-inbound FIFO queue URL and
+// sends the carried envelope as a FIFO message (MessageGroupId = sandboxID,
+// MessageDeduplicationId = SHA-256 hex of the envelope body). Both fields are
+// required by FIFO queues with ContentBasedDeduplication=false.
+func (h *CreateHandler) drainGithubEnvelope(ctx context.Context, sandboxID, envelope string) error {
+	prefix := resourcePrefix()
+	queueName := awspkg.GitHubInboundQueueName(prefix, sandboxID)
+
+	urlOut, err := h.SQSClient.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{
+		QueueName: aws.String(queueName),
+	})
+	if err != nil {
+		return fmt.Errorf("get github-inbound queue URL for %s: %w", queueName, err)
+	}
+	queueURL := aws.ToString(urlOut.QueueUrl)
+
+	// FIFO dedup: SHA-256 hex of the envelope body so duplicate cold-create
+	// events (e.g. from retried EventBridge delivery) are de-duplicated within
+	// the 5-minute SQS dedup window.
+	sum := sha256.Sum256([]byte(envelope))
+	dedupID := fmt.Sprintf("%x", sum[:])
+
+	_, err = h.SQSClient.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:               aws.String(queueURL),
+		MessageBody:            aws.String(envelope),
+		MessageGroupId:         aws.String(sandboxID),
+		MessageDeduplicationId: aws.String(dedupID),
+	})
+	if err != nil {
+		return fmt.Errorf("send github envelope to %s: %w", queueURL, err)
+	}
+	log.Info().Str("sandbox_id", sandboxID).Str("queue", queueName).
+		Msg("github envelope drained into github-inbound queue")
 	return nil
 }
 
@@ -626,6 +696,8 @@ func main() {
 		IdentityTableName: identitiesTable(),
 		Domain:            domain,
 		ToolchainDir:      toolchainDir,
+		// Phase 97: inject SQS client for github-inbound envelope drain.
+		SQSClient: sqs.NewFromConfig(awsCfg),
 	}
 
 	lambdaruntime.Start(h.Handle)

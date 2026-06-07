@@ -260,6 +260,11 @@ type DoctorConfigProvider interface {
 	// (Phase 80 cross-account IRSA), used by checkStaleIAMRoles to protect them
 	// from the stale-role sweep.
 	GetClusterRoleNames() []string
+	// GetGithubRepos returns the Phase 97 github.repos list from km-config.yaml.
+	// Empty slice means the GitHub bridge is not configured.
+	GetGithubRepos() []appcfg.GithubRepoEntry
+	// GetGithubDefaultProfile returns the Phase 97 github.default_profile from km-config.yaml.
+	GetGithubDefaultProfile() string
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -303,6 +308,8 @@ func (a *appConfigAdapter) GetClusterRoleNames() []string {
 	}
 	return out
 }
+func (a *appConfigAdapter) GetGithubRepos() []appcfg.GithubRepoEntry { return a.cfg.Github.Repos }
+func (a *appConfigAdapter) GetGithubDefaultProfile() string          { return a.cfg.Github.DefaultProfile }
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
@@ -943,6 +950,191 @@ func checkGitHubConfig(ctx context.Context, client SSMReadAPI, ssmPrefix string)
 		Status:      CheckWarn,
 		Message:     "app-client-id configured but no installation keys found — run 'km configure github' to add installations",
 		Remediation: "Run 'km configure github' to set up GitHub App integration",
+	}
+}
+
+// checkGitHubWebhookSecret verifies the webhook-secret parameter exists in SSM.
+// Returns WARN (not ERROR) when missing — GitHub integration is opt-in.
+func checkGitHubWebhookSecret(ctx context.Context, client SSMReadAPI, ssmPrefix string) CheckResult {
+	name := "GitHub Webhook Secret"
+	if client == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "SSM client not available"}
+	}
+	param := ssmPrefix + "config/github/webhook-secret"
+	_, err := client.GetParameter(ctx, &ssm.GetParameterInput{Name: awssdk.String(param)})
+	if err != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return CheckResult{
+				Name:        name,
+				Status:      CheckWarn,
+				Message:     fmt.Sprintf("parameter %q not found — webhook secret not configured", param),
+				Remediation: "Run 'km github init' to configure the webhook secret",
+			}
+		}
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("could not read %q: %v", param, err),
+			Remediation: "Run 'km github init' to configure the webhook secret",
+		}
+	}
+	return CheckResult{Name: name, Status: CheckOK, Message: "webhook secret configured in SSM"}
+}
+
+// checkGitHubBotLoginCached verifies the bot-login parameter exists in SSM.
+// The bot login (e.g. "klanker-maker[bot]") is written by km github init and
+// used by the bridge for loop-guard and mention detection.
+func checkGitHubBotLoginCached(ctx context.Context, client SSMReadAPI, ssmPrefix string) CheckResult {
+	name := "GitHub Bot Login"
+	if client == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "SSM client not available"}
+	}
+	param := ssmPrefix + "config/github/bot-login"
+	out, err := client.GetParameter(ctx, &ssm.GetParameterInput{Name: awssdk.String(param)})
+	if err != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return CheckResult{
+				Name:        name,
+				Status:      CheckWarn,
+				Message:     "bot login not cached in SSM — bridge cannot detect self-mentions",
+				Remediation: "Run 'km github init' to cache the bot login from the GitHub App",
+			}
+		}
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("could not read %q: %v", param, err),
+			Remediation: "Run 'km github init' to cache the bot login",
+		}
+	}
+	login := ""
+	if out.Parameter != nil && out.Parameter.Value != nil {
+		login = awssdk.ToString(out.Parameter.Value)
+	}
+	if login == "" {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     "bot login parameter exists but is empty",
+			Remediation: "Run 'km github init' to populate the bot login from the GitHub App",
+		}
+	}
+	return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("bot login cached: %s", login)}
+}
+
+// checkGitHubBridgeURL verifies the bridge-url parameter exists and is a valid HTTPS URL.
+// The bridge URL is written to SSM by km init after the Lambda is deployed.
+func checkGitHubBridgeURL(ctx context.Context, client SSMReadAPI, ssmPrefix string) CheckResult {
+	name := "GitHub Bridge URL"
+	if client == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "SSM client not available"}
+	}
+	param := ssmPrefix + "config/github/bridge-url"
+	out, err := client.GetParameter(ctx, &ssm.GetParameterInput{Name: awssdk.String(param)})
+	if err != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return CheckResult{
+				Name:        name,
+				Status:      CheckWarn,
+				Message:     "bridge URL not configured in SSM — Lambda may not be deployed yet",
+				Remediation: "Run 'km init --dry-run=false' to deploy the GitHub bridge Lambda",
+			}
+		}
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("could not read %q: %v", param, err),
+			Remediation: "Run 'km init --dry-run=false' to deploy the GitHub bridge Lambda",
+		}
+	}
+	url := ""
+	if out.Parameter != nil && out.Parameter.Value != nil {
+		url = awssdk.ToString(out.Parameter.Value)
+	}
+	if url == "" {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     "bridge URL parameter exists but is empty",
+			Remediation: "Run 'km init --dry-run=false' to deploy the GitHub bridge Lambda",
+		}
+	}
+	if !strings.HasPrefix(url, "https://") {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("bridge URL %q is not HTTPS — webhook delivery may fail", url),
+			Remediation: "Verify the Lambda function URL in km-config.yaml",
+		}
+	}
+	return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("bridge URL configured: %s", url)}
+}
+
+// checkGitHubReposResolvable verifies each github.repos entry references a
+// valid/resolvable profile and warns on match-overlap (two entries that would
+// both match the same repository).
+//
+// Resolvability: a profile is considered resolvable if the Profile field is
+// non-empty or a default_profile is set (bridge has a fallback). An empty
+// profile + no default → WARN: cold-create will fail to find the profile.
+//
+// Overlap: if two entries have the same Match pattern (exact duplicate), that
+// is always a WARN because one entry would silently shadow the other.
+func checkGitHubReposResolvable(repos []appcfg.GithubRepoEntry, defaultProfile string) CheckResult {
+	name := "GitHub Repos Resolvable"
+	if len(repos) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "no github.repos configured — skipping resolvability check",
+		}
+	}
+
+	var warnings []string
+
+	// Overlap check: flag duplicate Match values.
+	seen := make(map[string]int) // match → first index
+	for i, r := range repos {
+		if prev, ok := seen[r.Match]; ok {
+			warnings = append(warnings, fmt.Sprintf(
+				"match-overlap: %q matches both entry[%d] and entry[%d] — entry[%d] will never be reached",
+				r.Match, prev, i, i,
+			))
+		} else {
+			seen[r.Match] = i
+		}
+	}
+
+	// Resolvability check: profile must resolve for every entry.
+	for i, r := range repos {
+		profile := r.Profile
+		if profile == "" {
+			profile = defaultProfile
+		}
+		if profile == "" {
+			warnings = append(warnings, fmt.Sprintf(
+				"entry[%d] match=%q has no profile and no default_profile — cold-create will fail",
+				i, r.Match,
+			))
+		}
+	}
+
+	if len(warnings) > 0 {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%d resolvability issue(s): %s", len(warnings), strings.Join(warnings, "; ")),
+			Remediation: "Set profile: on each repos entry or set github.default_profile in km-config.yaml",
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("%d repo entry/entries configured, all resolvable", len(repos)),
 	}
 }
 
@@ -2806,8 +2998,15 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkOrphanSCPs(ctx, orphanSCPClient, localResourcePrefix, deps.IgnorePrefixes)
 	})
 
-	// GitHub config check.
+	// GitHub bridge checks — gated on github being configured (non-empty repos
+	// or any SSM github key present). When no github block is in km-config.yaml
+	// AND no SSM keys exist, all four sub-checks are skipped silently.
+	// The check group mirrors the Slack inbound check pattern.
 	ssmClient := deps.SSMReadClient
+	githubRepos := cfg.GetGithubRepos()
+	githubDefaultProfile := cfg.GetGithubDefaultProfile()
+	githubConfigured := len(githubRepos) > 0 // SSM-key presence validated inside each sub-check
+
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		if ssmClient == nil {
 			return CheckResult{
@@ -2816,7 +3015,82 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 				Message: "SSM client not available",
 			}
 		}
+		// When github is not configured (no repos and no github block), perform
+		// a lightweight probe: if app-client-id is absent too, skip silently.
+		if !githubConfigured {
+			probe, probeErr := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+				Name: awssdk.String(cfg.GetSsmPrefix() + "config/github/app-client-id"),
+			})
+			var notFoundErr *ssmtypes.ParameterNotFound
+			if errors.As(probeErr, &notFoundErr) || (probeErr == nil && (probe.Parameter == nil || probe.Parameter.Value == nil || awssdk.ToString(probe.Parameter.Value) == "")) {
+				return CheckResult{
+					Name:    "GitHub App Config",
+					Status:  CheckSkipped,
+					Message: "GitHub integration not configured (no github.repos in km-config.yaml)",
+				}
+			}
+		}
 		return checkGitHubConfig(ctx, ssmClient, cfg.GetSsmPrefix())
+	})
+
+	// GitHub webhook secret, bot-login, bridge-url, and repos-resolvable checks.
+	// All four are skipped when github is not configured AND the SSM probe above
+	// would have been skipped.  Individual checks handle nil ssmClient gracefully.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if !githubConfigured && ssmClient != nil {
+			// Probe app-client-id; if absent, skip this group silently.
+			_, probeErr := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+				Name: awssdk.String(cfg.GetSsmPrefix() + "config/github/app-client-id"),
+			})
+			var notFoundErr *ssmtypes.ParameterNotFound
+			if errors.As(probeErr, &notFoundErr) {
+				return CheckResult{
+					Name:    "GitHub Webhook Secret",
+					Status:  CheckSkipped,
+					Message: "GitHub integration not configured",
+				}
+			}
+		}
+		return checkGitHubWebhookSecret(ctx, ssmClient, cfg.GetSsmPrefix())
+	})
+
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if !githubConfigured && ssmClient != nil {
+			_, probeErr := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+				Name: awssdk.String(cfg.GetSsmPrefix() + "config/github/app-client-id"),
+			})
+			var notFoundErr *ssmtypes.ParameterNotFound
+			if errors.As(probeErr, &notFoundErr) {
+				return CheckResult{
+					Name:    "GitHub Bot Login",
+					Status:  CheckSkipped,
+					Message: "GitHub integration not configured",
+				}
+			}
+		}
+		return checkGitHubBotLoginCached(ctx, ssmClient, cfg.GetSsmPrefix())
+	})
+
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if !githubConfigured && ssmClient != nil {
+			_, probeErr := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+				Name: awssdk.String(cfg.GetSsmPrefix() + "config/github/app-client-id"),
+			})
+			var notFoundErr *ssmtypes.ParameterNotFound
+			if errors.As(probeErr, &notFoundErr) {
+				return CheckResult{
+					Name:    "GitHub Bridge URL",
+					Status:  CheckSkipped,
+					Message: "GitHub integration not configured",
+				}
+			}
+		}
+		return checkGitHubBridgeURL(ctx, ssmClient, cfg.GetSsmPrefix())
+	})
+
+	// Repos resolvability + overlap — pure config check, no SSM calls.
+	checks = append(checks, func(_ context.Context) CheckResult {
+		return checkGitHubReposResolvable(githubRepos, githubDefaultProfile)
 	})
 
 	// Credential rotation age check.

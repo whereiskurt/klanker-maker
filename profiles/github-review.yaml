@@ -1,0 +1,104 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: github-review
+  labels:
+    tier: development
+    tool: github-review-agent
+    phase: "97"
+  prefix: gh
+
+# github-review — Phase 97 lean profile for GitHub comment-trigger code review.
+#
+# Lifecycle: short-lived (2h TTL / 20m idle), teardownPolicy=stop so the DDB
+# record survives for status queries after the EC2 instance stops.
+#
+# Network: proxy enforcement, GitHub + AWS suffixes only (HTTPS egress).
+# Agent: Claude with Bash/Read/Write/Edit/Glob/Grep/WebFetch auto-approved.
+# Inbound: notification.github.inbound.enabled=true provisions the per-sandbox
+# github-inbound FIFO queue at km create so the GitHub poller (plan 97-05) can
+# drain comment-trigger envelopes and dispatch Claude turns.
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "20m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+    initCommands:
+      - "yum install -y git jq"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "whereiskurt/*"
+      allowedRefs:
+        - "main"
+        - "develop"
+        - "*"
+
+  network:
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - ".github.com"
+        - ".githubusercontent.com"
+        - ".amazonaws.com"
+        - "api.anthropic.com"
+      allowedHosts: []
+
+  iam:
+    roleSessionDuration: "2h"
+    allowedRegions:
+      - us-east-1
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: false
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+
+  agent:
+    default: claude
+    claude:
+      trustedDirectories:
+        - /workspace
+      tools:
+        autoApprove:
+          - Bash
+          - Read
+          - Write
+          - Edit
+          - Glob
+          - Grep
+          - WebFetch
+
+  notification:
+    github:
+      inbound:
+        enabled: true

@@ -369,6 +369,7 @@ locals {
 		cleanupGitHubTokenResources(ctx, awsCfg, sandboxID, cfg.GetResourcePrefix())
 	}
 	// Always attempt SSM cleanup (parameter may exist even if github-token dir is gone).
+	// SSM path format: /sandbox/%s/github-token (scoped under /{prefix} by SandboxParameterPath).
 	githubTokenParam := awspkg.SandboxParameterPath(cfg.GetResourcePrefix(), sandboxID, "github-token")
 	if _, delErr := ssmClient.DeleteParameter(ctx, &ssm.DeleteParameterInput{
 		Name: aws.String(githubTokenParam),
@@ -485,6 +486,40 @@ locals {
 			if existingMeta.Alias != "" {
 				fmt.Printf("Alias freed: %s\n", existingMeta.Alias)
 			}
+			// Phase 97-03: drain GitHub inbound queue BEFORE other teardown steps.
+			// Non-fatal: each step is best-effort; destroy has already succeeded.
+			if existingMeta.GithubInboundQueueURL != "" {
+				sqsRegionForGH := existingMeta.Region
+				if sqsRegionForGH == "" {
+					sqsRegionForGH = awsCfg.Region
+				}
+				sqsClientForGH, sqsGHErr := awspkg.NewSQSClient(ctx, sqsRegionForGH)
+				if sqsGHErr != nil {
+					log.Warn().Err(sqsGHErr).Str("sandbox_id", sandboxID).
+						Msg("github drain: failed to init SQS client (non-fatal)")
+				} else {
+					ssmClientForGH := ssm.NewFromConfig(awsCfg)
+					drainGitHubInbound(ctx, githubDestroyInboundDeps{
+						SandboxID:      sandboxID,
+						ResourcePrefix: cfg.GetResourcePrefix(),
+						QueueURL:       existingMeta.GithubInboundQueueURL,
+						SQS:            sqsClientForGH,
+						DeleteSSMParameter: func(dctx context.Context, name string) error {
+							_, derr := ssmClientForGH.DeleteParameter(dctx, &ssm.DeleteParameterInput{
+								Name: aws.String(name),
+							})
+							if derr != nil {
+								var notFound *ssmtypes.ParameterNotFound
+								if errors.As(derr, &notFound) {
+									return nil
+								}
+							}
+							return derr
+						},
+					})
+				}
+			}
+
 			// Phase 67-07: drain Slack-inbound queue and thread rows BEFORE the
 			// Phase 63 final-post + archive so the final "destroyed" message lands
 			// while the channel still exists.

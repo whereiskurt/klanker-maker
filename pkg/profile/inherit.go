@@ -145,6 +145,34 @@ func mergeNotificationSpec(parent, child *NotificationSpec) *NotificationSpec {
 		Events: mergeNotificationEventsSpec(parent.Events, child.Events),
 		Email:  mergeNotificationEmailSpec(parent.Email, child.Email),
 		Slack:  mergeNotificationSlackSpec(parent.Slack, child.Slack),
+		Github: mergeNotificationGitHubSpec(parent.Github, child.Github),
+	}
+}
+
+// mergeNotificationGitHubSpec performs field-level nil-aware merge of parent and
+// child NotificationGitHubSpec values. Child non-nil fields override parent; nil
+// fields inherit. Mirrors mergeNotificationSlackSpec / mergeNotificationSlackInboundSpec.
+func mergeNotificationGitHubSpec(parent, child *NotificationGitHubSpec) *NotificationGitHubSpec {
+	if parent == nil {
+		return child
+	}
+	if child == nil {
+		return parent
+	}
+	return &NotificationGitHubSpec{
+		Inbound: mergeNotificationGitHubInboundSpec(parent.Inbound, child.Inbound),
+	}
+}
+
+func mergeNotificationGitHubInboundSpec(parent, child *NotificationGitHubInboundSpec) *NotificationGitHubInboundSpec {
+	if parent == nil {
+		return child
+	}
+	if child == nil {
+		return parent
+	}
+	return &NotificationGitHubInboundSpec{
+		Enabled: pickBoolPtr(parent.Enabled, child.Enabled),
 	}
 }
 

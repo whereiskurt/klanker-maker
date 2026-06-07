@@ -18,6 +18,15 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
 - Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
 
+**Phase 97 (2026-06-06) — GitHub comment-trigger bridge: km-github-bridge Lambda (complete):**
+- When an allowlisted GitHub login @-mentions the bot in a PR comment, the km-github-bridge Lambda HMAC-verifies the webhook, dedupes by `X-GitHub-Delivery` GUID, resolves `owner/repo` → `{alias, profile, allow}` from `km-config.yaml github.repos:`, emits 👀 ACK, and dispatches to a per-repo sandbox (warm: FIFO enqueue; cold: EventBridge SandboxCreate).
+- **Dormant by default.** Add `github.repos:` to `km-config.yaml` to activate. Absent → byte-identical to pre-Phase-97 behavior. `km doctor` skips the GitHub group silently when unconfigured.
+- New CLI: `km github init` (cache bot-login from GitHub App), `km github manifest` (generate App JSON), `km github status` (print SSM-backed config). New sandbox-side helper `km-github comment|review|pr-files`.
+- New profile: `profiles/github-review.yaml` — lean 2h/20m-idle spot t3.medium with `notification.github.inbound.enabled: true` (provisions the per-sandbox github-inbound FIFO queue).
+- Source-aware userdata poller drains github-inbound envelopes and dispatches Claude turns; agent posts PR reviews via `km-github review`.
+- **Deploy:** `make build-lambdas` (clean) + `km init --dry-run=false` (new Lambda + EventBridge + env block, NOT `--sidecars`) + `km init --sidecars` (schema field) + `km github manifest` to update App scopes + `km github init` to cache bot-login. Existing sandboxes need `km destroy && km create` to gain the queue + poller.
+- See `docs/github-bridge.md` for the full operator runbook, deploy sequence, and troubleshooting.
+
 **Phase 96 (2026-06-05) — Slack default router: orphan-channel @-mention reply (complete):**
 - When the shared bot is @-mentioned in a channel no install owns, the front-door install posts ONE threaded reply naming the `#sb-{alias}-{profile}` convention and listing running sandbox channels across all installs as `<#CID>` Slack mentions. Empty aggregate list → guidance-only variant.
 - **Dormant by default.** Set `slack.default_router: true` in `km-config.yaml` on the **front-door install only**. Absent or false → byte-identical to Phase 95 (no reply, no extra calls).
@@ -47,6 +56,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Polite-bot mode, `KM_SLACK_MENTION_ONLY`, per-channel @-mention-only inbound | `docs/slack-notifications.md` § Phase 91 |
 | Federated bridge relay — one Slack App across multiple km installs | `docs/slack-notifications.md` § Phase 95 |
 | Default router: orphan-channel @-mention reply, `slack.default_router`, cooldown | `docs/slack-notifications.md` § Phase 96 |
+| GitHub comment-trigger bridge — `@km-bot review this PR` → sandbox agent → PR review | `docs/github-bridge.md` (Phase 97) |
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |

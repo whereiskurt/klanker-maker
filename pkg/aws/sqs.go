@@ -106,6 +106,67 @@ func DeleteSlackInboundQueue(ctx context.Context, c SQSClient, queueURL string) 
 	return nil
 }
 
+// GitHubInboundQueueName returns the FIFO queue name for a sandbox's GitHub inbound queue.
+// Phase 97: owned by pkg/aws so both the km CLI (plan 03) and the create-handler
+// Lambda (plan 02) can reference it without an intra-wave ordering dependency.
+// Format: {resource_prefix}-github-inbound-{sandbox-id}.fifo
+func GitHubInboundQueueName(resourcePrefix, sandboxID string) string {
+	return fmt.Sprintf("%s-github-inbound-%s.fifo", resourcePrefix, sandboxID)
+}
+
+// CreateGitHubInboundQueue creates a per-sandbox GitHub inbound FIFO queue.
+// Attributes mirror CreateSlackInboundQueue exactly (FIFO, ContentBasedDeduplication=false,
+// visibility=30s, retention=1209600/14d). Returns the queue URL on success.
+// Idempotent: QueueNameExists is treated as success via URL lookup.
+func CreateGitHubInboundQueue(ctx context.Context, c SQSClient, queueName string) (string, error) {
+	out, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: awssdk.String(queueName),
+		Attributes: map[string]string{
+			string(sqstypes.QueueAttributeNameFifoQueue):                 "true",
+			string(sqstypes.QueueAttributeNameContentBasedDeduplication): "false",
+			string(sqstypes.QueueAttributeNameVisibilityTimeout):         "30",
+			string(sqstypes.QueueAttributeNameMessageRetentionPeriod):    "1209600",
+		},
+	})
+	if err != nil {
+		var existsErr *sqstypes.QueueNameExists
+		if errors.As(err, &existsErr) {
+			list, lerr := c.ListQueues(ctx, &sqs.ListQueuesInput{
+				QueueNamePrefix: awssdk.String(queueName),
+			})
+			if lerr == nil {
+				for _, u := range list.QueueUrls {
+					if strings.HasSuffix(u, "/"+queueName) {
+						return u, nil
+					}
+				}
+			}
+			return "", fmt.Errorf("create github queue %s: exists but URL lookup failed: %w", queueName, lerr)
+		}
+		return "", fmt.Errorf("create github queue %s: %w", queueName, err)
+	}
+	return awssdk.ToString(out.QueueUrl), nil
+}
+
+// DeleteGitHubInboundQueue is best-effort — returns nil if the queue is already
+// gone. Used by km destroy and rollback paths in km create.
+func DeleteGitHubInboundQueue(ctx context.Context, c SQSClient, queueURL string) error {
+	if queueURL == "" {
+		return nil
+	}
+	_, err := c.DeleteQueue(ctx, &sqs.DeleteQueueInput{
+		QueueUrl: awssdk.String(queueURL),
+	})
+	if err != nil {
+		var notFound *sqstypes.QueueDoesNotExist
+		if errors.As(err, &notFound) {
+			return nil // already gone — treat as success
+		}
+		return fmt.Errorf("delete github queue %s: %w", queueURL, err)
+	}
+	return nil
+}
+
 // QueueDepth returns the ApproximateNumberOfMessages for a queue.
 // Used by km status / km doctor to surface queue backlog.
 func QueueDepth(ctx context.Context, c SQSClient, queueURL string) (int64, error) {

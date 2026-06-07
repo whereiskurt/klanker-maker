@@ -47,6 +47,15 @@ type SandboxMetadata struct {
 	// Populated by provisionSlackInboundQueue (Plan 67-06); read by drainSlackInbound (Plan 67-07).
 	SlackInboundQueueURL string `json:"slack_inbound_queue_url,omitempty"`
 
+	// Phase 97 — GitHub inbound metadata.
+	// GithubInboundQueueURL is the SQS FIFO queue URL for inbound GitHub comment-trigger events.
+	// Empty when notification.github.inbound.enabled was false/absent at create time (dormant invariant).
+	// Populated by provisionGitHubInboundQueue (Plan 97-03); read by the GitHub poller (Plan 97-05).
+	// MUST round-trip through marshal/unmarshal: every read-modify-write path (resume.go, extend.go,
+	// ttl-handler Lambda) PutItems the whole row — dropping this field reverts the sandbox to
+	// dormant on the next lifecycle write (project_sandboxmetadata_lossy_roundtrip footgun).
+	GithubInboundQueueURL string `json:"github_inbound_queue_url,omitempty"`
+
 	// Phase 91.5 — per-sandbox Slack inbound overrides. Written at km create by
 	// create_slack_inbound.go ONLY when the profile sets the field explicitly;
 	// read by the bridge's FetchByChannel. Tri-state via *bool: nil = "fall back

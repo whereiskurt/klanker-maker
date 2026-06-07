@@ -467,6 +467,35 @@ resource "aws_iam_role_policy" "ec2spot_slack_inbound_sqs" {
   })
 }
 
+# Policy: SQS read access for Phase 97 github-inbound per-sandbox queue.
+# The sandbox-side source-aware poller drains/deletes its own github-inbound
+# FIFO to consume @-mention dispatches from the km-github-bridge Lambda.
+# Scoped to the sandbox's OWN queue ARN only (cross-sandbox access prevented by
+# IAM, not just naming). Queue name: {resource_prefix}-github-inbound-{sandbox_id}.fifo
+resource "aws_iam_role_policy" "ec2spot_github_inbound_sqs" {
+  count = local.total_ec2spot_count > 0 ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-github-inbound"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SQSReadOwnGitHubInboundQueue"
+        Effect = "Allow"
+        Action = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ChangeMessageVisibility",
+        ]
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-github-inbound-${var.sandbox_id}.fifo"
+      }
+    ]
+  })
+}
+
 # Phase 68: PutObject permission for Slack transcript uploads.
 # Scoped to the sandbox's own prefix under transcripts/{sandbox_id}/* so a
 # compromised sandbox cannot overwrite another sandbox's transcripts. Gated

@@ -24,9 +24,17 @@ type SandboxCreateDetail struct {
 	ArtifactPrefix string `json:"artifact_prefix"`
 	OperatorEmail  string `json:"operator_email,omitempty"`
 	OnDemand       bool   `json:"on_demand"`
-	CreatedBy      string `json:"created_by,omitempty"`  // "cli", "email", "api", "remote"
+	CreatedBy      string `json:"created_by,omitempty"`   // "cli", "email", "api", "remote"
 	Alias          string `json:"alias,omitempty"`        // --alias override, forwarded to create subprocess
 	ScheduleTime   string `json:"schedule_time,omitempty"` // natural language time for deferred create via km at
+
+	// GithubEnvelope carries the JSON-serialized GitHub webhook envelope for
+	// cold-create correction (Phase 97, Pitfall 1 fix). When the km-github-bridge
+	// receives a comment trigger for a repo with no running sandbox, it publishes a
+	// SandboxCreate event with this field populated. The create-handler drains it
+	// into the new sandbox's github-inbound FIFO queue after provisioning so the
+	// poller can dispatch it on first boot. Empty for all non-github creates (dormant).
+	GithubEnvelope string `json:"github_envelope,omitempty"`
 }
 
 // PutSandboxCreateEvent publishes a SandboxCreate event to EventBridge.

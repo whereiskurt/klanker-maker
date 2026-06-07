@@ -240,13 +240,106 @@ func TestCompilePermissions_EmptySlice(t *testing.T) {
 
 // TestCompilePermissions_UnknownPermission verifies that unknown permission
 // strings (e.g. "write", "admin", "delete") are silently ignored and produce
-// an empty map. Only "clone", "fetch", and "push" are valid profile permissions.
+// an empty map. Only "clone", "fetch", "push", "comment", and "review" are
+// valid profile permissions.
 func TestCompilePermissions_UnknownPermission(t *testing.T) {
 	unknownPerms := []string{"write", "admin", "delete", "read"}
 	for _, unknown := range unknownPerms {
 		perms := github.CompilePermissions([]string{unknown})
 		if len(perms) != 0 {
 			t.Errorf("expected empty map for unknown permission %q, got %v", unknown, perms)
+		}
+	}
+}
+
+// ============================================================
+// CompilePermissions — write verb tests (Phase 97)
+// ============================================================
+
+// TestCompilePermissions_Comment verifies comment→issues:write mapping.
+func TestCompilePermissions_Comment(t *testing.T) {
+	perms := github.CompilePermissions([]string{"comment"})
+	if perms["issues"] != "write" {
+		t.Errorf("expected issues=write for comment, got %v", perms["issues"])
+	}
+}
+
+// TestCompilePermissions_Review verifies review→pull_requests:write mapping.
+func TestCompilePermissions_Review(t *testing.T) {
+	perms := github.CompilePermissions([]string{"review"})
+	if perms["pull_requests"] != "write" {
+		t.Errorf("expected pull_requests=write for review, got %v", perms["pull_requests"])
+	}
+}
+
+// TestCompilePermissions_CommentAndReview verifies both mappings coexist.
+func TestCompilePermissions_CommentAndReview(t *testing.T) {
+	perms := github.CompilePermissions([]string{"comment", "review"})
+	if perms["issues"] != "write" {
+		t.Errorf("expected issues=write, got %v", perms["issues"])
+	}
+	if perms["pull_requests"] != "write" {
+		t.Errorf("expected pull_requests=write, got %v", perms["pull_requests"])
+	}
+}
+
+// TestGitHubInboundWritePerms verifies the github-inbound write permission set
+// includes issues:write, pull_requests:write, contents:write, and checks:write.
+func TestGitHubInboundWritePerms(t *testing.T) {
+	perms := github.GitHubInboundWritePerms()
+	checks := map[string]string{
+		"issues":        "write",
+		"pull_requests": "write",
+		"contents":      "write",
+		"checks":        "write",
+	}
+	for k, want := range checks {
+		if got := perms[k]; got != want {
+			t.Errorf("GitHubInboundWritePerms: expected %s=%s, got %q", k, want, got)
+		}
+	}
+	if len(perms) != len(checks) {
+		t.Errorf("expected exactly %d entries, got %d: %v", len(checks), len(perms), perms)
+	}
+}
+
+// TestCompilePermissions_Checks verifies checks→checks:write mapping.
+func TestCompilePermissions_Checks(t *testing.T) {
+	perms := github.CompilePermissions([]string{"checks"})
+	if perms["checks"] != "write" {
+		t.Errorf("expected checks=write for checks verb, got %v", perms["checks"])
+	}
+}
+
+// TestCompilePermissions_AllInboundVerbs verifies all four github-inbound verbs
+// together produce the full write permission set.
+func TestCompilePermissions_AllInboundVerbs(t *testing.T) {
+	perms := github.CompilePermissions([]string{"comment", "review", "push", "checks"})
+	want := github.GitHubInboundWritePerms()
+	for k, wantVal := range want {
+		if got := perms[k]; got != wantVal {
+			t.Errorf("CompilePermissions(inbound verbs): expected %s=%s, got %q", k, wantVal, got)
+		}
+	}
+}
+
+// TestCompilePermissions_ExistingMappingsUnchanged verifies that the existing
+// clone/fetch→contents:read and push→contents:write mappings are not regressed.
+func TestCompilePermissions_ExistingMappingsUnchanged(t *testing.T) {
+	tests := []struct {
+		verbs    []string
+		wantKey  string
+		wantVal  string
+	}{
+		{[]string{"clone"}, "contents", "read"},
+		{[]string{"fetch"}, "contents", "read"},
+		{[]string{"push"}, "contents", "write"},
+		{[]string{"clone", "push"}, "contents", "write"},
+	}
+	for _, tc := range tests {
+		perms := github.CompilePermissions(tc.verbs)
+		if got := perms[tc.wantKey]; got != tc.wantVal {
+			t.Errorf("CompilePermissions(%v): expected %s=%s, got %q", tc.verbs, tc.wantKey, tc.wantVal, got)
 		}
 	}
 }
