@@ -1,9 +1,9 @@
 ---
 phase: 97-github-comment-trigger-mvp
 verified: 2026-06-06T00:00:00Z
-updated: 2026-06-06T22:11:00Z
+updated: 2026-06-07T04:20:00Z
 status: human_needed
-score: 11/11 must-haves verified (GH-E2E is human-only UAT)
+score: 11/11 code reqs verified; warm-path GH-E2E PASSED in live UAT; cold-path + negatives pending
 re_verification:
   previous_status: gaps_found
   previous_score: 9/11 must-haves verified (1 code gap found post-verification, 1 human-only)
@@ -11,6 +11,29 @@ re_verification:
     - "GH-BRIDGE-DEPLOY: infra/live/use1/lambda-github-bridge/terragrunt.hcl created; lambda-github-bridge added to init.go regionalModules() ordered list + 5-min timeout case; go build clean; TestRegionalModulesIncludesGitHubBridge + TestUninitDestroyOrder pass"
   gaps_remaining: []
   regressions: []
+post_uat:
+  warm_path_e2e: passed   # 2026-06-07, PR #10: @-mention -> 👀 -> Claude review -> single auto post-back, queue 0/0, no loop
+  cold_path_e2e: not_run
+  negative_nonallowlisted: not_run
+  negative_redelivery_dedupe: not_run
+  # 7 deploy/runtime gaps + operator-config issues surfaced ONLY in live UAT
+  # (code logic verification missed the deploy/IAM/runtime/prompt surface entirely).
+  code_gaps_found_and_fixed:
+    - "1. km-github-bridge not wired into km init (no live terragrunt unit + absent from regionalModules) — plan 97-07 (b4b62129/3c35c82f/dc4f5385)"
+    - "2. km-github-bridge missing from buildLambdaZips — km init never built the bridge zip (42ac12ec)"
+    - "3. create-handler role lacked github-inbound SQS create/delete/send — km create 403 on CreateQueue (b7efae31)"
+    - "4. ec2spot sandbox role lacked github-inbound SQS receive — poller would 403 on ReceiveMessage (b7efae31)"
+    - "5. km-github sidecar never uploaded to S3 — userdata 404 aborted ENTIRE bootstrap (no km-session-entry/agent) (074927b7)"
+    - "6. poller preamble never instructed post-back — agent generated review but never posted to the PR (2c77f963)"
+    - "6b. reactor requested only issues:write — 👀 reaction 403 on PR comments; needs pull_requests:write; now logs response body (2c77f963)"
+    - "7. SQS visibility 300s < ~6min review runtime — message re-delivered mid-run -> duplicate-review loop; extended to 1800s (3c348142)"
+  operator_config_issues_no_code_change:
+    - "stale SSM installation-id 124842848 -> 118557537 (per-sandbox token minted against wrong install -> post-back failed)"
+    - "bot-login had [bot] suffix -> @-mention text never matched; set to app slug 'klanker-maker'"
+    - "webhook secret never set in the GitHub App -> zero deliveries; copied SSM value into the App"
+    - "App write-perms not approved on the installation -> 403s; approved Issues/PR/Checks write"
+    - "(also fixed in code: doubled manifest app-name km-km-github-bridge -> km-github-bridge, 5db88ff1)"
+  verifier_blind_spot: "gsd-verifier + gsd-plan-checker validated code LOGIC (go build, unit tests, requirement coverage) but never exercised the DEPLOY/IAM/RUNTIME/PROMPT surface — module reachability by km init, IAM grants vs runtime API calls, artifact upload lists, SQS visibility vs agent runtime, prompt efficacy, live token/permission wiring. All 7 gaps surfaced only in live UAT. Future Lambda/queue/IAM/agent-prompt phases MUST add a deploy-surface verification pass."
 human_verification:
   - test: "Deploy bridge Lambda + configure GitHub App, then @-mention bot on a real PR from allowlisted login"
     expected: "👀 reaction within ~10s ack window; Claude runs in per-repo sandbox (warm path: enqueue; cold path: SandboxCreate carries envelope); PR review comment posted by bot via km-github review"
@@ -29,8 +52,59 @@ human_verification:
 
 **Verified:** 2026-06-06
 **Updated:** 2026-06-06 (re-verification after plan 97-07 gap closure)
-**Status:** human_needed — all code-level requirements verified; GH-E2E manual UAT pending
-**Re-verification:** Yes — after gap closure (GH-BRIDGE-DEPLOY closed by plan 97-07)
+**Status:** human_needed — all code-level requirements verified; **warm-path GH-E2E PASSED in live UAT (2026-06-07)**; cold-path + negative scenarios still pending.
+**Re-verification:** Yes — after gap closure (GH-BRIDGE-DEPLOY closed by plan 97-07) + live operator UAT.
+
+---
+
+## Post-Execution UAT — what live deployment revealed
+
+The phase passed all code-level verification (build, unit tests, requirement coverage) and was marked code-complete. But **live UAT surfaced seven distinct gaps that no automated verification caught**, because every one lived in the *deploy / IAM / runtime / prompt* surface rather than in code logic. The warm path only worked end-to-end after all seven were fixed. This section is the honest record.
+
+### Warm-path GH-E2E: PASSED ✅ (2026-06-07, PR #10)
+
+`@klanker-maker review this` → 👀 reaction within the ack window → bridge verified/resolved/enqueued → sandbox poller drained → Claude produced a real security review → **single auto-posted review back to the PR** via `km-github`. Confirmed clean: one dispatch, one `Turn complete`, queue `0/0`, poller idle, no loop. The full chain — webhook → bridge → SQS → sandbox → agent → post-back — is alive.
+
+### The seven gaps (all fixed, committed, pushed)
+
+| # | Gap | Class | Symptom in UAT | Fix | Commit |
+|---|-----|-------|----------------|-----|--------|
+| 1 | `km-github-bridge` not wired into `km init` — no live `infra/live/use1/lambda-github-bridge/terragrunt.hcl` and absent from `regionalModules()` | deploy | bridge never deployed; `km init` ran clean but produced no Function URL | plan 97-07: live unit + `init.go` entry + 5-min timeout | `b4b62129` `3c35c82f` `dc4f5385` |
+| 2 | `km-github-bridge` missing from `buildLambdaZips` hardcoded list | deploy | `km init --dry-run=false` never built the bridge zip → apply failed on `filebase64sha256(missing zip)` | add to `lambdaBuilds()` + guard test | `42ac12ec` |
+| 3 | create-handler role lacked `sqs:CreateQueue/DeleteQueue/SendMessage` on `*-github-inbound-*.fifo` | IAM | `km create` → `403 AccessDenied: sqs:CreateQueue` → sandbox `failed` | `km-operator-policy` grant (+SendMessage for cold drain) | `b7efae31` |
+| 4 | ec2spot sandbox role lacked `sqs:ReceiveMessage/DeleteMessage` on its own github-inbound queue | IAM | poller would 403 on drain (averted before it bit) | `ec2spot/v1.2.0` grant | `b7efae31` |
+| 5 | `km-github` sidecar never uploaded to S3 (missing from `buildAndUploadSidecars`) | deploy/artifact | userdata `aws s3 cp .../sidecars/km-github` → **404 aborted the ENTIRE bootstrap** under `set -e`: no `km-session-entry` (`km shell`/`agent auth` → 127), no network enforcement, no `claude` install | add to `sidecarBuilds()` + guard test | `074927b7` |
+| 6 | poller preamble never told the agent to post back | prompt | agent generated the review on the box and `Turn complete`'d, but nothing reached the PR | preamble now instructs `km-github comment/review` with repo+number pre-filled | `2c77f963` |
+| 6b | reactor minted token with only `issues:write` | IAM/code | 👀 reaction `403` on PR-conversation comments | request `pull_requests:write` too; include GitHub response body in the error | `2c77f963` |
+| 7 | SQS visibility (300s extend) < ~6-min review runtime | runtime | message re-appeared mid-run → poller re-dispatched → **duplicate-review loop** (1 comment → 3+ runs/posts); stale receipt handle made the post-run delete a no-op | extend to 1800s (hot-patched live + committed); future: heartbeat-extend | `3c348142` |
+
+### Operator-config issues (not code gaps — fixed via SSM/GitHub UI)
+
+These weren't code defects but blocked the flow and are worth recording for the runbook:
+- **Stale SSM `installation-id`** `124842848` → `118557537` — the per-sandbox token (and earlier the reactor) was minting against an install that no longer matched the repo, so post-backs/reactions 403'd. (Confirmed via the App's `/app/installations` API: a single install `118557537` on `whereiskurt` with all write perms.)
+- **`bot-login` carried the `[bot]` suffix** — GitHub stores `@klanker-maker` (no suffix) in the comment body, so `ContainsMention` never matched; set bot-login to the app slug `klanker-maker`.
+- **Webhook secret never configured in the App** — zero deliveries reached the bridge; copied the SSM `webhook-secret` value into the App's webhook config.
+- **App write-perms not approved on the installation** — required approving Issues/Pull-requests/Checks write before any token could write.
+- (Also fixed in code: the manifest's doubled app-name `km-km-github-bridge` → `km-github-bridge`, `5db88ff1`.)
+
+### The verifier blind spot (process lesson)
+
+`gsd-verifier` and `gsd-plan-checker` both passed the phase by validating **code logic**: `go build ./...`, unit tests, requirement-ID coverage, and that the TF module/source files *existed*. None of them exercised whether the system was **deployable and operable**:
+
+- module *reachable* by `km init` (live unit + curated module list), not just present in `infra/modules/`
+- IAM grants cross-checked against the actual runtime API calls (SQS create/receive/send, reactions)
+- artifact upload lists (`buildLambdaZips` / `buildAndUploadSidecars`) matching what userdata downloads
+- SQS visibility timeout vs realistic agent runtime
+- prompt efficacy (does the preamble actually cause the post-back?)
+- live token/permission/install wiring
+
+**Recommendation:** any phase introducing a new Lambda, queue, IAM surface, or agent prompt must add a **deploy-surface verification pass** — at minimum `km init --plan` enumerates the new module, an IAM-vs-runtime-call cross-check, the artifact-list lockstep guard tests (now added for lambdas + sidecars), and a visibility-vs-runtime sanity check. Code-green ≠ deployable.
+
+### Remaining before formal phase close
+
+- **Cold-path E2E** — comment on an allowlisted repo with no pre-warmed sandbox → `SandboxCreate` provisions a box, the carried envelope drains on first boot, review posts.
+- **Negative: non-allowlisted login** — comment from a login not in `allow:` → silent (no 👀, no dispatch).
+- **Negative: redelivery dedupe** — GitHub "Redeliver" → no second dispatch (nonces GUID).
 
 ---
 
