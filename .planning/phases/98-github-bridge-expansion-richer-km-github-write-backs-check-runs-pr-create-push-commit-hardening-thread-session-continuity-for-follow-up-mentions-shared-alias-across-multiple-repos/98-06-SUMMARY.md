@@ -154,4 +154,4 @@ mint / row delete / poller restart) and approve. Full live-UAT context: `98-UAT.
 
 ---
 *Phase: 98-github-bridge-expansion*
-*Completed: 2026-06-07 (Tasks 1–5 done; Task 6 checkpoint pending operator E2E)*
+*Completed: 2026-06-07 (Tasks 1–6 done; Task 6 checkpoint APPROVED after unattended live E2E — all 5 gaps validated: token self-minted at create, resume no-403, status→running, stale-session poller fallback fired ("retrying as fresh session" → posted to PR #11), reviews posted to PR #8 + #11)*
