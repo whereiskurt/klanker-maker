@@ -223,7 +223,10 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, check
 	var authResults map[string]string
 	if auth {
 		if checker == nil && ec2Err == nil {
-			checker = &ssmAgentAuthChecker{ssmClient: ssm.NewFromConfig(awsCfg)}
+			checker = &ssmAgentAuthChecker{
+				ssmClient: ssm.NewFromConfig(awsCfg),
+				ec2Client: ec2.NewFromConfig(awsCfg),
+			}
 		}
 		if checker != nil {
 			authResults = make(map[string]string, len(records))

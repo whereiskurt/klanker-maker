@@ -178,7 +178,10 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 		// Initialize real auth checker when none is injected — uses SSM.
 		// awsCfg is already loaded above, so no second LoadAWSConfig call needed.
 		if checker == nil {
-			checker = &ssmAgentAuthChecker{ssmClient: ssm.NewFromConfig(awsCfg)}
+			checker = &ssmAgentAuthChecker{
+				ssmClient: ssm.NewFromConfig(awsCfg),
+				ec2Client: ec2.NewFromConfig(awsCfg),
+			}
 		}
 	}
 
