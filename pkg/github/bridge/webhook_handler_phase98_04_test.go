@@ -1,17 +1,6 @@
-//go:build phase98_wave3
-
-// webhook_handler_phase98_04_test.go — RED tests for WebhookHandler auto-resume (98-04).
+// webhook_handler_phase98_04_test.go — Phase 98-04 tests for WebhookHandler auto-resume.
 //
-// BUILD TAG: phase98_wave3
-// TestHandle_AutoResume and its mocks reference Resumer/SandboxAliasResolverWithStatus
-// which are NOT yet defined. 98-04 implements these and removes this tag.
-//
-// HANDOFF TO 98-04:
-//   1. Add Resumer SandboxResumer field to WebhookHandler.
-//   2. Add ResolveByAliasWithStatus(ctx, alias) (sandboxID, status string, err error)
-//      to SandboxAliasResolver interface (or a new SandboxAliasResolverWithStatus).
-//   3. In Handle() warm path: if status == "stopped" || "paused", call Resumer.StartSandbox.
-//   4. Remove the phase98_wave3 build tag from THIS file.
+// Tests: TestHandle_AutoResume (GH-X-RESUME).
 package bridge_test
 
 import (

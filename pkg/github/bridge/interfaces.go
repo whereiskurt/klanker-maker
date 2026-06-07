@@ -2,6 +2,31 @@ package bridge
 
 import "context"
 
+// SandboxResumer starts a stopped or paused EC2 sandbox instance.
+// Used by WebhookHandler when an alias resolves to a stopped sandbox — the
+// resumer starts it and the enqueued prompt drains once the box boots.
+// Errors are non-fatal (logged); enqueue still proceeds so the prompt is not lost.
+type SandboxResumer interface {
+	// StartSandbox starts all stopped EC2 instances tagged with sandboxID.
+	// Returns nil when at least one instance was started, or a descriptive
+	// error that will be logged non-fatally by the caller.
+	StartSandbox(ctx context.Context, sandboxID string) error
+}
+
+// SandboxAliasResolverWithStatus extends SandboxAliasResolver with a status-aware
+// variant that returns the sandbox status alongside the sandbox_id. This enables
+// the unified dispatch decision: resume stopped/paused sandboxes instead of
+// cold-creating a duplicate, and cold-create only when the alias is truly absent.
+type SandboxAliasResolverWithStatus interface {
+	SandboxAliasResolver
+
+	// ResolveByAliasWithStatus returns the sandbox_id and status for the given alias.
+	// status "" (attribute absent in DDB) is equivalent to "running" (backward compat).
+	// Returns an error (sandbox not found) when the alias does not exist in DDB —
+	// the caller treats this as the cold-create trigger.
+	ResolveByAliasWithStatus(ctx context.Context, alias string) (sandboxID, status string, err error)
+}
+
 // SecretFetcher returns the GitHub webhook signing secret (cached from SSM).
 type SecretFetcher interface {
 	Fetch(ctx context.Context) (string, error)

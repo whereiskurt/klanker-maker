@@ -42,6 +42,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -80,6 +81,7 @@ func init() {
 	sqsClient := sqs.NewFromConfig(cfg)
 	ssmClient := ssm.NewFromConfig(cfg)
 	ebClient := eventbridge.NewFromConfig(cfg)
+	ec2Client := ec2.NewFromConfig(cfg)
 
 	// ── Resource prefix ──────────────────────────────────────────────────────
 	prefix := envOr("KM_RESOURCE_PREFIX", "km")
@@ -158,6 +160,10 @@ func init() {
 		ArtifactBucket: artifactsBucket,
 		ArtifactPrefix: artifactsPrefix,
 	}
+	resumer := &bridge.EC2Resumer{
+		Client:         ec2Client,
+		ResourcePrefix: prefix,
+	}
 	reactor := &bridge.InstallationReactor{
 		AppClientID:   appClientID,
 		PrivateKeyPEM: []byte(privateKeyPEM),
@@ -172,6 +178,7 @@ func init() {
 		Publisher:      publisher,
 		SQS:            sqsSender,
 		Reactor:        reactor,
+		Resumer:        resumer,
 		Threads:        threadStore,
 		Entries:        entries,
 		DefaultProfile: defaultProfile,

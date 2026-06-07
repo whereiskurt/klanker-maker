@@ -34,6 +34,8 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -243,6 +245,52 @@ func (r *DynamoAliasResolver) ResolveByAlias(ctx context.Context, alias string) 
 	return s.Value, nil
 }
 
+// ResolveByAliasWithStatus queries the alias-index GSI for the sandbox_id and
+// status of the sandbox with the given alias. Returns an error if no sandbox
+// exists (the caller treats this as the cold-create trigger).
+// status="" (attribute absent in DDB) is equivalent to "running" (backward compat).
+func (r *DynamoAliasResolver) ResolveByAliasWithStatus(ctx context.Context, alias string) (string, string, error) {
+	out, err := r.Client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              awssdk.String(r.TableName),
+		IndexName:              awssdk.String("alias-index"),
+		KeyConditionExpression: awssdk.String("alias = :alias"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":alias": &dynamodbtypes.AttributeValueMemberS{Value: alias},
+		},
+		Limit: awssdk.Int32(2), // fetch 2 to detect duplicates
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("github-bridge: resolve alias (with status) %q via GSI: %w", alias, err)
+	}
+	if len(out.Items) == 0 {
+		return "", "", fmt.Errorf("github-bridge: alias %q not found", alias)
+	}
+	if len(out.Items) > 1 {
+		return "", "", fmt.Errorf("github-bridge: alias %q is ambiguous (matched multiple sandboxes)", alias)
+	}
+
+	item := out.Items[0]
+	sv, ok := item["sandbox_id"]
+	if !ok {
+		return "", "", fmt.Errorf("github-bridge: alias %q: GSI item missing sandbox_id", alias)
+	}
+	s, ok := sv.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok {
+		return "", "", fmt.Errorf("github-bridge: alias %q: sandbox_id not a String", alias)
+	}
+	sandboxID := s.Value
+
+	// status is optional — absent means "running" (backward compat with rows created
+	// before the status field was introduced).
+	status := ""
+	if statV, ok := item["status"]; ok {
+		if sv2, ok := statV.(*dynamodbtypes.AttributeValueMemberS); ok {
+			status = sv2.Value
+		}
+	}
+	return sandboxID, status, nil
+}
+
 // GitHubQueueURL fetches the github_inbound_queue_url attribute from the
 // sandbox's km-sandboxes row. Returns an error if absent (queue not provisioned).
 func (r *DynamoAliasResolver) GitHubQueueURL(ctx context.Context, sandboxID string) (string, error) {
@@ -400,6 +448,71 @@ func (a *EventBridgeAdapter) PutSandboxCreate(ctx context.Context, alias, profil
 	}
 	if out.FailedEntryCount > 0 {
 		return fmt.Errorf("github-bridge: EventBridge PutEvents: %d entries failed", out.FailedEntryCount)
+	}
+	return nil
+}
+
+// ============================================================
+// EC2Resumer — starts stopped EC2 sandbox instances (warm-resume path)
+// ============================================================
+
+// EC2StartAPI is the narrow EC2 interface required by EC2Resumer.
+// *ec2.Client satisfies this interface.
+type EC2StartAPI interface {
+	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+	StartInstances(ctx context.Context, params *ec2.StartInstancesInput, optFns ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error)
+}
+
+// EC2Resumer implements SandboxResumer by finding stopped EC2 instances tagged
+// with the km sandbox-id tag and starting them. Mirrors the resume path in
+// internal/app/cmd/resume.go:95-115.
+type EC2Resumer struct {
+	Client          EC2StartAPI
+	SandboxIDTagKey string // e.g. "km:sandbox-id" (km standard sandbox tag)
+	ResourcePrefix  string // e.g. "km" — used to default SandboxIDTagKey when empty
+}
+
+func (r *EC2Resumer) sandboxIDTagKey() string {
+	if r.SandboxIDTagKey != "" {
+		return r.SandboxIDTagKey
+	}
+	if r.ResourcePrefix != "" {
+		return r.ResourcePrefix + ":sandbox-id"
+	}
+	return "km:sandbox-id"
+}
+
+// StartSandbox finds all stopped EC2 instances tagged with the km sandbox-id
+// tag equal to sandboxID and calls StartInstances on them. Returns nil when
+// at least one instance was started, or an error describing the failure.
+func (r *EC2Resumer) StartSandbox(ctx context.Context, sandboxID string) error {
+	tagKey := r.sandboxIDTagKey()
+	descOut, err := r.Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:" + tagKey), Values: []string{sandboxID}},
+			{Name: awssdk.String("instance-state-name"), Values: []string{"stopped"}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("github-bridge: EC2Resumer.DescribeInstances for %s: %w", sandboxID, err)
+	}
+
+	var instanceIDs []string
+	for _, res := range descOut.Reservations {
+		for _, inst := range res.Instances {
+			if inst.InstanceId != nil && *inst.InstanceId != "" {
+				instanceIDs = append(instanceIDs, *inst.InstanceId)
+			}
+		}
+	}
+	if len(instanceIDs) == 0 {
+		return fmt.Errorf("github-bridge: no stopped EC2 instances found for sandbox %s (tag %s)", sandboxID, tagKey)
+	}
+
+	if _, err := r.Client.StartInstances(ctx, &ec2.StartInstancesInput{
+		InstanceIds: instanceIDs,
+	}); err != nil {
+		return fmt.Errorf("github-bridge: EC2Resumer.StartInstances for %s: %w", sandboxID, err)
 	}
 	return nil
 }

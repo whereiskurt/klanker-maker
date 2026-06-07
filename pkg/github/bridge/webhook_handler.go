@@ -69,7 +69,17 @@ type WebhookHandler struct {
 	Nonces DeliveryNonceStore
 
 	// Resolver looks up a sandbox_id by alias (alias-index GSI).
+	// When the concrete value also satisfies SandboxAliasResolverWithStatus, Handle()
+	// uses ResolveByAliasWithStatus for the unified 3-way dispatch (absent→cold-create,
+	// stopped/paused→resume+enqueue, running→enqueue). Falls back to ResolveByAlias
+	// when only the base interface is provided (Phase 97 behavior).
 	Resolver SandboxAliasResolver
+
+	// Resumer starts stopped or paused EC2 sandbox instances. When non-nil and
+	// Resolver satisfies SandboxAliasResolverWithStatus, a stopped/paused alias
+	// triggers StartSandbox + enqueue instead of a cold-create.
+	// Nil → treat stopped like running (just enqueue, Phase 97 behavior).
+	Resumer SandboxResumer
 
 	// Publisher publishes a SandboxCreate EventBridge event (cold path).
 	Publisher EventBridgePublisher
@@ -239,29 +249,55 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		return WebhookResponse{StatusCode: 200, Body: "ok"}
 	}
 
-	sandboxID, resolveErr := h.Resolver.ResolveByAlias(ctx, alias)
-	if resolveErr != nil {
-		// Cold path — no running sandbox with this alias; publish SandboxCreate.
-		h.log().Info("github-bridge: cold create", "alias", alias, "profile", profile,
-			"resolve_err", resolveErr)
-		if pubErr := h.Publisher.PutSandboxCreate(ctx, alias, profile, string(envJSON)); pubErr != nil {
-			h.log().Error("github-bridge: publish SandboxCreate", "err", pubErr)
-		}
-	} else {
-		// Warm path — enqueue to per-sandbox github-inbound FIFO.
-		queueURL, qErr := h.Resolver.GitHubQueueURL(ctx, sandboxID)
-		if qErr != nil {
-			h.log().Error("github-bridge: lookup github queue URL", "sandbox_id", sandboxID, "err", qErr)
-		} else {
-			groupID := fmt.Sprintf("github-%s-%d", payload.Repository.FullName, payload.Issue.Number)
-			dedupID := fmt.Sprintf("%s-%s", deliveryGUID, groupID)
-			if sErr := h.SQS.Send(ctx, queueURL, string(envJSON), groupID, dedupID); sErr != nil {
-				h.log().Error("github-bridge: SQS enqueue", "err", sErr)
+	// ── Unified 3-way dispatch ────────────────────────────────────────────────
+	// Prefer ResolveByAliasWithStatus (available when Resolver also satisfies the
+	// extended interface). Falls back to ResolveByAlias for Phase 97 compatibility.
+	//
+	//   absent  → cold-create  (Publisher.PutSandboxCreate)
+	//   stopped/paused → Resumer.StartSandbox + enqueue  (resume path, GH-X-RESUME)
+	//   running → enqueue only  (Phase 97 warm path)
+	groupID := fmt.Sprintf("github-%s-%d", payload.Repository.FullName, payload.Issue.Number)
+	dedupID := fmt.Sprintf("%s-%s", deliveryGUID, groupID)
+
+	if rws, ok := h.Resolver.(SandboxAliasResolverWithStatus); ok {
+		// Extended path: status-aware dispatch.
+		sandboxID, status, resolveErr := rws.ResolveByAliasWithStatus(ctx, alias)
+		if resolveErr != nil {
+			// Alias not found → cold-create. The alias is truly absent from DDB — no
+			// second sandbox risk (a stopped sandbox holds its alias row).
+			h.log().Info("github-bridge: cold create", "alias", alias, "profile", profile,
+				"resolve_err", resolveErr)
+			if pubErr := h.Publisher.PutSandboxCreate(ctx, alias, profile, string(envJSON)); pubErr != nil {
+				h.log().Error("github-bridge: publish SandboxCreate", "err", pubErr)
+			}
+		} else if (status == "stopped" || status == "paused") && h.Resumer != nil {
+			// Resume path: start the EC2 instance, then enqueue so the prompt drains
+			// once the box boots. Resumer error is non-fatal (logged); enqueue still
+			// happens so the prompt is not lost on a transient StartInstances failure.
+			h.log().Info("github-bridge: auto-resume", "alias", alias, "sandbox_id", sandboxID, "status", status)
+			if rErr := h.Resumer.StartSandbox(ctx, sandboxID); rErr != nil {
+				h.log().Error("github-bridge: auto-resume failed (non-fatal; enqueue continues)", "err", rErr, "sandbox_id", sandboxID)
+			}
+			if queueURL, qErr := h.Resolver.GitHubQueueURL(ctx, sandboxID); qErr != nil {
+				h.log().Error("github-bridge: lookup github queue URL (resume path)", "sandbox_id", sandboxID, "err", qErr)
 			} else {
-				// Upsert (repo, number) → sandbox_id into km-github-threads so future
-				// replies in this thread bypass the mention requirement (GH-X-THREADBYPASS).
-				// Non-fatal on error — dispatch already succeeded.
-				if h.Threads != nil {
+				if sErr := h.SQS.Send(ctx, queueURL, string(envJSON), groupID, dedupID); sErr != nil {
+					h.log().Error("github-bridge: SQS enqueue (resume path)", "err", sErr)
+				} else if h.Threads != nil {
+					if uErr := h.Threads.Upsert(ctx, payload.Repository.FullName, payload.Issue.Number, sandboxID); uErr != nil {
+						h.log().Warn("github-bridge: thread upsert failed (non-fatal, resume path)", "err", uErr)
+					}
+				}
+			}
+		} else {
+			// Running (or stopped without a Resumer) → warm enqueue only.
+			h.log().Info("github-bridge: warm enqueue (status-aware)", "alias", alias, "sandbox_id", sandboxID)
+			if queueURL, qErr := h.Resolver.GitHubQueueURL(ctx, sandboxID); qErr != nil {
+				h.log().Error("github-bridge: lookup github queue URL", "sandbox_id", sandboxID, "err", qErr)
+			} else {
+				if sErr := h.SQS.Send(ctx, queueURL, string(envJSON), groupID, dedupID); sErr != nil {
+					h.log().Error("github-bridge: SQS enqueue", "err", sErr)
+				} else if h.Threads != nil {
 					if uErr := h.Threads.Upsert(ctx, payload.Repository.FullName, payload.Issue.Number, sandboxID); uErr != nil {
 						h.log().Warn("github-bridge: thread upsert failed (non-fatal)", "err", uErr,
 							"repo", payload.Repository.FullName, "number", payload.Issue.Number)
@@ -269,7 +305,32 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 				}
 			}
 		}
-		h.log().Info("github-bridge: warm enqueue", "alias", alias, "sandbox_id", sandboxID)
+	} else {
+		// Fallback: Phase 97 behavior — base SandboxAliasResolver, no status awareness.
+		sandboxID, resolveErr := h.Resolver.ResolveByAlias(ctx, alias)
+		if resolveErr != nil {
+			h.log().Info("github-bridge: cold create", "alias", alias, "profile", profile,
+				"resolve_err", resolveErr)
+			if pubErr := h.Publisher.PutSandboxCreate(ctx, alias, profile, string(envJSON)); pubErr != nil {
+				h.log().Error("github-bridge: publish SandboxCreate", "err", pubErr)
+			}
+		} else {
+			// Warm path — enqueue to per-sandbox github-inbound FIFO.
+			queueURL, qErr := h.Resolver.GitHubQueueURL(ctx, sandboxID)
+			if qErr != nil {
+				h.log().Error("github-bridge: lookup github queue URL", "sandbox_id", sandboxID, "err", qErr)
+			} else {
+				if sErr := h.SQS.Send(ctx, queueURL, string(envJSON), groupID, dedupID); sErr != nil {
+					h.log().Error("github-bridge: SQS enqueue", "err", sErr)
+				} else if h.Threads != nil {
+					if uErr := h.Threads.Upsert(ctx, payload.Repository.FullName, payload.Issue.Number, sandboxID); uErr != nil {
+						h.log().Warn("github-bridge: thread upsert failed (non-fatal)", "err", uErr,
+							"repo", payload.Repository.FullName, "number", payload.Issue.Number)
+					}
+				}
+			}
+			h.log().Info("github-bridge: warm enqueue", "alias", alias, "sandbox_id", sandboxID)
+		}
 	}
 
 	// ── Step 10: Post 👀 reaction synchronously ──────────────────────────────
