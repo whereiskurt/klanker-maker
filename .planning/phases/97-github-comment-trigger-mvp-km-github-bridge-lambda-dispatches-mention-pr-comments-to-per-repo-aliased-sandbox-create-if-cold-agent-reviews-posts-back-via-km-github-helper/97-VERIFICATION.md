@@ -13,9 +13,16 @@ re_verification:
   regressions: []
 post_uat:
   warm_path_e2e: passed   # 2026-06-07, PR #10: @-mention -> 👀 -> Claude review -> single auto post-back, queue 0/0, no loop
-  cold_path_e2e: not_run
+  cold_path_e2e: BROKEN_DEFERRED   # tested 2026-06-07: bridge fires cold-create but create-handler rejects it; deferred to Phase 98 (GH-COLD-CREATE)
   negative_nonallowlisted: not_run
   negative_redelivery_dedupe: not_run
+  cold_path_findings:
+    - "Bridge SandboxCreate event omits sandbox_id (create-handler requires it) -> 'sandbox_id is required in event payload', no box provisions"
+    - "Bridge also omits artifact_bucket and builds a malformed artifact_prefix (doubled profiles/ + .yaml)"
+    - "Deeper: create-handler downloads the profile from s3://{bucket}/{prefix}/.km-profile.yaml; the bridge has no profile content to stage there -> needs a profile-delivery mechanism (km init pre-stages github.repos profiles to S3)"
+    - "Cold-box auth: a fresh box from learn.v2 (useBedrock:false) has no Claude login -> review run fails 'Not logged in'. DESIGN DECISION (operator): inject Claude creds via SOPS (spec.secrets.sopsFile, Phase 89) — NOT Bedrock — so the cold box self-auths. create-handler already supports sopsFile (patchProfileForSops)."
+    - "DESIGN DECISION (operator): dispatch must also RESUME a paused/stopped aliased sandbox (ties to GH-X-RESUME) rather than only cold-create when truly absent."
+    - "Deferred to Phase 98 as GH-COLD-CREATE (+ GH-X-RESUME). Warm path is the shipped MVP."
   # 7 deploy/runtime gaps + operator-config issues surfaced ONLY in live UAT
   # (code logic verification missed the deploy/IAM/runtime/prompt surface entirely).
   code_gaps_found_and_fixed:
@@ -100,11 +107,26 @@ These weren't code defects but blocked the flow and are worth recording for the 
 
 **Recommendation:** any phase introducing a new Lambda, queue, IAM surface, or agent prompt must add a **deploy-surface verification pass** — at minimum `km init --plan` enumerates the new module, an IAM-vs-runtime-call cross-check, the artifact-list lockstep guard tests (now added for lambdas + sidecars), and a visibility-vs-runtime sanity check. Code-green ≠ deployable.
 
-### Remaining before formal phase close
+### Cold path — BROKEN, deferred to Phase 98 (gap GH-COLD-CREATE)
 
-- **Cold-path E2E** — comment on an allowlisted repo with no pre-warmed sandbox → `SandboxCreate` provisions a box, the carried envelope drains on first boot, review posts.
-- **Negative: non-allowlisted login** — comment from a login not in `allow:` → silent (no 👀, no dispatch).
-- **Negative: redelivery dedupe** — GitHub "Redeliver" → no second dispatch (nonces GUID).
+Live cold-path UAT (2026-06-07) revealed the cold path was implemented (97-02/97-04) but never exercised, and is broken on several counts. The bridge fires `cold create` correctly and posts 👀, but `create-handler` rejects the event and no box provisions:
+
+- Bridge `SandboxCreate` event **omits `sandbox_id`** → `create-handler: sandbox_id is required` (confirmed in logs).
+- Bridge also **omits `artifact_bucket`** and builds a **malformed `artifact_prefix`** (doubled `profiles/` + `.yaml`).
+- Deeper: `create-handler` downloads the profile from `s3://{bucket}/{prefix}/.km-profile.yaml`, but the bridge has no profile content to stage there → cold path needs a **profile-delivery mechanism** (`km init` pre-stages each `github.repos` profile to S3 at the matching key).
+- **Cold-box auth** — a fresh box from a direct-API profile (`useBedrock:false`) has no Claude login → review fails "Not logged in". **Operator design decision: inject Claude creds via SOPS** (`spec.secrets.sopsFile`, Phase 89) — *not* Bedrock — so the cold box self-authenticates. `create-handler` already supports `sopsFile` (`patchProfileForSops`).
+- **Operator design decision: dispatch must also resume a paused/stopped aliased sandbox** (`ResolveByAlias` finds it but the box is down) rather than only cold-create when truly absent — ties to **GH-X-RESUME** (already in Phase 98).
+
+These are folded into Phase 98 as **GH-COLD-CREATE** (+ existing **GH-X-RESUME**). Plan via `/gsd:plan-phase 98`.
+
+### Negatives — not yet run (optional for warm MVP)
+
+- **Non-allowlisted login** — comment from a login not in `allow:` → silent (no 👀, no dispatch).
+- **Redelivery dedupe** — GitHub "Redeliver" → no second dispatch (nonces GUID).
+
+### Phase 97 disposition
+
+**Shipped on the warm path** — the comment-trigger MVP works end-to-end for a pre-warmed/aliased sandbox: `@`-mention → 👀 → Claude review → single auto post-back. Cold-create deferred to Phase 98 (GH-COLD-CREATE). Negatives are quick follow-ups but don't block the warm MVP.
 
 ---
 
