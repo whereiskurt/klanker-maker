@@ -25,6 +25,21 @@ bridge ("the front door"). When that bridge receives an event for a repo it does
 not own, it **relays** the raw webhook to sibling bridges; the install whose
 `github.repos:` matches the repo processes it normally.
 
+### Secondary goal — scale hardening (folds in the 700-repo finding)
+
+The reorder this relay requires (`Resolve()` ownership ahead of the mention/thread
+filter) is made **unconditional** — it applies even when `peer_bridges` is empty —
+because it doubles as a standalone scale fix. Today the thread-continuity
+`LookupSandbox` (a DynamoDB `GetItem`) runs for **every created PR comment** before
+the mention and repo-ownership gates, so an App installed on many repos (e.g. 700)
+does a DDB read per PR comment org-wide even for repos never wired into
+`github.repos`. After the reorder, a comment on an **unconfigured/unowned repo
+short-circuits at the in-memory config match with no DDB read** (and no mention
+scan). This is byte-identical in *dispatch* outcomes — a thread row only ever exists
+for a repo this install owns (rows are written on dispatch, which requires a match),
+so skipping the lookup for unowned repos loses nothing; it only removes wasted reads.
+Single-install (no-federation) deployments benefit equally.
+
 ### Correctness invariant
 
 **Each repo is owned by exactly one install.** Ownership = a repo matched by that
@@ -120,10 +135,18 @@ before it ever reached `Resolve()`. So:
 
 - After signature-verify + parse + loop-guard + PR-filter, run `Resolve(owner/repo)`
   to determine **local ownership** (pure config match, no I/O).
-- The mention filter, thread-bypass, auth, dedupe, and dispatch run **only on the
-  locally-owned (matched) path** — unchanged from today.
+- The mention filter, thread-bypass (the `LookupSandbox` DDB read), auth, dedupe, and
+  dispatch run **only on the locally-owned (matched) path** — unchanged from today.
 - Each peer that receives a relayed request re-runs the **entire** `Handle()`,
   including its own thread-bypass against its own `km-github-threads`.
+
+This reorder is **unconditional** — it does not depend on `Relayer`/`peer_bridges`
+being set. With federation off, a resolve-miss simply returns 200 (today's
+no-config behavior) instead of broadcasting; either way the costly thread-lookup +
+mention scan no longer run for unconfigured/unowned repos. That is the scale fix
+described under *Secondary goal*: at 700 installed repos with only a handful wired
+into `github.repos`, the per-PR-comment DDB read for the unconfigured majority
+disappears.
 
 | `X-KM-Relayed` header | `Resolve()` matched? | Action |
 |---|---|---|
@@ -213,6 +236,12 @@ processed if owned, dropped otherwise — never re-broadcast. Maximum one hop.
   repo relays (is not dropped at the mention filter); a no-mention non-thread
   comment for a peer-owned repo also relays (peer drops it at its own mention
   filter).
+- **Scale / no-wasted-read (federation OFF):** with `peer_bridges` empty and
+  `Threads` configured, a created PR comment on a repo **not** in `github.repos`
+  returns 200 and performs **no** `LookupSandbox` DDB read (resolve-miss
+  short-circuits before the thread-bypass step); a comment on an owned repo still
+  performs the lookup. Verifies the reorder is unconditional and dispatch outcomes
+  are byte-identical to today.
 - **Loop guard:** relayed + miss never invokes the relayer.
 - **Relayer:** builds correct headers (preserves `X-Hub-Signature-256`,
   `X-GitHub-Event`, `X-GitHub-Delivery`; adds `X-KM-Relayed: 1`); POSTs to all
