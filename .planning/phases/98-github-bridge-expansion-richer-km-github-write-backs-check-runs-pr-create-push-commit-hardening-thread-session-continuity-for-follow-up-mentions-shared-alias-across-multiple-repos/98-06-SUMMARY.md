@@ -128,5 +128,30 @@ Then drive the @-mention scenario (paused aliased box) and confirm no 403 in Clo
 - Once operator types "approved" the plan is complete
 
 ---
+
+## Update (2026-06-07, second pass) — Tasks 3–5 complete; checkpoint is now Task 6
+
+After live UAT, three more defects (Gaps C/D/E) were folded into this plan as Tasks 3–5 and
+implemented in a second execution pass. The sections above reflect the FIRST pass (Tasks 1–2 +
+the old Task-3 checkpoint); the current state is:
+
+| Task | Gap | Commit | Status |
+|------|-----|--------|--------|
+| 1 | A — IAM condition `km:managed`→`km:resource-prefix` + regression test | `50e6c9b7`, `e57ff4ba` | ✅ done, deployed, live-validated |
+| 2 | B — DDB status write-back on resume + IAM + main.go wiring | `1eda6f0e`, `94722eb9` | ✅ done, deployed, live-validated |
+| 3 | C — `EC2Resumer` tolerates `stopping` (pause→mention race) | `22a0ab45` | ✅ done, tests green |
+| 4 | D — token-mint robustness: granted-perms-only + non-empty refresher input | `c9c37739` | ✅ done, tests green |
+| 5 | E — poller fresh-session fallback + cross-box continuity-row invalidation (`InvalidateStaleSession`) | `af8c97cb` | ✅ done, tests green (userdata golden re-captured) |
+| 6 | — Redeploy + unattended E2E re-verify | — | ⏸ checkpoint:human-verify (operator) |
+
+Verification at hand-off: `go build ./...` clean; `pkg/github/bridge`, `pkg/compiler`,
+`internal/app/cmd` (incl. `TestDeploySurfaceGitHubBridge`) test suites green; the pre-existing
+unrelated `cmd/km-slack` 503 test failure is out of scope. The second-pass executor hit its
+context limit after committing Tasks 3–5, so this update + STATE.md were finalized by the
+orchestrator. **Remaining: Task 6** — `make build && make build-lambdas && km init --dry-run=false`,
+then re-run the paused-box @-mention E2E *unattended* (the token should mint itself; no manual
+mint / row delete / poller restart) and approve. Full live-UAT context: `98-UAT.md`.
+
+---
 *Phase: 98-github-bridge-expansion*
-*Completed: 2026-06-07 (partial — checkpoint pending operator verification)*
+*Completed: 2026-06-07 (Tasks 1–5 done; Task 6 checkpoint pending operator E2E)*
