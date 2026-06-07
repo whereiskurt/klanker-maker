@@ -95,6 +95,26 @@ type GitHubReactor interface {
 	AddReaction(ctx context.Context, installationID, owner, repo string, commentID int64, content string) error
 }
 
+// CommentPoster posts a text comment on a GitHub issue or pull request.
+// Used by WebhookHandler for multi-command errors, command-not-authorized denials,
+// and /help replies. Uses the same installation token mint pattern as GitHubReactor.
+type CommentPoster interface {
+	// PostComment posts a text comment on the issue/PR with the given number in
+	// the named owner/repo. installationID is the GitHub App installation ID string.
+	// Returns nil on success; errors are logged but do not change the 200 response.
+	PostComment(ctx context.Context, installationID, owner, repo string, issueNumber int, body string) error
+}
+
+// CommandsFetcher fetches the command map from SSM (or a cache layer). Used by
+// WebhookHandler to allow per-invocation cache refresh without a full cold start.
+// The concrete implementation (SSMCommandsFetcher) caches for 15 minutes.
+type CommandsFetcher interface {
+	// Fetch returns the current command map. Returns an empty (non-nil) map when
+	// the SSM parameter is absent (dormant — not an error). Callers treat an empty
+	// map identically to a nil map: the command pass is skipped.
+	Fetch(ctx context.Context) (map[string]CommandEntry, error)
+}
+
 // GitHubThreadStore tracks (repo, number) → {sandbox_id, agent_session_id} mappings
 // backed by the km-github-threads DynamoDB table. Enables follow-up @-mentions in the
 // same PR/issue to continue the same agent session (GH-X-CONTINUITY) and allows replies

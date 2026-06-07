@@ -40,6 +40,7 @@ import (
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	pkggithub "github.com/whereiskurt/klanker-maker/pkg/github"
 )
 
@@ -877,3 +878,167 @@ func (r *InstallationReactor) AddReaction(ctx context.Context, installationID, o
 			resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 }
+
+// ============================================================
+// SSMCommandsFetcher — CommandsFetcher backed by SSM (15-min cache)
+// ============================================================
+
+// SSMCommandsFetcher fetches and caches the GitHub command map from SSM.
+// The parameter at Path is a plain String containing a JSON object mapping
+// command names to CommandEntry objects. Returns an empty map (not nil, not error)
+// when the parameter is absent — dormant-by-default (Research Pitfall 3).
+//
+// Mirrors SSMSecretFetcher's cachedValue pattern.
+type SSMCommandsFetcher struct {
+	Client   SecretSSMClient
+	Path     string        // e.g. "/{prefix}/config/github/commands"
+	CacheTTL time.Duration // defaults to 15 minutes
+
+	mu    sync.Mutex
+	cache struct {
+		commands map[string]CommandEntry
+		expiry   time.Time
+	}
+}
+
+// Fetch returns the current command map. Returns an empty non-nil map when the
+// SSM parameter is absent. Errors from SSM (other than ParameterNotFound) are
+// returned to the caller (logged; bridge falls back to empty-map dormant behavior).
+func (f *SSMCommandsFetcher) Fetch(ctx context.Context) (map[string]CommandEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	ttl := f.CacheTTL
+	if ttl == 0 {
+		ttl = 15 * time.Minute
+	}
+
+	// Return cached value if still fresh and non-nil (empty map is a valid cached result).
+	if f.cache.commands != nil && time.Now().Before(f.cache.expiry) {
+		return f.cache.commands, nil
+	}
+
+	out, err := f.Client.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           awssdk.String(f.Path),
+		WithDecryption: awssdk.Bool(false), // commands are plain String, not SecureString
+	})
+	if err != nil {
+		// ParameterNotFound → dormant (not an error from the caller's perspective).
+		// All other SSM errors are real errors.
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			empty := map[string]CommandEntry{}
+			f.cache.commands = empty
+			f.cache.expiry = time.Now().Add(ttl)
+			return empty, nil
+		}
+		return nil, fmt.Errorf("github-bridge: fetch commands from SSM %s: %w", f.Path, err)
+	}
+	if out.Parameter == nil || out.Parameter.Value == nil {
+		empty := map[string]CommandEntry{}
+		f.cache.commands = empty
+		f.cache.expiry = time.Now().Add(ttl)
+		return empty, nil
+	}
+
+	var cmds map[string]CommandEntry
+	if jsonErr := json.Unmarshal([]byte(*out.Parameter.Value), &cmds); jsonErr != nil {
+		return nil, fmt.Errorf("github-bridge: parse commands JSON from SSM %s: %w", f.Path, jsonErr)
+	}
+	if cmds == nil {
+		cmds = map[string]CommandEntry{}
+	}
+
+	f.cache.commands = cmds
+	f.cache.expiry = time.Now().Add(ttl)
+	return cmds, nil
+}
+
+// Compile-time check: SSMCommandsFetcher must satisfy CommandsFetcher.
+var _ CommandsFetcher = (*SSMCommandsFetcher)(nil)
+
+// ============================================================
+// InstallationCommenter — CommentPoster via installation token
+// ============================================================
+
+// InstallationCommenter implements CommentPoster by:
+//  1. Minting a short-lived App JWT via pkg/github.GenerateGitHubAppJWT.
+//  2. Exchanging the JWT for an installation access token.
+//  3. POSTing a text comment to /repos/{owner}/{repo}/issues/{number}/comments.
+//
+// Mirrors InstallationReactor.AddReaction exactly but targets the issues comments
+// API instead of the reactions API. The installation token is NOT cached — minted
+// per-invocation (the Lambda processes one comment at a time).
+type InstallationCommenter struct {
+	// AppClientID is the GitHub App client ID (read from SSM at cold-start).
+	AppClientID string
+	// PrivateKeyPEM is the App's RSA private key bytes (read from SSM at cold-start).
+	PrivateKeyPEM []byte
+	// HTTPClient is the HTTP client to use; defaults to a 10-second timeout client.
+	HTTPClient *http.Client
+	// BaseURL for the GitHub API; overridden in tests.
+	BaseURL string
+}
+
+func (c *InstallationCommenter) apiBaseURL() string {
+	if c.BaseURL != "" {
+		return c.BaseURL
+	}
+	return pkggithub.GitHubAPIBaseURL
+}
+
+func (c *InstallationCommenter) httpClient() *http.Client {
+	if c.HTTPClient != nil {
+		return c.HTTPClient
+	}
+	return &http.Client{Timeout: 10 * time.Second}
+}
+
+// PostComment mints an installation token and POSTs a comment to the issue/PR.
+// Returns nil on success. Errors are logged non-fatally by the caller.
+func (c *InstallationCommenter) PostComment(ctx context.Context, installationID, owner, repo string, issueNumber int, body string) error {
+	// Step 1: mint App JWT.
+	jwtToken, err := pkggithub.GenerateGitHubAppJWT(c.AppClientID, c.PrivateKeyPEM)
+	if err != nil {
+		return fmt.Errorf("github-bridge: commenter: generate JWT: %w", err)
+	}
+
+	// Step 2: exchange JWT for installation token.
+	// issues:write is sufficient for creating comments on issues and PRs.
+	token, err := pkggithub.ExchangeForInstallationToken(ctx, jwtToken, installationID,
+		[]string{"*"}, map[string]string{"issues": "write", "pull_requests": "write"})
+	if err != nil {
+		return fmt.Errorf("github-bridge: commenter: exchange installation token: %w", err)
+	}
+
+	// Step 3: POST comment to /repos/{owner}/{repo}/issues/{number}/comments.
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments",
+		c.apiBaseURL(), owner, repo, issueNumber)
+
+	reqBody, _ := json.Marshal(map[string]string{"body": body})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("github-bridge: commenter: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("github-bridge: commenter: POST comment: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	// 201 Created = comment posted successfully.
+	if resp.StatusCode == http.StatusCreated {
+		return nil
+	}
+	return fmt.Errorf("github-bridge: commenter: unexpected status %d: %s",
+		resp.StatusCode, strings.TrimSpace(string(respBody)))
+}
+
+// Compile-time check: InstallationCommenter must satisfy CommentPoster.
+var _ CommentPoster = (*InstallationCommenter)(nil)
