@@ -96,9 +96,48 @@ type GithubRepoEntry struct {
 	// Allow is a supplemental network allowlist for this repo's sandbox.
 	// Optional — sandbox profile's own allowlist is always the primary source.
 	Allow []string `mapstructure:"allow" yaml:"allow,omitempty" json:"allow,omitempty"`
+
+	// DefaultCommand is the per-repo override for the command key dispatched when
+	// no @command verb is present in the GitHub PR comment. Falls back to
+	// GithubConfig.DefaultCommand when empty. Phase 99 Plan 01.
+	DefaultCommand string `mapstructure:"default_command" yaml:"default_command,omitempty" json:"default_command,omitempty"`
+}
+
+// GithubCommandEntry defines a named, operator-declared command that the bridge
+// dispatches when the @bot-name <command> verb appears in a GitHub PR comment
+// (or when used as the default_command fallback). Phase 99 Plan 01.
+//
+// All fields carry mapstructure tags — required by viper's UnmarshalKey;
+// untagged fields are silently ignored (project_config_key_merge_list pitfall 1).
+//
+// The github.commands map is decoded by the SINGLE "github" merge-list entry
+// (config.go ~line 484) + the UnmarshalKey("github", &cfg.Github) call below.
+// Do NOT add a separate "github.commands" merge-list entry — the whole github:
+// block is decoded atomically via UnmarshalKey; a sibling entry would be a no-op
+// or cause parse-order issues (verified in 99-RESEARCH.md finding #6).
+type GithubCommandEntry struct {
+	// Description is a human-readable label shown in km github status and docs.
+	Description string `mapstructure:"description" yaml:"description,omitempty" json:"description,omitempty"`
+
+	// Alias is an optional sandbox alias to use instead of the repo-level alias
+	// when this command is dispatched. Useful for routing commands to dedicated sandboxes.
+	Alias string `mapstructure:"alias" yaml:"alias,omitempty" json:"alias,omitempty"`
+
+	// Profile is an optional override SandboxProfile path for cold-sandbox creation
+	// when this command is dispatched. Falls back to repo/install default when empty.
+	Profile string `mapstructure:"profile" yaml:"profile,omitempty" json:"profile,omitempty"`
+
+	// Allow is a supplemental network allowlist merged into the sandbox's allowlist
+	// when this command's sandbox is provisioned.
+	Allow []string `mapstructure:"allow" yaml:"allow,omitempty" json:"allow,omitempty"`
+
+	// Prompt is the prompt text injected as the initial turn when this command is
+	// dispatched. Required — the bridge skips dispatch if Prompt is empty.
+	Prompt string `mapstructure:"prompt" yaml:"prompt" json:"prompt"`
 }
 
 // GithubConfig holds install-level GitHub defaults that flow into the bridge
+// Lambda environment via km init. Phase 97 Plan 01 adds the github: block.
 // Lambda environment via km init. Phase 97 Plan 01 adds the github: block.
 //
 // Maps to km-config.yaml key github. Absent key → zero value (no error).
@@ -114,6 +153,18 @@ type GithubConfig struct {
 	// repo entry has no Profile set, or when no match is found and the bridge
 	// falls through to the default case.
 	DefaultProfile string `mapstructure:"default_profile" yaml:"default_profile,omitempty"`
+
+	// DefaultCommand is the install-wide fallback command key (must be a key in
+	// Commands) dispatched when no @verb is present and the matched repo entry
+	// has no per-repo DefaultCommand. Optional — absent means no default dispatch.
+	// Phase 99 Plan 01.
+	DefaultCommand string `mapstructure:"default_command" yaml:"default_command,omitempty"`
+
+	// Commands is the map of named operator-declared commands keyed by command verb
+	// (e.g. "review", "triage"). Decoded by the existing UnmarshalKey("github", …)
+	// call — no separate merge-list entry required (see GithubCommandEntry doc).
+	// Nil/empty map when absent => bridge dormancy preserved. Phase 99 Plan 01.
+	Commands map[string]GithubCommandEntry `mapstructure:"commands" yaml:"commands,omitempty" json:"commands,omitempty"`
 }
 
 // Config holds all configuration values for the km CLI.
