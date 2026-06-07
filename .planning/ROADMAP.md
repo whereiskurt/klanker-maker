@@ -2261,10 +2261,14 @@ Plans:
 
 **Requirements**: GH-CMD-CONFIG, GH-CMD-FILEREF, GH-CMD-SSM, GH-CMD-PARSE, GH-CMD-ROUTE, GH-CMD-AUTH, GH-CMD-HELP, GH-CMD-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
 **Depends on:** Phase 98
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 99 to break down)
+- [ ] 99-01-PLAN.md — Config plumbing: GithubCommandEntry + Commands/DefaultCommand + per-repo default_command + getters (GH-CMD-CONFIG)
+- [ ] 99-02-PLAN.md — Bridge command parser + resolver pure functions: code-strip, scan, {{args}}, expand, routing, auth-intersection (GH-CMD-PARSE/ROUTE/AUTH)
+- [ ] 99-03-PLAN.md — km init @file resolution + SSM commands publication + drift WARN (GH-CMD-FILEREF/SSM)
+- [ ] 99-04-PLAN.md — Bridge handler wiring + SSM read + reply paths (/help, multi-command, not-authorized) + dormancy (GH-CMD-AUTH/HELP/E2E)
+- [ ] 99-05-PLAN.md — km doctor checks + km github status + docs + deploy-surface (GH-CMD-CONFIG/HELP/E2E)
 
 ### Phase 100: GitHub bridge federated relay — one GitHub App serving many resource_prefix installs via github.peer_bridges
 
