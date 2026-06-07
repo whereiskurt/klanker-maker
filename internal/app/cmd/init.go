@@ -1933,19 +1933,43 @@ type sidecarBuild struct {
 // buildAndUploadSidecars cross-compiles sidecar binaries for linux/amd64 and uploads
 // them to s3://<bucket>/sidecars/. Also uploads the tracing config.yaml.
 // Skips upload if the S3 object already exists.
+// sidecarBuilds returns the ordered list of sidecar/helper binaries that
+// `km init` builds and uploads to s3://<bucket>/sidecars/<name>. This MUST stay
+// in lockstep with what the EC2 userdata bootstrap downloads — a binary the
+// userdata fetches but that is missing here 404s at boot and (under set -e)
+// aborts the whole bootstrap. km-github is gated in userdata on
+// GitHubInboundEnabled, so its absence only breaks github-inbound sandboxes.
+func sidecarBuilds() []sidecarBuild {
+	return []sidecarBuild{
+		{name: "dns-proxy", srcDir: "sidecars/dns-proxy"},
+		{name: "http-proxy", srcDir: "sidecars/http-proxy"},
+		{name: "audit-log", srcDir: "sidecars/audit-log/cmd"},
+		{name: "km-slack", srcDir: "cmd/km-slack"},
+		{name: "km-presence", srcDir: "cmd/km-presence"},
+		// Phase 97 — sandbox-side GitHub helper (comment/review verbs). Downloaded
+		// by userdata when notification.github.inbound.enabled. Missing upload here
+		// 404s the gated download and aborts bootstrap.
+		{name: "km-github", srcDir: "cmd/km-github"},
+	}
+}
+
+// SidecarBuildNames returns the sidecar names `km init` uploads. Exported for testing only.
+func SidecarBuildNames() []string {
+	builds := sidecarBuilds()
+	names := make([]string, len(builds))
+	for i, sc := range builds {
+		names[i] = sc.name
+	}
+	return names
+}
+
 func buildAndUploadSidecars(repoRoot, bucket string) error {
 	buildDir := filepath.Join(repoRoot, "build")
 	if err := os.MkdirAll(buildDir, 0o755); err != nil {
 		return fmt.Errorf("create build dir: %w", err)
 	}
 
-	sidecars := []sidecarBuild{
-		{name: "dns-proxy", srcDir: "sidecars/dns-proxy"},
-		{name: "http-proxy", srcDir: "sidecars/http-proxy"},
-		{name: "audit-log", srcDir: "sidecars/audit-log/cmd"},
-		{name: "km-slack", srcDir: "cmd/km-slack"},
-		{name: "km-presence", srcDir: "cmd/km-presence"},
-	}
+	sidecars := sidecarBuilds()
 
 	// Build and upload km binary for EC2 instances (linux/amd64).
 	// Instances download this at boot from s3://<bucket>/sidecars/km.

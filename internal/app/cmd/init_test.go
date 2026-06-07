@@ -1099,6 +1099,30 @@ func TestRunInitWithRunner_FastApplyDoesNotTriggerTimeout(t *testing.T) {
 	}
 }
 
+// TestSidecarBuildsIncludesGitHub guards a Phase 97 deploy gap: the EC2 userdata
+// bootstrap downloads s3://<bucket>/sidecars/km-github when github inbound is
+// enabled. If km-github is missing from the sidecar upload list, the download
+// 404s and (under set -e) aborts the entire bootstrap — km-session-entry, network
+// enforcement, and the agent install never run. The helper must be uploaded.
+func TestSidecarBuildsIncludesGitHub(t *testing.T) {
+	names := cmd.SidecarBuildNames()
+
+	want := map[string]bool{
+		"km-github": false,
+		"km-slack":  false,
+	}
+	for _, n := range names {
+		if _, ok := want[n]; ok {
+			want[n] = true
+		}
+	}
+	for n, found := range want {
+		if !found {
+			t.Errorf("SidecarBuildNames() missing %q — userdata download will 404 and abort bootstrap; got %v", n, names)
+		}
+	}
+}
+
 // TestRunInitPlan_BuildsLambdaZips verifies Gap #1 (Phase 84.4.1.1 Plan 01):
 // RunInitPlanWithRunner calls buildLambdaZips before the module loop so fresh-clone
 // `km init --plan` does not fail on filebase64sha256(build/create-handler.zip).
