@@ -150,6 +150,10 @@ func init() {
 		Client:    ddbClient,
 		TableName: sandboxesTable,
 	}
+	statusWriter := &bridge.DynamoSandboxStatusWriter{
+		Client:    ddbClient,
+		TableName: sandboxesTable,
+	}
 	threadStore := &bridge.DynamoGitHubThreadStore{
 		Client:    ddbClient,
 		TableName: githubThreadsTable,
@@ -179,6 +183,7 @@ func init() {
 		SQS:            sqsSender,
 		Reactor:        reactor,
 		Resumer:        resumer,
+		StatusWriter:   statusWriter,
 		Threads:        threadStore,
 		Entries:        entries,
 		DefaultProfile: defaultProfile,
