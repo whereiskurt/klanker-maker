@@ -155,8 +155,9 @@ type regionalModule struct {
 // RegionalModule is the exported view of a regional infrastructure module.
 // Used by tests to inspect module order without importing internal fields.
 type RegionalModule struct {
-	Name string
-	Dir  string
+	Name    string
+	Dir     string
+	EnvReqs []string // environment variables required to apply this module; nil = no requirements
 }
 
 // RegionalModules returns the ordered list of regional infrastructure modules
@@ -165,7 +166,7 @@ func RegionalModules(regionDir string) []RegionalModule {
 	internal := regionalModules(regionDir)
 	out := make([]RegionalModule, len(internal))
 	for i, m := range internal {
-		out[i] = RegionalModule{Name: m.name, Dir: m.dir}
+		out[i] = RegionalModule{Name: m.name, Dir: m.dir, EnvReqs: m.envReqs}
 	}
 	return out
 }

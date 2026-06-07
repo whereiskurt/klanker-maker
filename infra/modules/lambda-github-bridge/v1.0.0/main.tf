@@ -59,9 +59,9 @@ resource "aws_iam_role_policy" "kms_decrypt" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "KMSDecrypt"
-        Effect = "Allow"
-        Action = ["kms:Decrypt"]
+        Sid      = "KMSDecrypt"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
         Resource = var.kms_key_arn != "" ? var.kms_key_arn : "arn:aws:kms:*:${data.aws_caller_identity.current.account_id}:key/*"
       }
     ]
@@ -126,9 +126,9 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
         ]
       },
       {
-        Sid    = "DDBSandboxesGetItem"
-        Effect = "Allow"
-        Action = ["dynamodb:GetItem"]
+        Sid      = "DDBSandboxesGetItem"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem"]
         Resource = var.sandboxes_table_arn
       }
     ]
@@ -197,18 +197,18 @@ resource "aws_lambda_function" "github_bridge" {
 
   environment {
     variables = {
-      KM_RESOURCE_PREFIX         = var.resource_prefix
-      KM_GITHUB_REPOS            = var.github_repos_json
-      KM_GITHUB_DEFAULT_PROFILE  = var.github_default_profile
-      KM_NONCE_TABLE             = var.nonces_table_name
-      KM_SANDBOX_TABLE_NAME      = var.sandboxes_table_name
-      KM_WEBHOOK_SECRET_PATH     = var.webhook_secret_path
-      KM_BOT_LOGIN_PATH          = var.bot_login_path
-      KM_APP_CLIENT_ID_PATH      = var.app_client_id_path
-      KM_PRIVATE_KEY_PATH        = var.private_key_path
-      KM_INSTALLATION_ID_PATH    = var.installation_id_path
-      KM_ARTIFACTS_BUCKET        = var.artifacts_bucket
-      KM_ARTIFACTS_PREFIX        = var.artifacts_prefix
+      KM_RESOURCE_PREFIX        = var.resource_prefix
+      KM_GITHUB_REPOS           = var.github_repos_json
+      KM_GITHUB_DEFAULT_PROFILE = var.github_default_profile
+      KM_NONCE_TABLE            = var.nonces_table_name
+      KM_SANDBOX_TABLE_NAME     = var.sandboxes_table_name
+      KM_WEBHOOK_SECRET_PATH    = var.webhook_secret_path
+      KM_BOT_LOGIN_PATH         = var.bot_login_path
+      KM_APP_CLIENT_ID_PATH     = var.app_client_id_path
+      KM_PRIVATE_KEY_PATH       = var.private_key_path
+      KM_INSTALLATION_ID_PATH   = var.installation_id_path
+      KM_ARTIFACTS_BUCKET       = var.artifacts_bucket
+      KM_ARTIFACTS_PREFIX       = var.artifacts_prefix
     }
   }
 

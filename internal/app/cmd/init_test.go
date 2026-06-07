@@ -1301,6 +1301,185 @@ func TestDoctorGitHubAliasCollision(t *testing.T) {
 	})
 }
 
+// TestDeploySurfaceGitHubBridgePhase98 is the Phase 98 "code-green != deployable" gate.
+// It encodes every Phase-97/98 deploy footgun as an in-process, file-level assertion
+// (no live AWS) so the operator has confidence the deploy surface is correct before
+// running the live E2E.
+//
+// Covers (sub-test per invariant):
+//  1. dynamodb-github-threads appears in regionalModules() and is ordered BEFORE lambda-github-bridge.
+//  2. lambda-github-bridge appears in lambdaBuilds() and km-github appears in sidecarBuilds().
+//  3. lambda-github-bridge's envReqs includes "KM_ARTIFACTS_BUCKET" (cold-create needs it).
+//  4. infra/modules/lambda-github-bridge/v1.1.0/main.tf contains the IAM<->runtime cross-check
+//     strings: km-github-threads, ec2:StartInstances, ec2:DescribeInstances, dynamodb:GetItem,
+//     dynamodb:UpdateItem.
+//  5. infra/live/use1/lambda-github-bridge/terragrunt.hcl sources "v1.1.0" (not the stale v1.0.0).
+func TestDeploySurfaceGitHubBridgePhase98(t *testing.T) {
+	// Locate the repository root so file-level assertions can resolve absolute paths.
+	// We walk up from this test file's directory until we find CLAUDE.md (the repo root anchor).
+	repoRoot := func() string {
+		dir, err := filepath.Abs(".")
+		if err != nil {
+			t.Fatalf("could not determine working dir: %v", err)
+		}
+		for {
+			if _, err := os.Stat(filepath.Join(dir, "CLAUDE.md")); err == nil {
+				return dir
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				t.Fatal("could not find CLAUDE.md in any parent directory — is the test run from within the repo?")
+			}
+			dir = parent
+		}
+	}()
+
+	mods := cmd.RegionalModules(t.TempDir())
+
+	// ──────────────────────────────────────────────────────────────────
+	// Sub-test 1: dynamodb-github-threads ordering in regionalModules()
+	// ──────────────────────────────────────────────────────────────────
+	t.Run("dynamodb_github_threads_before_bridge", func(t *testing.T) {
+		threadsIdx := -1
+		bridgeIdx := -1
+		for i, m := range mods {
+			switch m.Name {
+			case "dynamodb-github-threads":
+				threadsIdx = i
+			case "lambda-github-bridge":
+				bridgeIdx = i
+			}
+		}
+		if threadsIdx == -1 {
+			t.Fatal("dynamodb-github-threads not found in regionalModules() — km init will never create the continuity table")
+		}
+		if bridgeIdx == -1 {
+			t.Fatal("lambda-github-bridge not found in regionalModules() — km init will never deploy the bridge")
+		}
+		if threadsIdx >= bridgeIdx {
+			t.Errorf("dynamodb-github-threads (idx %d) must appear before lambda-github-bridge (idx %d) in regionalModules()",
+				threadsIdx, bridgeIdx)
+		}
+	})
+
+	// ──────────────────────────────────────────────────────────────────
+	// Sub-test 2: build list completeness — lambda and sidecar
+	// ──────────────────────────────────────────────────────────────────
+	t.Run("build_lists_complete", func(t *testing.T) {
+		lambdaNames := cmd.LambdaBuildNames()
+		sidecarNames := cmd.SidecarBuildNames()
+
+		foundBridge := false
+		for _, n := range lambdaNames {
+			if n == "km-github-bridge" {
+				foundBridge = true
+				break
+			}
+		}
+		if !foundBridge {
+			t.Errorf("km-github-bridge missing from LambdaBuildNames() — km init will never build its zip; got %v", lambdaNames)
+		}
+
+		foundSidecar := false
+		for _, n := range sidecarNames {
+			if n == "km-github" {
+				foundSidecar = true
+				break
+			}
+		}
+		if !foundSidecar {
+			t.Errorf("km-github missing from SidecarBuildNames() — userdata download will 404 on github-inbound boxes; got %v", sidecarNames)
+		}
+	})
+
+	// ──────────────────────────────────────────────────────────────────
+	// Sub-test 3: lambda-github-bridge envReqs contains KM_ARTIFACTS_BUCKET
+	// ──────────────────────────────────────────────────────────────────
+	t.Run("lambda_github_bridge_envreqs_artifacts_bucket", func(t *testing.T) {
+		var bridgeMod *cmd.RegionalModule
+		for i := range mods {
+			if mods[i].Name == "lambda-github-bridge" {
+				bridgeMod = &mods[i]
+				break
+			}
+		}
+		if bridgeMod == nil {
+			t.Skip("lambda-github-bridge not in regionalModules — tested in sub-test 1")
+		}
+		found := false
+		for _, req := range bridgeMod.EnvReqs {
+			if req == "KM_ARTIFACTS_BUCKET" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("lambda-github-bridge envReqs does not include KM_ARTIFACTS_BUCKET — cold-create will fail when bucket is set; got %v", bridgeMod.EnvReqs)
+		}
+	})
+
+	// ──────────────────────────────────────────────────────────────────
+	// Sub-test 4: IAM<->runtime cross-check in v1.1.0/main.tf
+	// ──────────────────────────────────────────────────────────────────
+	t.Run("iam_runtime_cross_check", func(t *testing.T) {
+		mainTFPath := filepath.Join(repoRoot, "infra", "modules", "lambda-github-bridge", "v1.1.0", "main.tf")
+		content, err := os.ReadFile(mainTFPath)
+		if err != nil {
+			t.Fatalf("read %s: %v — ensure infra/modules/lambda-github-bridge/v1.1.0/main.tf is committed", mainTFPath, err)
+		}
+		src := string(content)
+
+		// Each string represents a runtime API call that must have a matching IAM grant.
+		// Failure here means the bridge will get AccessDenied at runtime for that call.
+		required := []struct {
+			needle string
+			why    string
+		}{
+			{"km-github-threads", "bridge reads/writes thread continuity table at runtime"},
+			{"ec2:StartInstances", "auto-resume path: bridge calls EC2 StartInstances on stopped alias box"},
+			{"ec2:DescribeInstances", "auto-resume path: bridge calls EC2 DescribeInstances to check state"},
+			{"dynamodb:GetItem", "bridge reads individual DDB items (sandboxes table + threads table)"},
+			{"dynamodb:UpdateItem", "bridge updates thread/session state in km-github-threads"},
+		}
+		for _, tc := range required {
+			if !strings.Contains(src, tc.needle) {
+				t.Errorf("infra/modules/lambda-github-bridge/v1.1.0/main.tf missing %q — %s", tc.needle, tc.why)
+			}
+		}
+	})
+
+	// ──────────────────────────────────────────────────────────────────
+	// Sub-test 5: live unit sources v1.1.0 (not stale v1.0.0)
+	// ──────────────────────────────────────────────────────────────────
+	t.Run("live_unit_sources_v1_1_0", func(t *testing.T) {
+		hclPath := filepath.Join(repoRoot, "infra", "live", "use1", "lambda-github-bridge", "terragrunt.hcl")
+		content, err := os.ReadFile(hclPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", hclPath, err)
+		}
+		src := string(content)
+		if !strings.Contains(src, "v1.1.0") {
+			t.Errorf("infra/live/use1/lambda-github-bridge/terragrunt.hcl does not reference v1.1.0 — bridge module version not upgraded from v1.0.0; source line: %q",
+				func() string {
+					for _, line := range strings.Split(src, "\n") {
+						if strings.Contains(line, "source") {
+							return line
+						}
+					}
+					return "(source line not found)"
+				}())
+		}
+		// Double-check there is no lingering v1.0.0 reference in the source line.
+		for _, line := range strings.Split(src, "\n") {
+			if strings.Contains(line, "source") && strings.Contains(line, "lambda-github-bridge") {
+				if strings.Contains(line, "v1.0.0") {
+					t.Errorf("live unit still references v1.0.0: %q", strings.TrimSpace(line))
+				}
+			}
+		}
+	})
+}
+
 // TestFetchAndUploadSops exercises the fetchAndUploadSops helper using PATH
 // shims (executable shell scripts named aws/curl) so tests run without real
 // network access or AWS credentials.
