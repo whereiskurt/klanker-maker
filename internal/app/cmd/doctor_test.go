@@ -650,6 +650,11 @@ func (c *testConfig) GetSandboxTableName() string       { return "km-sandboxes" 
 func (c *testConfig) GetClusterRoleNames() []string     { return nil }
 func (c *testConfig) GetGithubRepos() []appcfg.GithubRepoEntry { return nil }
 func (c *testConfig) GetGithubDefaultProfile() string          { return "" }
+func (c *testConfig) GetGithubCommands() map[string]appcfg.GithubCommandEntry {
+	return nil
+}
+func (c *testConfig) GetGithubDefaultCommand() string { return "" }
+func (c *testConfig) GetConfigFilePath() string       { return "" }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -991,6 +996,11 @@ func (c *testDoctorConfig) GetSandboxTableName() string       { return "km-sandb
 func (c *testDoctorConfig) GetClusterRoleNames() []string     { return nil }
 func (c *testDoctorConfig) GetGithubRepos() []appcfg.GithubRepoEntry { return nil }
 func (c *testDoctorConfig) GetGithubDefaultProfile() string          { return "" }
+func (c *testDoctorConfig) GetGithubCommands() map[string]appcfg.GithubCommandEntry {
+	return nil
+}
+func (c *testDoctorConfig) GetGithubDefaultCommand() string { return "" }
+func (c *testDoctorConfig) GetConfigFilePath() string       { return "" }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{

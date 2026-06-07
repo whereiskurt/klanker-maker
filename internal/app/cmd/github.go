@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
@@ -297,7 +299,119 @@ func RunGitHubStatus(ctx context.Context, ssmClient GitHubSSMReadAPI, cfg *confi
 	fmt.Fprintf(out, "  app-client-id:   %s\n", appClientID)
 	fmt.Fprintf(out, "  installation-id: %s\n", installID)
 
+	// Phase 99: list configured commands from SSM (dormant when absent).
+	printGitHubCommandsStatus(ctx, ssmClient, cfg, ghPrefix, out)
+
 	return nil
+}
+
+// printGitHubCommandsStatus reads the SSM commands param and prints the command
+// listing + per-repo effective default to out. Dormant (no output) when the SSM
+// param is absent or the commands map is empty.
+func printGitHubCommandsStatus(ctx context.Context, ssmClient GitHubSSMReadAPI, cfg *config.Config, ghPrefix string, out io.Writer) {
+	// Read the commands JSON doc from SSM.
+	paramName := ghPrefix + "commands"
+	result, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           &paramName,
+		WithDecryption: boolPtr(false),
+	})
+	if err != nil {
+		// Parameter absent or unreadable — dormant, no output.
+		return
+	}
+	if result.Parameter == nil || result.Parameter.Value == nil {
+		return
+	}
+
+	// Parse the JSON commands map.
+	var commandsMap map[string]struct {
+		Description string   `json:"description"`
+		Alias       string   `json:"alias"`
+		Profile     string   `json:"profile"`
+		Allow       []string `json:"allow"`
+		Prompt      string   `json:"prompt"`
+	}
+	if jsonErr := json.Unmarshal([]byte(*result.Parameter.Value), &commandsMap); jsonErr != nil {
+		fmt.Fprintf(out, "  commands:        (parse error: %v)\n", jsonErr)
+		return
+	}
+	if len(commandsMap) == 0 {
+		return
+	}
+
+	// Print sorted command list.
+	names := make([]string, 0, len(commandsMap))
+	for k := range commandsMap {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	fmt.Fprintf(out, "  commands (%d):\n", len(commandsMap))
+	for _, n := range names {
+		e := commandsMap[n]
+		target := ""
+		switch {
+		case e.Alias != "" && e.Profile != "":
+			target = fmt.Sprintf("→ alias:%s profile:%s", e.Alias, e.Profile)
+		case e.Alias != "":
+			target = fmt.Sprintf("→ alias:%s", e.Alias)
+		case e.Profile != "":
+			target = fmt.Sprintf("→ profile:%s", e.Profile)
+		}
+		desc := e.Description
+		if desc == "" {
+			desc = "(no description)"
+		}
+		line := fmt.Sprintf("    /%s — %s", n, desc)
+		if target != "" {
+			line += " [" + target + "]"
+		}
+		fmt.Fprintln(out, line)
+	}
+
+	// Print install-wide default_command.
+	installDefault := cfg.Github.DefaultCommand
+	if installDefault != "" {
+		fmt.Fprintf(out, "  default_command: %s (install-wide)\n", installDefault)
+	}
+
+	// Print per-repo effective default_command (where it differs from install-wide).
+	repos := cfg.Github.Repos
+	if len(repos) == 0 {
+		return
+	}
+
+	hasPerRepoDefaults := false
+	for _, r := range repos {
+		if r.DefaultCommand != "" {
+			hasPerRepoDefaults = true
+			break
+		}
+	}
+
+	if !hasPerRepoDefaults && installDefault == "" {
+		return
+	}
+
+	fmt.Fprintf(out, "  repos (%d):\n", len(repos))
+	for _, r := range repos {
+		effective := r.DefaultCommand
+		label := ""
+		if effective != "" {
+			label = " (per-repo)"
+		} else if installDefault != "" {
+			effective = installDefault
+			label = " (install-wide fallback)"
+		} else {
+			effective = "(none — free-form passthrough)"
+		}
+		match := r.Match
+		if strings.ContainsAny(match, "*?[") {
+			// Trim trailing glob for display.
+			match = strings.TrimSuffix(match, "/*") + "/*"
+		}
+		fmt.Fprintf(out, "    %-40s default_command: %s%s\n", match, effective, label)
+	}
 }
 
 func newGithubStatusCmd(cfg *config.Config) *cobra.Command {

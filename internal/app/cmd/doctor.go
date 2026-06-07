@@ -265,6 +265,16 @@ type DoctorConfigProvider interface {
 	GetGithubRepos() []appcfg.GithubRepoEntry
 	// GetGithubDefaultProfile returns the Phase 97 github.default_profile from km-config.yaml.
 	GetGithubDefaultProfile() string
+	// GetGithubCommands returns the Phase 99 github.commands map from km-config.yaml.
+	// Nil/empty map means no commands are configured (bridge runs dormant).
+	GetGithubCommands() map[string]appcfg.GithubCommandEntry
+	// GetGithubDefaultCommand returns the Phase 99 install-wide github.default_command.
+	// Empty string means no install-wide default is set.
+	GetGithubDefaultCommand() string
+	// GetConfigFilePath returns the absolute path to km-config.yaml as loaded by
+	// config.Load() (empty when running without a config file, e.g. in Lambda).
+	// Used to derive the configDir for @file prompt resolution.
+	GetConfigFilePath() string
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -310,6 +320,11 @@ func (a *appConfigAdapter) GetClusterRoleNames() []string {
 }
 func (a *appConfigAdapter) GetGithubRepos() []appcfg.GithubRepoEntry { return a.cfg.Github.Repos }
 func (a *appConfigAdapter) GetGithubDefaultProfile() string          { return a.cfg.Github.DefaultProfile }
+func (a *appConfigAdapter) GetGithubCommands() map[string]appcfg.GithubCommandEntry {
+	return a.cfg.Github.Commands
+}
+func (a *appConfigAdapter) GetGithubDefaultCommand() string { return a.cfg.Github.DefaultCommand }
+func (a *appConfigAdapter) GetConfigFilePath() string       { return a.cfg.ConfigFilePath }
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
@@ -1331,6 +1346,216 @@ func checkGitHubAliasCollision(repos []appcfg.GithubRepoEntry) CheckResult {
 		Name:    name,
 		Status:  CheckOK,
 		Message: fmt.Sprintf("%d repo entry/entries — no alias collisions or match overlaps detected", len(repos)),
+	}
+}
+
+// checkGitHubCommandsValid validates the github.commands block from km-config.yaml.
+// Runs four pure-config checks (no live AWS calls):
+//
+//  1. @file prompts — checks that each @file reference exists and is readable
+//     relative to configDir (same base-dir convention as ResolveCommandPrompts).
+//
+//  2. Profile resolvable — when a command declares profile:, the file must exist
+//     at that path.
+//
+//  3. "help" not shadowed — the reserved built-in /help must not be redefined.
+//
+//  4. Command-alias ↔ repo-alias overlap — a command.alias value that equals any
+//     repo.alias value (explicit or auto-derived) is flagged as a WARN.
+//
+//  5. default_command references — top-level github.default_command and per-repo
+//     repos[].default_command must each name a defined command key → ERROR.
+//
+// Returns SKIPPED when commands is nil or empty (dormant-by-default).
+// Returns ERROR only for undefined default_command references; everything else is WARN.
+// Exported so external tests in cmd_test can call it via cmd.CheckGitHubCommandsValid;
+// keep unexported for now — tests are in same package (package cmd).
+func checkGitHubCommandsValid(
+	commands map[string]appcfg.GithubCommandEntry,
+	defaultCommand string,
+	repos []appcfg.GithubRepoEntry,
+	defaultProfile string,
+	configDir string,
+) CheckResult {
+	name := "GitHub Commands Config"
+	if len(commands) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "no github.commands configured — skipping command validation",
+		}
+	}
+
+	var warnings []string
+	var errs []string
+
+	// 1. @file prompts — check existence relative to configDir (or CWD when empty).
+	base := configDir
+	if base == "" {
+		base = "."
+	}
+	for verb, entry := range commands {
+		prompt := entry.Prompt
+		if strings.HasPrefix(prompt, "@@") {
+			continue // @@ escape — literal, no file read
+		}
+		if strings.HasPrefix(prompt, "@") {
+			path := strings.TrimPrefix(prompt, "@")
+			absPath := filepath.Join(base, path)
+			if _, statErr := os.Stat(absPath); statErr != nil {
+				warnings = append(warnings, fmt.Sprintf(
+					"command %q prompt @file %q not found (resolved: %s): %v",
+					verb, path, absPath, statErr,
+				))
+			}
+		}
+	}
+
+	// 2. Profile resolvable — profile file must exist when declared.
+	for verb, entry := range commands {
+		if entry.Profile == "" {
+			continue
+		}
+		if _, statErr := os.Stat(entry.Profile); statErr != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"command %q profile %q not found: %v",
+				verb, entry.Profile, statErr,
+			))
+		}
+	}
+
+	// 3. "help" not shadowed — reserved built-in.
+	if _, hasHelp := commands["help"]; hasHelp {
+		warnings = append(warnings, `command "help" shadows the reserved built-in /help reply — rename to avoid unexpected behavior`)
+	}
+
+	// 4. Command-alias ↔ repo-alias overlap.
+	// Collect all repo aliases (explicit and auto-derived).
+	repoAliases := make(map[string]string) // alias → match
+	for _, r := range repos {
+		a := r.Alias
+		if a == "" {
+			a = "gh-" + strings.ReplaceAll(r.Match, "/", "-")
+		}
+		repoAliases[a] = r.Match
+	}
+	for verb, entry := range commands {
+		if entry.Alias == "" {
+			continue
+		}
+		if match, collision := repoAliases[entry.Alias]; collision {
+			warnings = append(warnings, fmt.Sprintf(
+				"command %q alias %q collides with repo alias for match=%q — command routing may be ambiguous",
+				verb, entry.Alias, match,
+			))
+		}
+	}
+
+	// 5. default_command references must name a defined command — ERROR level.
+	// Top-level github.default_command.
+	if defaultCommand != "" {
+		if _, defined := commands[defaultCommand]; !defined {
+			errs = append(errs, fmt.Sprintf(
+				"github.default_command=%q is not a defined command (defined: %s)",
+				defaultCommand, sortedCommandNames(commands),
+			))
+		}
+	}
+	// Per-repo repos[].default_command.
+	for _, r := range repos {
+		if r.DefaultCommand == "" {
+			continue
+		}
+		if _, defined := commands[r.DefaultCommand]; !defined {
+			errs = append(errs, fmt.Sprintf(
+				"repos match=%q default_command=%q is not a defined command (defined: %s)",
+				r.Match, r.DefaultCommand, sortedCommandNames(commands),
+			))
+		}
+	}
+
+	// Aggregate results — errors take precedence.
+	if len(errs) > 0 {
+		all := append(errs, warnings...) //nolint:gocritic
+		return CheckResult{
+			Name:        name,
+			Status:      CheckError,
+			Message:     fmt.Sprintf("%d error(s), %d warning(s): %s", len(errs), len(warnings), strings.Join(all, "; ")),
+			Remediation: "Correct default_command values to reference defined command keys in github.commands",
+		}
+	}
+	if len(warnings) > 0 {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%d issue(s): %s", len(warnings), strings.Join(warnings, "; ")),
+			Remediation: "Fix @file paths, profile paths, alias conflicts, or rename the 'help' command",
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("%d command(s) configured — all checks passed", len(commands)),
+	}
+}
+
+// sortedCommandNames returns a sorted, comma-joined list of defined command keys.
+func sortedCommandNames(commands map[string]appcfg.GithubCommandEntry) string {
+	names := make([]string, 0, len(commands))
+	for k := range commands {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// checkGitHubCommandsSSMParam verifies that the SSM {prefix}/config/github/commands
+// parameter is present when github.commands is configured. When the param is absent
+// the bridge Lambda will run dormant — this WARN reminds the operator to run km init.
+// Silent (SKIPPED) when commands is nil/empty or ssmClient is nil.
+func checkGitHubCommandsSSMParam(ctx context.Context, ssmClient SSMReadAPI, ssmPrefix string, commands map[string]appcfg.GithubCommandEntry) CheckResult {
+	name := "GitHub Commands SSM Param"
+	if len(commands) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "no github.commands configured — skipping SSM commands param check",
+		}
+	}
+	if ssmClient == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "SSM client not available",
+		}
+	}
+
+	paramName := ssmPrefix + "config/github/commands"
+	_, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name: awssdk.String(paramName),
+	})
+	if err != nil {
+		var notFoundErr *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFoundErr) {
+			return CheckResult{
+				Name:        name,
+				Status:      CheckWarn,
+				Message:     fmt.Sprintf("SSM commands param %q not found — bridge Lambda will run without commands (dormant)", paramName),
+				Remediation: "Run 'km init --dry-run=false' to publish the commands map to SSM",
+			}
+		}
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("failed to read SSM commands param %q: %v", paramName, err),
+			Remediation: "Verify SSM permissions and run 'km init --dry-run=false'",
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("SSM commands param %q is present (%d command(s) configured)", paramName, len(commands)),
 	}
 }
 
@@ -3294,6 +3519,25 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	// Silent when github.repos is absent (dormant-by-default contract).
 	checks = append(checks, func(_ context.Context) CheckResult {
 		return checkGitHubAliasCollision(githubRepos)
+	})
+
+	// GitHub command config checks — Phase 99.
+	// Pure config checks (no live AWS) for command @file paths, profiles,
+	// reserved "help" shadow, command↔repo alias overlap, and default_command references.
+	// Silent (SKIPPED) when github.commands is absent (dormant-by-default).
+	githubCommands := cfg.GetGithubCommands()
+	githubDefaultCommand := cfg.GetGithubDefaultCommand()
+	cfgFilePath := cfg.GetConfigFilePath()
+	configDir := "."
+	if cfgFilePath != "" {
+		configDir = filepath.Dir(cfgFilePath)
+	}
+	checks = append(checks, func(_ context.Context) CheckResult {
+		return checkGitHubCommandsValid(githubCommands, githubDefaultCommand, githubRepos, githubDefaultProfile, configDir)
+	})
+	// SSM commands param presence check — WARN when commands configured but param absent.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkGitHubCommandsSSMParam(ctx, ssmClient, cfg.GetSsmPrefix(), githubCommands)
 	})
 
 	// Credential rotation age check.
