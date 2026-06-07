@@ -2233,7 +2233,12 @@ Plans:
 
 **Requirements**: GH-X-CHECK, GH-X-PRCREATE, GH-X-PUSH, GH-X-CONTINUITY, GH-X-THREADBYPASS, GH-X-SHARED, GH-X-RESUME, GH-COLD-CREATE, GH-X-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
 **Depends on:** Phase 97
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 98 to break down)
+- [ ] 98-00-PLAN.md — Wave 0: RED test scaffolding + km-github-threads TF module/live unit + module-list guard
+- [ ] 98-01-PLAN.md — km-github check + pr create verbs; push hardening (worktree-per-PR preamble)
+- [ ] 98-02-PLAN.md — thread/session continuity + thread-bypass (km-github-threads store, bridge IAM v1.1.0, poller session write)
+- [ ] 98-03-PLAN.md — shared-alias resolution characterization + km doctor collision/overlap WARN
+- [ ] 98-04-PLAN.md — auto-resume + cold-create fix (sandbox_id/artifact_prefix, km init pre-stage, EC2 IAM, SOPS cold-box auth)
+- [ ] 98-05-PLAN.md — deploy-surface verification + github-bridge docs + manual E2E checkpoint
