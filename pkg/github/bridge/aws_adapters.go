@@ -491,31 +491,111 @@ func (r *EC2Resumer) sandboxIDTagKey() string {
 	return "km:sandbox-id"
 }
 
-// StartSandbox finds all stopped EC2 instances tagged with the km sandbox-id
-// tag equal to sandboxID and calls StartInstances on them. Returns nil when
-// at least one instance was started, or an error describing the failure.
+// StartSandbox finds stopped (or stopping) EC2 instances tagged with the km
+// sandbox-id tag equal to sandboxID and calls StartInstances on them. Returns
+// nil when at least one instance was started, or an error describing the failure.
+//
+// Gap C fix (98-06): the filter now includes "stopping" in addition to "stopped".
+// A quick pause→mention (box still transitioning through "stopping") previously
+// returned "no stopped EC2 instances found" and gave up — the prompt was enqueued
+// but the box never started. Now, when a "stopping" instance is found, StartSandbox
+// waits briefly (≤ stoppingPollTimeout in small increments) for it to reach "stopped"
+// before calling StartInstances. The wait is bounded so it does not block the 200
+// ack window; the message is already enqueued so a partial wait is acceptable.
 func (r *EC2Resumer) StartSandbox(ctx context.Context, sandboxID string) error {
 	tagKey := r.sandboxIDTagKey()
+
+	// Widen the filter to catch instances that are mid-transition (stopping→stopped).
+	// The bridge fires within seconds of the @-mention; a quick pause→mention can find
+	// the box still "stopping". Including "stopping" avoids the "no instances found"
+	// no-op that stranded the 2026-06-07 UAT prompt.
 	descOut, err := r.Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{
 			{Name: awssdk.String("tag:" + tagKey), Values: []string{sandboxID}},
-			{Name: awssdk.String("instance-state-name"), Values: []string{"stopped"}},
+			{Name: awssdk.String("instance-state-name"), Values: []string{"stopped", "stopping"}},
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("github-bridge: EC2Resumer.DescribeInstances for %s: %w", sandboxID, err)
 	}
 
-	var instanceIDs []string
+	type foundInst struct {
+		id       string
+		stopping bool // true = state is "stopping", false = "stopped"
+	}
+	var found []foundInst
 	for _, res := range descOut.Reservations {
 		for _, inst := range res.Instances {
-			if inst.InstanceId != nil && *inst.InstanceId != "" {
-				instanceIDs = append(instanceIDs, *inst.InstanceId)
+			if inst.InstanceId == nil || *inst.InstanceId == "" {
+				continue
+			}
+			isStopping := inst.State != nil &&
+				inst.State.Name == ec2types.InstanceStateNameStopping
+			found = append(found, foundInst{id: *inst.InstanceId, stopping: isStopping})
+		}
+	}
+	if len(found) == 0 {
+		return fmt.Errorf("github-bridge: no stopped/stopping EC2 instances found for sandbox %s (tag %s)", sandboxID, tagKey)
+	}
+
+	// Collect instance IDs to start. For "stopping" instances, we wait briefly
+	// for them to reach "stopped" before calling StartInstances (which rejects
+	// instances not yet in the stopped state). The poll is bounded at
+	// stoppingPollTimeout; if the instance is still stopping when the deadline
+	// arrives we attempt StartInstances anyway — EC2 may accept it or the message
+	// will be re-delivered via FIFO visibility timeout.
+	const stoppingPollInterval = 2 * time.Second
+	const stoppingPollTimeout = 8 * time.Second
+
+	allStopping := true
+	for _, fi := range found {
+		if !fi.stopping {
+			allStopping = false
+			break
+		}
+	}
+
+	if allStopping {
+		// All matched instances are still stopping. Poll until at least one reaches
+		// "stopped" or the timeout expires. Bounded so we don't block the ack window.
+		deadline := time.Now().Add(stoppingPollTimeout)
+		for time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				// Context cancelled — attempt StartInstances with current IDs anyway.
+				goto doStart
+			case <-time.After(stoppingPollInterval):
+			}
+			// Re-query — narrow to "stopped" only to detect transition.
+			rePoll, pollErr := r.Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+				Filters: []ec2types.Filter{
+					{Name: awssdk.String("tag:" + tagKey), Values: []string{sandboxID}},
+					{Name: awssdk.String("instance-state-name"), Values: []string{"stopped"}},
+				},
+			})
+			if pollErr != nil {
+				// Transient describe error — continue polling.
+				continue
+			}
+			var stoppedNow []foundInst
+			for _, res := range rePoll.Reservations {
+				for _, inst := range res.Instances {
+					if inst.InstanceId != nil && *inst.InstanceId != "" {
+						stoppedNow = append(stoppedNow, foundInst{id: *inst.InstanceId})
+					}
+				}
+			}
+			if len(stoppedNow) > 0 {
+				found = stoppedNow // replace with the now-stopped set
+				break
 			}
 		}
 	}
-	if len(instanceIDs) == 0 {
-		return fmt.Errorf("github-bridge: no stopped EC2 instances found for sandbox %s (tag %s)", sandboxID, tagKey)
+
+doStart:
+	var instanceIDs []string
+	for _, fi := range found {
+		instanceIDs = append(instanceIDs, fi.id)
 	}
 
 	if _, err := r.Client.StartInstances(ctx, &ec2.StartInstancesInput{
