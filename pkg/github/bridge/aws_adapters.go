@@ -18,11 +18,14 @@ package bridge
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -297,6 +300,42 @@ func (a *GitHubSQSAdapter) Send(ctx context.Context, queueURL, body, groupID, de
 // EventBridgeAdapter — publishes SandboxCreate for cold path
 // ============================================================
 
+// generateGitHubSandboxID returns a new unique sandbox ID in the form "gh-" + 8
+// lowercase hex characters (e.g. "gh-a1b2c3d4"). Mirrors compiler.GenerateSandboxID
+// semantics but is defined locally to avoid an import cycle between bridge and
+// pkg/compiler.
+func generateGitHubSandboxID() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failures are exceedingly rare; fall through to a time-seeded
+		// fallback rather than propagating an error through a value-returning function.
+		panic(fmt.Sprintf("github-bridge: generateGitHubSandboxID: rand.Read: %v", err))
+	}
+	return "gh-" + hex.EncodeToString(b)
+}
+
+// profileSlug normalises a profile name/path into a directory-safe slug.
+// Examples:
+//
+//	"github-review"       → "github-review"
+//	"github-review.yaml"  → "github-review"
+//	"profiles/foo.yaml"   → "foo"
+//
+// The create-handler convention is artifact_prefix/directory; the slug is the
+// directory component under "github-profiles/".
+func profileSlug(profile string) string {
+	// Drop any path prefix (keep just the base name).
+	base := filepath.Base(profile)
+	// Strip trailing ".yaml" or ".yml".
+	for _, ext := range []string{".yaml", ".yml"} {
+		if strings.HasSuffix(strings.ToLower(base), ext) {
+			base = base[:len(base)-len(ext)]
+			break
+		}
+	}
+	return strings.ToLower(base)
+}
+
 // EventBridgeAPI is the narrow EventBridge interface needed here.
 // *eventbridge.Client satisfies this.
 type EventBridgeAPI interface {
@@ -329,10 +368,17 @@ type EventBridgeAdapter struct {
 
 // PutSandboxCreate publishes a SandboxCreate event. profile is stored in
 // artifact_prefix so the create-handler knows which profile YAML to use.
+//
+// artifact_prefix is the DIRECTORY "github-profiles/{profileSlug}"; the
+// create-handler appends "/.km-profile.yaml" to resolve the actual profile file.
+// sandbox_id is generated here as "gh-" + 8 hex chars so the create-handler can
+// use the caller-supplied identity rather than generating its own (determinism).
 func (a *EventBridgeAdapter) PutSandboxCreate(ctx context.Context, alias, profile, githubEnvelopeJSON string) error {
+	sandboxID := generateGitHubSandboxID()
 	detail := sandboxCreateDetail{
+		SandboxID:      sandboxID,
 		ArtifactBucket: a.ArtifactBucket,
-		ArtifactPrefix: a.ArtifactPrefix + "/profiles/" + profile + ".yaml",
+		ArtifactPrefix: "github-profiles/" + profileSlug(profile),
 		Alias:          alias,
 		GithubEnvelope: githubEnvelopeJSON,
 	}

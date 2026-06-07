@@ -1,6 +1,4 @@
-//go:build phase98_wave0
-
-// aws_adapters_test.go — Phase 98 RED tests for EventBridgeAdapter cold-create fixes.
+// aws_adapters_test.go — Phase 98 tests for EventBridgeAdapter cold-create fixes.
 //
 // BUILD TAG: phase98_wave0
 // This file tests the BROKEN behavior in EventBridgeAdapter.PutSandboxCreate
