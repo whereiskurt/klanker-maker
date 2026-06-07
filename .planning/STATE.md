@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 99-03-PLAN.md — @file resolution + SSM commands publication (ResolveCommandPrompts + PublishGitHubCommandsToSSM)
-last_updated: "2026-06-07T23:19:56.579Z"
+stopped_at: Completed 99-05-PLAN.md — doctor checks + km github status command listing + Phase 99 docs
+last_updated: "2026-06-07T23:33:32.418Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 117
-  completed_phases: 100
+  completed_phases: 101
   total_plans: 504
-  completed_plans: 465
+  completed_plans: 466
   percent: 91
 ---
 
@@ -498,6 +498,7 @@ Progress: [█████████░] 91%
 | Phase 99-github-bridge-commands-config-defined-commands-mapping-to-prompt-templates-plus-env-routing P02 | 4 | 2 tasks | 3 files |
 | Phase 99 P04 | 323 | 3 tasks | 5 files |
 | Phase 99-github-bridge-commands P03 | 11min | 2 tasks | 3 files |
+| Phase 99 P05 | 556 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1444,6 +1445,9 @@ Recent decisions affecting current work:
 - [Phase 99-03]: Open-Q-1 resolved: Config.ConfigFilePath populated from v2.ConfigFileUsed() in Load(); callers use filepath.Dir(cfg.ConfigFilePath) for @file base dir
 - [Phase 99-03]: PublishGitHubCommandsToSSM exported directly (not unexported+wrapper) for clean SSMReadWriteAPI injection in cmd_test
 - [Phase 99-03]: SSM commands drift WARN: yaml always wins (no operator 'export' path for SSM); WARN is informational only unlike KM_GITHUB_REPOS env-wins pattern
+- [Phase 99]: DoctorConfigProvider interface extended with GetGithubCommands/GetGithubDefaultCommand/GetConfigFilePath; all test stubs updated with zero-value returns
+- [Phase 99]: printGitHubCommandsStatus reads live SSM param (not cfg) to show what Lambda actually reads at runtime
+- [Phase 99]: Deploy surface: make build-lambdas + km init --dry-run=false ONLY; no sidecars, no sandbox recreate — cross-checked against Plans 03/04, no discrepancies
 
 ### Roadmap Evolution
 
@@ -1572,6 +1576,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-07T23:19:56.568Z
-Stopped at: Completed 99-03-PLAN.md — @file resolution + SSM commands publication (ResolveCommandPrompts + PublishGitHubCommandsToSSM)
+Last session: 2026-06-07T23:33:32.408Z
+Stopped at: Completed 99-05-PLAN.md — doctor checks + km github status command listing + Phase 99 docs
 Resume file: None

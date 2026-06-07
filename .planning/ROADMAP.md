@@ -2261,7 +2261,7 @@ Plans:
 
 **Requirements**: GH-CMD-CONFIG, GH-CMD-FILEREF, GH-CMD-SSM, GH-CMD-PARSE, GH-CMD-ROUTE, GH-CMD-AUTH, GH-CMD-HELP, GH-CMD-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
 **Depends on:** Phase 98
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 - [ ] 99-01-PLAN.md — Config plumbing: GithubCommandEntry + Commands/DefaultCommand + per-repo default_command + getters (GH-CMD-CONFIG)
