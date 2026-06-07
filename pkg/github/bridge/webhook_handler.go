@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path"
 	"strconv"
 	"strings"
 )
@@ -114,6 +115,22 @@ type WebhookHandler struct {
 	// the current state and follow-up @-mentions don't re-fire StartInstances.
 	// Nil → no status write-back (pre-98-06 behavior).
 	StatusWriter SandboxStatusWriter
+
+	// Commands is the parsed command map from SSM {prefix}/config/github/commands.
+	// Nil or empty map → dormant (Phase 99 command pass is skipped; byte-identical
+	// to Phase 98 behavior). Populated at Lambda cold start from SSMCommandsFetcher.
+	Commands map[string]CommandEntry
+
+	// DefaultCommand is the install-wide default command name. When set and a
+	// comment contains no explicit /command, the handler uses this command's
+	// prompt template and routing overrides. Per-repo DefaultCommand from the
+	// matched RepoEntry takes precedence over this field.
+	// Empty string → no install-wide default (free-form passthrough when no command).
+	DefaultCommand string
+
+	// Commenter posts reply comments (multi-command errors, deny, /help) via the
+	// GitHub App installation token. Nil → reply paths are skipped (errors logged).
+	Commenter CommentPoster
 
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
@@ -241,7 +258,56 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	}
 
 	// ── Steps 8–9: Resolve alias + dispatch ──────────────────────────────────
-	promptBody := ExtractMentionBody(payload.Comment.Body, botLogin)
+
+	// ── Phase 99: command pass (dormant when Commands empty AND DefaultCommand "") ─
+	// Slotted AFTER dedupe (line ~241) and BEFORE envelope construction.
+	// When dormant, this block is skipped entirely — byte-identical to Phase 98.
+	// When active, RunCommandPass may:
+	//   Reply/Deny  → PostComment reply + return 200 (no dispatch)
+	//   Dispatch    → overrides alias/profile/promptBody before envelope construction
+	//   Passthrough → falls through to free-form ExtractMentionBody (same as dormant)
+	var promptBody string
+	if len(h.Commands) > 0 || h.DefaultCommand != "" {
+		// Resolve per-repo default command (from matched RepoEntry.DefaultCommand).
+		repoDefaultCmd := lookupRepoDefaultCommand(h.Entries, payload.Repository.FullName)
+
+		res := RunCommandPass(
+			payload.Comment.Body,
+			h.Commands,
+			h.DefaultCommand, repoDefaultCmd,
+			payload.Comment.User.Login,
+			alias, profile, h.DefaultProfile,
+			botLogin,
+		)
+
+		switch res.Action {
+		case CommandActionReply, CommandActionDeny:
+			// Post comment reply and return 200 — no dispatch.
+			if h.Commenter != nil {
+				owner := OwnerFromFullName(payload.Repository.FullName)
+				repo := RepoFromFullName(payload.Repository.FullName)
+				if cErr := h.Commenter.PostComment(ctx,
+					InstallIDString(payload.Installation.ID),
+					owner, repo, payload.Issue.Number, res.ReplyText); cErr != nil {
+					h.log().Warn("github-bridge: post command reply failed (non-fatal)", "err", cErr)
+				}
+			}
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+
+		case CommandActionDispatch:
+			// Command overrides alias/profile/prompt — fall through to envelope construction.
+			alias = res.Alias
+			profile = res.Profile
+			promptBody = res.Prompt
+
+		case CommandActionPassthrough:
+			// No command (and no effective default) → free-form body.
+			promptBody = ExtractMentionBody(payload.Comment.Body, botLogin)
+		}
+	} else {
+		// Dormant path: no commands configured — free-form dispatch (Phase 98 behavior).
+		promptBody = ExtractMentionBody(payload.Comment.Body, botLogin)
+	}
 
 	env := GitHubEnvelope{
 		Source:        "github",
@@ -437,4 +503,28 @@ func isInAllowlist(login string, allow []string) bool {
 // Kept for backward compat if callers need it; prefer InstallIDString.
 func formatInstallID(id int64) string {
 	return strconv.FormatInt(id, 10)
+}
+
+// lookupRepoDefaultCommand returns the DefaultCommand for the matched RepoEntry
+// by scanning entries for fullName. Returns "" when no entry matches (which won't
+// happen in practice — Resolve already confirmed a match — but is safe to handle).
+// This is a minimal scan because Resolve() returns alias/profile but not the
+// RepoEntry itself; keeping it separate avoids widening Resolve's return type.
+func lookupRepoDefaultCommand(entries []RepoEntry, fullName string) string {
+	// Exact match first (mirrors Resolve's resolution order).
+	for _, e := range entries {
+		if e.Match == fullName {
+			return e.DefaultCommand
+		}
+	}
+	// Glob match — isGlob is defined in resolve.go (same package); path.Match is stdlib.
+	for _, e := range entries {
+		if isGlob(e.Match) {
+			ok, err := path.Match(e.Match, fullName)
+			if err == nil && ok {
+				return e.DefaultCommand
+			}
+		}
+	}
+	return ""
 }

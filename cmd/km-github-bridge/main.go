@@ -141,6 +141,33 @@ func init() {
 	// On fetch failure, the reactor will fail at invocation time (logged + 200).
 	appClientID, privateKeyPEM := readAppCredentials(ctx, ssmClient)
 
+	// ── Phase 99: command map from SSM (dormant when absent) ──────────────────
+	// The commands parameter is a plain String SSM doc at {prefix}/config/github/commands.
+	// SSMCommandsFetcher returns an empty map (not nil, not error) when the parameter
+	// is absent — this is the dormant signal; no new behavior vs Phase 98.
+	ssmCommandsPath := envOr("KM_COMMANDS_PATH", "/"+prefix+"/config/github/commands")
+	commandsFetcher := &bridge.SSMCommandsFetcher{
+		Client:   ssmClient,
+		Path:     ssmCommandsPath,
+		CacheTTL: 15 * time.Minute,
+	}
+	// Eagerly fetch at cold start (like appClientID). Empty map → dormant.
+	commands, cmdErr := commandsFetcher.Fetch(ctx)
+	if cmdErr != nil {
+		slog.Warn("km-github-bridge: failed to fetch commands from SSM at cold start; command pass dormant",
+			"err", cmdErr, "path", ssmCommandsPath)
+		commands = map[string]bridge.CommandEntry{}
+	} else {
+		slog.Info("km-github-bridge: loaded command config",
+			"command_count", len(commands),
+			"path", ssmCommandsPath)
+	}
+
+	// ── Install-wide default command (from KM_GITHUB_DEFAULT_COMMAND env) ────
+	// Written to Lambda env by km init when github.default_command is set in
+	// km-config.yaml. Empty string → no install-wide default (free-form passthrough).
+	defaultCommand := os.Getenv("KM_GITHUB_DEFAULT_COMMAND")
+
 	// ── Wire adapters ─────────────────────────────────────────────────────────
 	nonceStore := &bridge.DynamoGitHubNonceStore{
 		Client:    ddbClient,
@@ -173,6 +200,14 @@ func init() {
 		PrivateKeyPEM: []byte(privateKeyPEM),
 	}
 
+	// ── Phase 99: InstallationCommenter for command reply paths ───────────────
+	// Uses the same App credentials as the reactor. Posts text comments for
+	// multi-command errors, command-not-authorized denials, and /help replies.
+	commenter := &bridge.InstallationCommenter{
+		AppClientID:   appClientID,
+		PrivateKeyPEM: []byte(privateKeyPEM),
+	}
+
 	// ── Construct WebhookHandler ──────────────────────────────────────────────
 	webhookHandler = &bridge.WebhookHandler{
 		Secret:         secretFetcher,
@@ -189,6 +224,10 @@ func init() {
 		DefaultProfile: defaultProfile,
 		ResourcePrefix: prefix,
 		SandboxesTable: sandboxesTable,
+		// Phase 99 command pass fields (dormant when commands empty AND defaultCommand "").
+		Commands:       commands,
+		DefaultCommand: defaultCommand,
+		Commenter:      commenter,
 	}
 
 	slog.Info("km-github-bridge: cold start",
@@ -200,6 +239,8 @@ func init() {
 		"KM_BOT_LOGIN_PATH", ssmBotLoginPath,
 		"KM_ARTIFACTS_BUCKET", artifactsBucket,
 		"repo_count", len(entries),
+		"command_count", len(commands),
+		"default_command", defaultCommand,
 	)
 }
 
