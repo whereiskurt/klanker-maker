@@ -166,6 +166,59 @@ github:
 
 ---
 
+## Multi-install (multiple `resource_prefix` environments)
+
+The GitHub bridge is **per-install**. Each `resource_prefix` (e.g. `kph`, `sec`)
+runs its own `{prefix}-github-bridge` Lambda with its own Function URL, its own SSM
+App config under `/{prefix}/config/github/`, its own `github.repos:` in its own
+`km-config.yaml`, and dispatches only into its own `{prefix}-sandboxes` table.
+**A bridge cannot dispatch into another prefix's sandboxes.**
+
+A GitHub App has exactly **one** webhook URL, so serving two installs requires one
+of two patterns:
+
+### Pattern A — two GitHub Apps (supported today)
+
+Run a separate GitHub App per install. This is the right choice when each
+environment owns a **disjoint** set of repos.
+
+1. Create two Apps (e.g. *klanker-kph* and *klanker-sec*). `km github manifest`
+   renders a manifest for each.
+2. Run `km github init` in each install — each stores its own
+   App creds + webhook secret in its own `/{prefix}/config/github/` SSM paths.
+3. Point each App's **Webhook URL** at that install's bridge Function URL
+   (`km github status` → `bridge-url`).
+4. Install App-*kph* on the repos `kph` owns; App-*sec* on the repos `sec` owns.
+5. Each `km-config.yaml` lists only its own repos in `github.repos:`.
+
+Routing-by-repo is then determined by **which App is installed on which repo** —
+a comment on a `kph` repo reaches only the `kph` App → `kph` bridge → `kph`
+sandboxes. Zero shared infrastructure.
+
+> **Invariant:** a given repo should be owned by exactly **one** install (one App
+> installation + one matching `github.repos:` entry). Registering the same repo in
+> two installs is ambiguous.
+
+### Pattern B — one GitHub App, federated relay
+
+If you want a **single bot identity** across both installs (one App, one place to
+manage), you need a federated relay — the GitHub analog of Slack's Phase 95
+`slack.peer_bridges` (`docs/slack-notifications.md` § Phase 95): one App's webhook
+points at a "front-door" install whose bridge relays repos it doesn't own to peer
+bridges until the owning install handles it.
+
+**This is not yet implemented** — see the design spec
+`docs/superpowers/specs/2026-06-07-github-bridge-peer-relay-design.md` (Phase 100).
+
+### What multi-install does NOT do
+
+Routing **by command on the same repo** to different prefixes (e.g. `/patch` →
+`sec`, `/review` → `kph` on one repo) is not possible. A command's `alias`/`profile`
+(Phase 99) resolve inside the handling bridge's own prefix; there is no cross-prefix
+dispatch.
+
+---
+
 ## The github-review Profile
 
 `profiles/github-review.yaml` is the lean built-in profile for GitHub PR review
