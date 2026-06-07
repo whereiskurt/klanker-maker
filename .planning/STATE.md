@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 97-07-PLAN.md (GH-BRIDGE-DEPLOY gap closure)
-last_updated: "2026-06-07T04:55:41.702Z"
-last_activity: 2026-06-06
+stopped_at: Completed 98-00-PLAN.md (Wave 0 Nyquist scaffolding)
+last_updated: "2026-06-07T14:45:42.682Z"
+last_activity: 2026-06-07
 progress:
   total_phases: 113
   completed_phases: 99
-  total_plans: 492
-  completed_plans: 454
+  total_plans: 498
+  completed_plans: 455
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 92-00 — all 3 tasks done; pre-Phase-92 byte-identity baselines captured,
 Total Plans in Phase: 7 (92-00 → 92-06)
 Current Plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 Status: in-progress
-Last activity: 2026-06-06
+Last activity: 2026-06-07
 
 Wave 1 UNBLOCKED: both byte-identity baselines (userdata + IAM HCL) committed before any Wave 1 source change.
 
@@ -487,6 +487,7 @@ Progress: [█████████░] 91%
 | Phase 97-github-comment-trigger-mvp P05 | 868 | 2 tasks | 4 files |
 | Phase 97 P06 | 1042s | 2 tasks | 7 files |
 | Phase 97-github-comment-trigger-mvp P07 | 15 | 3 tasks | 5 files |
+| Phase 98-github-bridge-expansion P00 | 590 | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -1409,6 +1410,9 @@ Recent decisions affecting current work:
 - [Phase 97]: checkGitHubReposResolvable is a pure config function (no AWS calls) for fast overlap + missing-profile detection
 - [Phase 97-github-comment-trigger-mvp]: GitHub bridge reuses dynamodb-slack-nonces (shared nonce table) with github-delivery: key namespace — no new DynamoDB table
 - [Phase 97-github-comment-trigger-mvp]: lambda-github-bridge placed after lambda-slack-bridge in regionalModules() — all bridge Lambdas contiguous before ses
+- [Phase 98-github-bridge-expansion]: phase98_wave0 build tag isolates all RED test scaffolding from normal builds — 98-01 through 98-04 remove tags as features ship
+- [Phase 98-github-bridge-expansion]: DynamoDB github-threads key schema: hash=repo(S), range=number(N) — number is type N not S, differs from Slack threads
+- [Phase 98-github-bridge-expansion]: TestRegionalModulesIncludesGitHubThreads runs in normal suite untagged to continuously gate missing regionalModules() entry (prevents Phase 97 silent non-deploy footgun)
 
 ### Roadmap Evolution
 
@@ -1532,6 +1536,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-06T22:09:33.886Z
-Stopped at: Completed 97-07-PLAN.md (GH-BRIDGE-DEPLOY gap closure)
+Last session: 2026-06-07T14:45:42.671Z
+Stopped at: Completed 98-00-PLAN.md (Wave 0 Nyquist scaffolding)
 Resume file: None
