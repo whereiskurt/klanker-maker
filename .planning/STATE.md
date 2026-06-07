@@ -4,11 +4,11 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: "Completed 98-06 tasks 1+2; paused at Task 3 checkpoint:human-verify (redeploy + E2E)"
-last_updated: "2026-06-07T17:40:06.475Z"
+stopped_at: "Completed 98-06 tasks 1-5 (Gaps A-E all fixed: IAM condition, status write-back, resumer-stopping race, token-mint robustness, stale/cross-box session fallback + row invalidation; build + tests green); paused at Task 6 checkpoint:human-verify (redeploy + unattended E2E re-verify). Gaps A+B already deployed + live-validated; the full resume→continuity→post-back chain was proven live on PR #11 (klanker-maker[bot]) via the manual unblocks Tasks 3-5 now automate. See 98-UAT.md."
+last_updated: "2026-06-07T21:10:45.081Z"
 last_activity: 2026-06-07
 progress:
-  total_phases: 114
+  total_phases: 117
   completed_phases: 100
   total_plans: 499
   completed_plans: 461
