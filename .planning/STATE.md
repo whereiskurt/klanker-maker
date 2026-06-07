@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 98-05-PLAN.md tasks 1+2 (deploy-surface test + docs); awaiting GH-X-E2E operator verification (task 3 checkpoint)
-last_updated: "2026-06-07T15:46:52.675Z"
+stopped_at: "Completed 98-06 tasks 1+2; paused at Task 3 checkpoint:human-verify (redeploy + E2E)"
+last_updated: "2026-06-07T17:40:06.475Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 114
   completed_phases: 100
-  total_plans: 498
-  completed_plans: 460
+  total_plans: 499
+  completed_plans: 461
   percent: 91
 ---
 
@@ -493,6 +493,7 @@ Progress: [█████████░] 91%
 | Phase 98-github-bridge-expansion P02 | 540s | 3 tasks | 13 files |
 | Phase 98-github-bridge-expansion P04 | 532s | 4 tasks | 10 files |
 | Phase 98-github-bridge-expansion P05 | 26m | 2 tasks | 5 files |
+| Phase 98-github-bridge-expansion P06 | 8 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1429,6 +1430,8 @@ Recent decisions affecting current work:
 - [Phase 98-04]: EC2 IAM scopes StartInstances to km:managed=true tag; SandboxAliasResolverWithStatus type-assertion preserves Phase 97 backward compat; profileSlug/generateGitHubSandboxID local to bridge (no import cycle)
 - [Phase 98-github-bridge-expansion]: Export EnvReqs from RegionalModule to enable direct assert of module env requirements in tests
 - [Phase 98-github-bridge-expansion]: 5-sub-test deploy-surface test encodes Phase 97/98 deploy footguns as in-process file-level assertions (no live AWS)
+- [Phase 98-github-bridge-expansion]: SetStatusRunning uses UpdateItem only (not PutItem) to avoid SandboxMetadata lossy round-trip; DDBSandboxesUpdateItem IAM statement grants only UpdateItem on km-sandboxes
+- [Phase 98-github-bridge-expansion]: StatusWriter is non-fatal in resume branch: DDB error logs Warn and enqueue always continues so the prompt is never lost
 
 ### Roadmap Evolution
 
@@ -1553,6 +1556,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-07T15:46:52.658Z
-Stopped at: Completed 98-05-PLAN.md tasks 1+2 (deploy-surface test + docs); awaiting GH-X-E2E operator verification (task 3 checkpoint)
+Last session: 2026-06-07T17:40:06.463Z
+Stopped at: Completed 98-06 tasks 1+2; paused at Task 3 checkpoint:human-verify (redeploy + E2E)
 Resume file: None
