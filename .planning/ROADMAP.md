@@ -2288,3 +2288,34 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 100 to break down)
+
+### Phase 101: GitHub bridge orphan-repo helpful reply — front-door posts guidance when no install owns the repo (claim-aware scatter-gather, Slack Phase 96 analog)
+
+**Goal:** Builds on Phase 100. After federation, an @-mention on a repo that NO install owns is silently dropped (`github_relay_no_owner`) and the human gets no response — the GitHub analog of the gap Slack Phase 96 closed. Goal: the front-door install posts ONE helpful PR/issue comment explaining no sandbox is bound to the repo and how to wire it up (point at `github.repos:` / the bot install). Mechanism (mirrors Slack 96): upgrade Phase 100's fire-and-forget broadcast to a **claim-aware scatter-gather** — each relayed-to peer returns `200 {claimed:bool}` (claimed=true when its `github.repos:` matches), the front door tallies, and **zero claims ⇒ true orphan ⇒ post the guidance comment**; any claim ⇒ owner handled it ⇒ no comment. Per-(repo,number) cooldown via the nonces table (reuse the Phase 96 cooldown-key pattern) to avoid repeat spam on a busy PR. Rollout-safe mixed fleet: a peer still on Phase-100 code returns a plain 200 with no body → treat as `claimed:true` (never post a false "nobody owns this"). Front-door-only toggle (analog of `slack.default_router`): e.g. `github.default_router: true`. Dormant by default ⇒ byte-identical to Phase 100 when off. No schema change, no sandbox recreate; deploy `make build-lambdas` + `km init --dry-run=false`. **Deferred from Phase 100** (which shipped routing-relay-only). Design: mirrors `docs/superpowers/specs/2026-06-05-slack-default-router-design.md` + the Phase 100 spec's deferred note; full spec to be written at `/gsd:plan-phase 101` time.
+
+**Requirements**: GH-ORPHAN-CLAIM, GH-ORPHAN-REPLY, GH-ORPHAN-COOLDOWN, GH-ORPHAN-ROLLOUT, GH-ORPHAN-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
+**Depends on:** Phase 100
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 101 to break down)
+
+### Phase 102: GitHub bridge agent verbs — /claude and /codex select the per-thread agent in a PR comment (Slack Phase 70 analog)
+
+**Goal:** Reserved **`/claude`** and **`/codex`** verbs in a PR/issue comment select the agent for that **thread** — the GitHub analog of Slack's Phase 70 `claude:`/`codex:` prefix routing. Today GitHub dispatch always runs the profile-default agent (`userdata.go:2248` hardwires `EFFECTIVE_AGENT="$AGENT"`); the poller already HAS the Claude/Codex dispatch fork and already captures both session types (Claude `.session_id`, Codex `thread.started` `thread_id`, `userdata.go:2253-2317`) but never varies the agent. Decisions: slash verbs (consistent with Phase 99 `/command` tokens, parsed anywhere; NOT Slack's `codex:` colon prefix), reserved built-ins (like `/help`); a **separate axis** from Phase 99 template commands that COMPOSES (`@bot /codex /patch fix X` = Codex agent + `/patch` template, `{{args}}`="fix X"); **persistent per-thread** (writes a new `agent_type` column on `km-github-threads`; follow-ups with no verb continue with it); precedence **verb > thread `agent_type` > profile default**; **≤1 agent verb** per comment (two = error reply); **single `agent_session_id` column, reset on cross-agent switch** (switching agent starts a fresh session + overwrites; switching back = fresh — no Slack-style 8-step new-top-level handoff, because the PR IS the thread); `/codex` requires a **Codex-capable profile** (the lean `github-review` is Claude-only) → documented precondition + a runtime helpful-error comment instead of a stranded turn. Plumbing: `GitHubEnvelope` gains `agent`; bridge parses+strips the verb; `km-github-threads` gains `agent_type` (schema-on-write, no TF/migration); poller computes `EFFECTIVE_AGENT` + writes `agent_type` back. `claude`/`codex`/`help` become reserved (github.commands shadow → `km doctor` WARN). No verb ⇒ byte-identical to today. Deploy: poller lives in `userdata.go` ⇒ `make build-lambdas` + `km init --dry-run=false` for remote create + existing sandboxes need `km destroy && km create`; bridge verb-parse via the same redeploy. Design spec: `docs/superpowers/specs/2026-06-07-github-bridge-agent-verbs-design.md`.
+
+**Success Criteria** (what must be TRUE):
+  1. A PR comment containing `/codex` dispatches the turn to Codex and persists `agent_type=codex` on the `(repo, number)` row; a subsequent no-verb comment in the same thread continues with Codex; `/claude` switches it back.
+  2. With no agent verb and no stored `agent_type`, dispatch uses the profile default — byte-identical to today.
+  3. The agent verb is parsed anywhere in the comment, stripped from `{{args}}`, composes with a Phase 99 template command (`/codex /patch …`), and two distinct agent verbs in one comment produce an error reply with no dispatch.
+  4. A cross-agent switch (stored `agent_type` differs from the verb) starts a FRESH session for the new agent (no `--resume` of the other agent's session) and overwrites `agent_session_id` + `agent_type`.
+  5. `/codex` on a Claude-only profile posts a helpful comment (no Codex here) rather than a silent failure / stranded turn.
+  6. `claude`, `codex`, `help` are reserved: a `github.commands` entry shadowing them is ignored with a `km doctor` WARN.
+  7. All Phase 97/98/99 success criteria continue to hold (no regression to dispatch, thread continuity, or command parsing).
+
+**Requirements**: GH-AGENT-VERB, GH-AGENT-PERSIST, GH-AGENT-SWITCH, GH-AGENT-POLLER, GH-AGENT-PROFILE, GH-AGENT-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
+**Depends on:** Phase 99 (parser) + Phase 98 (km-github-threads); independent of Phases 100/101
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 102 to break down)
