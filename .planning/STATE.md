@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 99-01-PLAN.md
-last_updated: "2026-06-07T23:01:26.800Z"
+stopped_at: Completed 99-02-PLAN.md — pure command parsing layer (commands.go + commands_test.go + RepoEntry.DefaultCommand)
+last_updated: "2026-06-07T23:04:26.047Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 117
   completed_phases: 100
   total_plans: 504
-  completed_plans: 462
+  completed_plans: 463
   percent: 91
 ---
 
@@ -495,6 +495,7 @@ Progress: [█████████░] 91%
 | Phase 98-github-bridge-expansion P05 | 26m | 2 tasks | 5 files |
 | Phase 98-github-bridge-expansion P06 | 8 | 2 tasks | 6 files |
 | Phase 99-github-bridge-commands-config-defined-commands-mapping-to-prompt-templates-plus-env-routing P01 | 113 | 2 tasks | 2 files |
+| Phase 99-github-bridge-commands-config-defined-commands-mapping-to-prompt-templates-plus-env-routing P02 | 4 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1435,6 +1436,7 @@ Recent decisions affecting current work:
 - [Phase 98-github-bridge-expansion]: StatusWriter is non-fatal in resume branch: DDB error logs Warn and enqueue always continues so the prompt is never lost
 - [Phase 99]: No new merge-list entry for github.commands: single 'github' entry covers whole block via UnmarshalKey; documented in GithubCommandEntry godoc to prevent future regression
 - [Phase 99]: GithubCommandEntry is map[string]GithubCommandEntry (keyed by verb) for O(1) dispatch lookup and clean YAML syntax
+- [Phase 99]: Command names are case-SENSITIVE (YAML key = exact match); /help intercepted before defined-command lookup; CommandEntry is bridge-local (no internal/app/config import); RunCommandPass is the IO-free seam Plan 04 wires into Handle()
 
 ### Roadmap Evolution
 
@@ -1563,6 +1565,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-07T23:01:26.790Z
-Stopped at: Completed 99-01-PLAN.md
+Last session: 2026-06-07T23:04:26.037Z
+Stopped at: Completed 99-02-PLAN.md — pure command parsing layer (commands.go + commands_test.go + RepoEntry.DefaultCommand)
 Resume file: None
