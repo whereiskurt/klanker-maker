@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: "Completed 98-06 tasks 1-5 (Gaps A-E all fixed: IAM condition, status write-back, resumer-stopping race, token-mint robustness, stale/cross-box session fallback + row invalidation; build + tests green); paused at Task 6 checkpoint:human-verify (redeploy + unattended E2E re-verify). Gaps A+B already deployed + live-validated; the full resume→continuity→post-back chain was proven live on PR #11 (klanker-maker[bot]) via the manual unblocks Tasks 3-5 now automate. See 98-UAT.md."
-last_updated: "2026-06-07T21:10:45.081Z"
+stopped_at: Completed 99-01-PLAN.md
+last_updated: "2026-06-07T23:01:26.800Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 117
   completed_phases: 100
-  total_plans: 499
-  completed_plans: 461
+  total_plans: 504
+  completed_plans: 462
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 92-00 — all 3 tasks done; pre-Phase-92 byte-identity baselines captured,
 Total Plans in Phase: 7 (92-00 → 92-06)
 Current Plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 Status: in-progress
-Last activity: 2026-06-07 - Completed quick task 8: uptime + agent-auth visibility for km status and km list
+Last activity: 2026-06-07
 
 Wave 1 UNBLOCKED: both byte-identity baselines (userdata + IAM HCL) committed before any Wave 1 source change.
 
@@ -494,6 +494,7 @@ Progress: [█████████░] 91%
 | Phase 98-github-bridge-expansion P04 | 532s | 4 tasks | 10 files |
 | Phase 98-github-bridge-expansion P05 | 26m | 2 tasks | 5 files |
 | Phase 98-github-bridge-expansion P06 | 8 | 2 tasks | 6 files |
+| Phase 99-github-bridge-commands-config-defined-commands-mapping-to-prompt-templates-plus-env-routing P01 | 113 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1432,6 +1433,8 @@ Recent decisions affecting current work:
 - [Phase 98-github-bridge-expansion]: 5-sub-test deploy-surface test encodes Phase 97/98 deploy footguns as in-process file-level assertions (no live AWS)
 - [Phase 98-github-bridge-expansion]: SetStatusRunning uses UpdateItem only (not PutItem) to avoid SandboxMetadata lossy round-trip; DDBSandboxesUpdateItem IAM statement grants only UpdateItem on km-sandboxes
 - [Phase 98-github-bridge-expansion]: StatusWriter is non-fatal in resume branch: DDB error logs Warn and enqueue always continues so the prompt is never lost
+- [Phase 99]: No new merge-list entry for github.commands: single 'github' entry covers whole block via UnmarshalKey; documented in GithubCommandEntry godoc to prevent future regression
+- [Phase 99]: GithubCommandEntry is map[string]GithubCommandEntry (keyed by verb) for O(1) dispatch lookup and clean YAML syntax
 
 ### Roadmap Evolution
 
@@ -1560,6 +1563,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-07T17:40:06.463Z
-Stopped at: Completed 98-06 tasks 1-5 (Gaps A-E all fixed: IAM condition, status write-back, resumer-stopping race, token-mint robustness, stale/cross-box session fallback + row invalidation; build + tests green); paused at Task 6 checkpoint:human-verify (redeploy + unattended E2E re-verify). Gaps A+B already deployed + live-validated; the full resume→continuity→post-back chain was proven live on PR #11 (klanker-maker[bot]) via the manual unblocks Tasks 3-5 now automate. See 98-UAT.md.
+Last session: 2026-06-07T23:01:26.790Z
+Stopped at: Completed 99-01-PLAN.md
 Resume file: None
