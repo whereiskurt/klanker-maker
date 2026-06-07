@@ -599,6 +599,17 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	// Non-fatal — first-install will silently skip when the param doesn't exist.
 	EnsureSlackBotUserIDFromSSM(ctx, cfg, awsCfg)
 
+	// Phase 99: publish github.commands to SSM {prefix}/config/github/commands.
+	// @file prompts are resolved relative to the km-config.yaml directory and
+	// inlined into the JSON before writing (the bridge Lambda has no filesystem).
+	// Dormant when len(cfg.Github.Commands) == 0 (byte-identical to pre-99).
+	if len(cfg.Github.Commands) > 0 {
+		ssmClientForCommands := ssm.NewFromConfig(awsCfg)
+		if pubErr := PublishGitHubCommandsToSSM(ctx, ssmClientForCommands, cfg, os.Stderr); pubErr != nil {
+			return fmt.Errorf("km init: github commands: %w", pubErr)
+		}
+	}
+
 	// Phase 84.3: hard-fail early when the artifacts bucket doesn't exist —
 	// prevents confusing mid-flight failures in s3-replication, create-handler, etc.
 	if cfg.ArtifactsBucket != "" {
@@ -1122,6 +1133,118 @@ func EnsureSlackBotUserIDFromSSM(ctx context.Context, cfg *config.Config, awsCfg
 		return
 	}
 	os.Setenv("KM_SLACK_BOT_USER_ID", *out.Parameter.Value) //nolint:errcheck
+}
+
+// ResolveCommandPrompts returns a copy of the commands map with each entry's
+// Prompt field resolved through the @file convention (Phase 99 Plan 03):
+//
+//   - "@@literal"     → "@literal"  (strip one @, no file read)
+//   - "@relative/p"   → contents of filepath.Join(configDir, "relative/p")
+//   - (other text)    → unchanged
+//   - @file missing   → hard error (callers surface to km init exit)
+//
+// configDir must be filepath.Dir(cfg.ConfigFilePath) — the directory that holds
+// km-config.yaml, NOT os.Getwd(). This prevents @file resolution from silently
+// depending on the operator's shell CWD (Research Pitfall 6).
+//
+// The returned map is a shallow copy: only the Prompt field is mutated; all other
+// GithubCommandEntry fields are forwarded unchanged. The input map is never modified.
+//
+// Exported so cmd_test can call it directly (testability seam).
+func ResolveCommandPrompts(commands map[string]config.GithubCommandEntry, configDir string) (map[string]config.GithubCommandEntry, error) {
+	out := make(map[string]config.GithubCommandEntry, len(commands))
+	for verb, entry := range commands {
+		resolved := entry // shallow copy
+		switch {
+		case strings.HasPrefix(entry.Prompt, "@@"):
+			// @@ escape: strip one @, yield literal @-prefixed text. No file I/O.
+			resolved.Prompt = entry.Prompt[1:]
+		case strings.HasPrefix(entry.Prompt, "@"):
+			// @file: read relative to km-config.yaml directory, NOT CWD.
+			relPath := entry.Prompt[1:]
+			absPath := filepath.Join(configDir, relPath)
+			data, err := os.ReadFile(absPath)
+			if err != nil {
+				return nil, fmt.Errorf("github.commands[%s].prompt @%s: %w", verb, relPath, err)
+			}
+			resolved.Prompt = string(data)
+		default:
+			// Inline text: unchanged.
+		}
+		out[verb] = resolved
+	}
+	return out, nil
+}
+
+// PublishGitHubCommandsToSSM resolves @file prompts in cfg.Github.Commands and writes
+// the assembled command map to SSM {prefix}/config/github/commands as a plain String
+// (NOT SecureString — commands are config, not secrets).
+//
+// Gate: when len(cfg.Github.Commands) == 0 the function returns nil without calling
+// SSM at all — absent commands ⇒ dormant (byte-identical to pre-Phase-99 behaviour).
+//
+// Drift WARN: when the param already exists in SSM with a different value, a WARN
+// is written to stderr before the new value is written. This mirrors the
+// KM_GITHUB_REPOS env-wins WARN pattern (init.go ExportTerragruntEnvVars ~line 1086).
+// Unlike env vars, SSM has no operator "export" path, so the yaml-derived value
+// always wins — the WARN is informational only.
+//
+// Called from runInit after ExportTerragruntEnvVars and EnsureSlackBotUserIDFromSSM.
+// Exported for testability (cmd_test injects a fake SSMReadWriteAPI).
+func PublishGitHubCommandsToSSM(ctx context.Context, ssmClient SSMReadWriteAPI, cfg *config.Config, stderr io.Writer) error {
+	if len(cfg.Github.Commands) == 0 {
+		// Dormant: no commands configured → write nothing. Bridge reads an empty-map
+		// default when the param is absent; no stale data scenario to guard.
+		return nil
+	}
+
+	// Derive the config-file directory for @file resolution. When ConfigFilePath is
+	// empty (Lambda cold start, or km-config.yaml not found), configDir defaults to
+	// "." which matches the CWD — acceptable because @file prompts require the
+	// operator to have a km-config.yaml; the Lambda never calls this function.
+	configDir := "."
+	if cfg.ConfigFilePath != "" {
+		configDir = filepath.Dir(cfg.ConfigFilePath)
+	}
+
+	// Resolve @file prompts relative to the km-config.yaml directory.
+	resolved, err := ResolveCommandPrompts(cfg.Github.Commands, configDir)
+	if err != nil {
+		return fmt.Errorf("km init: github commands @file resolution: %w", err)
+	}
+
+	// Marshal the resolved command map to JSON. The bridge Lambda unmarshals this
+	// into map[string]CommandEntry; the key names must match bridge.CommandEntry
+	// json tags (description/alias/profile/allow/prompt).
+	commandsJSON, err := json.Marshal(resolved)
+	if err != nil {
+		return fmt.Errorf("km init: marshal github commands: %w", err)
+	}
+	assembledVal := string(commandsJSON)
+
+	paramName := cfg.GetSsmPrefix() + "config/github/commands"
+
+	// Drift check: read the current SSM value and WARN when it differs from the
+	// newly assembled JSON. Then write the new value unconditionally (yaml wins).
+	existing, getErr := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String(paramName),
+		WithDecryption: aws.Bool(false), // plain String; decryption not needed
+	})
+	if getErr == nil && existing.Parameter != nil {
+		existingVal := aws.ToString(existing.Parameter.Value)
+		if existingVal != assembledVal {
+			fmt.Fprintf(stderr, "WARN: SSM %s differs from km-config.yaml github.commands (prior=%s, new=%s)\n",
+				paramName, existingVal, assembledVal)
+		}
+	}
+	// ParameterNotFound is expected on first init — not an error.
+
+	// Write the assembled commands JSON to SSM as a plain String (NOT SecureString).
+	if err := putSSMParam(ctx, ssmClient, paramName, assembledVal,
+		ssmtypes.ParameterTypeString, "", true); err != nil {
+		return fmt.Errorf("km init: write SSM %s: %w", paramName, err)
+	}
+	return nil
 }
 
 // ensureArtifactsBucketExists checks that the configured artifacts bucket exists
