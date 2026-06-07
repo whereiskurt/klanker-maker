@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: "Completed 98-02-PLAN.md (thread/session continuity: DynamoGitHubThreadStore + Handle() bypass + IAM v1.1.0 + poller session write)"
-last_updated: "2026-06-07T15:05:36.759Z"
+stopped_at: "Completed 98-04-PLAN.md (cold-create fix + auto-resume: EC2Resumer + unified dispatch + preStageGitHubProfiles + SOPS auth)"
+last_updated: "2026-06-07T15:19:31.391Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 113
   completed_phases: 99
   total_plans: 498
-  completed_plans: 458
+  completed_plans: 459
   percent: 91
 ---
 
@@ -491,6 +491,7 @@ Progress: [█████████░] 91%
 | Phase 98-github-bridge-expansion P03 | 8min | 2 tasks | 3 files |
 | Phase 98-github-bridge-expansion P01 | 238s | 2 tasks | 5 files |
 | Phase 98-github-bridge-expansion P02 | 540s | 3 tasks | 13 files |
+| Phase 98-github-bridge-expansion P04 | 532s | 4 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -1424,6 +1425,7 @@ Recent decisions affecting current work:
 - [Phase 98-github-bridge-expansion]: DynamoGitHubThreadClient: separate interface (superset of DynamoQueryPutter + UpdateItem) to avoid widening existing interface and breaking existing fakes
 - [Phase 98-github-bridge-expansion]: IAM policy for km-github-threads gated on github_threads_table_arn != '' for backward compat with pre-98-00 installs
 - [Phase 98-github-bridge-expansion]: TestHandle_AutoResume stays behind phase98_wave3 build tag until 98-04 implements SandboxResumer + ResolveByAliasWithStatus
+- [Phase 98-04]: EC2 IAM scopes StartInstances to km:managed=true tag; SandboxAliasResolverWithStatus type-assertion preserves Phase 97 backward compat; profileSlug/generateGitHubSandboxID local to bridge (no import cycle)
 
 ### Roadmap Evolution
 
@@ -1547,6 +1549,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-07T15:05:36.748Z
-Stopped at: Completed 98-02-PLAN.md (thread/session continuity: DynamoGitHubThreadStore + Handle() bypass + IAM v1.1.0 + poller session write)
+Last session: 2026-06-07T15:19:31.380Z
+Stopped at: Completed 98-04-PLAN.md (cold-create fix + auto-resume: EC2Resumer + unified dispatch + preStageGitHubProfiles + SOPS auth)
 Resume file: None
