@@ -105,14 +105,15 @@ type CommentPoster interface {
 	PostComment(ctx context.Context, installationID, owner, repo string, issueNumber int, body string) error
 }
 
-// CommandsFetcher fetches the command map from SSM (or a cache layer). Used by
+// CommandsFetcher fetches the command set from SSM (or a cache layer). Used by
 // WebhookHandler to allow per-invocation cache refresh without a full cold start.
 // The concrete implementation (SSMCommandsFetcher) caches for 15 minutes.
 type CommandsFetcher interface {
-	// Fetch returns the current command map. Returns an empty (non-nil) map when
-	// the SSM parameter is absent (dormant — not an error). Callers treat an empty
-	// map identically to a nil map: the command pass is skipped.
-	Fetch(ctx context.Context) (map[string]CommandEntry, error)
+	// Fetch returns the current command map and the install-wide default_command.
+	// Returns an empty (non-nil) map and "" when the SSM parameter is absent
+	// (dormant — not an error). Callers treat an empty map identically to a nil
+	// map: the command pass is skipped.
+	Fetch(ctx context.Context) (map[string]CommandEntry, string, error)
 }
 
 // GitHubThreadStore tracks (repo, number) → {sandbox_id, agent_session_id} mappings

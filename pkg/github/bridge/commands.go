@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+// CommandSet is the envelope written to SSM at {prefix}/config/github/commands.
+// It wraps the command map with the install-wide default_command so both travel
+// together over the single SSM param — a single source of truth (design D8).
+//
+// Written by km init (internal/app/cmd) and read by SSMCommandsFetcher (bridge side).
+// The bridge Lambda must NOT import internal/app/config; CommandSet is the
+// Lambda-side boundary type.
+type CommandSet struct {
+	Commands       map[string]CommandEntry `json:"commands"`
+	DefaultCommand string                  `json:"default_command,omitempty"`
+}
+
 // CommandEntry is the bridge-local representation of a configured command.
 // It is unmarshalled from the SSM JSON doc at {prefix}/config/github/commands
 // (written by km init from config.GithubCommandEntry). The bridge Lambda must NOT

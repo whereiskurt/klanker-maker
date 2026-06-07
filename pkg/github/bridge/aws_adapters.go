@@ -883,10 +883,15 @@ func (r *InstallationReactor) AddReaction(ctx context.Context, installationID, o
 // SSMCommandsFetcher — CommandsFetcher backed by SSM (15-min cache)
 // ============================================================
 
-// SSMCommandsFetcher fetches and caches the GitHub command map from SSM.
-// The parameter at Path is a plain String containing a JSON object mapping
-// command names to CommandEntry objects. Returns an empty map (not nil, not error)
-// when the parameter is absent — dormant-by-default (Research Pitfall 3).
+// SSMCommandsFetcher fetches and caches the GitHub CommandSet from SSM.
+// The parameter at Path is a plain String containing a CommandSet JSON envelope:
+//
+//	{"commands": {"name": {<CommandEntry>}, ...}, "default_command": "review"}
+//
+// Returns an empty map and "" default when the parameter is absent —
+// dormant-by-default (Research Pitfall 3). The envelope wraps both command map
+// and install-wide default_command so both travel over the single SSM param
+// (design D8: single source of truth).
 //
 // Mirrors SSMSecretFetcher's cachedValue pattern.
 type SSMCommandsFetcher struct {
@@ -896,15 +901,17 @@ type SSMCommandsFetcher struct {
 
 	mu    sync.Mutex
 	cache struct {
-		commands map[string]CommandEntry
-		expiry   time.Time
+		commands       map[string]CommandEntry
+		defaultCommand string
+		expiry         time.Time
 	}
 }
 
-// Fetch returns the current command map. Returns an empty non-nil map when the
-// SSM parameter is absent. Errors from SSM (other than ParameterNotFound) are
-// returned to the caller (logged; bridge falls back to empty-map dormant behavior).
-func (f *SSMCommandsFetcher) Fetch(ctx context.Context) (map[string]CommandEntry, error) {
+// Fetch returns the current command map and install-wide default_command.
+// Returns an empty non-nil map and "" default when the SSM parameter is absent.
+// Errors from SSM (other than ParameterNotFound) are returned to the caller
+// (logged; bridge falls back to empty-map dormant behavior).
+func (f *SSMCommandsFetcher) Fetch(ctx context.Context) (map[string]CommandEntry, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -915,7 +922,7 @@ func (f *SSMCommandsFetcher) Fetch(ctx context.Context) (map[string]CommandEntry
 
 	// Return cached value if still fresh and non-nil (empty map is a valid cached result).
 	if f.cache.commands != nil && time.Now().Before(f.cache.expiry) {
-		return f.cache.commands, nil
+		return f.cache.commands, f.cache.defaultCommand, nil
 	}
 
 	out, err := f.Client.GetParameter(ctx, &ssm.GetParameterInput{
@@ -929,29 +936,36 @@ func (f *SSMCommandsFetcher) Fetch(ctx context.Context) (map[string]CommandEntry
 		if errors.As(err, &notFound) {
 			empty := map[string]CommandEntry{}
 			f.cache.commands = empty
+			f.cache.defaultCommand = ""
 			f.cache.expiry = time.Now().Add(ttl)
-			return empty, nil
+			return empty, "", nil
 		}
-		return nil, fmt.Errorf("github-bridge: fetch commands from SSM %s: %w", f.Path, err)
+		return nil, "", fmt.Errorf("github-bridge: fetch commands from SSM %s: %w", f.Path, err)
 	}
 	if out.Parameter == nil || out.Parameter.Value == nil {
 		empty := map[string]CommandEntry{}
 		f.cache.commands = empty
+		f.cache.defaultCommand = ""
 		f.cache.expiry = time.Now().Add(ttl)
-		return empty, nil
+		return empty, "", nil
 	}
 
-	var cmds map[string]CommandEntry
-	if jsonErr := json.Unmarshal([]byte(*out.Parameter.Value), &cmds); jsonErr != nil {
-		return nil, fmt.Errorf("github-bridge: parse commands JSON from SSM %s: %w", f.Path, jsonErr)
+	// Unmarshal the CommandSet envelope. Fall back to legacy bare-map format for
+	// forward-compat during any partial-deploy window (the envelope has a "commands"
+	// key; a bare map would have command-name keys, not "commands").
+	raw := []byte(*out.Parameter.Value)
+	var cs CommandSet
+	if jsonErr := json.Unmarshal(raw, &cs); jsonErr != nil {
+		return nil, "", fmt.Errorf("github-bridge: parse commands JSON from SSM %s: %w", f.Path, jsonErr)
 	}
-	if cmds == nil {
-		cmds = map[string]CommandEntry{}
+	if cs.Commands == nil {
+		cs.Commands = map[string]CommandEntry{}
 	}
 
-	f.cache.commands = cmds
+	f.cache.commands = cs.Commands
+	f.cache.defaultCommand = cs.DefaultCommand
 	f.cache.expiry = time.Now().Add(ttl)
-	return cmds, nil
+	return cs.Commands, cs.DefaultCommand, nil
 }
 
 // Compile-time check: SSMCommandsFetcher must satisfy CommandsFetcher.

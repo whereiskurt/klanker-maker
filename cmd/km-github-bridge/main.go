@@ -141,10 +141,13 @@ func init() {
 	// On fetch failure, the reactor will fail at invocation time (logged + 200).
 	appClientID, privateKeyPEM := readAppCredentials(ctx, ssmClient)
 
-	// ── Phase 99: command map from SSM (dormant when absent) ──────────────────
+	// ── Phase 99: command set from SSM (dormant when absent) ─────────────────
 	// The commands parameter is a plain String SSM doc at {prefix}/config/github/commands.
-	// SSMCommandsFetcher returns an empty map (not nil, not error) when the parameter
-	// is absent — this is the dormant signal; no new behavior vs Phase 98.
+	// It is a CommandSet envelope: {"commands": {...}, "default_command": "review"}.
+	// SSMCommandsFetcher returns an empty map and "" default (not nil, not error) when
+	// the parameter is absent — this is the dormant signal; no new behavior vs Phase 98.
+	// Both the command map and install-wide default_command travel together in the
+	// single SSM param (design D8: single source of truth).
 	ssmCommandsPath := envOr("KM_COMMANDS_PATH", "/"+prefix+"/config/github/commands")
 	commandsFetcher := &bridge.SSMCommandsFetcher{
 		Client:   ssmClient,
@@ -152,21 +155,18 @@ func init() {
 		CacheTTL: 15 * time.Minute,
 	}
 	// Eagerly fetch at cold start (like appClientID). Empty map → dormant.
-	commands, cmdErr := commandsFetcher.Fetch(ctx)
+	commands, defaultCommand, cmdErr := commandsFetcher.Fetch(ctx)
 	if cmdErr != nil {
 		slog.Warn("km-github-bridge: failed to fetch commands from SSM at cold start; command pass dormant",
 			"err", cmdErr, "path", ssmCommandsPath)
 		commands = map[string]bridge.CommandEntry{}
+		defaultCommand = ""
 	} else {
 		slog.Info("km-github-bridge: loaded command config",
 			"command_count", len(commands),
+			"default_command", defaultCommand,
 			"path", ssmCommandsPath)
 	}
-
-	// ── Install-wide default command (from KM_GITHUB_DEFAULT_COMMAND env) ────
-	// Written to Lambda env by km init when github.default_command is set in
-	// km-config.yaml. Empty string → no install-wide default (free-form passthrough).
-	defaultCommand := os.Getenv("KM_GITHUB_DEFAULT_COMMAND")
 
 	// ── Wire adapters ─────────────────────────────────────────────────────────
 	nonceStore := &bridge.DynamoGitHubNonceStore{

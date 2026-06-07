@@ -1,22 +1,28 @@
 // aws_adapters_test.go — Phase 98 tests for EventBridgeAdapter (cold-create) and
 // EC2Resumer (auto-resume Gap C: stopping-state tolerance).
+// Also: Phase 99 gap-closure test for SSMCommandsFetcher (CommandSet envelope).
 //
 // BUILD TAG: phase98_wave0
 // The EventBridgeAdapter tests were originally RED stubs; they pass since 98-04.
 // The EC2Resumer tests (Gap C, 98-06 Task 3) are unconditionally included.
+// The SSMCommandsFetcher test (SC3a gap closure, 2026-06-07) is unconditionally included.
 package bridge_test
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"testing"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/whereiskurt/klanker-maker/pkg/github/bridge"
 )
 
@@ -307,5 +313,140 @@ func TestEventBridgeAdapter_ArtifactPrefix(t *testing.T) {
 	}
 	if bucket != "my-artifacts-bucket" {
 		t.Errorf("detail.artifact_bucket = %q; want 'my-artifacts-bucket'", bucket)
+	}
+}
+
+// ============================================================
+// Fake SSM client for SSMCommandsFetcher tests
+// ============================================================
+
+// fakeSSMCommandsClient is a minimal SecretSSMClient for testing SSMCommandsFetcher.
+type fakeSSMCommandsClient struct {
+	value string // pre-seeded SSM parameter value (empty string = absent)
+	err   error  // non-nil = return this error from GetParameter
+}
+
+func (f *fakeSSMCommandsClient) GetParameter(_ context.Context, input *ssm.GetParameterInput, _ ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.value == "" {
+		return nil, &ssmtypes.ParameterNotFound{}
+	}
+	name := awssdk.ToString(input.Name)
+	return &ssm.GetParameterOutput{
+		Parameter: &ssmtypes.Parameter{
+			Name:  awssdk.String(name),
+			Value: awssdk.String(f.value),
+		},
+	}, nil
+}
+
+// Compile-time check: fakeSSMCommandsClient satisfies bridge.SecretSSMClient.
+// (bridge.SecretSSMClient is unexported by name; we verify via SSMCommandsFetcher.Client.)
+var _ = &bridge.SSMCommandsFetcher{Client: (*fakeSSMCommandsClient)(nil)}
+
+// ============================================================
+// TestSSMCommandsFetcher_ParsesEnvelope — SC3a gap closure test
+// ============================================================
+
+// TestSSMCommandsFetcher_ParsesEnvelope verifies that SSMCommandsFetcher parses the
+// CommandSet envelope and returns both the command map AND the install-wide
+// default_command. This is the regression guard for Phase 99 gap SC3a: previously
+// default_command was read from KM_GITHUB_DEFAULT_COMMAND env (which nothing ever
+// wrote), so WebhookHandler.DefaultCommand was always "" at runtime.
+func TestSSMCommandsFetcher_ParsesEnvelope(t *testing.T) {
+	// Build a CommandSet envelope — this is what km init now writes to SSM.
+	envelope := `{"commands":{"review":{"description":"Review PR","prompt":"Please review: {{args}}"},"patch":{"prompt":"Apply fix"}},"default_command":"review"}`
+
+	fake := &fakeSSMCommandsClient{value: envelope}
+	fetcher := &bridge.SSMCommandsFetcher{
+		Client:   fake,
+		Path:     "/km/config/github/commands",
+		CacheTTL: time.Minute,
+	}
+
+	cmds, defaultCmd, err := fetcher.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+
+	// Install-wide default_command must be returned (SC3a fix).
+	if defaultCmd != "review" {
+		t.Errorf("defaultCmd = %q; want %q (SC3a gap: default_command was silently dropped)", defaultCmd, "review")
+	}
+
+	// Command map must be populated.
+	if len(cmds) != 2 {
+		t.Errorf("len(cmds) = %d; want 2", len(cmds))
+	}
+	if _, ok := cmds["review"]; !ok {
+		t.Error("cmds missing 'review' key")
+	}
+	if _, ok := cmds["patch"]; !ok {
+		t.Error("cmds missing 'patch' key")
+	}
+}
+
+// TestSSMCommandsFetcher_Dormant verifies the dormant-by-default behavior:
+// when the SSM parameter is absent, Fetch returns an empty map and "" default
+// (not an error). This is the Phase 98 byte-identity invariant.
+func TestSSMCommandsFetcher_Dormant(t *testing.T) {
+	fake := &fakeSSMCommandsClient{value: ""} // ParameterNotFound
+	fetcher := &bridge.SSMCommandsFetcher{
+		Client:   fake,
+		Path:     "/km/config/github/commands",
+		CacheTTL: time.Minute,
+	}
+
+	cmds, defaultCmd, err := fetcher.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("Fetch returned error on ParameterNotFound; want nil (dormant): %v", err)
+	}
+	if len(cmds) != 0 {
+		t.Errorf("cmds non-empty on dormant path; want empty map, got %v", cmds)
+	}
+	if defaultCmd != "" {
+		t.Errorf("defaultCmd = %q on dormant path; want \"\"", defaultCmd)
+	}
+}
+
+// TestSSMCommandsFetcher_SSMError verifies that real SSM errors (other than
+// ParameterNotFound) are returned to the caller (not swallowed as dormant).
+func TestSSMCommandsFetcher_SSMError(t *testing.T) {
+	fake := &fakeSSMCommandsClient{err: fmt.Errorf("SSM: ThrottlingException")}
+	fetcher := &bridge.SSMCommandsFetcher{
+		Client:   fake,
+		Path:     "/km/config/github/commands",
+		CacheTTL: time.Minute,
+	}
+
+	_, _, err := fetcher.Fetch(context.Background())
+	if err == nil {
+		t.Fatal("expected error from SSM ThrottlingException, got nil")
+	}
+}
+
+// TestSSMCommandsFetcher_NoDefaultCommand verifies that when the envelope has no
+// default_command (omitempty), Fetch returns "" for the default without error.
+func TestSSMCommandsFetcher_NoDefaultCommand(t *testing.T) {
+	// Envelope with commands but no default_command field.
+	envelope := `{"commands":{"review":{"prompt":"Review PR"}}}`
+	fake := &fakeSSMCommandsClient{value: envelope}
+	fetcher := &bridge.SSMCommandsFetcher{
+		Client:   fake,
+		Path:     "/km/config/github/commands",
+		CacheTTL: time.Minute,
+	}
+
+	cmds, defaultCmd, err := fetcher.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+	if defaultCmd != "" {
+		t.Errorf("defaultCmd = %q; want \"\" when envelope has no default_command", defaultCmd)
+	}
+	if len(cmds) != 1 {
+		t.Errorf("len(cmds) = %d; want 1", len(cmds))
 	}
 }

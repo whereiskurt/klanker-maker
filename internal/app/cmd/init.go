@@ -1213,10 +1213,21 @@ func PublishGitHubCommandsToSSM(ctx context.Context, ssmClient SSMReadWriteAPI, 
 		return fmt.Errorf("km init: github commands @file resolution: %w", err)
 	}
 
-	// Marshal the resolved command map to JSON. The bridge Lambda unmarshals this
-	// into map[string]CommandEntry; the key names must match bridge.CommandEntry
-	// json tags (description/alias/profile/allow/prompt).
-	commandsJSON, err := json.Marshal(resolved)
+	// Marshal the resolved command map AND install-wide default_command into the
+	// CommandSet envelope. Both travel together in the single SSM param so the
+	// bridge Lambda has one source of truth (design D8). The envelope shape is:
+	//   {"commands": {"name": {<CommandEntry>}, ...}, "default_command": "review"}
+	// The bridge's SSMCommandsFetcher unmarshals this CommandSet and returns both
+	// the command map and the default_command string to the cold-start wiring.
+	type commandSetEnvelope struct {
+		Commands       interface{} `json:"commands"`
+		DefaultCommand string      `json:"default_command,omitempty"`
+	}
+	envelope := commandSetEnvelope{
+		Commands:       resolved,
+		DefaultCommand: cfg.Github.DefaultCommand,
+	}
+	commandsJSON, err := json.Marshal(envelope)
 	if err != nil {
 		return fmt.Errorf("km init: marshal github commands: %w", err)
 	}

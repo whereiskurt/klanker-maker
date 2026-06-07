@@ -185,9 +185,10 @@ func TestResolveCommandPrompts(t *testing.T) {
 // ============================================================
 
 // TestInitGitHubCommands_WritesAssembledJSON verifies that when cfg has 2 commands
-// (one @file, one inline), PublishGitHubCommandsToSSM writes the assembled JSON to
-// {prefix}config/github/commands as ParameterTypeString with Overwrite=true.
+// (one @file, one inline), PublishGitHubCommandsToSSM writes the CommandSet envelope
+// JSON to {prefix}config/github/commands as ParameterTypeString with Overwrite=true.
 // The @file content is inlined in the written value.
+// The envelope shape is: {"commands": {...}, "default_command": "..."}.
 func TestInitGitHubCommands_WritesAssembledJSON(t *testing.T) {
 	// Write an @file template.
 	configDir := t.TempDir()
@@ -201,6 +202,7 @@ func TestInitGitHubCommands_WritesAssembledJSON(t *testing.T) {
 		ResourcePrefix: "km",
 		ConfigFilePath: filepath.Join(configDir, "km-config.yaml"), // used to derive configDir
 		Github: config.GithubConfig{
+			DefaultCommand: "review", // install-wide default — must appear in envelope
 			Commands: map[string]config.GithubCommandEntry{
 				"review": {
 					Description: "Code review",
@@ -248,22 +250,31 @@ func TestInitGitHubCommands_WritesAssembledJSON(t *testing.T) {
 		t.Errorf("Overwrite should be true")
 	}
 
-	// Parse the written JSON and verify shape.
-	var written map[string]struct {
-		Description string   `json:"description"`
-		Alias       string   `json:"alias"`
-		Profile     string   `json:"profile"`
-		Allow       []string `json:"allow"`
-		Prompt      string   `json:"prompt"`
+	// Parse the written JSON as the CommandSet envelope.
+	// Shape: {"commands": {"name": {<entry>}, ...}, "default_command": "..."}
+	var envelope struct {
+		DefaultCommand string `json:"default_command"`
+		Commands       map[string]struct {
+			Description string   `json:"description"`
+			Alias       string   `json:"alias"`
+			Profile     string   `json:"profile"`
+			Allow       []string `json:"allow"`
+			Prompt      string   `json:"prompt"`
+		} `json:"commands"`
 	}
-	if err := json.Unmarshal([]byte(aws.ToString(call.Value)), &written); err != nil {
+	if err := json.Unmarshal([]byte(aws.ToString(call.Value)), &envelope); err != nil {
 		t.Fatalf("written value is not valid JSON: %v\nvalue: %s", err, aws.ToString(call.Value))
 	}
 
+	// Verify install-wide default_command is present in the envelope.
+	if envelope.DefaultCommand != "review" {
+		t.Errorf("envelope.default_command: want %q, got %q", "review", envelope.DefaultCommand)
+	}
+
 	// Check review command — @file should be inlined.
-	review, ok := written["review"]
+	review, ok := envelope.Commands["review"]
 	if !ok {
-		t.Fatal("written JSON missing 'review' key")
+		t.Fatal("written JSON missing 'review' key in commands")
 	}
 	if review.Prompt != promptContent {
 		t.Errorf("review.prompt: want %q (inlined @file), got %q", promptContent, review.Prompt)
@@ -273,9 +284,9 @@ func TestInitGitHubCommands_WritesAssembledJSON(t *testing.T) {
 	}
 
 	// Check triage command — inline prompt unchanged.
-	triage, ok := written["triage"]
+	triage, ok := envelope.Commands["triage"]
 	if !ok {
-		t.Fatal("written JSON missing 'triage' key")
+		t.Fatal("written JSON missing 'triage' key in commands")
 	}
 	if triage.Prompt != "Triage this issue inline." {
 		t.Errorf("triage.prompt: want inline text, got %q", triage.Prompt)
@@ -284,6 +295,56 @@ func TestInitGitHubCommands_WritesAssembledJSON(t *testing.T) {
 	// No WARN should have been emitted (no prior SSM value).
 	if stderr.Len() > 0 {
 		t.Errorf("expected empty stderr on fresh install, got: %s", stderr.String())
+	}
+}
+
+// TestInitGitHubCommands_DefaultCommandRoundTrip verifies that the install-wide
+// github.default_command travels via the SSM envelope and is preserved in the
+// written JSON. This is the gap-closure test for SC3a: previously default_command
+// was silently dropped because it was written only to KM_GITHUB_DEFAULT_COMMAND
+// env (which nothing set). Now it rides inside the CommandSet envelope.
+func TestInitGitHubCommands_DefaultCommandRoundTrip(t *testing.T) {
+	cfg := &config.Config{
+		ResourcePrefix: "km",
+		Github: config.GithubConfig{
+			DefaultCommand: "triage", // install-wide default to preserve
+			Commands: map[string]config.GithubCommandEntry{
+				"triage": {Prompt: "Triage this issue."},
+			},
+		},
+	}
+
+	fakeSSM := newFakeCommandsSSM(nil)
+	var stderr bytes.Buffer
+
+	err := cmd.PublishGitHubCommandsToSSM(context.Background(), fakeSSM, cfg, &stderr)
+	if err != nil {
+		t.Fatalf("PublishGitHubCommandsToSSM returned error: %v", err)
+	}
+
+	if len(fakeSSM.puts) != 1 {
+		t.Fatalf("expected 1 PutParameter call, got %d", len(fakeSSM.puts))
+	}
+
+	writtenJSON := aws.ToString(fakeSSM.puts[0].Value)
+
+	// The written JSON must be parseable as the CommandSet envelope.
+	var envelope struct {
+		DefaultCommand string                     `json:"default_command"`
+		Commands       map[string]json.RawMessage `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(writtenJSON), &envelope); err != nil {
+		t.Fatalf("written value is not valid envelope JSON: %v\nvalue: %s", err, writtenJSON)
+	}
+
+	// Install-wide default_command must be present in the envelope.
+	if envelope.DefaultCommand != "triage" {
+		t.Errorf("envelope.default_command: want %q, got %q (gap SC3a: default lost at runtime)", "triage", envelope.DefaultCommand)
+	}
+
+	// Commands map must still be present and non-empty.
+	if len(envelope.Commands) == 0 {
+		t.Error("envelope.commands must be non-empty")
 	}
 }
 
