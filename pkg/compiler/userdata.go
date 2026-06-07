@@ -2159,10 +2159,15 @@ while true; do
   fi
 
   # Extend visibility BEFORE agent run to prevent re-delivery during long turns.
+  # GitHub PR reviews routinely run several minutes (clone + read diff + reason),
+  # so 300s was too short — the message re-appeared mid-run and a second poller
+  # iteration re-dispatched it, looping duplicate reviews. 1800s (30m) covers
+  # realistic review times. (Future: heartbeat-extend during the run for an
+  # unbounded ceiling.)
   aws sqs change-message-visibility \
     --queue-url "$QUEUE_URL" \
     --receipt-handle "$RECEIPT" \
-    --visibility-timeout 300 \
+    --visibility-timeout 1800 \
     --region "$REGION" 2>/dev/null || true
 
   # Build GitHub context preamble with worktree-per-PR guidance.
