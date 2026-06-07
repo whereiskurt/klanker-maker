@@ -102,3 +102,17 @@ spec:
     github:
       inbound:
         enabled: true
+
+  # Phase 98-04 (GH-COLD-CREATE defect 4): SOPS-encrypted secrets bundle for cold-box
+  # self-authentication. A cold sandbox provisioned by the GitHub bridge does NOT use
+  # Bedrock (useBedrock: false above) — it needs direct API credentials (ANTHROPIC_API_KEY
+  # or Claude OAuth token) injected at boot.
+  #
+  # Operator must provide the bundle encrypted with the shared SOPS KMS key:
+  #   km bootstrap --shared-secrets-key   # one-time, provisions the KMS key
+  #   sops --encrypt --kms <arn> github-review-secrets.enc.yaml
+  #   km init --dry-run=false             # re-stages the bundle to S3
+  #
+  # See docs/sandbox-secrets.md (Phase 89) for the full SOPS injection runbook.
+  secrets:
+    sopsFile: github-review-secrets.enc.yaml
