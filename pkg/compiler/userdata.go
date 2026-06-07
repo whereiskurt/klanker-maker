@@ -2095,6 +2095,10 @@ REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 # Profile default agent (same env var as Slack poller — KM_AGENT).
 AGENT="${KM_AGENT:-claude}"
 
+# km-github-threads table for session/thread continuity (GH-X-CONTINUITY).
+# Falls back to {prefix}-github-threads matching the default in main.go.
+GITHUB_THREADS_TABLE="${KM_GITHUB_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-github-threads}"
+
 # Export AWS_REGION so subprocesses (km-github comment, km-github review, aws CLI) inherit it.
 # The systemd unit's EnvironmentFile=/etc/km/notify.env uses systemd-native format
 # which doesn't include AWS_REGION; the bash fallback above sets REGION but does not
@@ -2170,6 +2174,20 @@ while true; do
     --visibility-timeout 1800 \
     --region "$REGION" 2>/dev/null || true
 
+  # GH-X-CONTINUITY: look up existing agent session for (repo, number) in km-github-threads.
+  # If present, resume the session so the agent has memory of prior turns.
+  # If absent (first dispatch), no resume arg is passed.
+  GITHUB_SESSION=""
+  if [ -n "$REPO" ] && [ -n "$NUMBER" ]; then
+    DDB_THREAD=$(aws dynamodb get-item \
+      --table-name "$GITHUB_THREADS_TABLE" \
+      --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
+      --projection-expression "agent_session_id" \
+      --region "$REGION" \
+      --output json 2>/dev/null || true)
+    GITHUB_SESSION=$(echo "$DDB_THREAD" | jq -r '.Item.agent_session_id.S // empty' 2>/dev/null || true)
+  fi
+
   # Build GitHub context preamble with worktree-per-PR guidance.
   # The preamble orients the agent: repo/PR/branch/head + how to work on this PR
   # without colliding with other concurrent PRs in a long-lived sandbox.
@@ -2228,6 +2246,10 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
 
   # Dispatch to agent (mirrors the Slack inbound poller dispatch fork).
   EFFECTIVE_AGENT="$AGENT"
+  # GH-X-CONTINUITY: resume the prior session if one exists for this (repo, number).
+  RESUME_ARG=""
+  [ -n "$GITHUB_SESSION" ] && RESUME_ARG="--resume $GITHUB_SESSION"
+
   if [ "$EFFECTIVE_AGENT" = "codex" ]; then
     sudo -u sandbox bash -lc "
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
@@ -2238,13 +2260,13 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
       echo \$? > '$RUN_DIR/exit_code'
     " || true
   else
-    # Claude path (default).
+    # Claude path (default). Pass --resume when a prior session exists.
     sudo -u sandbox bash -lc "
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
       export PATH=\"/home/sandbox/.local/bin:\$PATH\"
       cd /workspace 2>/dev/null || true
       claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
-        --dangerously-skip-permissions \
+        --dangerously-skip-permissions $RESUME_ARG \
         > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
       echo \$? > '$RUN_DIR/exit_code'
     " || true
@@ -2254,6 +2276,26 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
   RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
 
   if [ "$RUN_EXIT" -eq 0 ] && [ -s "$RUN_DIR/output.json" ]; then
+    # GH-X-CONTINUITY: extract session_id from agent output and write to km-github-threads.
+    # Claude: .session_id from output.json (single JSON document).
+    # Codex: thread_id from thread.started event in JSONL stream.
+    NEW_GITHUB_SESSION=""
+    if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+      NEW_GITHUB_SESSION=$(jq -r 'select(.type=="thread.started") | .thread_id // empty' "$RUN_DIR/output.json" 2>/dev/null | head -1 || true)
+    else
+      NEW_GITHUB_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
+    fi
+
+    if [ -n "$NEW_GITHUB_SESSION" ] && [ -n "$REPO" ] && [ -n "$NUMBER" ]; then
+      aws dynamodb update-item \
+        --table-name "$GITHUB_THREADS_TABLE" \
+        --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
+        --update-expression "SET agent_session_id = :sid" \
+        --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_GITHUB_SESSION\"}}" \
+        --region "$REGION" 2>/dev/null || true
+      echo "[km-github-inbound-poller] Session updated — repo=$REPO PR=#$NUMBER session=${NEW_GITHUB_SESSION:0:8}..."
+    fi
+
     # Ack-then-log: delete message before logging so a crash can't cause duplicate dispatch.
     aws sqs delete-message \
       --queue-url "$QUEUE_URL" \

@@ -29,7 +29,7 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/lambda-github-bridge/v1.0.0"
+  source = "${local.repo_root}/infra/modules/lambda-github-bridge/v1.1.0"
 }
 
 # km-sandboxes: provides alias-index GSI query + GetItem for github_inbound_queue_url lookup
@@ -53,11 +53,26 @@ dependency "nonces" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
 }
 
+# km-github-threads: (repo, number) → {sandbox_id, agent_session_id} continuity table
+# (Phase 98-02: GH-X-CONTINUITY + GH-X-THREADBYPASS)
+dependency "github_threads" {
+  config_path = "../dynamodb-github-threads"
+  mock_outputs = {
+    table_name = "km-github-threads"
+    table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-github-threads"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
+}
+
 inputs = {
   # Required (no-default) inputs
   lambda_zip_path   = "${local.repo_root}/build/km-github-bridge.zip"
   sandboxes_table_arn = dependency.sandboxes.outputs.table_arn
   nonces_table_arn    = dependency.nonces.outputs.table_arn
+
+  # Phase 98-02: km-github-threads continuity table
+  github_threads_table_name = dependency.github_threads.outputs.table_name
+  github_threads_table_arn  = dependency.github_threads.outputs.table_arn
 
   # Prefix-aware overrides
   resource_prefix      = local.site_vars.locals.site.label
