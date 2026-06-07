@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 98-01-PLAN.md (check + pr create verbs + worktree preamble)
-last_updated: "2026-06-07T14:52:51.721Z"
+stopped_at: "Completed 98-02-PLAN.md (thread/session continuity: DynamoGitHubThreadStore + Handle() bypass + IAM v1.1.0 + poller session write)"
+last_updated: "2026-06-07T15:05:36.759Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 113
   completed_phases: 99
   total_plans: 498
-  completed_plans: 457
+  completed_plans: 458
   percent: 91
 ---
 
@@ -490,6 +490,7 @@ Progress: [█████████░] 91%
 | Phase 98-github-bridge-expansion P00 | 590 | 3 tasks | 12 files |
 | Phase 98-github-bridge-expansion P03 | 8min | 2 tasks | 3 files |
 | Phase 98-github-bridge-expansion P01 | 238s | 2 tasks | 5 files |
+| Phase 98-github-bridge-expansion P02 | 540s | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -1420,6 +1421,9 @@ Recent decisions affecting current work:
 - [Phase 98-01]: checkRunOutput.Title uses check name as title (agent-friendly default, no separate flag)
 - [Phase 98-01]: runPRCreateWith receives stdout io.Writer for testability — html_url printed to stdout so agent can read new PR URL
 - [Phase 98-01]: Byte-identity golden re-captured (not test patched) for preamble expansion — intentional permanent change
+- [Phase 98-github-bridge-expansion]: DynamoGitHubThreadClient: separate interface (superset of DynamoQueryPutter + UpdateItem) to avoid widening existing interface and breaking existing fakes
+- [Phase 98-github-bridge-expansion]: IAM policy for km-github-threads gated on github_threads_table_arn != '' for backward compat with pre-98-00 installs
+- [Phase 98-github-bridge-expansion]: TestHandle_AutoResume stays behind phase98_wave3 build tag until 98-04 implements SandboxResumer + ResolveByAliasWithStatus
 
 ### Roadmap Evolution
 
@@ -1543,6 +1547,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-07T14:52:51.711Z
-Stopped at: Completed 98-01-PLAN.md (check + pr create verbs + worktree preamble)
+Last session: 2026-06-07T15:05:36.748Z
+Stopped at: Completed 98-02-PLAN.md (thread/session continuity: DynamoGitHubThreadStore + Handle() bypass + IAM v1.1.0 + poller session write)
 Resume file: None

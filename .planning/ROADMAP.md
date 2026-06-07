@@ -2233,7 +2233,7 @@ Plans:
 
 **Requirements**: GH-X-CHECK, GH-X-PRCREATE, GH-X-PUSH, GH-X-CONTINUITY, GH-X-THREADBYPASS, GH-X-SHARED, GH-X-RESUME, GH-COLD-CREATE, GH-X-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
 **Depends on:** Phase 97
-**Plans:** 3/6 plans executed
+**Plans:** 4/6 plans executed
 
 Plans:
 - [ ] 98-00-PLAN.md — Wave 0: RED test scaffolding + km-github-threads TF module/live unit + module-list guard
