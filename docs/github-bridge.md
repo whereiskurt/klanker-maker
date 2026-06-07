@@ -217,6 +217,17 @@ Routing **by command on the same repo** to different prefixes (e.g. `/patch` →
 (Phase 99) resolve inside the handling bridge's own prefix; there is no cross-prefix
 dispatch.
 
+### Scale: install the App on selected repos, not all
+
+> **The single biggest scale lever:** install the App on **selected repositories
+> only**, never "All repositories." GitHub delivers an `issue_comment` webhook for
+> *every* comment on *every* issue/PR in the repos the App is installed on — even
+> when the bot is never @-mentioned. Scoping the installation to the handful of
+> repos you actually wire into `github.repos:` means the other repos generate **zero
+> deliveries** (no Lambda invocations, no dropped-event noise). Bot-visible noise is
+> already nil regardless (deny-by-default + @-mention gate; 👀 only on dispatch), but
+> installation scope is what keeps webhook/invocation volume low on a large org.
+
 ---
 
 ## The github-review Profile
