@@ -62,6 +62,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |
 | Run a remote browser/desktop in a sandbox via km desktop | `klanker:desktop` skill |
 | Cross-account k8s (IRSA) cluster onboarding | `klanker:cluster` skill |
+| Non-obvious operational footguns (deploy surface, terragrunt, teardown, Ubuntu userdata) | `docs/operational-gotchas.md` |
 | Full operator runbook | `OPERATOR-GUIDE.md` |
 | Email protocol deep-dive (SES, IAM, signing) | `docs/multi-agent-email.md` |
 | Slack runbook (full setup, troubleshooting) | `docs/slack-notifications.md` |
