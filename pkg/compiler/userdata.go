@@ -2181,19 +2181,40 @@ Head SHA: $HEAD_SHA
 Sender: $SENDER
 URL: $HTML_URL
 
-Worktree guidance: For concurrent PR review in this sandbox, prefer using
-  git worktree add /workspace/pr-${NUMBER} $BRANCH
-to isolate changes per PR rather than switching branches in /workspace.
+--- Worktree isolation (REQUIRED for concurrent PRs) ---
+This sandbox may handle multiple PRs concurrently. ALWAYS fetch this PR into a
+dedicated git worktree so changes stay isolated from /workspace and from each other:
+
+  git fetch origin pull/${NUMBER}/head
+  git worktree add /workspace/pr-${NUMBER} FETCH_HEAD
+
+Work exclusively inside /workspace/pr-${NUMBER} for this PR. Never switch
+branches in /workspace (that would break other concurrent PR contexts).
 
 --- User comment ---
 $COMMENT_BODY
 
 --- Posting your response (REQUIRED) ---
-Your reply reaches the requester ONLY if you post it to GitHub. When you finish, post
-your response to this PR by running (the per-sandbox GitHub token is already configured):
+Your reply reaches the requester ONLY if you post it to GitHub. Available km-github verbs:
+
+  # Post a plain comment (most common):
   km-github comment --repo $REPO --number $NUMBER --body '<your full response, markdown>'
-For a formal PR review instead of a plain comment, use:
-  km-github review --repo $REPO --number $NUMBER --event COMMENT --body '<review text>'
+
+  # Submit a formal PR review:
+  km-github review --repo $REPO --number $NUMBER --event COMMENT|APPROVE|REQUEST_CHANGES --body '<review text>'
+
+  # Post a CI check run (pass/fail/neutral):
+  km-github check --repo $REPO --name '<check-name>' --conclusion success|failure|neutral \
+    --summary '<summary text>' --head-sha $HEAD_SHA
+
+  # Open a new pull request from a branch:
+  km-github pr create --repo $REPO --title '<title>' --base <base-branch> --head <feature-branch> \
+    [--body '<description>']
+  # (prints the new PR html_url to stdout)
+
+  # Push commits (credential helper is pre-configured, token already set):
+  git push origin HEAD:<branch-name>
+
 Do NOT only print your answer — it is discarded unless you post it with km-github."
 
   RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
