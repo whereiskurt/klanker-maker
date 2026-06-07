@@ -13,6 +13,19 @@ type SandboxResumer interface {
 	StartSandbox(ctx context.Context, sandboxID string) error
 }
 
+// SandboxStatusWriter writes status updates back to the km-sandboxes DynamoDB
+// table via UpdateItem (never PutItem — full-row replaces strip un-marshalled
+// attributes, the SandboxMetadata lossy round-trip footgun).
+// Used by WebhookHandler to flip status=running after a successful auto-resume
+// so km list / km resume reflect the current state and a follow-up @-mention
+// takes the warm path instead of firing a redundant StartInstances.
+type SandboxStatusWriter interface {
+	// SetStatusRunning sets status="running" on the km-sandboxes row for the
+	// given sandboxID. Non-fatal in the caller — errors are logged but do not
+	// abort the enqueue or change the 200 response.
+	SetStatusRunning(ctx context.Context, sandboxID string) error
+}
+
 // SandboxAliasResolverWithStatus extends SandboxAliasResolver with a status-aware
 // variant that returns the sandbox status alongside the sandbox_id. This enables
 // the unified dispatch decision: resume stopped/paused sandboxes instead of

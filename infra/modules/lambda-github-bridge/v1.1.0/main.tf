@@ -110,6 +110,9 @@ resource "aws_iam_role_policy" "dynamodb_nonce" {
 
 # Policy: DynamoDB — alias-index GSI query (warm-path alias→sandbox_id resolution)
 # + GetItem on base table (github_inbound_queue_url attribute lookup)
+# + UpdateItem on base table (status write-back after auto-resume, Phase 98-06 Gap B fix)
+# CRITICAL: UpdateItem only — full-row PutItem is intentionally excluded to avoid
+# the SandboxMetadata lossy round-trip footgun (attributes not in the struct are stripped).
 resource "aws_iam_role_policy" "dynamodb_sandboxes" {
   name = "${local.function_name}-dynamodb-sandboxes"
   role = aws_iam_role.github_bridge.id
@@ -126,9 +129,17 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
         ]
       },
       {
-        Sid      = "DDBSandboxesGetItem"
-        Effect   = "Allow"
-        Action   = ["dynamodb:GetItem"]
+        Sid    = "DDBSandboxesGetItem"
+        Effect = "Allow"
+        Action = ["dynamodb:GetItem"]
+        Resource = var.sandboxes_table_arn
+      },
+      {
+        Sid    = "DDBSandboxesUpdateItem"
+        Effect = "Allow"
+        # UpdateItem only — allows the bridge to flip status=running after auto-resume
+        # without granting full write access to sandbox rows.
+        Action   = ["dynamodb:UpdateItem"]
         Resource = var.sandboxes_table_arn
       }
     ]

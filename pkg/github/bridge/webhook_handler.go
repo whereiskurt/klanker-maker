@@ -108,6 +108,13 @@ type WebhookHandler struct {
 	// When nil, Handle() behaves exactly as Phase 97 (mention always required).
 	Threads GitHubThreadStore
 
+	// StatusWriter writes status=running back to km-sandboxes after a successful
+	// auto-resume (GH-X-RESUME Gap B fix). When non-nil, Handle() calls
+	// SetStatusRunning after StartSandbox succeeds so km list / km resume reflect
+	// the current state and follow-up @-mentions don't re-fire StartInstances.
+	// Nil → no status write-back (pre-98-06 behavior).
+	StatusWriter SandboxStatusWriter
+
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
 }
@@ -277,6 +284,16 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 			h.log().Info("github-bridge: auto-resume", "alias", alias, "sandbox_id", sandboxID, "status", status)
 			if rErr := h.Resumer.StartSandbox(ctx, sandboxID); rErr != nil {
 				h.log().Error("github-bridge: auto-resume failed (non-fatal; enqueue continues)", "err", rErr, "sandbox_id", sandboxID)
+			} else if h.StatusWriter != nil {
+				// Gap B fix (98-06): flip km-sandboxes status=running so km list / km resume
+				// see running state and a follow-up @-mention doesn't re-fire StartInstances.
+				// UpdateItem only — do NOT PutItem (SandboxMetadata lossy round-trip footgun).
+				if swErr := h.StatusWriter.SetStatusRunning(ctx, sandboxID); swErr != nil {
+					h.log().Warn("github-bridge: status write-back failed (non-fatal; enqueue continues)",
+						"err", swErr, "sandbox_id", sandboxID)
+				} else {
+					h.log().Info("github-bridge: status write-back running", "sandbox_id", sandboxID)
+				}
 			}
 			if queueURL, qErr := h.Resolver.GitHubQueueURL(ctx, sandboxID); qErr != nil {
 				h.log().Error("github-bridge: lookup github queue URL (resume path)", "sandbox_id", sandboxID, "err", qErr)

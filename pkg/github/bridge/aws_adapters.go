@@ -67,6 +67,15 @@ type DynamoGitHubThreadClient interface {
 	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
 }
 
+// DynamoUpdateItemClient is the minimal DynamoDB interface required to perform
+// an UpdateItem call. Used by DynamoSandboxStatusWriter to flip status=running
+// on the km-sandboxes row after a successful auto-resume. Kept narrow to avoid
+// widening DynamoQueryPutter (which would force all existing fakes to implement
+// UpdateItem just for this path).
+type DynamoUpdateItemClient interface {
+	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+}
+
 // ErrNonceReplayed is returned by DynamoGitHubNonceStore when the key was already inserted.
 var ErrNonceReplayed = errors.New("github-bridge: delivery GUID already seen (replay)")
 
@@ -513,6 +522,47 @@ func (r *EC2Resumer) StartSandbox(ctx context.Context, sandboxID string) error {
 		InstanceIds: instanceIDs,
 	}); err != nil {
 		return fmt.Errorf("github-bridge: EC2Resumer.StartInstances for %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
+// ============================================================
+// DynamoSandboxStatusWriter — SandboxStatusWriter backed by km-sandboxes
+// ============================================================
+
+// DynamoSandboxStatusWriter implements SandboxStatusWriter by performing a
+// DynamoDB UpdateItem on the km-sandboxes table. Only the status attribute is
+// updated — full-row PutItem is intentionally avoided because it strips all
+// attributes not present in the SandboxMetadata struct (the lossy round-trip
+// footgun documented in project memory SandboxMetadata lossy round-trip).
+type DynamoSandboxStatusWriter struct {
+	Client    DynamoUpdateItemClient
+	TableName string // e.g. "km-sandboxes"
+}
+
+// SetStatusRunning sets status="running" on the km-sandboxes row for sandboxID
+// using UpdateItem (not PutItem). Called after a successful EC2 StartInstances
+// so km list / km resume reflect the running state and a follow-up @-mention
+// reads status=running and takes the warm enqueue path without a redundant
+// StartInstances call. Errors are non-fatal in the caller (logged, not returned
+// as a failure).
+func (w *DynamoSandboxStatusWriter) SetStatusRunning(ctx context.Context, sandboxID string) error {
+	_, err := w.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(w.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		UpdateExpression: awssdk.String("SET #st = :running"),
+		// Use an expression attribute name because "status" is a DynamoDB reserved word.
+		ExpressionAttributeNames: map[string]string{
+			"#st": "status",
+		},
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":running": &dynamodbtypes.AttributeValueMemberS{Value: "running"},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("github-bridge: SetStatusRunning for %s: %w", sandboxID, err)
 	}
 	return nil
 }
