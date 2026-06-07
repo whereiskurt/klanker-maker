@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 98-00-PLAN.md (Wave 0 Nyquist scaffolding)
-last_updated: "2026-06-07T14:45:42.682Z"
+stopped_at: Completed 98-03-PLAN.md (shared-alias characterization + doctor alias-collision check)
+last_updated: "2026-06-07T14:52:22.993Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 113
   completed_phases: 99
   total_plans: 498
-  completed_plans: 455
+  completed_plans: 456
   percent: 91
 ---
 
@@ -488,6 +488,7 @@ Progress: [█████████░] 91%
 | Phase 97 P06 | 1042s | 2 tasks | 7 files |
 | Phase 97-github-comment-trigger-mvp P07 | 15 | 3 tasks | 5 files |
 | Phase 98-github-bridge-expansion P00 | 590 | 3 tasks | 12 files |
+| Phase 98-github-bridge-expansion P03 | 8min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1413,6 +1414,8 @@ Recent decisions affecting current work:
 - [Phase 98-github-bridge-expansion]: phase98_wave0 build tag isolates all RED test scaffolding from normal builds — 98-01 through 98-04 remove tags as features ship
 - [Phase 98-github-bridge-expansion]: DynamoDB github-threads key schema: hash=repo(S), range=number(N) — number is type N not S, differs from Slack threads
 - [Phase 98-github-bridge-expansion]: TestRegionalModulesIncludesGitHubThreads runs in normal suite untagged to continuously gate missing regionalModules() entry (prevents Phase 97 silent non-deploy footgun)
+- [Phase 98-github-bridge-expansion]: Use appcfg.GithubRepoEntry (not bridge.RepoEntry) in DetectGitHubAliasIssues — consistent with checkGitHubReposResolvable; avoids importing bridge into doctor.go
+- [Phase 98-github-bridge-expansion]: Intentional shared alias (multiple entries same explicit alias:) produces no WARN — supported GH-X-SHARED feature; only implicit-vs-explicit collision warns
 
 ### Roadmap Evolution
 
@@ -1536,6 +1539,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-07T14:45:42.671Z
-Stopped at: Completed 98-00-PLAN.md (Wave 0 Nyquist scaffolding)
+Last session: 2026-06-07T14:52:22.982Z
+Stopped at: Completed 98-03-PLAN.md (shared-alias characterization + doctor alias-collision check)
 Resume file: None
