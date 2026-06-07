@@ -629,31 +629,51 @@ Claude turns directly without Bedrock.
 This section supersedes the Phase 97 deploy sequence above. Run this in order:
 
 ```bash
-# Step 1: CLEAN build of all Lambda zips.
-#   Memory: project_km_init_skips_existing_zips — must use 'make build-lambdas' not 'make build'
-#   to rebuild from the hardcoded lambdaBuilds() list. Avoids stale zips silently surviving.
+# Step 1: Rebuild the km OPERATOR BINARY — REQUIRED, do not skip.
+#   Phase 98 added 'dynamodb-github-threads' to regionalModules(), PreStageGitHubProfiles,
+#   and new doctor checks — these live in the km binary. If you run a stale km, 'km init'
+#   uses the OLD module list and silently SKIPS the new DDB table; lambda-github-bridge
+#   then falls back to its mock dependency outputs (fake account 000000000000 in table_arn),
+#   so the bridge's thread-continuity IAM points at a non-existent ARN and DDB calls get
+#   AccessDenied at runtime. 'make build' != 'make build-lambdas' — you need BOTH.
+make build           # rebuilds ./km with the new regionalModules() entry (ldflags-stamped)
+
+# Step 2: CLEAN build of all Lambda zips.
+#   Memory: project_km_init_skips_existing_zips — 'make build-lambdas' rebuilds from the
+#   hardcoded lambdaBuilds() list (the km-github-bridge zip). This is SEPARATE from Step 1:
+#   Step 1 builds the operator binary, Step 2 builds the Lambda zips. Run both.
 make build-lambdas
 
-# Step 2: Full terragrunt apply — new dynamodb-github-threads table + bridge IAM/env.
+# Step 3: Full terragrunt apply — new dynamodb-github-threads table + bridge IAM/env.
 #   This applies ALL modules including the new DDB table and the v1.1.0 bridge module.
 #   NOT --sidecars: env-block + IAM + new DDB table require a full terragrunt apply.
 #   Memory: feedback_km_init_full_apply — use km init --dry-run=false.
+#   FIRST-APPLY NOTE: terragrunt applies dynamodb-github-threads BEFORE lambda-github-bridge
+#   (the bridge depends on it). If you ever see "dynamodb-github-threads ... has no outputs,
+#   but mock outputs provided" during the bridge apply, the table did NOT apply first (usually
+#   a stale km from skipping Step 1) — re-run this command once the table exists so the bridge
+#   re-resolves the REAL table_arn (real account) into its IAM policy.
 km init --dry-run=false
 
-# Step 3: Refresh create-handler and source-aware poller binaries.
+# Step 4: Refresh create-handler and source-aware poller binaries.
 #   --sidecars is safe here: no env-block changes, only binary refresh.
 km init --sidecars
 
-# Step 4: Verify km doctor.
+# Step 5: Verify km doctor.
 #   Expect: dynamodb-github-threads OK, lambda-github-bridge v1.1.0 IAM OK.
 #   No unexpected alias-collision WARNs for your config.
+#   Spot-check the bridge IAM did NOT bake the mock ARN:
+#     aws iam get-role-policy --role-name km-github-bridge-role \
+#       --policy-name km-github-bridge-dynamodb-github-threads \
+#       --query 'PolicyDocument.Statement[].Resource'
+#   The account in the ARN must be your REAL account, not 000000000000.
 km doctor
 
-# Step 5 (cold-create only): Encrypt and pre-stage the SOPS bundle.
+# Step 6 (cold-create only): Encrypt and pre-stage the SOPS bundle.
 #   See "Cold-create with S3-staged profile and SOPS auth" above.
 #   Re-run 'km init --dry-run=false' after adding spec.secrets.sopsFile to the profile.
 
-# Step 6: Existing sandboxes must be recreated to gain the new queue, poller, and verbs.
+# Step 7: Existing sandboxes must be recreated to gain the new queue, poller, and verbs.
 km destroy <sandbox-id> --remote --yes && km create profiles/github-review.yaml --alias <alias>
 ```
 
