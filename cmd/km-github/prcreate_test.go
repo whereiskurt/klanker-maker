@@ -1,21 +1,6 @@
-//go:build phase98_wave0
-
-// prcreate_test.go — RED unit tests for the km-github pr create subcommand.
+// prcreate_test.go — unit tests for the km-github pr create subcommand.
 //
-// BUILD TAG: phase98_wave0
-// This file is excluded from normal builds. It references runPRCreate and
-// runPRCreateWith which are NOT YET IMPLEMENTED (98-01 adds them). This is
-// the Wave 0 Nyquist gate: the tests exist and fail to compile until 98-01
-// implements the functions.
-//
-// HANDOFF TO 98-01:
-//   1. Implement runPRCreate(args []string, stderr io.Writer) int in main.go.
-//   2. Implement runPRCreateWith(repo, title, head, base, body, token string,
-//      stderr io.Writer, stdout io.Writer) int in main.go. The function MUST
-//      print html_url to the stdout writer (and it also receives stderr for errors).
-//      This matches the *With pattern extended with stdout for testability.
-//   3. Add "pr" sub-subcommand to the dispatch table in dispatch().
-//   4. Remove the `//go:build phase98_wave0` constraint from THIS file.
+// GREEN: build tag removed in 98-01 after runPRCreate + runPRCreateWith implemented in main.go.
 package main
 
 import (

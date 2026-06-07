@@ -1,18 +1,6 @@
-//go:build phase98_wave0
-
-// check_test.go — RED unit tests for the km-github check subcommand.
+// check_test.go — unit tests for the km-github check subcommand.
 //
-// BUILD TAG: phase98_wave0
-// This file is excluded from normal builds. It references runCheck and runCheckWith
-// which are NOT YET IMPLEMENTED (98-01 adds them). This is the Wave 0 Nyquist gate:
-// the tests exist and fail to compile until 98-01 implements the functions.
-//
-// HANDOFF TO 98-01:
-//   1. Implement runCheck(args []string, stderr io.Writer) int in main.go.
-//   2. Implement runCheckWith(repo string, number int, name, conclusion, summary,
-//      headSHA, token string, stderr io.Writer) int in main.go.
-//   3. Add "check" to the dispatch table in dispatch().
-//   4. Remove the `//go:build phase98_wave0` constraint from THIS file.
+// GREEN: build tag removed in 98-01 after runCheck + runCheckWith implemented in main.go.
 package main
 
 import (

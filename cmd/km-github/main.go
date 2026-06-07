@@ -1,7 +1,7 @@
-// Command km-github is the sandbox-side Phase 97 GitHub API client.
+// Command km-github is the sandbox-side Phase 97/98 GitHub API client.
 // It reads the per-sandbox GitHub installation token from SSM
-// (/{resource_prefix}/sandbox/{id}/github-token) and posts comments or
-// reviews back to GitHub via the REST API.
+// (/{resource_prefix}/sandbox/{id}/github-token) and posts comments,
+// reviews, check runs, or opens pull requests back to GitHub via the REST API.
 //
 // Subcommands:
 //
@@ -11,6 +11,13 @@
 //	km-github review  --repo owner/repo --number N --event APPROVE|COMMENT|REQUEST_CHANGES \
 //	                  --body "..." [--commit-id <sha>]
 //	  → POST /repos/{owner}/{repo}/pulls/{N}/reviews
+//
+//	km-github check   --repo owner/repo --name "check-name" --conclusion success|failure|neutral \
+//	                  --summary "..." --head-sha <sha> [--number N]
+//	  → POST /repos/{owner}/{repo}/check-runs
+//
+//	km-github pr create --repo owner/repo --title "..." --head <branch> --base <branch> [--body "..."]
+//	  → POST /repos/{owner}/{repo}/pulls — prints html_url to stdout
 //
 // Required env: KM_SANDBOX_ID, AWS_REGION (or AWS_DEFAULT_REGION).
 // KM_RESOURCE_PREFIX defaults to "km" (matches the km operator prefix).
@@ -68,6 +75,21 @@ func dispatch(args []string, stderr io.Writer) int {
 		return runComment(args[1:], stderr)
 	case "review":
 		return runReview(args[1:], stderr)
+	case "check":
+		return runCheck(args[1:], stderr)
+	case "pr":
+		if len(args) < 2 {
+			usage(stderr)
+			return 2
+		}
+		switch args[1] {
+		case "create":
+			return runPRCreate(args[2:], stderr)
+		default:
+			fmt.Fprintf(stderr, "unknown pr subcommand: %q\n", args[1])
+			usage(stderr)
+			return 2
+		}
 	case "-h", "--help", "help":
 		usage(stderr)
 		return 0
@@ -81,11 +103,17 @@ func dispatch(args []string, stderr io.Writer) int {
 func usage(w io.Writer) {
 	fmt.Fprintln(w, `usage: km-github <subcommand> [args]
 Subcommands:
-  comment  Post a comment to a pull request or issue (issues:write).
-           --repo owner/repo --number N --body "..."
-  review   Submit a pull request review (pull_requests:write).
-           --repo owner/repo --number N --event APPROVE|COMMENT|REQUEST_CHANGES
-           --body "..." [--commit-id <sha>]`)
+  comment    Post a comment to a pull request or issue (issues:write).
+             --repo owner/repo --number N --body "..."
+  review     Submit a pull request review (pull_requests:write).
+             --repo owner/repo --number N --event APPROVE|COMMENT|REQUEST_CHANGES
+             --body "..." [--commit-id <sha>]
+  check      Post a CI check run (checks:write).
+             --repo owner/repo --name "check-name" --conclusion success|failure|neutral
+             --summary "..." --head-sha <sha> [--number N]
+  pr create  Open a new pull request (pull_requests:write).
+             --repo owner/repo --title "..." --head <branch> --base <branch> [--body "..."]
+             Prints the html_url of the created PR to stdout.`)
 }
 
 // runComment is the comment subcommand entry point. It validates flags, loads
@@ -243,6 +271,215 @@ func runReviewWith(repo string, number int, event, body, commitID, token string,
 		fmt.Fprintf(stderr, "km-github review: GitHub API returned HTTP %d: %s\n", resp.StatusCode, string(respBody))
 		return 1
 	}
+	return 0
+}
+
+// validCheckConclusions is the set of GitHub Check Run conclusion values supported
+// by km-github check. GitHub allows more (e.g. "skipped", "timed_out"), but
+// the sandbox agent only needs pass/fail/neutral.
+var validCheckConclusions = map[string]bool{
+	"success": true,
+	"failure": true,
+	"neutral": true,
+}
+
+// runCheck is the check subcommand entry point. It validates flags, loads
+// the per-sandbox token from SSM, and calls runCheckWith.
+func runCheck(args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var repo, name, conclusion, summary, headSHA string
+	var number int
+	fs.StringVar(&repo, "repo", "", "Repository in owner/repo format (required)")
+	fs.StringVar(&name, "name", "", "Check run name (required)")
+	fs.StringVar(&conclusion, "conclusion", "", "Conclusion: success|failure|neutral (required)")
+	fs.StringVar(&summary, "summary", "", "Summary text for the check run output block")
+	fs.StringVar(&headSHA, "head-sha", "", "Commit SHA the check run is associated with (required)")
+	fs.IntVar(&number, "number", 0, "Pull request number (optional, for context only)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if repo == "" || name == "" || conclusion == "" {
+		fmt.Fprintln(stderr, "km-github check: --repo, --name, and --conclusion are required")
+		return 2
+	}
+
+	token, err := loadToken(stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-github check: load token: %v\n", err)
+		return 1
+	}
+
+	return runCheckWith(repo, number, name, conclusion, summary, headSHA, token, stderr)
+}
+
+// checkRunOutput is the nested output block in the GitHub Check Runs API payload.
+type checkRunOutput struct {
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+}
+
+// checkRunPayload is the JSON body for the GitHub Check Runs API.
+type checkRunPayload struct {
+	Name       string         `json:"name"`
+	HeadSHA    string         `json:"head_sha"`
+	Status     string         `json:"status"`
+	Conclusion string         `json:"conclusion"`
+	Output     checkRunOutput `json:"output"`
+}
+
+// runCheckWith is the testable inner entry point for the check subcommand.
+// Tests inject a token and point GitHubAPIBaseURL at an httptest server.
+func runCheckWith(repo string, number int, name, conclusion, summary, headSHA, token string, stderr io.Writer) int {
+	// Validate conclusion before making any HTTP call.
+	if !validCheckConclusions[conclusion] {
+		fmt.Fprintf(stderr, "km-github check: invalid --conclusion %q; valid values: success, failure, neutral\n", conclusion)
+		return 1
+	}
+	// Validate head_sha — required by the GitHub Checks API (returns 422 otherwise).
+	if headSHA == "" {
+		fmt.Fprintf(stderr, "km-github check: --head-sha is required (GitHub API returns 422 without a commit SHA)\n")
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() { <-sigCh; cancel() }()
+
+	url := fmt.Sprintf("%s/repos/%s/check-runs", github.GitHubAPIBaseURL, repo)
+	payload := checkRunPayload{
+		Name:       name,
+		HeadSHA:    headSHA,
+		Status:     "completed",
+		Conclusion: conclusion,
+		Output: checkRunOutput{
+			Title:   name, // use check name as the output title
+			Summary: summary,
+		},
+	}
+	reqBody, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-github check: marshal body: %v\n", err)
+		return 1
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	if err != nil {
+		fmt.Fprintf(stderr, "km-github check: build request: %v\n", err)
+		return 1
+	}
+	addGitHubHeaders(req, token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-github check: request: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(stderr, "km-github check: GitHub API returned HTTP %d: %s\n", resp.StatusCode, string(respBody))
+		return 1
+	}
+	return 0
+}
+
+// runPRCreate is the pr create subcommand entry point. It validates flags, loads
+// the per-sandbox token from SSM, and calls runPRCreateWith.
+func runPRCreate(args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pr create", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var repo, title, head, base, body string
+	fs.StringVar(&repo, "repo", "", "Repository in owner/repo format (required)")
+	fs.StringVar(&title, "title", "", "Pull request title (required)")
+	fs.StringVar(&head, "head", "", "Branch to merge (required)")
+	fs.StringVar(&base, "base", "", "Target branch (required)")
+	fs.StringVar(&body, "body", "", "Pull request body text (optional)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if repo == "" || title == "" || head == "" || base == "" {
+		fmt.Fprintln(stderr, "km-github pr create: --repo, --title, --head, and --base are required")
+		return 2
+	}
+
+	token, err := loadToken(stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-github pr create: load token: %v\n", err)
+		return 1
+	}
+
+	return runPRCreateWith(repo, title, head, base, body, token, stderr, os.Stdout)
+}
+
+// prCreatePayload is the JSON body for the GitHub Pull Requests API.
+type prCreatePayload struct {
+	Title string `json:"title"`
+	Head  string `json:"head"`
+	Base  string `json:"base"`
+	Body  string `json:"body,omitempty"`
+}
+
+// prCreateResponse captures the fields we care about from the PR creation response.
+type prCreateResponse struct {
+	HTMLURL string `json:"html_url"`
+	Number  int    `json:"number"`
+}
+
+// runPRCreateWith is the testable inner entry point for the pr create subcommand.
+// Tests inject a token, point GitHubAPIBaseURL at an httptest server, and capture
+// stdout via the stdout writer. The html_url is written to stdout so the agent
+// can read the created PR's URL.
+func runPRCreateWith(repo, title, head, base, body, token string, stderr io.Writer, stdout io.Writer) int {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() { <-sigCh; cancel() }()
+
+	url := fmt.Sprintf("%s/repos/%s/pulls", github.GitHubAPIBaseURL, repo)
+	payload := prCreatePayload{
+		Title: title,
+		Head:  head,
+		Base:  base,
+		Body:  body,
+	}
+	reqBody, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-github pr create: marshal body: %v\n", err)
+		return 1
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	if err != nil {
+		fmt.Fprintf(stderr, "km-github pr create: build request: %v\n", err)
+		return 1
+	}
+	addGitHubHeaders(req, token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-github pr create: request: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(stderr, "km-github pr create: GitHub API returned HTTP %d: %s\n", resp.StatusCode, string(respBody))
+		return 1
+	}
+
+	// Decode the response and print the PR URL to stdout for the agent to read.
+	var result prCreateResponse
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		fmt.Fprintf(stderr, "km-github pr create: decode response: %v\n", decodeErr)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.HTMLURL)
 	return 0
 }
 
