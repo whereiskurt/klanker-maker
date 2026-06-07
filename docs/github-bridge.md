@@ -829,3 +829,252 @@ via the SOPS Claude credentials, and a PR review posts — fully automated.
 
 **No regression** — Confirm the Phase 97 warm-path comment-trigger review still works on a
 repo with an existing running sandbox (no code changed for the warm path).
+
+---
+
+## Phase 99 — Config-defined /commands
+
+> **Phase 99 (2026-06-07) — Config-defined /command dispatch (complete):**
+> Operators declare named commands in `km-config.yaml github.commands:`. Each command
+> maps a `/verb` in a PR comment to a prompt template (inline or `@file`), an optional
+> alias override, and an optional allow list. A `default_command` fires when no `/verb`
+> is present. The bridge reads the command map from SSM at cold start — the deploy
+> footprint is unchanged (no new Lambda, no new DDB table, no sandbox recreate).
+
+### The github.commands Config Surface
+
+Add a `commands:` block under `github:` in `km-config.yaml`:
+
+```yaml
+github:
+  default_command: review          # install-wide default when no /verb in comment
+  repos:
+    - match: my-org/*
+      alias: gh-myorg
+      profile: profiles/github-review.yaml
+      allow: [alice, bob]
+      default_command: triage      # per-repo override (beats install-wide)
+
+  commands:
+    review:
+      description: "Read-only review — posts inline findings as a PR review"
+      alias: gh-myorg              # optional: route to a different sandbox than repo default
+      profile: ""                  # optional: override profile for cold-create
+      allow: [alice, bob, carol]   # optional: inner gate (must also pass repo.allow)
+      prompt: |
+        You are a careful code reviewer. Review this pull request for correctness,
+        performance, and style. Use {{args}} as extra context if provided.
+        Post your findings as a structured PR review via `km-github review`.
+
+    patch:
+      description: "Apply the smallest safe fix and push a commit"
+      alias: gh-myorg-dev          # route to a dedicated dev sandbox
+      profile: profiles/github-dev.yaml
+      prompt: "@prompts/gh-patch.txt"   # @file — resolved relative to km-config.yaml
+
+    triage:
+      description: "Classify severity, reproduce, and label the issue"
+      prompt: "Triage this issue. Classify severity (P0-P3), add labels, reproduce if possible. {{args}}"
+```
+
+**Fields:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `description` | no | Human-readable label shown in `km github status` and `/help` reply |
+| `alias` | no | Sandbox alias override (default: repo's `alias`) |
+| `profile` | no | SandboxProfile path override for cold-create (default: repo's `profile`) |
+| `allow` | no | Inner gate — sender must be in BOTH `repo.allow` AND `command.allow` |
+| `prompt` | yes | Template text or `@file` reference. `{{args}}` is replaced with the comment text after the `/verb` |
+
+**Routing (Decision D2):** command settings override repo settings. Resolution:
+- `alias` = `command.alias || repo.alias`
+- `profile` = `command.profile || repo.profile || github.default_profile`
+
+### `@file` Prompt References
+
+`prompt: "@path/to/file.txt"` reads the file **relative to `km-config.yaml`** at `km init` time
+on the operator's workstation. The file contents are inlined into the SSM parameter before the
+Lambda ever reads it — the Lambda never reads the filesystem.
+
+**Rules:**
+- `@file` → inlined at `km init` time; missing file = hard `km init` error + `km doctor` WARN
+- `@@text` → escaped literal `@text` (no file read)
+- Inline text (no `@` prefix) → used as-is
+
+### `{{args}}` Template Variable
+
+The only template variable is `{{args}}`. After stripping the `@mention` and the `/command`
+token from the comment body, the remaining text replaces every occurrence of `{{args}}` in the
+prompt. If no remaining text, `{{args}}` is replaced with an empty string.
+
+Example: comment `@km-bot /review please focus on error handling` → `{{args}}` = `please focus on error handling`.
+
+### Command Dispatch Rules
+
+**Command located anywhere:** The `/command` token can appear anywhere in the comment body
+(not anchored after the mention). Code blocks are stripped first to avoid false positives
+(`/usr/bin/patch` in a shell block does not trigger `/patch`). (Decision D3)
+
+**Multiple commands → error reply:** If two or more distinct commands appear in one comment,
+the bridge posts a polite error reply and does NOT dispatch. Repeated identical commands are
+deduped and treated as one. (Decision D5)
+
+**Unknown `/token` → lenient passthrough:** A `/token` not in the command map is treated as
+plain text — the comment body dispatches as free-form (or via `default_command`). No
+unknown-command error reply. (Decision D6)
+
+**Auth intersection (Decision D7):**
+1. `repo.allow` is the **outer gate** — failing it causes a silent drop (no reply). This is
+   the Phase 97 behavior, unchanged.
+2. `command.allow` is the **inner gate** — the sender must pass `repo.allow` first; if they
+   pass repo.allow but fail command.allow, the bridge posts a polite "not authorized for this
+   command" reply.
+
+### `default_command`
+
+`github.default_command` (install-wide) and `repos[].default_command` (per-repo) specify the
+command key dispatched when no `/verb` is present in the comment. Resolution order:
+1. Per-repo `repos[].default_command` (if set)
+2. Install-wide `github.default_command` (if set)
+3. Unset → free-form passthrough (the raw mention body is dispatched as-is, Phase 97/98 behavior)
+
+Both values must name a key in `github.commands` — an undefined name is a hard `km doctor`
+ERROR (not a WARN).
+
+### `/help` Built-in
+
+`/help` is a reserved built-in. Posting `/help` in a PR comment causes the bridge to reply
+with a formatted list of all configured commands, their descriptions, and the effective
+default for the repo. `/help` never dispatches to a sandbox. Defining a user command named
+`help` in `km-config.yaml` shadows the built-in and triggers a `km doctor` WARN.
+
+### km doctor Command Checks
+
+`km doctor` adds the following checks to the existing GitHub check group. All checks are
+**dormant (SKIPPED) when `github.commands` is absent** — byte-identical to pre-Phase-99.
+
+| Check | Level | Trigger |
+|-------|-------|---------|
+| `@file` prompt missing/unreadable | WARN | command.prompt is `@file` but file not found relative to km-config.yaml dir |
+| Profile unresolvable | WARN | command.profile path does not exist |
+| `help` shadowed | WARN | user defines a command named `help` (reserved built-in) |
+| Command↔repo alias overlap | WARN | command.alias equals a repo alias (explicit or auto-derived) |
+| Undefined `default_command` (top-level) | ERROR | `github.default_command` names a key not in `github.commands` |
+| Undefined `default_command` (per-repo) | ERROR | `repos[].default_command` names a key not in `github.commands` |
+| SSM commands param absent | WARN | `github.commands` configured but `{prefix}/config/github/commands` not in SSM |
+
+**Stale SSM param:** Removing `github.commands` from `km-config.yaml` on a subsequent
+`km init --dry-run=false` will NOT automatically delete the SSM param (SSM writes are
+additive). `km doctor` will no longer show the SSM-present WARN (it's dormant when commands
+is absent), but the stale param remains in SSM until manually deleted:
+
+```bash
+aws ssm delete-parameter --name "$(km env | grep KM_RESOURCE_PREFIX | cut -d= -f2 | tr -d /)km/config/github/commands"
+# or equivalently:
+aws ssm delete-parameter --name "/km/config/github/commands"
+```
+
+### km github status Command Listing
+
+`km github status` extends its output to list all configured commands (read from SSM at
+runtime) and the effective default command per repo:
+
+```
+GitHub bridge config (prefix: /km/):
+  webhook-secret:  [set]
+  bot-login:       km-bot[bot]
+  bridge-url:      https://abc123.lambda-url.us-east-1.on.aws/
+  app-client-id:   Iv1.abc123
+  installation-id: 99999999
+  commands (2):
+    /patch  — apply the smallest safe fix [→ alias:gh-myorg-dev profile:profiles/github-dev.yaml]
+    /review — read-only review, inline findings [→ alias:gh-myorg]
+  default_command: review (install-wide)
+  repos (2):
+    my-org/*                                 default_command: triage (per-repo)
+    my-org/backend                           default_command: review (install-wide fallback)
+```
+
+When no commands are configured, the extra block is omitted — output is identical to
+pre-Phase-99.
+
+### Phase 99 Deploy Sequence
+
+> **DEPLOY SURFACE VERIFICATION** (per `feedback_verify_deploy_surface_not_just_code`)
+>
+> Phase 99 ships zero new Terraform modules. The km-github-bridge Lambda already exists from
+> Phase 97 and is already in `lambdaBuilds()`. The only deploy steps are:
+
+```bash
+# 1. Rebuild the bridge zip with Phase 99 command-pass code.
+make build-lambdas
+
+# 2. Upload the bridge zip + write the SSM commands param.
+km init --dry-run=false
+```
+
+**That is all.** Specifically:
+
+- **NOT required: `km init --sidecars`** — there is no SandboxProfile schema change in Phase 99.
+  `--sidecars` rebuilds binaries and cold-starts the Lambda but does NOT update the Lambda
+  environment block or the SSM commands param. Using `--sidecars` alone would leave the bridge
+  running Phase 98 code without the command-pass slot.
+
+- **NOT required: `make build`** — the km operator binary has no new `regionalModules()` entry
+  (no new DDB table, no new Lambda from the km CLI perspective). `make build` rebuilds the
+  operator CLI only; it does NOT rebuild the bridge Lambda zip. Use `make build-lambdas` to
+  rebuild the Lambda.
+
+- **NOT required: sandbox recreate (`km destroy && km create`)** — Phase 99 has no
+  sandbox-side changes. The command pass runs in the bridge Lambda, not in the sandbox.
+  Existing sandboxes benefit automatically on next webhook delivery after the Lambda code is
+  updated.
+
+**What `km init --dry-run=false` does for Phase 99:**
+1. Calls `PublishGitHubCommandsToSSM` → resolves all `@file` prompts → writes the assembled
+   command JSON to SSM `{prefix}/config/github/commands` as a plain String (not SecureString).
+2. Uploads the rebuilt `km-github-bridge.zip` to the Lambda function code (same as Phase 97
+   deploy step 2).
+3. Emits a drift WARN if the SSM commands param already exists with a different value
+   (informational — the new yaml-derived value always wins).
+
+**Cross-check against Plans 03/04:**
+- Plan 03 (`PublishGitHubCommandsToSSM`): SSM write confirmed — `putSSMParam(ctx, ssmClient, prefix+"config/github/commands", commandsJSON, ParameterTypeString, "", overwrite=true)`. No discrepancy.
+- Plan 04 (bridge cold-start): `SSMCommandsFetcher` reads `{prefix}/config/github/commands` at cold start (15-minute cache). ParameterNotFound → empty map → bridge runs dormant. No discrepancy.
+- `lambdaBuilds()` list: km-github-bridge was added in Phase 97 (`init.go:1876`). Phase 99 does NOT modify this list — confirmed. `make build-lambdas` picks it up automatically.
+
+**No discrepancies found between Phase 99 docs deploy claims and Plans 03/04 implementation.**
+
+### Phase 99 E2E Verification Checklist
+
+After completing the deploy sequence above, verify:
+
+**A. COMMAND DISPATCH** — Post `@km-bot /review` on an open PR in a configured repo. Confirm:
+- The bridge emits 👀 ACK immediately.
+- The agent receives the command prompt (with `{{args}}` replaced by any trailing text).
+- A PR review is posted by the agent via `km-github review`.
+
+**B. DEFAULT COMMAND** — Post `@km-bot please check this` (no `/verb`) on a repo with
+`default_command: triage`. Confirm the triage prompt is used, not the raw mention body.
+
+**C. /HELP** — Post `@km-bot /help` on a PR. Confirm the bridge replies with a comment
+listing all configured commands and the effective default for the repo. No sandbox dispatch.
+
+**D. MULTI-COMMAND ERROR** — Post `@km-bot /review /patch` on a PR. Confirm the bridge
+posts an error reply (not a dispatch, not a silent drop).
+
+**E. UNKNOWN VERB** — Post `@km-bot /frobnicate this PR`. Confirm the comment dispatches
+as free-form (lenient passthrough) — no error reply, no `/help` spam.
+
+**F. COMMAND AUTH** — Configure a command with a narrow `allow: [alice]`. Post as `bob`
+(who is in `repo.allow` but not `command.allow`). Confirm a "not authorized for this
+command" reply is posted.
+
+**G. `km doctor`** — Run `km doctor` after deploying. Confirm:
+- All command checks show OK (green).
+- SSM commands param check shows OK (param present).
+- Removing the SSM param manually and re-running shows WARN with `km init` remediation.
+
+**H. `km github status`** — Run `km github status`. Confirm the commands section appears
+with all configured commands, their descriptions/targets, and the effective default per repo.
