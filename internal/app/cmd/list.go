@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -15,6 +16,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -35,10 +37,18 @@ func NewListCmd(cfg *config.Config) *cobra.Command {
 // If lister is nil, the real AWS-backed lister is used. This overload is used
 // in tests to inject fake lister implementations.
 func NewListCmdWithLister(cfg *config.Config, lister SandboxLister) *cobra.Command {
+	return NewListCmdWithCheckers(cfg, lister, nil)
+}
+
+// NewListCmdWithCheckers builds the list command with an optional lister AND an
+// optional AgentAuthChecker. Pass nil for real AWS-backed clients. This is the
+// widest overload; all narrower constructors delegate to it.
+func NewListCmdWithCheckers(cfg *config.Config, lister SandboxLister, checker AgentAuthChecker) *cobra.Command {
 	var jsonOutput bool
 	var useTagScan bool
 	var wide bool
 	var reset bool
+	var auth bool
 
 	cmd := &cobra.Command{
 		Use:          "list",
@@ -50,13 +60,14 @@ func NewListCmdWithLister(cfg *config.Config, lister SandboxLister) *cobra.Comma
 			if reset {
 				return runListReset(cmd)
 			}
-			return runList(cmd, cfg, lister, jsonOutput, useTagScan, wide)
+			return runList(cmd, cfg, lister, checker, jsonOutput, useTagScan, wide, auth)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON array")
 	cmd.Flags().BoolVar(&useTagScan, "tags", false, "Use AWS tag scan instead of S3 state scan")
 	cmd.Flags().BoolVar(&wide, "wide", false, "Show all columns (profile, substrate, region)")
 	cmd.Flags().BoolVar(&reset, "reset", false, "Reset local sandbox numbering so the next created sandbox is #1")
+	cmd.Flags().BoolVar(&auth, "auth", false, "Check agent (claude/codex) login state per running sandbox via SSM")
 	return cmd
 }
 
@@ -85,18 +96,21 @@ type SandboxLister interface {
 	ListSandboxes(ctx context.Context, useTagScan bool) ([]kmaws.SandboxRecord, error)
 }
 
-// runList is the command RunE logic, accepting an explicit lister for testability.
-func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonOutput, useTagScan, wide bool) error {
+// runList is the command RunE logic, accepting an explicit lister and checker for testability.
+func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, checker AgentAuthChecker, jsonOutput, useTagScan, wide, auth bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
+	var awsCfg awssdk.Config
+	var ec2Err error
+
 	if lister == nil {
 		awsProfile := "klanker-terraform"
-		awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)
-		if err != nil {
-			return fmt.Errorf("load AWS config: %w", err)
+		awsCfg, ec2Err = kmaws.LoadAWSConfig(ctx, awsProfile)
+		if ec2Err != nil {
+			return fmt.Errorf("load AWS config: %w", ec2Err)
 		}
 		lister = newRealLister(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 	}
@@ -106,14 +120,30 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 		return fmt.Errorf("list sandboxes: %w", err)
 	}
 
+	// Banner: print version+timestamp header for all non-JSON output.
+	// Emit BEFORE any tabular content so it's the first visible line.
+	if !jsonOutput {
+		n := len(records)
+		noun := "sandboxes"
+		if n == 1 {
+			noun = "sandbox"
+		}
+		fprintBanner(cmd.OutOrStdout(), "km list", fmt.Sprintf("%d %s", n, noun))
+	}
+
 	if len(records) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "No running sandboxes.")
 		return nil
 	}
 
 	// Check live instance status for EC2 sandboxes to detect spot reclamation / termination.
-	awsProfile := "klanker-terraform"
-	awsCfg, ec2Err := kmaws.LoadAWSConfig(ctx, awsProfile)
+	// Re-use awsCfg loaded above (real path); if lister was injected, try loading now for
+	// EC2/DDB enrichment (best-effort — test injections set awsCfg to zero value).
+	if ec2Err == nil && awsCfg.Region == "" {
+		// lister was injected but we still need an awsCfg for enrichment; attempt load.
+		awsCfg, ec2Err = kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+	}
+
 	if ec2Err == nil {
 		ec2Client := ec2.NewFromConfig(awsCfg)
 		for i := range records {
@@ -140,7 +170,7 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 
 	// Load active thread counts for --wide display (km-slack-threads, grouped by channel_id).
 	// Only attempted when at least one sandbox has SlackInboundQueueURL set.
-	if wide {
+	if wide && ec2Err == nil {
 		hasInbound := false
 		for _, r := range records {
 			if r.SlackInboundQueueURL != "" {
@@ -148,7 +178,7 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 				break
 			}
 		}
-		if hasInbound && ec2Err == nil {
+		if hasInbound {
 			ddbClient := dynamodb.NewFromConfig(awsCfg)
 			threadsTable := cfg.GetSlackThreadsTableName()
 			for i := range records {
@@ -187,7 +217,59 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
 	}
 
-	return printSandboxTable(cmd, records, wide, lnState.Map)
+	// Auth fan-out: only when --auth is set. Build a real checker from the loaded
+	// awsCfg when none is injected (real path). Fan out concurrently over running
+	// sandboxes with a bounded goroutine pool (semaphore of 8).
+	var authResults map[string]string
+	if auth {
+		if checker == nil && ec2Err == nil {
+			checker = &ssmAgentAuthChecker{
+				ssmClient: ssm.NewFromConfig(awsCfg),
+				ec2Client: ec2.NewFromConfig(awsCfg),
+			}
+		}
+		if checker != nil {
+			authResults = make(map[string]string, len(records))
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			sem := make(chan struct{}, 8) // bounded concurrency
+
+			for i := range records {
+				if records[i].Status != "running" {
+					continue
+				}
+				wg.Add(1)
+				rec := &records[i]
+				go func() {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+
+					cl, cx, authErr := checker.CheckAuth(ctx, rec)
+					var label string
+					if authErr != nil {
+						label = "?"
+					} else {
+						clS := "cl✗"
+						if cl {
+							clS = "cl✓"
+						}
+						cxS := "cx✗"
+						if cx {
+							cxS = "cx✓"
+						}
+						label = clS + " " + cxS
+					}
+					mu.Lock()
+					authResults[rec.SandboxID] = label
+					mu.Unlock()
+				}()
+			}
+			wg.Wait()
+		}
+	}
+
+	return printSandboxTable(cmd, records, wide, lnState.Map, authResults)
 }
 
 // awsSandboxLister is the real AWS-backed SandboxLister implementation.
@@ -238,8 +320,10 @@ func (l *awsSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) (
 // Status is color-coded: red for "failed", yellow for "partial"/"killed", green for "running".
 // Locked sandboxes are shown in bold white with a lock icon.
 // When wide=false, profile/substrate/region columns are hidden for a narrower display.
-func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide bool, numbers map[string]int) error {
+// authResults maps sandbox ID → compact auth string (e.g. "cl✓ cx✗"); nil means no AUTH column.
+func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide bool, numbers map[string]int, authResults map[string]string) error {
 	out := cmd.OutOrStdout()
+	showAuth := authResults != nil
 	// Use fixed-width printf instead of tabwriter to avoid ANSI color codes
 	// breaking column alignment (tabwriter counts bytes, not visible chars).
 	// Compute max sandbox ID width for dynamic column sizing
@@ -308,19 +392,38 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 
 	if wide {
 		if showThreads {
-			fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %-5s %s\n",
-				numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
-				padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
-				"STATUS", "TTL", "IDLE", "💬", "CLONED FROM")
+			if showAuth {
+				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %-7s %-5s %-9s %s\n",
+					numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
+					padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
+					"STATUS", "TTL", "IDLE", "UP", "💬", "AUTH", "CLONED FROM")
+			} else {
+				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %-7s %-5s %s\n",
+					numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
+					padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
+					"STATUS", "TTL", "IDLE", "UP", "💬", "CLONED FROM")
+			}
 		} else {
-			fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %s\n",
-				numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
-				padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
-				"STATUS", "TTL", "IDLE", "CLONED FROM")
+			if showAuth {
+				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %-7s %-9s %s\n",
+					numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
+					padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
+					"STATUS", "TTL", "IDLE", "UP", "AUTH", "CLONED FROM")
+			} else {
+				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %-7s %s\n",
+					numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
+					padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
+					"STATUS", "TTL", "IDLE", "UP", "CLONED FROM")
+			}
 		}
 	} else {
-		fmt.Fprintf(out, "%-*s %-*s  %-*s %-10s %s\n",
-			numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL")
+		if showAuth {
+			fmt.Fprintf(out, "%-*s %-*s  %-*s %-10s %-8s %-7s %s\n",
+				numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL", "UP", "AUTH")
+		} else {
+			fmt.Fprintf(out, "%-*s %-*s  %-*s %-10s %-8s %s\n",
+				numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL", "UP")
+		}
 	}
 	for i, r := range records {
 		ttl := r.TTLRemaining
@@ -358,6 +461,23 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 			localNum = i + 1 // fallback to positional if no local number
 		}
 		num := bw(fmt.Sprintf("%-*d", numWidth, localNum))
+
+		// UP column: uptime for running rows, "-" for all others. The --tags
+		// (tag-scan) path leaves CreatedAt zero, which would otherwise render a
+		// garbage "106751d23h"; guard on IsZero so those rows show "-".
+		uptime := "-"
+		if r.Status == "running" && !r.CreatedAt.IsZero() {
+			uptime = formatUptime(r.CreatedAt)
+		}
+
+		// AUTH column: result from fan-out map, "-" if not present/running.
+		authStr := "-"
+		if showAuth {
+			if v, ok := authResults[r.SandboxID]; ok {
+				authStr = v
+			}
+		}
+
 		if wide {
 			idle := r.IdleRemaining
 			if idle == "" {
@@ -376,22 +496,44 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 				if r.SlackChannelID != "" {
 					threads = fmt.Sprintf("%d", r.ActiveThreads)
 				}
-				fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %-5s %s%s\n",
-					num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-					bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
-					bw(region), colorStatus, bw(ttl), bw(idle),
-					bw(threads), bw(truncCol(clonedFrom, 14)), lock)
+				if showAuth {
+					fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %-7s %-5s %-9s %s%s\n",
+						num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+						bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
+						bw(region), colorStatus, bw(ttl), bw(idle),
+						bw(uptime), bw(threads), bw(authStr), bw(truncCol(clonedFrom, 14)), lock)
+				} else {
+					fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %-7s %-5s %s%s\n",
+						num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+						bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
+						bw(region), colorStatus, bw(ttl), bw(idle),
+						bw(uptime), bw(threads), bw(truncCol(clonedFrom, 14)), lock)
+				}
 			} else {
-				fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %s%s\n",
-					num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-					bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
-					bw(region), colorStatus, bw(ttl), bw(idle),
-					bw(truncCol(clonedFrom, 14)), lock)
+				if showAuth {
+					fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %-7s %-9s %s%s\n",
+						num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+						bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
+						bw(region), colorStatus, bw(ttl), bw(idle),
+						bw(uptime), bw(authStr), bw(truncCol(clonedFrom, 14)), lock)
+				} else {
+					fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %-7s %s%s\n",
+						num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+						bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
+						bw(region), colorStatus, bw(ttl), bw(idle),
+						bw(uptime), bw(truncCol(clonedFrom, 14)), lock)
+				}
 			}
 		} else {
-			fmt.Fprintf(out, "%s %s  %s %s %s%s\n",
-				num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-				colorStatus, bw(ttl), lock)
+			if showAuth {
+				fmt.Fprintf(out, "%s %s  %s %s %-8s %-7s %s%s\n",
+					num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+					colorStatus, bw(ttl), bw(uptime), bw(authStr), lock)
+			} else {
+				fmt.Fprintf(out, "%s %s  %s %s %-8s %s%s\n",
+					num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+					colorStatus, bw(ttl), bw(uptime), lock)
+			}
 		}
 	}
 	return nil

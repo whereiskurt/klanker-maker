@@ -73,6 +73,13 @@ func NewStatusCmdWithFetchers(cfg *config.Config, fetcher SandboxFetcher, budget
 // NewStatusCmdWithAllFetchers builds the status command with optional custom fetchers for
 // sandbox metadata, budget, and identity data. Pass nil for real AWS-backed clients.
 func NewStatusCmdWithAllFetchers(cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher) *cobra.Command {
+	return NewStatusCmdWithChecker(cfg, fetcher, budgetFetcher, identityFetcher, nil)
+}
+
+// NewStatusCmdWithChecker builds the status command with the full DI set including an
+// optional AgentAuthChecker. Pass nil checker to use the real SSM-backed implementation
+// at runtime. Existing callers can keep using NewStatusCmdWithAllFetchers unchanged.
+func NewStatusCmdWithChecker(cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher, checker AgentAuthChecker) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "status [sandbox-id | #number]",
 		Short:        "Show detailed state for a sandbox",
@@ -85,13 +92,13 @@ func NewStatusCmdWithAllFetchers(cfg *config.Config, fetcher SandboxFetcher, bud
 				ctx = context.Background()
 			}
 			if len(args) == 0 {
-				return runStatusAll(cmd, cfg, fetcher, budgetFetcher, identityFetcher)
+				return runStatusAll(cmd, cfg, fetcher, budgetFetcher, identityFetcher, checker)
 			}
 			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
 			if err != nil {
 				return err
 			}
-			return runStatus(cmd, cfg, fetcher, budgetFetcher, identityFetcher, sandboxID)
+			return runStatus(cmd, cfg, fetcher, budgetFetcher, identityFetcher, checker, sandboxID)
 		},
 	}
 	return cmd
@@ -103,7 +110,7 @@ type SandboxFetcher interface {
 }
 
 // runStatusAll lists all sandboxes and runs status on each one.
-func runStatusAll(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher) error {
+func runStatusAll(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher, checker AgentAuthChecker) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -122,7 +129,7 @@ func runStatusAll(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher
 		if i > 0 {
 			fmt.Fprintln(cmd.OutOrStdout())
 		}
-		if err := runStatus(cmd, cfg, fetcher, budgetFetcher, identityFetcher, rec.SandboxID); err != nil {
+		if err := runStatus(cmd, cfg, fetcher, budgetFetcher, identityFetcher, checker, rec.SandboxID); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "  error fetching status for %s: %v\n", rec.SandboxID, err)
 		}
 	}
@@ -130,7 +137,7 @@ func runStatusAll(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher
 }
 
 // runStatus is the command RunE logic for km status.
-func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher, sandboxID string) error {
+func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher, checker AgentAuthChecker, sandboxID string) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -167,6 +174,15 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 				tableName: identityTableName,
 			}
 		}
+
+		// Initialize real auth checker when none is injected — uses SSM.
+		// awsCfg is already loaded above, so no second LoadAWSConfig call needed.
+		if checker == nil {
+			checker = &ssmAgentAuthChecker{
+				ssmClient: ssm.NewFromConfig(awsCfg),
+				ec2Client: ec2.NewFromConfig(awsCfg),
+			}
+		}
 	}
 
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
@@ -199,7 +215,7 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 	}
 	fprintBanner(cmd.OutOrStdout(), "km status", bannerID)
 	isTTY := isTerminal(cmd.OutOrStdout())
-	printSandboxStatus(ctx, cmd, rec, budget, identity, isTTY, cfg.GetResourcePrefix())
+	printSandboxStatus(ctx, cmd, rec, budget, identity, checker, isTTY, cfg.GetResourcePrefix())
 	return nil
 }
 
@@ -344,7 +360,7 @@ func colorPercent(percent float64, isTTY bool) string {
 }
 
 // printSandboxStatus prints detailed sandbox information including optional budget and identity sections.
-func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *kmaws.BudgetSummary, identity *kmaws.IdentityRecord, isTTY bool, resourcePrefix string) {
+func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *kmaws.BudgetSummary, identity *kmaws.IdentityRecord, checker AgentAuthChecker, isTTY bool, resourcePrefix string) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Sandbox ID:  %s\n", rec.SandboxID)
 	if rec.Alias != "" {
@@ -380,6 +396,32 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 	fmt.Fprintf(out, "Created At:  %s\n", rec.CreatedAt.Local().Format("2006-01-02 3:04:05 PM MST"))
 	if rec.TTLExpiry != nil {
 		fmt.Fprintf(out, "TTL Expiry:  %s\n", rec.TTLExpiry.Local().Format("2006-01-02 3:04:05 PM MST"))
+	}
+
+	// Uptime and Auth — only for running sandboxes.
+	if rec.Status == "running" {
+		fmt.Fprintf(out, "Uptime:      %s\n", formatUptime(rec.CreatedAt))
+
+		// Auth section: check agent login state via a single SSM round-trip.
+		// Soft-fail on SSM error: print a single unavailable line, never fail the command.
+		if checker != nil {
+			claudeOK, codexOK, authErr := checker.CheckAuth(ctx, rec)
+			if authErr != nil {
+				fmt.Fprintf(out, "Auth:        <unavailable: %v>\n", authErr)
+			} else {
+				claudeSymbol := "✗ not logged in"
+				if claudeOK {
+					claudeSymbol = "✓ logged in"
+				}
+				codexSymbol := "✗ not logged in"
+				if codexOK {
+					codexSymbol = "✓ logged in"
+				}
+				fmt.Fprintf(out, "Auth:\n")
+				fmt.Fprintf(out, "  claude:  %s\n", claudeSymbol)
+				fmt.Fprintf(out, "  codex:   %s\n", codexSymbol)
+			}
+		}
 	}
 
 	// Show idle countdown — try metadata first, fall back to profile default

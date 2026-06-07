@@ -764,6 +764,174 @@ func TestStatusCmd_Running_NoFailureLine(t *testing.T) {
 	}
 }
 
+// ---- Fake AgentAuthChecker ----
+
+type fakeAuthChecker struct {
+	claude bool
+	codex  bool
+	err    error
+	calls  int
+}
+
+func (f *fakeAuthChecker) CheckAuth(_ context.Context, _ *kmaws.SandboxRecord) (bool, bool, error) {
+	f.calls++
+	return f.claude, f.codex, f.err
+}
+
+// runStatusCmdWithChecker executes km status with a full DI set including an AgentAuthChecker.
+func runStatusCmdWithChecker(t *testing.T, fetcher cmd.SandboxFetcher, checker cmd.AgentAuthChecker, args ...string) (string, error) {
+	t.Helper()
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	statusCmd := cmd.NewStatusCmdWithChecker(cfg, fetcher, nil, nil, checker)
+	root.AddCommand(statusCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+
+	root.SetArgs(append([]string{"status"}, args...))
+	err := root.Execute()
+	return buf.String(), err
+}
+
+// TestStatusCmd_Running_ShowsUptime verifies that km status prints an Uptime: line
+// for a running sandbox.
+func TestStatusCmd_Running_ShowsUptime(t *testing.T) {
+	// Create a sandbox that started ~1h30m ago so we get "1h30m" output.
+	createdAt := time.Now().Add(-(1*time.Hour + 30*time.Minute))
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-uptime1",
+			Profile:   "open-dev",
+			Substrate: "ecs", // non-EC2 to skip EC2 live status check
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+		},
+	}
+	checker := &fakeAuthChecker{claude: true, codex: false}
+
+	out, err := runStatusCmdWithChecker(t, fetcher, checker, "sb-uptime1")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	if !strings.Contains(out, "Uptime:") {
+		t.Errorf("expected 'Uptime:' line for running sandbox, got:\n%s", out)
+	}
+	// Should contain hours (1h...)
+	if !strings.Contains(out, "1h") {
+		t.Errorf("expected uptime containing '1h' for ~1h30m box, got:\n%s", out)
+	}
+}
+
+// TestStatusCmd_Running_ShowsAuth verifies that km status prints an Auth: section
+// for a running sandbox when the checker reports claude=true, codex=false.
+func TestStatusCmd_Running_ShowsAuth(t *testing.T) {
+	createdAt := time.Now().Add(-10 * time.Minute)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-auth1",
+			Profile:   "open-dev",
+			Substrate: "ecs",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+		},
+	}
+	checker := &fakeAuthChecker{claude: true, codex: false}
+
+	out, err := runStatusCmdWithChecker(t, fetcher, checker, "sb-auth1")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	if !strings.Contains(out, "Auth:") {
+		t.Errorf("expected 'Auth:' section for running sandbox, got:\n%s", out)
+	}
+	if !strings.Contains(out, "claude:") {
+		t.Errorf("expected 'claude:' line in Auth section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "codex:") {
+		t.Errorf("expected 'codex:' line in Auth section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "logged in") {
+		t.Errorf("expected 'logged in' text in Auth section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "not logged in") {
+		t.Errorf("expected 'not logged in' text in Auth section, got:\n%s", out)
+	}
+	// Verify the check was actually called exactly once
+	if checker.calls != 1 {
+		t.Errorf("expected CheckAuth called 1 time, got %d", checker.calls)
+	}
+}
+
+// TestStatusCmd_Running_AuthCheckerError verifies soft-fail behaviour: when the
+// checker returns an error, the command exits 0 and prints a soft unavailable line.
+func TestStatusCmd_Running_AuthCheckerError(t *testing.T) {
+	createdAt := time.Now().Add(-5 * time.Minute)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-autherr",
+			Profile:   "open-dev",
+			Substrate: "ecs",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+		},
+	}
+	checker := &fakeAuthChecker{err: fmt.Errorf("SSM timeout")}
+
+	out, err := runStatusCmdWithChecker(t, fetcher, checker, "sb-autherr")
+	if err != nil {
+		t.Fatalf("status command must exit 0 even on auth check error: %v\noutput: %s", err, out)
+	}
+
+	if !strings.Contains(out, "unavailable") {
+		t.Errorf("expected soft 'unavailable' text on checker error, got:\n%s", out)
+	}
+	// Must NOT fail the command
+}
+
+// TestStatusCmd_NonRunning_NoUptimeNoAuth verifies that a non-running sandbox shows
+// neither the Uptime: line nor the Auth: section.
+func TestStatusCmd_NonRunning_NoUptimeNoAuth(t *testing.T) {
+	createdAt := time.Now().Add(-2 * time.Hour)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-stopped1",
+			Profile:   "open-dev",
+			Substrate: "ecs",
+			Region:    "us-east-1",
+			Status:    "stopped",
+			CreatedAt: createdAt,
+		},
+	}
+	checker := &fakeAuthChecker{claude: true, codex: true}
+
+	out, err := runStatusCmdWithChecker(t, fetcher, checker, "sb-stopped1")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	if strings.Contains(out, "Uptime:") {
+		t.Errorf("expected NO 'Uptime:' line for stopped sandbox, got:\n%s", out)
+	}
+	if strings.Contains(out, "Auth:") {
+		t.Errorf("expected NO 'Auth:' section for stopped sandbox, got:\n%s", out)
+	}
+	// Checker must not be called for non-running sandboxes
+	if checker.calls != 0 {
+		t.Errorf("expected CheckAuth NOT called for stopped sandbox, got %d calls", checker.calls)
+	}
+}
+
 // TestStatus_NoIdentity verifies that km status does not show an Identity section
 // when the fetcher returns nil (sandbox has no published identity).
 func TestStatus_NoIdentity(t *testing.T) {

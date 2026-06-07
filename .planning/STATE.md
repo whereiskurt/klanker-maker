@@ -31,7 +31,7 @@ Plan: 92-00 — all 3 tasks done; pre-Phase-92 byte-identity baselines captured,
 Total Plans in Phase: 7 (92-00 → 92-06)
 Current Plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 Status: in-progress
-Last activity: 2026-06-07
+Last activity: 2026-06-07 - Completed quick task 8: uptime + agent-auth visibility for km status and km list
 
 Wave 1 UNBLOCKED: both byte-identity baselines (userdata + IAM HCL) committed before any Wave 1 source change.
 
@@ -1467,6 +1467,7 @@ Recent decisions affecting current work:
 | 5 | Plugin snapshot save/restore workflow for Claude plugins via rsync to S3 | 2026-04-19 | 66b303e | [5-plugin-snapshot-save-restore-workflow-fo](./quick/5-plugin-snapshot-save-restore-workflow-fo/) |
 | 6 | Fix GitHub App installation-ID resolution for wildcard-only allowedRepos so learn.yaml clones work without prompting | 2026-05-01 | 99f49eb | [6-fix-github-app-installation-id-resolutio](./quick/6-fix-github-app-installation-id-resolutio/) |
 | 7 | km doctor --dry-run=false cleans up stale Slack SQS queues and S3 transcript prefixes | 2026-05-04 | afa03a4 | [7-km-doctor-dry-run-false-cleans-up-stale-](./quick/7-km-doctor-dry-run-false-cleans-up-stale-/) |
+| 8 | Implement spec: uptime + agent-auth visibility for km status and km list | 2026-06-07 | 5bf71288 | [8-implement-spec-uptime-agent-auth-visibil](./quick/8-implement-spec-uptime-agent-auth-visibil/) |
 
 ## Accumulated Context
 
