@@ -94,6 +94,7 @@ func init() {
 	// ── Table names ───────────────────────────────────────────────────────────
 	nonceTable := envOr("KM_NONCE_TABLE", prefix+"-slack-bridge-nonces")
 	sandboxesTable := envOr("KM_SANDBOX_TABLE_NAME", prefix+"-sandboxes")
+	githubThreadsTable := envOr("KM_GITHUB_THREADS_TABLE", prefix+"-github-threads")
 
 	// ── Artifacts (for cold-create EventBridge event) ─────────────────────────
 	artifactsBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
@@ -147,6 +148,10 @@ func init() {
 		Client:    ddbClient,
 		TableName: sandboxesTable,
 	}
+	threadStore := &bridge.DynamoGitHubThreadStore{
+		Client:    ddbClient,
+		TableName: githubThreadsTable,
+	}
 	sqsSender := &bridge.GitHubSQSAdapter{Client: sqsClient}
 	publisher := &bridge.EventBridgeAdapter{
 		Client:         ebClient,
@@ -167,6 +172,7 @@ func init() {
 		Publisher:      publisher,
 		SQS:            sqsSender,
 		Reactor:        reactor,
+		Threads:        threadStore,
 		Entries:        entries,
 		DefaultProfile: defaultProfile,
 		ResourcePrefix: prefix,
@@ -177,6 +183,7 @@ func init() {
 		"KM_RESOURCE_PREFIX", prefix,
 		"KM_SANDBOX_TABLE_NAME", sandboxesTable,
 		"KM_NONCE_TABLE", nonceTable,
+		"KM_GITHUB_THREADS_TABLE", githubThreadsTable,
 		"KM_WEBHOOK_SECRET_PATH", ssmWebhookSecretPath,
 		"KM_BOT_LOGIN_PATH", ssmBotLoginPath,
 		"KM_ARTIFACTS_BUCKET", artifactsBucket,

@@ -92,6 +92,12 @@ type WebhookHandler struct {
 	// SandboxesTable is the DynamoDB km-sandboxes table name.
 	SandboxesTable string
 
+	// Threads tracks (repo, number) → {sandbox_id, agent_session_id} in km-github-threads.
+	// When non-nil, known threads bypass the @-mention requirement (GH-X-THREADBYPASS) and
+	// the poller can resume the same agent session on follow-up turns (GH-X-CONTINUITY).
+	// When nil, Handle() behaves exactly as Phase 97 (mention always required).
+	Threads GitHubThreadStore
+
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
 }
@@ -157,8 +163,26 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		return WebhookResponse{StatusCode: 200, Body: "ok"}
 	}
 
+	// ── Step 4b: known-thread bypass (GH-X-THREADBYPASS) ────────────────────
+	// If (repo, number) is already tracked in km-github-threads, skip the
+	// mention requirement. Mirrors Phase 91.3 Slack thread-bypass logic.
+	// Threads == nil → Phase 97 behavior (mention always required).
+	threadKnown := false
+	if h.Threads != nil {
+		if sid, _, lookupErr := h.Threads.LookupSandbox(ctx, payload.Repository.FullName, payload.Issue.Number); lookupErr == nil && sid != "" {
+			threadKnown = true
+			h.log().Debug("github-bridge: known thread; bypassing mention check",
+				"repo", payload.Repository.FullName,
+				"number", payload.Issue.Number,
+				"sandbox_id", sid)
+		} else if lookupErr != nil {
+			h.log().Warn("github-bridge: thread lookup failed; treating as new thread",
+				"err", lookupErr, "repo", payload.Repository.FullName, "number", payload.Issue.Number)
+		}
+	}
+
 	// ── Step 5: @-mention filter ─────────────────────────────────────────────
-	if !ContainsMention(payload.Comment.Body, botLogin) {
+	if !ContainsMention(payload.Comment.Body, botLogin) && !threadKnown {
 		h.log().Info("github-bridge: no mention, dropping",
 			"repo", payload.Repository.FullName)
 		return WebhookResponse{StatusCode: 200, Body: "ok"}
@@ -233,6 +257,16 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 			dedupID := fmt.Sprintf("%s-%s", deliveryGUID, groupID)
 			if sErr := h.SQS.Send(ctx, queueURL, string(envJSON), groupID, dedupID); sErr != nil {
 				h.log().Error("github-bridge: SQS enqueue", "err", sErr)
+			} else {
+				// Upsert (repo, number) → sandbox_id into km-github-threads so future
+				// replies in this thread bypass the mention requirement (GH-X-THREADBYPASS).
+				// Non-fatal on error — dispatch already succeeded.
+				if h.Threads != nil {
+					if uErr := h.Threads.Upsert(ctx, payload.Repository.FullName, payload.Issue.Number, sandboxID); uErr != nil {
+						h.log().Warn("github-bridge: thread upsert failed (non-fatal)", "err", uErr,
+							"repo", payload.Repository.FullName, "number", payload.Issue.Number)
+					}
+				}
 			}
 		}
 		h.log().Info("github-bridge: warm enqueue", "alias", alias, "sandbox_id", sandboxID)
