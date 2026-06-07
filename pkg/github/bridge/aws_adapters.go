@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -402,8 +403,11 @@ func (r *InstallationReactor) AddReaction(ctx context.Context, installationID, o
 	// We request all-repos scope ("*") with issues:write permission.
 	// The installation is scoped to the specific repo so "*" resolves to just
 	// that repo within the install's scope.
+	// Reactions on a PR's conversation comment can require pull_requests:write
+	// (the comment lives under a pull request), not just issues:write — request
+	// both so the 👀 works on both issue and PR comments.
 	token, err := pkggithub.ExchangeForInstallationToken(ctx, jwtToken, installationID,
-		[]string{"*"}, map[string]string{"issues": "write"})
+		[]string{"*"}, map[string]string{"issues": "write", "pull_requests": "write"})
 	if err != nil {
 		return fmt.Errorf("github-bridge: reactor: exchange installation token: %w", err)
 	}
@@ -427,7 +431,7 @@ func (r *InstallationReactor) AddReaction(ctx context.Context, installationID, o
 		return fmt.Errorf("github-bridge: reactor: POST reaction: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.ReadAll(resp.Body) // drain
+	respBody, _ := io.ReadAll(resp.Body)
 
 	// 201 Created = new reaction; 200 OK = reaction already exists (idempotent).
 	// 422 Unprocessable Entity is returned when the reaction already exists in
@@ -439,6 +443,9 @@ func (r *InstallationReactor) AddReaction(ctx context.Context, installationID, o
 		// already_reacted — treat as success per interface contract.
 		return nil
 	default:
-		return fmt.Errorf("github-bridge: reactor: unexpected status %d", resp.StatusCode)
+		// Include the GitHub response body — it names the missing permission
+		// (e.g. "Resource not accessible by integration") for diagnosis.
+		return fmt.Errorf("github-bridge: reactor: unexpected status %d: %s",
+			resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 }

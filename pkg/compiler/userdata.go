@@ -2181,7 +2181,15 @@ Worktree guidance: For concurrent PR review in this sandbox, prefer using
 to isolate changes per PR rather than switching branches in /workspace.
 
 --- User comment ---
-$COMMENT_BODY"
+$COMMENT_BODY
+
+--- Posting your response (REQUIRED) ---
+Your reply reaches the requester ONLY if you post it to GitHub. When you finish, post
+your response to this PR by running (the per-sandbox GitHub token is already configured):
+  km-github comment --repo $REPO --number $NUMBER --body '<your full response, markdown>'
+For a formal PR review instead of a plain comment, use:
+  km-github review --repo $REPO --number $NUMBER --event COMMENT --body '<review text>'
+Do NOT only print your answer — it is discarded unless you post it with km-github."
 
   RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
   RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
