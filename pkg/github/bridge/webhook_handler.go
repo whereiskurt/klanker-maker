@@ -390,7 +390,9 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		)
 
 		// Phase 102: capture agent verb from ParseCommands (same parse, shared result).
-		agentVerb, agentVerbConflict := parseAgentVerbs(payload.Comment.Body, h.Commands)
+		// Use assignment (not :=) so agentVerb is populated in the outer scope for envelope.
+		var agentVerbConflict bool
+		agentVerb, agentVerbConflict = parseAgentVerbs(payload.Comment.Body, h.Commands)
 
 		// Phase 102: conflict short-circuit — before the command-pass switch.
 		// Two distinct verbs (/claude AND /codex) → error reply, return 200, NO dispatch.
@@ -398,8 +400,6 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 			postConflictReply()
 			return WebhookResponse{StatusCode: 200, Body: "ok"}
 		}
-
-		_ = agentVerb // used in env construction below
 
 		switch res.Action {
 		case CommandActionReply, CommandActionDeny:

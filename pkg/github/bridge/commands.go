@@ -284,49 +284,11 @@ func ParseCommands(body string, commands map[string]CommandEntry) ParseResult {
 // strings.Fields join (collapsing repeated spaces/tabs/newlines into single spaces).
 //
 // When commandToken == "" (the default-command path), only the mention is stripped.
+//
+// Phase 102: delegates to ExtractArgsWithAgent with agentVerbToken="" so all stripping
+// logic lives in one place.
 func ExtractArgs(body, botLogin, commandToken string) string {
-	// Build the mention token to strip (case-insensitive search).
-	mention := "@" + botLogin
-	mentionLower := strings.ToLower(mention)
-
-	lowerBody := strings.ToLower(body)
-
-	// Find and remove the first occurrence of the mention (case-insensitive by position).
-	var workBuf strings.Builder
-	workBuf.Grow(len(body))
-	mentionIdx := strings.Index(lowerBody, mentionLower)
-	if mentionIdx >= 0 {
-		workBuf.WriteString(body[:mentionIdx])
-		workBuf.WriteString(body[mentionIdx+len(mention):])
-	} else {
-		workBuf.WriteString(body)
-	}
-
-	work := workBuf.String()
-
-	// Find and remove the first occurrence of "/{commandToken}" (exact, case-sensitive).
-	if commandToken != "" {
-		cmdTok := "/" + commandToken
-		cmdIdx := strings.Index(work, cmdTok)
-		if cmdIdx >= 0 {
-			// Only strip if it's a whole-word token (preceded/followed by whitespace or boundary).
-			end := cmdIdx + len(cmdTok)
-			// Check it's whitespace-bounded (or at string boundaries).
-			precedingOK := cmdIdx == 0 || isWhitespace(work[cmdIdx-1])
-			followingOK := end == len(work) || isWhitespace(work[end])
-			if precedingOK && followingOK {
-				work = work[:cmdIdx] + work[end:]
-			} else {
-				// Embedded in a larger token — don't strip. But this shouldn't happen
-				// since the scanner already validated the token as whitespace-bounded.
-				// For robustness, do a non-word-bounded strip as fallback.
-				work = work[:cmdIdx] + work[end:]
-			}
-		}
-	}
-
-	// Whitespace-normalize: split on any whitespace and rejoin with single spaces.
-	return strings.Join(strings.Fields(work), " ")
+	return ExtractArgsWithAgent(body, botLogin, commandToken, "")
 }
 
 func isWhitespace(c byte) bool {
