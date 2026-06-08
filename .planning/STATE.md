@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Phase 99 SC3a gap closure — default_command now travels via SSM CommandSet envelope (95978591)
-last_updated: "2026-06-07T23:55:00.000Z"
+stopped_at: Phase 99 SC3a gap closure — default_command now travels via SSM CommandSet envelope (commit 95978591)
+last_updated: "2026-06-08T00:02:00.163Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 117
