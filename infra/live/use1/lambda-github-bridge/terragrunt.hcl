@@ -94,6 +94,11 @@ inputs = {
   # Empty string = federation off = byte-identical Lambda env to Phase 97/98.
   github_peer_bridges = get_env("KM_GITHUB_PEER_BRIDGES", "")
 
+  # Phase 101: front-door orphan-repo router toggle. String "true"/"false" from
+  # ExportTerragruntEnvVars (km-config.yaml github.default_router). "false" = dormant
+  # = byte-identical to Phase 100. Only the federation front-door install sets "true".
+  github_default_router = get_env("KM_GITHUB_DEFAULT_ROUTER", "false")
+
   # SSM paths for GitHub App credentials (GetSsmPrefix() = "/{prefix}/")
   webhook_secret_path   = "/${local.site_vars.locals.site.label}/config/github/webhook-secret"
   bot_login_path        = "/${local.site_vars.locals.site.label}/config/github/bot-login"

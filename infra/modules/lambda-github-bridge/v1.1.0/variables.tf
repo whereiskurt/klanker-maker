@@ -65,6 +65,12 @@ variable "github_peer_bridges" {
   default     = ""
 }
 
+variable "github_default_router" {
+  type        = string
+  default     = "false"
+  description = "Front-door orphan-repo router toggle (KM_GITHUB_DEFAULT_ROUTER). \"false\" = dormant (Phase 100 byte-identical). Only the federation front door sets \"true\"."
+}
+
 variable "webhook_secret_path" {
   description = "SSM path for the GitHub webhook signing secret (SecureString)"
   type        = string

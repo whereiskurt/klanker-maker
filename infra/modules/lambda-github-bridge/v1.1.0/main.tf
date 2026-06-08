@@ -285,6 +285,7 @@ resource "aws_lambda_function" "github_bridge" {
       KM_ARTIFACTS_BUCKET       = var.artifacts_bucket
       KM_ARTIFACTS_PREFIX       = var.artifacts_prefix
       KM_GITHUB_PEER_BRIDGES    = var.github_peer_bridges
+      KM_GITHUB_DEFAULT_ROUTER  = var.github_default_router
     }
   }
 
