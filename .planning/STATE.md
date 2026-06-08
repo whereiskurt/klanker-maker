@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 99.1-02-PLAN.md
-last_updated: "2026-06-08T02:57:19.936Z"
+stopped_at: Completed 99.1-03-PLAN.md
+last_updated: "2026-06-08T03:02:39.531Z"
 last_activity: 2026-06-08
 progress:
   total_phases: 118
   completed_phases: 101
   total_plans: 508
-  completed_plans: 468
+  completed_plans: 469
   percent: 91
 ---
 
@@ -501,6 +501,7 @@ Progress: [█████████░] 91%
 | Phase 99 P05 | 556 | 3 tasks | 5 files |
 | Phase 99.1 P01 | 3min | 2 tasks | 3 files |
 | Phase 99.1 P02 | 3min | 3 tasks | 7 files |
+| Phase 99.1 P03 | 2min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1453,6 +1454,8 @@ Recent decisions affecting current work:
 - [Phase 99.1]: Shared inbound DLQ must be FIFO (FifoQueue=true) — a FIFO source queue cannot redrive to a non-FIFO DLQ
 - [Phase 99.1]: RedrivePolicy injected only when dlqARN non-empty (maxReceiveCount=3); empty keeps the inbound Attributes map byte-identical (dormancy invariant)
 - [Phase 99.1]: DLQ ARN derived (not API-fetched) at km create call sites from cfg.ApplicationAccountID + region + {GitHub,Slack}InboundDLQName; empty when unresolvable (dormancy)
+- [Phase 99.1]: Shared inbound FIFO DLQs (sqs-inbound-dlq module) created once per install at km init, idempotent via TF state
+- [Phase 99.1]: No new IAM grant: existing {prefix}-{github,slack}-inbound-*.fifo wildcards already cover -dlq.fifo (RESEARCH Pitfall 6)
 
 ### Roadmap Evolution
 
@@ -1582,6 +1585,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-08T02:57:13.898Z
-Stopped at: Completed 99.1-02-PLAN.md
+Last session: 2026-06-08T03:02:31.504Z
+Stopped at: Completed 99.1-03-PLAN.md
 Resume file: None
