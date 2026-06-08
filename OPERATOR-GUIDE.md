@@ -732,6 +732,40 @@ cd infra/live/use1/ttl-handler && terragrunt apply
 The Lambda modules require `arm64`. The sidecar build targets use `amd64` — do not
 mix them.
 
+### Inbound Slack/GitHub turns stop flowing for one sandbox (FIFO poison-message wedge)
+
+If a sandbox stops responding to **all** inbound Slack or GitHub turns — but other
+sandboxes are fine and the poller is running — a *poison message* may be
+head-of-line-blocking its FIFO inbound queue. A poison envelope (one whose agent turn
+fails every time) blocks every later message in the same FIFO message group; a poller
+restart does **not** clear it.
+
+**Phase 99.1** cures this with a shared per-install **dead-letter queue** + a
+`RedrivePolicy` (`maxReceiveCount=3`) on each per-sandbox inbound FIFO queue: after 3 failed
+receives the poison envelope is auto-evicted to the DLQ and the group unblocks.
+
+Diagnose and remediate:
+
+```bash
+# 1. km doctor surfaces stranded poison messages:
+km doctor          # look for: "Inbound DLQ depth" → WARN: N poison message(s)
+
+# 2. Inspect the dead-lettered envelope before deciding:
+aws sqs receive-message --queue-url \
+  https://sqs.<region>.amazonaws.com/<account>/<prefix>-slack-inbound-dlq.fifo
+#   (or <prefix>-github-inbound-dlq.fifo for the GitHub bridge)
+
+# 3. After triage, purge (or redrive) the DLQ:
+aws sqs purge-queue --queue-url \
+  https://sqs.<region>.amazonaws.com/<account>/<prefix>-slack-inbound-dlq.fifo
+```
+
+**Deploy (NOT `--sidecars`):** the shared DLQs are a new Terraform module, so they need a
+full apply — `make build && make build-lambdas && km init --dry-run=false`. **Existing
+sandboxes do not gain the RedrivePolicy retroactively** (no silent backfill) — recreate
+with `km destroy <id> --remote --yes && km create <profile>`. See `docs/slack-notifications.md`
+§ Phase 99.1 and `docs/github-bridge.md` § Phase 99.1.
+
 ### SES "not verified" or DKIM still pending
 
 DKIM propagation takes up to 72 hours. After `terragrunt apply` on the ses config, the

@@ -429,6 +429,87 @@ Match-overlap WARN example:
 
 ---
 
+## Phase 99.1 — Inbound poison-message DLQ (FIFO wedge fix)
+
+The per-sandbox github-inbound FIFO queue (`{prefix}-github-inbound-{sandbox-id}.fifo`)
+delivers comment-trigger envelopes to the sandbox poller, which dispatches an agent turn.
+Before Phase 99.1, a *poison message* — an envelope whose agent turn fails every time —
+would **head-of-line-block** its FIFO message group **forever**: SQS will not deliver a
+later message in the same group until the failed one is acknowledged, and a poller restart
+does not clear it (only a queue purge does). Surfaced in the Phase 99 UAT.
+
+**Fix:** a shared **per-install FIFO dead-letter queue** plus a `RedrivePolicy` on the
+source queues:
+
+- **Shared DLQs** (one pair per install, not per sandbox), created at `km init` by the
+  `sqs-inbound-dlq` Terraform module:
+  - `{prefix}-github-inbound-dlq.fifo`
+  - `{prefix}-slack-inbound-dlq.fifo`
+- **RedrivePolicy** on every per-sandbox inbound FIFO queue:
+  `maxReceiveCount = 3` → after 3 failed receives, SQS auto-evicts the poison envelope
+  to the matching DLQ, **unblocking the FIFO group** so subsequent turns flow.
+- DLQs are FIFO (a FIFO source queue can only redrive to a FIFO DLQ) with **14-day
+  retention** so an operator has time to inspect or redrive poison messages.
+- No SandboxProfile schema change; no poller-shell change; the source-queue
+  `RedrivePolicy` is injected purely at the SQS-attribute layer.
+
+### km doctor — inbound DLQ depth
+
+`km doctor` reports an **Inbound DLQ depth** check:
+
+| State | Condition |
+|---|---|
+| **SKIP** | No SQS client configured, OR neither shared DLQ exists (dormant — inbound never provisioned). |
+| **OK** | One or both DLQs present and **empty** (no poison messages). |
+| **WARN** | At least one DLQ holds **> 0** messages — names the count and points at `aws sqs receive-message` / `purge-queue` / redrive. |
+
+A WARN means an agent turn failed 3× for some envelope — inspect the source poller logs.
+
+```bash
+# Inspect a poison message before deciding to redrive or purge:
+aws sqs receive-message --queue-url \
+  https://sqs.<region>.amazonaws.com/<account>/<prefix>-github-inbound-dlq.fifo
+```
+
+### Deploy sequence (Phase 99.1)
+
+```bash
+# 1. Rebuild the km binary (carries the new regionalModules() entry — a stale km
+#    silently skips the sqs-inbound-dlq module). Memory: project_make_build_precedes_km_init.
+make build
+
+# 2. Clean-rebuild the Lambda zips (avoids the km-init-skips-existing-zips trap).
+make build-lambdas
+
+# 3. Full terragrunt apply — creates the two shared DLQs + the source-queue RedrivePolicy
+#    is applied to NEW queues on the next km create.
+#    NOT --sidecars: a new Terraform module + IAM require a full apply (env-block/IAM
+#    changes are invisible to --sidecars). Memory: feedback_km_init_full_apply.
+km init --dry-run=false
+
+# 4. Existing sandboxes do NOT gain the RedrivePolicy retroactively (no silent backfill) —
+#    their already-created queues keep the pre-99.1 attributes. Recreate to attach redrive:
+km destroy <sandbox-id> --remote --yes && km create profiles/github-review.yaml --alias <alias>
+```
+
+**No `cmd/create-handler/main.go` change was required:** the create-handler Lambda only
+*drains* envelopes into a pre-existing queue — it never creates the queue, so the
+RedrivePolicy injection happens entirely in the `km create` warm path + the shared module.
+
+**IAM:** no new grant. The existing `{prefix}-github-inbound-*.fifo` /
+`{prefix}-slack-inbound-*.fifo` operator-policy wildcards already match `-dlq.fifo`
+(Create/Delete/GetQueueAttributes/SetQueueAttributes/ListQueues/TagQueue). The sandbox EC2
+role needs **no** DLQ grant — the poller never reads the DLQ (SQS moves poison messages
+there automatically).
+
+### Dormant invariant (99.1)
+
+When no inbound integration is configured, the shared DLQs are never provisioned, no
+source queue carries a `RedrivePolicy`, the doctor check **SKIPs**, and runtime is
+**byte-identical** to pre-Phase-99.1.
+
+---
+
 ## Troubleshooting
 
 ### 👀 reaction not appearing
