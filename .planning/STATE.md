@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 99.1-04-PLAN.md
-last_updated: "2026-06-08T03:24:58.106Z"
+stopped_at: Completed 100-01-PLAN.md
+last_updated: "2026-06-08T12:21:39.153Z"
 last_activity: 2026-06-08
 progress:
   total_phases: 118
   completed_phases: 102
-  total_plans: 508
-  completed_plans: 470
+  total_plans: 512
+  completed_plans: 471
   percent: 91
 ---
 
@@ -503,6 +503,7 @@ Progress: [█████████░] 91%
 | Phase 99.1 P02 | 3min | 3 tasks | 7 files |
 | Phase 99.1 P03 | 2min | 3 tasks | 6 files |
 | Phase 99.1-harden-github-slack-inbound-pollers-against-fifo-poison-message-wedge-via-shared-per-install-dlq-redrivepolicy P04 | 13min | 3 tasks | 7 files |
+| Phase 100 P01 | 3m13s | 4 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1458,6 +1459,8 @@ Recent decisions affecting current work:
 - [Phase 99.1]: Shared inbound FIFO DLQs (sqs-inbound-dlq module) created once per install at km init, idempotent via TF state
 - [Phase 99.1]: No new IAM grant: existing {prefix}-{github,slack}-inbound-*.fifo wildcards already cover -dlq.fifo (RESEARCH Pitfall 6)
 - [Phase 99.1-harden-github-slack-inbound-pollers-against-fifo-poison-message-wedge-via-shared-per-install-dlq-redrivepolicy]: km doctor inbound DLQ-depth check (SKIP dormant / OK empty / WARN poison-present) reuses the Slack inbound SQS client; deploy-surface verified (reachability triple, IAM-by-wildcard, no create-handler change, recreate migration)
+- [Phase 100]: 100-01: github.peer_bridges decodes via existing UnmarshalKey("github")+"github" merge entry — NO new merge-list entry (proven by TestLoadGithubPeerBridges_Set)
+- [Phase 100]: 100-01: lambda-github-bridge v1.1.0 edited in place (additive, default empty) instead of bumping to v1.2.0 — live source line untouched
 
 ### Roadmap Evolution
 
@@ -1587,6 +1590,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-08T03:19:26.271Z
-Stopped at: Completed 99.1-04-PLAN.md
+Last session: 2026-06-08T12:21:33.593Z
+Stopped at: Completed 100-01-PLAN.md
 Resume file: None
