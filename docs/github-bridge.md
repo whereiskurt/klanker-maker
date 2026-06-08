@@ -25,8 +25,9 @@ security boundary.
 7. [Deploy Sequence](#deploy-sequence)
 8. [Dormant Invariant](#dormant-invariant)
 9. [km doctor GitHub Checks](#km-doctor-github-checks)
-10. [Troubleshooting](#troubleshooting)
-11. [See Also](#see-also)
+10. [Phase 100 — Federated relay (one App, many installs)](#phase-100--federated-relay-one-app-many-installs)
+11. [Troubleshooting](#troubleshooting)
+12. [See Also](#see-also)
 
 ---
 
@@ -199,16 +200,16 @@ sandboxes. Zero shared infrastructure.
 > installation + one matching `github.repos:` entry). Registering the same repo in
 > two installs is ambiguous.
 
-### Pattern B — one GitHub App, federated relay
+### Pattern B — one GitHub App, federated relay (Phase 100, implemented)
 
 If you want a **single bot identity** across both installs (one App, one place to
-manage), you need a federated relay — the GitHub analog of Slack's Phase 95
-`slack.peer_bridges` (`docs/slack-notifications.md` § Phase 95): one App's webhook
-points at a "front-door" install whose bridge relays repos it doesn't own to peer
-bridges until the owning install handles it.
+manage), use the federated relay — the GitHub analog of Slack's Phase 95
+`slack.peer_bridges` (`docs/slack-notifications.md` § Phase 95). One App's webhook
+points at a **front-door** install whose bridge relays webhooks for repos it doesn't
+own to peer bridges; the install whose `github.repos:` matches the repo processes it.
 
-**This is not yet implemented** — see the design spec
-`docs/superpowers/specs/2026-06-07-github-bridge-peer-relay-design.md` (Phase 100).
+See **§ Phase 100 — Federated relay (one App, many installs)** below for the full
+runbook, config surface, deploy sequence, and `km doctor` peer checks.
 
 ### What multi-install does NOT do
 
@@ -414,6 +415,7 @@ the GitHub bridge group:
 | Bot login cached | `GitHub Bot Login` | `bot-login` non-empty in SSM |
 | Bridge URL | `GitHub Bridge URL` | `bridge-url` present and `https://` prefixed |
 | Repos resolvable | `GitHub Repos Resolvable` | Each `github.repos` entry has a profile (or `default_profile` fallback); no match-overlap |
+| Peer bridges | `GitHub peer bridges` | (Phase 100) `github.peer_bridges` entries are well-formed `https://` URLs and none is this install's own bridge URL (self-loop). SKIPPED when `github.peer_bridges` is empty |
 
 **All checks are WARN (not ERROR) when missing** — GitHub integration is opt-in.
 The entire group is **silently skipped** when `github.repos` is empty AND
@@ -426,6 +428,165 @@ Match-overlap WARN example:
   entry[0] and entry[1] — entry[1] will never be reached
   → Remediation: Set profile: on each repos entry or set github.default_profile
 ```
+
+---
+
+## Phase 100 — Federated relay (one App, many installs)
+
+Phase 100 lets a **single GitHub App** serve multiple `resource_prefix` installs.
+A GitHub App has exactly one webhook URL; that URL points at one install — the
+**front door**. The front-door bridge relays webhooks for repos it does not own to
+its peer bridges, and the install whose `github.repos:` matches the repo processes
+the comment. This is the GitHub analog of the **shipped** Slack Phase 95 relay
+(`slack.peer_bridges`, `docs/slack-notifications.md` § Phase 95), simplified to
+fire-and-forget (no orphan-repo reply — that is deferred to Phase 101).
+
+### Model: front door + full symmetry
+
+- **One App, one webhook URL → one front-door install.** GitHub delivers every
+  `issue_comment` event to that single URL.
+- **Full symmetry.** Each install lists *every other* install's bridge Function URL
+  in `github.peer_bridges`. Whichever install GitHub happens to deliver to acts as
+  the front door for that delivery; symmetry means any install can be the front
+  door, so you don't have to pick one statically.
+- **Owner processes; front door just relays.** On a delivery the front-door bridge
+  runs `Resolve(owner/repo)` against its own `github.repos:`. **Matched** → it
+  processes locally (full path: thread-lookup, @-mention gate, allowlist, dedupe,
+  dispatch, and the single 👀 reaction). **Not matched** → it broadcasts the raw
+  webhook verbatim to every URL in `github.peer_bridges`.
+- **The owner posts the single 👀.** The front door on a miss **does not react** —
+  it only relays. Exactly one install (the owner) reacts.
+
+### What is forwarded (verbatim)
+
+The relay POSTs the **raw request body** unchanged, plus these headers verbatim:
+
+| Header | Purpose |
+|---|---|
+| `X-Hub-Signature-256` | HMAC — each peer re-verifies with its own copy of the **same** App webhook secret. GitHub signatures carry no timestamp → no skew window. |
+| `X-GitHub-Event` | Event type (`issue_comment`). |
+| `X-GitHub-Delivery` | Delivery GUID — each install dedupes in its **own** `{prefix}` nonces store. |
+| `X-KM-Relayed: 1` | **Added by the relay.** Single-hop loop guard. |
+
+Because the body is byte-identical, the same `X-Hub-Signature-256` verifies at the
+peer — no re-signing, no shared signing key beyond the App webhook secret each
+install already holds.
+
+### Single-hop loop guard
+
+`X-KM-Relayed: 1` is the **entire** loop guard. A relayed request is **terminal**:
+
+| `X-KM-Relayed` | `Resolve()` matched? | Action |
+|---|---|---|
+| absent | yes | process locally (thread / @-mention / auth / dedupe / dispatch / 👀) |
+| absent | **no** | broadcast raw webhook to all `github.peer_bridges`, return 200 (if `peer_bridges` empty → 200 no-op) |
+| present | yes | process locally |
+| present | **no** | **drop** (`github_relay_no_owner` log line), return 200 — **never re-relay** |
+
+A relayed event that no peer owns is dropped with `github_relay_no_owner` and **no
+reaction** (the helpful orphan reply is deferred to Phase 101). Self-loops (this
+install's own URL in its `peer_bridges`) cost one wasted hop but cannot loop — the
+relayed copy carries `X-KM-Relayed: 1` and is terminal. `km doctor` WARNs on the
+self-loop anyway (see below).
+
+### Config surface
+
+Opt in by adding `github.peer_bridges` to `km-config.yaml` — a list of the **other**
+installs' GitHub bridge Function URLs:
+
+```yaml
+github:
+  repos:
+    - match: "kph-org/*"
+      profile: github-review
+  # Phase 100: federated relay. List EVERY OTHER install's GitHub bridge
+  # Function URL (km github status → bridge-url). Absent/empty ⇒ federation off.
+  peer_bridges:
+    - https://sec000.lambda-url.us-east-1.on.aws/
+```
+
+`github.peer_bridges` → `KM_GITHUB_PEER_BRIDGES` (comma-joined) is exported to the
+bridge Lambda by `km init`. Find each install's URL with `km github status`
+(`bridge-url`).
+
+### Deploy sequence
+
+Federation is an **env-block** change (`KM_GITHUB_PEER_BRIDGES`), so it requires a
+full terragrunt apply — **NOT** `km init --sidecars`:
+
+```bash
+# On EACH install where github.peer_bridges changed:
+
+# 1. CLEAN rebuild of all Lambda zips. `make build` alone does NOT rebuild the
+#    bridge zip (memory: project_km_init_skips_existing_lambda_zips); a stale zip
+#    would ship without the relay code.
+make build-lambdas
+
+# 2. Full terragrunt apply — updates the Lambda environment.variables block with
+#    KM_GITHUB_PEER_BRIDGES. `km init --sidecars` rebuilds the zip + cold-starts
+#    but does NOT touch the env block (memory: project_km_init_lambdas_doesnt_deploy),
+#    so the relay would stay silently off.
+km init --dry-run=false
+
+# 3. Verify.
+km doctor          # → "GitHub peer bridges" OK / WARN
+```
+
+> **NOT `--sidecars`.** The `KM_GITHUB_PEER_BRIDGES` env var lives in the
+> `lambda-github-bridge` module's `environment.variables` block, which only updates
+> on a full `km init --dry-run=false` apply. Use `make build-lambdas` (clean) +
+> `km init --dry-run=false` — see memory `feedback_km_init_full_apply`.
+
+The `lambda-github-bridge` module is edited **in place at `v1.1.0`** (additive env
+var, `default=""`, backward-compatible) — no version bump, no `source =` change.
+
+### Dormancy / byte-identity invariant
+
+When `github.peer_bridges` is **absent or empty**:
+
+- `KM_GITHUB_PEER_BRIDGES` is empty; the bridge's relayer is `nil`.
+- The `Resolve()`-miss path returns 200 with no broadcast — **byte-identical** to
+  Phase 97/98 (the `Resolve()` reorder is a pure scale fix and produces identical
+  dispatch outcomes whether or not federation is on).
+- **No SandboxProfile schema change** ⇒ **no `km init --sidecars`, no sandbox
+  recreate.** Existing sandboxes are untouched.
+- `km doctor` SKIPs the `GitHub peer bridges` check silently.
+
+### km doctor — peer bridges
+
+`km doctor` adds a **`GitHub peer bridges`** check (gated on `github.repos` being
+configured), mirroring the Slack `checkSlackPeerBridges`:
+
+| Condition | Result |
+|---|---|
+| `github.peer_bridges` empty | **SKIPPED** — federation off |
+| Any entry malformed (bad URL / no scheme or host) | **WARN** — naming the bad entry |
+| Any entry == this install's own bridge URL (self-loop) | **WARN** — remove it |
+| All entries well-formed, no self-loop | **OK** |
+
+The own bridge URL is read from SSM `{prefix}config/github/bridge-url` (the same
+param `GitHub Bridge URL` reads). When that param is unavailable the self-loop check
+degrades gracefully (skipped) but the malformed-URL check still runs.
+
+```
+⚠ GitHub peer bridges
+  self-loop detected in github.peer_bridges:
+  https://kph000.lambda-url.us-east-1.on.aws/ is this install's own bridge URL — remove it
+  → Remediation: Remove this install's own bridge URL from km-config.yaml
+    github.peer_bridges. Run `km init --dry-run=false` after fixing.
+```
+
+### Correctness invariant (documented, not enforced)
+
+> **Each repo must be owned by exactly one install** — one `github.repos:` entry
+> across the whole fleet. Per-sandbox routing is safe by construction; for shared
+> repos, register the repo on exactly one install. Two installs both matching the
+> same repo would both dispatch (double-processing). This is **documented, not
+> enforced** by the relay — `km doctor` validates URL hygiene, not cross-install
+> ownership uniqueness.
+
+The live two-install/one-App verification is in the phase UAT runbook
+(`.planning/phases/100-*/100-UAT.md`).
 
 ---
 

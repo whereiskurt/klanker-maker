@@ -766,6 +766,35 @@ sandboxes do not gain the RedrivePolicy retroactively** (no silent backfill) —
 with `km destroy <id> --remote --yes && km create <profile>`. See `docs/slack-notifications.md`
 § Phase 99.1 and `docs/github-bridge.md` § Phase 99.1.
 
+### GitHub bridge federated relay — one App, many installs (Phase 100)
+
+To run a **single GitHub App** across multiple `resource_prefix` installs (one bot
+identity, one place to manage), use the federated relay. GitHub delivers every
+`issue_comment` webhook to one **front-door** install; its bridge relays repos it
+does not own (verbatim body + `X-Hub-Signature-256` + `X-GitHub-Event` +
+`X-GitHub-Delivery`, adding `X-KM-Relayed: 1`) to the peer bridges in
+`github.peer_bridges`, and the install whose `github.repos:` matches the repo
+processes the comment and posts the **single** 👀. This mirrors the Slack Phase 95
+relay (`slack.peer_bridges`).
+
+```yaml
+# km-config.yaml — list EVERY OTHER install's GitHub bridge Function URL
+# (km github status → bridge-url). Absent/empty ⇒ federation off (dormant).
+github:
+  peer_bridges:
+    - https://sec000.lambda-url.us-east-1.on.aws/
+```
+
+**Deploy (NOT `--sidecars`):** `github.peer_bridges` → `KM_GITHUB_PEER_BRIDGES` is an
+env-block change, so it needs a full apply — `make build-lambdas && km init
+--dry-run=false` on each affected install. `km init --sidecars` rebuilds the zip but
+does **not** update the Lambda env block, so the relay would stay silently off. No
+SandboxProfile schema change ⇒ no sandbox recreate; absent `github.peer_bridges` is
+byte-identical to Phase 97/98. `km doctor` adds a **`GitHub peer bridges`** check
+(malformed URL / self-loop → WARN; empty → SKIP). Each repo must be owned by exactly
+one install (documented, not enforced). Full runbook + two-install/one-App UAT:
+`docs/github-bridge.md` § Phase 100.
+
 ### SES "not verified" or DKIM still pending
 
 DKIM propagation takes up to 72 hours. After `terragrunt apply` on the ses config, the

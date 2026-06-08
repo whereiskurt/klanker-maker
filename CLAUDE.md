@@ -18,6 +18,16 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
 - Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
 
+**Phase 100 (2026-06-08) — GitHub bridge federated relay: one GitHub App serving many installs (complete):**
+- A single GitHub App can serve multiple `resource_prefix` installs. GitHub delivers every `issue_comment` webhook to one **front-door** install; its bridge runs `Resolve(owner/repo)` against its own `github.repos:` and on a **miss** relays the raw webhook verbatim (body + `X-Hub-Signature-256` + `X-GitHub-Event` + `X-GitHub-Delivery`, adding `X-KM-Relayed: 1`) to every peer in `github.peer_bridges`. The install whose `github.repos:` owns the repo processes it and posts the **single** 👀 (the front door reacts none). GitHub analog of the Slack Phase 95 relay, simplified to fire-and-forget (orphan-repo reply deferred to Phase 101).
+- **Dormant by default.** Add `github.peer_bridges:` (list of *other* installs' GitHub bridge Function URLs, `km github status` → `bridge-url`) to `km-config.yaml`. Absent/empty → `KM_GITHUB_PEER_BRIDGES` empty, relayer nil → **byte-identical to Phase 97/98**. `km doctor` SKIPs the peer check silently.
+- **`X-KM-Relayed: 1` is the entire single-hop loop guard.** A relayed request is terminal: process if owned, else drop (`github_relay_no_owner` log) — never re-relayed. Each install dedupes the forwarded `X-GitHub-Delivery` in its **own** nonces store; each peer re-verifies HMAC with its own copy of the same App webhook secret (GitHub sigs are timestamp-free → no skew window).
+- **`Resolve()` reorder** (moved ahead of the thread-lookup + @-mention filter) is an unconditional scale fix — byte-identical dispatch, and it skips a wasted `LookupSandbox` DDB read per PR comment on unowned repos (the 700-repo fix). Federation off or on, dispatch outcomes are identical.
+- **`km doctor` adds:** `GitHub peer bridges` (malformed URL / self-loop → WARN; empty → SKIP), mirroring `checkSlackPeerBridges`; own bridge-url from SSM `{prefix}config/github/bridge-url`.
+- **Correctness invariant (documented, not enforced):** each repo owned by exactly one install across the fleet; two owners ⇒ double-processing.
+- **Deploy = `make build-lambdas` (clean) + `km init --dry-run=false` (NOT `--sidecars`)** on each affected install: `KM_GITHUB_PEER_BRIDGES` is an env-block change that needs a full terragrunt apply (`--sidecars` rebuilds the zip + cold-starts but does NOT update the env block). The `lambda-github-bridge` module is edited **in place at `v1.1.0`** (additive `default=""` var, no version bump). **No SandboxProfile schema change ⇒ no sandbox recreate.**
+- See `docs/github-bridge.md` § Phase 100 for the full operator runbook + the two-install/one-App E2E UAT.
+
 **Phase 97 (2026-06-06) — GitHub comment-trigger bridge: km-github-bridge Lambda (complete):**
 - When an allowlisted GitHub login @-mentions the bot in a PR comment, the km-github-bridge Lambda HMAC-verifies the webhook, dedupes by `X-GitHub-Delivery` GUID, resolves `owner/repo` → `{alias, profile, allow}` from `km-config.yaml github.repos:`, emits 👀 ACK, and dispatches to a per-repo sandbox (warm: FIFO enqueue; cold: EventBridge SandboxCreate).
 - **Dormant by default.** Add `github.repos:` to `km-config.yaml` to activate. Absent → byte-identical to pre-Phase-97 behavior. `km doctor` skips the GitHub group silently when unconfigured.
@@ -57,6 +67,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Federated bridge relay — one Slack App across multiple km installs | `docs/slack-notifications.md` § Phase 95 |
 | Default router: orphan-channel @-mention reply, `slack.default_router`, cooldown | `docs/slack-notifications.md` § Phase 96 |
 | GitHub comment-trigger bridge — `@km-bot review this PR` → sandbox agent → PR review | `docs/github-bridge.md` (Phase 97) |
+| GitHub bridge federated relay — one GitHub App across multiple km installs (`github.peer_bridges`) | `docs/github-bridge.md` § Phase 100 |
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |
