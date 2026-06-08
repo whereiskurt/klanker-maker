@@ -460,6 +460,16 @@ type DoctorDeps struct {
 	// SSM parameter when --dry-run=false is set. Nil = skip SSM cleanup.
 	SlackSSMDeleter SSMDeleterAPI
 
+	// Inbound DLQ depth check dependencies (Phase 99.1 Plan 04).
+	// InboundDLQSQS is the SQS client used to probe the shared per-install
+	// {prefix}-{github,slack}-inbound-dlq.fifo dead-letter queues. Nil ⇒
+	// checkInboundDLQDepth returns CheckSkipped (dormant). Production reuses the
+	// SlackInboundSQS client.
+	InboundDLQSQS kmaws.SQSClient
+	// InboundResourcePrefix is the resource prefix used to derive the shared DLQ
+	// names. Production reuses SlackResourcePrefix.
+	InboundResourcePrefix string
+
 	// Slack transcript-streaming health check dependencies (Plan 68-11).
 	// Nil fields cause the corresponding transcript checks to be skipped without error.
 	// SlackTranscriptS3 is the S3 client used for ListObjectsV2 on transcripts/
@@ -3842,6 +3852,19 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkSlackInboundStaleQueues(ctx, listInbound, inboundSQS, resourcePrefix, dryRun, deps.DeleteSQS, slackSSMDeleter)
 	})
 
+	// Phase 99.1 Plan 04 — shared inbound DLQ depth (poison-message visibility).
+	// SKIP when no SQS client / DLQs absent (dormant); OK empty; WARN non-empty.
+	dlqSQS := deps.InboundDLQSQS
+	dlqPrefix := deps.InboundResourcePrefix
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkInboundDLQDepth(ctx, dlqSQS, dlqPrefix)
+		// Demote any ERROR to WARN so a DLQ probe never fails km doctor.
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	slackScopes := deps.SlackAuthTestScopes
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		r := checkSlackAppEventsScopes(ctx, slackScopes)
@@ -4191,6 +4214,10 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	// Derive the resource prefix directly via the interface (Phase 66: GetResourcePrefix
 	// is now part of DoctorConfigProvider — no type-assert needed).
 	deps.SlackResourcePrefix = cfg.GetResourcePrefix()
+	// Phase 99.1 Plan 04: the inbound-DLQ depth check reuses the Slack inbound SQS
+	// client + resource prefix (the shared DLQs live in the same region/account).
+	deps.InboundDLQSQS = deps.SlackInboundSQS
+	deps.InboundResourcePrefix = cfg.GetResourcePrefix()
 	// SlackAuthTestScopes calls Slack auth.test and returns the OAuth scopes.
 	deps.SlackAuthTestScopes = func(innerCtx context.Context) ([]string, error) {
 		token, tokenErr := ssmClientForSlack.GetParameter(innerCtx, &ssm.GetParameterInput{
