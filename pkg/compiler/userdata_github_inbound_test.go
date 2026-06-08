@@ -285,3 +285,26 @@ func TestUserdata_GitHubInboundPoller_KmGithubBinary(t *testing.T) {
 		t.Fatalf("user-data must reference km-github binary when github-inbound enabled\n%s", abbreviateUD(out))
 	}
 }
+
+// TestUserdata_GitHubInboundPoller_Phase102AgentVerbs verifies that the Phase 102
+// agent-verb (D1-D6) tokens are present in the rendered GitHub inbound poller.
+// These tokens are the only automated signal for the bash blocks; runtime behaviour
+// (D4 precedence, D5 cross-agent switch, D6 codex guard, D3 persistence) is verified
+// manually in Plan 102-05's E2E UAT — the same pattern used in Phases 97/98/99.
+func TestUserdata_GitHubInboundPoller_Phase102AgentVerbs(t *testing.T) {
+	p := minimalGitHubInboundProfile(t, true)
+	out := compileGitHubInboundUserData(t, p)
+	poller := extractGitHubInboundPoller(t, out)
+
+	must := []string{
+		"AGENT_OVERRIDE",            // D1: parse .agent from envelope
+		"THREAD_AGENT_TYPE",         // D3: thread-pinned agent read from DDB
+		"command -v codex",          // D6: codex-missing helpful-error guard
+		"agent_type = :at",          // D3: agent_type write-back in update-expression
+	}
+	for _, s := range must {
+		if !strings.Contains(poller, s) {
+			t.Fatalf("Phase 102 token missing from GitHub inbound poller: %q\n%s", s, abbreviateUD(poller))
+		}
+	}
+}
