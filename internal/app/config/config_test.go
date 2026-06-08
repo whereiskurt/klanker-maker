@@ -910,6 +910,76 @@ slack:
 	}
 }
 
+// TestLoadGithubPeerBridges_Set verifies Phase 100 nested key github.peer_bridges
+// round-trips into cfg.Github.PeerBridges end-to-end.
+//
+// DEVIATION (100-RESEARCH.md Pitfall 2): unlike slack.peer_bridges — which needed
+// its OWN "slack.peer_bridges" merge-list entry because Slack config is decoded
+// field-by-field via GetStringSlice — the github: block is decoded as a single
+// structured v.UnmarshalKey("github", &cfg.Github) and "github" is ALREADY in the
+// v2→v merge-list (config.go ~line 551). Adding PeerBridges []string to GithubConfig
+// is picked up automatically — NO new merge-list entry is required. This test
+// PASSING with ONLY the struct field added (and the existing "github" merge entry)
+// is the proof that no redundant "github.peer_bridges" merge entry is needed.
+func TestLoadGithubPeerBridges_Set(t *testing.T) {
+	dir := t.TempDir()
+	// Synthetic on.aws Lambda Function URLs — generic placeholders, never real accounts.
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+github:
+    peer_bridges:
+      - https://gh-abc123.lambda-url.us-east-1.on.aws/
+      - https://gh-def456.lambda-url.us-east-1.on.aws/
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Github.PeerBridges == nil {
+		t.Fatal("Github.PeerBridges is nil; expected non-nil from yaml load via the existing UnmarshalKey(\"github\",…) — proves no separate merge entry is needed")
+	}
+	if len(cfg.Github.PeerBridges) != 2 {
+		t.Errorf("Github.PeerBridges: got len=%d, want 2; values=%v", len(cfg.Github.PeerBridges), cfg.Github.PeerBridges)
+	}
+	if cfg.Github.PeerBridges[0] != "https://gh-abc123.lambda-url.us-east-1.on.aws/" {
+		t.Errorf("Github.PeerBridges[0]: got %q, want gh-abc123 URL", cfg.Github.PeerBridges[0])
+	}
+	if cfg.Github.PeerBridges[1] != "https://gh-def456.lambda-url.us-east-1.on.aws/" {
+		t.Errorf("Github.PeerBridges[1]: got %q, want gh-def456 URL", cfg.Github.PeerBridges[1])
+	}
+}
+
+// TestLoadGithubPeerBridges_Absent verifies that omitting github.peer_bridges
+// (even with a github: block present carrying other keys) yields a nil/empty
+// slice — the "federation off" dormancy sentinel for the GitHub relayer.
+func TestLoadGithubPeerBridges_Absent(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+github:
+    default_profile: github-review
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.Github.PeerBridges) != 0 {
+		t.Errorf("Github.PeerBridges: got %v (len=%d), want empty/nil when github.peer_bridges absent", cfg.Github.PeerBridges, len(cfg.Github.PeerBridges))
+	}
+}
+
 // TestLoadSlackPeerBridges_Absent verifies that omitting slack.peer_bridges from
 // yaml yields a nil slice — the "federation off" sentinel for EventsHandler.Relayer.
 func TestLoadSlackPeerBridges_Absent(t *testing.T) {
