@@ -45,6 +45,13 @@ type slackInboundDeps struct {
 	SandboxID string
 	// SQS is the SQS client (real or mock).
 	SQS awspkg.SQSClient
+	// DLQArn is the shared (per-install) Slack-inbound dead-letter-queue ARN
+	// (Phase 99.1). When non-empty it is threaded into CreateSlackInboundQueue,
+	// which attaches a RedrivePolicy (maxReceiveCount=3) so a poison envelope is
+	// auto-evicted to the shared DLQ instead of head-of-line-blocking the FIFO
+	// group forever. Empty ⇒ no RedrivePolicy (dormancy preserved, byte-identical
+	// to pre-99.1). Derived from region + account ID + SlackInboundDLQName(prefix).
+	DLQArn string
 	// UpdateSandboxAttr persists a single string attribute to the km-sandboxes
 	// DynamoDB row. Signature matches the internal DynamoDB UpdateItem pattern
 	// used throughout sandbox_dynamo.go.
@@ -102,7 +109,7 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 	}
 	queueName := awspkg.SlackInboundQueueName(resourcePrefix, deps.SandboxID)
 
-	queueURL, err = awspkg.CreateSlackInboundQueue(ctx, deps.SQS, queueName)
+	queueURL, err = awspkg.CreateSlackInboundQueue(ctx, deps.SQS, queueName, deps.DLQArn)
 	if err != nil {
 		return "", fmt.Errorf("provision slack inbound queue: %w", err)
 	}

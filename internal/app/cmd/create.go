@@ -1076,11 +1076,23 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		ssmStoreFor11e := &productionSSMParamStore{client: ssmClientFor11e}
 		// Fetch bridge URL once for the ready-announcement callback below.
 		bridgeURLFor11e, _ := ssmStoreFor11e.Get(ctx, cfg.GetSsmPrefix()+"slack/bridge-url", false)
+
+		// Phase 99.1: derive the shared (per-install) Slack-inbound DLQ ARN so the
+		// new per-sandbox source queue carries a RedrivePolicy (poison-message
+		// auto-eviction after 3 receives). Derive — do NOT call SQS — from region +
+		// account ID + SlackInboundDLQName(prefix). When either region or account ID
+		// is empty, leave DLQArn empty so provisioning stays dormant (no RedrivePolicy,
+		// byte-identical to pre-99.1) rather than fabricating a partial ARN.
+		slackDLQArn := ""
+		if sqsRegion != "" && cfg.ApplicationAccountID != "" {
+			slackDLQArn = awspkg.DLQArn(sqsRegion, cfg.ApplicationAccountID, awspkg.SlackInboundDLQName(cfg.GetResourcePrefix()))
+		}
 		step11eDeps := slackInboundDeps{
 			Profile:   resolvedProfile,
 			Cfg:       cfg,
 			SandboxID: sandboxID,
 			SQS:       sqsClientForInbound,
+			DLQArn:    slackDLQArn,
 			UpdateSandboxAttr: func(ictx context.Context, sid, attr, val string) error {
 				return awspkg.UpdateSandboxStringAttrDynamo(ictx, sandboxDynamoClient, step11eTableName, sid, attr, val)
 			},
@@ -1152,11 +1164,23 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 
 		ssmClientForGH := ssm.NewFromConfig(awsCfg)
+
+		// Phase 99.1: derive the shared (per-install) GitHub-inbound DLQ ARN so the
+		// new per-sandbox source queue carries a RedrivePolicy (poison-message
+		// auto-eviction after 3 receives). Derive — do NOT call SQS — from region +
+		// account ID + GitHubInboundDLQName(prefix). When either region or account ID
+		// is empty, leave DLQArn empty so provisioning stays dormant (no RedrivePolicy,
+		// byte-identical to pre-99.1) rather than fabricating a partial ARN.
+		githubDLQArn := ""
+		if sqsRegionForGH != "" && cfg.ApplicationAccountID != "" {
+			githubDLQArn = awspkg.DLQArn(sqsRegionForGH, cfg.ApplicationAccountID, awspkg.GitHubInboundDLQName(cfg.GetResourcePrefix()))
+		}
 		step11fDeps := githubInboundDeps{
 			Profile:   resolvedProfile,
 			Cfg:       cfg,
 			SandboxID: sandboxID,
 			SQS:       sqsClientForGH,
+			DLQArn:    githubDLQArn,
 			UpdateSandboxAttr: func(ictx context.Context, sid, attr, val string) error {
 				return awspkg.UpdateSandboxStringAttrDynamo(ictx, sandboxDynamoClientForGH, step11fTableName, sid, attr, val)
 			},
