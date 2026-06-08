@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Phase 99 SC3a gap closure — default_command now travels via SSM CommandSet envelope (commit 95978591)
-last_updated: "2026-06-08T00:02:00.163Z"
-last_activity: 2026-06-07
+stopped_at: Completed 99.1-01-PLAN.md
+last_updated: "2026-06-08T02:51:22.170Z"
+last_activity: 2026-06-08
 progress:
-  total_phases: 117
+  total_phases: 118
   completed_phases: 101
-  total_plans: 504
-  completed_plans: 466
+  total_plans: 508
+  completed_plans: 467
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 92-00 — all 3 tasks done; pre-Phase-92 byte-identity baselines captured,
 Total Plans in Phase: 7 (92-00 → 92-06)
 Current Plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 Status: in-progress
-Last activity: 2026-06-07
+Last activity: 2026-06-08
 
 Wave 1 UNBLOCKED: both byte-identity baselines (userdata + IAM HCL) committed before any Wave 1 source change.
 
@@ -499,6 +499,7 @@ Progress: [█████████░] 91%
 | Phase 99 P04 | 323 | 3 tasks | 5 files |
 | Phase 99-github-bridge-commands P03 | 11min | 2 tasks | 3 files |
 | Phase 99 P05 | 556 | 3 tasks | 5 files |
+| Phase 99.1 P01 | 3min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1448,6 +1449,8 @@ Recent decisions affecting current work:
 - [Phase 99]: DoctorConfigProvider interface extended with GetGithubCommands/GetGithubDefaultCommand/GetConfigFilePath; all test stubs updated with zero-value returns
 - [Phase 99]: printGitHubCommandsStatus reads live SSM param (not cfg) to show what Lambda actually reads at runtime
 - [Phase 99]: Deploy surface: make build-lambdas + km init --dry-run=false ONLY; no sidecars, no sandbox recreate — cross-checked against Plans 03/04, no discrepancies
+- [Phase 99.1]: Shared inbound DLQ must be FIFO (FifoQueue=true) — a FIFO source queue cannot redrive to a non-FIFO DLQ
+- [Phase 99.1]: RedrivePolicy injected only when dlqARN non-empty (maxReceiveCount=3); empty keeps the inbound Attributes map byte-identical (dormancy invariant)
 
 ### Roadmap Evolution
 
@@ -1459,6 +1462,7 @@ Recent decisions affecting current work:
 - Phase 17 added: Sandbox Email Mailbox & Access Control — aliases, allow-lists, self-mail, S3 reader (human-friendly sandbox names, profile-driven sender restrictions, mailbox reading library)
 - Phase 18 added: Loose Ends — km init deploys all regional infra, km uninit teardown, bootstrap KMS, github-token graceful skip, state_bucket auto-config (discovered during live testing 2026-03-23)
 - Phase 21 added: Bug fixes and mini-features — budget precision (4 decimal places), polish, small enhancements
+- Phase 99.1 inserted after Phase 99: Harden github/slack inbound pollers against FIFO poison-message wedge via shared per-install DLQ + RedrivePolicy (URGENT — production-risk gap found live in Phase 99 UAT 2026-06-08; poison message head-of-line-blocks FIFO group, wedges poller, only purge recovers)
 
 ### Pending Todos
 
@@ -1576,6 +1580,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-07T23:55:00Z
-Stopped at: Phase 99 SC3a gap closure — default_command now travels via SSM CommandSet envelope (commit 95978591)
+Last session: 2026-06-08T02:51:15.041Z
+Stopped at: Completed 99.1-01-PLAN.md
 Resume file: None
