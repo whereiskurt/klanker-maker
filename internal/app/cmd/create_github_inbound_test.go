@@ -9,7 +9,9 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
@@ -204,5 +206,80 @@ func TestCreate_GitHubInboundDDBPersistFailureRollback(t *testing.T) {
 	}
 	if fs.deleteCalled != 1 {
 		t.Fatalf("expected 1 DeleteQueue rollback call after DDB failure, got %d", fs.deleteCalled)
+	}
+}
+
+// ============================================================
+// Phase 99.1 Plan 02 — DLQ-ARN threading + teardown guard
+// ============================================================
+
+const testGitHubDLQArn = "arn:aws:sqs:us-east-1:123456789012:km-github-inbound-dlq.fifo"
+
+// TestCreate_GitHubInboundQueueWithDLQ verifies that a non-empty DLQArn on the
+// deps struct injects a RedrivePolicy (maxReceiveCount=3 + the exact
+// deadLetterTargetArn) into the CreateQueue Attributes map.
+func TestCreate_GitHubInboundQueueWithDLQ(t *testing.T) {
+	fs := &fakeSQS{}
+	deps, _ := githubInboundDepsEnabled(t, true, fs, nil, nil)
+	deps.DLQArn = testGitHubDLQArn
+
+	if _, err := provisionGitHubInboundQueue(context.Background(), deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rp, ok := fs.createAttrs["RedrivePolicy"]
+	if !ok {
+		t.Fatalf("expected RedrivePolicy attribute; attrs=%v", fs.createAttrs)
+	}
+	var got struct {
+		DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+		MaxReceiveCount     int    `json:"maxReceiveCount"`
+	}
+	if err := json.Unmarshal([]byte(rp), &got); err != nil {
+		t.Fatalf("RedrivePolicy is not valid JSON: %v (%q)", err, rp)
+	}
+	if got.MaxReceiveCount != 3 {
+		t.Errorf("maxReceiveCount: got %d, want 3", got.MaxReceiveCount)
+	}
+	if got.DeadLetterTargetArn != testGitHubDLQArn {
+		t.Errorf("deadLetterTargetArn: got %q, want %q", got.DeadLetterTargetArn, testGitHubDLQArn)
+	}
+}
+
+// TestCreate_GitHubInboundQueueNoDLQ verifies that an empty DLQArn leaves NO
+// RedrivePolicy key (dormancy invariant — byte-identical to pre-99.1).
+func TestCreate_GitHubInboundQueueNoDLQ(t *testing.T) {
+	fs := &fakeSQS{}
+	deps, _ := githubInboundDepsEnabled(t, true, fs, nil, nil)
+	deps.DLQArn = "" // explicit: no shared DLQ resolvable
+
+	if _, err := provisionGitHubInboundQueue(context.Background(), deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := fs.createAttrs["RedrivePolicy"]; ok {
+		t.Fatalf("expected NO RedrivePolicy when DLQArn empty (dormancy); attrs=%v", fs.createAttrs)
+	}
+}
+
+// TestDrainGitHubInbound_NoSharedDLQDelete verifies km destroy deletes ONLY the
+// per-sandbox source queue and never a *-dlq.fifo (shared DLQ is install-scoped).
+func TestDrainGitHubInbound_NoSharedDLQDelete(t *testing.T) {
+	fs := &fakeSQS{}
+	sourceURL := "https://sqs.us-east-1.amazonaws.com/123456789012/km-github-inbound-sb-abc123.fifo"
+	deps := githubDestroyInboundDeps{
+		SandboxID:      "sb-abc123",
+		ResourcePrefix: "km",
+		QueueURL:       sourceURL,
+		SQS:            fs,
+	}
+	drainGitHubInbound(context.Background(), deps)
+
+	if fs.deleteCalled != 1 {
+		t.Fatalf("expected exactly 1 DeleteQueue (source only), got %d", fs.deleteCalled)
+	}
+	if fs.deleteURL != sourceURL {
+		t.Fatalf("deleted queue URL: got %q, want per-sandbox source %q", fs.deleteURL, sourceURL)
+	}
+	if strings.Contains(fs.deleteURL, "-dlq.fifo") {
+		t.Fatalf("km destroy deleted the shared DLQ %q — it must be install-scoped", fs.deleteURL)
 	}
 }
