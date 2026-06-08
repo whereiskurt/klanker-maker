@@ -1116,6 +1116,24 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			}
 		}
 	}
+
+	// Phase 100: KM_GITHUB_PEER_BRIDGES — comma-joined list of sibling github-bridge
+	// Function URLs. Consumed by infra/live/use1/lambda-github-bridge/terragrunt.hcl
+	// get_env("KM_GITHUB_PEER_BRIDGES", ""). Only export when the operator has
+	// explicitly set github.peer_bridges in km-config.yaml. Empty list => omit =>
+	// terragrunt default "" applies => federation off (byte-identical Lambda env to
+	// Phase 97/98). env-wins semantics: when the env var is already set to a
+	// DIFFERENT value, emit a drift WARN and do NOT overwrite it. strings.Join used
+	// (value is a []string, not a *bool). Mirrors the KM_SLACK_PEER_BRIDGES block
+	// (Phase 95) verbatim — only the env-var name and config source differ.
+	if len(cfg.Github.PeerBridges) > 0 {
+		yamlGithubPeerBridges := strings.Join(cfg.Github.PeerBridges, ",")
+		if envVal := os.Getenv("KM_GITHUB_PEER_BRIDGES"); envVal != "" && envVal != yamlGithubPeerBridges {
+			fmt.Fprintf(os.Stderr, "WARN: KM_GITHUB_PEER_BRIDGES=%s (env) overrides km-config.yaml github.peer_bridges=%s\n", envVal, yamlGithubPeerBridges)
+		} else if envVal == "" {
+			os.Setenv("KM_GITHUB_PEER_BRIDGES", yamlGithubPeerBridges) //nolint:errcheck
+		}
+	}
 }
 
 // EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at
