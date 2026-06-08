@@ -165,6 +165,21 @@ type GithubConfig struct {
 	// call — no separate merge-list entry required (see GithubCommandEntry doc).
 	// Nil/empty map when absent => bridge dormancy preserved. Phase 99 Plan 01.
 	Commands map[string]GithubCommandEntry `mapstructure:"commands" yaml:"commands,omitempty" json:"commands,omitempty"`
+
+	// PeerBridges is the Phase 100 federated relay peer list — a []string of sibling
+	// km install github-bridge Function URLs. Exported as KM_GITHUB_PEER_BRIDGES
+	// (comma-joined) by ExportTerragruntEnvVars for
+	// infra/live/use1/lambda-github-bridge/terragrunt.hcl get_env("KM_GITHUB_PEER_BRIDGES", "").
+	//   nil   → key absent from yaml; federation off (WebhookHandler.Relayer stays nil)
+	//   []URL → broadcast unowned-repo webhooks to all peers (Plan 02 relay logic)
+	//
+	// DEVIATION from the Slack peer-bridges path (100-RESEARCH.md Pitfall 2): unlike
+	// slack.peer_bridges, this field needs NO separate "github.peer_bridges" merge-list
+	// entry and NO separate population block. The existing "github" merge entry
+	// (config.go ~line 551) + the single v.UnmarshalKey("github", &cfg.Github) call
+	// below decode the whole github: block atomically, this field included. Adding a
+	// redundant merge entry would be a no-op at best (verified by TestLoadGithubPeerBridges_Set).
+	PeerBridges []string `mapstructure:"peer_bridges" yaml:"peer_bridges,omitempty"`
 }
 
 // Config holds all configuration values for the km CLI.
