@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 99.1-01-PLAN.md
-last_updated: "2026-06-08T02:51:22.170Z"
+stopped_at: Completed 99.1-02-PLAN.md
+last_updated: "2026-06-08T02:57:19.936Z"
 last_activity: 2026-06-08
 progress:
   total_phases: 118
   completed_phases: 101
   total_plans: 508
-  completed_plans: 467
+  completed_plans: 468
   percent: 91
 ---
 
@@ -500,6 +500,7 @@ Progress: [█████████░] 91%
 | Phase 99-github-bridge-commands P03 | 11min | 2 tasks | 3 files |
 | Phase 99 P05 | 556 | 3 tasks | 5 files |
 | Phase 99.1 P01 | 3min | 2 tasks | 3 files |
+| Phase 99.1 P02 | 3min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1451,6 +1452,7 @@ Recent decisions affecting current work:
 - [Phase 99]: Deploy surface: make build-lambdas + km init --dry-run=false ONLY; no sidecars, no sandbox recreate — cross-checked against Plans 03/04, no discrepancies
 - [Phase 99.1]: Shared inbound DLQ must be FIFO (FifoQueue=true) — a FIFO source queue cannot redrive to a non-FIFO DLQ
 - [Phase 99.1]: RedrivePolicy injected only when dlqARN non-empty (maxReceiveCount=3); empty keeps the inbound Attributes map byte-identical (dormancy invariant)
+- [Phase 99.1]: DLQ ARN derived (not API-fetched) at km create call sites from cfg.ApplicationAccountID + region + {GitHub,Slack}InboundDLQName; empty when unresolvable (dormancy)
 
 ### Roadmap Evolution
 
@@ -1580,6 +1582,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-08T02:51:15.041Z
-Stopped at: Completed 99.1-01-PLAN.md
+Last session: 2026-06-08T02:57:13.898Z
+Stopped at: Completed 99.1-02-PLAN.md
 Resume file: None
