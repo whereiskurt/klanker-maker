@@ -21,6 +21,18 @@ const (
 	GitHubDeliveryNonceTTLSeconds = 86400
 )
 
+// jsonClaim returns a 200 WebhookResponse with a JSON body {"claimed":<claimed>}.
+// Used by the peer-side relayed path (Phase 101 claim-aware scatter-gather):
+//   - relayed+miss  → jsonClaim(false)  — this install does not own the repo
+//   - relayed+owned → jsonClaim(true)   — this install owns and dispatched
+//
+// The non-relayed owned path keeps plain "ok" (byte-identity with Phase 100 for
+// the front-door + GitHub — GitHub ignores the body, but we preserve existing behavior).
+func jsonClaim(claimed bool) WebhookResponse {
+	b, _ := json.Marshal(map[string]bool{"claimed": claimed})
+	return WebhookResponse{StatusCode: 200, Body: string(b)}
+}
+
 // WebhookRequest is the normalized inbound request to WebhookHandler.Handle.
 // Headers are expected to be lowercase-keyed (caller normalizes before passing).
 type WebhookRequest struct {
@@ -140,6 +152,15 @@ type WebhookHandler struct {
 	// !matched path byte-identical to Phase 97/98.
 	Relayer PeerRelayer
 
+	// DefaultRouter enables the Phase 101 orphan-repo guidance comment (front-door only).
+	// false ⇒ dormant (byte-identical to Phase 100: relay + 200, no claim tally, no comment).
+	DefaultRouter bool
+
+	// OrphanCooldown rate-limits the orphan comment per (repo,number). Reuses the nonces store
+	// (gh-router-cooldown: prefix isolates it from github-delivery: keys in the shared table).
+	// Nil ⇒ no cooldown gate (still gated by DefaultRouter+mention).
+	OrphanCooldown DeliveryNonceStore
+
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
 }
@@ -228,19 +249,33 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		relayed := req.Headers["x-km-relayed"] != ""
 		if relayed {
 			// Already relayed and still no owner here → terminal drop, NEVER re-relay.
+			// Return {"claimed":false} so the front-door tally can count genuine orphans.
 			h.log().Warn("github-bridge: relay miss — no owner for relayed delivery",
 				"repo", payload.Repository.FullName, "event", "github_relay_no_owner")
-			return WebhookResponse{StatusCode: 200, Body: "ok"}
+			return jsonClaim(false)
 		}
 		if h.Relayer != nil {
 			// Front door: fan the verbatim webhook out to sibling installs so the
 			// owning peer processes it. Synchronous (Broadcast waits) — Lambda
 			// freezes on return. A failing peer is non-fatal (tallied Claimed:true).
-			// Phase 101 (Plan 03) will consume the []PeerClaimResult for the
-			// orphan-repo helpful reply; for now the tally is discarded.
-			if _, bErr := h.Relayer.Broadcast(ctx, req.RawBody, req.Headers); bErr != nil {
+			// Phase 101: capture PeerClaimResult slice for orphan-repo tally.
+			claimResults, bErr := h.Relayer.Broadcast(ctx, req.RawBody, req.Headers)
+			if bErr != nil {
 				h.log().Warn("github-bridge: relay broadcast partial failure",
 					"err", bErr, "repo", payload.Repository.FullName)
+			}
+			// Phase 101: front-door orphan-repo tally (dormant when DefaultRouter=false).
+			if h.DefaultRouter {
+				anyClaimed := false
+				for _, r := range claimResults {
+					if r.Claimed {
+						anyClaimed = true
+						break
+					}
+				}
+				if !anyClaimed {
+					h.maybePostGitHubOrphanComment(ctx, payload, botLogin)
+				}
 			}
 		} else {
 			// Federation off (nil Relayer) → today's silent no-config drop.
@@ -504,6 +539,13 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		}
 	}
 
+	// Phase 101: peer-side claim emit. A relayed+owned delivery returns
+	// {"claimed":true} so the front door's tally correctly counts this as claimed.
+	// A non-relayed owned delivery keeps plain "ok" (byte-identical to Phase 100:
+	// the front door sends to GitHub directly, and GitHub ignores the body).
+	if req.Headers["x-km-relayed"] != "" {
+		return jsonClaim(true)
+	}
 	return WebhookResponse{StatusCode: 200, Body: "ok"}
 }
 
