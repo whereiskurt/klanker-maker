@@ -2309,7 +2309,7 @@ Plans:
 
 **Requirements**: GH-FED-CONFIG, GH-FED-RELAY, GH-FED-REORDER, GH-FED-LOOPGUARD, GH-FED-VERIFY, GH-FED-DOCTOR, GH-FED-SCALE, GH-FED-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
 **Depends on:** Phase 98 (independent of Phase 99)
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 - [ ] 100-01-PLAN.md — config plumbing: github.peer_bridges → KM_GITHUB_PEER_BRIDGES (struct + init.go export + TF/terragrunt), no new merge entry
