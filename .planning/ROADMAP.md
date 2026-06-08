@@ -2323,7 +2323,7 @@ Plans:
 
 **Requirements**: GH-ORPHAN-CLAIM, GH-ORPHAN-REPLY, GH-ORPHAN-COOLDOWN, GH-ORPHAN-ROLLOUT, GH-ORPHAN-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
 **Depends on:** Phase 100
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 - [ ] 101-01-PLAN.md — github.default_router config plumbing (struct → KM_GITHUB_DEFAULT_ROUTER env → TF var/Lambda env); no merge-list entry

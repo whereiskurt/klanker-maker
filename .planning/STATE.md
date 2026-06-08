@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 101-02-PLAN.md
-last_updated: "2026-06-08T13:43:11.982Z"
+stopped_at: Completed 101-03-PLAN.md
+last_updated: "2026-06-08T14:02:03.294Z"
 last_activity: 2026-06-08
 progress:
   total_phases: 118
   completed_phases: 103
   total_plans: 516
-  completed_plans: 476
+  completed_plans: 477
   percent: 91
 ---
 
@@ -509,6 +509,7 @@ Progress: [█████████░] 91%
 | Phase 100 P04 | 11 | 3 tasks | 8 files |
 | Phase 101 P01 | 213s | 3 tasks | 7 files |
 | Phase 101 P02 | 286 | 2 tasks | 5 files |
+| Phase 101 P03 | 239 | 4 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1474,6 +1475,8 @@ Recent decisions affecting current work:
 - [Phase 101]: In-place v1.1.0 TF module edit with additive default="false" github_default_router var — no version bump (Phase 100 precedent)
 - [Phase 101]: PeerClaimResult has no Channels field — GitHub orphan reply has no repo list unlike Slack Phase-96
 - [Phase 101]: Rollout safety: legacy 'ok'/non-2xx/timeout all tally Claimed:true; only explicit {claimed:false} counts as unclaimed
+- [Phase 101]: jsonClaim helper returns plain JSON body — WebhookResponse has no Headers field; GitHub ignores response headers so Content-Type omission is safe
+- [Phase 101]: Reuse DynamoGitHubNonceStore as OrphanCooldown store with gh-router-cooldown: key prefix — no new table, no new interface
 
 ### Roadmap Evolution
 
@@ -1603,6 +1606,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-08T13:43:11.932Z
-Stopped at: Completed 101-02-PLAN.md
+Last session: 2026-06-08T14:02:03.284Z
+Stopped at: Completed 101-03-PLAN.md
 Resume file: None
