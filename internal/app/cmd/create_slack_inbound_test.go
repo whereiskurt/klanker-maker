@@ -37,6 +37,15 @@ type fakeSQS struct {
 	getAttrsErr error
 	// listResult controls the queue URLs returned by ListQueues (for doctor checks).
 	listResult []string
+	// depthByName, when non-nil, lets a test set a per-queue
+	// ApproximateNumberOfMessages keyed by the trailing queue-name segment of the
+	// GetQueueAttributes QueueUrl (used by the inbound-DLQ depth doctor check to
+	// distinguish the OK (all-zero) and WARN (non-empty) branches). Absent ⇒ depth 0.
+	depthByName map[string]string
+	// listByPrefix, when true, filters listResult so only URLs whose trailing
+	// queue-name segment carries the requested QueueNamePrefix are returned —
+	// lets a single fakeSQS resolve distinct github/slack DLQ URLs by prefix.
+	listByPrefix bool
 }
 
 func (f *fakeSQS) CreateQueue(_ context.Context, in *sqs.CreateQueueInput, _ ...func(*sqs.Options)) (*sqs.CreateQueueOutput, error) {
@@ -61,17 +70,42 @@ func (f *fakeSQS) DeleteQueue(_ context.Context, in *sqs.DeleteQueueInput, _ ...
 	return &sqs.DeleteQueueOutput{}, f.deleteErr
 }
 
-func (f *fakeSQS) GetQueueAttributes(_ context.Context, _ *sqs.GetQueueAttributesInput, _ ...func(*sqs.Options)) (*sqs.GetQueueAttributesOutput, error) {
+func (f *fakeSQS) GetQueueAttributes(_ context.Context, in *sqs.GetQueueAttributesInput, _ ...func(*sqs.Options)) (*sqs.GetQueueAttributesOutput, error) {
 	if f.getAttrsErr != nil {
 		return nil, f.getAttrsErr
 	}
+	depth := "0"
+	if f.depthByName != nil && in != nil && in.QueueUrl != nil {
+		url := *in.QueueUrl
+		name := url
+		if i := strings.LastIndex(url, "/"); i >= 0 {
+			name = url[i+1:]
+		}
+		if v, ok := f.depthByName[name]; ok {
+			depth = v
+		}
+	}
 	return &sqs.GetQueueAttributesOutput{
-		Attributes: map[string]string{"ApproximateNumberOfMessages": "0"},
+		Attributes: map[string]string{"ApproximateNumberOfMessages": depth},
 	}, nil
 }
 
-func (f *fakeSQS) ListQueues(_ context.Context, _ *sqs.ListQueuesInput, _ ...func(*sqs.Options)) (*sqs.ListQueuesOutput, error) {
-	return &sqs.ListQueuesOutput{QueueUrls: f.listResult}, nil
+func (f *fakeSQS) ListQueues(_ context.Context, in *sqs.ListQueuesInput, _ ...func(*sqs.Options)) (*sqs.ListQueuesOutput, error) {
+	if !f.listByPrefix || in == nil || in.QueueNamePrefix == nil || *in.QueueNamePrefix == "" {
+		return &sqs.ListQueuesOutput{QueueUrls: f.listResult}, nil
+	}
+	prefix := *in.QueueNamePrefix
+	var matched []string
+	for _, u := range f.listResult {
+		name := u
+		if i := strings.LastIndex(u, "/"); i >= 0 {
+			name = u[i+1:]
+		}
+		if strings.HasPrefix(name, prefix) {
+			matched = append(matched, u)
+		}
+	}
+	return &sqs.ListQueuesOutput{QueueUrls: matched}, nil
 }
 
 // ============================================================
