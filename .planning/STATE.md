@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 102-02-PLAN.md
-last_updated: "2026-06-08T21:37:56.781Z"
+stopped_at: Completed 102-01-PLAN.md
+last_updated: "2026-06-08T21:40:27.482Z"
 last_activity: 2026-06-08
 progress:
   total_phases: 118
   completed_phases: 104
   total_plans: 521
-  completed_plans: 479
+  completed_plans: 480
   percent: 91
 ---
 
@@ -512,6 +512,7 @@ Progress: [█████████░] 91%
 | Phase 101 P03 | 239 | 4 tasks | 4 files |
 | Phase 101 P04 | 200s | 2 tasks | 4 files |
 | Phase 102 P02 | 324s | 3 tasks | 5 files |
+| Phase 102 P01 | 470s | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1482,6 +1483,8 @@ Recent decisions affecting current work:
 - [Phase 101]: Phase 101 doc sections mirror Slack-96 analog in docs/github-bridge.md + OPERATOR-GUIDE.md + CLAUDE.md; 101-UAT.md has Tests A-D for GH-ORPHAN-E2E
 - [Phase 102]: InvalidateStaleSession keeps agent_type (does not REMOVE): stale rows retain agent binding across sandbox recreations
 - [Phase 102]: agent_type schema-on-write in km-github-threads; old rows return empty string (profile default); no Terraform change
+- [Phase 102]: AgentVerb cleared to empty when AgentVerbConflict=true; two-verb conflict short-circuits Handle() before dispatch
+- [Phase 102]: ExtractArgs delegates to ExtractArgsWithAgent('') — single stripping implementation for mention+command+agent-verb
 
 ### Roadmap Evolution
 
@@ -1611,6 +1614,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-08T21:37:56.770Z
-Stopped at: Completed 102-02-PLAN.md
+Last session: 2026-06-08T21:40:27.471Z
+Stopped at: Completed 102-01-PLAN.md
 Resume file: None
