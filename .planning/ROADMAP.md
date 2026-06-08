@@ -2346,7 +2346,11 @@ Plans:
 
 **Requirements**: GH-AGENT-VERB, GH-AGENT-PERSIST, GH-AGENT-SWITCH, GH-AGENT-POLLER, GH-AGENT-PROFILE, GH-AGENT-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
 **Depends on:** Phase 99 (parser) + Phase 98 (km-github-threads); independent of Phases 100/101
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 102 to break down)
+- [ ] 102-01-PLAN.md — Bridge verb parser (/claude, /codex) + GitHubEnvelope.Agent + two-verb conflict reply [GH-AGENT-VERB]
+- [ ] 102-02-PLAN.md — km-github-threads agent_type read/write (LookupSandbox + UpdateSession) [GH-AGENT-PERSIST]
+- [ ] 102-03-PLAN.md — GitHub poller EFFECTIVE_AGENT precedence + cross-agent switch + codex-missing guard + agent_type write-back [GH-AGENT-POLLER, GH-AGENT-SWITCH, GH-AGENT-PROFILE]
+- [ ] 102-04-PLAN.md — km doctor reserved-shadow (claude/codex/help) + /help agent listing + docs (github-bridge.md + CLAUDE.md) [GH-AGENT-VERB, GH-AGENT-PROFILE]
+- [ ] 102-05-PLAN.md — Deploy-surface audit + live GH-AGENT-E2E UAT (checkpoint) [GH-AGENT-E2E]
