@@ -1178,3 +1178,93 @@ doctor_s3_expire_days: 7
 		}
 	})
 }
+
+// ---- Phase 101: GithubConfig.DefaultRouter *bool round-trip tests ----
+
+// TestLoadGithubDefaultRouter_Set verifies Phase 101 nested key github.default_router
+// round-trips into cfg.Github.DefaultRouter end-to-end for all three cases:
+// true, false, and absent (nil).
+//
+// NO-MERGE-ENTRY PROOF: the github: block is decoded as a single structured
+// v.UnmarshalKey("github", &cfg.Github) call and "github" is ALREADY in the
+// v2→v merge-list (config.go ~line 566). Adding DefaultRouter *bool to GithubConfig
+// is picked up automatically — NO new "github.default_router" merge-list entry is
+// required. This test PASSING with ONLY the struct field added (and the existing
+// "github" merge entry) is the proof that no redundant merge entry is needed.
+// Mirrors TestLoadGithubPeerBridges_Set precedent (Phase 100, Research Pitfall 2).
+func TestLoadGithubDefaultRouter_Set(t *testing.T) {
+	t.Run("true", func(t *testing.T) {
+		dir := t.TempDir()
+		writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+github:
+    default_router: true
+`)
+		orig, _ := os.Getwd()
+		t.Cleanup(func() { os.Chdir(orig) })
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if cfg.Github.DefaultRouter == nil {
+			t.Fatal("Github.DefaultRouter is nil; expected non-nil from yaml load via the existing UnmarshalKey(\"github\",…) — proves no separate merge entry is needed")
+		}
+		if *cfg.Github.DefaultRouter != true {
+			t.Errorf("Github.DefaultRouter: got %v, want true", *cfg.Github.DefaultRouter)
+		}
+	})
+
+	t.Run("false", func(t *testing.T) {
+		dir := t.TempDir()
+		writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+github:
+    default_router: false
+`)
+		orig, _ := os.Getwd()
+		t.Cleanup(func() { os.Chdir(orig) })
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if cfg.Github.DefaultRouter == nil {
+			t.Fatal("Github.DefaultRouter is nil; expected non-nil (explicit false) from yaml load")
+		}
+		if *cfg.Github.DefaultRouter != false {
+			t.Errorf("Github.DefaultRouter: got %v, want false", *cfg.Github.DefaultRouter)
+		}
+	})
+
+	t.Run("absent", func(t *testing.T) {
+		dir := t.TempDir()
+		writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+github:
+    default_profile: github-review
+`)
+		orig, _ := os.Getwd()
+		t.Cleanup(func() { os.Chdir(orig) })
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		// nil is the tri-state dormancy sentinel: absent key ⇒ DefaultRouter nil ⇒
+		// km init does NOT export KM_GITHUB_DEFAULT_ROUTER ⇒ terragrunt default "false"
+		// applies ⇒ router dormant (Phase 100 byte-identical).
+		if cfg.Github.DefaultRouter != nil {
+			t.Errorf("Github.DefaultRouter: got %v, want nil (tri-state dormancy when absent)", *cfg.Github.DefaultRouter)
+		}
+	})
+}

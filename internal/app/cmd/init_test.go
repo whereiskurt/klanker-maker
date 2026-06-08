@@ -1069,6 +1069,79 @@ func TestExportTerragruntEnvVars_DefaultRouter_DriftWarn(t *testing.T) {
 	}
 }
 
+// ---- Phase 101: KM_GITHUB_DEFAULT_ROUTER export tests ----
+
+// TestInitExportsGithubDefaultRouter_True verifies that when
+// cfg.Github.DefaultRouter == &true and KM_GITHUB_DEFAULT_ROUTER is unset,
+// ExportTerragruntEnvVars sets KM_GITHUB_DEFAULT_ROUTER=true.
+func TestInitExportsGithubDefaultRouter_True(t *testing.T) {
+	t.Setenv("KM_GITHUB_DEFAULT_ROUTER", "")
+	os.Unsetenv("KM_GITHUB_DEFAULT_ROUTER")
+
+	v := true
+	cfg := &config.Config{}
+	cfg.Github.DefaultRouter = &v
+
+	cmd.ExportTerragruntEnvVars(cfg)
+
+	if got := os.Getenv("KM_GITHUB_DEFAULT_ROUTER"); got != "true" {
+		t.Errorf("KM_GITHUB_DEFAULT_ROUTER = %q, want %q", got, "true")
+	}
+}
+
+// TestInitExportsGithubDefaultRouter_Nil verifies that when
+// cfg.Github.DefaultRouter is nil (key absent from yaml), ExportTerragruntEnvVars
+// does NOT set KM_GITHUB_DEFAULT_ROUTER — Phase 100 byte-identical.
+func TestInitExportsGithubDefaultRouter_Nil(t *testing.T) {
+	t.Setenv("KM_GITHUB_DEFAULT_ROUTER", "")
+	os.Unsetenv("KM_GITHUB_DEFAULT_ROUTER")
+
+	cfg := &config.Config{} // DefaultRouter is nil
+
+	cmd.ExportTerragruntEnvVars(cfg)
+
+	if _, ok := os.LookupEnv("KM_GITHUB_DEFAULT_ROUTER"); ok {
+		t.Errorf("KM_GITHUB_DEFAULT_ROUTER should not be set when cfg.Github.DefaultRouter is nil; got %q", os.Getenv("KM_GITHUB_DEFAULT_ROUTER"))
+	}
+}
+
+// TestInitExportsGithubDefaultRouter_DriftWarn verifies that when
+// KM_GITHUB_DEFAULT_ROUTER is already set to a DIFFERENT value than yaml, the
+// env-wins drift WARN fires and the env var is NOT overwritten.
+func TestInitExportsGithubDefaultRouter_DriftWarn(t *testing.T) {
+	// Pre-set env to "false" while yaml says "true" — env wins, WARN fires.
+	t.Setenv("KM_GITHUB_DEFAULT_ROUTER", "false")
+
+	v := true
+	cfg := &config.Config{}
+	cfg.Github.DefaultRouter = &v
+
+	// Capture stderr to verify the WARN fires.
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+
+	cmd.ExportTerragruntEnvVars(cfg)
+
+	w.Close()
+	os.Stderr = origStderr
+	var buf [512]byte
+	n, _ := r.Read(buf[:])
+	stderrOut := string(buf[:n])
+
+	// Env must remain "false" (was NOT overwritten).
+	if got := os.Getenv("KM_GITHUB_DEFAULT_ROUTER"); got != "false" {
+		t.Errorf("KM_GITHUB_DEFAULT_ROUTER = %q, want %q (env should win)", got, "false")
+	}
+	// WARN line must be present.
+	if !strings.Contains(stderrOut, "KM_GITHUB_DEFAULT_ROUTER") || !strings.Contains(stderrOut, "WARN") {
+		t.Errorf("expected WARN about KM_GITHUB_DEFAULT_ROUTER drift on stderr; got: %q", stderrOut)
+	}
+}
+
 // ---- Phase 84.1-02: per-module timeout tests (GAP-4, GAP-5) ----
 
 // withShortModuleTimeout temporarily overrides cmd.ModuleTimeoutFunc so a
