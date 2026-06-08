@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -208,6 +209,37 @@ func init() {
 		PrivateKeyPEM: []byte(privateKeyPEM),
 	}
 
+	// ── Phase 100: federated relay. Parse KM_GITHUB_PEER_BRIDGES ─────────────
+	// One GitHub App → one webhook URL; each resource_prefix install runs its own
+	// {prefix}-github-bridge Lambda. The "front door" install relays verbatim
+	// webhooks it does not own to sibling bridges (X-KM-Relayed:1 single-hop).
+	// KM_GITHUB_PEER_BRIDGES is set by the lambda-github-bridge Terraform module
+	// (var.github_peer_bridges) from km-config.yaml github.peer_bridges.
+	// Empty/absent → relayer stays nil → federation OFF → byte-identical to Phase 97/98.
+	//
+	// Deploy constraint: this env-block change requires `km init --dry-run=false`
+	// (NOT --sidecars). See project_km_init_lambdas_doesnt_deploy.
+	var relayer *bridge.HTTPPeerRelayer
+	if raw := os.Getenv("KM_GITHUB_PEER_BRIDGES"); raw != "" {
+		var peers []string
+		for _, u := range strings.Split(raw, ",") {
+			if u = strings.TrimSpace(u); u != "" {
+				peers = append(peers, u)
+			}
+		}
+		if len(peers) > 0 {
+			relayer = &bridge.HTTPPeerRelayer{
+				PeerURLs:   peers,
+				HTTPClient: &http.Client{Timeout: 10 * time.Second},
+			}
+			slog.Info("km-github-bridge: federated relay enabled", "peer_count", len(peers))
+		} else {
+			slog.Info("km-github-bridge: KM_GITHUB_PEER_BRIDGES had no usable peers; federation off")
+		}
+	} else {
+		slog.Info("km-github-bridge: KM_GITHUB_PEER_BRIDGES not set; federation off (no relay)")
+	}
+
 	// ── Construct WebhookHandler ──────────────────────────────────────────────
 	webhookHandler = &bridge.WebhookHandler{
 		Secret:         secretFetcher,
@@ -228,6 +260,13 @@ func init() {
 		Commands:       commands,
 		DefaultCommand: defaultCommand,
 		Commenter:      commenter,
+	}
+
+	// Phase 100: set Relayer ONLY when peers were configured. Assigning a typed-nil
+	// *HTTPPeerRelayer into the PeerRelayer interface field would make h.Relayer != nil
+	// TRUE (non-nil interface holding a nil pointer) and panic in Broadcast — so guard.
+	if relayer != nil {
+		webhookHandler.Relayer = relayer
 	}
 
 	slog.Info("km-github-bridge: cold start",
