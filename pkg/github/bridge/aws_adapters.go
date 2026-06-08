@@ -707,22 +707,23 @@ type DynamoGitHubThreadStore struct {
 	TableName string // e.g. "km-github-threads" (from KM_GITHUB_THREADS_TABLE env var)
 }
 
-// LookupSandbox returns the sandbox_id and agent_session_id for (repo, number).
-// Returns ("", "", nil) when the row is absent — first dispatch is not an error.
-func (s *DynamoGitHubThreadStore) LookupSandbox(ctx context.Context, repo string, number int) (string, string, error) {
+// LookupSandbox returns the sandbox_id, agent_session_id, and agent_type for
+// (repo, number). Returns ("", "", "", nil) when the row is absent — first dispatch
+// is not an error. agent_type is "" for pre-Phase-102 rows (schema-on-write).
+func (s *DynamoGitHubThreadStore) LookupSandbox(ctx context.Context, repo string, number int) (string, string, string, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: awssdk.String(s.TableName),
 		Key: map[string]dynamodbtypes.AttributeValue{
 			"repo":   &dynamodbtypes.AttributeValueMemberS{Value: repo},
 			"number": &dynamodbtypes.AttributeValueMemberN{Value: strconv.Itoa(number)},
 		},
-		ProjectionExpression: awssdk.String("sandbox_id, agent_session_id"),
+		ProjectionExpression: awssdk.String("sandbox_id, agent_session_id, agent_type"),
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("github-threads: lookup (%s, %d): %w", repo, number, err)
+		return "", "", "", fmt.Errorf("github-threads: lookup (%s, %d): %w", repo, number, err)
 	}
 	if len(out.Item) == 0 {
-		return "", "", nil // absent → first dispatch
+		return "", "", "", nil // absent → first dispatch
 	}
 
 	sandboxID := ""
@@ -737,7 +738,13 @@ func (s *DynamoGitHubThreadStore) LookupSandbox(ctx context.Context, repo string
 			sessionID = sv.Value
 		}
 	}
-	return sandboxID, sessionID, nil
+	agentType := ""
+	if v, ok := out.Item["agent_type"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			agentType = sv.Value
+		}
+	}
+	return sandboxID, sessionID, agentType, nil
 }
 
 // Upsert creates a new (repo, number) → sandbox_id row only if one does not already
@@ -770,19 +777,23 @@ func (s *DynamoGitHubThreadStore) Upsert(ctx context.Context, repo string, numbe
 	return nil
 }
 
-// UpdateSession sets agent_session_id on the (repo, number) row via an UpdateItem.
+// UpdateSession sets agent_session_id and agent_type on the (repo, number) row via an
+// UpdateItem (never PutItem — avoids the SandboxMetadata lossy round-trip footgun).
 // Called by the sandbox poller after each agent turn completes so future turns resume
-// the same session.
-func (s *DynamoGitHubThreadStore) UpdateSession(ctx context.Context, repo string, number int, sessionID string) error {
+// the same session and the per-thread agent binding is preserved.
+// agentType="" is valid — it writes an empty string so the attribute exists for future
+// reads (downstream treats "" as profile default).
+func (s *DynamoGitHubThreadStore) UpdateSession(ctx context.Context, repo string, number int, sessionID, agentType string) error {
 	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: awssdk.String(s.TableName),
 		Key: map[string]dynamodbtypes.AttributeValue{
 			"repo":   &dynamodbtypes.AttributeValueMemberS{Value: repo},
 			"number": &dynamodbtypes.AttributeValueMemberN{Value: strconv.Itoa(number)},
 		},
-		UpdateExpression: awssdk.String("SET agent_session_id = :sid"),
+		UpdateExpression: awssdk.String("SET agent_session_id = :sid, agent_type = :at"),
 		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
 			":sid": &dynamodbtypes.AttributeValueMemberS{Value: sessionID},
+			":at":  &dynamodbtypes.AttributeValueMemberS{Value: agentType},
 		},
 	})
 	if err != nil {

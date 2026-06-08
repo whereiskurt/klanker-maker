@@ -145,26 +145,34 @@ type CommandsFetcher interface {
 	Fetch(ctx context.Context) (map[string]CommandEntry, string, error)
 }
 
-// GitHubThreadStore tracks (repo, number) → {sandbox_id, agent_session_id} mappings
-// backed by the km-github-threads DynamoDB table. Enables follow-up @-mentions in the
-// same PR/issue to continue the same agent session (GH-X-CONTINUITY) and allows replies
-// in a known thread to bypass the re-@-mention requirement (GH-X-THREADBYPASS).
+// GitHubThreadStore tracks (repo, number) → {sandbox_id, agent_session_id, agent_type}
+// mappings backed by the km-github-threads DynamoDB table. Enables follow-up @-mentions
+// in the same PR/issue to continue the same agent session (GH-X-CONTINUITY) and allows
+// replies in a known thread to bypass the re-@-mention requirement (GH-X-THREADBYPASS).
+//
+// Phase 102: agent_type is schema-on-write — old rows without the attribute return ""
+// (treated as profile default downstream). No Terraform change, no migration.
 //
 // Continuity data lives ONLY in km-github-threads — never in km-sandboxes — to avoid
 // the SandboxMetadata lossy round-trip footgun.
 type GitHubThreadStore interface {
-	// LookupSandbox returns the sandbox_id and agent_session_id for (repo, number).
-	// Returns ("", "", nil) when the row is absent (first dispatch, not an error).
-	LookupSandbox(ctx context.Context, repo string, number int) (sandboxID, sessionID string, err error)
+	// LookupSandbox returns the sandbox_id, agent_session_id, and agent_type for
+	// (repo, number). Returns ("", "", "", nil) when the row is absent (first
+	// dispatch, not an error). agent_type is "" for pre-Phase-102 rows (treated as
+	// profile default downstream).
+	LookupSandbox(ctx context.Context, repo string, number int) (sandboxID, sessionID, agentType string, err error)
 
 	// Upsert creates a new (repo, number) → sandbox_id row only if one does not
 	// already exist (attribute_not_exists condition). ConditionalCheckFailed is
 	// treated as idempotent success — the row already exists with valid data.
 	Upsert(ctx context.Context, repo string, number int, sandboxID string) error
 
-	// UpdateSession sets agent_session_id on an existing (repo, number) row.
-	// Called by the poller after each agent turn completes.
-	UpdateSession(ctx context.Context, repo string, number int, sessionID string) error
+	// UpdateSession sets agent_session_id and agent_type on an existing (repo, number)
+	// row via UpdateItem (never PutItem — avoids the SandboxMetadata lossy round-trip
+	// footgun). Called by the poller after each agent turn completes.
+	// agentType="" is valid — it writes an empty string, preserving the attribute for
+	// future reads (downstream treats "" as profile default).
+	UpdateSession(ctx context.Context, repo string, number int, sessionID, agentType string) error
 
 	// InvalidateStaleSession overwrites the sandbox_id and clears agent_session_id
 	// on a (repo, number) row whose stored sandbox_id no longer matches the current

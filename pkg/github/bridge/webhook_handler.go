@@ -300,7 +300,7 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	threadKnown := false
 	threadStoredSandboxID := ""
 	if h.Threads != nil {
-		if sid, _, lookupErr := h.Threads.LookupSandbox(ctx, payload.Repository.FullName, payload.Issue.Number); lookupErr == nil && sid != "" {
+		if sid, _, _, lookupErr := h.Threads.LookupSandbox(ctx, payload.Repository.FullName, payload.Issue.Number); lookupErr == nil && sid != "" {
 			threadKnown = true
 			threadStoredSandboxID = sid
 			h.log().Debug("github-bridge: known thread; bypassing mention check",

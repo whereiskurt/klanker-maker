@@ -34,9 +34,9 @@ type mockGitHubThreadStore struct {
 	lookupCalls int
 }
 
-func (m *mockGitHubThreadStore) LookupSandbox(_ context.Context, _ string, _ int) (string, string, error) {
+func (m *mockGitHubThreadStore) LookupSandbox(_ context.Context, _ string, _ int) (string, string, string, error) {
 	m.lookupCalls++
-	return m.sandboxID, m.sessionID, m.err
+	return m.sandboxID, m.sessionID, "", m.err
 }
 
 func (m *mockGitHubThreadStore) Upsert(_ context.Context, _ string, _ int, _ string) error {
@@ -44,7 +44,7 @@ func (m *mockGitHubThreadStore) Upsert(_ context.Context, _ string, _ int, _ str
 	return m.upsertErr
 }
 
-func (m *mockGitHubThreadStore) UpdateSession(_ context.Context, _ string, _ int, _ string) error {
+func (m *mockGitHubThreadStore) UpdateSession(_ context.Context, _ string, _ int, _, _ string) error {
 	return nil
 }
 
