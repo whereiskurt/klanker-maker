@@ -18,6 +18,16 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
 - Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
 
+**Phase 102 (2026-06-08) — GitHub bridge agent verbs: /claude and /codex select the per-thread agent in a PR comment (complete):**
+- An @-mention in a PR/issue comment may include `/claude` or `/codex` anywhere in the body (code-stripped, ≤1 agent verb per comment; two distinct verbs → error reply, no dispatch). The verb selects the agent for the turn and is persisted as `agent_type` in `km-github-threads`; subsequent turns in the same thread inherit it. GitHub analog of the Slack Phase 70 per-thread agent-verb (`/claude:` / `codex:`).
+- **Precedence:** explicit verb > thread `agent_type` row > profile `spec.agent.default` (default: `claude`).
+- **Codex precondition:** `/codex` routes to the sandbox; if the sandbox profile has no Codex installed, the poller posts a helpful error comment ("This sandbox's profile has no Codex; /codex is unavailable here.") and acks the queue message without dispatching.
+- **Reserved tokens + km doctor:** `help`, `claude`, `codex` are reserved in `github.commands`. Defining a command entry with one of these names → `km doctor WARN`. Extended from "help-only" in Phase 99 to include `claude` and `codex` in Phase 102.
+- **`/help` extension:** the built-in `/help` reply now prepends an "Available agents" block listing `/claude` and `/codex`, and appends "Current thread agent: `<type>`" when the thread has a stored `agent_type`.
+- **Back-compat:** a comment with no agent verb is byte-identical to Phase 101 behavior. No new Terraform resources. No SandboxProfile schema change. `agent_type` is schema-on-write (DDB column added in Phase 102 Plan 02; no TF migration).
+- **Deploy = `make build-lambdas` (clean) + `km init --dry-run=false` (NOT `--sidecars`)** — bridge + create-handler Lambdas updated together. Existing sandboxes need `km destroy && km create` to gain the new Phase 102 poller (D6 guard + `THREAD_AGENT_TYPE` env var). Bridge agent-verb parsing fires on the next webhook delivery without sandbox recreate.
+- See `docs/github-bridge.md` § Phase 102 for the full operator runbook, Codex precondition, reserved tokens, and two-install/one-App UAT.
+
 **Phase 101 (2026-06-08) — GitHub bridge orphan-repo helpful reply (complete):**
 - When the shared bot is @-mentioned in a PR or issue comment on a repo **no install owns**, the front-door install posts ONE guidance comment naming `github.repos:` wiring and `km init`. Previously (Phase 100) the event was silently dropped (`github_relay_no_owner`); Phase 101 closes that gap with claim-aware scatter-gather — each relayed peer returns `{"claimed": bool}`; zero claims ⇒ true orphan ⇒ one comment. GitHub analog of the Slack Phase 96 default router (`docs/slack-notifications.md` § Phase 96).
 - **Dormant by default.** Set `github.default_router: true` in `km-config.yaml` on the **front-door install only**. Absent or false → byte-identical to Phase 100 (no comment, no claim-gather overhead). `github.default_router` → `KM_GITHUB_DEFAULT_ROUTER`; dormancy = `"false"`.
@@ -77,6 +87,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Default router: orphan-channel @-mention reply, `slack.default_router`, cooldown | `docs/slack-notifications.md` § Phase 96 |
 | GitHub comment-trigger bridge — `@km-bot review this PR` → sandbox agent → PR review | `docs/github-bridge.md` (Phase 97) |
 | GitHub bridge federated relay — one GitHub App across multiple km installs (`github.peer_bridges`) | `docs/github-bridge.md` § Phase 100 |
+| GitHub bridge agent verbs — `/claude` / `/codex` per-thread agent select in PR comments | `docs/github-bridge.md` § Phase 102 |
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |

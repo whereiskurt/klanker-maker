@@ -844,6 +844,205 @@ This should not happen — see Rollout-safe mixed fleet above. If it does:
 
 ---
 
+## Phase 102 — Agent verbs (/claude, /codex)
+
+> **Phase 102 (2026-06-08) — GitHub bridge agent verbs: /claude and /codex select the
+> per-thread agent in a PR comment (Slack Phase 70 analog).**
+>
+> An @-mention in a PR/issue comment may now include `/claude` or `/codex` anywhere
+> in the body (code-stripped, ≤1 agent verb per comment). The verb selects the agent
+> for the entire thread and is persisted in `km-github-threads` as `agent_type`.
+> Subsequent turns in the same thread use the stored type unless overridden. Back-compat:
+> a comment with no verb is byte-identical to Phase 101 behavior.
+> No SandboxProfile schema change. No new Terraform resources.
+
+### Syntax and composition
+
+A PR/issue comment may include `/claude` or `/codex` **anywhere** in the body, in
+combination with a Phase 99 `/command` or as a free-form turn:
+
+```
+@km-bot /claude review the auth module        # agent verb only (free-form body)
+@km-bot /codex /patch fix the flaky tests     # agent verb + command composition
+@km-bot /codex                                # switches the thread to Codex, no prompt
+@km-bot just look at this                     # no verb → thread's stored agent_type applies
+```
+
+**Parsing rules:**
+
+1. `StripCode` removes fenced `` ``` `` blocks and `` `inline code` `` spans before
+   scanning so `/claude` or `/codex` inside a code example is never recognized.
+2. Agent verbs are intercepted **before** the Phase 99 command map — they are on a
+   separate axis. `/codex /patch fix X` resolves to `AgentVerb=codex, Known=[patch]`.
+3. Two distinct agent verbs in the same comment (`/claude /codex`) → the bridge posts
+   a "Specify one agent" error reply and returns 200 without dispatching.
+4. Same verb twice (`/codex /codex`) → deduplicated; treated as one `/codex`. No error.
+5. Unknown slash tokens (`/frobnicate`) are silently ignored (lenient passthrough).
+
+### Per-thread persistence and precedence
+
+When the bridge dispatches a turn, it writes `agent_type` to the `km-github-threads`
+row (the same DDB item that records `sandbox_id` and `session_id` for Phase 97/98
+thread continuity). On subsequent turns:
+
+| Condition | Effective agent |
+|---|---|
+| Comment has `/claude` or `/codex` verb | verb wins (overrides thread row + profile default) |
+| No verb; thread row has `agent_type` | thread row's `agent_type` |
+| No verb; no thread row (fresh PR) | profile `spec.agent.default` (default: `claude`) |
+
+Switching agents mid-thread (e.g. from `/claude` to `/codex`) updates the thread row
+so future turns inherit the new agent. There is no "cross-agent session handoff"
+ceremony in the GitHub path (unlike the Slack Phase 70 handoff) — GitHub turns are
+always discrete, single-turn dispatches.
+
+### Codex-capable-profile precondition
+
+`/codex` routes to the **sandbox**. If the sandbox was created from a profile that
+does not install Codex (e.g. the lean `github-review.yaml` default), the poller posts
+a helpful error comment and acks the queue message:
+
+> This sandbox's profile has no Codex; /codex is unavailable here.
+
+To use `/codex`, the operator must:
+1. Create a Codex-capable profile that installs Codex CLI (`spec.initCommands` or a
+   pre-baked AMI) and sets `spec.agent.default: codex`.
+2. Add the repo entry with that profile: `github.repos[].profile: profiles/my-codex-profile.yaml`.
+3. Recreate the sandbox: `km destroy <id> && km create profiles/my-codex-profile.yaml --alias gh-myrepo`.
+
+The lean `profiles/github-review.yaml` ships as a Claude-only baseline; it has no
+Codex installation and does NOT set `spec.agent.default: codex`.
+
+### Reserved tokens and km doctor
+
+`/help`, `/claude`, and `/codex` are **reserved built-in verbs**. Defining a
+`github.commands` entry with one of these names would shadow the built-in and confuse
+users. `km doctor` WARNs on each reserved name found in `github.commands`:
+
+```
+WARN  GitHub commands config   command "claude" shadows the reserved built-in /claude verb — rename to avoid unexpected behavior
+```
+
+The remediation is to rename the command key (e.g. `claude-review: …`).
+
+### /help extension
+
+The bridge's built-in `/help` reply now advertises the available agent verbs in
+addition to the Phase 99 command list:
+
+```
+**Available agents:**
+- /claude — dispatch this thread to Claude
+- /codex  — dispatch this thread to Codex
+
+**Current thread agent:** `codex`    ← shown only for known threads with a stored agent_type
+
+**Available commands:**
+
+- /patch  — apply the smallest fix
+- /review — read-only review, inline findings
+
+**Default:** /review (used when no command is specified)
+```
+
+When the thread has no row yet (fresh PR), the "Current thread agent" line is omitted.
+
+### Back-compatibility
+
+A comment with no `/claude` or `/codex` token is **byte-identical** to Phase 101
+behavior:
+
+- `AgentVerb` is `""` → the envelope's `Agent` field is `""` → the poller uses the
+  profile-default agent type → the thread row's `agent_type` is written as the profile
+  default, same as Phase 101.
+- No change to `X-KM-Relayed` semantics, claim-gather, cooldown, or nonce deduplication.
+
+### Deploy surface
+
+Phase 102 adds:
+
+- **Bridge Lambda (`km-github-bridge`)** — new agent-verb parsing + conflict reply.
+- **Source-aware poller** (sandbox-side userdata) — `THREAD_AGENT_TYPE` env var, D6
+  Codex-guard check.
+
+Phase 102 touches **NO** new Terraform resources and **NO** SandboxProfile schema fields.
+
+```bash
+# 1. CLEAN rebuild of all Lambda zips.
+#    Phase 102 modifies the bridge Lambda (pkg/github/bridge/) AND the compiled
+#    userdata (pkg/compiler/userdata.go → poller script embedded in create-handler).
+#    Rebuild both:
+make build-lambdas
+
+# 2. Full terragrunt apply — redeploys bridge + create-handler Lambda.
+#    NOT --sidecars: this is a code change to Lambdas managed by their TF module.
+#    --sidecars rebuilds the km binary and cold-starts sidecars but does NOT
+#    update the Lambda code (memory: feedback_km_init_full_apply).
+km init --dry-run=false
+
+# 3. Existing sandboxes must be recreated to gain the new poller
+#    (which carries the THREAD_AGENT_TYPE env var and D6 guard).
+#    The bridge Lambda update is instant — new agent-verb parsing fires on the NEXT
+#    webhook delivery without sandbox recreate.
+km destroy <sandbox-id> --remote --yes
+km create profiles/github-review.yaml --alias gh-myrepo
+
+# 4. Verify.
+km doctor
+```
+
+**What needs `km destroy && km create`:** The source-aware poller is embedded in the
+userdata bootstrap (compiled by the create-handler Lambda). Only **newly created**
+sandboxes get the Phase 102 poller. Existing sandboxes continue running the Phase 101
+poller — they dispatch correctly but do not read `THREAD_AGENT_TYPE` from the envelope
+and do not emit the D6 Codex-guard comment.
+
+**NOT required:** `km init --sidecars` — there is no SandboxProfile schema change.
+Agent-type persistence is schema-on-write: the DDB `agent_type` column was added in
+Phase 102 Plan 02 and is written by the bridge; no TF migration required.
+
+### Two-install / one-App UAT: agent-verb end-to-end
+
+After deploying (bridge + poller, sandbox recreated):
+
+**A. Agent verb selects Claude:**
+1. Post `@km-bot /claude look at the auth fix` on an open PR in a configured repo.
+2. Bridge emits 👀; envelope carries `"agent": "claude"`.
+3. Poller writes `agent_type=claude` to `km-github-threads`; dispatches Claude.
+4. Claude posts a review via `km-github review`.
+
+**B. Agent verb selects Codex (Codex-capable sandbox):**
+1. Post `@km-bot /codex /patch fix the flaky test` on the same PR.
+2. Bridge emits 👀; envelope carries `"agent": "codex"`, `"body"` = args without `/codex /patch`.
+3. Poller writes `agent_type=codex`; dispatches Codex.
+4. Codex applies the patch and posts a review.
+
+**C. Thread continuity:**
+1. Reply to the same PR thread with `@km-bot what did you change?` (no verb).
+2. Bridge looks up the thread row; carries stored `agent_type` in the envelope.
+3. Same agent (Codex from step B) handles the follow-up.
+
+**D. Agent switch mid-thread:**
+1. Reply with `@km-bot /claude review what Codex did`.
+2. Bridge parses `/claude`; `agent_type=claude` is written over the prior `codex` row.
+3. Claude handles this turn and future turns (until another verb appears).
+
+**E. Conflict error:**
+1. Post `@km-bot /claude /codex do something`.
+2. Bridge detects `AgentVerbConflict=true`; posts "Specify one agent" reply; returns 200. No dispatch.
+
+**F. Codex on Claude-only sandbox (D6 guard):**
+1. Post `@km-bot /codex review this` on a PR whose sandbox was created from `github-review.yaml`.
+2. Bridge emits 👀; poller checks `command -v codex` → not found.
+3. Poller posts "This sandbox's profile has no Codex; /codex is unavailable here." and acks.
+
+**G. km doctor reserved-verb check:**
+1. Add `claude: {prompt: "Custom prompt."}` to `github.commands` in `km-config.yaml`.
+2. Run `km doctor`.
+3. Expect `WARN GitHub commands config` mentioning `"claude"` shadows the reserved verb.
+
+---
+
 ## Troubleshooting
 
 ### 👀 reaction not appearing
