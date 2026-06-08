@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 101-04-PLAN.md
-last_updated: "2026-06-08T18:32:20.181Z"
+stopped_at: Completed 102-02-PLAN.md
+last_updated: "2026-06-08T21:37:56.781Z"
 last_activity: 2026-06-08
 progress:
   total_phases: 118
   completed_phases: 104
-  total_plans: 516
-  completed_plans: 478
+  total_plans: 521
+  completed_plans: 479
   percent: 91
 ---
 
@@ -511,6 +511,7 @@ Progress: [█████████░] 91%
 | Phase 101 P02 | 286 | 2 tasks | 5 files |
 | Phase 101 P03 | 239 | 4 tasks | 4 files |
 | Phase 101 P04 | 200s | 2 tasks | 4 files |
+| Phase 102 P02 | 324s | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1479,6 +1480,8 @@ Recent decisions affecting current work:
 - [Phase 101]: jsonClaim helper returns plain JSON body — WebhookResponse has no Headers field; GitHub ignores response headers so Content-Type omission is safe
 - [Phase 101]: Reuse DynamoGitHubNonceStore as OrphanCooldown store with gh-router-cooldown: key prefix — no new table, no new interface
 - [Phase 101]: Phase 101 doc sections mirror Slack-96 analog in docs/github-bridge.md + OPERATOR-GUIDE.md + CLAUDE.md; 101-UAT.md has Tests A-D for GH-ORPHAN-E2E
+- [Phase 102]: InvalidateStaleSession keeps agent_type (does not REMOVE): stale rows retain agent binding across sandbox recreations
+- [Phase 102]: agent_type schema-on-write in km-github-threads; old rows return empty string (profile default); no Terraform change
 
 ### Roadmap Evolution
 
@@ -1608,6 +1611,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-08T14:08:02.108Z
-Stopped at: Completed 101-04-PLAN.md
+Last session: 2026-06-08T21:37:56.770Z
+Stopped at: Completed 102-02-PLAN.md
 Resume file: None
