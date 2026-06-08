@@ -144,13 +144,14 @@ func TestGitHubThreadStore_Upsert(t *testing.T) {
 }
 
 // TestGitHubThreadStore_LookupSandbox_Found verifies that LookupSandbox returns
-// sandboxID and sessionID when the item exists.
+// sandboxID, sessionID, and agentType when the item exists.
 func TestGitHubThreadStore_LookupSandbox_Found(t *testing.T) {
 	fake := &fakeGitHubThreadDynamo{
 		getItem: &dynamodb.GetItemOutput{
 			Item: map[string]dynamodbtypes.AttributeValue{
 				"sandbox_id":       &dynamodbtypes.AttributeValueMemberS{Value: "sb-found"},
 				"agent_session_id": &dynamodbtypes.AttributeValueMemberS{Value: "sess-xyz"},
+				"agent_type":       &dynamodbtypes.AttributeValueMemberS{Value: "codex"},
 			},
 		},
 	}
@@ -159,7 +160,7 @@ func TestGitHubThreadStore_LookupSandbox_Found(t *testing.T) {
 		TableName: "km-github-threads",
 	}
 
-	sandboxID, sessionID, err := store.LookupSandbox(context.Background(), "owner/repo", 7)
+	sandboxID, sessionID, agentType, err := store.LookupSandbox(context.Background(), "owner/repo", 7)
 	if err != nil {
 		t.Fatalf("LookupSandbox returned error: %v", err)
 	}
@@ -169,10 +170,46 @@ func TestGitHubThreadStore_LookupSandbox_Found(t *testing.T) {
 	if sessionID != "sess-xyz" {
 		t.Errorf("sessionID = %q; want sess-xyz", sessionID)
 	}
+	if agentType != "codex" {
+		t.Errorf("agentType = %q; want codex", agentType)
+	}
+}
+
+// TestGitHubThreadStore_LookupSandbox_NoAgentType verifies that LookupSandbox returns
+// agentType=="" for a row that pre-dates Phase 102 (no agent_type attribute).
+// The absent attribute must return "" (treated as profile default downstream).
+func TestGitHubThreadStore_LookupSandbox_NoAgentType(t *testing.T) {
+	fake := &fakeGitHubThreadDynamo{
+		getItem: &dynamodb.GetItemOutput{
+			Item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":       &dynamodbtypes.AttributeValueMemberS{Value: "sb-old"},
+				"agent_session_id": &dynamodbtypes.AttributeValueMemberS{Value: "sess-old"},
+				// agent_type intentionally absent — pre-Phase-102 row
+			},
+		},
+	}
+	store := &bridge.DynamoGitHubThreadStore{
+		Client:    fake,
+		TableName: "km-github-threads",
+	}
+
+	sandboxID, sessionID, agentType, err := store.LookupSandbox(context.Background(), "owner/repo", 8)
+	if err != nil {
+		t.Fatalf("LookupSandbox(no-agent_type) returned error: %v", err)
+	}
+	if sandboxID != "sb-old" {
+		t.Errorf("sandboxID = %q; want sb-old", sandboxID)
+	}
+	if sessionID != "sess-old" {
+		t.Errorf("sessionID = %q; want sess-old", sessionID)
+	}
+	if agentType != "" {
+		t.Errorf("agentType = %q; want empty (back-compat with pre-Phase-102 rows)", agentType)
+	}
 }
 
 // TestGitHubThreadStore_LookupSandbox_NotFound verifies that a missing item
-// returns ("", "", nil) — NOT an error (absent = first-dispatch, not a failure).
+// returns ("", "", "", nil) — NOT an error (absent = first-dispatch, not a failure).
 func TestGitHubThreadStore_LookupSandbox_NotFound(t *testing.T) {
 	fake := &fakeGitHubThreadDynamo{} // getItem nil → returns empty GetItemOutput
 	store := &bridge.DynamoGitHubThreadStore{
@@ -180,7 +217,7 @@ func TestGitHubThreadStore_LookupSandbox_NotFound(t *testing.T) {
 		TableName: "km-github-threads",
 	}
 
-	sandboxID, sessionID, err := store.LookupSandbox(context.Background(), "owner/repo", 99)
+	sandboxID, sessionID, agentType, err := store.LookupSandbox(context.Background(), "owner/repo", 99)
 	if err != nil {
 		t.Fatalf("LookupSandbox(absent) returned error: %v; want nil", err)
 	}
@@ -190,10 +227,13 @@ func TestGitHubThreadStore_LookupSandbox_NotFound(t *testing.T) {
 	if sessionID != "" {
 		t.Errorf("sessionID = %q; want empty string", sessionID)
 	}
+	if agentType != "" {
+		t.Errorf("agentType = %q; want empty string (row absent)", agentType)
+	}
 }
 
 // TestGitHubThreadStore_UpdateSession verifies that UpdateSession issues an
-// UpdateItem that sets agent_session_id on the (repo, number) row.
+// UpdateItem that sets agent_session_id AND agent_type on the (repo, number) row.
 func TestGitHubThreadStore_UpdateSession(t *testing.T) {
 	fake := &fakeGitHubThreadDynamo{}
 	store := &bridge.DynamoGitHubThreadStore{
@@ -201,7 +241,7 @@ func TestGitHubThreadStore_UpdateSession(t *testing.T) {
 		TableName: "km-github-threads",
 	}
 
-	err := store.UpdateSession(context.Background(), "owner/repo", 42, "session-abc")
+	err := store.UpdateSession(context.Background(), "owner/repo", 42, "session-abc", "codex")
 	if err != nil {
 		t.Fatalf("UpdateSession returned error: %v", err)
 	}
@@ -214,21 +254,49 @@ func TestGitHubThreadStore_UpdateSession(t *testing.T) {
 		t.Errorf("TableName = %q; want km-github-threads", *upd.TableName)
 	}
 
-	// Verify the update expression sets agent_session_id.
+	// Verify the update expression sets both agent_session_id and agent_type.
 	if upd.UpdateExpression == nil || *upd.UpdateExpression == "" {
-		t.Error("UpdateExpression is nil/empty; want SET agent_session_id = ...")
+		t.Error("UpdateExpression is nil/empty; want SET agent_session_id = :sid, agent_type = :at")
+	}
+	expr := *upd.UpdateExpression
+	if !contains(expr, "agent_type") {
+		t.Errorf("UpdateExpression %q does not mention agent_type; want SET ... agent_type = :at", expr)
 	}
 
 	// Verify the ExpressionAttributeValues includes the session ID.
-	found := false
+	foundSession := false
 	for _, v := range upd.ExpressionAttributeValues {
 		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok && sv.Value == "session-abc" {
-			found = true
+			foundSession = true
 		}
 	}
-	if !found {
+	if !foundSession {
 		t.Errorf("ExpressionAttributeValues does not contain 'session-abc'; got %v", upd.ExpressionAttributeValues)
 	}
+
+	// Verify the ExpressionAttributeValues includes agent_type = "codex".
+	foundAgent := false
+	for _, v := range upd.ExpressionAttributeValues {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok && sv.Value == "codex" {
+			foundAgent = true
+		}
+	}
+	if !foundAgent {
+		t.Errorf("ExpressionAttributeValues does not contain 'codex' for agent_type; got %v", upd.ExpressionAttributeValues)
+	}
+}
+
+// contains is a simple substring helper used by UpdateSession assertions.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+			return false
+		}())
 }
 
 // Ensure the DynamoGitHubThreadStore type reference causes compilation failure
