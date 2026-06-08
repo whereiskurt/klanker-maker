@@ -22,8 +22,10 @@ import (
 // These exercise the fire-and-forget (Phase-95-era) GitHub peer relayer:
 // verbatim body + forwarded GitHub headers + X-KM-Relayed:1, parallel POSTs,
 // bounded context, failing-peer tolerance, empty no-op, and HMAC re-verify.
-// There is NO claim machinery (Broadcast returns a plain error) — that is the
-// deferred Phase 101 orphan reply.
+//
+// Phase 101: Broadcast is now claim-aware — returns ([]PeerClaimResult, error).
+// The Phase-100 tests are updated to the new 2-value return but their assertions
+// are unchanged (they do not inspect claim results, only side-effects).
 // ============================================================
 
 const testRelayBody = `{"action":"created","issue":{"number":7}}`
@@ -83,7 +85,7 @@ func TestHTTPPeerRelayer_Broadcast_ForwardsHeaders(t *testing.T) {
 	defer s2.Close()
 
 	r := &bridge.HTTPPeerRelayer{PeerURLs: []string{s1.URL, s2.URL}}
-	if err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders(wantSig, wantEvent, wantDelivery)); err != nil {
+	if _, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders(wantSig, wantEvent, wantDelivery)); err != nil {
 		t.Fatalf("Broadcast returned err: %v", err)
 	}
 
@@ -135,7 +137,7 @@ func TestHTTPPeerRelayer_Broadcast_AllPeers(t *testing.T) {
 	}()
 
 	r := &bridge.HTTPPeerRelayer{PeerURLs: urls}
-	if err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g1")); err != nil {
+	if _, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g1")); err != nil {
 		t.Fatalf("Broadcast returned err: %v", err)
 	}
 
@@ -166,7 +168,7 @@ func TestHTTPPeerRelayer_Broadcast_FailingPeerNonFatal(t *testing.T) {
 		PeerURLs:   []string{healthy.URL, failing.URL, unreachable},
 		HTTPClient: &http.Client{Timeout: 2 * time.Second},
 	}
-	if err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g1")); err != nil {
+	if _, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g1")); err != nil {
 		t.Fatalf("Broadcast returned err on failing peers (must be non-fatal): %v", err)
 	}
 
@@ -200,7 +202,7 @@ func TestHTTPPeerRelayer_Broadcast_BoundedContext(t *testing.T) {
 	}
 
 	start := time.Now()
-	if err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g1")); err != nil {
+	if _, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g1")); err != nil {
 		t.Fatalf("Broadcast returned err: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -216,12 +218,12 @@ func TestHTTPPeerRelayer_Broadcast_BoundedContext(t *testing.T) {
 // returns nil with no panic (dormancy).
 func TestHTTPPeerRelayer_Broadcast_EmptyPeers_NoOp(t *testing.T) {
 	r := &bridge.HTTPPeerRelayer{PeerURLs: nil}
-	if err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g1")); err != nil {
+	if _, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g1")); err != nil {
 		t.Fatalf("empty Broadcast returned err: %v", err)
 	}
 
 	r2 := &bridge.HTTPPeerRelayer{PeerURLs: []string{}}
-	if err := r2.Broadcast(context.Background(), []byte(testRelayBody), nil); err != nil {
+	if _, err := r2.Broadcast(context.Background(), []byte(testRelayBody), nil); err != nil {
 		t.Fatalf("empty Broadcast (nil headers) returned err: %v", err)
 	}
 }
@@ -251,7 +253,7 @@ func TestHTTPPeerRelayer_RelayedVerify(t *testing.T) {
 	defer peer.Close()
 
 	r := &bridge.HTTPPeerRelayer{PeerURLs: []string{peer.URL}}
-	if err := r.Broadcast(context.Background(), body, ghHeaders(sig, "issue_comment", "guid-xyz")); err != nil {
+	if _, err := r.Broadcast(context.Background(), body, ghHeaders(sig, "issue_comment", "guid-xyz")); err != nil {
 		t.Fatalf("Broadcast returned err: %v", err)
 	}
 
@@ -260,5 +262,188 @@ func TestHTTPPeerRelayer_RelayedVerify(t *testing.T) {
 	}
 	if verifyErr != nil {
 		t.Errorf("peer re-verify failed: %v (verbatim forward must preserve the HMAC)", verifyErr)
+	}
+}
+
+// ============================================================
+// Phase 101 — Claim-aware scatter-gather tests
+//
+// These exercise the new ([]PeerClaimResult, error) return type and the
+// rollout-safety invariant: any transport error, non-2xx status, OR
+// unparseable/legacy body tallies as Claimed:true. Only an explicit
+// {"claimed":false} response counts as unclaimed.
+// ============================================================
+
+// TestHTTPPeerRelayer_ClaimTally_MixedPeers: 3 peers — two return {"claimed":true},
+// one returns {"claimed":false}. Broadcast must return one result per peer with
+// matching Claimed booleans.
+func TestHTTPPeerRelayer_ClaimTally_MixedPeers(t *testing.T) {
+	makeServer := func(body string, status int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		}))
+	}
+
+	claimedTrue1 := makeServer(`{"claimed":true}`, http.StatusOK)
+	claimedFalse := makeServer(`{"claimed":false}`, http.StatusOK)
+	claimedTrue2 := makeServer(`{"claimed":true}`, http.StatusOK)
+	defer claimedTrue1.Close()
+	defer claimedFalse.Close()
+	defer claimedTrue2.Close()
+
+	r := &bridge.HTTPPeerRelayer{
+		PeerURLs: []string{claimedTrue1.URL, claimedFalse.URL, claimedTrue2.URL},
+	}
+	results, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g1"))
+	if err != nil {
+		t.Fatalf("Broadcast returned err: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("got %d results, want 3", len(results))
+	}
+
+	// There must be at least one Claimed:true and exactly one Claimed:false.
+	var trueCount, falseCount int
+	for _, res := range results {
+		if res.Claimed {
+			trueCount++
+		} else {
+			falseCount++
+		}
+	}
+	if trueCount < 1 {
+		t.Errorf("expected at least one Claimed:true, got %d", trueCount)
+	}
+	if falseCount != 1 {
+		t.Errorf("expected exactly one Claimed:false, got %d", falseCount)
+	}
+}
+
+// TestHTTPPeerRelayer_RolloutLegacyOk_ClaimedTrue: a peer returns 200 with the
+// Phase-100 legacy plain-string `"ok"` body. json.Unmarshal fails → Claimed:true
+// (rollout-safe, never a false orphan).
+func TestHTTPPeerRelayer_RolloutLegacyOk_ClaimedTrue(t *testing.T) {
+	legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`"ok"`)) // Phase-100 fire-and-forget response body
+	}))
+	defer legacy.Close()
+
+	r := &bridge.HTTPPeerRelayer{PeerURLs: []string{legacy.URL}}
+	results, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g2"))
+	if err != nil {
+		t.Fatalf("Broadcast returned err: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if !results[0].Claimed {
+		t.Errorf("legacy 'ok' body must tally as Claimed:true (rollout safety), got Claimed:false")
+	}
+}
+
+// TestHTTPPeerRelayer_RolloutNon2xx_ClaimedTrue: a peer returns HTTP 500 ⇒ Claimed:true.
+func TestHTTPPeerRelayer_RolloutNon2xx_ClaimedTrue(t *testing.T) {
+	errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"claimed":false}`)) // body is ignored on non-2xx
+	}))
+	defer errServer.Close()
+
+	r := &bridge.HTTPPeerRelayer{PeerURLs: []string{errServer.URL}}
+	results, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g3"))
+	if err != nil {
+		t.Fatalf("Broadcast returned err: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if !results[0].Claimed {
+		t.Errorf("non-2xx status must tally as Claimed:true (rollout safety), got Claimed:false")
+	}
+}
+
+// TestHTTPPeerRelayer_RolloutTimeout_ClaimedTrue: a peer sleeps well past the
+// relayBroadcastTimeout ⇒ transport/context error ⇒ Claimed:true; Broadcast
+// still returns within a reasonable bound.
+func TestHTTPPeerRelayer_RolloutTimeout_ClaimedTrue(t *testing.T) {
+	done := make(chan struct{})
+	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		select {
+		case <-req.Context().Done():
+		case <-done:
+		case <-time.After(30 * time.Second):
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slowServer.Close()
+	defer close(done)
+
+	r := &bridge.HTTPPeerRelayer{
+		PeerURLs:   []string{slowServer.URL},
+		HTTPClient: &http.Client{Timeout: 10 * time.Second},
+	}
+
+	start := time.Now()
+	results, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g4"))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Broadcast returned err: %v", err)
+	}
+	if elapsed > 8*time.Second {
+		t.Errorf("Broadcast took %v (want bounded to ~5s relayBroadcastTimeout)", elapsed)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if !results[0].Claimed {
+		t.Errorf("timeout/transport error must tally as Claimed:true (rollout safety), got Claimed:false")
+	}
+}
+
+// TestHTTPPeerRelayer_ClaimedFalse_Parsed: a single peer returns {"claimed":false} ⇒
+// exactly one result with Claimed:false — proves a true orphan repo is detectable.
+func TestHTTPPeerRelayer_ClaimedFalse_Parsed(t *testing.T) {
+	unownedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"claimed":false}`))
+	}))
+	defer unownedServer.Close()
+
+	r := &bridge.HTTPPeerRelayer{PeerURLs: []string{unownedServer.URL}}
+	results, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g5"))
+	if err != nil {
+		t.Fatalf("Broadcast returned err: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Claimed {
+		t.Errorf("explicit {\"claimed\":false} must tally as Claimed:false, got Claimed:true")
+	}
+}
+
+// TestHTTPPeerRelayer_Empty_NilNil: empty PeerURLs ⇒ (nil, nil).
+func TestHTTPPeerRelayer_Empty_NilNil(t *testing.T) {
+	r := &bridge.HTTPPeerRelayer{PeerURLs: nil}
+	results, err := r.Broadcast(context.Background(), []byte(testRelayBody), ghHeaders("sha256=x", "issue_comment", "g6"))
+	if err != nil {
+		t.Fatalf("empty Broadcast returned err: %v", err)
+	}
+	if results != nil {
+		t.Errorf("empty PeerURLs must return nil results, got %v", results)
+	}
+
+	r2 := &bridge.HTTPPeerRelayer{PeerURLs: []string{}}
+	results2, err2 := r2.Broadcast(context.Background(), []byte(testRelayBody), nil)
+	if err2 != nil {
+		t.Fatalf("empty Broadcast (nil headers) returned err: %v", err2)
+	}
+	if results2 != nil {
+		t.Errorf("empty PeerURLs must return nil results, got %v", results2)
 	}
 }
