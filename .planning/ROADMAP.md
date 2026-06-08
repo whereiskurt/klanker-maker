@@ -2309,10 +2309,13 @@ Plans:
 
 **Requirements**: GH-FED-CONFIG, GH-FED-RELAY, GH-FED-REORDER, GH-FED-LOOPGUARD, GH-FED-VERIFY, GH-FED-DOCTOR, GH-FED-SCALE, GH-FED-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
 **Depends on:** Phase 98 (independent of Phase 99)
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 100 to break down)
+- [ ] 100-01-PLAN.md — config plumbing: github.peer_bridges → KM_GITHUB_PEER_BRIDGES (struct + init.go export + TF/terragrunt), no new merge entry
+- [ ] 100-02-PLAN.md — HTTP peer relayer (PeerRelayer interface + fire-and-forget HTTPPeerRelayer, X-KM-Relayed loop guard)
+- [ ] 100-03-PLAN.md — Resolve() reorder + !matched relay/drop branch + cmd wiring (byte-identity + 700-repo scale fix)
+- [ ] 100-04-PLAN.md — km doctor peer checks + docs (github-bridge.md / OPERATOR-GUIDE / CLAUDE.md) + two-install E2E UAT runbook
 
 ### Phase 101: GitHub bridge orphan-repo helpful reply — front-door posts guidance when no install owns the repo (claim-aware scatter-gather, Slack Phase 96 analog)
 
