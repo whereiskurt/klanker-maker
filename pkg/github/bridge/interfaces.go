@@ -2,17 +2,33 @@ package bridge
 
 import "context"
 
+// PeerClaimResult is one peer's verdict on a relayed webhook. Claimed=true means
+// the peer owns the repo and handled it (OR is unreachable/legacy — rollout safety
+// treats those as claimed to avoid a false orphan). Claimed=false means the peer
+// explicitly does not own the repo.
+//
+// NO Channels field: the GitHub orphan reply has no repo list to return (unlike
+// the Slack Phase-96 analog which lists running sandbox channels).
+type PeerClaimResult struct {
+	PeerURL string // for logging
+	Claimed bool   // true = peer owns repo (or legacy/error/timeout — conservative)
+}
+
 // PeerRelayer broadcasts an unowned webhook to sibling github-bridge installs.
-// Fire-and-forget (Phase 100): Broadcast returns a plain error and does NOT
-// parse peer responses. Claim-aware scatter-gather (the orphan-repo reply, the
-// Phase-96 Slack analog) is deferred to Phase 101 — do not add a claim-result
-// slice return here.
+// Phase 101: claim-aware scatter-gather (the Phase-96 Slack analog, MINUS Channels).
+// Broadcast returns one PeerClaimResult per peer so the caller can detect true
+// orphan repos (zero claims from any peer).
+//
+// Rollout safety (GH-ORPHAN-ROLLOUT, LOCKED): any transport error, non-2xx status,
+// OR unparseable/legacy body is treated as Claimed:true — never produce a false orphan
+// in a mixed-version fleet. Only an explicit {"claimed":false} counts as unclaimed.
 type PeerRelayer interface {
 	// Broadcast POSTs the verbatim webhook body to every configured peer bridge
 	// in parallel, forwarding the GitHub auth/routing headers plus X-KM-Relayed:1.
-	// It is synchronous (waits for all POSTs / the bounded context) and treats a
-	// failing/slow peer as non-fatal. Empty peer list ⇒ no-op returning nil.
-	Broadcast(ctx context.Context, rawBody []byte, ghHeaders map[string]string) error
+	// It is synchronous (waits for all POSTs / the bounded context) so the Lambda
+	// runtime is not frozen with in-flight goroutines. Empty peer list ⇒ (nil, nil).
+	// Returns one PeerClaimResult per peer; errors are non-fatal (tallied Claimed:true).
+	Broadcast(ctx context.Context, rawBody []byte, ghHeaders map[string]string) ([]PeerClaimResult, error)
 }
 
 // SandboxResumer starts a stopped or paused EC2 sandbox instance.

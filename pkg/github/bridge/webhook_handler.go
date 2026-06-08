@@ -235,8 +235,10 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		if h.Relayer != nil {
 			// Front door: fan the verbatim webhook out to sibling installs so the
 			// owning peer processes it. Synchronous (Broadcast waits) — Lambda
-			// freezes on return. A failing peer is non-fatal.
-			if bErr := h.Relayer.Broadcast(ctx, req.RawBody, req.Headers); bErr != nil {
+			// freezes on return. A failing peer is non-fatal (tallied Claimed:true).
+			// Phase 101 (Plan 03) will consume the []PeerClaimResult for the
+			// orphan-repo helpful reply; for now the tally is discarded.
+			if _, bErr := h.Relayer.Broadcast(ctx, req.RawBody, req.Headers); bErr != nil {
 				h.log().Warn("github-bridge: relay broadcast partial failure",
 					"err", bErr, "repo", payload.Repository.FullName)
 			}

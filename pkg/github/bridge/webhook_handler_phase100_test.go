@@ -29,11 +29,11 @@ type mockPeerRelayer struct {
 	err            error
 }
 
-func (m *mockPeerRelayer) Broadcast(_ context.Context, rawBody []byte, ghHeaders map[string]string) error {
+func (m *mockPeerRelayer) Broadcast(_ context.Context, rawBody []byte, ghHeaders map[string]string) ([]bridge.PeerClaimResult, error) {
 	m.broadcastCalls++
 	m.lastRawBody = rawBody
 	m.lastHeaders = ghHeaders
-	return m.err
+	return nil, m.err
 }
 
 // Compile-time check: mockPeerRelayer must satisfy bridge.PeerRelayer.
