@@ -132,6 +132,14 @@ type WebhookHandler struct {
 	// GitHub App installation token. Nil → reply paths are skipped (errors logged).
 	Commenter CommentPoster
 
+	// Relayer broadcasts an unowned webhook to sibling github-bridge installs
+	// (Phase 100 federated relay). When non-nil and a Resolve() miss is NOT already
+	// relayed (x-km-relayed absent), Handle() fans the verbatim webhook out to all
+	// peers and returns 200 so the owning install processes it. When nil, federation
+	// is OFF: a resolve-miss returns 200 (today's silent no-config drop) — making the
+	// !matched path byte-identical to Phase 97/98.
+	Relayer PeerRelayer
+
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
 }
@@ -197,6 +205,53 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		return WebhookResponse{StatusCode: 200, Body: "ok"}
 	}
 
+	// ── Step 4.5: Resolve ownership FIRST (GH-FED-REORDER + GH-FED-SCALE) ─────
+	// Phase 100 moves Resolve() ahead of the thread-lookup (4b) and the @-mention
+	// filter (5). Two reasons:
+	//   1. Federated relay: a !matched webhook is relayed (front door) or dropped
+	//      (already relayed) BEFORE any local work — the owning peer does the rest.
+	//   2. 700-repo scale fix: Resolve() is pure config (no I/O). Running it first
+	//      means the wasted Threads.LookupSandbox DDB GetItem (4b) and the mention
+	//      scan happen ONLY on the owned path.
+	//
+	// BYTE-IDENTITY argument (CLAUDE.md dormancy rule + RESEARCH Pitfall 3): a
+	// km-github-threads continuity row only EVER exists for a repo this install
+	// owns (rows are written at dispatch time, which requires matched=true). So
+	// short-circuiting the thread-lookup for an unowned repo loses nothing — the
+	// matched path's thread-bypass (Phase 98) is unchanged in order and behavior.
+	alias, profile, allow, matched := Resolve(payload.Repository.FullName, h.Entries, h.DefaultProfile)
+	if !matched {
+		// Decision table (GH-FED-LOOPGUARD); relayed = X-KM-Relayed present
+		// (Function URL headers are lowercased before Handle()):
+		//   absent  + miss → broadcast to peers (if Relayer set) else 200 no-op
+		//   present + miss → TERMINAL drop, never re-relay (single-hop guard)
+		relayed := req.Headers["x-km-relayed"] != ""
+		if relayed {
+			// Already relayed and still no owner here → terminal drop, NEVER re-relay.
+			h.log().Warn("github-bridge: relay miss — no owner for relayed delivery",
+				"repo", payload.Repository.FullName, "event", "github_relay_no_owner")
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+		}
+		if h.Relayer != nil {
+			// Front door: fan the verbatim webhook out to sibling installs so the
+			// owning peer processes it. Synchronous (Broadcast waits) — Lambda
+			// freezes on return. A failing peer is non-fatal.
+			if bErr := h.Relayer.Broadcast(ctx, req.RawBody, req.Headers); bErr != nil {
+				h.log().Warn("github-bridge: relay broadcast partial failure",
+					"err", bErr, "repo", payload.Repository.FullName)
+			}
+		} else {
+			// Federation off (nil Relayer) → today's silent no-config drop.
+			h.log().Info("github-bridge: no repo config, silent drop",
+				"repo", payload.Repository.FullName)
+		}
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// ── matched path: thread-lookup → mention → allowlist → dedupe → dispatch ─
+	// Everything below runs in the SAME relative order as Phase 98; only the
+	// POSITION of Resolve() (now above) and the !matched early-exit changed.
+
 	// ── Step 4b: known-thread bypass (GH-X-THREADBYPASS) ────────────────────
 	// If (repo, number) is already tracked in km-github-threads, skip the
 	// mention requirement. Mirrors Phase 91.3 Slack thread-bypass logic.
@@ -229,12 +284,6 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	}
 
 	// ── Step 6: Authorize sender ─────────────────────────────────────────────
-	alias, profile, allow, matched := Resolve(payload.Repository.FullName, h.Entries, h.DefaultProfile)
-	if !matched {
-		h.log().Info("github-bridge: no repo config, silent drop",
-			"repo", payload.Repository.FullName)
-		return WebhookResponse{StatusCode: 200, Body: "ok"}
-	}
 	if !isInAllowlist(payload.Comment.User.Login, allow) {
 		// Silent — no reaction, no comment, invisible to unauthorized users.
 		h.log().Info("github-bridge: sender not in allowlist, silent drop",
