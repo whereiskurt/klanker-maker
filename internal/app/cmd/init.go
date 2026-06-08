@@ -298,6 +298,20 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			// Phase 99.1 (GH-DLQ-SHARED / GH-DLQ-DEPLOY): two shared per-install FIFO
+			// DLQs (km-{github,slack}-inbound-dlq.fifo) created once at km init,
+			// idempotent via TF state. Per-sandbox inbound FIFO queues attach a
+			// redrivePolicy targeting these so a poison message that exhausts
+			// maxReceiveCount is moved off the source queue instead of head-of-line
+			// blocking its message group forever (Phase 99 UAT FIFO poison wedge).
+			// Plain regional infra — no dependency block, applies before the lambdas
+			// and before "ses" (ses applies last; it owns the consolidated bucket
+			// policy). km uninit destroys it on the reverse-order traversal.
+			name:    "sqs-inbound-dlq",
+			dir:     filepath.Join(regionDir, "sqs-inbound-dlq"),
+			envReqs: nil,
+		},
+		{
 			// Phase 63: Slack-notify bridge Lambda with Function URL (auth=NONE;
 			// Ed25519 + nonce provide application-layer auth). Depends on
 			// dynamodb-identities, dynamodb-sandboxes, and dynamodb-slack-nonces.
