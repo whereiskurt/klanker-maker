@@ -2323,10 +2323,13 @@ Plans:
 
 **Requirements**: GH-ORPHAN-CLAIM, GH-ORPHAN-REPLY, GH-ORPHAN-COOLDOWN, GH-ORPHAN-ROLLOUT, GH-ORPHAN-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
 **Depends on:** Phase 100
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 101 to break down)
+- [ ] 101-01-PLAN.md — github.default_router config plumbing (struct → KM_GITHUB_DEFAULT_ROUTER env → TF var/Lambda env); no merge-list entry
+- [ ] 101-02-PLAN.md — relayer claim-aware upgrade (Broadcast → []PeerClaimResult; rollout-safe legacy/timeout/non-2xx ⇒ Claimed:true)
+- [ ] 101-03-PLAN.md — handler wiring (peer-side claim emit, front-door tally, orphan-comment method, cooldown, main.go gate)
+- [ ] 101-04-PLAN.md — docs (github-bridge.md/OPERATOR-GUIDE/CLAUDE Phase 101) + two-install E2E UAT runbook (101-UAT.md)
 
 ### Phase 102: GitHub bridge agent verbs — /claude and /codex select the per-thread agent in a PR comment (Slack Phase 70 analog)
 
