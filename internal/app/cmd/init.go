@@ -1135,11 +1135,46 @@ func EnsureSlackBotUserIDFromSSM(ctx context.Context, cfg *config.Config, awsCfg
 	os.Setenv("KM_SLACK_BOT_USER_ID", *out.Parameter.Value) //nolint:errcheck
 }
 
+// commandPromptSearchPath returns the ordered list of absolute candidate paths a
+// command @file is looked up in, given the km-config.yaml directory. profiles/ is
+// the default home for command prompt templates, so a bare reference like
+// "@review.txt" is found at profiles/review.txt without the operator spelling out
+// the prefix. An explicit relative path ("@profiles/review.txt", "@sub/x.txt") is
+// tried against configDir first, so existing configs keep working unchanged.
+// configDir == "" falls back to ".".
+func commandPromptSearchPath(configDir, relPath string) []string {
+	if configDir == "" {
+		configDir = "."
+	}
+	return []string{
+		filepath.Join(configDir, relPath),             // explicit: @profiles/x.txt, @sub/x.txt
+		filepath.Join(configDir, "profiles", relPath), // default home: bare @x.txt → profiles/x.txt
+	}
+}
+
+// resolveCommandPromptFile returns the first existing (non-directory) file from
+// the command-prompt search path, or ("", candidates, error) when none exist.
+// The candidate list is returned on miss so callers can report exactly what was
+// searched. Operator-workstation only — used by km init (to inline into SSM) and
+// km doctor (to validate); the bridge Lambda never reads files.
+func resolveCommandPromptFile(configDir, relPath string) (string, []string, error) {
+	candidates := commandPromptSearchPath(configDir, relPath)
+	for _, c := range candidates {
+		if fi, statErr := os.Stat(c); statErr == nil && !fi.IsDir() {
+			return c, candidates, nil
+		}
+	}
+	return "", candidates, fmt.Errorf("not found in any of: %s", strings.Join(candidates, ", "))
+}
+
 // ResolveCommandPrompts returns a copy of the commands map with each entry's
 // Prompt field resolved through the @file convention (Phase 99 Plan 03):
 //
 //   - "@@literal"     → "@literal"  (strip one @, no file read)
-//   - "@relative/p"   → contents of filepath.Join(configDir, "relative/p")
+//   - "@relative/p"   → contents of the first hit on the command-prompt search
+//     path: filepath.Join(configDir, "relative/p"), then
+//     filepath.Join(configDir, "profiles", "relative/p"). A bare "@p.txt" thus
+//     resolves to profiles/p.txt by default; "@profiles/p.txt" still works.
 //   - (other text)    → unchanged
 //   - @file missing   → hard error (callers surface to km init exit)
 //
@@ -1160,9 +1195,14 @@ func ResolveCommandPrompts(commands map[string]config.GithubCommandEntry, config
 			// @@ escape: strip one @, yield literal @-prefixed text. No file I/O.
 			resolved.Prompt = entry.Prompt[1:]
 		case strings.HasPrefix(entry.Prompt, "@"):
-			// @file: read relative to km-config.yaml directory, NOT CWD.
+			// @file: read from the command-prompt search path (configDir, then
+			// configDir/profiles). Operator-workstation only — the contents are
+			// inlined into the SSM command doc; the bridge Lambda never reads files.
 			relPath := entry.Prompt[1:]
-			absPath := filepath.Join(configDir, relPath)
+			absPath, _, ferr := resolveCommandPromptFile(configDir, relPath)
+			if ferr != nil {
+				return nil, fmt.Errorf("github.commands[%s].prompt @%s: %w", verb, relPath, ferr)
+			}
 			data, err := os.ReadFile(absPath)
 			if err != nil {
 				return nil, fmt.Errorf("github.commands[%s].prompt @%s: %w", verb, relPath, err)

@@ -1389,11 +1389,9 @@ func checkGitHubCommandsValid(
 	var warnings []string
 	var errs []string
 
-	// 1. @file prompts — check existence relative to configDir (or CWD when empty).
-	base := configDir
-	if base == "" {
-		base = "."
-	}
+	// 1. @file prompts — check existence on the command-prompt search path
+	//    (configDir, then configDir/profiles), matching ResolveCommandPrompts so
+	//    a bare "@x.txt" found at profiles/x.txt is not falsely flagged missing.
 	for verb, entry := range commands {
 		prompt := entry.Prompt
 		if strings.HasPrefix(prompt, "@@") {
@@ -1401,11 +1399,10 @@ func checkGitHubCommandsValid(
 		}
 		if strings.HasPrefix(prompt, "@") {
 			path := strings.TrimPrefix(prompt, "@")
-			absPath := filepath.Join(base, path)
-			if _, statErr := os.Stat(absPath); statErr != nil {
+			if _, candidates, ferr := resolveCommandPromptFile(configDir, path); ferr != nil {
 				warnings = append(warnings, fmt.Sprintf(
-					"command %q prompt @file %q not found (resolved: %s): %v",
-					verb, path, absPath, statErr,
+					"command %q prompt @file %q not found (searched: %s)",
+					verb, path, strings.Join(candidates, ", "),
 				))
 			}
 		}

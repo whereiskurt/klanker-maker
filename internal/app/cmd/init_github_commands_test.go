@@ -160,6 +160,43 @@ func TestResolveCommandPrompts(t *testing.T) {
 		}
 	})
 
+	t.Run("bare @file defaults to profiles/ subdir", func(t *testing.T) {
+		// A file that exists ONLY under configDir/profiles/, referenced WITHOUT
+		// the profiles/ prefix, must resolve via the search-path fallback.
+		profilesDir := filepath.Join(configDir, "profiles")
+		if err := os.MkdirAll(profilesDir, 0o750); err != nil {
+			t.Fatalf("setup: mkdir profiles: %v", err)
+		}
+		defContent := "Default review/triage prompt for {{args}}."
+		if err := os.WriteFile(filepath.Join(profilesDir, "default.github.prompt.txt"), []byte(defContent), 0o600); err != nil {
+			t.Fatalf("setup: write profiles prompt: %v", err)
+		}
+		cmds := map[string]config.GithubCommandEntry{
+			"review": {Prompt: "@default.github.prompt.txt"}, // no profiles/ prefix
+		}
+		got, err := cmd.ResolveCommandPrompts(cmds, configDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got["review"].Prompt != defContent {
+			t.Errorf("want %q, got %q", defContent, got["review"].Prompt)
+		}
+	})
+
+	t.Run("explicit @profiles/ prefix still resolves (back-compat)", func(t *testing.T) {
+		// Same file, referenced WITH the explicit profiles/ prefix.
+		cmds := map[string]config.GithubCommandEntry{
+			"review": {Prompt: "@profiles/default.github.prompt.txt"},
+		}
+		got, err := cmd.ResolveCommandPrompts(cmds, configDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(got["review"].Prompt, "Default review/triage prompt") {
+			t.Errorf("explicit @profiles/ form should resolve; got %q", got["review"].Prompt)
+		}
+	})
+
 	t.Run("resolver uses configDir, not CWD", func(t *testing.T) {
 		// Create file ONLY in configDir (not in CWD or any other temp dir).
 		cwd, _ := os.Getwd()

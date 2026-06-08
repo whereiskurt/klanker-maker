@@ -870,7 +870,7 @@ github:
       description: "Apply the smallest safe fix and push a commit"
       alias: gh-myorg-dev          # route to a dedicated dev sandbox
       profile: profiles/github-dev.yaml
-      prompt: "@prompts/gh-patch.txt"   # @file — resolved relative to km-config.yaml
+      prompt: "@gh-patch.txt"   # @file — bare name → profiles/gh-patch.txt (see search path below)
 
     triage:
       description: "Classify severity, reproduce, and label the issue"
@@ -893,12 +893,24 @@ github:
 
 ### `@file` Prompt References
 
-`prompt: "@path/to/file.txt"` reads the file **relative to `km-config.yaml`** at `km init` time
-on the operator's workstation. The file contents are inlined into the SSM parameter before the
-Lambda ever reads it — the Lambda never reads the filesystem.
+`prompt: "@path/to/file.txt"` reads the file at `km init` time on the operator's workstation.
+The file contents are inlined into the SSM parameter before the Lambda ever reads it — the
+Lambda never reads the filesystem (no `/tmp`, no extraction; the resolution is purely
+operator-side).
+
+**Search path** (resolved against the `km-config.yaml` directory, **not** the shell CWD):
+
+1. `<config-dir>/<path>` — explicit form, e.g. `@profiles/gh-review.txt` or `@sub/dir/x.txt`
+2. `<config-dir>/profiles/<path>` — fallback, so a bare `@gh-review.txt` resolves to
+   `profiles/gh-review.txt` without spelling out the prefix
+
+`profiles/` is the conventional home for command prompt templates, so the bare form is the
+recommended style (`prompt: "@default.github.prompt.txt"` → `profiles/default.github.prompt.txt`).
+The explicit `@profiles/...` form keeps working unchanged.
 
 **Rules:**
-- `@file` → inlined at `km init` time; missing file = hard `km init` error + `km doctor` WARN
+- `@file` → inlined at `km init` time; missing on the whole search path = hard `km init` error
+  + `km doctor` WARN (the WARN lists every path searched)
 - `@@text` → escaped literal `@text` (no file read)
 - Inline text (no `@` prefix) → used as-is
 
@@ -956,7 +968,7 @@ default for the repo. `/help` never dispatches to a sandbox. Defining a user com
 
 | Check | Level | Trigger |
 |-------|-------|---------|
-| `@file` prompt missing/unreadable | WARN | command.prompt is `@file` but file not found relative to km-config.yaml dir |
+| `@file` prompt missing/unreadable | WARN | command.prompt is `@file` but file not found on the search path (config-dir, then config-dir/profiles); the WARN lists every path searched |
 | Profile unresolvable | WARN | command.profile path does not exist |
 | `help` shadowed | WARN | user defines a command named `help` (reserved built-in) |
 | Command↔repo alias overlap | WARN | command.alias equals a repo alias (explicit or auto-derived) |
