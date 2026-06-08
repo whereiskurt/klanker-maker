@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 101-01-PLAN.md
-last_updated: "2026-06-08T13:42:22.165Z"
+stopped_at: Completed 101-02-PLAN.md
+last_updated: "2026-06-08T13:43:11.982Z"
 last_activity: 2026-06-08
 progress:
   total_phases: 118
   completed_phases: 103
   total_plans: 516
-  completed_plans: 475
+  completed_plans: 476
   percent: 91
 ---
 
@@ -508,6 +508,7 @@ Progress: [█████████░] 91%
 | Phase 100-github-bridge-federated-relay-one-github-app-serving-many-resource-prefix-installs-via-github-peer-bridges P03 | 188 | 3 tasks | 4 files |
 | Phase 100 P04 | 11 | 3 tasks | 8 files |
 | Phase 101 P01 | 213s | 3 tasks | 7 files |
+| Phase 101 P02 | 286 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1471,6 +1472,8 @@ Recent decisions affecting current work:
 - [Phase 100]: Phase 100 federated relay: km doctor checkGitHubPeerBridges (malformed/self-loop WARN, empty SKIP) mirrors Slack; deterministic checks only (no undeterminable front-door-empty WARN); deploy = make build-lambdas + km init --dry-run=false (NOT --sidecars); v1.1.0 in-place; dormant absent github.peer_bridges
 - [Phase 101]: No new merge-list entry for github.default_router — decoded by existing UnmarshalKey("github") call, proven by TestLoadGithubDefaultRouter_Set
 - [Phase 101]: In-place v1.1.0 TF module edit with additive default="false" github_default_router var — no version bump (Phase 100 precedent)
+- [Phase 101]: PeerClaimResult has no Channels field — GitHub orphan reply has no repo list unlike Slack Phase-96
+- [Phase 101]: Rollout safety: legacy 'ok'/non-2xx/timeout all tally Claimed:true; only explicit {claimed:false} counts as unclaimed
 
 ### Roadmap Evolution
 
@@ -1600,6 +1603,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-08T13:42:22.154Z
-Stopped at: Completed 101-01-PLAN.md
+Last session: 2026-06-08T13:43:11.932Z
+Stopped at: Completed 101-02-PLAN.md
 Resume file: None
