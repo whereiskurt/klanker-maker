@@ -178,16 +178,21 @@ func TestHTTPPeerRelayer_Broadcast_FailingPeerNonFatal(t *testing.T) {
 // TestHTTPPeerRelayer_Broadcast_BoundedContext asserts a slow peer does not hang
 // Broadcast beyond the bounded relay timeout.
 func TestHTTPPeerRelayer_Broadcast_BoundedContext(t *testing.T) {
+	// done is closed when the test finishes so the slow handler can release
+	// promptly on httptest.Server.Close() instead of blocking on its timer.
+	done := make(chan struct{})
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		// Sleep well beyond relayBroadcastTimeout (~5s). The bounded context must
-		// cancel the in-flight request long before this completes.
+		// Block well beyond relayBroadcastTimeout (~5s). The bounded context must
+		// cancel the in-flight client request long before this would complete.
 		select {
-		case <-req.Context().Done():
+		case <-req.Context().Done(): // client/transport dropped the connection
+		case <-done:                 // test teardown
 		case <-time.After(30 * time.Second):
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer slow.Close()
+	defer close(done)
 
 	r := &bridge.HTTPPeerRelayer{
 		PeerURLs:   []string{slow.URL},

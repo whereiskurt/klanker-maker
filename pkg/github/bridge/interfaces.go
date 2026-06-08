@@ -2,6 +2,19 @@ package bridge
 
 import "context"
 
+// PeerRelayer broadcasts an unowned webhook to sibling github-bridge installs.
+// Fire-and-forget (Phase 100): Broadcast returns a plain error and does NOT
+// parse peer responses. Claim-aware scatter-gather (the orphan-repo reply, the
+// Phase-96 Slack analog) is deferred to Phase 101 — do not add a claim-result
+// slice return here.
+type PeerRelayer interface {
+	// Broadcast POSTs the verbatim webhook body to every configured peer bridge
+	// in parallel, forwarding the GitHub auth/routing headers plus X-KM-Relayed:1.
+	// It is synchronous (waits for all POSTs / the bounded context) and treats a
+	// failing/slow peer as non-fatal. Empty peer list ⇒ no-op returning nil.
+	Broadcast(ctx context.Context, rawBody []byte, ghHeaders map[string]string) error
+}
+
 // SandboxResumer starts a stopped or paused EC2 sandbox instance.
 // Used by WebhookHandler when an alias resolves to a stopped sandbox — the
 // resumer starts it and the enqueued prompt drains once the box boots.
