@@ -45,6 +45,12 @@ func drainGitHubInbound(ctx context.Context, deps githubDestroyInboundDeps) {
 	fmt.Fprintf(os.Stderr, "  GitHub inbound drain: starting (queue=%s)\n", deps.QueueURL)
 
 	// Step 1: delete the SQS queue.
+	//
+	// Phase 99.1 (GH-DLQ-TEARDOWN): this deletes ONLY the per-sandbox source queue
+	// (deps.QueueURL). The shared per-install GitHub-inbound DLQ
+	// ({prefix}-github-inbound-dlq.fifo) is install-scoped and is NEVER deleted by
+	// km destroy (CONTEXT D5; km uninit owns the shared DLQ's lifecycle). Do not add
+	// a DLQ delete here — sibling sandboxes still redrive into it.
 	if deps.SQS != nil {
 		if err := awspkg.DeleteGitHubInboundQueue(ctx, deps.SQS, deps.QueueURL); err != nil {
 			fmt.Fprintf(os.Stderr, "  ⚠ GitHub inbound drain: queue delete failed: %v (continuing)\n", err)

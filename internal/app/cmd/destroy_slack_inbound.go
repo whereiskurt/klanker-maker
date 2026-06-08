@@ -110,6 +110,12 @@ func drainSlackInbound(ctx context.Context, deps destroyInboundDeps) {
 	}
 
 	// Step 3: delete the SQS queue.
+	//
+	// Phase 99.1 (GH-DLQ-TEARDOWN): this deletes ONLY the per-sandbox source queue
+	// (deps.QueueURL). The shared per-install Slack-inbound DLQ
+	// ({prefix}-slack-inbound-dlq.fifo) is install-scoped and is NEVER deleted by
+	// km destroy (CONTEXT D5; km uninit owns the shared DLQ's lifecycle). Do not add
+	// a DLQ delete here — sibling sandboxes still redrive into it.
 	if deps.SQS != nil {
 		if err := awspkg.DeleteSlackInboundQueue(ctx, deps.SQS, deps.QueueURL); err != nil {
 			fmt.Fprintf(os.Stderr, "  ⚠ Slack inbound drain: queue delete failed: %v (continuing)\n", err)
