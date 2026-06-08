@@ -2252,11 +2252,33 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
   printf '%s' "$PREAMBLE" > "$PROMPT_FILE"
   chown sandbox:sandbox "$PROMPT_FILE" 2>/dev/null || true
 
-  # Dispatch to agent (mirrors the Slack inbound poller dispatch fork).
-  EFFECTIVE_AGENT="$AGENT"
   # GH-X-CONTINUITY: resume the prior session if one exists for this (repo, number).
   RESUME_ARG=""
   [ -n "$GITHUB_SESSION" ] && RESUME_ARG="--resume $GITHUB_SESSION"
+
+  # Phase 102 Plan 03: D4 precedence (verb override > thread agent_type > profile default)
+  # + D5 cross-agent session reset. Mirrors Slack poller Phase 70 Plan 70-06 routing decision.
+  # Must run AFTER GITHUB_SESSION and RESUME_ARG are computed (so reset takes effect)
+  # and BEFORE the dispatch fork (so EFFECTIVE_AGENT drives both codex and claude paths).
+  if [ -n "$AGENT_OVERRIDE" ]; then
+    if [ "$AGENT_OVERRIDE" != "$THREAD_AGENT_TYPE" ] && [ -n "$GITHUB_SESSION" ]; then
+      echo "[km-github-inbound-poller] cross-agent switch ${THREAD_AGENT_TYPE}->${AGENT_OVERRIDE}; resetting session"
+      GITHUB_SESSION=""   # Pitfall 3: clear both together so both paths see a fresh start
+      RESUME_ARG=""
+    fi
+    EFFECTIVE_AGENT="$AGENT_OVERRIDE"
+  else
+    EFFECTIVE_AGENT="$THREAD_AGENT_TYPE"
+  fi
+
+  # Phase 102 Plan 03: D6 codex-missing guard — post helpful error and ack rather than
+  # stranding the turn when codex: verb is used on a profile without Codex installed.
+  if [ "$EFFECTIVE_AGENT" = "codex" ] && ! command -v codex >/dev/null 2>&1; then
+    /opt/km/bin/km-github comment --repo "$REPO" --number "$NUMBER" \
+      --body "This sandbox's profile has no Codex; the 'codex:' verb is unavailable here."
+    aws sqs delete-message --queue-url "$QUEUE_URL" --receipt-handle "$RECEIPT" --region "$REGION" 2>/dev/null || true
+    continue
+  fi
 
   if [ "$EFFECTIVE_AGENT" = "codex" ]; then
     sudo -u sandbox bash -lc "
@@ -2325,13 +2347,15 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
     fi
 
     if [ -n "$NEW_GITHUB_SESSION" ] && [ -n "$REPO" ] && [ -n "$NUMBER" ]; then
+      # Phase 102 Plan 03: write agent_type alongside agent_session_id (D3 persistence).
+      # Pins the thread to EFFECTIVE_AGENT so future turns without a verb default correctly.
       aws dynamodb update-item \
         --table-name "$GITHUB_THREADS_TABLE" \
         --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
-        --update-expression "SET agent_session_id = :sid" \
-        --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_GITHUB_SESSION\"}}" \
+        --update-expression "SET agent_session_id = :sid, agent_type = :at" \
+        --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_GITHUB_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
         --region "$REGION" 2>/dev/null || true
-      echo "[km-github-inbound-poller] Session updated — repo=$REPO PR=#$NUMBER session=${NEW_GITHUB_SESSION:0:8}..."
+      echo "[km-github-inbound-poller] Session updated — repo=$REPO PR=#$NUMBER session=${NEW_GITHUB_SESSION:0:8}... agent=$EFFECTIVE_AGENT"
     fi
 
     # Ack-then-log: delete message before logging so a crash can't cause duplicate dispatch.
