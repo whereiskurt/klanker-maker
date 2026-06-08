@@ -1134,6 +1134,24 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			os.Setenv("KM_GITHUB_PEER_BRIDGES", yamlGithubPeerBridges) //nolint:errcheck
 		}
 	}
+
+	// Phase 101: KM_GITHUB_DEFAULT_ROUTER — front-door orphan-repo router toggle.
+	// Consumed by infra/live/use1/lambda-github-bridge/terragrunt.hcl
+	// get_env("KM_GITHUB_DEFAULT_ROUTER", "false"). Only export when the operator has
+	// explicitly set github.default_router in km-config.yaml (nil => omit => terragrunt
+	// default "false" applies => router dormant, Phase 100 byte-identical). env-wins:
+	// when the env var is already set to a DIFFERENT value, emit a drift WARN and do
+	// NOT overwrite it. Mirrors the KM_SLACK_DEFAULT_ROUTER block (Phase 96) exactly —
+	// only the env-var name and config source differ. *bool tri-state: nil skip, non-nil
+	// use strconv.FormatBool. Plan 03 reads this env var in km-github-bridge main.go.
+	if cfg.Github.DefaultRouter != nil {
+		yamlGithubDefaultRouter := strconv.FormatBool(*cfg.Github.DefaultRouter)
+		if envVal := os.Getenv("KM_GITHUB_DEFAULT_ROUTER"); envVal != "" && envVal != yamlGithubDefaultRouter {
+			fmt.Fprintf(os.Stderr, "WARN: KM_GITHUB_DEFAULT_ROUTER=%s (env) overrides km-config.yaml github.default_router=%s\n", envVal, yamlGithubDefaultRouter)
+		} else if envVal == "" {
+			os.Setenv("KM_GITHUB_DEFAULT_ROUTER", yamlGithubDefaultRouter) //nolint:errcheck
+		}
+	}
 }
 
 // EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at

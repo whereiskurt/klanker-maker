@@ -180,6 +180,19 @@ type GithubConfig struct {
 	// below decode the whole github: block atomically, this field included. Adding a
 	// redundant merge entry would be a no-op at best (verified by TestLoadGithubPeerBridges_Set).
 	PeerBridges []string `mapstructure:"peer_bridges" yaml:"peer_bridges,omitempty"`
+
+	// DefaultRouter is the Phase 101 front-door orphan-repo router toggle — tri-state *bool;
+	// nil/absent ⇒ dormant (Phase 100 byte-identical); true ⇒ front-door posts a helpful
+	// reply when no install owns the commented-on repo. Exported as KM_GITHUB_DEFAULT_ROUTER
+	// (strconv.FormatBool) by ExportTerragruntEnvVars (init.go) for
+	// infra/live/use1/lambda-github-bridge/terragrunt.hcl get_env("KM_GITHUB_DEFAULT_ROUTER","false").
+	//
+	// Only the federation front-door install sets this to true; peers leave it absent.
+	//
+	// DECODED by the existing v.UnmarshalKey("github", &cfg.Github) call — NO new
+	// "github.default_router" merge-list entry is required (RESEARCH Pitfall 6,
+	// proven by TestLoadGithubDefaultRouter_Set). Mirrors Phase 100 PeerBridges precedent.
+	DefaultRouter *bool `mapstructure:"default_router" yaml:"default_router,omitempty"`
 }
 
 // Config holds all configuration values for the km CLI.
