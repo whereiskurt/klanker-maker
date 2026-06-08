@@ -269,6 +269,16 @@ func init() {
 		webhookHandler.Relayer = relayer
 	}
 
+	// Phase 101: front-door orphan-repo router. Reuse the already-built nonceStore as the
+	// per-(repo,number) cooldown store (gh-router-cooldown: prefix isolates it from
+	// github-delivery: keys in the shared table).
+	// Dormant unless KM_GITHUB_DEFAULT_ROUTER=="true" — byte-identical to Phase 100 when off.
+	if os.Getenv("KM_GITHUB_DEFAULT_ROUTER") == "true" {
+		webhookHandler.DefaultRouter = true
+		webhookHandler.OrphanCooldown = nonceStore
+		slog.Info("km-github-bridge: orphan-repo default router ENABLED (front door)")
+	}
+
 	slog.Info("km-github-bridge: cold start",
 		"KM_RESOURCE_PREFIX", prefix,
 		"KM_SANDBOX_TABLE_NAME", sandboxesTable,
