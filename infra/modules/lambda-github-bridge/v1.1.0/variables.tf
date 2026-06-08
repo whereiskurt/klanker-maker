@@ -59,6 +59,12 @@ variable "github_default_profile" {
   default     = "github-review"
 }
 
+variable "github_peer_bridges" {
+  description = "Comma-joined list of sibling github-bridge Function URLs (KM_GITHUB_PEER_BRIDGES). Empty = federation off (Phase 100 byte-identical to Phase 97/98)."
+  type        = string
+  default     = ""
+}
+
 variable "webhook_secret_path" {
   description = "SSM path for the GitHub webhook signing secret (SecureString)"
   type        = string

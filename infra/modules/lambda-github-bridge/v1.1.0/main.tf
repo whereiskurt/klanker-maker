@@ -129,9 +129,9 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
         ]
       },
       {
-        Sid    = "DDBSandboxesGetItem"
-        Effect = "Allow"
-        Action = ["dynamodb:GetItem"]
+        Sid      = "DDBSandboxesGetItem"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem"]
         Resource = var.sandboxes_table_arn
       },
       {
@@ -284,6 +284,7 @@ resource "aws_lambda_function" "github_bridge" {
       KM_INSTALLATION_ID_PATH   = var.installation_id_path
       KM_ARTIFACTS_BUCKET       = var.artifacts_bucket
       KM_ARTIFACTS_PREFIX       = var.artifacts_prefix
+      KM_GITHUB_PEER_BRIDGES    = var.github_peer_bridges
     }
   }
 

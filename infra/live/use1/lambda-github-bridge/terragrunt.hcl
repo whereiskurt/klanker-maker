@@ -89,6 +89,11 @@ inputs = {
   github_repos_json      = get_env("KM_GITHUB_REPOS", "")
   github_default_profile = get_env("KM_GITHUB_DEFAULT_PROFILE", "github-review")
 
+  # Phase 100: federated relay peer list. Comma-joined sibling github-bridge
+  # Function URLs from ExportTerragruntEnvVars (km-config.yaml github.peer_bridges).
+  # Empty string = federation off = byte-identical Lambda env to Phase 97/98.
+  github_peer_bridges = get_env("KM_GITHUB_PEER_BRIDGES", "")
+
   # SSM paths for GitHub App credentials (GetSsmPrefix() = "/{prefix}/")
   webhook_secret_path   = "/${local.site_vars.locals.site.label}/config/github/webhook-secret"
   bot_login_path        = "/${local.site_vars.locals.site.label}/config/github/bot-login"
