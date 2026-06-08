@@ -102,7 +102,9 @@ func TestCreateGitHubInboundQueue_FIFO(t *testing.T) {
 	fs := &testGitHubSQS{}
 	queueName := GitHubInboundQueueName("km", "sb-abc123")
 
-	url, err := CreateGitHubInboundQueue(context.Background(), fs, queueName)
+	// Phase 99.1: signature gained a trailing dlqARN. Passing "" exercises the
+	// dormancy path — the 4 locked FIFO attrs below must remain byte-identical.
+	url, err := CreateGitHubInboundQueue(context.Background(), fs, queueName, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
