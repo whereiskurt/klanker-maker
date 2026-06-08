@@ -104,6 +104,19 @@ type ParseResult struct {
 	// MultiError is true when more than one distinct known command was found.
 	// The handler should post an error reply listing the conflicting commands.
 	MultiError bool
+
+	// AgentVerb is the resolved agent override found in the comment body:
+	// "claude", "codex", or "" (none found). /claude and /codex are reserved
+	// built-in tokens on a separate axis from template commands — they compose
+	// freely with any /command (e.g. "/codex /patch fix X") and are intercepted
+	// before the defined-command lookup. Same verb twice is deduped (no conflict).
+	// Phase 102.
+	AgentVerb string
+
+	// AgentVerbConflict is true when BOTH /claude AND /codex appear in the same
+	// comment. The handler posts a "Specify one agent" error reply and returns 200
+	// without dispatching. Phase 102.
+	AgentVerbConflict bool
 }
 
 // StripCode removes fenced ``` blocks and `inline code` spans from body before
@@ -225,6 +238,19 @@ func ParseCommands(body string, commands map[string]CommandEntry) ParseResult {
 			continue
 		}
 
+		// Phase 102: /claude and /codex are reserved built-in agent-verb tokens on a
+		// separate axis from template commands. They compose freely with any /command
+		// (e.g. "/codex /patch fix X") and are intercepted before the command map.
+		// Dedup: same verb twice is fine; two DISTINCT verbs = AgentVerbConflict.
+		if name == "claude" || name == "codex" {
+			if result.AgentVerb == "" || result.AgentVerb == name {
+				result.AgentVerb = name // dedup: same verb twice is fine
+			} else {
+				result.AgentVerbConflict = true // /claude AND /codex = conflict
+			}
+			continue
+		}
+
 		// Look up in the defined commands map (case-sensitive).
 		if _, defined := commands[name]; defined {
 			seenKnown[name] = true
@@ -239,6 +265,12 @@ func ParseCommands(body string, commands map[string]CommandEntry) ParseResult {
 	sort.Strings(result.Known)
 
 	result.MultiError = len(result.Known) > 1
+
+	// Phase 102: when both /claude and /codex appear (conflict), neither agent verb
+	// takes effect — clear AgentVerb so callers only see one non-empty value at a time.
+	if result.AgentVerbConflict {
+		result.AgentVerb = ""
+	}
 
 	return result
 }
@@ -299,6 +331,59 @@ func ExtractArgs(body, botLogin, commandToken string) string {
 
 func isWhitespace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+// ExtractArgsWithAgent is the Phase 102 extension of ExtractArgs. It strips:
+//  1. The FIRST occurrence of "@{botLogin}" (case-insensitive) — same as ExtractArgs.
+//  2. The FIRST occurrence of "/{commandToken}" — same as ExtractArgs (when non-"").
+//  3. The FIRST occurrence of "/{agentVerbToken}" — Phase 102 addition (when non-"").
+//
+// The agent verb token (/claude or /codex) MUST be stripped from the args so the
+// sandbox agent never sees it as literal prompt text (Pitfall 4 / PLAN 102-01).
+//
+// When agentVerbToken == "" (no agent verb present), behavior is identical to ExtractArgs.
+func ExtractArgsWithAgent(body, botLogin, commandToken, agentVerbToken string) string {
+	// Build the mention token to strip (case-insensitive search).
+	mention := "@" + botLogin
+	mentionLower := strings.ToLower(mention)
+
+	lowerBody := strings.ToLower(body)
+
+	// Find and remove the first occurrence of the mention (case-insensitive by position).
+	var workBuf strings.Builder
+	workBuf.Grow(len(body))
+	mentionIdx := strings.Index(lowerBody, mentionLower)
+	if mentionIdx >= 0 {
+		workBuf.WriteString(body[:mentionIdx])
+		workBuf.WriteString(body[mentionIdx+len(mention):])
+	} else {
+		workBuf.WriteString(body)
+	}
+
+	work := workBuf.String()
+
+	// Find and remove the first occurrence of "/{commandToken}" (exact, case-sensitive).
+	if commandToken != "" {
+		cmdTok := "/" + commandToken
+		cmdIdx := strings.Index(work, cmdTok)
+		if cmdIdx >= 0 {
+			end := cmdIdx + len(cmdTok)
+			work = work[:cmdIdx] + work[end:]
+		}
+	}
+
+	// Phase 102: Find and remove the first occurrence of "/{agentVerbToken}".
+	if agentVerbToken != "" {
+		agentTok := "/" + agentVerbToken
+		agentIdx := strings.Index(work, agentTok)
+		if agentIdx >= 0 {
+			end := agentIdx + len(agentTok)
+			work = work[:agentIdx] + work[end:]
+		}
+	}
+
+	// Whitespace-normalize: split on any whitespace and rejoin with single spaces.
+	return strings.Join(strings.Fields(work), " ")
 }
 
 // ExpandTemplate replaces "{{args}}" in the template with args. When the template
@@ -472,14 +557,16 @@ func RunCommandPass(
 		}
 	}
 
-	// Extract args: strip mention and command token from the full body.
+	// Extract args: strip mention, command token, and agent verb token from the full body.
+	// Phase 102: agent verb (/claude or /codex) must also be stripped so the agent
+	// never sees it as literal prompt text (Pitfall 4).
 	var cmdToken string
 	if len(parsed.Known) == 1 {
 		// Explicit command — strip the actual command token.
 		cmdToken = commandName
 	}
 	// For default-command path (no explicit command token in body), cmdToken remains "".
-	args := ExtractArgs(fullBody, botLogin, cmdToken)
+	args := ExtractArgsWithAgent(fullBody, botLogin, cmdToken, parsed.AgentVerb)
 
 	// Expand the prompt template.
 	prompt := ExpandTemplate(entry.Prompt, args)

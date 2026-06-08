@@ -83,4 +83,9 @@ type GitHubEnvelope struct {
 	Body          string `json:"body"`
 	InstallID     string `json:"install_id"`
 	DefaultBranch string `json:"default_branch,omitempty"`
+	// Agent is the parsed agent override from the comment body: "claude", "codex", or "".
+	// Set from ParseResult.AgentVerb by the bridge handler. The poller reads this to
+	// select the agent for the turn. omitempty so old envelope shapes (no field) decode
+	// cleanly as "" (profile default). Phase 102.
+	Agent string `json:"agent,omitempty"`
 }

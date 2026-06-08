@@ -345,14 +345,37 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 
 	// ── Steps 8–9: Resolve alias + dispatch ──────────────────────────────────
 
-	// ── Phase 99: command pass (dormant when Commands empty AND DefaultCommand "") ─
-	// Slotted AFTER dedupe (line ~241) and BEFORE envelope construction.
-	// When dormant, this block is skipped entirely — byte-identical to Phase 98.
-	// When active, RunCommandPass may:
-	//   Reply/Deny  → PostComment reply + return 200 (no dispatch)
-	//   Dispatch    → overrides alias/profile/promptBody before envelope construction
-	//   Passthrough → falls through to free-form ExtractMentionBody (same as dormant)
+	// ── Phase 99/102: command pass + agent-verb resolution ──────────────────
+	// Command pass is dormant when Commands empty AND DefaultCommand "".
+	// Phase 102: agent verb (/claude, /codex) is recognized on ALL paths via
+	// ParseCommands. The conflict check (two distinct verbs) short-circuits before
+	// dispatch; a single verb is carried to the envelope's Agent field.
 	var promptBody string
+	var agentVerb string // Phase 102: "claude" | "codex" | ""
+
+	// parseAgentVerbs parses agent-verb fields from a comment body.
+	// Returns (agentVerb, agentVerbConflict) using the same ParseCommands call
+	// that command parsing already does; nil commands = dormant command map.
+	parseAgentVerbs := func(body string, cmds map[string]CommandEntry) (string, bool) {
+		p := ParseCommands(body, cmds)
+		return p.AgentVerb, p.AgentVerbConflict
+	}
+
+	// postConflictReply posts the "Specify one agent" error and returns true.
+	// Returns false (and does nothing) when Commenter is nil.
+	postConflictReply := func() {
+		if h.Commenter != nil {
+			owner := OwnerFromFullName(payload.Repository.FullName)
+			repo := RepoFromFullName(payload.Repository.FullName)
+			if cErr := h.Commenter.PostComment(ctx,
+				InstallIDString(payload.Installation.ID),
+				owner, repo, payload.Issue.Number,
+				"🤖 Specify one agent — found /claude and /codex."); cErr != nil {
+				h.log().Warn("github-bridge: post agent-verb conflict reply failed (non-fatal)", "err", cErr)
+			}
+		}
+	}
+
 	if len(h.Commands) > 0 || h.DefaultCommand != "" {
 		// Resolve per-repo default command (from matched RepoEntry.DefaultCommand).
 		repoDefaultCmd := lookupRepoDefaultCommand(h.Entries, payload.Repository.FullName)
@@ -365,6 +388,18 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 			alias, profile, h.DefaultProfile,
 			botLogin,
 		)
+
+		// Phase 102: capture agent verb from ParseCommands (same parse, shared result).
+		agentVerb, agentVerbConflict := parseAgentVerbs(payload.Comment.Body, h.Commands)
+
+		// Phase 102: conflict short-circuit — before the command-pass switch.
+		// Two distinct verbs (/claude AND /codex) → error reply, return 200, NO dispatch.
+		if agentVerbConflict {
+			postConflictReply()
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+		}
+
+		_ = agentVerb // used in env construction below
 
 		switch res.Action {
 		case CommandActionReply, CommandActionDeny:
@@ -392,7 +427,23 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		}
 	} else {
 		// Dormant path: no commands configured — free-form dispatch (Phase 98 behavior).
-		promptBody = ExtractMentionBody(payload.Comment.Body, botLogin)
+		// Phase 102: parse agent verbs even on dormant path so the envelope carries Agent.
+		var agentVerbConflict bool
+		agentVerb, agentVerbConflict = parseAgentVerbs(payload.Comment.Body, nil)
+
+		// Phase 102: conflict check on dormant path.
+		if agentVerbConflict {
+			postConflictReply()
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+		}
+
+		// Free-form body with agent verb stripped.
+		rawBody := ExtractMentionBody(payload.Comment.Body, botLogin)
+		if agentVerb != "" {
+			// Strip the agent verb token (/claude or /codex) so it doesn't reach the agent.
+			rawBody = strings.Join(strings.Fields(strings.Replace(rawBody, "/"+agentVerb, "", 1)), " ")
+		}
+		promptBody = rawBody
 	}
 
 	env := GitHubEnvelope{
@@ -406,6 +457,7 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		Body:          promptBody,
 		InstallID:     InstallIDString(payload.Installation.ID),
 		DefaultBranch: payload.Repository.DefaultBranch,
+		Agent:         agentVerb, // Phase 102: carry agent verb to poller
 	}
 
 	envJSON, err := json.Marshal(env)
