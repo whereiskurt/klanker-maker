@@ -675,6 +675,7 @@ func TestRunCommandPass(t *testing.T) {
 				tc.repoProfile,
 				tc.defaultProfile,
 				"mybot[bot]",
+				"", // currentAgentType: "" (fresh thread; not relevant to these routing tests)
 			)
 
 			if result.Action != tc.wantAction {
@@ -700,4 +701,84 @@ func containsStr(s, sub string) bool {
 		subl := strings.ToLower(sub)
 		return strings.Contains(sl, subl)
 	})())
+}
+
+// ============================================================
+// TestBuildHelpReply — Phase 102: agent listing + current-thread-agent
+// ============================================================
+// buildHelpReply is unexported so we test through RunCommandPass (/help path).
+
+func TestBuildHelpReplyAgentListing(t *testing.T) {
+	commands := map[string]bridge.CommandEntry{
+		"review": {Description: "review the PR", Prompt: "Review: {{args}}"},
+	}
+
+	tests := []struct {
+		name              string
+		fullBody          string
+		currentAgentType  string // thread's current agent (passed to RunCommandPass)
+		wantReplyContains []string
+		wantNotContains   []string
+	}{
+		{
+			name:             "/help reply lists /claude and /codex verbs",
+			fullBody:         "@mybot[bot] /help",
+			currentAgentType: "",
+			wantReplyContains: []string{"/claude", "/codex", "Available agents"},
+		},
+		{
+			name:             "/help with currentAgentType=codex shows current thread agent",
+			fullBody:         "@mybot[bot] /help",
+			currentAgentType: "codex",
+			wantReplyContains: []string{"/claude", "/codex", "Current thread agent", "codex"},
+		},
+		{
+			name:             "/help with currentAgentType=claude shows current thread agent",
+			fullBody:         "@mybot[bot] /help",
+			currentAgentType: "claude",
+			wantReplyContains: []string{"/claude", "/codex", "Current thread agent", "claude"},
+		},
+		{
+			name:             "/help with empty currentAgentType (fresh thread) shows no current-agent line",
+			fullBody:         "@mybot[bot] /help",
+			currentAgentType: "",
+			wantNotContains:  []string{"Current thread agent"},
+		},
+		{
+			// Pitfall 7: /help wins even when an agent verb is co-present.
+			name:             "/help + /codex → help wins, still lists agents",
+			fullBody:         "@mybot[bot] /help /codex",
+			currentAgentType: "",
+			wantReplyContains: []string{"/claude", "/codex", "Available agents"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := bridge.RunCommandPass(
+				tc.fullBody,
+				commands,
+				"", "",    // no install/repo default
+				"alice",   // sender
+				"repo-alias", "repo-profile", "default-profile",
+				"mybot[bot]",
+				tc.currentAgentType, // Phase 102: current thread agent
+			)
+
+			if result.Action != bridge.CommandActionReply {
+				t.Fatalf("Action=%v want CommandActionReply; ReplyText=%q", result.Action, result.ReplyText)
+			}
+
+			for _, want := range tc.wantReplyContains {
+				if !strings.Contains(result.ReplyText, want) {
+					t.Errorf("ReplyText does not contain %q:\n%s", want, result.ReplyText)
+				}
+			}
+			for _, notWant := range tc.wantNotContains {
+				if strings.Contains(result.ReplyText, notWant) {
+					t.Errorf("ReplyText should NOT contain %q:\n%s", notWant, result.ReplyText)
+				}
+			}
+		})
+	}
 }

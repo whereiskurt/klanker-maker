@@ -299,10 +299,12 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	// if they differ (box recreated), InvalidateStaleSession is called (Gap E fix).
 	threadKnown := false
 	threadStoredSandboxID := ""
+	threadCurrentAgentType := "" // Phase 102: agentType from thread row for /help reply
 	if h.Threads != nil {
-		if sid, _, _, lookupErr := h.Threads.LookupSandbox(ctx, payload.Repository.FullName, payload.Issue.Number); lookupErr == nil && sid != "" {
+		if sid, _, agentType, lookupErr := h.Threads.LookupSandbox(ctx, payload.Repository.FullName, payload.Issue.Number); lookupErr == nil && sid != "" {
 			threadKnown = true
 			threadStoredSandboxID = sid
+			threadCurrentAgentType = agentType // Phase 102: carry to /help reply
 			h.log().Debug("github-bridge: known thread; bypassing mention check",
 				"repo", payload.Repository.FullName,
 				"number", payload.Issue.Number,
@@ -387,6 +389,7 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 			payload.Comment.User.Login,
 			alias, profile, h.DefaultProfile,
 			botLogin,
+			threadCurrentAgentType, // Phase 102: thread's current agent for /help reply
 		)
 
 		// Phase 102: capture agent verb from ParseCommands (same parse, shared result).

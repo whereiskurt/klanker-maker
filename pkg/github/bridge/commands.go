@@ -416,11 +416,25 @@ func CommandAllowed(sender string, cmdAllow []string) bool {
 	return false
 }
 
-// buildHelpReply constructs a /help reply listing all defined commands and
-// the effective default for the current repo.
-func buildHelpReply(commands map[string]CommandEntry, effectiveDefaultCmd string) string {
+// buildHelpReply constructs a /help reply listing all defined commands,
+// the available agent verbs (/claude, /codex), and the effective default.
+//
+// Phase 102: currentAgentType is the thread's current agent ("claude", "codex",
+// or "" for a fresh thread with no row yet). When non-empty, an extra line
+// "Current thread agent: `<type>`" is appended to the agents block so the
+// user sees which agent is active in this thread.
+func buildHelpReply(commands map[string]CommandEntry, effectiveDefaultCmd string, currentAgentType string) string {
 	var b strings.Builder
-	b.WriteString("**Available commands:**\n\n")
+
+	// Phase 102: agent verbs block — always listed first so users know these exist.
+	b.WriteString("**Available agents:**\n")
+	b.WriteString("- `/claude` — dispatch this thread to Claude\n")
+	b.WriteString("- `/codex` — dispatch this thread to Codex\n")
+	if currentAgentType != "" {
+		b.WriteString(fmt.Sprintf("\n**Current thread agent:** `%s`\n", currentAgentType))
+	}
+
+	b.WriteString("\n**Available commands:**\n\n")
 
 	// List commands in sorted order for deterministic output.
 	names := make([]string, 0, len(commands))
@@ -459,12 +473,15 @@ func buildHelpReply(commands map[string]CommandEntry, effectiveDefaultCmd string
 //   - repoProfile: the profile resolved by Resolve() for the matched repo entry
 //   - defaultProfile: the top-level default_profile fallback
 //   - botLogin: the bot's GitHub login (for mention stripping in ExtractArgs)
+//   - currentAgentType: the thread's current agent_type ("claude", "codex", or "" for fresh).
+//     Passed to buildHelpReply so the /help reply can show the active agent. Phase 102.
 func RunCommandPass(
 	fullBody string,
 	commands map[string]CommandEntry,
 	installDefaultCmd, repoDefaultCmd string,
 	sender, repoAlias, repoProfile, defaultProfile string,
 	botLogin string,
+	currentAgentType string,
 ) CommandPassResult {
 	// Determine the effective default command for this repo.
 	effectiveDefaultCmd := EffectiveDefault(repoDefaultCmd, installDefaultCmd)
@@ -476,7 +493,7 @@ func RunCommandPass(
 	if parsed.HelpRequested {
 		return CommandPassResult{
 			Action:    CommandActionReply,
-			ReplyText: buildHelpReply(commands, effectiveDefaultCmd),
+			ReplyText: buildHelpReply(commands, effectiveDefaultCmd, currentAgentType),
 		}
 	}
 
