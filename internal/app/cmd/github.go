@@ -15,6 +15,7 @@ package cmd
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -323,18 +324,31 @@ func printGitHubCommandsStatus(ctx context.Context, ssmClient GitHubSSMReadAPI, 
 		return
 	}
 
-	// Parse the JSON commands map.
-	var commandsMap map[string]struct {
+	// The SSM value is base64-encoded JSON (km init encodes it to dodge SSM's {{}}
+	// restriction — command templates contain {{args}}). Decode base64 first; fall
+	// back to raw JSON for robustness against an older raw-JSON build.
+	rawVal := []byte(*result.Parameter.Value)
+	if decoded, b64Err := base64.StdEncoding.DecodeString(*result.Parameter.Value); b64Err == nil {
+		rawVal = decoded
+	}
+
+	// Parse the CommandSet envelope: {"commands": {<name>: {...}}, "default_command": "..."}.
+	type cmdEntry struct {
 		Description string   `json:"description"`
 		Alias       string   `json:"alias"`
 		Profile     string   `json:"profile"`
 		Allow       []string `json:"allow"`
 		Prompt      string   `json:"prompt"`
 	}
-	if jsonErr := json.Unmarshal([]byte(*result.Parameter.Value), &commandsMap); jsonErr != nil {
+	var envelope struct {
+		Commands       map[string]cmdEntry `json:"commands"`
+		DefaultCommand string              `json:"default_command"`
+	}
+	if jsonErr := json.Unmarshal(rawVal, &envelope); jsonErr != nil {
 		fmt.Fprintf(out, "  commands:        (parse error: %v)\n", jsonErr)
 		return
 	}
+	commandsMap := envelope.Commands
 	if len(commandsMap) == 0 {
 		return
 	}

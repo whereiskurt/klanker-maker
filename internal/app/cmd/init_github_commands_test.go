@@ -11,6 +11,7 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -71,6 +72,16 @@ func (f *fakeCommandsSSM) PutParameter(_ context.Context, input *ssm.PutParamete
 
 // Compile-time check: fakeCommandsSSM must satisfy cmd.SSMReadWriteAPI.
 var _ cmd.SSMReadWriteAPI = &fakeCommandsSSM{}
+
+// decodeCommandsSSMValue returns the JSON form of a written SSM commands value.
+// km init base64-encodes the JSON (to dodge SSM's {{}} restriction); decode it
+// back to JSON for assertions, falling back to raw on a non-base64 value.
+func decodeCommandsSSMValue(val string) string {
+	if decoded, err := base64.StdEncoding.DecodeString(val); err == nil {
+		return string(decoded)
+	}
+	return val
+}
 
 // ============================================================
 // TestResolveCommandPrompts — pure @file resolution helper
@@ -299,8 +310,8 @@ func TestInitGitHubCommands_WritesAssembledJSON(t *testing.T) {
 			Prompt      string   `json:"prompt"`
 		} `json:"commands"`
 	}
-	if err := json.Unmarshal([]byte(aws.ToString(call.Value)), &envelope); err != nil {
-		t.Fatalf("written value is not valid JSON: %v\nvalue: %s", err, aws.ToString(call.Value))
+	if err := json.Unmarshal([]byte(decodeCommandsSSMValue(aws.ToString(call.Value))), &envelope); err != nil {
+		t.Fatalf("written value is not valid JSON: %v\nvalue: %s", err, decodeCommandsSSMValue(aws.ToString(call.Value)))
 	}
 
 	// Verify install-wide default_command is present in the envelope.
@@ -363,7 +374,7 @@ func TestInitGitHubCommands_DefaultCommandRoundTrip(t *testing.T) {
 		t.Fatalf("expected 1 PutParameter call, got %d", len(fakeSSM.puts))
 	}
 
-	writtenJSON := aws.ToString(fakeSSM.puts[0].Value)
+	writtenJSON := decodeCommandsSSMValue(aws.ToString(fakeSSM.puts[0].Value))
 
 	// The written JSON must be parseable as the CommandSet envelope.
 	var envelope struct {
@@ -448,7 +459,7 @@ func TestInitGitHubCommands_DriftWarn(t *testing.T) {
 	}
 
 	// Written value should be the NEW assembled JSON (not the stale one).
-	writtenVal := aws.ToString(fakeSSM.puts[0].Value)
+	writtenVal := decodeCommandsSSMValue(aws.ToString(fakeSSM.puts[0].Value))
 	if strings.Contains(writtenVal, "stale old prompt") {
 		t.Errorf("expected written value to be the NEW prompt, not the stale one; got: %s", writtenVal)
 	}

@@ -10,6 +10,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -266,11 +267,18 @@ func TestDoctorGitHubCommands_Dormant(t *testing.T) {
 // buildCommandsJSON is a helper to marshal a command map to JSON for SSM seeding.
 func buildCommandsJSON(t *testing.T, cmds map[string]appcfg.GithubCommandEntry) string {
 	t.Helper()
-	b, err := json.Marshal(cmds)
+	// Mirror exactly what km init writes to SSM: a CommandSet envelope
+	// ({"commands": {...}, "default_command": "..."}), base64-encoded to dodge
+	// SSM's {{}} restriction. km github status / the bridge decode it on read.
+	envelope := struct {
+		Commands       map[string]appcfg.GithubCommandEntry `json:"commands"`
+		DefaultCommand string                               `json:"default_command,omitempty"`
+	}{Commands: cmds}
+	b, err := json.Marshal(envelope)
 	if err != nil {
-		t.Fatalf("marshal commands: %v", err)
+		t.Fatalf("marshal commands envelope: %v", err)
 	}
-	return string(b)
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // Note: TestGitHubStatusCommands is in the internal package (package cmd) so it can

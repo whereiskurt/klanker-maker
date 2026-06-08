@@ -1044,12 +1044,19 @@ km init --dry-run=false
   updated.
 
 **What `km init --dry-run=false` does for Phase 99:**
-1. Calls `PublishGitHubCommandsToSSM` → resolves all `@file` prompts → writes the assembled
-   command JSON to SSM `{prefix}/config/github/commands` as a plain String (not SecureString).
+1. Calls `PublishGitHubCommandsToSSM` → resolves all `@file` prompts → assembles the
+   `CommandSet` envelope (`{"commands": {...}, "default_command": "..."}`) → **base64-encodes
+   it** → writes to SSM `{prefix}/config/github/commands` as a plain String (not SecureString).
+   The base64 step is required: SSM rejects any value containing `{{...}}` (it reserves that for
+   its own `{{ssm:...}}` reference syntax), and command templates use the `{{args}}` placeholder.
+   The bridge's `SSMCommandsFetcher` and `km github status` base64-decode on read (with a
+   raw-JSON fallback for robustness). The value is config, not a secret — base64 is encoding,
+   not encryption; an operator inspecting the raw SSM param sees base64, but `km github status`
+   renders the human-readable view.
 2. Uploads the rebuilt `km-github-bridge.zip` to the Lambda function code (same as Phase 97
    deploy step 2).
 3. Emits a drift WARN if the SSM commands param already exists with a different value
-   (informational — the new yaml-derived value always wins).
+   (informational — the new yaml-derived value always wins; compared on decoded JSON).
 
 **Cross-check against Plans 03/04:**
 - Plan 03 (`PublishGitHubCommandsToSSM`): SSM write confirmed — `putSSMParam(ctx, ssmClient, prefix+"config/github/commands", commandsJSON, ParameterTypeString, "", overwrite=true)`. No discrepancy.

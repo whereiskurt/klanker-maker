@@ -10,10 +10,12 @@ package bridge_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -385,6 +387,39 @@ func TestSSMCommandsFetcher_ParsesEnvelope(t *testing.T) {
 	}
 	if _, ok := cmds["patch"]; !ok {
 		t.Error("cmds missing 'patch' key")
+	}
+}
+
+// TestSSMCommandsFetcher_DecodesBase64 verifies the production storage format:
+// km init base64-encodes the CommandSet JSON before writing to SSM (because SSM
+// rejects any value containing "{{...}}", and templates use the {{args}}
+// placeholder). The fetcher must base64-decode before unmarshaling — and the
+// {{args}} placeholder must survive the round-trip intact.
+func TestSSMCommandsFetcher_DecodesBase64(t *testing.T) {
+	jsonEnvelope := `{"commands":{"review":{"description":"Review PR","prompt":"Please review: {{args}}"}},"default_command":"review"}`
+	encoded := base64.StdEncoding.EncodeToString([]byte(jsonEnvelope))
+
+	fake := &fakeSSMCommandsClient{value: encoded}
+	fetcher := &bridge.SSMCommandsFetcher{
+		Client:   fake,
+		Path:     "/km/config/github/commands",
+		CacheTTL: time.Minute,
+	}
+
+	cmds, defaultCmd, err := fetcher.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("Fetch returned error on base64-encoded value: %v", err)
+	}
+	if defaultCmd != "review" {
+		t.Errorf("defaultCmd = %q; want %q", defaultCmd, "review")
+	}
+	review, ok := cmds["review"]
+	if !ok {
+		t.Fatal("cmds missing 'review' key after base64 decode")
+	}
+	// The {{args}} placeholder — the reason we base64-encode — must be intact.
+	if !strings.Contains(review.Prompt, "{{args}}") {
+		t.Errorf("review.prompt lost the {{args}} placeholder: %q", review.Prompt)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -1273,29 +1274,50 @@ func PublishGitHubCommandsToSSM(ctx context.Context, ssmClient SSMReadWriteAPI, 
 	}
 	assembledVal := string(commandsJSON)
 
+	// SSM rejects any parameter value containing "{{...}}" (it reserves that for
+	// its own {{ssm:...}} parameter-reference syntax), and command templates use
+	// the {{args}} placeholder. We own both ends (this writer and the bridge's
+	// SSMCommandsFetcher / km github status reader), so we base64-encode the JSON
+	// before storing it and decode on read. Stays a plain String (no KMS); sidesteps
+	// {{}} and any other SSM-reserved sequence. See decodeGitHubCommandsParam.
+	encodedVal := base64.StdEncoding.EncodeToString(commandsJSON)
+
 	paramName := cfg.GetSsmPrefix() + "config/github/commands"
 
-	// Drift check: read the current SSM value and WARN when it differs from the
-	// newly assembled JSON. Then write the new value unconditionally (yaml wins).
+	// Drift check: read the current SSM value, decode it, and WARN when the decoded
+	// JSON differs from the newly assembled JSON. Then write unconditionally (yaml
+	// wins). Compare on decoded JSON so the WARN is human-readable and a value
+	// written by an older raw-JSON build still compares correctly.
 	existing, getErr := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
 		Name:           aws.String(paramName),
 		WithDecryption: aws.Bool(false), // plain String; decryption not needed
 	})
 	if getErr == nil && existing.Parameter != nil {
-		existingVal := aws.ToString(existing.Parameter.Value)
-		if existingVal != assembledVal {
+		existingDecoded := decodeGitHubCommandsParam(aws.ToString(existing.Parameter.Value))
+		if existingDecoded != assembledVal {
 			fmt.Fprintf(stderr, "WARN: SSM %s differs from km-config.yaml github.commands (prior=%s, new=%s)\n",
-				paramName, existingVal, assembledVal)
+				paramName, existingDecoded, assembledVal)
 		}
 	}
 	// ParameterNotFound is expected on first init — not an error.
 
-	// Write the assembled commands JSON to SSM as a plain String (NOT SecureString).
-	if err := putSSMParam(ctx, ssmClient, paramName, assembledVal,
+	// Write the base64-encoded commands JSON to SSM as a plain String (NOT SecureString).
+	if err := putSSMParam(ctx, ssmClient, paramName, encodedVal,
 		ssmtypes.ParameterTypeString, "", true); err != nil {
 		return fmt.Errorf("km init: write SSM %s: %w", paramName, err)
 	}
 	return nil
+}
+
+// decodeGitHubCommandsParam returns the JSON form of an SSM github-commands value.
+// New km init builds store base64-encoded JSON (to dodge SSM's {{}} restriction);
+// older builds may have stored raw JSON. Try base64 first; on failure treat the
+// value as raw JSON. Mirrors the bridge's SSMCommandsFetcher decode path.
+func decodeGitHubCommandsParam(val string) string {
+	if decoded, err := base64.StdEncoding.DecodeString(val); err == nil {
+		return string(decoded)
+	}
+	return val
 }
 
 // ensureArtifactsBucketExists checks that the configured artifacts bucket exists

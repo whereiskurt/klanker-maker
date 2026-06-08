@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -950,10 +951,18 @@ func (f *SSMCommandsFetcher) Fetch(ctx context.Context) (map[string]CommandEntry
 		return empty, "", nil
 	}
 
+	// The value is base64-encoded JSON (km init encodes it to dodge SSM's {{}}
+	// restriction, since command templates contain the {{args}} placeholder). Decode
+	// base64 first; fall back to treating the value as raw JSON for robustness
+	// against any value written by an older raw-JSON build.
+	raw := []byte(*out.Parameter.Value)
+	if decoded, b64Err := base64.StdEncoding.DecodeString(*out.Parameter.Value); b64Err == nil {
+		raw = decoded
+	}
+
 	// Unmarshal the CommandSet envelope. Fall back to legacy bare-map format for
 	// forward-compat during any partial-deploy window (the envelope has a "commands"
 	// key; a bare map would have command-name keys, not "commands").
-	raw := []byte(*out.Parameter.Value)
 	var cs CommandSet
 	if jsonErr := json.Unmarshal(raw, &cs); jsonErr != nil {
 		return nil, "", fmt.Errorf("github-bridge: parse commands JSON from SSM %s: %w", f.Path, jsonErr)
