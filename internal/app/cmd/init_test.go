@@ -600,6 +600,57 @@ func TestRegionalModulesIncludesGitHubThreads(t *testing.T) {
 	}
 }
 
+// TestRegionalModules_IncludesSQSInboundDLQ guards Phase 99.1 GH-DLQ-DEPLOY: the
+// shared per-install FIFO DLQ module (sqs-inbound-dlq) MUST appear in
+// regionalModules() so `km init` provisions the two DLQs automatically and
+// `km uninit` destroys them on the reverse-order traversal. A module with a live
+// terragrunt unit but missing from this list is silently never deployed (the same
+// Phase-97 footgun closed by TestRegionalModulesIncludesGitHubBridge). This test is
+// RED until 99.1-03 adds the entry.
+//
+// Ordering requirement:
+//   - sqs-inbound-dlq must appear BEFORE the "ses" entry (ses applies last because
+//     it owns the consolidated S3 bucket policy; the DLQs are plain regional infra).
+func TestRegionalModules_IncludesSQSInboundDLQ(t *testing.T) {
+	mods := cmd.RegionalModules(t.TempDir())
+
+	dlqIdx := -1
+	sesIdx := -1
+	for i, m := range mods {
+		switch m.Name {
+		case "sqs-inbound-dlq":
+			dlqIdx = i
+		case "ses":
+			sesIdx = i
+		}
+	}
+
+	if dlqIdx == -1 {
+		t.Fatal("sqs-inbound-dlq not found in regionalModules() — 99.1-03 must add it; km init will never create the shared DLQs")
+	}
+
+	// Must appear before "ses" (ses applies last).
+	if sesIdx >= 0 && dlqIdx >= sesIdx {
+		t.Errorf("sqs-inbound-dlq (idx %d) must appear before ses (idx %d) in regionalModules()", dlqIdx, sesIdx)
+	}
+}
+
+// TestLambdaBuilds asserts Phase 99.1 adds NO new Lambda: the shared-DLQ phase is
+// pure infrastructure (two FIFO queues), so LambdaBuildNames() must NOT gain an
+// sqs-inbound-dlq entry. Guards against accidentally wiring a Lambda build that
+// doesn't exist (RESEARCH Finding 8: no Lambda this phase).
+func TestLambdaBuilds(t *testing.T) {
+	names := cmd.LambdaBuildNames()
+	for _, n := range names {
+		if n == "sqs-inbound-dlq" {
+			t.Errorf("LambdaBuildNames() unexpectedly includes %q — Phase 99.1 adds NO Lambda; got %v", n, names)
+		}
+	}
+	if len(names) == 0 {
+		t.Fatal("LambdaBuildNames() returned empty — expected the existing Lambda build set to be present")
+	}
+}
+
 // TestLambdaBuildsIncludesGitHubBridge guards GH-BRIDGE-DEPLOY: `km init` builds
 // Lambda zips from a hardcoded list (buildLambdaZips). A Lambda with a live
 // terragrunt unit but missing from this list is silently never built, so apply
