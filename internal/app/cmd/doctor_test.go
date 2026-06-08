@@ -654,6 +654,7 @@ func (c *testConfig) GetGithubCommands() map[string]appcfg.GithubCommandEntry {
 	return nil
 }
 func (c *testConfig) GetGithubDefaultCommand() string { return "" }
+func (c *testConfig) GetGithubPeerBridges() []string  { return nil }
 func (c *testConfig) GetConfigFilePath() string       { return "" }
 
 // =============================================================================
@@ -1000,6 +1001,7 @@ func (c *testDoctorConfig) GetGithubCommands() map[string]appcfg.GithubCommandEn
 	return nil
 }
 func (c *testDoctorConfig) GetGithubDefaultCommand() string { return "" }
+func (c *testDoctorConfig) GetGithubPeerBridges() []string  { return nil }
 func (c *testDoctorConfig) GetConfigFilePath() string       { return "" }
 
 func allOKDeps() *DoctorDeps {

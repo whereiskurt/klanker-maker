@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -271,6 +272,9 @@ type DoctorConfigProvider interface {
 	// GetGithubDefaultCommand returns the Phase 99 install-wide github.default_command.
 	// Empty string means no install-wide default is set.
 	GetGithubDefaultCommand() string
+	// GetGithubPeerBridges returns the Phase 100 github.peer_bridges federated-relay
+	// peer URL list from km-config.yaml. Empty slice means federation is off.
+	GetGithubPeerBridges() []string
 	// GetConfigFilePath returns the absolute path to km-config.yaml as loaded by
 	// config.Load() (empty when running without a config file, e.g. in Lambda).
 	// Used to derive the configDir for @file prompt resolution.
@@ -324,6 +328,7 @@ func (a *appConfigAdapter) GetGithubCommands() map[string]appcfg.GithubCommandEn
 	return a.cfg.Github.Commands
 }
 func (a *appConfigAdapter) GetGithubDefaultCommand() string { return a.cfg.Github.DefaultCommand }
+func (a *appConfigAdapter) GetGithubPeerBridges() []string  { return a.cfg.Github.PeerBridges }
 func (a *appConfigAdapter) GetConfigFilePath() string       { return a.cfg.ConfigFilePath }
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
@@ -1096,6 +1101,69 @@ func checkGitHubBridgeURL(ctx context.Context, client SSMReadAPI, ssmPrefix stri
 		}
 	}
 	return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("bridge URL configured: %s", url)}
+}
+
+// checkGitHubPeerBridges validates the Phase 100 federated-relay peer list.
+//
+// Mirrors checkSlackPeerBridges (doctor_slack.go). Returns:
+//   - SKIPPED: peerBridges is nil or empty — federation is not configured.
+//   - WARN:    any entry is malformed (url.Parse error or empty scheme/host).
+//   - WARN:    any entry equals ownBridgeURL — self-loop detected.
+//   - OK:      all entries are well-formed and none is a self-loop.
+//
+// ownBridgeURL is the install's own GitHub bridge Function URL (from SSM
+// {prefix}config/github/bridge-url). Pass "" when the bridge URL is unavailable —
+// the self-loop check is simply skipped in that case.
+//
+// Deterministic checks only (RESEARCH OQ2): the undeterminable
+// "front-door-with-empty-peers" WARN is intentionally NOT implemented, because
+// the bridge cannot know whether GitHub is configured to deliver to it.
+func checkGitHubPeerBridges(peerBridges []string, ownBridgeURL string) CheckResult {
+	name := "GitHub peer bridges"
+	if len(peerBridges) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "github.peer_bridges not set — federation off",
+		}
+	}
+
+	var malformed, selfLoop []string
+	for _, raw := range peerBridges {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			malformed = append(malformed, raw)
+			continue
+		}
+		if ownBridgeURL != "" && raw == ownBridgeURL {
+			selfLoop = append(selfLoop, raw)
+		}
+	}
+
+	if len(malformed) > 0 {
+		return CheckResult{
+			Name:   name,
+			Status: CheckWarn,
+			Message: fmt.Sprintf("malformed peer_bridges URL(s): %s — check km-config.yaml github.peer_bridges",
+				strings.Join(malformed, ", ")),
+			Remediation: "Edit km-config.yaml github.peer_bridges to list well-formed https:// Lambda Function URLs for each sibling km install. Run `km init --dry-run=false` to deploy the updated Lambda env.",
+		}
+	}
+	if len(selfLoop) > 0 {
+		return CheckResult{
+			Name:   name,
+			Status: CheckWarn,
+			Message: fmt.Sprintf("self-loop detected in github.peer_bridges: %s is this install's own bridge URL — remove it",
+				strings.Join(selfLoop, ", ")),
+			Remediation: "Remove this install's own bridge URL from km-config.yaml github.peer_bridges. Each entry should be a SIBLING install's GitHub bridge Function URL. Run `km init --dry-run=false` after fixing.",
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("github.peer_bridges configured: %d peer(s); no malformed URLs or self-loops detected", len(peerBridges)),
+	}
 }
 
 // checkGitHubReposResolvable verifies each github.repos entry references a
@@ -3934,6 +4002,32 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 			ownBridgeURL, _ = slackSSMStore.Get(ctx, cfg.GetSsmPrefix()+"slack/bridge-url", false)
 		}
 		r := checkSlackPeerBridges(peerBridges, ownBridgeURL)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
+	// Phase 100 — GitHub federated-relay peer-bridge validation. Gated on github
+	// being configured (non-empty repos), mirroring the Slack peer check. The own
+	// bridge URL comes from SSM {prefix}config/github/bridge-url (the same param
+	// checkGitHubBridgeURL reads); pass "" when unavailable so the self-loop check
+	// degrades gracefully. Reuses slackSSMStore (a generic SSMParamStore keyed by
+	// full SSM path, not Slack-specific).
+	githubPeerBridges := cfg.GetGithubPeerBridges()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if !githubConfigured {
+			return CheckResult{
+				Name:    "GitHub peer bridges",
+				Status:  CheckSkipped,
+				Message: "GitHub integration not configured (no github.repos in km-config.yaml)",
+			}
+		}
+		var ownBridgeURL string
+		if slackSSMStore != nil {
+			ownBridgeURL, _ = slackSSMStore.Get(ctx, cfg.GetSsmPrefix()+"config/github/bridge-url", false)
+		}
+		r := checkGitHubPeerBridges(githubPeerBridges, ownBridgeURL)
 		if r.Status == CheckError {
 			r.Status = CheckWarn
 		}
