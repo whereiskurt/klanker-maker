@@ -795,6 +795,38 @@ byte-identical to Phase 97/98. `km doctor` adds a **`GitHub peer bridges`** chec
 one install (documented, not enforced). Full runbook + two-install/one-App UAT:
 `docs/github-bridge.md` § Phase 100.
 
+### GitHub bridge orphan-repo helpful reply — front-door default router (Phase 101)
+
+When the shared bot is @-mentioned on a repo **no install owns**, the front-door
+install posts ONE guidance comment explaining how to wire the repo. The GitHub analog
+of the Slack Phase 96 default router.
+
+```yaml
+# km-config.yaml — FRONT-DOOR INSTALL ONLY
+github:
+  default_router: true   # post guidance comment on unowned-repo @-mentions
+  peer_bridges:
+    - https://sec000.lambda-url.us-east-1.on.aws/
+```
+
+**How it works:** claim-aware scatter-gather — each relayed peer returns
+`{"claimed": bool}`; zero claims ⇒ orphan ⇒ one guidance comment. Legacy
+Phase-100 peers return plain 200, tallied as `claimed:true` (rollout-safe — no
+false orphan comment before peers upgrade). Cooldown: one comment per (repo,
+PR/issue number) per 3600s via the nonces table (no new infrastructure).
+
+**Deploy (NOT `--sidecars`):** `github.default_router` → `KM_GITHUB_DEFAULT_ROUTER`
+is an env-block change — full apply required on the **front-door install only**:
+
+```bash
+make build-lambdas       # clean rebuild
+km init --dry-run=false  # update Lambda env block (NOT --sidecars)
+```
+
+No SandboxProfile schema change ⇒ no sandbox recreate. Absent or false →
+byte-identical to Phase 100. Full runbook + two-install UAT:
+`docs/github-bridge.md` § Phase 101.
+
 ### SES "not verified" or DKIM still pending
 
 DKIM propagation takes up to 72 hours. After `terragrunt apply` on the ses config, the

@@ -18,6 +18,15 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
 - Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
 
+**Phase 101 (2026-06-08) — GitHub bridge orphan-repo helpful reply (complete):**
+- When the shared bot is @-mentioned in a PR or issue comment on a repo **no install owns**, the front-door install posts ONE guidance comment naming `github.repos:` wiring and `km init`. Previously (Phase 100) the event was silently dropped (`github_relay_no_owner`); Phase 101 closes that gap with claim-aware scatter-gather — each relayed peer returns `{"claimed": bool}`; zero claims ⇒ true orphan ⇒ one comment. GitHub analog of the Slack Phase 96 default router (`docs/slack-notifications.md` § Phase 96).
+- **Dormant by default.** Set `github.default_router: true` in `km-config.yaml` on the **front-door install only**. Absent or false → byte-identical to Phase 100 (no comment, no claim-gather overhead). `github.default_router` → `KM_GITHUB_DEFAULT_ROUTER`; dormancy = `"false"`.
+- **Rollout-safe mixed fleet.** A peer still on Phase-100 code returns plain 200 (no body) — tallied as `claimed:true`. **No false "nobody owns this"** until peers upgrade. Upgrade peers in any order.
+- **Per-(repo, number) cooldown** (3600s) via the nonces table (key `gh-router-cooldown:{owner}/{repo}#{number}`) — no new infrastructure.
+- **No SandboxProfile schema change ⇒ no `km init --sidecars`, no sandbox recreate.**
+- **Deploy = `make build-lambdas` (clean) + `km init --dry-run=false` (NOT `--sidecars`)** on the **front-door install**. `KM_GITHUB_DEFAULT_ROUTER` is an env-block change; `--sidecars` does not update the env block.
+- See `docs/github-bridge.md` § Phase 101 for the full operator runbook + the two-install/one-App/unowned-repo UAT.
+
 **Phase 100 (2026-06-08) — GitHub bridge federated relay: one GitHub App serving many installs (complete):**
 - A single GitHub App can serve multiple `resource_prefix` installs. GitHub delivers every `issue_comment` webhook to one **front-door** install; its bridge runs `Resolve(owner/repo)` against its own `github.repos:` and on a **miss** relays the raw webhook verbatim (body + `X-Hub-Signature-256` + `X-GitHub-Event` + `X-GitHub-Delivery`, adding `X-KM-Relayed: 1`) to every peer in `github.peer_bridges`. The install whose `github.repos:` owns the repo processes it and posts the **single** 👀 (the front door reacts none). GitHub analog of the Slack Phase 95 relay, simplified to fire-and-forget (orphan-repo reply deferred to Phase 101).
 - **Dormant by default.** Add `github.peer_bridges:` (list of *other* installs' GitHub bridge Function URLs, `km github status` → `bridge-url`) to `km-config.yaml`. Absent/empty → `KM_GITHUB_PEER_BRIDGES` empty, relayer nil → **byte-identical to Phase 97/98**. `km doctor` SKIPs the peer check silently.

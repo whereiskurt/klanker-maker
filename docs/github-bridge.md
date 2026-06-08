@@ -26,8 +26,9 @@ security boundary.
 8. [Dormant Invariant](#dormant-invariant)
 9. [km doctor GitHub Checks](#km-doctor-github-checks)
 10. [Phase 100 — Federated relay (one App, many installs)](#phase-100--federated-relay-one-app-many-installs)
-11. [Troubleshooting](#troubleshooting)
-12. [See Also](#see-also)
+11. [Phase 101 — Orphan-repo helpful reply (front-door default router)](#phase-101--orphan-repo-helpful-reply-front-door-default-router)
+12. [Troubleshooting](#troubleshooting)
+13. [See Also](#see-also)
 
 ---
 
@@ -668,6 +669,178 @@ there automatically).
 When no inbound integration is configured, the shared DLQs are never provisioned, no
 source queue carries a `RedrivePolicy`, the doctor check **SKIPs**, and runtime is
 **byte-identical** to pre-Phase-99.1.
+
+---
+
+## Phase 101 — Orphan-repo helpful reply (front-door default router)
+
+> **Phase 101 (2026-06-08) — Orphan-repo helpful reply (complete):**
+> When the shared bot is @-mentioned in a PR or issue comment on a repo **no install
+> owns**, the front-door install posts ONE guidance comment naming how to wire the
+> repo (`github.repos:` in `km-config.yaml` + `km init`). Dormant by default — set
+> `github.default_router: true` on the front-door install to activate. GitHub analog
+> of the Slack Phase 96 default router (`docs/slack-notifications.md` § Phase 96).
+
+Phase 100 shipped a fire-and-forget relay: when no install owns a relayed repo, the
+event was silently dropped (`github_relay_no_owner` log). Phase 101 closes that gap
+— the front door detects a **true orphan** (zero claims from any peer) and posts a
+single helpful guidance comment on the PR or issue.
+
+### Mechanism: claim-aware scatter-gather
+
+Phase 101 upgrades Phase 100's fire-and-forget `Broadcast` to a **claim-aware
+scatter-gather** — the same pattern the Slack Phase 96 default router uses:
+
+1. Front door runs `Resolve(owner/repo)` → **no match** → it broadcasts the raw
+   webhook verbatim to every URL in `github.peer_bridges` (Phase 100 behavior).
+2. **Each relayed-to peer** returns `200 {"claimed": bool}` JSON:
+   - If the peer **owns** the repo (matched + dispatched): `{"claimed": true}`.
+   - If the peer does **not** own the repo: `{"claimed": false}`.
+3. The front door **tallies** the claim results:
+   - **Any `claimed:true` from any peer** → the owner handled it → front door does
+     nothing. No guidance comment.
+   - **Zero `claimed:true` from all peers** → true orphan → front door posts ONE
+     guidance comment on the PR/issue.
+
+### Rollout-safe mixed fleet
+
+A peer still on **Phase-100 code** returns a plain `200 "ok"` body (no JSON). The
+front-door tally **treats any legacy/non-JSON/HTTP-error/timeout response as
+`claimed:true`** — it NEVER produces a false "nobody owns this". Upgrade peers in any
+order; no coordinated cutover required. This mirrors Slack Phase 96's "Legacy
+Phase-95 peer responses treated as claimed:true" invariant.
+
+### Guidance comment content
+
+When a true orphan is detected, the front door posts a comment like:
+
+> No klanker sandbox is bound to `acme/widgets`. To enable the bot here, an operator
+> must add this repo under `github.repos:` in `km-config.yaml` and run
+> `km init --dry-run=false`. See `docs/github-bridge.md`.
+
+The comment is posted using the GitHub App installation token
+(`InstallationCommenter.PostComment`) with the payload's `Installation.ID` — the
+same credential path used for PR reviews in Phase 99.
+
+### Cooldown
+
+To avoid comment spam on a busy PR (multiple @-mentions in a short window), Phase 101
+imposes a **per-(repo, PR/issue number) cooldown of 3600 seconds** via the shared
+nonces table:
+
+- Cooldown key: `gh-router-cooldown:{owner}/{repo}#{number}` (e.g.
+  `gh-router-cooldown:acme/widgets#42`).
+- Uses `DynamoGitHubNonceStore.CheckAndStore` — the same conditional-put-with-TTL
+  path the Phase 100 deduplication uses.
+- While the cooldown key is active, a second orphan @-mention on the same PR posts
+  **no second comment**.
+- No new DynamoDB tables; the existing `{prefix}-bridge-nonces` table is reused.
+
+### Config surface
+
+Set `github.default_router: true` on the **front-door install only** in
+`km-config.yaml`:
+
+```yaml
+# km-config.yaml — FRONT-DOOR INSTALL ONLY
+github:
+  default_router: true   # Phase 101: post guidance comment on unowned-repo @-mentions
+  peer_bridges:          # Phase 100: list every other install's bridge URL
+    - https://sec000.lambda-url.us-east-1.on.aws/
+```
+
+`github.default_router` → `KM_GITHUB_DEFAULT_ROUTER` (bool string `"true"` or
+`"false"`) is exported to the bridge Lambda by `km init`. Absent or `false` →
+`KM_GITHUB_DEFAULT_ROUTER` is `"false"` → **byte-identical to Phase 100** (no
+claim-gather overhead, no comment, terminal drop on unowned relay).
+
+### Dormancy / byte-identity invariant
+
+When `github.default_router` is **absent or false**:
+
+- `KM_GITHUB_DEFAULT_ROUTER` is `"false"`; the orphan-post code path is never
+  entered.
+- Phase 100 fire-and-forget behavior is preserved: unowned relayed events are dropped
+  with `github_relay_no_owner` and 200.
+- **No SandboxProfile schema change** ⇒ **no `km init --sidecars`, no sandbox
+  recreate.**
+
+### Deploy sequence (Phase 101)
+
+`github.default_router` → `KM_GITHUB_DEFAULT_ROUTER` is an **env-block change**, so
+it requires a full terragrunt apply on the **front-door install** — **NOT** `km init
+--sidecars`:
+
+```bash
+# 1. Edit km-config.yaml on the FRONT-DOOR install:
+#    github:
+#      default_router: true
+#      peer_bridges: [...]   # Phase 100 — already set
+
+# 2. CLEAN rebuild of all Lambda zips.
+#    Memory: project_km_init_skips_existing_lambda_zips — must clean before km init.
+make build-lambdas
+
+# 3. Full terragrunt apply — updates the Lambda environment.variables block with
+#    KM_GITHUB_DEFAULT_ROUTER. NOT --sidecars: env-block changes require full apply.
+#    Memory: feedback_km_init_full_apply — use km init --dry-run=false.
+km init --dry-run=false
+
+# 4. Verify the env var reached the Lambda:
+aws lambda get-function-configuration \
+  --function-name ${KM_RESOURCE_PREFIX}-github-bridge \
+  --query 'Environment.Variables.KM_GITHUB_DEFAULT_ROUTER'
+# Expected: "true"
+
+# 5. Run km doctor (optional — no dedicated doctor check for default_router,
+#    mirroring Slack 96 which also ships no doctor check).
+km doctor
+```
+
+> **Peers do NOT need `github.default_router: true`** — only the front-door install.
+> However, peers MUST be on Phase-101 code to emit `{"claimed": bool}` JSON. If a
+> peer is still on Phase-100 code, its plain-200 response is tallied as `claimed:true`
+> (rollout-safe) — no false orphan comment, but the peer-claim signal is absent until
+> it upgrades. Upgrade peers at your own pace.
+
+> **NOT `--sidecars`:** the `KM_GITHUB_DEFAULT_ROUTER` env var lives in the
+> `lambda-github-bridge` module's `environment.variables` block, which only updates on
+> a full `km init --dry-run=false` apply. See memory `feedback_km_init_full_apply` and
+> `project_km_init_lambdas_doesnt_deploy`.
+
+**No SandboxProfile schema change ⇒ no sandbox recreate.**
+
+### Troubleshooting
+
+**Guidance comment never appears:**
+
+1. Verify `github.default_router: true` is set on the **front-door** install, NOT
+   a peer.
+2. Confirm `KM_GITHUB_DEFAULT_ROUTER=true` reached the Lambda:
+   ```bash
+   aws lambda get-function-configuration \
+     --function-name ${KM_RESOURCE_PREFIX}-github-bridge \
+     --query 'Environment.Variables.KM_GITHUB_DEFAULT_ROUTER'
+   ```
+3. Check that the GitHub App is **installed on the target repo** (not just authorized
+   by the org). `Installation.ID == 0` means the App cannot post comments — install
+   it on the repo first.
+4. Check for an active cooldown: the comment fires only once per (repo, number) per
+   3600s. If the cooldown key `gh-router-cooldown:{owner}/{repo}#{number}` is set,
+   wait for it to expire (TTL 3600s) or delete it from DDB.
+5. Confirm the comment was not an unqualified message (no @-mention). The mention gate
+   runs before `Resolve()`, so the orphan path only fires on confirmed @-mentions.
+
+**A false orphan comment appeared (owned repo got a guidance comment):**
+
+This should not happen — see Rollout-safe mixed fleet above. If it does:
+1. Confirm the owning peer is returning `{"claimed": true}` (Phase-101 code).
+2. Check Lambda logs on the front door for the `claimResults` tally.
+3. If the peer is returning a non-2xx error or timing out, its response is tallied as
+   `claimed:true` — check peer health first.
+
+**See also:** `docs/slack-notifications.md` § Phase 96 for the Slack analog
+(`slack.default_router`), which this phase mirrors.
 
 ---
 
