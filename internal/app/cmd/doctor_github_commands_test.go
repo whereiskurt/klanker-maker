@@ -104,6 +104,7 @@ func TestDoctorGitHubCommandsProfileUnresolvable(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 // TestDoctorGitHubCommandsHelpShadow
 // A user-defined command named "help" → WARN (reserved built-in).
+// Phase 102: extended to cover "claude" and "codex" reserved agent verbs.
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestDoctorGitHubCommandsHelpShadow(t *testing.T) {
@@ -119,6 +120,49 @@ func TestDoctorGitHubCommandsHelpShadow(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(result.Message), "reserved") || !strings.Contains(strings.ToLower(result.Message+result.Remediation), "built-in") && !strings.Contains(strings.ToLower(result.Message+result.Remediation), "reserved") {
 		t.Logf("message: %s, remediation: %s", result.Message, result.Remediation)
+	}
+}
+
+// TestDoctorGitHubCommandsAgentVerbShadow — Phase 102
+// User-defined commands named "claude" or "codex" → WARN (reserved agent verbs).
+// Also verifies a clean map (no reserved names) produces no shadow WARN.
+func TestDoctorGitHubCommandsAgentVerbShadow(t *testing.T) {
+	tests := []struct {
+		name          string
+		commandNames  []string
+		wantStatus    CheckStatus
+		wantInMessage string // substring that must appear in WARN message
+	}{
+		{
+			name:          "claude shadows reserved agent verb → WARN",
+			commandNames:  []string{"claude"},
+			wantStatus:    CheckWarn,
+			wantInMessage: "claude",
+		},
+		{
+			name:          "codex shadows reserved agent verb → WARN",
+			commandNames:  []string{"codex"},
+			wantStatus:    CheckWarn,
+			wantInMessage: "codex",
+		},
+		{
+			name:         "clean map with no reserved names → OK/SKIPPED (no shadow WARN)",
+			commandNames: []string{"review", "patch"},
+			wantStatus:   CheckOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cmds := makeCommands(tc.commandNames...)
+			result := checkGitHubCommandsValid(cmds, "", nil, "", "")
+			if result.Status != tc.wantStatus {
+				t.Errorf("expected %s got %s (msg=%s)", tc.wantStatus, result.Status, result.Message)
+			}
+			if tc.wantInMessage != "" && !strings.Contains(strings.ToLower(result.Message), tc.wantInMessage) {
+				t.Errorf("expected %q in message, got: %s", tc.wantInMessage, result.Message)
+			}
+		})
 	}
 }
 

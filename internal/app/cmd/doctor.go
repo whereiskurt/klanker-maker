@@ -1499,9 +1499,14 @@ func checkGitHubCommandsValid(
 		}
 	}
 
-	// 3. "help" not shadowed — reserved built-in.
-	if _, hasHelp := commands["help"]; hasHelp {
-		warnings = append(warnings, `command "help" shadows the reserved built-in /help reply — rename to avoid unexpected behavior`)
+	// 3. Reserved tokens not shadowed — /help, /claude, /codex are built-in verbs (Phase 102).
+	for _, reserved := range []string{"help", "claude", "codex"} {
+		if _, shadowed := commands[reserved]; shadowed {
+			warnings = append(warnings, fmt.Sprintf(
+				"command %q shadows the reserved built-in /%s verb — rename to avoid unexpected behavior",
+				reserved, reserved,
+			))
+		}
 	}
 
 	// 4. Command-alias ↔ repo-alias overlap.
@@ -1564,7 +1569,7 @@ func checkGitHubCommandsValid(
 			Name:        name,
 			Status:      CheckWarn,
 			Message:     fmt.Sprintf("%d issue(s): %s", len(warnings), strings.Join(warnings, "; ")),
-			Remediation: "Fix @file paths, profile paths, alias conflicts, or rename the 'help' command",
+			Remediation: "Fix @file paths, profile paths, alias conflicts, or rename reserved commands (help, claude, codex)",
 		}
 	}
 	return CheckResult{
