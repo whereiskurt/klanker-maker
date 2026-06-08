@@ -34,9 +34,11 @@ func TestCommandParse(t *testing.T) {
 		name string
 		body string
 		// expected ParseResult fields
-		wantHelpRequested bool
-		wantKnown         []string // sorted expected known command names; nil = expect none
-		wantMultiError    bool
+		wantHelpRequested    bool
+		wantKnown            []string // sorted expected known command names; nil = expect none
+		wantMultiError       bool
+		wantAgentVerb        string // Phase 102: "claude" | "codex" | ""
+		wantAgentVerbConflict bool  // Phase 102: true when /claude AND /codex both appear
 	}{
 		{
 			name:           "fenced code block suppresses /patch token",
@@ -114,6 +116,41 @@ func TestCommandParse(t *testing.T) {
 			wantKnown:         []string{"patch"}, // /help is reserved; /patch still found
 			wantMultiError:    false,              // /help does not count as a "known" command
 		},
+
+		// ── Phase 102: agent verb cases ───────────────────────────────────────────
+		{
+			name:          "/claude anywhere → AgentVerb=claude, no conflict",
+			body:          "@mybot[bot] /claude please review the auth module",
+			wantAgentVerb: "claude",
+		},
+		{
+			name:          "/codex anywhere → AgentVerb=codex, no conflict",
+			body:          "Great work! /codex can you fix the flaky test",
+			wantAgentVerb: "codex",
+		},
+		{
+			name:                 "/claude AND /codex → AgentVerbConflict=true",
+			body:                 "@mybot[bot] /claude /codex review this",
+			wantAgentVerbConflict: true,
+		},
+		{
+			name:          "/codex /codex (same verb twice) → deduped, no conflict",
+			body:          "@mybot[bot] /codex /codex fix the tests",
+			wantAgentVerb: "codex",
+		},
+		{
+			// Composition: /codex + known command /patch — both axes resolved independently.
+			name:          "/codex /patch compose → AgentVerb=codex, Known=[patch]",
+			body:          "@mybot[bot] /codex /patch fix the flaky test",
+			wantAgentVerb: "codex",
+			wantKnown:     []string{"patch"},
+		},
+		{
+			// Agent verb inside fenced code block → NOT recognized.
+			name:          "agent verb inside fenced code block → NOT recognized",
+			body:          "Look at this:\n```\n/claude or /codex\n```\nno agent here",
+			wantAgentVerb: "",
+		},
 	}
 
 	for _, tc := range tests {
@@ -125,6 +162,14 @@ func TestCommandParse(t *testing.T) {
 			}
 			if result.MultiError != tc.wantMultiError {
 				t.Errorf("MultiError=%v want %v", result.MultiError, tc.wantMultiError)
+			}
+
+			// Phase 102: agent verb assertions.
+			if result.AgentVerb != tc.wantAgentVerb {
+				t.Errorf("AgentVerb=%q want %q", result.AgentVerb, tc.wantAgentVerb)
+			}
+			if result.AgentVerbConflict != tc.wantAgentVerbConflict {
+				t.Errorf("AgentVerbConflict=%v want %v", result.AgentVerbConflict, tc.wantAgentVerbConflict)
 			}
 
 			// Compare known command sets (order-independent)
@@ -144,6 +189,68 @@ func TestCommandParse(t *testing.T) {
 						t.Errorf("Known=%v missing %q, want %v", result.Known, k, tc.wantKnown)
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestExtractArgs_AgentVerbStripped verifies that the agent verb token is NOT present
+// in the ExtractArgs result. Phase 102 requirement: /claude and /codex must be
+// stripped so the agent never sees them as literal prompt text.
+func TestExtractArgs_AgentVerbStripped(t *testing.T) {
+	tests := []struct {
+		name             string
+		body             string
+		botLogin         string
+		commandToken     string
+		agentVerbToken   string // the agent verb to strip (passed to ExtractArgsWithAgent)
+		wantNotContain   string // must NOT appear in result
+		wantContain      string // must appear in result
+	}{
+		{
+			name:           "/codex /patch compose — agent verb stripped, args clean",
+			body:           "@mybot[bot] /codex /patch fix the flaky test",
+			botLogin:       "mybot[bot]",
+			commandToken:   "patch",
+			agentVerbToken: "codex",
+			wantNotContain: "/codex",
+			wantContain:    "fix the flaky test",
+		},
+		{
+			name:           "/claude alone — agent verb stripped, args clean",
+			body:           "@mybot[bot] /claude please review the auth module",
+			botLogin:       "mybot[bot]",
+			commandToken:   "",
+			agentVerbToken: "claude",
+			wantNotContain: "/claude",
+			wantContain:    "please review the auth module",
+		},
+		{
+			name:           "/codex at end — stripped cleanly",
+			body:           "@mybot[bot] review this /codex",
+			botLogin:       "mybot[bot]",
+			commandToken:   "",
+			agentVerbToken: "codex",
+			wantNotContain: "/codex",
+			wantContain:    "review this",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// ExtractArgs with agent verb stripping.
+			got := bridge.ExtractArgs(tc.body, tc.botLogin, tc.commandToken)
+			// After ExtractArgs, we strip the agent verb token separately to confirm
+			// the implementation does remove it. The actual mechanism is tested via
+			// RunCommandPass end-to-end (which calls ExtractArgs internally with agent stripping).
+			// Here we call the extended form that accepts agentVerbToken:
+			got = bridge.ExtractArgsWithAgent(tc.body, tc.botLogin, tc.commandToken, tc.agentVerbToken)
+
+			if strings.Contains(got, tc.wantNotContain) {
+				t.Errorf("ExtractArgsWithAgent result %q still contains %q (must be stripped)", got, tc.wantNotContain)
+			}
+			if tc.wantContain != "" && !strings.Contains(got, tc.wantContain) {
+				t.Errorf("ExtractArgsWithAgent result %q does not contain expected %q", got, tc.wantContain)
 			}
 		})
 	}
