@@ -2346,7 +2346,7 @@ Plans:
 
 **Requirements**: GH-AGENT-VERB, GH-AGENT-PERSIST, GH-AGENT-SWITCH, GH-AGENT-POLLER, GH-AGENT-PROFILE, GH-AGENT-E2E (phase-local synthetic IDs — see REQUIREMENTS.md § Phase 98)
 **Depends on:** Phase 99 (parser) + Phase 98 (km-github-threads); independent of Phases 100/101
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 - [ ] 102-01-PLAN.md — Bridge verb parser (/claude, /codex) + GitHubEnvelope.Agent + two-verb conflict reply [GH-AGENT-VERB]
