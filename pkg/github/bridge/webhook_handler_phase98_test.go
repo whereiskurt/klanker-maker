@@ -28,9 +28,14 @@ type mockGitHubThreadStore struct {
 	// Gap E tracking
 	invalidateCalled    bool
 	invalidateSandboxID string // the new sandbox_id passed to InvalidateStaleSession
+
+	// Phase 100 (GH-FED-SCALE) tracking: counts LookupSandbox invocations so the
+	// no-wasted-read test can assert ZERO DDB reads on the unowned-repo path.
+	lookupCalls int
 }
 
 func (m *mockGitHubThreadStore) LookupSandbox(_ context.Context, _ string, _ int) (string, string, error) {
+	m.lookupCalls++
 	return m.sandboxID, m.sessionID, m.err
 }
 
