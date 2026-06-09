@@ -19,8 +19,9 @@ Flags:
                    (default: true)
   --show-prereqs   Print the IAM role and trust policy needed in the
                    management account before bootstrap can deploy the SCP
-  --scp            Print the km-sandbox-containment SCP policy JSON and
-                   the km-org-admin role/trust policy with real account IDs
+  --scp            Print the {prefix}-sandbox-containment SCP policy JSON and
+                   the {prefix}-org-admin role/trust policy with real account IDs
+                   ({prefix} = resource_prefix from km-config.yaml)
 
 Infrastructure Preview:
   The dry-run output shows what a full bootstrap would provision:

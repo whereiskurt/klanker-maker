@@ -768,21 +768,31 @@ func BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM []strin
 // The 5,000-byte safety threshold (matching the HCL precondition) is NOT enforced
 // here — callers should check len(result) <= 5000 if needed.
 func BuildSCPPolicyFromPrefix(resourcePrefix, applicationAccountID, allowedRegion string) string {
-	// Phase 84.4.1: resourcePrefix and applicationAccountID are no longer used in
-	// trust slot construction. Accepted for backward-compatible signature.
+	// Phase 84.4.1: resourcePrefix is not used in trust slot construction (patterns
+	// are prefix-agnostic *-* wildcards). applicationAccountID account-scopes the SSO
+	// trust entry so this preview matches the deployed policy.
 	_ = resourcePrefix
-	_ = applicationAccountID
 
-	// trustedBase mirrors trusted_arns_base = var.trusted_role_arns (default: SSO only).
+	// IMPORTANT (preview parity): trustedBase MUST mirror the `trusted_role_arns`
+	// input in infra/live/management/scp/terragrunt.hcl — that terragrunt unit is the
+	// SOURCE OF TRUTH for the deployed SCP. This Go builder only renders the preview
+	// shown by `km bootstrap --scp`; keep the two lists in sync when either changes.
+	// (Previously this used the module DEFAULT — SSO-only — so the preview was MORE
+	// restrictive than reality and omitted provisioner/lifecycle/ttl/create-handler.)
 	trustedBase := []string{
-		"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+		// Operator SSO roles — account-scoped to the application account.
+		"arn:aws:iam::" + applicationAccountID + ":role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+		// Provisioner / lifecycle / handler roles — account + prefix wildcarded.
+		"arn:aws:iam::*:role/*-provisioner-*",
+		"arn:aws:iam::*:role/*-lifecycle-*",
+		"arn:aws:iam::*:role/*-ecs-spot-handler",
+		"arn:aws:iam::*:role/*-ttl-handler",
+		"arn:aws:iam::*:role/*-create-handler",
 	}
 	// trustedInstance mirrors trusted_arns_instance: base + *-ecs-spot-handler.
-	// Phase 84.4.1: account + prefix wildcarded — trusts any install's spot handler.
 	trustedInstance := append(append([]string{}, trustedBase...),
 		"arn:aws:iam::*:role/*-ecs-spot-handler")
 	// trustedIAM mirrors trusted_arns_iam: base + *-budget-enforcer-*.
-	// Phase 84.4.1: account + prefix wildcarded.
 	trustedIAM := append(append([]string{}, trustedBase...),
 		"arn:aws:iam::*:role/*-budget-enforcer-*")
 	// trustedSSM mirrors trusted_arns_ssm: narrower set — only SSM-specific roles + SSO.
@@ -1397,7 +1407,7 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 	cmd.Flags().BoolVar(&showPrereqs, "show-prereqs", false,
 		"Print the IAM role and trust policy that must be created in the management account before bootstrap can deploy the SCP")
 	cmd.Flags().BoolVar(&showSCP, "scp", false,
-		"Print the km-sandbox-containment SCP policy JSON and the km-org-admin role/trust policy")
+		"Print the {prefix}-sandbox-containment SCP policy JSON and the {prefix}-org-admin role/trust policy (prefix from km-config.yaml resource_prefix)")
 	cmd.Flags().BoolVar(&sharedSES, "shared-ses", false,
 		"Provision the account-shared SES rule set + domain identity (Phase 84); run before km init on a fresh account")
 	cmd.Flags().BoolVar(&sharedSecretsKey, "shared-secrets-key", false,

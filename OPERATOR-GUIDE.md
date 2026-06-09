@@ -257,8 +257,11 @@ export KM_REGION=us-east-1
 ### Bootstrap SCP Policy
 
 Before deploying shared infrastructure, bootstrap the SCP sandbox-containment policy.
-This step requires credentials that can assume the `km-org-admin` role in the organization
-account (the AWS Organizations management account set in `accounts.organization`). If
+This step requires credentials that can assume the **`{prefix}-org-admin`** role in the
+organization account (the AWS Organizations management account set in
+`accounts.organization`), where `{prefix}` is your `resource_prefix` — e.g. `km-org-admin`
+for the default install, `rg-org-admin` for a `resource_prefix: rg` install. The role name
+is per-install so multiple installs in one Organization each manage their own SCP. If
 `accounts.organization` is blank, SCP deployment is skipped — `km bootstrap` exits with
 a notice and sandbox containment relies on IAM policies only.
 
@@ -281,9 +284,30 @@ The SCP policy constrains the application account to prevent sandbox workloads f
 escaping their containment boundary (security group mutation, network escape, IAM
 escalation, etc.). The bootstrap step must complete before creating sandboxes.
 
-**Prerequisite**: The `km-org-admin` IAM role must exist in the organization account
+**Prerequisite**: The `{prefix}-org-admin` IAM role must exist in the organization account
 (`accounts.organization`) with an Organizations permissions policy and a trust relationship
-allowing your operator credentials to assume it.
+allowing your operator credentials to assume it. Run `km bootstrap --scp` to print the exact
+role name, trust policy, and inline policy for your `resource_prefix` and account IDs.
+
+#### SCP portability & assumptions
+
+The SCP module is parameterized (account ID, region, resource_prefix, allowed regions are all
+config-driven — no hardcoded account IDs or OUs), so it drops into any AWS Organization. Two
+deployment-environment assumptions are worth knowing before a fresh setup:
+
+- **Commercial partition (`aws`) only.** All trusted-role ARNs and the management-account
+  assume-role use the `arn:aws:...` partition. **AWS GovCloud (`aws-us-gov`) and China
+  (`aws-cn`) are not supported as-is** — the trusted-role conditions would not match those
+  partitions' principal ARNs, so operators would be denied by the containment statements.
+  Supporting them means partition-aware ARNs in `infra/modules/scp/` and the live unit.
+
+- **Operators are assumed to use AWS IAM Identity Center (SSO).** The default trusted
+  principals key on `arn:aws:iam::<app-account>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*`.
+  **If your operators authenticate as plain IAM users/roles (not SSO),** add your operator
+  principal ARN pattern to `trusted_role_arns` in `infra/live/management/scp/terragrunt.hcl`
+  before deploying — otherwise the SCP will deny operators security-group / IAM / instance /
+  SSM mutation in the application account. The other trusted slots (provisioner, lifecycle,
+  spot/ttl/create handlers, budget-enforcer, ssm) are already wildcarded by role-name pattern.
 
 ---
 

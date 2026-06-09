@@ -5,7 +5,11 @@ locals {
 }
 
 # Provider: Organizations API is global; must operate from management account.
-# The km-org-admin role is provisioned in the management account with Organizations permissions.
+# The {prefix}-org-admin role (per-install; e.g. km-org-admin, rg-org-admin) is
+# provisioned in the management account with Organizations permissions. Its name is
+# resource_prefix-scoped (local.site.label) so a non-default install assumes its OWN
+# org-admin role — matching `km bootstrap --scp` guidance (runShowSCP) and `km uninit`
+# teardown, which both use {prefix}-org-admin.
 generate "provider" {
   path      = "provider.tf"
   if_exists = "overwrite_terragrunt"
@@ -25,7 +29,7 @@ generate "provider" {
       region = "us-east-1"
 
       assume_role {
-        role_arn = "arn:aws:iam::${local.accounts.organization}:role/km-org-admin"
+        role_arn = "arn:aws:iam::${local.accounts.organization}:role/${local.site.label}-org-admin"
       }
 
       default_tags {
