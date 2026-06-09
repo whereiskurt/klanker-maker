@@ -1,11 +1,11 @@
 apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
-  name: learn
+  name: desktop
   labels:
     tier: development
     tool: learning-sandbox-unsafe
-  prefix: learn
+  prefix: desktop
 
 spec:
   lifecycle:
@@ -83,8 +83,12 @@ spec:
       - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
       - "cp -r /root/.local/bin/goose /usr/local/bin/goose-bin || true"
       - "printf 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\\nexport OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318\\n' > /etc/profile.d/km-zz-goose-otel.sh"
-      - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt"
-      - "echo export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt >> /etc/profile.d/km-zz-goose-otel.sh"
+      # Ubuntu 24.04 CA bundle is /etc/ssl/certs/ca-certificates.crt (NOT the
+      # Amazon Linux /etc/pki/... path). The proxy cert is already dropped in
+      # /usr/local/share/ca-certificates/, so update-ca-certificates folds it in.
+      # `|| true` so a single cert hiccup can never abort the rest of init.
+      - "update-ca-certificates || true"
+      - "echo export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt >> /etc/profile.d/km-zz-goose-otel.sh"
       - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose-bin /usr/local/bin/goose && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
       - "npm install -g @anthropic-ai/claude-code@2.1.160"
       - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.133.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"

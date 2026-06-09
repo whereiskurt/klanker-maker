@@ -182,6 +182,11 @@ spec:
 
   # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
   notification:
+    # Phase 97 — provision the per-sandbox github-inbound FIFO queue + make the
+    # poller source-aware so the km-github-bridge can dispatch @-mention reviews.
+    github:
+      inbound:
+        enabled: true
     events:
       onIdle: false
       onPermission: false
