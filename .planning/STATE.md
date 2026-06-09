@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 102-05 Task 1 (deploy-surface audit); awaiting live GH-AGENT-E2E verification
-last_updated: "2026-06-08T22:12:27.230Z"
-last_activity: 2026-06-08
+stopped_at: Completed 102-05-PLAN.md — GH-AGENT-E2E PASS; Phase 102 all plans complete
+last_updated: "2026-06-09T00:37:39.653Z"
+last_activity: 2026-06-09
 progress:
   total_phases: 118
-  completed_phases: 104
+  completed_phases: 105
   total_plans: 521
-  completed_plans: 482
+  completed_plans: 483
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 92-00 — all 3 tasks done; pre-Phase-92 byte-identity baselines captured,
 Total Plans in Phase: 7 (92-00 → 92-06)
 Current Plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 Status: in-progress
-Last activity: 2026-06-08
+Last activity: 2026-06-09
 
 Wave 1 UNBLOCKED: both byte-identity baselines (userdata + IAM HCL) committed before any Wave 1 source change.
 
@@ -515,6 +515,7 @@ Progress: [█████████░] 91%
 | Phase 102 P01 | 470s | 3 tasks | 5 files |
 | Phase 102-github-bridge-agent-verbs-claude-and-codex-select-the-per-thread-agent-in-a-pr-comment-slack-phase-70-analog P03 | 348 | 3 tasks | 3 files |
 | Phase 102 P04 | 429s | 3 tasks | 7 files |
+| Phase 102-github-bridge-agent-verbs-claude-and-codex-select-the-per-thread-agent-in-a-pr-comment-slack-phase-70-analog P05 | 30min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1491,6 +1492,9 @@ Recent decisions affecting current work:
 - [Phase 102-github-bridge-agent-verbs-claude-and-codex-select-the-per-thread-agent-in-a-pr-comment-slack-phase-70-analog]: Golden file re-captured to include Phase 102 poller changes — standard per-phase pattern
 - [Phase 102]: buildHelpReply/RunCommandPass extended with currentAgentType param; threadCurrentAgentType captured at existing LookupSandbox call site
 - [Phase 102]: Reserved-shadow loop over slice [help,claude,codex] replaces single-help check in doctor.go
+- [Phase 102]: Step e (/codex on Claude-only sandbox) covered by code+unit (D6 guard userdata.go:2276-2281) with operator-approved skip of 2nd live sandbox
+- [Phase 102]: GitHub Codex path never passes a resume arg (pre-existing) — candidate follow-up: codex exec resume for GitHub threads
+- [Phase 102]: GH-AGENT-E2E requirement closed: Phase 102 proven deployable via make build-lambdas + km init --dry-run=false (NOT --sidecars), additive-only surface confirmed
 
 ### Roadmap Evolution
 
@@ -1620,6 +1624,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-08T22:12:27.211Z
-Stopped at: Completed 102-05 Task 1 (deploy-surface audit); awaiting live GH-AGENT-E2E verification
+Last session: 2026-06-09T00:37:39.642Z
+Stopped at: Completed 102-05-PLAN.md — GH-AGENT-E2E PASS; Phase 102 all plans complete
 Resume file: None
