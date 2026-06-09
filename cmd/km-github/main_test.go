@@ -11,6 +11,59 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/github"
 )
 
+// TestAttributionFooter covers the Phase 102 follow-up: poller-dispatched
+// comments/reviews carry a "via Claude" / "via Codex" footer so a reader can
+// tell which agent produced the reply. The footer is gated on the agent label
+// (the poller exports KM_GITHUB_REPLY_AGENT); manual km-github use passes "" and
+// must be left byte-identical.
+func TestAttributionFooter(t *testing.T) {
+	cases := []struct {
+		name  string
+		body  string
+		agent string
+		want  string
+	}{
+		{
+			name:  "codex appends footer",
+			body:  "Looks good to me.",
+			agent: "codex",
+			want:  "Looks good to me.\n\n<sub>🤖 via Codex</sub>",
+		},
+		{
+			name:  "claude appends footer",
+			body:  "Two risks stand out.",
+			agent: "claude",
+			want:  "Two risks stand out.\n\n<sub>🤖 via Claude</sub>",
+		},
+		{
+			name:  "case-insensitive and trimmed",
+			body:  "x",
+			agent: "  CODEX ",
+			want:  "x\n\n<sub>🤖 via Codex</sub>",
+		},
+		{
+			name:  "empty agent leaves body unchanged",
+			body:  "untouched",
+			agent: "",
+			want:  "untouched",
+		},
+		{
+			name:  "unknown agent leaves body unchanged",
+			body:  "untouched",
+			agent: "goose",
+			want:  "untouched",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := attributionFooter(tc.body, tc.agent)
+			if got != tc.want {
+				t.Errorf("attributionFooter(%q, %q) = %q, want %q", tc.body, tc.agent, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestDispatch_NoArgs verifies that dispatch with no args returns exit code 2.
 func TestDispatch_NoArgs(t *testing.T) {
 	code := dispatch(nil, io.Discard)

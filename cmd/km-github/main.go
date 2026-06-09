@@ -39,6 +39,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -140,7 +141,30 @@ func runComment(args []string, stderr io.Writer) int {
 		return 1
 	}
 
+	body = attributionFooter(body, os.Getenv(replyAgentEnv))
 	return runCommentWith(repo, number, body, token, stderr)
+}
+
+// replyAgentEnv is set by the GitHub inbound poller (exported inline into the
+// agent's dispatch shell) to the EFFECTIVE_AGENT for the turn — "claude" or
+// "codex". It is the signal that a comment/review is an agent-dispatched reply.
+const replyAgentEnv = "KM_GITHUB_REPLY_AGENT"
+
+// attributionFooter appends a "via <Agent>" footer so a reader can tell whether
+// Claude or Codex produced an agent-dispatched reply (Phase 102 follow-up).
+// agent is the KM_GITHUB_REPLY_AGENT value; an empty or unknown value leaves the
+// body byte-identical (manual km-github invocations are never decorated).
+func attributionFooter(body, agent string) string {
+	var label string
+	switch strings.ToLower(strings.TrimSpace(agent)) {
+	case "codex":
+		label = "Codex"
+	case "claude":
+		label = "Claude"
+	default:
+		return body
+	}
+	return body + "\n\n<sub>🤖 via " + label + "</sub>"
 }
 
 // runCommentWith is the testable inner entry point for the comment subcommand.
@@ -208,6 +232,10 @@ func runReview(args []string, stderr io.Writer) int {
 		return 1
 	}
 
+	// Only decorate a non-empty review body — a bodyless APPROVE stays bodyless.
+	if body != "" {
+		body = attributionFooter(body, os.Getenv(replyAgentEnv))
+	}
 	return runReviewWith(repo, number, event, body, commitID, token, stderr)
 }
 

@@ -2272,28 +2272,52 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
   fi
 
   # Phase 102 Plan 03: D6 codex-missing guard — post helpful error and ack rather than
-  # stranding the turn when codex: verb is used on a profile without Codex installed.
+  # stranding the turn when the /codex verb is used on a profile without Codex installed.
   if [ "$EFFECTIVE_AGENT" = "codex" ] && ! command -v codex >/dev/null 2>&1; then
     /opt/km/bin/km-github comment --repo "$REPO" --number "$NUMBER" \
-      --body "This sandbox's profile has no Codex; the 'codex:' verb is unavailable here."
+      --body "This sandbox's profile has no Codex; /codex is unavailable here."
     aws sqs delete-message --queue-url "$QUEUE_URL" --receipt-handle "$RECEIPT" --region "$REGION" 2>/dev/null || true
     continue
   fi
 
   if [ "$EFFECTIVE_AGENT" = "codex" ]; then
-    sudo -u sandbox bash -lc "
-      set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
-      cd /workspace 2>/dev/null || true
-      codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
-        > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
-      echo \$? > '$RUN_DIR/exit_code'
-    " || true
+    # Phase 102 follow-up: KM_GITHUB_REPLY_AGENT is exported INLINE in the sudo
+    # string (root-side vars don't survive sudo -u sandbox bash -lc) so km-github
+    # appends a "via Codex" attribution footer to the reply.
+    if [ -n "$GITHUB_SESSION" ]; then
+      # Resume the prior Codex thread — subcommand form (codex exec resume SESSION
+      # PROMPT --flags), mirroring the Slack poller (Phase 70). The D5 cross-agent
+      # reset above clears GITHUB_SESSION, so a switch TO codex always lands in the
+      # else-branch below as a fresh first turn (never resumes the other agent).
+      sudo -u sandbox bash -lc "
+        set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export KM_GITHUB_REPLY_AGENT='codex'
+        cd /workspace 2>/dev/null || true
+        codex exec resume '$GITHUB_SESSION' \"\$(cat '$PROMPT_FILE')\" \
+          --json --dangerously-bypass-approvals-and-sandbox \
+          > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+        echo \$? > '$RUN_DIR/exit_code'
+      " || true
+    else
+      # Codex first turn — no prior session for this (repo, number).
+      sudo -u sandbox bash -lc "
+        set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export KM_GITHUB_REPLY_AGENT='codex'
+        cd /workspace 2>/dev/null || true
+        codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
+          > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+        echo \$? > '$RUN_DIR/exit_code'
+      " || true
+    fi
   else
     # Claude path (default). Pass --resume when a prior session exists.
+    # KM_GITHUB_REPLY_AGENT (exported inline) drives the km-github "via Claude" footer.
     sudo -u sandbox bash -lc "
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
       export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      export KM_GITHUB_REPLY_AGENT='claude'
       cd /workspace 2>/dev/null || true
       claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
         --dangerously-skip-permissions $RESUME_ARG \
@@ -2323,6 +2347,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
       sudo -u sandbox bash -lc "
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export KM_GITHUB_REPLY_AGENT='claude'
         cd /workspace 2>/dev/null || true
         claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
           --dangerously-skip-permissions \

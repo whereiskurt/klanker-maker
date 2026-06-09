@@ -301,10 +301,19 @@ func TestUserdata_GitHubInboundPoller_Phase102AgentVerbs(t *testing.T) {
 		"THREAD_AGENT_TYPE",         // D3: thread-pinned agent read from DDB
 		"command -v codex",          // D6: codex-missing helpful-error guard
 		"agent_type = :at",          // D3: agent_type write-back in update-expression
+		"/codex is unavailable here", // Follow-up #2: D6 message uses the /codex slash verb (not 'codex:')
+		"codex exec resume '$GITHUB_SESSION'", // Follow-up #1: Codex thread resume on GitHub (mirrors Slack)
+		"KM_GITHUB_REPLY_AGENT='codex'",       // Follow-up #3: reply-agent env for the km-github attribution footer
+		"KM_GITHUB_REPLY_AGENT='claude'",      // Follow-up #3: same on the Claude dispatch path
 	}
 	for _, s := range must {
 		if !strings.Contains(poller, s) {
 			t.Fatalf("Phase 102 token missing from GitHub inbound poller: %q\n%s", s, abbreviateUD(poller))
 		}
+	}
+
+	// Follow-up #2 regression: the old Slack-style 'codex:' colon wording must be gone.
+	if strings.Contains(poller, "'codex:' verb") {
+		t.Errorf("stale 'codex:' colon wording still present in codex-missing guard; expected /codex slash verb")
 	}
 }
