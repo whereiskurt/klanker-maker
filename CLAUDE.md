@@ -87,6 +87,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Default router: orphan-channel @-mention reply, `slack.default_router`, cooldown | `docs/slack-notifications.md` § Phase 96 |
 | GitHub comment-trigger bridge — `@km-bot review this PR` → sandbox agent → PR review | `docs/github-bridge.md` (Phase 97) |
 | GitHub bridge federated relay — one GitHub App across multiple km installs (`github.peer_bridges`) | `docs/github-bridge.md` § Phase 100 |
+| GitHub App permissions reference — every scope/event + why, `contents:write` push opt-in | `docs/github-app-permissions.md` |
+| Slack App permissions reference — every bot scope/event + why | `docs/slack-app-permissions.md` |
 | GitHub bridge agent verbs — `/claude` / `/codex` per-thread agent select in PR comments | `docs/github-bridge.md` § Phase 102 |
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |

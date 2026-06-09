@@ -1,5 +1,9 @@
 # GitHub Bridge Guide
 
+> **App permissions:** for a per-scope breakdown of the GitHub App permissions and
+> webhook events km requests (and the `contents:write` push opt-in), see
+> `docs/github-app-permissions.md`.
+
 > **Phase 97 (2026-06-06) — GitHub comment-trigger bridge (complete):**
 > When an allowlisted GitHub login @-mentions the bot in a pull-request comment,
 > the km-github-bridge Lambda emits a 👀 reaction within the ack window, dispatches

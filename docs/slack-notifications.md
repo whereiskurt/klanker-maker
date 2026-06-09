@@ -1,5 +1,9 @@
 # Slack Notifications Guide
 
+> **App permissions:** for a per-scope breakdown of the Slack bot token scopes and
+> events km requests (and what breaks without each), see
+> `docs/slack-app-permissions.md`.
+
 > **NOTE — Phase 92 (2026-05-31):** All `spec.cli.notify*` fields moved under the
 > structured `spec.notification:` block (`notification.events.*`,
 > `notification.email.*`, `notification.slack.*` with `slack.inbound`,
