@@ -72,6 +72,105 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 # container_substrates_enabled: true
 
 # =============================================================================
+# SLACK BRIDGE — install-level defaults (all OPTIONAL, dormant unless set)
+# =============================================================================
+#
+# These keys flow into the slack-bridge Lambda's environment block at
+# `km init --dry-run=false` time (a full terragrunt apply — NOT `km init
+# --sidecars`, which rebuilds binaries but leaves the env block untouched).
+# Bootstrapping Slack itself (token, signing secret, channel) is done with
+# `km slack init`, not here. See docs/slack-notifications.md.
+#
+# slack:
+#   # Polite-bot mode (Phase 91). When true, the bridge only acts on messages
+#   # that @-mention the bot in shared channels. Per-sandbox #sb-{id} channels
+#   # are unaffected. Omit the key for the chatty default (false).
+#   mention_only: true
+#
+#   # First-only reactor (Phase 91.4). When false, the bridge posts the 👀
+#   # reaction only on top-level engagement messages; thread replies dispatch
+#   # silently. Omit for the default (true = react on every dispatch).
+#   react_always: false
+#
+#   # Federated relay (Phase 95). One Slack App serving multiple km installs.
+#   # List the OTHER installs' bridge /events URLs here; Slack delivers all
+#   # events to this "front-door" install, which relays unknown-channel events
+#   # to the peers until the owning install processes them. Get a peer's URL
+#   # from `km slack status` on that install. Empty/absent → federation off.
+#   peer_bridges:
+#     - https://aaaaaaaaaaaaaaaaaaaaaaaaaa.lambda-url.us-east-1.on.aws/events
+#     - https://bbbbbbbbbbbbbbbbbbbbbbbbbb.lambda-url.us-east-1.on.aws/events
+#
+#   # Default router (Phase 96). Set true on the FRONT-DOOR install only. When
+#   # the bot is @-mentioned in a channel no install owns, the front door posts
+#   # one threaded reply naming the #sb-{alias}-{profile} convention and listing
+#   # running sandbox channels across the fleet. Absent/false → no reply.
+#   default_router: true
+
+# =============================================================================
+# GITHUB BRIDGE — comment-trigger bridge (all OPTIONAL, dormant unless set)
+# =============================================================================
+#
+# When an allowlisted GitHub login @-mentions the bot in a PR/issue comment,
+# the github-bridge Lambda resolves owner/repo → a sandbox and dispatches an
+# agent turn that posts back a PR review/comment. Absent `github:` block →
+# byte-identical to a bridge-less install. Register the GitHub App with
+# `km github manifest` / `km github init`; these keys configure routing only.
+# Deploy with `km init --dry-run=false` (NOT `--sidecars`). See docs/github-bridge.md.
+#
+# github:
+#   # Fallback SandboxProfile used when a matched repo entry has no `profile:`.
+#   default_profile: profiles/github-review.yaml
+#
+#   # Fallback command key (must be a key under `commands:`) dispatched when a
+#   # comment carries no @verb and the matched repo has no `default_command:`.
+#   default_command: review
+#
+#   # Repo → sandbox routing. `match` is "owner/repo" (Phase 97; `owner/*`
+#   # wildcard supported). Each entry may override alias/profile/default_command
+#   # and add a supplemental network allowlist. Profile falls back to
+#   # default_profile above when omitted.
+#   repos:
+#     - match: example-org/*          # all repos under example-org
+#       alias: github-bot
+#       profile: profiles/github-review.yaml
+#       allow:                        # extra network allowlist (login/host entries)
+#         - example-org
+#     - match: example-org/payments   # a more specific override wins
+#       alias: payments-review
+#       profile: profiles/github-review.yaml
+#       default_command: triage
+#
+#   # Named, operator-declared commands (Phase 99). The verb after the @-mention
+#   # (e.g. "@bot review") selects the entry; `prompt` is the initial turn and
+#   # may be inline text or @file (resolved relative to the repo root). `help`,
+#   # `claude`, and `codex` are RESERVED (Phase 102) — defining them here trips
+#   # a `km doctor` WARN.
+#   commands:
+#     review:
+#       description: Review or triage the PR/issue (default when no command is given)
+#       prompt: '@profiles/default.github.prompt.txt'
+#     triage:
+#       description: Label and summarize a new issue
+#       alias: payments-review        # optional: route this command to a dedicated sandbox
+#       prompt: |
+#         Triage this issue: assign labels, summarize the request, and suggest next steps.
+#
+#   # Federated relay (Phase 100). One GitHub App serving multiple km installs.
+#   # List the OTHER installs' github-bridge Function URLs (`km github status` →
+#   # bridge-url). GitHub delivers every webhook to this front-door install,
+#   # which relays repos it doesn't own to the peers. Empty/absent → off.
+#   peer_bridges:
+#     - https://cccccccccccccccccccccccccc.lambda-url.us-east-1.on.aws/
+#     - https://dddddddddddddddddddddddddd.lambda-url.us-east-1.on.aws/
+#
+#   # Orphan-repo router (Phase 101). Set true on the FRONT-DOOR install only.
+#   # When the bot is @-mentioned on a repo no install owns, the front door
+#   # posts one guidance comment naming `github.repos:` wiring + `km init`.
+#   # Absent/false → the event is silently dropped (Phase 100 behavior).
+#   default_router: true
+
+# =============================================================================
 # AUTO-POPULATED by km init — uncomment to override
 # =============================================================================
 
