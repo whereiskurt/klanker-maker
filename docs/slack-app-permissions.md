@@ -15,7 +15,7 @@ km slack manifest > app.json   # render a deployment-specific manifest
 # Slack → Your Apps → Create New App → "From an app manifest" → paste app.json
 ```
 
-Bot token scopes (14) + bot events (2) declared by the manifest:
+Bot token scopes (15) + bot events (2) declared by the manifest:
 
 | Scope | One-liner |
 |-------|-----------|
@@ -32,6 +32,7 @@ Bot token scopes (14) + bot events (2) declared by the manifest:
 | `reactions:read` | read reaction state (read-counterpart; future reactions-as-actions) |
 | `files:write` | upload attachments + transcript files |
 | `files:read` | read files referenced in inbound messages |
+| `users:read` | base user-read; **required companion** of `users:read.email` |
 | `users:read.email` | resolve an email → Slack user id for invites |
 | **event** `message.channels` | messages in public channels the bot is in |
 | **event** `message.groups` | messages in private channels the bot is in |
@@ -84,10 +85,18 @@ person (a different workspace), used by `km slack invite --external` and the
 Requires a Pro/Business Slack workspace. **Without it:** external/Connect invites fail;
 native-workspace invites (same workspace) still work.
 
-**`users:read.email`** — resolves an **email address → Slack user id**, which Slack's
-invite APIs require. Used by `km slack invite <email>` and `km create` auto-invite
-(Phase 72). `km doctor` warns when it's missing (`checkSlackUsersReadEmailScope`).
-**Without it:** every email-based invite fails with `missing_scope`.
+**`users:read.email`** — resolves an **email address → Slack user id** via
+`users.lookupByEmail` (`pkg/slack/client.go`), which Slack's invite APIs require. Used
+by `km slack invite <email>` and `km create` auto-invite (Phase 72). `km doctor` warns
+when it's missing (`checkSlackUsersReadEmailScope`). **Without it:** every email-based
+invite fails with `missing_scope`.
+
+**`users:read`** — the **base user-read scope** and a **required companion** of
+`users:read.email`. Slack treats the `.email` variant as an *add-on* to `users:read`:
+the email field is only readable when both are granted, and a manifest that lists
+`users:read.email` alone is incomplete (Slack's own OAuth UI auto-pairs them, but a
+manifest must list both explicitly). **Without it:** `users:read.email` cannot function
+— `users.lookupByEmail` / user reads fail even though the email scope appears granted.
 
 ### Reactions
 
@@ -140,7 +149,7 @@ keeping the surface minimal. App-mention-in-non-member-channels (`app_mention` +
 | Inbound (listen + reply) | `channels:history`, `groups:history`, `chat:write` + events `message.channels`/`message.groups` |
 | 👀 ACK reaction | `reactions:write` |
 | Transcript streaming / attachments | `files:write`, `files:read` |
-| Invites (native + Connect) | `users:read.email`, `conversations.connect:write` |
+| Invites (native + Connect) | `users:read` + `users:read.email`, `conversations.connect:write` |
 
 ---
 

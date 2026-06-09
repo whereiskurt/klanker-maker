@@ -90,6 +90,14 @@ func TestSlackManifest_ScopesIncludeUsersReadEmail(t *testing.T) {
 	if !strings.Contains(out, `"users:read.email"`) {
 		t.Errorf("output missing users:read.email scope; got:\n%s", out)
 	}
+	// Slack requires the base users:read scope alongside users:read.email — the
+	// email variant is an add-on to user-read, and users.lookupByEmail (the invite
+	// path) needs it. A manifest listing only users:read.email is incomplete.
+	// NB: match the standalone element `"users:read",` — a bare "users:read"
+	// substring would also match inside "users:read.email" and pass spuriously.
+	if !strings.Contains(out, `"users:read",`) {
+		t.Errorf("output missing standalone users:read scope (required companion of users:read.email); got:\n%s", out)
+	}
 	// files:read is required by Phase 75 (inbound file attachments) and enforced
 	// by km doctor's inbound-scope check.
 	if !strings.Contains(out, `"files:read"`) {
