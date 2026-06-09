@@ -156,8 +156,8 @@ keeping the surface minimal. App-mention-in-non-member-channels (`app_mention` +
 ## Verifying & updating
 
 - **Check live scopes:** `km doctor` validates the inbound set (`channels:history`,
-  `groups:history`, `reactions:write`, `files:read`), `files:write`, and
-  `users:read.email`, with exact remediation lines for any that are missing.
+  `groups:history`, `reactions:write`, `files:read`), `files:write`, `users:read.email`,
+  and its companion `users:read`, with exact remediation lines for any that are missing.
 - **Add a scope:** `km slack manifest > app.json`, update the App's Bot Token Scopes
   from it (Slack Admin → your app → OAuth & Permissions → Bot Token Scopes), then
   **reinstall** to the workspace. Adding scopes does **not** change the bot token, so no

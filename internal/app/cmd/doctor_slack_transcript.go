@@ -376,6 +376,62 @@ func checkSlackUsersReadEmailScope(
 	}
 }
 
+// checkSlackUsersReadScope verifies the bot has the base users:read scope, the
+// REQUIRED companion of users:read.email. Slack treats the .email variant as an
+// add-on to users:read — the email field is only readable when both are granted,
+// and users.lookupByEmail (the EnsureMemberByEmail invite path) needs it. A bot
+// that somehow carries users:read.email WITHOUT users:read still fails invites, so
+// this check catches that drift independently of checkSlackUsersReadEmailScope.
+//
+// Mirrors checkSlackUsersReadEmailScope verbatim — same closure-injection pattern,
+// same dep shape (getScopes func), same status semantics.
+//
+// Returns:
+//   - SKIPPED: getScopes is nil (bot token not configured / Slack not set up).
+//   - OK: users:read present in scopes.
+//   - WARN: users:read missing (email-based invites fail even if users:read.email
+//     appears granted).
+//   - WARN: getScopes returned an error (do not fail doctor on auth.test outage).
+func checkSlackUsersReadScope(
+	ctx context.Context,
+	getScopes func(context.Context) ([]string, error),
+) CheckResult {
+	name := "Slack users:read scope"
+	if getScopes == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "Slack auth-test scopes func not configured",
+		}
+	}
+	scopes, err := getScopes(ctx)
+	if err != nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("could not check Slack scopes: %v", err),
+		}
+	}
+	for _, s := range scopes {
+		if s == "users:read" {
+			return CheckResult{
+				Name:    name,
+				Status:  CheckOK,
+				Message: "Slack bot has users:read scope (companion of users:read.email)",
+			}
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckWarn,
+		Message: "Slack bot is missing users:read scope — the required companion of users:read.email; email-based invites fail even when users:read.email is granted",
+		Remediation: "Run `km slack manifest > app.json`, update the Slack App's bot scopes from app.json " +
+			"(Slack Admin → Apps → your app → OAuth & Permissions → Bot Token Scopes → add users:read), " +
+			"then reinstall the app to your workspace (the bot token is unchanged — no `km slack rotate-token` needed). " +
+			"Run `km doctor` again to verify.",
+	}
+}
+
 // checkSlackBotUserIDCached verifies the {prefix}slack/bot-user-id SSM cache
 // is populated when mention-only mode is effective for at least one local
 // profile (Phase 91). Without the cached value, the bridge's mention-scan

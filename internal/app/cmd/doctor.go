@@ -3978,6 +3978,16 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// users:read — required companion of users:read.email (email field is unreadable
+	// without the base user-read scope; users.lookupByEmail needs it).
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackUsersReadScope(ctx, slackScopes)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	// Phase 91 — bot-user-id SSM cache check. Build the getUID closure only
 	// when at least one local profile resolves to mention-only mode. If no
 	// such profile exists the check returns SKIPPED (nil closure path).
