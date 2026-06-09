@@ -309,6 +309,32 @@ deployment-environment assumptions are worth knowing before a fresh setup:
   SSM mutation in the application account. The other trusted slots (provisioner, lifecycle,
   spot/ttl/create handlers, budget-enforcer, ssm) are already wildcarded by role-name pattern.
 
+#### Multi-install in a shared application account
+
+Multiple installs (distinct `resource_prefix` values — e.g. `kph` and `rg`) can share one
+application account. Each install deploys its **own** SCP, `{prefix}-sandbox-containment`, and
+both attach to the same account; AWS evaluates all attached SCPs as a logical **AND**
+(an action is denied if any attached SCP denies it). Three things to know:
+
+- **The containment statements compose automatically — no per-prefix configuration.** The
+  trusted-role exemptions are prefix-agnostic `*-{suffix}` patterns (e.g.
+  `arn:aws:iam::*:role/*-create-handler`), so `kph`'s SCP already trusts `rg`'s platform roles
+  and vice versa. No install needs to know another install's prefix. `km doctor` treats a
+  sibling `{other}-sandbox-containment` as expected (orphan-SCP WARN, silence with
+  `--ignore-prefix`).
+
+- **All same-account installs MUST share the same `allowed_regions`.** The region-lock
+  statement is account-wide and scoped to *each install's own* `allowed_regions`, with no
+  carve-out for sandbox (non-trusted) roles. If `kph` locks `us-east-1` and `rg` locks
+  `us-west-2` in the same account, the intersection denies sandbox roles in **both** regions
+  (each region is "not allowed" by one of the two SCPs). SCPs cannot scope the region lock to a
+  single install's resources, so this is an inherent cross-install invariant — keep
+  `accounts.application`-sharing installs on identical `allowed_regions`.
+
+- **~5 installs per account.** AWS's default limit is 5 SCPs per account, so roughly five
+  prefixes can coexist before you need an AWS limit increase. The 5,000-byte policy guard is
+  per-SCP, not aggregate.
+
 ---
 
 ## 3. Build Artifacts
