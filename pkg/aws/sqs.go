@@ -57,6 +57,25 @@ func GitHubInboundDLQName(resourcePrefix string) string {
 	return fmt.Sprintf("%s-github-inbound-dlq.fifo", resourcePrefix)
 }
 
+// H1InboundDLQName returns the shared (per-install, not per-sandbox) HackerOne
+// inbound dead-letter queue name. Format: {resource_prefix}-h1-inbound-dlq.fifo
+// (Phase 103, analog of GitHubInboundDLQName). The per-sandbox h1-inbound FIFO
+// queues attach a RedrivePolicy targeting this so a poison H1 envelope that
+// exhausts maxReceiveCount is evicted to the shared DLQ instead of head-of-line
+// blocking its message group forever (memory project_inbound_poller_fifo_poison_wedge).
+func H1InboundDLQName(resourcePrefix string) string {
+	return fmt.Sprintf("%s-h1-inbound-dlq.fifo", resourcePrefix)
+}
+
+// h1InboundVisibilityTimeout is the in-flight visibility timeout (seconds) for the
+// per-sandbox HackerOne inbound FIFO queues. Deliberately 1800s (30 min), NOT the
+// 30s used by the Slack/GitHub inbound queues: a HackerOne triage turn (read the
+// report, reason, post an internal comment) runs far longer than a Slack reply, and
+// a too-short timeout re-delivers the envelope mid-turn → duplicate review/comment
+// loops (the Phase 97 dup-review failure mode). 30 min comfortably brackets a triage
+// turn while still letting a genuinely stuck turn re-queue (≤3 times, then DLQ).
+const h1InboundVisibilityTimeout = "1800"
+
 // DLQArn deterministically derives a queue ARN from region, account ID, and
 // queue name — no SQS API call required. Format:
 // arn:aws:sqs:{region}:{accountID}:{queueName}
@@ -285,6 +304,94 @@ func DeleteGitHubInboundQueue(ctx context.Context, c SQSClient, queueURL string)
 			return nil // already gone — treat as success
 		}
 		return fmt.Errorf("delete github queue %s: %w", queueURL, err)
+	}
+	return nil
+}
+
+// h1InboundQueueAttrs builds the attribute map for the per-sandbox HackerOne
+// inbound FIFO queue. It mirrors inboundQueueAttrs (FIFO, ContentBasedDeduplication=
+// false, 14-day retention, optional RedrivePolicy) but overrides VisibilityTimeout
+// to h1InboundVisibilityTimeout (1800s) so a long-running triage turn is not
+// re-delivered mid-flight (Phase 97 dup-review loops). When dlqARN is empty the
+// RedrivePolicy attribute is omitted (dormancy preserved).
+func h1InboundQueueAttrs(dlqARN string) (map[string]string, error) {
+	attrs := map[string]string{
+		string(sqstypes.QueueAttributeNameFifoQueue):                 "true",
+		string(sqstypes.QueueAttributeNameContentBasedDeduplication): "false",
+		string(sqstypes.QueueAttributeNameVisibilityTimeout):         h1InboundVisibilityTimeout,
+		string(sqstypes.QueueAttributeNameMessageRetentionPeriod):    "1209600",
+	}
+	if dlqARN != "" {
+		rp, err := redrivePolicyJSON(dlqARN)
+		if err != nil {
+			return nil, err
+		}
+		attrs["RedrivePolicy"] = rp
+	}
+	return attrs, nil
+}
+
+// H1InboundQueueName returns the FIFO queue name for a sandbox's HackerOne inbound
+// queue. Phase 103, analog of GitHubInboundQueueName.
+// Format: {resource_prefix}-h1-inbound-{sandbox-id}.fifo
+func H1InboundQueueName(resourcePrefix, sandboxID string) string {
+	return fmt.Sprintf("%s-h1-inbound-%s.fifo", resourcePrefix, sandboxID)
+}
+
+// CreateH1InboundQueue creates a per-sandbox HackerOne inbound FIFO queue.
+// Attributes mirror CreateGitHubInboundQueue EXCEPT VisibilityTimeout=1800s
+// (h1InboundVisibilityTimeout — long-running triage turns, NOT 30s; see the
+// h1InboundVisibilityTimeout doc). Returns the queue URL on success. Idempotent:
+// QueueNameExists is treated as success via URL lookup.
+//
+// Phase 103 (poison-wedge protection): when dlqARN is non-empty a RedrivePolicy
+// attribute (maxReceiveCount=3) is attached so poison envelopes auto-evict to the
+// shared per-install DLQ instead of head-of-line-blocking the FIFO message group
+// (memory project_inbound_poller_fifo_poison_wedge). Empty dlqARN ⇒ no RedrivePolicy.
+func CreateH1InboundQueue(ctx context.Context, c SQSClient, queueName, dlqARN string) (string, error) {
+	attrs, err := h1InboundQueueAttrs(dlqARN)
+	if err != nil {
+		return "", fmt.Errorf("create h1 queue %s: %w", queueName, err)
+	}
+	out, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName:  awssdk.String(queueName),
+		Attributes: attrs,
+	})
+	if err != nil {
+		var existsErr *sqstypes.QueueNameExists
+		if errors.As(err, &existsErr) {
+			list, lerr := c.ListQueues(ctx, &sqs.ListQueuesInput{
+				QueueNamePrefix: awssdk.String(queueName),
+			})
+			if lerr == nil {
+				for _, u := range list.QueueUrls {
+					if strings.HasSuffix(u, "/"+queueName) {
+						return u, nil
+					}
+				}
+			}
+			return "", fmt.Errorf("create h1 queue %s: exists but URL lookup failed: %w", queueName, lerr)
+		}
+		return "", fmt.Errorf("create h1 queue %s: %w", queueName, err)
+	}
+	return awssdk.ToString(out.QueueUrl), nil
+}
+
+// DeleteH1InboundQueue is best-effort — returns nil if the queue is already gone.
+// Used by km destroy and rollback paths in km create. Phase 103.
+func DeleteH1InboundQueue(ctx context.Context, c SQSClient, queueURL string) error {
+	if queueURL == "" {
+		return nil
+	}
+	_, err := c.DeleteQueue(ctx, &sqs.DeleteQueueInput{
+		QueueUrl: awssdk.String(queueURL),
+	})
+	if err != nil {
+		var notFound *sqstypes.QueueDoesNotExist
+		if errors.As(err, &notFound) {
+			return nil // already gone — treat as success
+		}
+		return fmt.Errorf("delete h1 queue %s: %w", queueURL, err)
 	}
 	return nil
 }
