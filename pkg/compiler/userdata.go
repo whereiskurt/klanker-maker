@@ -1119,6 +1119,14 @@ chmod +x /opt/km/bin/km-github
 ln -sf /opt/km/bin/km-github /usr/local/bin/km-github
 echo "[km-bootstrap] km-github binary installed at /opt/km/bin/km-github"
 {{- end }}
+{{- if .H1InboundEnabled }}
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-h1" /opt/km/bin/km-h1
+chmod +x /opt/km/bin/km-h1
+# Expose km-h1 on /usr/local/bin so non-login shells and ad-hoc invocations
+# resolve it without needing /opt/km/bin on PATH.
+ln -sf /opt/km/bin/km-h1 /usr/local/bin/km-h1
+echo "[km-bootstrap] km-h1 binary installed at /opt/km/bin/km-h1"
+{{- end }}
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 
 # Download km binary for eBPF enforcer (km ebpf-attach command)
@@ -2397,6 +2405,313 @@ GITHUBINBOUND
 chmod +x /opt/km/bin/km-github-inbound-poller
 echo "[km-bootstrap] km-github-inbound-poller installed at /opt/km/bin/km-github-inbound-poller"
 {{- end }}
+{{- if .H1InboundEnabled }}
+# Phase 103 Plan 09: km-h1-inbound-poller — SQS long-poll dispatch to the agent.
+# Forked from km-github-inbound-poller (above), re-keyed (report_id, target) and
+# pointed at the HackerOne back-channel (km-h1). DORMANCY INVARIANT: this whole
+# block renders ONLY when notification.h1.inbound.enabled is true (the Wave-0
+# TestUserdataH1ByteIdentity golden guards an H1-free profile stays byte-identical).
+cat > /opt/km/bin/km-h1-inbound-poller << 'H1INBOUND'
+#!/bin/bash
+set -euo pipefail
+# km-h1-inbound-poller: poll the per-sandbox SQS FIFO queue for inbound HackerOne
+# comment-trigger / auto-triage envelopes and dispatch each turn via the agent,
+# then post back to HackerOne via km-h1 (INTERNAL by default — safety layer).
+# Envelope schema (pkg/h1/bridge/payload.go H1Envelope): {source:"hackerone",
+#   program, report_id, kind, activity_id, report_url, actor, body, agent,
+#   reply_to_researcher}
+
+QUEUE_URL="${KM_H1_INBOUND_QUEUE_URL:-}"
+SANDBOX_ID="${KM_SANDBOX_ID:-}"
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+
+# Profile default agent (same env var as the Slack/GitHub pollers — KM_AGENT).
+AGENT="${KM_AGENT:-claude}"
+
+# The thread-continuity key is (report_id, target). On the box, "target" is this
+# sandbox's OWN alias — the bridge dispatched here BECAUSE this alias matched the
+# fanout target.Alias, and it upserts the (report_id, target.Alias) row with this
+# sandbox_id. Fall back to KM_SANDBOX_ID when no alias is set so the key is never empty.
+TARGET="${KM_SANDBOX_ALIAS:-$SANDBOX_ID}"
+
+# km-h1-threads table for session/thread continuity (H1-THREAD-CONTINUITY).
+# Falls back to {prefix}-h1-threads matching the bridge default.
+H1_THREADS_TABLE="${KM_H1_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-h1-threads}"
+
+# Export AWS_REGION so subprocesses (km-h1, aws CLI) inherit it. The systemd unit's
+# EnvironmentFile=/etc/km/notify.env uses systemd-native format which omits AWS_REGION.
+export AWS_REGION="$REGION"
+
+[ -z "$SANDBOX_ID" ] && echo "[km-h1-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
+
+# Fall back to SSM Parameter Store when the env var is empty. km create writes
+# /{prefix}/sandbox/{id}/h1-inbound-queue-url after the SQS FIFO queue is created.
+# The poller starts at boot and may race the create-handler write — retry with
+# backoff for up to ~5 minutes.
+PARAM_NAME="{{ .SsmPrefix }}sandbox/${SANDBOX_ID}/h1-inbound-queue-url"
+if [ -z "$QUEUE_URL" ]; then
+  echo "[km-h1-inbound-poller] KM_H1_INBOUND_QUEUE_URL empty, reading $PARAM_NAME from SSM"
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    QUEUE_URL=$(aws ssm get-parameter \
+      --name "$PARAM_NAME" \
+      --region "$REGION" \
+      --query 'Parameter.Value' \
+      --output text 2>/dev/null || true)
+    [ -n "$QUEUE_URL" ] && [ "$QUEUE_URL" != "None" ] && break
+    QUEUE_URL=""
+    echo "[km-h1-inbound-poller] $PARAM_NAME not yet available (attempt $attempt/10), sleeping 30s"
+    sleep 30
+  done
+fi
+[ -z "$QUEUE_URL" ] && echo "[km-h1-inbound-poller] queue URL unavailable after retries, exiting" && exit 0
+
+echo "[km-h1-inbound-poller] Starting — queue=$QUEUE_URL region=$REGION target=$TARGET"
+
+while true; do
+  MSG=$(aws sqs receive-message \
+    --queue-url "$QUEUE_URL" \
+    --wait-time-seconds 20 \
+    --max-number-of-messages 1 \
+    --region "$REGION" \
+    --output json 2>/dev/null || true)
+
+  BODY=$(echo "$MSG" | jq -r '.Messages[0].Body // empty' 2>/dev/null || true)
+  RECEIPT=$(echo "$MSG" | jq -r '.Messages[0].ReceiptHandle // empty' 2>/dev/null || true)
+
+  [ -z "$BODY" ] && continue
+
+  # Parse envelope fields.
+  REPORT_ID=$(echo "$BODY" | jq -r '.report_id // empty')
+  PROGRAM=$(echo "$BODY" | jq -r '.program // empty')
+  KIND=$(echo "$BODY" | jq -r '.kind // empty')
+  ACTOR=$(echo "$BODY" | jq -r '.actor // empty')
+  REPORT_URL=$(echo "$BODY" | jq -r '.report_url // empty')
+  COMMENT_BODY=$(echo "$BODY" | jq -r '.body // empty')
+  # Per-message agent verb (claude|codex). Empty when absent.
+  AGENT_OVERRIDE=$(echo "$BODY" | jq -r '.agent // empty' 2>/dev/null || true)
+  # SAFETY: reply_to_researcher defaults to false (internal). The poller passes
+  # --reply-to-researcher to km-h1 ONLY when this flag is explicitly true.
+  REPLY_TO_RESEARCHER=$(echo "$BODY" | jq -r '.reply_to_researcher // false' 2>/dev/null || echo false)
+
+  # Validate envelope.
+  if [ -z "$REPORT_ID" ]; then
+    echo "[km-h1-inbound-poller] WARN: malformed envelope (missing report_id), acking: $BODY"
+    aws sqs delete-message \
+      --queue-url "$QUEUE_URL" \
+      --receipt-handle "$RECEIPT" \
+      --region "$REGION" 2>/dev/null || true
+    continue
+  fi
+
+  # Extend visibility BEFORE the agent run to prevent re-delivery during long turns.
+  # A HackerOne triage turn (read report + reason + draft reply) runs far longer than
+  # a Slack reply, so the queue's 1800s VisibilityTimeout is reinforced here — the
+  # message must not re-appear mid-run and re-dispatch (Phase 97 dup-review loop).
+  aws sqs change-message-visibility \
+    --queue-url "$QUEUE_URL" \
+    --receipt-handle "$RECEIPT" \
+    --visibility-timeout 1800 \
+    --region "$REGION" 2>/dev/null || true
+
+  # H1-THREAD-CONTINUITY: look up existing agent session for (report_id, target) in
+  # km-h1-threads. If present, resume the session so the agent has memory of prior
+  # turns. Also read agent_type so the precedence block can pin the thread agent.
+  H1_SESSION=""
+  THREAD_AGENT_TYPE=""
+  DDB_THREAD=$(aws dynamodb get-item \
+    --table-name "$H1_THREADS_TABLE" \
+    --key "{\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}}" \
+    --projection-expression "agent_session_id, agent_type" \
+    --region "$REGION" \
+    --output json 2>/dev/null || true)
+  H1_SESSION=$(echo "$DDB_THREAD" | jq -r '.Item.agent_session_id.S // empty' 2>/dev/null || true)
+  THREAD_AGENT_TYPE=$(echo "$DDB_THREAD" | jq -r '.Item.agent_type.S // empty' 2>/dev/null || true)
+  # Default THREAD_AGENT_TYPE to profile default when the attribute is absent
+  # (pre-existing rows have no agent_type; treat them as pinned to the profile default).
+  [ -z "$THREAD_AGENT_TYPE" ] && THREAD_AGENT_TYPE="$AGENT"
+
+  # Build the HackerOne context preamble. It orients the agent and teaches the
+  # km-h1 back-channel verbs — INTERNAL by default; --reply-to-researcher is
+  # taught ONLY when the envelope carries reply_to_researcher:true.
+  REPLY_GUIDANCE="  # Post an INTERNAL reply (DEFAULT — not visible to the researcher):
+  km-h1 comment --report $REPORT_ID --body '<your full response, markdown>'"
+  if [ "$REPLY_TO_RESEARCHER" = "true" ]; then
+    REPLY_GUIDANCE="$REPLY_GUIDANCE
+
+  # This trigger was explicitly authorized for a RESEARCHER-VISIBLE (external) reply.
+  # Use --reply-to-researcher ONLY for the message intended for the external hacker:
+  km-h1 comment --report $REPORT_ID --reply-to-researcher --body '<external reply, markdown>'"
+  fi
+
+  PREAMBLE="[HackerOne Comment Trigger]
+Program: $PROGRAM
+Report: $REPORT_ID
+Event: $KIND
+Actor: $ACTOR
+URL: $REPORT_URL
+
+--- Reading the report ---
+Fetch the full report JSON (title, state, severity, the researcher's writeup):
+
+  km-h1 read --report $REPORT_ID
+
+--- Trigger context ---
+$COMMENT_BODY
+
+--- Posting your response (REQUIRED) ---
+Your reply reaches HackerOne ONLY if you post it with km-h1. Replies are INTERNAL
+(team-only) by DEFAULT — this is the safety default; never message an external
+researcher unless explicitly authorized for THIS trigger.
+
+$REPLY_GUIDANCE
+
+Do NOT only print your answer — it is discarded unless you post it with km-h1."
+
+  RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+  RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
+  mkdir -p "$RUN_DIR"
+  chown sandbox:sandbox "$RUN_DIR" 2>/dev/null || true
+
+  PROMPT_FILE="$RUN_DIR/h1-prompt.txt"
+  printf '%s' "$PREAMBLE" > "$PROMPT_FILE"
+  chown sandbox:sandbox "$PROMPT_FILE" 2>/dev/null || true
+
+  # H1-THREAD-CONTINUITY: resume the prior session if one exists for (report_id, target).
+  RESUME_ARG=""
+  [ -n "$H1_SESSION" ] && RESUME_ARG="--resume $H1_SESSION"
+
+  # H1-AGENT-VERB precedence (verb override > thread agent_type > profile default)
+  # + cross-agent session reset. Ports the GitHub Phase 102 precedence block.
+  # Runs AFTER H1_SESSION and RESUME_ARG are computed (so the reset takes effect)
+  # and BEFORE the dispatch fork (so EFFECTIVE_AGENT drives both codex and claude).
+  if [ -n "$AGENT_OVERRIDE" ]; then
+    if [ "$AGENT_OVERRIDE" != "$THREAD_AGENT_TYPE" ] && [ -n "$H1_SESSION" ]; then
+      echo "[km-h1-inbound-poller] cross-agent switch ${THREAD_AGENT_TYPE}->${AGENT_OVERRIDE}; resetting session"
+      H1_SESSION=""   # clear both together so both paths see a fresh start
+      RESUME_ARG=""
+    fi
+    EFFECTIVE_AGENT="$AGENT_OVERRIDE"
+  else
+    EFFECTIVE_AGENT="$THREAD_AGENT_TYPE"
+  fi
+
+  # codex-missing guard — post a helpful INTERNAL note and ack rather than stranding
+  # the turn when /codex is used on a profile without Codex installed.
+  if [ "$EFFECTIVE_AGENT" = "codex" ] && ! command -v codex >/dev/null 2>&1; then
+    /opt/km/bin/km-h1 comment --report "$REPORT_ID" \
+      --body "This sandbox's profile has no Codex; /codex is unavailable here."
+    aws sqs delete-message --queue-url "$QUEUE_URL" --receipt-handle "$RECEIPT" --region "$REGION" 2>/dev/null || true
+    continue
+  fi
+
+  if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+    # KM_H1_REPLY_AGENT is exported INLINE in the sudo string (root-side vars don't
+    # survive sudo -u sandbox bash -lc) — forward-compat attribution hook mirroring
+    # KM_GITHUB_REPLY_AGENT.
+    if [ -n "$H1_SESSION" ]; then
+      sudo -u sandbox bash -lc "
+        set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export KM_H1_REPLY_AGENT='codex'
+        cd /workspace 2>/dev/null || true
+        codex exec resume '$H1_SESSION' \"\$(cat '$PROMPT_FILE')\" \
+          --json --dangerously-bypass-approvals-and-sandbox \
+          > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+        echo \$? > '$RUN_DIR/exit_code'
+      " || true
+    else
+      sudo -u sandbox bash -lc "
+        set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export KM_H1_REPLY_AGENT='codex'
+        cd /workspace 2>/dev/null || true
+        codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
+          > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+        echo \$? > '$RUN_DIR/exit_code'
+      " || true
+    fi
+  else
+    # Claude path (default). Pass --resume when a prior session exists for (report_id, target).
+    sudo -u sandbox bash -lc "
+      set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      export KM_H1_REPLY_AGENT='claude'
+      cd /workspace 2>/dev/null || true
+      claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
+        --dangerously-skip-permissions $RESUME_ARG \
+        > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+      echo \$? > '$RUN_DIR/exit_code'
+    " || true
+
+    # If --resume failed with "No conversation found" (stale or cross-box session ID),
+    # retry ONCE without --resume so the turn is not stranded + head-of-line blocking
+    # the FIFO group (the Gap E fix ported from the GitHub poller).
+    RUN_EXIT_FIRST=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
+    if [ "$RUN_EXIT_FIRST" -ne 0 ] && [ -n "$RESUME_ARG" ] && \
+       grep -q "No conversation found" "$RUN_DIR/stderr.log" 2>/dev/null; then
+      echo "[km-h1-inbound-poller] WARN: --resume session not found (${H1_SESSION:0:8}...), retrying as fresh session — report=$REPORT_ID target=$TARGET"
+      rm -f "$RUN_DIR/output.json" "$RUN_DIR/exit_code"
+      # Clear the stale DDB session row so the next dispatch doesn't retry --resume.
+      aws dynamodb update-item \
+        --table-name "$H1_THREADS_TABLE" \
+        --key "{\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}}" \
+        --update-expression "REMOVE agent_session_id" \
+        --region "$REGION" 2>/dev/null || true
+      sudo -u sandbox bash -lc "
+        set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export KM_H1_REPLY_AGENT='claude'
+        cd /workspace 2>/dev/null || true
+        claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
+          --dangerously-skip-permissions \
+          > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+        echo \$? > '$RUN_DIR/exit_code'
+      " || true
+    fi
+  fi
+  rm -f "$PROMPT_FILE"
+
+  RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
+
+  if [ "$RUN_EXIT" -eq 0 ] && [ -s "$RUN_DIR/output.json" ]; then
+    # H1-THREAD-CONTINUITY: extract session_id from agent output and write back to
+    # km-h1-threads via UpdateItem (NOT PutItem — memory project_sandboxmetadata_lossy_roundtrip:
+    # a full-row PutItem would strip sandbox_id/ttl_expiry set by the bridge upsert).
+    # Claude: .session_id from output.json. Codex: thread_id from the thread.started event.
+    NEW_H1_SESSION=""
+    if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+      NEW_H1_SESSION=$(jq -r 'select(.type=="thread.started") | .thread_id // empty' "$RUN_DIR/output.json" 2>/dev/null | head -1 || true)
+    else
+      NEW_H1_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
+    fi
+
+    if [ -n "$NEW_H1_SESSION" ]; then
+      # Write agent_session_id + agent_type via UpdateItem. Pins the thread to
+      # EFFECTIVE_AGENT so future turns without a verb default correctly.
+      aws dynamodb update-item \
+        --table-name "$H1_THREADS_TABLE" \
+        --key "{\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}}" \
+        --update-expression "SET agent_session_id = :sid, agent_type = :at" \
+        --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_H1_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
+        --region "$REGION" 2>/dev/null || true
+      echo "[km-h1-inbound-poller] Session updated — report=$REPORT_ID target=$TARGET session=${NEW_H1_SESSION:0:8}... agent=$EFFECTIVE_AGENT"
+    fi
+
+    # Ack-then-log: delete the message AFTER a successful turn (DeleteMessage only on
+    # success) so a crash can't cause duplicate dispatch.
+    aws sqs delete-message \
+      --queue-url "$QUEUE_URL" \
+      --receipt-handle "$RECEIPT" \
+      --region "$REGION" 2>/dev/null || true
+    echo "[km-h1-inbound-poller] Turn complete — report=$REPORT_ID target=$TARGET actor=$ACTOR"
+  else
+    echo "[km-h1-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
+  fi
+done
+H1INBOUND
+chmod +x /opt/km/bin/km-h1-inbound-poller
+echo "[km-bootstrap] km-h1-inbound-poller installed at /opt/km/bin/km-h1-inbound-poller"
+{{- end }}
 
 # km-send: send Ed25519-signed email with optional attachments via SES
 cat > /opt/km/bin/km-send << 'KMSEND'
@@ -2717,6 +3032,28 @@ RestartSec=5
 WantedBy=multi-user.target
 GITHUBINBOUNDUNIT
 echo "[km-bootstrap] km-github-inbound-poller.service installed"
+{{- end }}
+{{- if .H1InboundEnabled }}
+
+cat > /etc/systemd/system/km-h1-inbound-poller.service << 'H1INBOUNDUNIT'
+[Unit]
+Description=Klanker Maker HackerOne inbound poller — dispatches HackerOne comment-trigger events to the agent
+After=network.target
+[Service]
+User=root
+# systemd-native format env file (no 'export' prefix) — systemd rejects the
+# shell-keyword prefix used by /etc/profile.d/km-notify-env.sh. Leading '-'
+# tolerates a missing file on first boot / older AMIs.
+EnvironmentFile=-/etc/km/notify.env
+Environment=SANDBOX_ID={{ .SandboxID }}
+Environment=KM_SANDBOX_ID={{ .SandboxID }}
+ExecStart=/opt/km/bin/km-h1-inbound-poller
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+H1INBOUNDUNIT
+echo "[km-bootstrap] km-h1-inbound-poller.service installed"
 {{- end }}
 cat > /etc/systemd/system/km-presence.service << 'UNIT'
 [Unit]
@@ -3843,15 +4180,15 @@ echo "[km-bootstrap] km-recv installed at /opt/km/bin/km-recv"
 # daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
 # picks up the freshly-written unit before enable/restart so the correct env is used.
 systemctl daemon-reload
-systemctl enable km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}
-systemctl restart km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}
+systemctl enable km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}
+systemctl restart km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started (DNS via eBPF enforcer, not km-dns-proxy)"
 {{- else }}
 # daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
 # picks up the freshly-written unit before enable/restart so the correct env is used.
 systemctl daemon-reload
-systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}
-systemctl restart km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}
+systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}
+systemctl restart km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started"
 {{- end }}
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
@@ -4520,6 +4857,12 @@ type userDataParams struct {
 	// systemctl enable/start lines.
 	// Set from profile.Spec.Notification.Github.Inbound.Enabled (Phase 97 Plan 05).
 	GitHubInboundEnabled bool
+	// H1InboundEnabled gates conditional emission of the km-h1-inbound-poller bash
+	// script, its systemd unit, the km-h1 binary download, and the systemctl
+	// enable/start lines. Set from profile.Spec.Notification.H1.Inbound.Enabled
+	// (Phase 103 Plan 09). DORMANCY INVARIANT: when false the H1 poller block must
+	// NOT render — guarded by the Wave-0 TestUserdataH1ByteIdentity golden.
+	H1InboundEnabled bool
 }
 
 // parseUserDataTemplate parses the userDataTemplate and returns the compiled template.
@@ -4694,6 +5037,21 @@ func githubInboundEnabled(p *profile.SandboxProfile) bool {
 		return false
 	}
 	in := p.Spec.Notification.Github.Inbound
+	return in != nil && in.Enabled != nil && *in.Enabled
+}
+
+// h1InboundEnabled reports whether notification.h1.inbound.enabled is &true.
+// Phase 103 Plan 09: gates the km-h1-inbound-poller heredoc, systemd unit,
+// km-h1 binary download, KM_H1_INBOUND_QUEUE_URL notify.env slot, and the
+// systemctl enable/restart lines. This is the DORMANCY INVARIANT the Wave-0
+// TestUserdataH1ByteIdentity golden guards: when false (the default, no
+// notification.h1 block), NONE of the H1 poller output renders and the userdata
+// is byte-identical to the pre-Phase-103 baseline.
+func h1InboundEnabled(p *profile.SandboxProfile) bool {
+	if p.Spec.Notification == nil || p.Spec.Notification.H1 == nil {
+		return false
+	}
+	in := p.Spec.Notification.H1.Inbound
 	return in != nil && in.Enabled != nil && *in.Enabled
 }
 
@@ -5067,6 +5425,14 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		if githubInboundEnabled(p) {
 			notifyEnv["KM_GITHUB_INBOUND_QUEUE_URL"] = ""
 		}
+
+		// Phase 103 Plan 09: HackerOne inbound — emit KM_H1_INBOUND_QUEUE_URL as an
+		// empty placeholder in the notify.env so the poller always has the env slot.
+		// km create fills the real value via SSM Parameter Store after queue creation
+		// (/{prefix}/sandbox/{id}/h1-inbound-queue-url, written by provisionH1InboundQueue).
+		if h1InboundEnabled(p) {
+			notifyEnv["KM_H1_INBOUND_QUEUE_URL"] = ""
+		}
 	}
 
 	// Phase 97 Plan 05: wire GitHubInboundEnabled for template conditionals.
@@ -5075,6 +5441,16 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	// github-inbound (e.g., a non-agent sandbox used purely as a code-review bot).
 	if githubInboundEnabled(p) {
 		params.GitHubInboundEnabled = true
+	}
+
+	// Phase 103 Plan 09: wire H1InboundEnabled for template conditionals. Gated
+	// independently of Spec.CLI — h1-inbound is under spec.notification.h1, not
+	// spec.cli, so a profile without a CLI block can still enable h1-inbound (the
+	// h1-triage profile is exactly such a profile). DORMANCY INVARIANT: when this
+	// is false, none of the H1 poller heredoc / unit / binary / systemctl lines
+	// render (TestUserdataH1ByteIdentity golden).
+	if h1InboundEnabled(p) {
+		params.H1InboundEnabled = true
 	}
 
 	// Phase 92 (Wave 5): synthesize the Claude Code settings.json from the typed

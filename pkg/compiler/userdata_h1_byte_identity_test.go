@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
@@ -109,5 +110,59 @@ func TestUserdataH1ByteIdentity(t *testing.T) {
 		t.Errorf("userdata drifted from the pre-Phase-103 dormancy baseline for the H1-free "+
 			"profile %s (the H1 poller block must NOT render unless notification.h1.inbound.enabled "+
 			"is true):\n%s", h1BaselineProfile, diffStrings(string(want), got))
+	}
+}
+
+// TestUserdataH1EnabledRendersPoller is the active half of the dormancy invariant
+// (Plan 09): when notification.h1.inbound.enabled IS true, the km-h1-inbound-poller
+// heredoc, its systemd unit, the km-h1 binary download, and the systemctl
+// enable/restart lines MUST appear in the rendered userdata. Together with
+// TestUserdataH1ByteIdentity (the negative case) this pins the conditional gate:
+// present iff enabled.
+func TestUserdataH1EnabledRendersPoller(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller unavailable")
+	}
+	profPath := filepath.Join(filepath.Dir(thisFile), "testdata", h1BaselineProfile)
+	raw, err := os.ReadFile(profPath)
+	if err != nil {
+		t.Fatalf("read profile %s: %v", profPath, err)
+	}
+	p, err := profile.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse profile %s: %v", profPath, err)
+	}
+
+	// Flip on notification.h1.inbound.enabled in-struct (no separate testdata file
+	// needed — the gate is a single *bool). Mirrors how the production h1-triage
+	// profile opts in.
+	enabled := true
+	if p.Spec.Notification == nil {
+		p.Spec.Notification = &profile.NotificationSpec{}
+	}
+	p.Spec.Notification.H1 = &profile.NotificationH1Spec{
+		Inbound: &profile.NotificationH1InboundSpec{Enabled: &enabled},
+	}
+
+	got, err := generateUserData(p, "sb-phase103-h1on", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	wantSubstrings := []string{
+		"km-h1-inbound-poller",                                  // poller heredoc + script
+		"/etc/systemd/system/km-h1-inbound-poller.service",      // systemd unit
+		"sidecars/km-h1",                                        // km-h1 binary download
+		"KM_H1_INBOUND_QUEUE_URL",                               // queue URL env slot
+		`\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}`, // (report_id,target) key (literal backslashes inside the heredoc)
+		"update-item",                                           // UpdateItem (not PutItem) write-back
+		"km-h1 comment --report $REPORT_ID",                     // internal-by-default reply preamble
+	}
+	for _, sub := range wantSubstrings {
+		if !strings.Contains(got, sub) {
+			t.Errorf("H1-enabled userdata is missing expected substring %q (the poller block "+
+				"must render when notification.h1.inbound.enabled is true)", sub)
+		}
 	}
 }

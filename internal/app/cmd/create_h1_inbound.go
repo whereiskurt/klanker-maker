@@ -62,19 +62,16 @@ type h1InboundDeps struct {
 }
 
 // notificationH1Inbound returns the per-sandbox H1 inbound spec (nil-safe), the
-// gate for provisionH1InboundQueue. The notification.h1.inbound schema field is
-// introduced in Plan 09 (it carries the km-h1-inbound-poller userdata + the
-// dormancy golden). Until that field lands this accessor returns nil so the H1
-// queue provisioning stays dormant and the build is green in Plan-08 isolation;
-// Plan 09 repoints this at p.Spec.Notification.H1.Inbound and wires the create.go
-// call site alongside the gate field it owns.
+// gate for provisionH1InboundQueue. Plan 09 introduced the notification.h1.inbound
+// schema field (carrying the km-h1-inbound-poller userdata + the dormancy golden)
+// and repointed this accessor at p.Spec.Notification.H1.Inbound.
 //
 // Mirrors notificationGitHubInbound / notificationSlackInbound.
-func notificationH1Inbound(p *profile.SandboxProfile) *profile.NotificationGitHubInboundSpec {
-	// Forward-compat stub (Plan 09 wiring point). Returning nil keeps the H1
-	// inbound path dormant — no SQS calls, no DDB writes, no SSM commands.
-	_ = p
-	return nil
+func notificationH1Inbound(p *profile.SandboxProfile) *profile.NotificationH1InboundSpec {
+	if p == nil || p.Spec.Notification == nil || p.Spec.Notification.H1 == nil {
+		return nil
+	}
+	return p.Spec.Notification.H1.Inbound
 }
 
 // provisionH1InboundQueue creates the per-sandbox HackerOne inbound FIFO queue,

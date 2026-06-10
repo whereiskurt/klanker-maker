@@ -1205,6 +1205,64 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 	}
 
+	// Step 11g: Provision per-sandbox HackerOne inbound SQS FIFO queue (Phase 103-09).
+	// Only runs when notification.h1.inbound.enabled=true (the dormancy gate — same
+	// posture as the GitHub block above). FATAL: failure rolls back the queue; km create aborts.
+	if inbound := notificationH1Inbound(resolvedProfile); inbound != nil && inbound.Enabled != nil && *inbound.Enabled {
+		sandboxDynamoClientForH1 := dynamodbpkg.NewFromConfig(awsCfg)
+		step11gTableName := cfg.GetSandboxTableName()
+
+		sqsRegionForH1 := resolvedProfile.Spec.Runtime.Region
+		if sqsRegionForH1 == "" {
+			sqsRegionForH1 = awsCfg.Region
+		}
+		sqsClientForH1, sqsClientH1Err := awspkg.NewSQSClient(ctx, sqsRegionForH1)
+		if sqsClientH1Err != nil {
+			return fmt.Errorf("km create: h1 inbound provisioning (SQS client): %w", sqsClientH1Err)
+		}
+
+		ssmClientForH1 := ssm.NewFromConfig(awsCfg)
+
+		// Phase 99.1 / 103-08: derive the shared (per-install) H1-inbound DLQ ARN so the
+		// new per-sandbox source queue carries a RedrivePolicy (poison-message auto-eviction
+		// after 3 receives). Derive — do NOT call SQS — from region + account ID +
+		// H1InboundDLQName(prefix). When either region or account ID is empty, leave DLQArn
+		// empty so provisioning stays dormant (no RedrivePolicy) rather than fabricating a
+		// partial ARN.
+		h1DLQArn := ""
+		if sqsRegionForH1 != "" && cfg.ApplicationAccountID != "" {
+			h1DLQArn = awspkg.DLQArn(sqsRegionForH1, cfg.ApplicationAccountID, awspkg.H1InboundDLQName(cfg.GetResourcePrefix()))
+		}
+		step11gDeps := h1InboundDeps{
+			Profile:   resolvedProfile,
+			Cfg:       cfg,
+			SandboxID: sandboxID,
+			SQS:       sqsClientForH1,
+			DLQArn:    h1DLQArn,
+			UpdateSandboxAttr: func(ictx context.Context, sid, attr, val string) error {
+				return awspkg.UpdateSandboxStringAttrDynamo(ictx, sandboxDynamoClientForH1, step11gTableName, sid, attr, val)
+			},
+			PutSSMParameter: func(ictx context.Context, name, val string) error {
+				_, err := ssmClientForH1.PutParameter(ictx, &ssm.PutParameterInput{
+					Name:      aws.String(name),
+					Value:     aws.String(val),
+					Type:      ssmtypes.ParameterTypeString,
+					Overwrite: aws.Bool(true),
+				})
+				return err
+			},
+		}
+
+		h1QueueURL, h1InboundErr := provisionH1InboundQueue(ctx, step11gDeps)
+		if h1InboundErr != nil {
+			return fmt.Errorf("km create: h1 inbound provisioning: %w", h1InboundErr)
+		}
+		if h1QueueURL != "" {
+			log.Info().Str("sandbox_id", sandboxID).Str("queue_url", h1QueueURL).
+				Msg("HackerOne inbound queue provisioned")
+		}
+	}
+
 	// Step 12: Create EventBridge TTL schedule if TTL is configured.
 	// Auto-discover Lambda ARN if not explicitly set.
 	// Non-fatal: sandbox is provisioned; operator can re-schedule manually if this fails.
