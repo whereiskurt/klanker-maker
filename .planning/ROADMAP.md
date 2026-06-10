@@ -2354,3 +2354,13 @@ Plans:
 - [ ] 102-03-PLAN.md — GitHub poller EFFECTIVE_AGENT precedence + cross-agent switch + codex-missing guard + agent_type write-back [GH-AGENT-POLLER, GH-AGENT-SWITCH, GH-AGENT-PROFILE]
 - [ ] 102-04-PLAN.md — km doctor reserved-shadow (claude/codex/help) + /help agent listing + docs (github-bridge.md + CLAUDE.md) [GH-AGENT-VERB, GH-AGENT-PROFILE]
 - [ ] 102-05-PLAN.md — Deploy-surface audit + live GH-AGENT-E2E UAT (checkpoint) [GH-AGENT-E2E]
+
+### Phase 103: HackerOne comment-trigger bridge — km-h1-bridge Lambda dispatches HackerOne webhook events to per-program sandbox agents (auto-triage + comment-keyword), internal-by-default replies
+
+**Goal:** A HackerOne program webhook can drive a sandbox agent turn the same way a GitHub PR comment does (Phase 97-102): a single `km-h1-bridge` Lambda Function URL HMAC-verifies the `X-H1-Signature`, dedupes by `X-H1-Delivery`, resolves the report's program handle to one-or-more sandbox targets from `h1.programs:` in km-config.yaml, and dispatches an agent turn (warm FIFO / cold create / resume) with report-id-keyed thread continuity — via TWO trigger models (opt-in lifecycle-event auto-triage + configurable @-handle comment-keyword), config-driven event→prompt mappings, multi-target fanout, and a reply path that is INTERNAL by default with an allowlist-gated `/reply_to_researcher` for researcher-visible replies. The agent posts back through a new `cmd/km-h1` helper using HackerOne customer-API Basic Auth.
+**Requirements**: H1-BRIDGE-HMAC, H1-BRIDGE-DEDUP, H1-RESOLVE-PROGRAM, H1-TRIGGER-AUTOTRIAGE, H1-TRIGGER-MENTION, H1-COMMAND-PARSE, H1-AGENT-VERB, H1-EVENT-PROMPT-MAP, H1-FANOUT-MULTITARGET, H1-DISPATCH-3WAY, H1-THREAD-CONTINUITY, H1-REPLY-INTERNAL-DEFAULT, H1-REPLY-RESEARCHER-GATED, H1-HELPER-KM-H1, H1-CLI-INIT-STATUS, H1-DEPLOY-WIRING, H1-E2E (defined at plan time)
+**Depends on:** Phase 102
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 103 to break down)
