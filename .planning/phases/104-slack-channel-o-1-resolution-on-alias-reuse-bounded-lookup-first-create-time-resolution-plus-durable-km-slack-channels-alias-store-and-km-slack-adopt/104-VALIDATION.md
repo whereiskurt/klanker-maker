@@ -44,6 +44,7 @@ created: 2026-06-10
 | 01 | 1 | SLACK-CHAN-LOOKUP | unit | `go test ./internal/app/cmd/ -run TestResolvePerSandbox_StoredID_Live_NoScan -v` | ❌ W0 | ⬜ pending |
 | 01 | 1 | SLACK-CHAN-LOOKUP | unit | `go test ./internal/app/cmd/ -run TestResolvePerSandbox_StoredID_TransientInfo_NoScan -v` | ❌ W0 (today's bug) | ⬜ pending |
 | 01 | 1 | SLACK-CHAN-LOOKUP | unit | `go test ./internal/app/cmd/ -run TestResolvePerSandbox_StoredID_NotFound_Recreates -v` | ❌ W0 | ⬜ pending |
+| 01 | 1 | SLACK-CHAN-STORE | unit | `go test ./internal/app/cmd/ -run TestResolvePerSandbox_StoredID_SSMOnly_BackfillsDDB -v` (SSM-sourced hit migrates into DDB store) | ❌ W0 | ⬜ pending |
 | 01 | 1 | SLACK-CHAN-LOOKUP | unit | `go test ./internal/app/cmd/ -run TestResolvePerSandbox_NameTaken_NoMapping_FailFast -v` | ❌ W0 | ⬜ pending |
 | 01 | 1 | SLACK-CHAN-LOOKUP | unit | `go test ./internal/app/cmd/ -run TestResolvePerSandbox_FreshCreate_WritesStore -v` | ❌ W0 | ⬜ pending |
 | 02 | 2 | SLACK-CHAN-STORE/DEPLOY | smoke | `cd infra/modules/dynamodb-slack-channels/v1.0.0 && terraform init -backend=false && terraform validate` | ❌ W0 (new module) | ⬜ pending |
@@ -66,7 +67,7 @@ created: 2026-06-10
 
 - [ ] `pkg/slack/client_test.go` — 3 new `TestFindChannelByName_*` (PageCapExceeded, ZeroCapDisablesScan, CtxCancelledMidScan); update the existing 2-arg call sites in `TestFindChannelByName_RetriesOnRateLimit` / `_RateLimitExhausted`
 - [ ] `pkg/slack/client_test.go` — `TestIsChannelNotFound` (4 cases: definitive, transient ratelimited, nil, network)
-- [ ] `internal/app/cmd/create_slack_test.go` — extend `fakeSlackAPI` (`findShouldPanic`, `channelInfoErr`, `createCalls`, 3-arg `FindChannelByName`); add `fakeChannelStore`; add 5 `TestResolvePerSandbox_*`; `TestSlackResolveBudget` env-parse test
+- [ ] `internal/app/cmd/create_slack_test.go` — extend `fakeSlackAPI` (`findShouldPanic`, `channelInfoErr`, `createCalls`, 3-arg `FindChannelByName`); add `fakeChannelStore`; add 6 `TestResolvePerSandbox_*` (incl. `StoredID_SSMOnly_BackfillsDDB` — SSM-sourced hit promotes into DDB store); `TestSlackResolveBudget` env-parse test
 - [ ] `pkg/aws/slack_channels.go` + `pkg/aws/slack_channels_test.go` — new `SlackChannelStore` + interface + 2 tests (UpsertThenGet, GetMiss); add a `fakeDDB` if absent
 - [ ] `internal/app/config/config_test.go` — `TestGetSlackChannelsTableName` (3 cases: nil receiver, explicit override, prefix-derived)
 - [ ] `internal/app/cmd/slack_adopt.go` + `internal/app/cmd/slack_adopt_test.go` — new command + 3 tests (RejectsBadChannelID, RequiresBotMembership, WritesThrough)

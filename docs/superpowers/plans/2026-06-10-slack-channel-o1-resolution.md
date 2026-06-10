@@ -401,6 +401,30 @@ func TestResolvePerSandbox_FreshCreate_WritesStore(t *testing.T) {
 		t.Fatalf("fresh create must write store, got %q", store.m["github-bot"])
 	}
 }
+
+// Pre-104 channel: DDB store EMPTY, ID present in the SSM by-name cache, channel live →
+// resolves O(1) AND migrates the mapping into the authoritative DDB store on first touch.
+func TestResolvePerSandbox_StoredID_SSMOnly_BackfillsDDB(t *testing.T) {
+	api := &fakeSlackAPI{
+		channelInfoErr:  nil,  // info(SSM-sourced ID) succeeds
+		findShouldPanic: true, // must NOT enumerate
+	}
+	store := &fakeChannelStore{m: map[string]string{}} // DDB empty
+	// Seed the fake SSM by-name cache (NOT the store) with the existing channel ID.
+	// resolvePerSandboxChannelForTest must let the test pre-seed the fake SSM store at
+	// key slackChannelNameCacheKey(prefix, "sb-github-bot") = "C0SSM".
+	id, _, err := resolvePerSandboxChannelForTestWithSSM(t, api, store,
+		"github-bot", "sb-github-bot", map[string]string{"sb-github-bot": "C0SSM"})
+	if err != nil || id != "C0SSM" {
+		t.Fatalf("SSM-sourced hit must resolve O(1), got %q/%v", id, err)
+	}
+	if store.m["github-bot"] != "C0SSM" {
+		t.Fatalf("SSM-sourced hit must back-fill the DDB store, got %q", store.m["github-bot"])
+	}
+	if api.createCalls != 0 {
+		t.Fatalf("back-fill path must not create a channel")
+	}
+}
 ```
 
 You will need a small `fakeChannelStore` (map-backed `SlackChannelStore`) and to extend the existing `fakeSlackAPI` with `findShouldPanic`/`createCalls`/`channelInfoErr` fields and the 3-arg `FindChannelByName`. Also write the `resolvePerSandboxChannelForTest` helper that builds a minimal profile with `notification.slack.enabled+perSandbox=true` and calls the real `resolveSlackChannel` with a fake SSM store. Mirror the construction already used by `TestResolveSlack_PerSandbox_NameTaken_RateLimited_ErrorMessage`.
@@ -417,18 +441,20 @@ Replace `resolveExistingChannelID` (lines ~152-182) and refactor the Mode-2 bloc
 ```go
 // lookupStoredChannelID returns a previously-stored channel ID for the alias,
 // DDB-first (authoritative) then SSM by-name (back-compat). Empty alias ⇒ skip
-// DDB (no stable reuse key). Returns "" on miss.
+// DDB (no stable reuse key). Returns ("", false) on miss. fromDDB is true only
+// when the hit came from the authoritative DDB store — callers back-fill DDB on
+// an SSM-sourced hit (fromDDB=false) so pre-104 channels migrate on first touch.
 func lookupStoredChannelID(ctx context.Context, store SlackChannelStore, ssmStore SSMParamStore,
-	slackPrefix, alias, channelName string) string {
+	slackPrefix, alias, channelName string) (id string, fromDDB bool) {
 	if store != nil && alias != "" {
-		if id, err := store.GetByAlias(ctx, alias); err == nil && id != "" {
-			return id
+		if v, err := store.GetByAlias(ctx, alias); err == nil && v != "" {
+			return v, true
 		}
 	}
-	if id, _ := ssmStore.Get(ctx, slackChannelNameCacheKey(slackPrefix, channelName), false); id != "" {
-		return id
+	if v, _ := ssmStore.Get(ctx, slackChannelNameCacheKey(slackPrefix, channelName), false); v != "" {
+		return v, false
 	}
-	return ""
+	return "", false
 }
 
 // storeChannelMapping write-throughs the name→ID binding to BOTH the durable DDB
@@ -483,14 +509,18 @@ defer log path=… ms=… id=…
 channelName := deriveSandboxChannelName(...)
 
 // 1. lookup-first
-if id := lookupStoredChannelID(...); id != "" {
+if id, fromDDB := lookupStoredChannelID(...); id != "" {
     ok, gone := validateStoredChannel(ctx, api, id)
     switch {
-    case ok:        path="cache_hit"; ensureBotMember(id); finishInvites(); return id
-    case !gone:     path="cache_optimistic"; ensureBotMember(id); finishInvites(); return id   // transient
+    case ok:        path="cache_hit"; backfillDDBIfSSM(fromDDB, id); ensureBotMember(id); finishInvites(); return id
+    case !gone:     path="cache_optimistic"; backfillDDBIfSSM(fromDDB, id); ensureBotMember(id); finishInvites(); return id   // transient
     default:        // gone → fall through to create (invalidate happens via overwrite on next store)
     }
 }
+// backfillDDBIfSSM: when !fromDDB && store != nil && alias != "" → store.UpsertByAlias(ctx, alias, id)
+// best-effort (log-debug on error, never fail create). Promotes an SSM-sourced hit into the
+// authoritative DDB table so a pre-104 / out-of-band channel migrates on first touch. No-op when
+// fromDDB (DDB was already authoritative) or store==nil (104-01 production until 104-03 wires it).
 
 // 2. create
 id, createErr := api.CreateChannel(ctx, channelName)
