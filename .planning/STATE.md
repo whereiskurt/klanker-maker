@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 103-01-PLAN.md
-last_updated: "2026-06-10T03:58:21.489Z"
+stopped_at: Completed 103-02-PLAN.md
+last_updated: "2026-06-10T04:09:14.178Z"
 last_activity: 2026-06-10
 progress:
   total_phases: 119
   completed_phases: 105
   total_plans: 531
-  completed_plans: 484
+  completed_plans: 486
   percent: 91
 ---
 
@@ -519,6 +519,7 @@ Progress: [█████████░] 91%
 | Phase 102 P04 | 429s | 3 tasks | 7 files |
 | Phase 102-github-bridge-agent-verbs-claude-and-codex-select-the-per-thread-agent-in-a-pr-comment-slack-phase-70-analog P05 | 30min | 2 tasks | 1 files |
 | Phase 103 P01 | 2min | 3 tasks | 5 files |
+| Phase 103 P02 | 8min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1500,6 +1501,7 @@ Recent decisions affecting current work:
 - [Phase 102]: GH-AGENT-E2E requirement closed: Phase 102 proven deployable via make build-lambdas + km init --dry-run=false (NOT --sidecars), additive-only surface confirmed
 - [Phase 103]: Phase 103 Plan 01: took pre-authorized synthetic-fallback for the live HackerOne webhook capture; real Sandbox-program capture + envelope-wrapper confirmation deferred to Plan 10 (Wave 6) E2E
 - [Phase 103]: Phase 103 Plan 01: OQ1 program-handle path resolved (data.report.relationships.program.data.attributes.handle); OQ2 state endpoint left LOW-confidence/deferred (km-h1 state may be fast-follow)
+- [Phase 103]: 103-02: h1: config merge-list-wired (no silent drop); Resolve(handle) multi-target fanout; CommandEntry single-owner in commands.go; H1ThreadStore keyed reportID+target; H1Commenter internal-by-default
 
 ### Roadmap Evolution
 
@@ -1630,6 +1632,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-10T03:58:13.312Z
-Stopped at: Completed 103-01-PLAN.md
+Last session: 2026-06-10T04:09:14.161Z
+Stopped at: Completed 103-02-PLAN.md
 Resume file: None
