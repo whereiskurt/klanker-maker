@@ -168,7 +168,7 @@ func TestCreateSlack_OperatorInvite_NativeMember(t *testing.T) {
 	var stderrOut string
 	p := perSandboxProfile(nil, nil)
 	stderrOut = captureStderr(t, func() {
-		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, ssm, "km/")
+		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, nil, ssm, "km/")
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
@@ -193,7 +193,7 @@ func TestCreateSlack_OperatorInvite_ExternalConnect(t *testing.T) {
 	var stderrOut string
 	p := perSandboxProfile(nil, nil)
 	stderrOut = captureStderr(t, func() {
-		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, ssm, "km/")
+		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, nil, ssm, "km/")
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
@@ -215,7 +215,7 @@ func TestCreateSlack_OperatorInvite_MissingEmail(t *testing.T) {
 	ssm := fakeSSM{vals: map[string]string{}} // invite-email absent
 
 	p := perSandboxProfile(nil, nil)
-	_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, ssm, "km/")
+	_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, nil, ssm, "km/")
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -242,7 +242,7 @@ func TestCreateSlack_InvitesEmails(t *testing.T) {
 	var stderrOut string
 	p := perSandboxProfile([]string{"alice@example.com"}, nil)
 	stderrOut = captureStderr(t, func() {
-		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, ssm, "km/")
+		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, nil, ssm, "km/")
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
@@ -269,7 +269,7 @@ func TestCreateSlack_AutoConnectsExternalWhenEnabled(t *testing.T) {
 	// useSlackConnect unset (nil) ⇒ true ⇒ AutoConnect.
 	p := perSandboxProfile([]string{"bob@external.com"}, nil)
 	stderrOut = captureStderr(t, func() {
-		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, ssm, "km/")
+		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, nil, ssm, "km/")
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
@@ -295,7 +295,7 @@ func TestCreateSlack_SkipsExternalWhenConnectDisabled(t *testing.T) {
 	// useSlackConnect: false ⇒ AutoConnect=false ⇒ SkippedExternal.
 	p := perSandboxProfile([]string{"bob@external.com"}, ptrBool(false))
 	stderrOut = captureStderr(t, func() {
-		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, ssm, "km/")
+		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, nil, ssm, "km/")
 		if err != nil {
 			t.Fatalf("err = %v (should NOT fail create on SkippedExternal)", err)
 		}
@@ -328,7 +328,7 @@ func TestCreateSlack_WarnsOnInviteFailure(t *testing.T) {
 	var stderrOut string
 	p := perSandboxProfile([]string{"guest@example.com"}, nil)
 	stderrOut = captureStderr(t, func() {
-		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, ssm, "km/")
+		_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, nil, ssm, "km/")
 		if err != nil {
 			t.Fatalf("err = %v (Failed must be fail-soft)", err)
 		}
@@ -348,7 +348,7 @@ func TestCreateSlack_EmptyInviteList(t *testing.T) {
 	ssm := fakeSSM{vals: map[string]string{"km/slack/invite-email": "operator@corp.example"}}
 
 	p := perSandboxProfile(nil, nil) // no additional folks
-	_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, ssm, "km/")
+	_, _, err := resolveSlackChannel(context.Background(), p, "test123", "", api, nil, ssm, "km/")
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
