@@ -18,6 +18,18 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
 - Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
 
+**Phase 104 (2026-06-10) — O(1) Slack channel resolution on alias reuse (complete):**
+- `km create` on a reused `--alias` (profile has `notification.slack.perSandbox: true` + `archiveOnDestroy: false`) now resolves the existing channel in **bounded, O(1)** time — never the unbounded `conversations.list` workspace scan that previously wedged the create-handler Lambda for the full 900 s.
+- **Root cause fixed:** any transient `conversations.info` error (ratelimited / 5xx / context blip) previously fell through to an unbounded paginated scan. Phase 104 classifies the error: only a definitive `channel_not_found` invalidates the stored mapping; every other error triggers a bounded retry (2× / 500 ms) then optimistic use of the stored ID — never a scan.
+- **Three layers:** P0 wall-clock sub-context bounded by `KM_SLACK_RESOLVE_BUDGET` (default 45 s); P1 lookup-first with transient-error classification; P2 durable `km-slack-channels` DDB table (hash key `alias`, no TTL) as the authoritative store.
+- **New `km-slack-channels` table** (`{prefix}-slack-channels`, PAY_PER_REQUEST, SSE on). Existing SSM by-name cache kept as back-compat read/write fallback; both stores written through on every successful resolution. `km doctor` checks table existence only — NOT orphan-row scan (alias rows are not per-sandbox and must never be auto-deleted).
+- **`km slack adopt <alias> <channelID>`** — seeds the DDB store for channels created outside km or before Phase 104. Validates `^C[A-Z0-9]+$` format + bot membership; writes through to DDB + SSM. Find the channel ID in Slack → channel name (top bar) → About → Channel ID.
+- **Observability:** `slack_resolve path=cache_hit|cache_optimistic|created|scan_capped|failfast ms=… id=…` — one INFO log per Mode-2 resolution at create time.
+- **No SandboxProfile schema change ⇒ no `--sidecars`, existing sandboxes unaffected** (create-time fix; running sandboxes do not need to be recreated).
+- **No `lambda-slack-bridge` change.** Bridge is NOT a consumer of the `km-slack-channels` table.
+- **Deploy = `make build` (BEFORE `km init` — binary carries the new `dynamodb-slack-channels` regionalModules entry; a stale binary silently skips it → `AccessDenied` at runtime) + `make build-lambdas` + `km init --dry-run=false`** (new table + create-handler IAM require a full terragrunt apply, NOT `--sidecars`).
+- See `docs/slack-notifications.md` § Phase 104 for incident root-cause analysis, env knobs, adopt runbook, and troubleshooting.
+
 **Phase 102 (2026-06-08) — GitHub bridge agent verbs: /claude and /codex select the per-thread agent in a PR comment (complete):**
 - An @-mention in a PR/issue comment may include `/claude` or `/codex` anywhere in the body (code-stripped, ≤1 agent verb per comment; two distinct verbs → error reply, no dispatch). The verb selects the agent for the turn and is persisted as `agent_type` in `km-github-threads`; subsequent turns in the same thread inherit it. GitHub analog of the Slack Phase 70 per-thread agent-verb (`/claude:` / `codex:`).
 - **Precedence:** explicit verb > thread `agent_type` row > profile `spec.agent.default` (default: `claude`).
@@ -91,6 +103,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Slack App permissions reference — every bot scope/event + why | `docs/slack-app-permissions.md` |
 | GitHub bridge agent verbs — `/claude` / `/codex` per-thread agent select in PR comments | `docs/github-bridge.md` § Phase 102 |
 | HackerOne comment-trigger bridge — program webhook → sandbox agent → report comment (auto-triage + `@`-handle, multi-target fanout, internal-by-default replies) | `docs/h1-bridge.md` (Phase 103) |
+| O(1) Slack channel resolution on alias reuse, `km-slack-channels` table, `km slack adopt`, `KM_SLACK_RESOLVE_BUDGET` | `docs/slack-notifications.md` § Phase 104 |
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |

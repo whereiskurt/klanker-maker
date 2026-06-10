@@ -34,6 +34,11 @@ signed payloads and the Lambda forwards to the Slack Web API.
 12. [Troubleshooting](#troubleshooting)
 13. [Security Model](#security-model)
 14. [See Also](#see-also)
+15. [Phase 91: Polite-bot](#phase-91-polite-bot----mention-only-mode-for-sharedoverride-channels)
+16. [Phase 95: Federated relay](#phase-95-federated-bridge-relay--one-slack-app-many-km-installs)
+17. [Phase 96: Default router](#phase-96--default-router-orphan-channel--mention-reply)
+18. [Phase 99.1: Inbound DLQ](#phase-991--inbound-poison-message-dlq-fifo-wedge-fix)
+19. [Phase 104: O(1) channel resolution](#phase-104--o1-channel-resolution-on-alias-reuse)
 
 ---
 
@@ -2311,4 +2316,174 @@ there automatically).
 When no inbound integration is configured, the shared DLQs are never provisioned, no source
 queue carries a `RedrivePolicy`, the doctor check **SKIPs**, and runtime is **byte-identical**
 to pre-Phase-99.1.
+
+---
+
+## Phase 104 — O(1) channel resolution on alias reuse
+
+### Background: the 900s wedge incident
+
+`km create` on a profile with `notification.slack.perSandbox: true` and
+`notification.slack.archiveOnDestroy: false` calls `conversations.create` on every
+recreate. When the channel already exists Slack returns `name_taken` and the resolver
+previously fell back to `conversations.list` — an unbounded walk of every channel in the
+workspace (1 000 items per page, freshly-created channels sort last). On large corporate
+workspaces with tens of thousands of channels this walk can exhaust the create-handler's
+900 s Lambda timeout and strand the sandbox in `starting`.
+
+**Root cause (confirmed against code):** `resolveExistingChannelID` in
+`internal/app/cmd/create_slack.go` gated an SSM by-name cache hit on
+`conversations.info(cachedID) == nil-err`. ANY transient info error — a momentary
+`ratelimited`, 5xx, or network blip — fell through to `FindChannelByName`, an unbounded
+`for{}` with `limit:1000` and no page cap. The SSM cache value was present and correct
+during the incident; the defeater was the transient-info fall-through, not a cache miss.
+
+Phase 104 closes the incident with three layers of defence:
+
+- **P0 — wall-clock budget:** the entire per-sandbox channel resolution step runs in a
+  sub-context bounded by `KM_SLACK_RESOLVE_BUDGET` (default **45 s**). The create-handler
+  Lambda can never wedge beyond this ceiling.
+- **P1 — lookup-first with transient-error classification:** the resolver reads the stored
+  channel ID (DDB then SSM) before calling `conversations.create`. `conversations.info`
+  errors are classified: only a definitive `channel_not_found` invalidates the stored
+  mapping. Every other error (ratelimited, 5xx, network, context) is **transient** and
+  never triggers a scan — after two bounded retries the stored ID is used optimistically.
+- **P2 — durable authoritative store:** a dedicated `km-slack-channels` DynamoDB table
+  (hash key `alias`, no TTL) makes the O(1) mapping survive across `km destroy`/`km
+  create` cycles. The existing SSM by-name cache is kept as a back-compat read/write
+  fallback; both stores are written through on every successful resolution.
+
+### Env knobs
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `KM_SLACK_RESOLVE_BUDGET` | `45` (seconds) | Wall-clock ceiling for Mode-2 channel resolution at `km create` time. Increase for very slow workspaces. |
+| `KM_SLACK_MAX_SCAN_PAGES` | `0` (scan **off**) | Max pages for the `conversations.list` fallback scan. `0` = fail-fast (return `scan_capped`/`failfast` with no HTTP call). Set `>0` only as a temporary migration aid — the bounded-lookup-first path makes a scan unnecessary for correctly populated stores. |
+
+These env vars are read by the **operator-side `km` binary** (the create-handler Lambda
+derives the table name from `cfg.GetSlackChannelsTableName()`, not from an env var).
+
+### km-slack-channels DynamoDB table
+
+A dedicated `{prefix}-slack-channels` DynamoDB table stores the authoritative
+`alias → channel_id` mapping:
+
+| Attribute | Type | Notes |
+|-----------|------|-------|
+| `alias` (PK) | String | The `--alias` value passed to `km create`. Key is absent for alias-less sandboxes — those channels never collide. |
+| `channel_id` | String | The Slack channel ID (e.g. `C012ABCDE3F`). |
+| `channel_name` | String | Recorded for observability only. |
+
+**No TTL.** Mappings must survive destroy/recreate cycles. Stale rows (channel deleted or
+bot removed) self-heal: `conversations.info` returns a definitive `channel_not_found` →
+the row is re-populated on the next `km create`.
+
+The table is **not scanned** by any km code path — unlike `km-sandboxes`, adding a
+synthetic alias row would never pollute `km list`. `km doctor` checks for table existence
+only (NOT orphan-row scan — alias rows are not per-sandbox and must never be auto-deleted).
+
+### Observability: `slack_resolve` log line
+
+The create-handler emits exactly one `INFO`-level log per Mode-2 resolution:
+
+```
+slack_resolve path=cache_hit ms=12 id=C012ABCDE3F channel=sb-github-review-myalias
+```
+
+| `path` value | Meaning |
+|--------------|---------|
+| `cache_hit` | Stored ID confirmed live via `conversations.info` — O(1), no API scan. |
+| `cache_optimistic` | Stored ID present; `conversations.info` returned a transient error after retries — used optimistically (never scan). |
+| `created` | No stored mapping; `conversations.create` succeeded — mapping written to DDB + SSM. |
+| `scan_capped` | `KM_SLACK_MAX_SCAN_PAGES>0` scan ran and hit the page cap without finding the channel. |
+| `failfast` | `KM_SLACK_MAX_SCAN_PAGES=0` (default); no scan attempted. |
+
+On the first `km create` after deploying Phase 104 the path will be `created`. On every
+subsequent recreate with the same `--alias` it will be `cache_hit` (or `cache_optimistic`
+on a transient blip) — never an unbounded scan.
+
+### channelOverride — zero-lookup manual escape (unchanged)
+
+`notification.slack.channelOverride: "C012ABCDE3F"` (Mode 3) is the zero-lookup escape
+hatch: the resolver validates the channel ID format and bot membership via a single
+`conversations.info` call and returns immediately. No DDB read, no SSM read, no scan.
+Suitable for channels that are not named after an alias (e.g. a shared team channel that
+predates km).
+
+### km slack adopt — seed the store for orphaned channels
+
+When a channel was created outside km (or before Phase 104 was deployed) and the
+bot is already a member, use `km slack adopt` to write the `alias → channel_id` mapping
+into the DDB store without running `km create`:
+
+```bash
+km slack adopt <alias> <channelID>
+```
+
+**Example:**
+```bash
+# Find the channel ID: open the channel in Slack → channel name (top bar) → About → Channel ID
+km slack adopt github-bot C012ABCDE3F
+# Output: ✓ adopted alias=github-bot channel_id=C012ABCDE3F
+```
+
+`km slack adopt` validates:
+
+1. `channelID` matches `^C[A-Z0-9]+$` — rejects IDs in wrong format.
+2. Bot is a **member** of the channel — rejects if not (`conversations.info is_member`).
+   Fix: `/invite @km-bot` in Slack, then re-run.
+3. Writes through to **both** the DDB store (authoritative) and the SSM by-name cache
+   (back-compat).
+
+**After adopting**, the next `km create --alias <alias>` resolves O(1) via `cache_hit`
+instead of running `conversations.create` (which would fail with `name_taken`) or
+triggering a scan.
+
+**Negative cases:**
+- `km slack adopt github-bot not-an-id` → rejected: `channel ID must match ^C[A-Z0-9]+$`
+- Adopting a channel the bot is not in → rejected: `bot is not a member of C… — /invite the bot first, then re-run km slack adopt`
+
+### Deploy sequence (Phase 104)
+
+**CRITICAL build order:** `make build` the `km` binary BEFORE `km init`. The binary
+carries the `regionalModules()` entry for `dynamodb-slack-channels`; a stale binary
+silently skips the module and `km init` bakes in a mock ARN (`000000000000`), causing
+`AccessDenied` at runtime. See memory `project_make_build_precedes_km_init`.
+
+```bash
+# 1. Rebuild the km binary (picks up the new dynamodb-slack-channels module registration).
+make build
+
+# 2. Clean-rebuild the Lambda zips.
+make build-lambdas
+
+# 3. Preview the apply — confirm dynamodb-slack-channels + create-handler IAM show as ADDs;
+#    no destroy-class trips expected.
+AWS_PROFILE=klanker-application km init --plan
+
+# 4. Full apply — creates the km-slack-channels table + create-handler IAM policy.
+#    NOT --sidecars: a new Terraform module + IAM require a full terragrunt apply.
+AWS_PROFILE=klanker-application km init --dry-run=false
+
+# 5. Verify table is reachable.
+AWS_PROFILE=klanker-application km doctor 2>&1 | grep -i slack-channels
+# Expected: ✓ slack-channels table: <prefix>-slack-channels
+```
+
+**No SandboxProfile schema change.** No `km init --sidecars`. Existing sandboxes are
+unaffected — Phase 104 is a create-time fix; running sandboxes do not need to be recreated.
+
+**No `lambda-slack-bridge` change.** The bridge is not a consumer of the `km-slack-channels`
+table. Only the `km` binary (operator-side) and the create-handler Lambda (IAM grant)
+interact with the table.
+
+### Troubleshooting (Phase 104)
+
+| Symptom | Fix |
+|---------|-----|
+| `km create` still wedges for ~900 s | Binary is stale — `make build` was NOT run before `km init`. Rebuild and redeploy: `make build && make build-lambdas && km init --dry-run=false`. |
+| `slack_resolve path=failfast` on every create | `KM_SLACK_MAX_SCAN_PAGES` defaults to 0 (scan off). This is correct for the bounded-lookup path. If you expected `cache_hit`, the DDB mapping may be missing — run `km slack adopt <alias> <channelID>`. |
+| `km slack adopt` rejected: "not a member" | Invite the bot to the channel in Slack (`/invite @km-bot`), then re-run `km slack adopt`. |
+| `km doctor` reports slack-channels table missing | `make build` (stale binary skipped the module) OR `km init` not run after Phase 104. Follow the deploy sequence above. |
+| `path=cache_optimistic` on every create | `conversations.info` is returning transient errors (ratelimited or 5xx). The stored ID is being used optimistically — check Slack API status; the behaviour is correct (no scan triggered). |
 | CloudWatch shows `events: router: orphan reply post failed` | The bot is not a member of the orphan channel. Invite it with `/invite @km-bot`. |
