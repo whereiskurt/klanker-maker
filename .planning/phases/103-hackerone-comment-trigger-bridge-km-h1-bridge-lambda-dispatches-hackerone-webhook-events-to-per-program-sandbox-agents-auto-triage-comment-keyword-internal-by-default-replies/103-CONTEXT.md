@@ -162,8 +162,26 @@ models, config-driven event→prompt mapping, multi-target fanout, and the inter
   `report_reopened`, `report_bounty_awarded`, etc. Payload: `data.activity` + `data.report`.
   Docs: https://docs.hackerone.com/en/articles/8588351-webhooks , https://api.hackerone.com/webhooks/
 - **HackerOne customer API:** HTTP Basic Auth (API username + token). `GET /reports/{id}`,
-  `POST /reports/{id}/comments` (internal flag), `PATCH /reports/{id}/state`.
+  `POST /reports/{id}/activities` (with `internal` flag), state change.
   Docs: https://api.hackerone.com/customer-resources/
+
+- **Live sanity test (2026-06-09, read-only):** A temp Basic-Auth token was exercised against the
+  live customer API (greenhouse program, report 3792794). Confirmed: auth works (HTTP 200); the
+  report-object field paths the research only *predicted* are CORRECT —
+  `report.relationships.program.data.attributes.handle` (program handle / routing key),
+  `activity.attributes.internal` (boolean — the safety-critical visibility flag; internal comments
+  carry `internal:true`), `activity.relationships.actor.data.attributes.username` (actor / allowlist
+  key), comment body at `activity.attributes.message`. Still requires a live WEBHOOK capture to pin
+  the envelope WRAPPER + headers + state endpoint. NOTE: greenhouse is a REAL production program —
+  used as a read-only fixture ONLY; never a write/UAT target.
+
+- **HackerOne Sandbox program (E2E/UAT target — DECISION):** HackerOne offers a FREE customer
+  **Sandbox program** (create at https://hackerone.com/teams/new/sandbox while logged in) with almost
+  all features, into which you submit your OWN fake/test reports, supporting the same webhooks
+  (X-H1-Signature) + customer API. THIS is the target for the Wave-0 webhook capture AND the Wave-6
+  comment-posting / `/reply_to_researcher` UAT — it touches no real researchers or real programs.
+  Production programs (e.g. greenhouse) are read-only fixture sources only.
+  Public example: hackerone.com/security-test-ep-sandbox.
 
 - **GitHub-bridge files to clone/adapt** (canonical map):
   - Lambda entry: `cmd/km-github-bridge/main.go`
