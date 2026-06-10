@@ -2372,4 +2372,4 @@ Plans:
 - [x] 103-07-PLAN.md — cmd/km-h1-bridge Lambda entry + lambda-h1-bridge TF module v1.0.0 + live unit
 - [x] 103-08-PLAN.md — deploy wiring: regionalModules/lambdaBuilds/sidecarBuilds + KM_H1_* env + SSM publish + dynamodb-h1-threads + create_h1_inbound (DLQ) + Makefile
 - [x] 103-09-PLAN.md — km-h1-inbound-poller userdata + notification.h1.inbound schema + profiles/h1-triage.yaml (dormant by default)
-- [ ] 103-10-PLAN.md — deploy-surface guard tests + gated E2E harness + 103-UAT.md + live reply-visibility UAT
+- [x] 103-10-PLAN.md — deploy-surface guard tests + gated E2E harness + 103-UAT.md + live reply-visibility UAT
