@@ -362,6 +362,75 @@ func TestRegionalModulesIncludesEFS(t *testing.T) {
 	}
 }
 
+// TestRegionalModulesIncludesH1Bridge verifies the Phase 103 deploy wiring
+// (memory project_new_lambda_needs_live_unit_and_init_list): both the
+// dynamodb-h1-threads table and the lambda-h1-bridge Lambda are registered in
+// regionalModules(), and the ORDERING invariants hold:
+//   - dynamodb-h1-threads applies BEFORE lambda-h1-bridge (the bridge writes to it).
+//   - lambda-h1-bridge applies AFTER lambda-github-bridge and the shared deps
+//     (dynamodb-sandboxes, dynamodb-slack-nonces), and BEFORE ses (ses is last).
+// A regression here = the bridge Lambda is silently never deployed.
+func TestRegionalModulesIncludesH1Bridge(t *testing.T) {
+	mods := cmd.RegionalModules(t.TempDir())
+
+	idx := map[string]int{}
+	for i, m := range mods {
+		idx[m.Name] = i
+	}
+
+	for _, name := range []string{
+		"dynamodb-h1-threads", "lambda-h1-bridge",
+		"dynamodb-sandboxes", "dynamodb-slack-nonces", "lambda-github-bridge", "ses",
+	} {
+		if _, ok := idx[name]; !ok {
+			t.Fatalf("expected regionalModules() to include %q, not found", name)
+		}
+	}
+
+	if idx["dynamodb-h1-threads"] >= idx["lambda-h1-bridge"] {
+		t.Errorf("dynamodb-h1-threads (%d) must apply BEFORE lambda-h1-bridge (%d)",
+			idx["dynamodb-h1-threads"], idx["lambda-h1-bridge"])
+	}
+	if idx["lambda-h1-bridge"] <= idx["lambda-github-bridge"] {
+		t.Errorf("lambda-h1-bridge (%d) must apply AFTER lambda-github-bridge (%d)",
+			idx["lambda-h1-bridge"], idx["lambda-github-bridge"])
+	}
+	for _, dep := range []string{"dynamodb-sandboxes", "dynamodb-slack-nonces"} {
+		if idx["lambda-h1-bridge"] <= idx[dep] {
+			t.Errorf("lambda-h1-bridge (%d) must apply AFTER %s (%d)",
+				idx["lambda-h1-bridge"], dep, idx[dep])
+		}
+	}
+	if idx["lambda-h1-bridge"] >= idx["ses"] {
+		t.Errorf("lambda-h1-bridge (%d) must apply BEFORE ses (%d)",
+			idx["lambda-h1-bridge"], idx["ses"])
+	}
+}
+
+// TestH1BridgeBuildListMembership verifies the artifact-lockstep invariant (memory
+// project_km_init_skips_existing_lambda_zips): the H1 bridge zip is built by
+// lambdaBuilds() and the sandbox-side km-h1 helper by sidecarBuilds(). A miss here
+// = the zip/helper is silently never built, and the (correctly wired) live unit's
+// lambda_zip_path points at a non-existent file at apply time.
+func TestH1BridgeBuildListMembership(t *testing.T) {
+	sliceHas := func(haystack []string, needle string) bool {
+		for _, s := range haystack {
+			if s == needle {
+				return true
+			}
+		}
+		return false
+	}
+	lambdaNames := cmd.LambdaBuildNames()
+	if !sliceHas(lambdaNames, "km-h1-bridge") {
+		t.Errorf("lambdaBuilds() must include km-h1-bridge; got %v", lambdaNames)
+	}
+	sidecarNames := cmd.SidecarBuildNames()
+	if !sliceHas(sidecarNames, "km-h1") {
+		t.Errorf("sidecarBuilds() must include km-h1; got %v", sidecarNames)
+	}
+}
+
 // TestLoadEFSOutputs_Success verifies LoadEFSOutputs reads filesystem_id from efs/outputs.json.
 func TestLoadEFSOutputs_Success(t *testing.T) {
 	repoRoot := t.TempDir()

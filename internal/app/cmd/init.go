@@ -183,7 +183,7 @@ func defaultModuleTimeout(name string) time.Duration {
 	switch name {
 	case "network", "ses-shared-rule-set":
 		return 10 * time.Minute
-	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge", "lambda-github-bridge":
+	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge", "lambda-github-bridge", "lambda-h1-bridge":
 		return 5 * time.Minute
 	default:
 		return 3 * time.Minute
@@ -329,6 +329,30 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
+			// Phase 103 (H1-DEPLOY-WIRING): DynamoDB h1-threads table mapping
+			// (report_id, target) → {sandbox_id, agent_session_id, agent_type} for
+			// HackerOne report thread continuity + multi-target fanout. The bridge
+			// writes to it at runtime, so it MUST apply BEFORE lambda-h1-bridge.
+			// Mirrors dynamodb-github-threads. Ordered here (after the github threads
+			// table, before the H1 bridge) so the bridge's terragrunt dependency on
+			// dynamodb-h1-threads resolves to a real table at apply time.
+			name:    "dynamodb-h1-threads",
+			dir:     filepath.Join(regionDir, "dynamodb-h1-threads"),
+			envReqs: nil,
+		},
+		{
+			// Phase 103 (H1-DEPLOY-WIRING): HackerOne comment-trigger bridge Lambda with
+			// Function URL (auth=NONE; X-H1-Signature HMAC + nonce replay provide
+			// application-layer auth). Depends on dynamodb-sandboxes (alias-index GSI),
+			// dynamodb-slack-nonces (shared nonce table, "h1-delivery:" key namespace),
+			// and dynamodb-h1-threads (continuity table, declared just above so it
+			// applies first). artifacts bucket needed for cold-create EventBridge
+			// dispatch. Ordered AFTER lambda-github-bridge + all shared deps, BEFORE ses.
+			name:    "lambda-h1-bridge",
+			dir:     filepath.Join(regionDir, "lambda-h1-bridge"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
 			// SES must apply LAST because it owns the consolidated S3 bucket policy.
 			// The email-handler must apply before SES so its ARN is available for
 			// the operator-inbound receipt rule.
@@ -427,6 +451,85 @@ func PreStageGitHubProfiles(ctx context.Context, repos []GitHubRepoConfig, artif
 		}
 	}
 	return nil
+}
+
+// H1ProgramConfig is the config-layer representation of one h1.programs target as
+// consumed by PreStageH1Profiles. It mirrors the {alias, profile} shape of
+// config.H1Target plus an optional SOPSFile so the pre-stage step can upload the
+// encrypted secrets bundle alongside the profile YAML (Phase 89 mechanism). Mirrors
+// GitHubRepoConfig.
+type H1ProgramConfig struct {
+	Alias    string
+	Profile  string
+	SOPSFile string // optional; path to SOPS-encrypted secrets bundle on disk
+}
+
+// PreStageH1Profiles uploads one profile YAML (and optional SOPS bundle) per unique
+// profile slug to S3 so the create-handler can fetch it during a cold-create
+// triggered by the HackerOne bridge. HackerOne analog of PreStageGitHubProfiles.
+//
+// For each UNIQUE profile slug across targets (deduped by slug):
+//   - uploads {artifactBucket}/h1-profiles/{slug}/.km-profile.yaml
+//   - if the target has a SOPSFile set: also uploads
+//     {artifactBucket}/h1-profiles/{slug}/.km-secrets-bundle.enc.yaml
+//
+// Profile YAML is read from disk at profiles/{slug}.yaml relative to the process
+// working directory (km runs from the repo root). Missing files upload as empty
+// placeholders (warned, non-fatal) so the S3 key exists. Dormant when targets empty.
+//
+// Exported (test-seam) and gated by the caller on cfg.H1.Programs being non-empty,
+// mirroring the GitHub pre-stage contract.
+func PreStageH1Profiles(ctx context.Context, targets []H1ProgramConfig, artifactBucket string, uploader S3ProfileUploader) error {
+	if len(targets) == 0 {
+		return nil
+	}
+
+	uploaded := make(map[string]bool)
+	for _, tgt := range targets {
+		slug := githubProfileSlug(tgt.Profile)
+		if uploaded[slug] {
+			continue // dedup by slug
+		}
+		uploaded[slug] = true
+
+		profileKey := "h1-profiles/" + slug + "/.km-profile.yaml"
+		profileData := readFileOrEmpty("profiles/" + slug + ".yaml")
+		if err := uploader.PutObject(ctx, artifactBucket, profileKey, profileData); err != nil {
+			return fmt.Errorf("km init: pre-stage h1 profile %s: %w", slug, err)
+		}
+
+		if tgt.SOPSFile != "" {
+			bundleKey := "h1-profiles/" + slug + "/.km-secrets-bundle.enc.yaml"
+			bundleData := readFileOrEmpty(tgt.SOPSFile)
+			if err := uploader.PutObject(ctx, artifactBucket, bundleKey, bundleData); err != nil {
+				return fmt.Errorf("km init: pre-stage h1 sops bundle %s: %w", slug, err)
+			}
+		}
+	}
+	return nil
+}
+
+// h1ProgramConfigsFromCfg flattens cfg.H1.Programs[].Targets into the flat
+// []H1ProgramConfig list PreStageH1Profiles consumes, applying the H1Config.DefaultProfile
+// fallback for targets that omit a profile (mirrors the bridge's resolve fallback).
+func h1ProgramConfigsFromCfg(cfg *config.Config) []H1ProgramConfig {
+	if cfg == nil {
+		return nil
+	}
+	var out []H1ProgramConfig
+	for _, prog := range cfg.H1.Programs {
+		for _, tgt := range prog.Targets {
+			prof := tgt.Profile
+			if prof == "" {
+				prof = cfg.H1.DefaultProfile
+			}
+			if prof == "" {
+				continue // nothing to stage when neither target nor install default names a profile
+			}
+			out = append(out, H1ProgramConfig{Alias: tgt.Alias, Profile: prof})
+		}
+	}
+	return out
 }
 
 // githubProfileSlug normalises a profile name/path into a directory-safe slug.
@@ -622,6 +725,18 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		ssmClientForCommands := ssm.NewFromConfig(awsCfg)
 		if pubErr := PublishGitHubCommandsToSSM(ctx, ssmClientForCommands, cfg, os.Stderr); pubErr != nil {
 			return fmt.Errorf("km init: github commands: %w", pubErr)
+		}
+	}
+
+	// Phase 103: publish the merged install-wide HackerOne CommandSet to SSM
+	// {prefix}/config/h1/commands (base64-encoded envelope). The km-h1-bridge reads
+	// it at cold start (SSMCommandsFetcher). PublishH1CommandsToSSM self-gates: when
+	// no program declares any command it returns nil without calling SSM (dormant —
+	// byte-identical to pre-H1). @file prompts are inlined relative to km-config.yaml.
+	if len(cfg.H1.Programs) > 0 {
+		ssmClientForH1Commands := ssm.NewFromConfig(awsCfg)
+		if pubErr := PublishH1CommandsToSSM(ctx, ssmClientForH1Commands, cfg, os.Stderr); pubErr != nil {
+			return fmt.Errorf("km init: h1 commands: %w", pubErr)
 		}
 	}
 
@@ -1152,6 +1267,59 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			os.Setenv("KM_GITHUB_DEFAULT_ROUTER", yamlGithubDefaultRouter) //nolint:errcheck
 		}
 	}
+
+	// Phase 103: KM_H1_PROGRAMS — JSON-encoded HackerOne program-to-target routing.
+	// Consumed by infra/live/use1/lambda-h1-bridge/terragrunt.hcl get_env("KM_H1_PROGRAMS")
+	// and parsed by km-h1-bridge main.go into []bridge.ProgramEntry. Gate: only export
+	// when at least one program is configured (len > 0) — absent h1: block leaves
+	// KM_H1_PROGRAMS unset (dormant byte-identity; the bridge silent-drops every event).
+	// The payload mirrors the GitHub githubExportPayload shape: a {programs, default_profile,
+	// bot_handle} envelope (the bridge's programsConfig struct). env-wins: when the env var
+	// is already set to a DIFFERENT value, emit a drift WARN and do NOT overwrite.
+	// env-block change ⇒ needs a full `km init --dry-run=false`, NOT --sidecars.
+	if len(cfg.H1.Programs) > 0 {
+		type h1ExportPayload struct {
+			Programs       []config.H1ProgramEntry `json:"programs"`
+			DefaultProfile string                  `json:"default_profile,omitempty"`
+			BotHandle      string                  `json:"bot_handle,omitempty"`
+		}
+		payload := h1ExportPayload{
+			Programs:       cfg.H1.Programs,
+			DefaultProfile: cfg.H1.DefaultProfile,
+			BotHandle:      cfg.H1.BotHandle,
+		}
+		jsonBytes, err := json.Marshal(payload)
+		if err == nil {
+			yamlH1Programs := string(jsonBytes)
+			if envVal := os.Getenv("KM_H1_PROGRAMS"); envVal != "" && envVal != yamlH1Programs {
+				fmt.Fprintf(os.Stderr, "WARN: KM_H1_PROGRAMS=%s (env) overrides km-config.yaml h1.programs=%s\n", envVal, yamlH1Programs)
+			} else if envVal == "" {
+				os.Setenv("KM_H1_PROGRAMS", yamlH1Programs) //nolint:errcheck
+			}
+		}
+	}
+
+	// Phase 103: KM_H1_DEFAULT_PROFILE / KM_H1_BOT_HANDLE — install-wide scalar
+	// fallbacks ALSO read directly by the bridge terragrunt.hcl get_env() calls
+	// (h1_default_profile / h1_bot_handle) so a bridge with KM_H1_PROGRAMS absent
+	// still has the handle/profile context. The KM_H1_PROGRAMS envelope carries the
+	// same two scalars (main.go prefers the envelope values when present), so these
+	// are belt-and-suspenders for the terragrunt-default path. Export only when set
+	// (empty ⇒ terragrunt defaults "h1-triage" / "" apply). Same env-wins WARN.
+	if cfg.H1.DefaultProfile != "" {
+		if envVal := os.Getenv("KM_H1_DEFAULT_PROFILE"); envVal != "" && envVal != cfg.H1.DefaultProfile {
+			fmt.Fprintf(os.Stderr, "WARN: KM_H1_DEFAULT_PROFILE=%s (env) overrides km-config.yaml h1.default_profile=%s\n", envVal, cfg.H1.DefaultProfile)
+		} else if envVal == "" {
+			os.Setenv("KM_H1_DEFAULT_PROFILE", cfg.H1.DefaultProfile) //nolint:errcheck
+		}
+	}
+	if cfg.H1.BotHandle != "" {
+		if envVal := os.Getenv("KM_H1_BOT_HANDLE"); envVal != "" && envVal != cfg.H1.BotHandle {
+			fmt.Fprintf(os.Stderr, "WARN: KM_H1_BOT_HANDLE=%s (env) overrides km-config.yaml h1.bot_handle=%s\n", envVal, cfg.H1.BotHandle)
+		} else if envVal == "" {
+			os.Setenv("KM_H1_BOT_HANDLE", cfg.H1.BotHandle) //nolint:errcheck
+		}
+	}
 }
 
 // EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at
@@ -1368,6 +1536,111 @@ func decodeGitHubCommandsParam(val string) string {
 		return string(decoded)
 	}
 	return val
+}
+
+// PublishH1CommandsToSSM assembles the install-wide HackerOne CommandSet from every
+// configured program's commands and writes it (base64-encoded) to SSM
+// {prefix}/config/h1/commands. The km-h1-bridge reads this at cold start via
+// SSMCommandsFetcher (Plan 07) — a single install-wide command map + default_command,
+// exactly like the GitHub bridge.
+//
+// HackerOne commands are declared PER-PROGRAM (h1.programs[].commands), but the
+// bridge consumes ONE install-wide map (WebhookHandler.Commands). This function
+// therefore MERGES every program's commands into one map. A command name defined
+// by two programs is a config ambiguity; last-program-wins (deterministic by the
+// programs[] order) and a WARN is emitted. The install-wide default_command is the
+// first non-empty program DefaultCommand encountered (programs[] order).
+//
+// @file prompts are resolved relative to the km-config.yaml directory and inlined
+// before writing (the bridge Lambda has no filesystem). The envelope shape matches
+// the GitHub CommandSet: {"commands": {...}, "default_command": "triage"}, base64-
+// encoded to dodge SSM's {{}} reserved-sequence restriction (the bridge decodes it).
+//
+// Gate: when no program declares any command the function returns nil without
+// calling SSM (dormant — byte-identical to a pre-H1 install). Exported for testability.
+func PublishH1CommandsToSSM(ctx context.Context, ssmClient SSMReadWriteAPI, cfg *config.Config, stderr io.Writer) error {
+	// Merge every program's commands into one install-wide map; capture the first
+	// non-empty per-program default_command.
+	merged := map[string]config.H1CommandEntry{}
+	defaultCommand := ""
+	for _, prog := range cfg.H1.Programs {
+		for name, entry := range prog.Commands {
+			if _, dup := merged[name]; dup {
+				fmt.Fprintf(stderr, "WARN: h1 command %q defined by multiple programs; last-program-wins (program %q)\n", name, prog.Handle)
+			}
+			merged[name] = entry
+		}
+		if defaultCommand == "" && prog.DefaultCommand != "" {
+			defaultCommand = prog.DefaultCommand
+		}
+	}
+	if len(merged) == 0 {
+		// Dormant: no commands configured → write nothing. The bridge reads an
+		// empty-map default when the param is absent (free-form dispatch only).
+		return nil
+	}
+
+	// Resolve @file prompts relative to the km-config.yaml directory.
+	configDir := "."
+	if cfg.ConfigFilePath != "" {
+		configDir = filepath.Dir(cfg.ConfigFilePath)
+	}
+	resolved := make(map[string]config.H1CommandEntry, len(merged))
+	for name, entry := range merged {
+		switch {
+		case strings.HasPrefix(entry.Prompt, "@@"):
+			// @@ escape: strip one @, yield literal @-prefixed text. No file I/O.
+			entry.Prompt = entry.Prompt[1:]
+		case strings.HasPrefix(entry.Prompt, "@"):
+			// @file: read from the command-prompt search path (configDir, then
+			// configDir/profiles). Inlined into the SSM doc; the bridge never reads files.
+			relPath := entry.Prompt[1:]
+			absPath, _, ferr := resolveCommandPromptFile(configDir, relPath)
+			if ferr != nil {
+				return fmt.Errorf("km init: h1 command %q prompt @%s: %w", name, relPath, ferr)
+			}
+			data, rerr := os.ReadFile(absPath)
+			if rerr != nil {
+				return fmt.Errorf("km init: h1 command %q prompt @%s: %w", name, relPath, rerr)
+			}
+			entry.Prompt = string(data)
+		}
+		resolved[name] = entry
+	}
+
+	// The bridge unmarshals a CommandSet envelope; match the GitHub shape exactly.
+	type commandSetEnvelope struct {
+		Commands       interface{} `json:"commands"`
+		DefaultCommand string      `json:"default_command,omitempty"`
+	}
+	envelope := commandSetEnvelope{Commands: resolved, DefaultCommand: defaultCommand}
+	commandsJSON, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("km init: marshal h1 commands: %w", err)
+	}
+	assembledVal := string(commandsJSON)
+	encodedVal := base64.StdEncoding.EncodeToString(commandsJSON)
+
+	paramName := cfg.GetSsmPrefix() + "config/h1/commands"
+
+	// Drift WARN: compare on decoded JSON so the message is human-readable; yaml wins.
+	existing, getErr := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String(paramName),
+		WithDecryption: aws.Bool(false),
+	})
+	if getErr == nil && existing.Parameter != nil {
+		existingDecoded := decodeGitHubCommandsParam(aws.ToString(existing.Parameter.Value))
+		if existingDecoded != assembledVal {
+			fmt.Fprintf(stderr, "WARN: SSM %s differs from km-config.yaml h1 commands (prior=%s, new=%s)\n",
+				paramName, existingDecoded, assembledVal)
+		}
+	}
+
+	if err := putSSMParam(ctx, ssmClient, paramName, encodedVal,
+		ssmtypes.ParameterTypeString, "", true); err != nil {
+		return fmt.Errorf("km init: write SSM %s: %w", paramName, err)
+	}
+	return nil
 }
 
 // ensureArtifactsBucketExists checks that the configured artifacts bucket exists
@@ -2121,6 +2394,10 @@ func lambdaBuilds() []lambdaBuild {
 		{name: "km-slack-bridge", srcDir: "cmd/km-slack-bridge"},
 		// Phase 97: GitHub comment-trigger bridge Lambda — verifies webhooks, dispatches @-mentions.
 		{name: "km-github-bridge", srcDir: "cmd/km-github-bridge"},
+		// Phase 103: HackerOne comment-trigger bridge Lambda — verifies webhooks, dispatches
+		// auto-triage events + @-handle comment keywords. Missing here ⇒ zip never built
+		// (memory project_km_init_skips_existing_lambda_zips).
+		{name: "km-h1-bridge", srcDir: "cmd/km-h1-bridge"},
 	}
 }
 
@@ -2322,6 +2599,11 @@ func sidecarBuilds() []sidecarBuild {
 		// by userdata when notification.github.inbound.enabled. Missing upload here
 		// 404s the gated download and aborts bootstrap.
 		{name: "km-github", srcDir: "cmd/km-github"},
+		// Phase 103 — sandbox-side HackerOne helper (comment/state/read verbs).
+		// Downloaded by userdata (km-h1-inbound-poller, Plan 09) when
+		// notification.h1.inbound.enabled. Missing upload here 404s the gated
+		// download and aborts bootstrap (memory project_km_init_skips_existing_lambda_zips).
+		{name: "km-h1", srcDir: "cmd/km-h1"},
 	}
 }
 
