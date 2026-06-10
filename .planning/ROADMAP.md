@@ -2366,9 +2366,9 @@ Plans:
 - [x] 103-01-PLAN.md — Wave 0: live HackerOne webhook payload capture + pin field paths + userdata dormancy golden
 - [x] 103-02-PLAN.md — h1: config structs + merge-list wiring + pkg/h1/bridge resolve/interfaces
 - [x] 103-03-PLAN.md — H1 payload + envelope + HMAC verify + command/agent-verb parser (+ /reply_to_researcher)
-- [ ] 103-04-PLAN.md — webhook_handler: two-trigger gate, dedup, multi-target fanout, 3-way dispatch, thread continuity, safety-critical reply gate
+- [x] 103-04-PLAN.md — webhook_handler: two-trigger gate, dedup, multi-target fanout, 3-way dispatch, thread continuity, safety-critical reply gate
 - [x] 103-05-PLAN.md — cmd/km-h1 sandbox helper (comment/state/read, Basic Auth, internal-by-default)
-- [ ] 103-06-PLAN.md — km h1 init/status CLI (mint secret + Basic-Auth -> SSM; no manifest)
+- [x] 103-06-PLAN.md — km h1 init/status CLI (mint secret + Basic-Auth -> SSM; no manifest)
 - [ ] 103-07-PLAN.md — cmd/km-h1-bridge Lambda entry + lambda-h1-bridge TF module v1.0.0 + live unit
 - [ ] 103-08-PLAN.md — deploy wiring: regionalModules/lambdaBuilds/sidecarBuilds + KM_H1_* env + SSM publish + dynamodb-h1-threads + create_h1_inbound (DLQ) + Makefile
 - [ ] 103-09-PLAN.md — km-h1-inbound-poller userdata + notification.h1.inbound schema + profiles/h1-triage.yaml (dormant by default)
