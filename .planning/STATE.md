@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 103-03-PLAN.md
-last_updated: "2026-06-10T04:10:33.764Z"
+stopped_at: Completed 103-06-PLAN.md
+last_updated: "2026-06-10T04:17:55.033Z"
 last_activity: 2026-06-10
 progress:
   total_phases: 119
   completed_phases: 105
   total_plans: 531
-  completed_plans: 487
+  completed_plans: 488
   percent: 91
 ---
 
@@ -521,6 +521,7 @@ Progress: [█████████░] 91%
 | Phase 103 P01 | 2min | 3 tasks | 5 files |
 | Phase 103 P02 | 8min | 2 tasks | 5 files |
 | Phase 103-hackerone-comment-trigger-bridge P03 | 9min | 2 tasks | 6 files |
+| Phase 103 P06 | 3m | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1506,6 +1507,7 @@ Recent decisions affecting current work:
 - [Phase 103-hackerone-comment-trigger-bridge]: 103-03: ported VerifyH1Signature byte-identical from GitHub (X-H1-Signature swap); HMAC over base64-DECODED body
 - [Phase 103-hackerone-comment-trigger-bridge]: 103-03: payload parser wrapper-tolerant (data.report vs JSON:API double-data); missing handle = hard resolve-miss, never panic
 - [Phase 103-hackerone-comment-trigger-bridge]: 103-03: /reply_to_researcher is parse-only intent + always stripped; internal-by-default gate deferred to Plan 04
+- [Phase 103]: km h1 init/status forked from github.go, dropping manifest (HackerOne has no App-install model); webhook-secret + api-token SecureString, api-username String under /{prefix}config/h1/*
 
 ### Roadmap Evolution
 
@@ -1636,6 +1638,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-10T04:10:27.696Z
-Stopped at: Completed 103-03-PLAN.md
+Last session: 2026-06-10T04:17:55.022Z
+Stopped at: Completed 103-06-PLAN.md
 Resume file: None
