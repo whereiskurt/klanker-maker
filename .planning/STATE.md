@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 103-04-PLAN.md
-last_updated: "2026-06-10T04:24:54.252Z"
+stopped_at: Completed 103-07-PLAN.md
+last_updated: "2026-06-10T04:34:16.001Z"
 last_activity: 2026-06-10
 progress:
   total_phases: 119
   completed_phases: 105
   total_plans: 531
-  completed_plans: 489
+  completed_plans: 490
   percent: 91
 ---
 
@@ -523,6 +523,7 @@ Progress: [█████████░] 91%
 | Phase 103-hackerone-comment-trigger-bridge P03 | 9min | 2 tasks | 6 files |
 | Phase 103 P06 | 3m | 2 tasks | 3 files |
 | Phase 103 P04 | 17min | 3 tasks | 5 files |
+| Phase 103 P07 | 6min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1511,6 +1512,7 @@ Recent decisions affecting current work:
 - [Phase 103]: km h1 init/status forked from github.go, dropping manifest (HackerOne has no App-install model); webhook-secret + api-token SecureString, api-username String under /{prefix}config/h1/*
 - [Phase 103]: H1 reply gate enforced at the handler: ComputeReplyToResearcher requires command AND allowlist (deny-by-default); only targets[0] may post externally (never N external replies under fanout)
 - [Phase 103]: Multi-target fanout = per-target distinct dedupID (h1-{report_id}-{alias}) + per-(report_id,target) thread row; H1ThreadStore keyed (report_id,target) UpdateItem-shaped
+- [Phase 103]: Plan 07: km-h1-bridge Lambda forks the GitHub bridge entry but DROPS all GitHub App machinery (App creds, JWT reactor, relayer, orphan router) — HackerOne uses HTTP Basic Auth + per-program webhook URLs, so no App-install model or federation relay is needed.
 
 ### Roadmap Evolution
 
@@ -1641,6 +1643,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-10T04:24:46.844Z
-Stopped at: Completed 103-04-PLAN.md
+Last session: 2026-06-10T04:34:05.018Z
+Stopped at: Completed 103-07-PLAN.md
 Resume file: None
