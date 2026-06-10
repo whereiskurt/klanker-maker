@@ -253,3 +253,28 @@ func TestState(t *testing.T) {
 		t.Errorf("attributes.state = %q; want triaged", got.Data.Attributes.State)
 	}
 }
+
+// TestStateEndpointOverride asserts the KM_H1_STATE_ENDPOINT escape hatch lets a
+// fast-follow repoint the LOW-confidence (OQ2) state endpoint without a rebuild.
+func TestStateEndpointOverride(t *testing.T) {
+	t.Setenv("KM_H1_STATE_ENDPOINT", "/reports/%d")
+
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"id":"99"}}`))
+	}))
+	defer srv.Close()
+
+	code := dispatch([]string{
+		"state", "--report", "2468", "--to", "triaged",
+	}, io.Discard, withBaseURL(srv.URL), withCreds("apiuser", "apitoken"))
+
+	if code != 0 {
+		t.Fatalf("state exit = %d; want 0", code)
+	}
+	if gotPath != "/reports/2468" {
+		t.Errorf("path = %q; want /reports/2468 (override honored)", gotPath)
+	}
+}

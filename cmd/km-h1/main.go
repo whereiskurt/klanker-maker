@@ -294,8 +294,20 @@ type stateChangeRequest struct {
 	} `json:"data"`
 }
 
+// stateEndpointPath returns the state-change path for a report. It defaults to
+// the OQ2 best-effort candidate /reports/{id}/state_changes but honors a
+// KM_H1_STATE_ENDPOINT override (a printf template taking the report id, e.g.
+// "/reports/%d") so a fast-follow can repoint the endpoint against the live
+// HackerOne Sandbox program WITHOUT rebuilding the helper. See OQ2.
+func stateEndpointPath(report int) string {
+	if tmpl := os.Getenv("KM_H1_STATE_ENDPOINT"); tmpl != "" && strings.Contains(tmpl, "%d") {
+		return fmt.Sprintf(tmpl, report)
+	}
+	return fmt.Sprintf("/reports/%d/state_changes", report)
+}
+
 func runStateWith(report int, to, user, token string, cfg *runConfig, stderr io.Writer) int {
-	url := fmt.Sprintf("%s/reports/%d/state_changes", cfg.baseURL, report)
+	url := cfg.baseURL + stateEndpointPath(report)
 	var payload stateChangeRequest
 	payload.Data.Type = "state-change"
 	payload.Data.Attributes.State = to
