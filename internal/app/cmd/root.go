@@ -58,6 +58,10 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	// For the old "configure github --setup" shortcut use: km configure github --setup
 	root.AddCommand(NewGithubCmd(cfg))
 
+	// km h1 — HackerOne webhook bridge config (Phase 103).
+	// Subcommands: init, status (NO manifest — HackerOne has no App-install model).
+	root.AddCommand(NewH1Cmd(cfg))
+
 	root.AddCommand(NewExtendCmd(cfg))
 	root.AddCommand(NewStopCmd(cfg))
 	root.AddCommand(NewPauseCmd(cfg))
