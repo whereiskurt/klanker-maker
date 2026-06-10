@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 104-02-PLAN.md (DynamoDB km-slack-channels table module + live unit + init.go registration)
-last_updated: "2026-06-10T19:41:56.881Z"
+stopped_at: Completed 104-03-PLAN.md (create-handler IAM + SlackChannelStore DDB helper + km create wiring)
+last_updated: "2026-06-10T19:58:24.921Z"
 last_activity: 2026-06-10
 progress:
   total_phases: 120
   completed_phases: 106
   total_plans: 536
-  completed_plans: 495
+  completed_plans: 496
   percent: 91
 ---
 
@@ -529,6 +529,7 @@ Progress: [█████████░] 91%
 | Phase 103 P10 | 5 min | 2 tasks | 4 files |
 | Phase 104 P01 | 1080 | 2 tasks | 11 files |
 | Phase 104 P02 | 137 | 2 tasks | 5 files |
+| Phase 104 P03 | 775 | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1526,6 +1527,9 @@ Recent decisions affecting current work:
 - [Phase 104]: Transient conversations.info errors bounded-retried then optimistically trusted; never trigger workspace scan
 - [Phase 104]: No TTL on km-slack-channels table: alias→channel_id mapping must persist across sandbox destroy/recreate; stale rows self-heal via channel_not_found recreate path
 - [Phase 104]: km-slack-channels table name derives from site.label (not hardcoded prefix): ensures multi-install isolation without collision
+- [Phase 104]: No dependency block in create-handler live unit for slack-channels table: IAM grant needs only table name string, static pattern mirrors slack-threads
+- [Phase 104]: No TF env var for slack-channels table name: cfg.GetSlackChannelsTableName() derived at runtime in create.go, matching km-slack-threads pattern
+- [Phase 104]: slack_channels_table_name added to viper merge-list in config.go: prevents silent ignore of km-config.yaml key (project_config_key_merge_list footgun)
 
 ### Roadmap Evolution
 
@@ -1658,6 +1662,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-10T19:41:56.870Z
-Stopped at: Completed 104-02-PLAN.md (DynamoDB km-slack-channels table module + live unit + init.go registration)
+Last session: 2026-06-10T19:58:24.910Z
+Stopped at: Completed 104-03-PLAN.md (create-handler IAM + SlackChannelStore DDB helper + km create wiring)
 Resume file: None
