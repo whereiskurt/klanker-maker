@@ -194,6 +194,22 @@ h1:
 	if len(cfg.H1.Programs) > 0 && cfg.H1.Programs[0].Handle != "sentinel-program" {
 		t.Errorf("H1.Programs[0].Handle: got %q, want %q", cfg.H1.Programs[0].Handle, "sentinel-program")
 	}
+
+	// ── Phase 103 Plan 10 deploy-surface MERGE-LIST GUARD ───────────────────────
+	// This is the unmistakable config half of H1-DEPLOY-WIRING (the other half is
+	// the lambdaBuilds/regionalModules guards in internal/app/cmd/init_test.go).
+	// The whole h1: block — including the sentinel target inside the program — only
+	// survives config.Load() when "h1" is in the v2→v merge-loop allowlist. If a
+	// future refactor drops that entry, the program loads but its nested fields are
+	// silently empty; assert the target round-tripped too so the guard cannot be
+	// satisfied by a half-merged struct.
+	if len(cfg.H1.Programs) > 0 {
+		if len(cfg.H1.Programs[0].Targets) != 1 {
+			t.Errorf("MERGE-LIST GUARD: H1.Programs[0].Targets len=%d, want 1 — nested h1: fields dropped (merge-list entry missing/broken)", len(cfg.H1.Programs[0].Targets))
+		} else if cfg.H1.Programs[0].Targets[0].Alias != "h1-sentinel" {
+			t.Errorf("MERGE-LIST GUARD: H1.Programs[0].Targets[0].Alias=%q, want %q — nested h1: target field not merged", cfg.H1.Programs[0].Targets[0].Alias, "h1-sentinel")
+		}
+	}
 }
 
 // TestH1BotHandleOverride verifies per-program bot_handle overrides the install-wide

@@ -744,6 +744,101 @@ func TestLambdaBuildsIncludesGitHubBridge(t *testing.T) {
 	}
 }
 
+// TestLambdaBuildsIncludesH1Bridge guards H1-DEPLOY-WIRING (Phase 103) — the
+// HackerOne analog of TestLambdaBuildsIncludesGitHubBridge. `km init` builds
+// Lambda zips from a hardcoded list (buildLambdaZips); a Lambda with a live
+// terragrunt unit but MISSING from this list is silently never built, so apply
+// fails on filebase64sha256(missing-zip) (the Phase-97 footgun,
+// project_km_init_skips_existing_lambda_zips). The km-h1-bridge Lambda zip AND
+// the km-h1 sidecar helper must both be present; a future refactor that drops
+// either re-opens the deploy gap this phase exists to close.
+func TestLambdaBuildsIncludesH1Bridge(t *testing.T) {
+	names := cmd.LambdaBuildNames()
+
+	want := map[string]bool{
+		"km-h1-bridge":     false,
+		"km-github-bridge": false, // sibling bridge — proves the list still carries the family
+		"create-handler":   false,
+	}
+	for _, n := range names {
+		if _, ok := want[n]; ok {
+			want[n] = true
+		}
+	}
+	for n, found := range want {
+		if !found {
+			t.Errorf("LambdaBuildNames() missing %q — km init will never build its zip; got %v", n, names)
+		}
+	}
+
+	// km-h1 is a SIDECAR (built/uploaded via sidecarBuilds(), like km-github),
+	// not a Lambda zip. Assert it is present in the sidecar build list so the
+	// sandbox-side helper is actually shipped.
+	sidecars := cmd.SidecarBuildNames()
+	foundKMH1 := false
+	for _, n := range sidecars {
+		if n == "km-h1" {
+			foundKMH1 = true
+			break
+		}
+	}
+	if !foundKMH1 {
+		t.Errorf("SidecarBuildNames() missing km-h1 — the sandbox-side HackerOne helper is never built; got %v", sidecars)
+	}
+}
+
+// TestRegionalModulesH1BridgeOrdering is the focused Phase-103 deploy-surface
+// ORDERING guard (H1-DEPLOY-WIRING). It asserts lambda-h1-bridge appears exactly
+// ONCE and is ordered AFTER its data-plane and sibling-Lambda dependencies
+// (dynamodb-h1-threads, dynamodb-sandboxes, dynamodb-slack-nonces,
+// lambda-github-bridge) and BEFORE ses (ses applies last). dynamodb-h1-threads
+// must precede the bridge that writes to it. Complements the membership-focused
+// TestRegionalModulesIncludesH1Bridge from Plan 08; a mis-ordering here bakes a
+// mock dependency ARN (account 000000000000) into the bridge unit at apply time.
+func TestRegionalModulesH1BridgeOrdering(t *testing.T) {
+	mods := cmd.RegionalModules(t.TempDir())
+
+	idx := map[string]int{}
+	bridgeCount := 0
+	for i, m := range mods {
+		idx[m.Name] = i
+		if m.Name == "lambda-h1-bridge" {
+			bridgeCount++
+		}
+	}
+
+	if bridgeCount != 1 {
+		t.Fatalf("lambda-h1-bridge must appear exactly once in regionalModules(); got %d", bridgeCount)
+	}
+
+	for _, name := range []string{
+		"dynamodb-h1-threads", "lambda-h1-bridge", "dynamodb-sandboxes",
+		"dynamodb-slack-nonces", "lambda-github-bridge", "ses",
+	} {
+		if _, ok := idx[name]; !ok {
+			t.Fatalf("regionalModules() missing %q — required for the H1 ordering guard", name)
+		}
+	}
+
+	// dynamodb-h1-threads BEFORE lambda-h1-bridge (the bridge writes to it).
+	if idx["dynamodb-h1-threads"] >= idx["lambda-h1-bridge"] {
+		t.Errorf("dynamodb-h1-threads (%d) must apply BEFORE lambda-h1-bridge (%d)",
+			idx["dynamodb-h1-threads"], idx["lambda-h1-bridge"])
+	}
+	// lambda-h1-bridge AFTER each shared dependency.
+	for _, dep := range []string{"dynamodb-sandboxes", "dynamodb-slack-nonces", "lambda-github-bridge"} {
+		if idx["lambda-h1-bridge"] <= idx[dep] {
+			t.Errorf("lambda-h1-bridge (%d) must apply AFTER %s (%d)",
+				idx["lambda-h1-bridge"], dep, idx[dep])
+		}
+	}
+	// lambda-h1-bridge BEFORE ses (ses is always last).
+	if idx["lambda-h1-bridge"] >= idx["ses"] {
+		t.Errorf("lambda-h1-bridge (%d) must apply BEFORE ses (%d)",
+			idx["lambda-h1-bridge"], idx["ses"])
+	}
+}
+
 // ──────────────────────────────────────────────
 // forceSlackBridgeColdStart tests (SLCK-13)
 // ──────────────────────────────────────────────
