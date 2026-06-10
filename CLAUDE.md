@@ -90,6 +90,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | GitHub App permissions reference — every scope/event + why, `contents:write` push opt-in | `docs/github-app-permissions.md` |
 | Slack App permissions reference — every bot scope/event + why | `docs/slack-app-permissions.md` |
 | GitHub bridge agent verbs — `/claude` / `/codex` per-thread agent select in PR comments | `docs/github-bridge.md` § Phase 102 |
+| HackerOne comment-trigger bridge — program webhook → sandbox agent → report comment (auto-triage + `@`-handle, multi-target fanout, internal-by-default replies) | `docs/h1-bridge.md` (Phase 103) |
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |
