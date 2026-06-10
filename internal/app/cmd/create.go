@@ -595,7 +595,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			return fmt.Errorf("profile requires Slack notifications but %sslack/bot-token is not configured — run km slack init first", cfg.GetSsmPrefix())
 		}
 		slackClient := slack.NewClient(botToken, nil)
-		chID, perSb, slackErr := resolveSlackChannel(ctx, resolvedProfile, sandboxID, aliasOverride, slackClient, ssmStore, cfg.GetSsmPrefix())
+		chID, perSb, slackErr := resolveSlackChannel(ctx, resolvedProfile, sandboxID, aliasOverride, slackClient, nil, ssmStore, cfg.GetSsmPrefix())
 		if slackErr != nil {
 			return fmt.Errorf("provision Slack channel: %w", slackErr)
 		}

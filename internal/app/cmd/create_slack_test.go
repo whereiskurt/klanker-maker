@@ -28,6 +28,10 @@ type fakeSlackAPI struct {
 	channelInfoCount    int
 	channelInfoErr      error
 
+	// Phase 104: additional fields for lookup-first resolver tests.
+	findShouldPanic bool // if true, FindChannelByName panics (asserts it was never called)
+	createCalls     int  // counts CreateChannel invocations
+
 	// capture calls
 	createChannelName  string
 	findChannelCalled  bool
@@ -38,11 +42,15 @@ type fakeSlackAPI struct {
 
 func (f *fakeSlackAPI) CreateChannel(_ context.Context, name string) (string, error) {
 	f.createChannelName = name
+	f.createCalls++
 	return f.createChannelResult, f.createChannelErr
 }
 
 func (f *fakeSlackAPI) FindChannelByName(_ context.Context, _ string, _ int) (string, error) {
 	f.findChannelCalled = true
+	if f.findShouldPanic {
+		panic("FindChannelByName must NOT be called in this scenario")
+	}
 	return f.findChannelResult, f.findChannelErr
 }
 
@@ -105,6 +113,53 @@ func (f *fakeSSMParamStore) Put(_ context.Context, name, value string, _ bool) e
 // ────────────────────────────────────────────────────────────────────────────
 
 func boolPtrCreate(b bool) *bool { return &b }
+
+// ─── Phase 104: fakeChannelStore + lookup-first resolver helpers ─────────────
+
+// fakeChannelStore is a map-backed SlackChannelStore for tests.
+type fakeChannelStore struct {
+	m map[string]string
+}
+
+func (s *fakeChannelStore) GetByAlias(_ context.Context, alias string) (string, error) {
+	return s.m[alias], nil
+}
+
+func (s *fakeChannelStore) UpsertByAlias(_ context.Context, alias, channelID string) error {
+	if s.m == nil {
+		s.m = map[string]string{}
+	}
+	s.m[alias] = channelID
+	return nil
+}
+
+// resolvePerSandboxChannelForTest builds a minimal per-sandbox profile and calls
+// resolveSlackChannel with an empty SSM store + the provided fake store.
+// sandboxID is used as both the sandbox ID and the channel name (e.g. "sb-github-bot").
+func resolvePerSandboxChannelForTest(t *testing.T, api *fakeSlackAPI, store SlackChannelStore, alias, sandboxID string) (string, bool, error) {
+	t.Helper()
+	return resolvePerSandboxChannelForTestWithSSM(t, api, store, alias, sandboxID, nil)
+}
+
+// resolvePerSandboxChannelForTestWithSSM is like resolvePerSandboxChannelForTest but
+// pre-seeds the fake SSM by-name cache with the provided map (keyed by channel name).
+func resolvePerSandboxChannelForTestWithSSM(t *testing.T, api *fakeSlackAPI, store SlackChannelStore, alias, sandboxID string, ssmByName map[string]string) (string, bool, error) {
+	t.Helper()
+	// Shrink retry delay so tests run fast.
+	old := slackInfoRetryDelay
+	slackInfoRetryDelay = time.Millisecond
+	defer func() { slackInfoRetryDelay = old }()
+
+	p := profileWithSlack(boolPtrCreate(true), true, "")
+	params := map[string]string{
+		"/km/slack/invite-email": "invite@example.com",
+	}
+	for k, v := range ssmByName {
+		params["/km/slack/channel-id-by-name/"+k] = v
+	}
+	ssmStore := &fakeSSMParamStore{params: params}
+	return resolveSlackChannel(context.Background(), p, sandboxID, alias, api, store, ssmStore, "/km/")
+}
 
 func profileWithSlack(enabled *bool, perSandbox bool, override string) *profile.SandboxProfile {
 	p := &profile.SandboxProfile{}
@@ -217,7 +272,7 @@ func TestResolveSlack_NotEnabled_Skipped(t *testing.T) {
 	api := &fakeSlackAPI{}
 	ssmStore := &fakeSSMParamStore{}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "myalias", api, ssmStore, "/km/")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "myalias", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -231,7 +286,7 @@ func TestResolveSlack_NilEnabled_Skipped(t *testing.T) {
 	api := &fakeSlackAPI{}
 	ssmStore := &fakeSSMParamStore{}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -249,7 +304,7 @@ func TestResolveSlack_SharedMode_HappyPath(t *testing.T) {
 		},
 	}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -269,7 +324,7 @@ func TestResolveSlack_SharedMode_NotConfigured_Error(t *testing.T) {
 	api := &fakeSlackAPI{}
 	ssmStore := &fakeSSMParamStore{} // no /km/slack/shared-channel-id
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, nil, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error when shared channel not configured")
 	}
@@ -289,7 +344,7 @@ func TestResolveSlack_PerSandbox_HappyPath_WithAlias(t *testing.T) {
 		},
 	}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -318,7 +373,7 @@ func TestResolveSlack_PerSandbox_HappyPath_NoAlias(t *testing.T) {
 		},
 	}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc12345", "", api, ssmStore, "/km/")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc12345", "", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -345,7 +400,7 @@ func TestResolveSlack_PerSandbox_AliasWithDots(t *testing.T) {
 		},
 	}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "research.team-A", api, ssmStore, "/km/")
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "research.team-A", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -354,11 +409,14 @@ func TestResolveSlack_PerSandbox_AliasWithDots(t *testing.T) {
 	}
 }
 
-// Renamed from TestResolveSlack_PerSandbox_NameTaken_Error — name_taken now
-// auto-recovers via FindChannelByName rather than failing. The hard-error
-// path only fires when the channel is unrecoverable (archived → reserved
-// name, or lookup unsupported by bot scopes).
+// TestResolveSlack_PerSandbox_NameTaken_AutoRecoversViaLookup verifies that
+// name_taken auto-recovers via FindChannelByName when KM_SLACK_MAX_SCAN_PAGES>0
+// (scan opt-in). Phase 104: scan is disabled by default; this test enables it.
 func TestResolveSlack_PerSandbox_NameTaken_AutoRecoversViaLookup(t *testing.T) {
+	old := SlackMaxScanPages
+	SlackMaxScanPages = 100 // opt-in to scan
+	defer func() { SlackMaxScanPages = old }()
+
 	p := profileWithSlack(boolPtrCreate(true), true, "")
 	api := &fakeSlackAPI{
 		createChannelErr:  &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
@@ -370,7 +428,7 @@ func TestResolveSlack_PerSandbox_NameTaken_AutoRecoversViaLookup(t *testing.T) {
 		},
 	}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("expected name_taken to auto-recover, got error: %v", err)
 	}
@@ -381,14 +439,21 @@ func TestResolveSlack_PerSandbox_NameTaken_AutoRecoversViaLookup(t *testing.T) {
 		t.Error("perSandbox should still be true on the reuse path")
 	}
 	if !api.findChannelCalled {
-		t.Error("FindChannelByName must be called when name_taken triggers")
+		t.Error("FindChannelByName must be called when name_taken triggers with scan opt-in")
 	}
 	if !api.joinChannelCalled {
 		t.Error("JoinChannel must be called after channel resolution to ensure bot membership")
 	}
 }
 
+// TestResolveSlack_PerSandbox_NameTaken_ArchivedReservation verifies that
+// name_taken + empty scan result (archived reservation) errors appropriately.
+// Requires scan opt-in (SlackMaxScanPages>0) to exercise the empty-scan path.
 func TestResolveSlack_PerSandbox_NameTaken_ArchivedReservation(t *testing.T) {
+	old := SlackMaxScanPages
+	SlackMaxScanPages = 100 // opt-in to scan
+	defer func() { SlackMaxScanPages = old }()
+
 	p := profileWithSlack(boolPtrCreate(true), true, "")
 	api := &fakeSlackAPI{
 		createChannelErr:  &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
@@ -396,7 +461,7 @@ func TestResolveSlack_PerSandbox_NameTaken_ArchivedReservation(t *testing.T) {
 	}
 	ssmStore := &fakeSSMParamStore{}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, nil, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error when name_taken AND lookup returns no match (archived reservation)")
 	}
@@ -424,7 +489,7 @@ func TestResolveSlack_PerSandbox_NameTaken_UsesByNameCache(t *testing.T) {
 		},
 	}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("expected cache hit to succeed, got: %v", err)
 	}
@@ -446,8 +511,13 @@ func TestResolveSlack_PerSandbox_NameTaken_UsesByNameCache(t *testing.T) {
 }
 
 // TestResolveSlack_PerSandbox_NameTaken_CacheMiss_FallsBackToScan verifies that
-// with no by-name cache entry, name_taken recovery falls back to the scan.
+// with no stored mapping, name_taken recovery falls back to the scan when
+// KM_SLACK_MAX_SCAN_PAGES>0 (scan opt-in). Phase 104: scan disabled by default.
 func TestResolveSlack_PerSandbox_NameTaken_CacheMiss_FallsBackToScan(t *testing.T) {
+	old := SlackMaxScanPages
+	SlackMaxScanPages = 100 // opt-in to scan
+	defer func() { SlackMaxScanPages = old }()
+
 	p := profileWithSlack(boolPtrCreate(true), true, "")
 	api := &fakeSlackAPI{
 		createChannelErr:  &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
@@ -457,7 +527,7 @@ func TestResolveSlack_PerSandbox_NameTaken_CacheMiss_FallsBackToScan(t *testing.
 		params: map[string]string{"/km/slack/invite-email": "invite@example.com"},
 	}
 
-	chID, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	chID, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -465,7 +535,7 @@ func TestResolveSlack_PerSandbox_NameTaken_CacheMiss_FallsBackToScan(t *testing.
 		t.Errorf("channelID = %q; want CSCANNED (scan fallback)", chID)
 	}
 	if !api.findChannelCalled {
-		t.Error("FindChannelByName must be called on a cache miss")
+		t.Error("FindChannelByName must be called on a cache miss with scan opt-in")
 	}
 	// The scan result should be written back to the cache for next time.
 	cacheKey := "/km/slack/channel-id-by-name/sb-demo"
@@ -475,9 +545,20 @@ func TestResolveSlack_PerSandbox_NameTaken_CacheMiss_FallsBackToScan(t *testing.
 }
 
 // TestResolveSlack_PerSandbox_NameTaken_StaleCache_FallsBackToScan verifies that
-// a cached ID that no longer resolves (conversations.info errors) is discarded
-// and the scan runs.
+// a cached ID that definitively no longer exists (channel_not_found) causes the
+// resolver to fall through to create and then scan when KM_SLACK_MAX_SCAN_PAGES>0.
+// Phase 104: stored ID validated before create; gone → recreate attempt; name_taken
+// again → scan (with opt-in).
 func TestResolveSlack_PerSandbox_NameTaken_StaleCache_FallsBackToScan(t *testing.T) {
+	old := SlackMaxScanPages
+	SlackMaxScanPages = 100 // opt-in to scan
+	defer func() { SlackMaxScanPages = old }()
+
+	// Shrink retry delay so test doesn't pause.
+	oldDelay := slackInfoRetryDelay
+	slackInfoRetryDelay = time.Millisecond
+	defer func() { slackInfoRetryDelay = oldDelay }()
+
 	p := profileWithSlack(boolPtrCreate(true), true, "")
 	api := &fakeSlackAPI{
 		createChannelErr:  &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
@@ -491,25 +572,29 @@ func TestResolveSlack_PerSandbox_NameTaken_StaleCache_FallsBackToScan(t *testing
 		},
 	}
 
-	chID, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	chID, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if chID != "CFRESH" {
-		t.Errorf("channelID = %q; want CFRESH (stale cache → scan)", chID)
+		t.Errorf("channelID = %q; want CFRESH (stale cache → recreate → scan)", chID)
 	}
 	if !api.channelInfoCalled {
-		t.Error("ChannelInfo must be called to probe the cached ID")
+		t.Error("ChannelInfo must be called to validate the stored ID")
 	}
 	if !api.findChannelCalled {
-		t.Error("FindChannelByName must be called after the cached ID fails to resolve")
+		t.Error("FindChannelByName must be called after the stored ID fails to resolve and create returns name_taken")
 	}
 }
 
 // TestResolveSlack_PerSandbox_NameTaken_RateLimited_ErrorMessage verifies the
-// error-message fix: when the scan is rate-limited, the error must mention rate
-// limiting + channelOverride and must NOT advise granting channels:read.
+// error-message fix: when the scan is rate-limited (with scan opt-in), the error
+// must mention rate limiting + channelOverride and must NOT advise granting channels:read.
 func TestResolveSlack_PerSandbox_NameTaken_RateLimited_ErrorMessage(t *testing.T) {
+	old := SlackMaxScanPages
+	SlackMaxScanPages = 100 // opt-in to scan so the rate-limit error is exercised
+	defer func() { SlackMaxScanPages = old }()
+
 	p := profileWithSlack(boolPtrCreate(true), true, "")
 	api := &fakeSlackAPI{
 		createChannelErr: &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
@@ -519,7 +604,7 @@ func TestResolveSlack_PerSandbox_NameTaken_RateLimited_ErrorMessage(t *testing.T
 		params: map[string]string{"/km/slack/invite-email": "invite@example.com"},
 	}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, nil, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected an error when the scan is rate-limited")
 	}
@@ -544,7 +629,7 @@ func TestResolveSlack_PerSandbox_CreateSuccess_CachesByName(t *testing.T) {
 		params: map[string]string{"/km/slack/invite-email": "invite@example.com"},
 	}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -569,7 +654,7 @@ func TestResolveSlack_PerSandbox_InviteFails_NonFatal(t *testing.T) {
 		},
 	}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("invite failure should be non-fatal, got error: %v", err)
 	}
@@ -592,7 +677,7 @@ func TestResolveSlack_Override_HappyPath_BotIsMember(t *testing.T) {
 	}
 	ssmStore := &fakeSSMParamStore{}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, nil, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -618,7 +703,7 @@ func TestResolveSlack_Override_BotNotMember_Error(t *testing.T) {
 	}
 	ssmStore := &fakeSSMParamStore{}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, nil, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error when bot is not a member")
 	}
@@ -634,7 +719,7 @@ func TestResolveSlack_Override_ChannelNotFound_Error(t *testing.T) {
 	}
 	ssmStore := &fakeSSMParamStore{}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, nil, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error when channel not found")
 	}
@@ -649,7 +734,7 @@ func TestResolveSlack_InvalidOverrideID_Error(t *testing.T) {
 	api := &fakeSlackAPI{}
 	ssmStore := &fakeSSMParamStore{}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, nil, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error for invalid channel ID format")
 	}
@@ -720,5 +805,102 @@ func TestStep11d_Success_WritesChannelIDParam(t *testing.T) {
 	}
 	if put.calls[0].Value != "C-TEST" {
 		t.Errorf("PutParameter Value: got %q, want %q", put.calls[0].Value, "C-TEST")
+	}
+}
+
+// ─── Phase 104: TestResolvePerSandbox_* — lookup-first budgeted resolver ─────
+
+// StoredID_Live_NoScan: DDB store has ID + info() succeeds → O(1), no create, no scan.
+func TestResolvePerSandbox_StoredID_Live_NoScan(t *testing.T) {
+	api := &fakeSlackAPI{
+		channelInfoErr:  nil, // info(cachedID) succeeds
+		findShouldPanic: true,
+	}
+	store := &fakeChannelStore{m: map[string]string{"github-bot": "C0LIVE"}}
+	id, per, err := resolvePerSandboxChannelForTest(t, api, store, "github-bot", "sb-github-bot")
+	if err != nil || id != "C0LIVE" || !per {
+		t.Fatalf("want C0LIVE/true/nil, got %q/%v/%v", id, per, err)
+	}
+	if api.createCalls != 0 {
+		t.Fatalf("stored-live path must not call conversations.create, got %d", api.createCalls)
+	}
+}
+
+// StoredID_TransientInfo_NoScan: transient ratelimited → bounded-retry then optimistic-use, NO scan.
+func TestResolvePerSandbox_StoredID_TransientInfo_NoScan(t *testing.T) {
+	api := &fakeSlackAPI{
+		channelInfoErr:  &slack.SlackAPIError{Method: "conversations.info", Code: "ratelimited"},
+		findShouldPanic: true, // must never enumerate
+	}
+	store := &fakeChannelStore{m: map[string]string{"github-bot": "C0OPT"}}
+	id, _, err := resolvePerSandboxChannelForTest(t, api, store, "github-bot", "sb-github-bot")
+	if err != nil || id != "C0OPT" {
+		t.Fatalf("transient info must optimistically use stored ID, got %q/%v", id, err)
+	}
+}
+
+// StoredID_NotFound_Recreates: definitive channel_not_found → invalidate + recreate.
+func TestResolvePerSandbox_StoredID_NotFound_Recreates(t *testing.T) {
+	api := &fakeSlackAPI{
+		channelInfoErr:      &slack.SlackAPIError{Method: "conversations.info", Code: "channel_not_found"},
+		createChannelResult: "C0NEW",
+	}
+	store := &fakeChannelStore{m: map[string]string{"github-bot": "C0DEAD"}}
+	id, _, err := resolvePerSandboxChannelForTest(t, api, store, "github-bot", "sb-github-bot")
+	if err != nil || id != "C0NEW" {
+		t.Fatalf("dead stored ID must recreate, got %q/%v", id, err)
+	}
+	if store.m["github-bot"] != "C0NEW" {
+		t.Fatalf("mapping must be rewritten to C0NEW, got %q", store.m["github-bot"])
+	}
+}
+
+// NameTaken_NoMapping_FailFast: no stored mapping + create→name_taken + scan disabled → fail fast.
+func TestResolvePerSandbox_NameTaken_NoMapping_FailFast(t *testing.T) {
+	old := SlackMaxScanPages
+	SlackMaxScanPages = 0
+	defer func() { SlackMaxScanPages = old }()
+	api := &fakeSlackAPI{
+		createChannelErr: &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		findShouldPanic:  true, // scan disabled ⇒ never called
+	}
+	store := &fakeChannelStore{m: map[string]string{}}
+	_, _, err := resolvePerSandboxChannelForTest(t, api, store, "github-bot", "sb-github-bot")
+	if err == nil || !strings.Contains(err.Error(), "km slack adopt") {
+		t.Fatalf("want fail-fast adopt guidance, got %v", err)
+	}
+}
+
+// FreshCreate_WritesStore: no stored mapping, name free → create + write-through to store.
+func TestResolvePerSandbox_FreshCreate_WritesStore(t *testing.T) {
+	api := &fakeSlackAPI{createChannelResult: "C0FRESH"}
+	store := &fakeChannelStore{m: map[string]string{}}
+	id, _, err := resolvePerSandboxChannelForTest(t, api, store, "github-bot", "sb-github-bot")
+	if err != nil || id != "C0FRESH" {
+		t.Fatalf("want C0FRESH, got %q/%v", id, err)
+	}
+	if store.m["github-bot"] != "C0FRESH" {
+		t.Fatalf("fresh create must write store, got %q", store.m["github-bot"])
+	}
+}
+
+// StoredID_SSMOnly_BackfillsDDB: DDB store empty, SSM by-name cache has ID, channel live →
+// resolves O(1) AND migrates the mapping into the DDB store on first touch.
+func TestResolvePerSandbox_StoredID_SSMOnly_BackfillsDDB(t *testing.T) {
+	api := &fakeSlackAPI{
+		channelInfoErr:  nil, // info(SSM-sourced ID) succeeds
+		findShouldPanic: true,
+	}
+	store := &fakeChannelStore{m: map[string]string{}} // DDB empty
+	id, _, err := resolvePerSandboxChannelForTestWithSSM(t, api, store,
+		"github-bot", "sb-github-bot", map[string]string{"sb-github-bot": "C0SSM"})
+	if err != nil || id != "C0SSM" {
+		t.Fatalf("SSM-sourced hit must resolve O(1), got %q/%v", id, err)
+	}
+	if store.m["github-bot"] != "C0SSM" {
+		t.Fatalf("SSM-sourced hit must back-fill the DDB store, got %q", store.m["github-bot"])
+	}
+	if api.createCalls != 0 {
+		t.Fatalf("back-fill path must not create a channel, got %d", api.createCalls)
 	}
 }

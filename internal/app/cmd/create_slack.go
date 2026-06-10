@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -138,47 +139,70 @@ func cacheSlackChannelIDByName(ctx context.Context, store SSMParamStore, slackPr
 	}
 }
 
-// resolveExistingChannelID recovers the ID of an already-existing channel after
-// CreateChannel returned name_taken, in priority order:
-//
-//  1. By-name SSM cache (O(1)) — if a cached ID resolves via conversations.info
-//     (single call), reuse it directly. A deleted/renamed channel fails the
-//     conversations.info probe and falls through to the scan.
-//  2. FindChannelByName enumeration (O(N)) — the fallback. On success the result
-//     is written back to the cache so the next recreate is O(1). On a rate-limit
-//     failure mid-scan the error is rate-limit-specific (NOT a channels:read
-//     scope hint, which would be misleading). An empty result means the name is
-//     reserved by an archived channel (Slack's 30-day window).
-func resolveExistingChannelID(ctx context.Context, api SlackAPI, ssmStore SSMParamStore, slackPrefix, channelName string) (string, error) {
-	// 1. By-name cache.
-	if cachedID, _ := ssmStore.Get(ctx, slackChannelNameCacheKey(slackPrefix, channelName), false); cachedID != "" {
-		if _, _, infoErr := api.ChannelInfo(ctx, cachedID); infoErr == nil {
-			log.Debug().Str("channel", cachedID).Str("name", channelName).
-				Msg("reused Slack channel ID from by-name SSM cache (skipped conversations.list scan)")
-			return cachedID, nil
+// lookupStoredChannelID returns a previously-stored channel ID for the alias,
+// DDB-first (authoritative) then SSM by-name (back-compat). Empty alias ⇒ skip
+// DDB (no stable reuse key). Returns ("", false) on miss. fromDDB is true only
+// when the hit came from the authoritative DDB store — callers back-fill DDB on
+// an SSM-sourced hit (fromDDB=false) so pre-104 channels migrate on first touch.
+func lookupStoredChannelID(ctx context.Context, store SlackChannelStore, ssmStore SSMParamStore,
+	slackPrefix, alias, channelName string) (id string, fromDDB bool) {
+	if store != nil && alias != "" {
+		if v, err := store.GetByAlias(ctx, alias); err == nil && v != "" {
+			return v, true
 		}
-		// Cache stale (channel deleted/renamed) — fall through to the scan.
-		log.Debug().Str("channel", cachedID).Str("name", channelName).
-			Msg("cached Slack channel ID no longer resolves; falling back to conversations.list scan")
 	}
+	if v, _ := ssmStore.Get(ctx, slackChannelNameCacheKey(slackPrefix, channelName), false); v != "" {
+		return v, false
+	}
+	return "", false
+}
 
-	// 2. Enumeration fallback.
-	existingID, lookupErr := api.FindChannelByName(ctx, channelName, 1000)
-	if lookupErr != nil {
-		var apierr *slack.SlackAPIError
-		if errors.As(lookupErr, &apierr) && apierr.Code == "ratelimited" {
-			return "", fmt.Errorf("channel #%s exists but resolving its ID timed out: Slack rate-limited conversations.list while scanning the workspace. "+
-				"Retry shortly, or set notification.slack.channelOverride to the channel ID: %w", channelName, lookupErr)
+// storeChannelMapping write-throughs the name→ID binding to BOTH the durable DDB
+// store (by alias) and the SSM by-name cache. Best-effort: never fails the create.
+func storeChannelMapping(ctx context.Context, store SlackChannelStore, ssmStore SSMParamStore,
+	slackPrefix, alias, channelName, channelID string) {
+	if store != nil && alias != "" && channelID != "" {
+		if err := store.UpsertByAlias(ctx, alias, channelID); err != nil {
+			log.Debug().Err(err).Str("alias", alias).Msg("DDB channel mapping upsert failed (non-fatal)")
 		}
-		return "", fmt.Errorf("channel #%s exists (name_taken) but lookup via conversations.list failed: %w\n"+
-			"Either grant the bot the channels:read scope and retry, or pick a unique --alias / use notification.slack.channelOverride", channelName, lookupErr)
 	}
-	if existingID == "" {
-		return "", fmt.Errorf("channel name #%s is reserved (likely by an archived channel within Slack's 30-day window); pick a unique --alias or unarchive the existing channel", channelName)
+	cacheSlackChannelIDByName(ctx, ssmStore, slackPrefix, channelName, channelID)
+}
+
+// validateStoredChannel probes conversations.info with bounded retry. Returns:
+//
+//	ok=true             → channel live, use it
+//	gone=true           → definitive channel_not_found, invalidate + recreate
+//	ok=false,gone=false → transient after retries → caller optimistically uses the ID
+func validateStoredChannel(ctx context.Context, api SlackAPI, channelID string) (ok, gone bool) {
+	var lastErr error
+	for attempt := 0; attempt <= slackInfoRetries; attempt++ {
+		if _, _, err := api.ChannelInfo(ctx, channelID); err == nil {
+			return true, false
+		} else {
+			lastErr = err
+			if slack.IsChannelNotFound(err) {
+				return false, true
+			}
+		}
+		if attempt < slackInfoRetries {
+			if sleepErr := slackResolveSleep(ctx, slackInfoRetryDelay); sleepErr != nil {
+				break
+			}
+		}
 	}
-	// Persist so the next recreate skips the scan entirely.
-	cacheSlackChannelIDByName(ctx, ssmStore, slackPrefix, channelName, existingID)
-	return existingID, nil
+	log.Debug().Err(lastErr).Str("channel", channelID).
+		Msg("conversations.info transient after retries — optimistically trusting stored ID")
+	return false, false
+}
+
+// slackResolveFailFast returns the fail-fast error when a channel exists but km
+// has no stored ID for it and enumeration is disabled (the default).
+func slackResolveFailFast(channelName string) error {
+	return fmt.Errorf("Slack channel #%s exists but km has no stored ID for it. "+
+		"Seed the mapping with `km slack adopt <alias> <channelID>` (find the ID in Slack → channel → About → Channel ID), "+
+		"or set notification.slack.channelOverride=<id>. "+
+		"(Workspace enumeration is disabled by default; set KM_SLACK_MAX_SCAN_PAGES>0 to allow a bounded scan.)", channelName)
 }
 
 // SSMRunner is a narrow interface for running shell commands on a sandbox
@@ -188,6 +212,62 @@ type SSMRunner interface {
 }
 
 var channelIDRe = regexp.MustCompile(`^C[A-Z0-9]+$`)
+
+// ─── Slack channel-resolution bounding knobs (Phase 104 P0/P1) ───────────────
+
+// SlackResolveBudget caps total wall-clock for per-sandbox Slack channel
+// resolution. Far below the 900s create-handler ceiling, far above a normal
+// create+info round-trip. Override: KM_SLACK_RESOLVE_BUDGET (seconds).
+var SlackResolveBudget = 45 * time.Second
+
+// SlackMaxScanPages caps the conversations.list fallback. 0 = scan disabled
+// (fail fast with adopt/channelOverride guidance) — the safe default for huge
+// workspaces. Override: KM_SLACK_MAX_SCAN_PAGES.
+var SlackMaxScanPages = 0
+
+// slackInfoRetries is the bounded retry count for a transient conversations.info
+// probe before optimistically trusting the stored ID.
+var slackInfoRetries = 2
+
+// slackInfoRetryDelay is the backoff between transient info retries.
+var slackInfoRetryDelay = 500 * time.Millisecond
+
+func init() {
+	if v := os.Getenv("KM_SLACK_RESOLVE_BUDGET"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			SlackResolveBudget = time.Duration(secs) * time.Second
+		}
+	}
+	if v := os.Getenv("KM_SLACK_MAX_SCAN_PAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			SlackMaxScanPages = n
+		}
+	}
+}
+
+// slackResolveSleep is a ctx-aware sleep for the resolve retry loop. Package-level
+// so tests can swap it for a no-op.
+var slackResolveSleep = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// SlackChannelStore is the durable alias→channelID mapping (Phase 104 P2). The
+// DDB-backed implementation lives in pkg/aws; resolveSlackChannel reads it first
+// and write-throughs on create/resolve. A nil store disables the DDB layer (SSM
+// by-name cache still applies) so tests and prefix-less paths degrade cleanly.
+type SlackChannelStore interface {
+	GetByAlias(ctx context.Context, alias string) (channelID string, err error)
+	UpsertByAlias(ctx context.Context, alias, channelID string) error
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 // notificationSlack returns p.Spec.Notification.Slack (nil-safe). Phase 92:
 // Slack delivery config lives under spec.notification.slack.*.
@@ -234,7 +314,7 @@ func runtimeVSCode(p *profile.SandboxProfile) *profile.RuntimeVSCodeSpec {
 //     channel ID format + confirm bot membership via ChannelInfo; perSandbox=false
 //     (operator-controlled channel — do not archive at destroy).
 func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandboxID, alias string,
-	api SlackAPI, ssmStore SSMParamStore, ssmPrefix string) (channelID string, perSandbox bool, err error) {
+	api SlackAPI, store SlackChannelStore, ssmStore SSMParamStore, ssmPrefix string) (channelID string, perSandbox bool, err error) {
 	slackPrefix := ssmPrefix + "slack/"
 
 	// Phase 92: Slack delivery config moved from spec.cli.notify* to
@@ -260,113 +340,170 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 		return sl.ChannelOverride, false, nil
 	}
 
-	// Mode 2 — per-sandbox: create a dedicated channel for this sandbox.
+	// Mode 2 — per-sandbox: bounded, lookup-first channel resolution (Phase 104 P0+P1).
 	if sl.PerSandbox != nil && *sl.PerSandbox {
+		// Wrap Mode-2 in a wall-clock budget so the create-handler can never wedge.
+		ctx, cancel := context.WithTimeout(ctx, SlackResolveBudget)
+		defer cancel()
+
 		channelName, derr := deriveSandboxChannelName(sl.ChannelName, p.Metadata.Name, alias, sandboxID)
 		if derr != nil {
 			return "", false, derr
 		}
 
+		start := time.Now()
+		path := "failfast"
+		var resolvedID string
+		defer func() {
+			log.Info().
+				Str("path", path).
+				Int64("ms", time.Since(start).Milliseconds()).
+				Str("id", resolvedID).
+				Str("channel", channelName).
+				Msg("slack_resolve")
+		}()
+
+		// ensureBotMemberAndInvite handles the common bot-join + primary-operator +
+		// additional-collaborator invite sequence that follows any successful resolution.
+		ensureBotMemberAndInvite := func(chID string) (string, bool, error) {
+			var apierr *slack.SlackAPIError
+			if joinErr := api.JoinChannel(ctx, chID); joinErr != nil {
+				isAPIErr := errors.As(joinErr, &apierr)
+				switch {
+				case isAPIErr && apierr.Code == "missing_scope":
+					return "", false, fmt.Errorf("bot needs channels:join scope to ensure membership in #%s (channel %s): %w\n"+
+						"Add the scope in Slack App config → OAuth & Permissions, reinstall the app, then re-run km slack rotate-token", channelName, chID, joinErr)
+				case isAPIErr && apierr.Code == "is_archived":
+					return "", false, fmt.Errorf("channel #%s (%s) is archived; pick a different --alias or unarchive it via:\n"+
+						"  curl -H \"Authorization: Bearer $BOT_TOKEN\" -d \"channel=%s\" https://slack.com/api/conversations.unarchive",
+						channelName, chID, chID)
+				default:
+					log.Warn().Err(joinErr).Str("channel", chID).Msg("auto-join channel failed (non-fatal); /invite the bot manually if needed")
+				}
+			}
+
+			inviteEmail, ssmErr := ssmStore.Get(ctx, slackPrefix+"invite-email", false)
+			if ssmErr != nil || inviteEmail == "" {
+				log.Warn().Str("channel", chID).Msgf("Slack invite-email not configured at %sinvite-email; skipping cross-workspace invite (run km slack init to set)", slackPrefix)
+				resolvedID = chID
+				return chID, true, nil
+			}
+
+			// Phase 72: primary operator invite (always auto-connect).
+			opRes, opErr := slack.EnsureMemberByEmail(ctx, api, chID, inviteEmail, slack.EnsureMemberOpts{
+				Interactive: false,
+				AutoConnect: true,
+			})
+			slackInviteResultWarn(opRes, opErr, inviteEmail, channelName)
+
+			// Phase 72: additional collaborators from profile.
+			var invites *profile.NotificationSlackInvitesSpec
+			if sl != nil {
+				invites = sl.Invites
+			}
+			autoConnect := invites == nil || invites.UseConnect == nil || *invites.UseConnect
+			var inviteEmails []string
+			if invites != nil {
+				inviteEmails = invites.Emails
+			}
+			for _, email := range inviteEmails {
+				email = strings.TrimSpace(email)
+				if email == "" {
+					continue
+				}
+				res, err := slack.EnsureMemberByEmail(ctx, api, chID, email, slack.EnsureMemberOpts{
+					Interactive: false,
+					AutoConnect: autoConnect,
+				})
+				slackInviteResultWarn(res, err, email, channelName)
+			}
+
+			resolvedID = chID
+			return chID, true, nil
+		}
+
+		// ── Step 1: lookup-first ─────────────────────────────────────────────────
+		if storedID, fromDDB := lookupStoredChannelID(ctx, store, ssmStore, slackPrefix, alias, channelName); storedID != "" {
+			ok, gone := validateStoredChannel(ctx, api, storedID)
+			switch {
+			case ok:
+				// cache_hit: stored ID is live → O(1), no create.
+				path = "cache_hit"
+				if !fromDDB {
+					// SSM-sourced hit: promote into the authoritative DDB store
+					// (migrate-on-touch for pre-104 / out-of-band channels).
+					if store != nil && alias != "" {
+						if upsertErr := store.UpsertByAlias(ctx, alias, storedID); upsertErr != nil {
+							log.Debug().Err(upsertErr).Str("alias", alias).Msg("DDB back-fill on SSM hit failed (non-fatal)")
+						}
+					}
+				}
+				return ensureBotMemberAndInvite(storedID)
+
+			case !gone:
+				// cache_optimistic: transient info error after retries → trust stored ID.
+				// The incident bug: this path previously fell through to an unbounded scan.
+				path = "cache_optimistic"
+				if !fromDDB {
+					if store != nil && alias != "" {
+						if upsertErr := store.UpsertByAlias(ctx, alias, storedID); upsertErr != nil {
+							log.Debug().Err(upsertErr).Str("alias", alias).Msg("DDB back-fill on SSM hit (optimistic) failed (non-fatal)")
+						}
+					}
+				}
+				return ensureBotMemberAndInvite(storedID)
+
+			default:
+				// gone: definitive channel_not_found → fall through to create.
+				log.Debug().Str("stored_id", storedID).Str("channel", channelName).
+					Msg("stored channel ID no longer exists (channel_not_found); recreating")
+			}
+		}
+
+		// ── Step 2: create ───────────────────────────────────────────────────────
 		chID, createErr := api.CreateChannel(ctx, channelName)
 		var apierr *slack.SlackAPIError
 		nameTaken := errors.As(createErr, &apierr) && apierr.Code == "name_taken"
 
-		switch {
-		case createErr != nil && !nameTaken:
+		if createErr == nil {
+			// Fresh channel created.
+			path = "created"
+			storeChannelMapping(ctx, store, ssmStore, slackPrefix, alias, channelName, chID)
+			return ensureBotMemberAndInvite(chID)
+		}
+
+		if !nameTaken {
 			return "", false, fmt.Errorf("create channel #%s: %w", channelName, createErr)
-
-		case nameTaken:
-			// Channel exists in Slack but isn't tracked here — typically because
-			// a prior create attempt for the same alias already created it (the
-			// failure mode km slack init also recovers from) and survived
-			// archiveOnDestroy:false. Resolve the existing channel and reuse
-			// rather than failing the whole sandbox provisioning.
-			existingID, resolveErr := resolveExistingChannelID(ctx, api, ssmStore, slackPrefix, channelName)
-			if resolveErr != nil {
-				return "", false, resolveErr
-			}
-			chID = existingID
-
-		default: // createErr == nil — fresh channel created.
-			// Cache the name→ID mapping so a future recreate with the same --alias
-			// hits the O(1) reuse path instead of enumerating every public channel.
-			cacheSlackChannelIDByName(ctx, ssmStore, slackPrefix, channelName, chID)
 		}
 
-		// Ensure the bot is in the channel. Required because:
-		//   - Brand-new channel: Slack auto-joins the creator bot, but a Slack
-		//     App reinstall later drops the bot out.
-		//   - Reused channel (name_taken path above): bot may have been kicked
-		//     or never joined under the current bot session.
-		// Without this, chat.postMessage from the bridge fails with
-		// not_in_channel even though the channel exists.
-		if joinErr := api.JoinChannel(ctx, chID); joinErr != nil {
-			isAPIErr := errors.As(joinErr, &apierr)
+		// ── Step 3: name_taken with no usable stored mapping ────────────────────
+		// Enumeration is the last resort — disabled by default (SlackMaxScanPages=0).
+		if SlackMaxScanPages > 0 {
+			scannedID, scanErr := api.FindChannelByName(ctx, channelName, SlackMaxScanPages)
 			switch {
-			case isAPIErr && apierr.Code == "missing_scope":
-				return "", false, fmt.Errorf("bot needs channels:join scope to ensure membership in #%s (channel %s): %w\n"+
-					"Add the scope in Slack App config → OAuth & Permissions, reinstall the app, then re-run km slack rotate-token", channelName, chID, joinErr)
-			case isAPIErr && apierr.Code == "is_archived":
-				return "", false, fmt.Errorf("channel #%s (%s) is archived; pick a different --alias or unarchive it via:\n"+
-					"  curl -H \"Authorization: Bearer $BOT_TOKEN\" -d \"channel=%s\" https://slack.com/api/conversations.unarchive",
-					channelName, chID, chID)
+			case scanErr == nil && scannedID != "":
+				path = "scan_capped"
+				storeChannelMapping(ctx, store, ssmStore, slackPrefix, alias, channelName, scannedID)
+				return ensureBotMemberAndInvite(scannedID)
+			case errors.Is(scanErr, slack.ErrScanCapExceeded) || (scanErr == nil && scannedID == ""):
+				// Capped with no match, or scan empty (archived reservation).
+				if scanErr == nil && scannedID == "" {
+					return "", false, fmt.Errorf("channel name #%s is reserved (likely by an archived channel within Slack's 30-day window); pick a unique --alias or unarchive the existing channel", channelName)
+				}
+				return "", false, slackResolveFailFast(channelName)
 			default:
-				log.Warn().Err(joinErr).Str("channel", chID).Msg("auto-join channel failed (non-fatal); /invite the bot manually if needed")
+				// Scan error (ratelimited, missing_scope, etc.).
+				if errors.As(scanErr, &apierr) && apierr.Code == "ratelimited" {
+					return "", false, fmt.Errorf("channel #%s exists but resolving its ID timed out: Slack rate-limited conversations.list while scanning the workspace. "+
+						"Retry shortly, or set notification.slack.channelOverride to the channel ID: %w", channelName, scanErr)
+				}
+				return "", false, fmt.Errorf("channel #%s exists (name_taken) but lookup via conversations.list failed: %w\n"+
+					"Either grant the bot the channels:read scope and retry, or set notification.slack.channelOverride", channelName, scanErr)
 			}
 		}
 
-		// Fetch the invite email from SSM so the operator is always invited.
-		inviteEmail, ssmErr := ssmStore.Get(ctx, slackPrefix+"invite-email", false)
-		if ssmErr != nil || inviteEmail == "" {
-			// Missing invite-email is configurational — the channel exists and
-			// the bot is in it, so treat as warning rather than failing the
-			// whole create. Operator can run `km slack init` later.
-			log.Warn().Str("channel", chID).Msgf("Slack invite-email not configured at %sinvite-email; skipping cross-workspace invite (run km slack init to set)", slackPrefix)
-			return chID, true, nil
-		}
-
-		// Phase 72: route the primary operator invite through the unified
-		// orchestrator (EnsureMemberByEmail). AutoConnect=true is UNCONDITIONAL
-		// here — the operator is always invited regardless of useSlackConnect.
-		// Native workspace member → conversations.invite (fixes corporate case);
-		// external operator → Slack Connect (preserves prior PoC behavior).
-		//
-		// Pass channelName (e.g. "sb-test123") rather than the opaque Slack channel
-		// ID so that SkippedExternal hints render as a usable `km slack invite
-		// --channel sb-{name}` command.
-		opRes, opErr := slack.EnsureMemberByEmail(ctx, api, chID, inviteEmail, slack.EnsureMemberOpts{
-			Interactive: false,
-			AutoConnect: true,
-		})
-		slackInviteResultWarn(opRes, opErr, inviteEmail, channelName)
-
-		// Phase 72: profile-driven auto-invite for ADDITIONAL collaborators
-		// (beyond the primary operator above). AutoConnect is gated by
-		// useSlackConnect (nil ⇒ true). Interactive is always false — km create
-		// may run from km at / scheduled contexts. Non-fatal throughout.
-		var invites *profile.NotificationSlackInvitesSpec
-		if sl != nil {
-			invites = sl.Invites
-		}
-		autoConnect := invites == nil || invites.UseConnect == nil || *invites.UseConnect
-		var inviteEmails []string
-		if invites != nil {
-			inviteEmails = invites.Emails
-		}
-		for _, email := range inviteEmails {
-			email = strings.TrimSpace(email)
-			if email == "" {
-				continue
-			}
-			res, err := slack.EnsureMemberByEmail(ctx, api, chID, email, slack.EnsureMemberOpts{
-				Interactive: false,
-				AutoConnect: autoConnect,
-				// Prompter intentionally nil — non-interactive path never calls it.
-			})
-			slackInviteResultWarn(res, err, email, channelName)
-		}
-
-		return chID, true, nil
+		// Scan disabled (default) — fail fast with actionable guidance.
+		return "", false, slackResolveFailFast(channelName)
 	}
 
 	// Mode 1 — shared (default): read channel ID from SSM.
