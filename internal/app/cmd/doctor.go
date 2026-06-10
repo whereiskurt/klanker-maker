@@ -279,6 +279,9 @@ type DoctorConfigProvider interface {
 	// config.Load() (empty when running without a config file, e.g. in Lambda).
 	// Used to derive the configDir for @file prompt resolution.
 	GetConfigFilePath() string
+	// GetSlackChannelsTableName returns the Phase 104 durable alias→channel_id
+	// DynamoDB table name. Used by the existence-only doctor check.
+	GetSlackChannelsTableName() string
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -330,6 +333,9 @@ func (a *appConfigAdapter) GetGithubCommands() map[string]appcfg.GithubCommandEn
 func (a *appConfigAdapter) GetGithubDefaultCommand() string { return a.cfg.Github.DefaultCommand }
 func (a *appConfigAdapter) GetGithubPeerBridges() []string  { return a.cfg.Github.PeerBridges }
 func (a *appConfigAdapter) GetConfigFilePath() string       { return a.cfg.ConfigFilePath }
+func (a *appConfigAdapter) GetSlackChannelsTableName() string {
+	return a.cfg.GetSlackChannelsTableName()
+}
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
@@ -3449,6 +3455,21 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		r := checkDynamoTable(ctx, dynamoClient, identityTable, "Identity Table ("+identityTable+")")
 		if r.Status == CheckError {
 			r.Status = CheckWarn // identity table is optional
+		}
+		return r
+	})
+
+	// DynamoDB: slack-channels table — existence/DescribeTable probe only.
+	// CORRECTION #4: alias rows are not per-sandbox and must survive destroy;
+	// do NOT add this table to checkOrphanedDDBRows. The WARN-level demote mirrors
+	// the identity-table pattern: installs without per-sandbox Slack may not have
+	// this table yet, so a missing table is advisory rather than fatal.
+	slackChannelsTable := cfg.GetSlackChannelsTableName()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkDynamoTable(ctx, dynamoClient, slackChannelsTable, "Slack Channels Table ("+slackChannelsTable+")")
+		if r.Status == CheckError {
+			r.Status = CheckWarn // table is optional for installs without per-sandbox Slack
+			r.Remediation = "Run 'km init --dry-run=false' to create the DynamoDB slack-channels table"
 		}
 		return r
 	})
