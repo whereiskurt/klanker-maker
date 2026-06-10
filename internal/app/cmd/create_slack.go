@@ -84,7 +84,7 @@ func (s *productionSSMParamStore) Put(ctx context.Context, name, value string, s
 // the channel, archive it, or invent a new --alias.
 type SlackAPI interface {
 	CreateChannel(ctx context.Context, name string) (string, error)
-	FindChannelByName(ctx context.Context, name string) (string, error)
+	FindChannelByName(ctx context.Context, name string, maxPages int) (string, error)
 	JoinChannel(ctx context.Context, channelID string) error
 	InviteShared(ctx context.Context, channelID, email string) error
 	ChannelInfo(ctx context.Context, channelID string) (memberCount int, isMember bool, err error)
@@ -163,7 +163,7 @@ func resolveExistingChannelID(ctx context.Context, api SlackAPI, ssmStore SSMPar
 	}
 
 	// 2. Enumeration fallback.
-	existingID, lookupErr := api.FindChannelByName(ctx, channelName)
+	existingID, lookupErr := api.FindChannelByName(ctx, channelName, 1000)
 	if lookupErr != nil {
 		var apierr *slack.SlackAPIError
 		if errors.As(lookupErr, &apierr) && apierr.Code == "ratelimited" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -365,7 +366,7 @@ func TestFindChannelByName_MatchOnLastPage(t *testing.T) {
 	defer ts.Close()
 
 	c := newClientAgainstServer(ts)
-	id, err := c.FindChannelByName(context.Background(), "sec-kph-desk1")
+	id, err := c.FindChannelByName(context.Background(), "sec-kph-desk1", 100)
 	if err != nil {
 		t.Fatalf("FindChannelByName: %v", err)
 	}
@@ -405,7 +406,7 @@ func TestFindChannelByName_RetriesOnRateLimit(t *testing.T) {
 	defer ts.Close()
 
 	c := newClientAgainstServer(ts)
-	id, err := c.FindChannelByName(context.Background(), "sb-demo")
+	id, err := c.FindChannelByName(context.Background(), "sb-demo", 100)
 	if err != nil {
 		t.Fatalf("FindChannelByName should recover from a transient ratelimit: %v", err)
 	}
@@ -432,7 +433,7 @@ func TestFindChannelByName_RateLimitExhausted(t *testing.T) {
 	defer ts.Close()
 
 	c := newClientAgainstServer(ts)
-	_, err := c.FindChannelByName(context.Background(), "sb-demo")
+	_, err := c.FindChannelByName(context.Background(), "sb-demo", 100)
 	if err == nil {
 		t.Fatal("expected ratelimited error after exhausting retries")
 	}
@@ -445,6 +446,91 @@ func TestFindChannelByName_RateLimitExhausted(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&hits); got != int32(slack.SlackRateLimitMaxAttempts) {
 		t.Errorf("request count = %d; want %d (SlackRateLimitMaxAttempts)", got, slack.SlackRateLimitMaxAttempts)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TestFindChannelByName_PageCapExceeded, _ZeroCapDisablesScan, _CtxCancelledMidScan
+// (P0: bounded scan)
+// ────────────────────────────────────────────────────────────────────────────
+
+// TestFindChannelByName_PageCapExceeded verifies that the scan walks exactly
+// maxPages pages and then returns ErrScanCapExceeded when the target is never
+// found (server always returns a full page + next_cursor).
+func TestFindChannelByName_PageCapExceeded(t *testing.T) {
+	var pages int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&pages, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"channels":[{"id":"C1","name":"other"}],"response_metadata":{"next_cursor":"more"}}`))
+	}))
+	defer ts.Close()
+	c := newClientAgainstServer(ts)
+	_, err := c.FindChannelByName(context.Background(), "sb-target", 3)
+	if !errors.Is(err, slack.ErrScanCapExceeded) {
+		t.Fatalf("want ErrScanCapExceeded, got %v", err)
+	}
+	if got := atomic.LoadInt32(&pages); got != 3 {
+		t.Fatalf("want exactly 3 pages walked, got %d", got)
+	}
+}
+
+// TestFindChannelByName_ZeroCapDisablesScan verifies that maxPages==0 returns
+// ErrScanCapExceeded without making any HTTP call.
+func TestFindChannelByName_ZeroCapDisablesScan(t *testing.T) {
+	var called bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.Write([]byte(`{"ok":true,"channels":[],"response_metadata":{"next_cursor":""}}`))
+	}))
+	defer ts.Close()
+	c := newClientAgainstServer(ts)
+	_, err := c.FindChannelByName(context.Background(), "sb-target", 0)
+	if !errors.Is(err, slack.ErrScanCapExceeded) {
+		t.Fatalf("want ErrScanCapExceeded for zero cap, got %v", err)
+	}
+	if called {
+		t.Fatal("zero cap must not make any HTTP call")
+	}
+}
+
+// TestFindChannelByName_CtxCancelledMidScan verifies that a context cancelled
+// after the first page is returned propagates as context.Canceled.
+func TestFindChannelByName_CtxCancelledMidScan(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel() // cancel after the first page is served
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"channels":[{"id":"C1","name":"other"}],"response_metadata":{"next_cursor":"more"}}`))
+	}))
+	defer ts.Close()
+	c := newClientAgainstServer(ts)
+	_, err := c.FindChannelByName(ctx, "sb-target", 100)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TestIsChannelNotFound (P1: info-error classifier)
+// ────────────────────────────────────────────────────────────────────────────
+
+// TestIsChannelNotFound verifies the four classification cases.
+func TestIsChannelNotFound(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"definitive", &slack.SlackAPIError{Method: "conversations.info", Code: "channel_not_found"}, true},
+		{"transient ratelimited", &slack.SlackAPIError{Method: "conversations.info", Code: "ratelimited"}, false},
+		{"nil", nil, false},
+		{"network", errors.New("dial tcp: timeout"), false},
+	}
+	for _, tc := range cases {
+		if got := slack.IsChannelNotFound(tc.err); got != tc.want {
+			t.Errorf("%s: IsChannelNotFound=%v want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

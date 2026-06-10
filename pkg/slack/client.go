@@ -193,6 +193,13 @@ func decodeSlackResponse(method string, raw []byte) (*SlackAPIResponse, error) {
 //
 // These knobs bound the retry so a wedged call can never blow the Lambda
 // timeout. Exposed (like BridgeBackoff) so tests can shrink them.
+// ErrScanCapExceeded is returned by FindChannelByName when the page cap is hit
+// before a match is found (including maxPages==0, which disables scanning
+// entirely). Distinct from a *SlackAPIError{Code:"ratelimited"} so callers can
+// give "set channelOverride / run km slack adopt" guidance rather than a
+// retry-shortly hint.
+var ErrScanCapExceeded = errors.New("slack: conversations.list scan exceeded page cap")
+
 var (
 	// SlackRateLimitMaxAttempts is the total attempt count (initial + retries)
 	// for a rate-limited Slack call.
@@ -586,13 +593,16 @@ func (c *Client) JoinChannel(ctx context.Context, channelID string) error {
 }
 
 // FindChannelByName scans public channels via conversations.list and returns
-// the first channel whose name exactly matches. Returns ("", nil) if no
-// match exists (caller decides whether that's an error). Errors are returned
-// untouched so callers can inspect SlackAPIError for missing_scope etc.
+// the first channel whose name exactly matches. Returns ("", nil) if the scan
+// completes with no match. The scan is BOUNDED: it walks at most maxPages pages
+// and aborts on ctx cancellation between/within pages. maxPages==0 disables the
+// scan entirely (returns ErrScanCapExceeded without any HTTP call) — the safe
+// default for huge workspaces where enumeration is the very thing that wedges
+// create. A cap hit returns ErrScanCapExceeded (NOT a SlackAPIError), so callers
+// emit channelOverride / km slack adopt guidance rather than a rate-limit hint.
 //
-// Used by km slack init to recover from CreateChannel's name_taken — the
-// channel exists in Slack but its ID isn't in SSM (e.g. fresh install after
-// km unbootstrap, or first run on a new operator workstation).
+// Used by km slack init and the name_taken fallback in resolveSlackChannel to
+// recover a channel whose ID isn't in any local store.
 //
 // Requires the bot's `channels:read` scope. Slack returns "missing_scope" via
 // SlackAPIError if the bot wasn't granted it; the caller should surface that
@@ -602,9 +612,15 @@ func (c *Client) JoinChannel(ctx context.Context, channelID string) error {
 // by an archived channel is a Slack-side 30-day reservation that no API call
 // can clear, so reuse of the archived ID isn't viable; the operator must
 // pick a new name or wait out the reservation.
-func (c *Client) FindChannelByName(ctx context.Context, name string) (string, error) {
+func (c *Client) FindChannelByName(ctx context.Context, name string, maxPages int) (string, error) {
+	if maxPages <= 0 {
+		return "", ErrScanCapExceeded
+	}
 	cursor := ""
-	for {
+	for page := 0; page < maxPages; page++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		body := map[string]any{
 			"types": "public_channel",
 			// Slack max page size. conversations.list returns channels in roughly
@@ -628,10 +644,11 @@ func (c *Client) FindChannelByName(ctx context.Context, name string) (string, er
 			}
 		}
 		if resp.ResponseMetadata.NextCursor == "" {
-			return "", nil
+			return "", nil // scan completed, no match
 		}
 		cursor = resp.ResponseMetadata.NextCursor
 	}
+	return "", ErrScanCapExceeded
 }
 
 // LookupUserByEmail wraps users.lookupByEmail. Returns (id, true, nil) on hit;
@@ -755,6 +772,17 @@ func (c *Client) ChannelInfo(ctx context.Context, channelID string) (int, bool, 
 		return 0, false, err
 	}
 	return resp.Channel.NumMembers, resp.Channel.IsMember, nil
+}
+
+// IsChannelNotFound reports whether err is the definitive Slack
+// "channel_not_found" response (a deleted/invalid channel) — the ONLY
+// conversations.info error that should invalidate a stored channel mapping.
+// Every other error (ratelimited, transient 5xx, network) is treated as a hiccup
+// the caller bounded-retries / trusts optimistically, never as a reason to
+// enumerate the workspace.
+func IsChannelNotFound(err error) bool {
+	var apierr *SlackAPIError
+	return errors.As(err, &apierr) && apierr.Code == "channel_not_found"
 }
 
 // ArchiveChannel calls conversations.archive.

@@ -63,7 +63,7 @@ func (f *fakeSlackInitAPI) CreateChannel(_ context.Context, _ string) (string, e
 	return f.createID, f.createErr
 }
 
-func (f *fakeSlackInitAPI) FindChannelByName(_ context.Context, _ string) (string, error) {
+func (f *fakeSlackInitAPI) FindChannelByName(_ context.Context, _ string, _ int) (string, error) {
 	f.findCalls++
 	return f.findID, f.findErr
 }
@@ -766,7 +766,7 @@ func (f *fakeRotateAPI) CreateChannel(_ context.Context, _ string) (string, erro
 	return "", nil
 }
 
-func (f *fakeRotateAPI) FindChannelByName(_ context.Context, _ string) (string, error) {
+func (f *fakeRotateAPI) FindChannelByName(_ context.Context, _ string, _ int) (string, error) {
 	return "", nil
 }
 

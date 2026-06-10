@@ -181,7 +181,7 @@ func resolveInviteChannel(ctx context.Context, d *SlackCmdDeps, want string) (st
 		return want, nil
 	}
 	// Name → ID lookup. FindChannelByName returns "" when not found.
-	id, err := d.Slack.FindChannelByName(ctx, strings.TrimPrefix(want, "#"))
+	id, err := d.Slack.FindChannelByName(ctx, strings.TrimPrefix(want, "#"), 1000)
 	if err != nil {
 		return "", err
 	}

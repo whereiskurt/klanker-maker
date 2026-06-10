@@ -57,7 +57,7 @@ func (f *fakeSlackAPIForInvite) CreateChannel(_ context.Context, _ string) (stri
 	return f.createChannelResult, f.createChannelErr
 }
 
-func (f *fakeSlackAPIForInvite) FindChannelByName(_ context.Context, _ string) (string, error) {
+func (f *fakeSlackAPIForInvite) FindChannelByName(_ context.Context, _ string, _ int) (string, error) {
 	return "", nil
 }
 

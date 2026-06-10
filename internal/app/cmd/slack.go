@@ -50,7 +50,7 @@ type SlackInitAPI interface {
 	// bot ID without a live auth.test round-trip on cold-start.
 	AuthTestWithUserID(ctx context.Context) (string, error)
 	CreateChannel(ctx context.Context, name string) (string, error)
-	FindChannelByName(ctx context.Context, name string) (string, error)
+	FindChannelByName(ctx context.Context, name string, maxPages int) (string, error)
 	JoinChannel(ctx context.Context, channelID string) error
 	InviteShared(ctx context.Context, channelID, email string) error
 }
@@ -291,7 +291,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 			// by a recently-archived channel still trips name_taken. Slack
 			// holds those names for ~30 days; if that's the case we can't
 			// reuse and must surface the situation clearly.
-			existingID, lookupErr := api.FindChannelByName(ctx, chName)
+			existingID, lookupErr := api.FindChannelByName(ctx, chName, 1000)
 			if lookupErr != nil {
 				var apierr *kmslack.SlackAPIError
 				if errors.As(lookupErr, &apierr) && apierr.Code == "ratelimited" {

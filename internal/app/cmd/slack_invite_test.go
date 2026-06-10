@@ -65,7 +65,7 @@ func (f *fakeSlackAPIForInvite) InviteShared(_ context.Context, channelID, email
 	return f.inviteSharedErr
 }
 
-func (f *fakeSlackAPIForInvite) FindChannelByName(_ context.Context, name string) (string, error) {
+func (f *fakeSlackAPIForInvite) FindChannelByName(_ context.Context, name string, _ int) (string, error) {
 	f.findChannelCalls = append(f.findChannelCalls, name)
 	return f.findChannelID, nil
 }
