@@ -49,3 +49,12 @@ variable "slack_threads_table_name" {
   type        = string
   default     = ""
 }
+
+# Phase 104.3 — Slack channels table for km create O(1) alias→channel_id lookup.
+# Conditionally grants GetItem/PutItem/DescribeTable so installs without
+# Phase 104 don't acquire an unused policy.
+variable "slack_channels_table_name" {
+  description = "Name of the km-slack-channels DynamoDB table. Empty disables the IAM grant (back-compat for pre-Phase-104 installs)."
+  type        = string
+  default     = ""
+}

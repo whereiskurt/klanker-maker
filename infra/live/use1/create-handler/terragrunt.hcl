@@ -61,4 +61,10 @@ inputs = {
   # user replies in them get blocked by the mention-only filter instead of
   # triggering the Phase 91.3 thread-bypass. Empty value disables the grant.
   slack_threads_table_name   = "${local.site_vars.locals.site.label}-slack-threads"
+
+  # Phase 104.3 — O(1) alias→channel_id lookup via km-slack-channels DDB table.
+  # Static string (no dependency block) — the IAM grant needs only the table NAME,
+  # not an ARN output, so a dependency on the slack-channels unit is not required
+  # and would break km init --plan on fresh installs. Mirrors the slack_threads pattern.
+  slack_channels_table_name  = "${local.site_vars.locals.site.label}-slack-channels"
 }

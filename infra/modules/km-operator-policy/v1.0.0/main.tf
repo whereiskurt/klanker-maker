@@ -131,6 +131,37 @@ resource "aws_iam_role_policy" "dynamodb_slack_threads" {
   })
 }
 
+# Phase 104.3 — Policy: DynamoDB km-slack-channels read/write for O(1) alias→channel_id
+# lookup during km create. The create-handler Lambda calls GetByAlias before any Slack
+# API call (warm path) and UpsertByAlias after a fresh create (write-through).
+#
+# Conditionally created when slack_channels_table_name is non-empty so installs
+# without Phase-104 enabled don't acquire an unused policy.
+resource "aws_iam_role_policy" "dynamodb_slack_channels" {
+  count = var.slack_channels_table_name != "" ? 1 : 0
+
+  name = "${var.resource_prefix}-create-handler-dynamodb-slack-channels"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SlackChannelsTableGetPut"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DescribeTable",
+        ]
+        Resource = [
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.slack_channels_table_name}",
+        ]
+      }
+    ]
+  })
+}
+
 # Policy: DynamoDB ${resource_prefix}-schedules — km at stores recurring
 # operation records here (key: schedule name, attrs: cron expr / target
 # payload). Not covered by the dynamodb state-lock or budget statements.
