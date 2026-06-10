@@ -2363,9 +2363,9 @@ Plans:
 **Plans:** 4/10 plans executed
 
 Plans:
-- [ ] 103-01-PLAN.md — Wave 0: live HackerOne webhook payload capture + pin field paths + userdata dormancy golden
-- [ ] 103-02-PLAN.md — h1: config structs + merge-list wiring + pkg/h1/bridge resolve/interfaces
-- [ ] 103-03-PLAN.md — H1 payload + envelope + HMAC verify + command/agent-verb parser (+ /reply_to_researcher)
+- [x] 103-01-PLAN.md — Wave 0: live HackerOne webhook payload capture + pin field paths + userdata dormancy golden
+- [x] 103-02-PLAN.md — h1: config structs + merge-list wiring + pkg/h1/bridge resolve/interfaces
+- [x] 103-03-PLAN.md — H1 payload + envelope + HMAC verify + command/agent-verb parser (+ /reply_to_researcher)
 - [ ] 103-04-PLAN.md — webhook_handler: two-trigger gate, dedup, multi-target fanout, 3-way dispatch, thread continuity, safety-critical reply gate
 - [x] 103-05-PLAN.md — cmd/km-h1 sandbox helper (comment/state/read, Basic Auth, internal-by-default)
 - [ ] 103-06-PLAN.md — km h1 init/status CLI (mint secret + Basic-Auth -> SSM; no manifest)
