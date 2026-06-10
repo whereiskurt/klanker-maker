@@ -2360,7 +2360,16 @@ Plans:
 **Goal:** A HackerOne program webhook can drive a sandbox agent turn the same way a GitHub PR comment does (Phase 97-102): a single `km-h1-bridge` Lambda Function URL HMAC-verifies the `X-H1-Signature`, dedupes by `X-H1-Delivery`, resolves the report's program handle to one-or-more sandbox targets from `h1.programs:` in km-config.yaml, and dispatches an agent turn (warm FIFO / cold create / resume) with report-id-keyed thread continuity — via TWO trigger models (opt-in lifecycle-event auto-triage + configurable @-handle comment-keyword), config-driven event→prompt mappings, multi-target fanout, and a reply path that is INTERNAL by default with an allowlist-gated `/reply_to_researcher` for researcher-visible replies. The agent posts back through a new `cmd/km-h1` helper using HackerOne customer-API Basic Auth.
 **Requirements**: H1-BRIDGE-HMAC, H1-BRIDGE-DEDUP, H1-RESOLVE-PROGRAM, H1-TRIGGER-AUTOTRIAGE, H1-TRIGGER-MENTION, H1-COMMAND-PARSE, H1-AGENT-VERB, H1-EVENT-PROMPT-MAP, H1-FANOUT-MULTITARGET, H1-DISPATCH-3WAY, H1-THREAD-CONTINUITY, H1-REPLY-INTERNAL-DEFAULT, H1-REPLY-RESEARCHER-GATED, H1-HELPER-KM-H1, H1-CLI-INIT-STATUS, H1-DEPLOY-WIRING, H1-E2E (defined at plan time)
 **Depends on:** Phase 102
-**Plans:** 0 plans
+**Plans:** 10 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 103 to break down)
+- [ ] 103-01-PLAN.md — Wave 0: live HackerOne webhook payload capture + pin field paths + userdata dormancy golden
+- [ ] 103-02-PLAN.md — h1: config structs + merge-list wiring + pkg/h1/bridge resolve/interfaces
+- [ ] 103-03-PLAN.md — H1 payload + envelope + HMAC verify + command/agent-verb parser (+ /reply_to_researcher)
+- [ ] 103-04-PLAN.md — webhook_handler: two-trigger gate, dedup, multi-target fanout, 3-way dispatch, thread continuity, safety-critical reply gate
+- [ ] 103-05-PLAN.md — cmd/km-h1 sandbox helper (comment/state/read, Basic Auth, internal-by-default)
+- [ ] 103-06-PLAN.md — km h1 init/status CLI (mint secret + Basic-Auth -> SSM; no manifest)
+- [ ] 103-07-PLAN.md — cmd/km-h1-bridge Lambda entry + lambda-h1-bridge TF module v1.0.0 + live unit
+- [ ] 103-08-PLAN.md — deploy wiring: regionalModules/lambdaBuilds/sidecarBuilds + KM_H1_* env + SSM publish + dynamodb-h1-threads + create_h1_inbound (DLQ) + Makefile
+- [ ] 103-09-PLAN.md — km-h1-inbound-poller userdata + notification.h1.inbound schema + profiles/h1-triage.yaml (dormant by default)
+- [ ] 103-10-PLAN.md — deploy-surface guard tests + gated E2E harness + 103-UAT.md + live reply-visibility UAT
