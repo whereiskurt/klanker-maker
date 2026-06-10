@@ -1,2 +1,5 @@
 ## Plan 103-06 — out-of-scope discoveries
 - Untracked build artifact `km-h1` (12MB) at repo root from Plan 05's `cmd/km-h1`; not gitignored (only `km` is). Out of this plan's scope (different package). Recommend adding `km-h1` to .gitignore in a Plan 05 follow-up or the deploy-wiring plan.
+
+## Plan 103-10 — out-of-scope discoveries
+- `make test` fails on a PRE-EXISTING `pkg/hygiene` failure (`TestGoSourceNamesUseResourcePrefix`): 5 hardcoded `km-` name-construction sites flagged in `internal/app/cmd/doctor_artifacts.go:351` and `internal/app/cmd/doctor_log_groups.go:{62,68,74,80}`. These were introduced in Phase 94 (commits `5bdd4153` / `af50bb69`), NOT by Plan 103-10. Verified RED on `HEAD~1` before this plan's commit — entirely unrelated to the H1 bridge. Out of scope per the executor scope boundary (pre-existing failure in unrelated files). Fix path: derive the prefix via `resourcePrefix()` / `cfg.GetResourcePrefix()` in those four doctor sites, OR add `relpath:literal` allow-list entries to `pkg/hygiene/testdata/allowlist.txt` if the names are genuinely benign. Recommend a small `doctor` hygiene follow-up.
