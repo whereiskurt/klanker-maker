@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 103-02-PLAN.md
-last_updated: "2026-06-10T04:09:14.178Z"
+stopped_at: Completed 103-03-PLAN.md
+last_updated: "2026-06-10T04:10:33.764Z"
 last_activity: 2026-06-10
 progress:
   total_phases: 119
   completed_phases: 105
   total_plans: 531
-  completed_plans: 486
+  completed_plans: 487
   percent: 91
 ---
 
@@ -520,6 +520,7 @@ Progress: [█████████░] 91%
 | Phase 102-github-bridge-agent-verbs-claude-and-codex-select-the-per-thread-agent-in-a-pr-comment-slack-phase-70-analog P05 | 30min | 2 tasks | 1 files |
 | Phase 103 P01 | 2min | 3 tasks | 5 files |
 | Phase 103 P02 | 8min | 2 tasks | 5 files |
+| Phase 103-hackerone-comment-trigger-bridge P03 | 9min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1502,6 +1503,9 @@ Recent decisions affecting current work:
 - [Phase 103]: Phase 103 Plan 01: took pre-authorized synthetic-fallback for the live HackerOne webhook capture; real Sandbox-program capture + envelope-wrapper confirmation deferred to Plan 10 (Wave 6) E2E
 - [Phase 103]: Phase 103 Plan 01: OQ1 program-handle path resolved (data.report.relationships.program.data.attributes.handle); OQ2 state endpoint left LOW-confidence/deferred (km-h1 state may be fast-follow)
 - [Phase 103]: 103-02: h1: config merge-list-wired (no silent drop); Resolve(handle) multi-target fanout; CommandEntry single-owner in commands.go; H1ThreadStore keyed reportID+target; H1Commenter internal-by-default
+- [Phase 103-hackerone-comment-trigger-bridge]: 103-03: ported VerifyH1Signature byte-identical from GitHub (X-H1-Signature swap); HMAC over base64-DECODED body
+- [Phase 103-hackerone-comment-trigger-bridge]: 103-03: payload parser wrapper-tolerant (data.report vs JSON:API double-data); missing handle = hard resolve-miss, never panic
+- [Phase 103-hackerone-comment-trigger-bridge]: 103-03: /reply_to_researcher is parse-only intent + always stripped; internal-by-default gate deferred to Plan 04
 
 ### Roadmap Evolution
 
@@ -1632,6 +1636,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-10T04:09:14.161Z
-Stopped at: Completed 103-02-PLAN.md
+Last session: 2026-06-10T04:10:27.696Z
+Stopped at: Completed 103-03-PLAN.md
 Resume file: None
