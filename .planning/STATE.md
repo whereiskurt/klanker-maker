@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
+current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 102-05-PLAN.md — GH-AGENT-E2E PASS; Phase 102 all plans complete
-last_updated: "2026-06-09T00:45:23.474Z"
-last_activity: 2026-06-09
+stopped_at: Completed 103-01-PLAN.md
+last_updated: "2026-06-10T03:58:21.489Z"
+last_activity: 2026-06-10
 progress:
-  total_phases: 118
+  total_phases: 119
   completed_phases: 105
-  total_plans: 521
-  completed_plans: 483
+  total_plans: 531
+  completed_plans: 484
   percent: 91
 ---
 
@@ -22,20 +22,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-21)
 
 **Core value:** A sandbox is a declarative policy object that compiles into a controlled, auditable execution environment
-**Current focus:** Phase 92 — Profile spec restructure (IAM rename / notification block / dead-field removal / structured agent tool gating) — Wave 0 (92-00) complete
+**Current focus:** Phase 103 — HackerOne comment-trigger bridge (km-h1-bridge) — Wave 0 (103-01) complete
 
 ## Current Position
 
-Phase: 92 (profile-spec-restructure) — 7 plans planned (92-00 → 92-06); Wave 0 (92-00) executed
-Plan: 92-00 — all 3 tasks done; pre-Phase-92 byte-identity baselines captured, 4 RED stubs landed behind wave build tags
-Total Plans in Phase: 7 (92-00 → 92-06)
-Current Plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
+Phase: 103 (hackerone-comment-trigger-bridge) — 10 plans planned (103-01 → 103-10); Wave 0 (103-01) executed
+Plan: 103-01 — all 3 tasks done; synthetic HackerOne webhook bodies + pinned field-paths (OQ1 resolved, OQ2 deferred) + pre-H1 userdata dormancy golden captured
+Total Plans in Phase: 10 (103-01 → 103-10)
+Current Plan: 103-01 complete; next 103-02
 Status: in-progress
-Last activity: 2026-06-09
+Last activity: 2026-06-10
 
-Wave 1 UNBLOCKED: both byte-identity baselines (userdata + IAM HCL) committed before any Wave 1 source change.
+Plan 03 (payload parse) + Plan 08 (byte-identity guard) UNBLOCKED: field-paths.md pins the resolve key + safety-critical internal flag (wrapper-tolerant parse directive); TestUserdataH1ByteIdentity green against the pre-H1 dormancy golden.
 
-Next up: Phase 92 Wave 1 (92-01) — IdentitySpec → IAMSpec rename; must keep TestIAMHCLPhase92ByteIdentity + TestUserdataLearnV2Phase92ByteIdentity GREEN.
+Carried to Plan 10 (Wave 6 E2E): re-pin every DOCS-SHAPED field-path row + the OQ2 state endpoint against a real HackerOne Sandbox webhook delivery (synthetic-fallback used in Wave 0 per operator pre-authorization). No production program is a target — only the operator's HackerOne Sandbox account.
 
 Progress: [█████████░] 91%
 
@@ -516,6 +516,7 @@ Progress: [█████████░] 91%
 | Phase 102-github-bridge-agent-verbs-claude-and-codex-select-the-per-thread-agent-in-a-pr-comment-slack-phase-70-analog P03 | 348 | 3 tasks | 3 files |
 | Phase 102 P04 | 429s | 3 tasks | 7 files |
 | Phase 102-github-bridge-agent-verbs-claude-and-codex-select-the-per-thread-agent-in-a-pr-comment-slack-phase-70-analog P05 | 30min | 2 tasks | 1 files |
+| Phase 103 P01 | 2min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1495,6 +1496,8 @@ Recent decisions affecting current work:
 - [Phase 102]: Step e (/codex on Claude-only sandbox) covered by code+unit (D6 guard userdata.go:2276-2281) with operator-approved skip of 2nd live sandbox
 - [Phase 102]: GitHub Codex path never passes a resume arg (pre-existing) — candidate follow-up: codex exec resume for GitHub threads
 - [Phase 102]: GH-AGENT-E2E requirement closed: Phase 102 proven deployable via make build-lambdas + km init --dry-run=false (NOT --sidecars), additive-only surface confirmed
+- [Phase 103]: Phase 103 Plan 01: took pre-authorized synthetic-fallback for the live HackerOne webhook capture; real Sandbox-program capture + envelope-wrapper confirmation deferred to Plan 10 (Wave 6) E2E
+- [Phase 103]: Phase 103 Plan 01: OQ1 program-handle path resolved (data.report.relationships.program.data.attributes.handle); OQ2 state endpoint left LOW-confidence/deferred (km-h1 state may be fast-follow)
 
 ### Roadmap Evolution
 
@@ -1625,6 +1628,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-09T00:37:39.642Z
-Stopped at: Completed 102-05-PLAN.md — GH-AGENT-E2E PASS; Phase 102 all plans complete
+Last session: 2026-06-10T03:58:13.312Z
+Stopped at: Completed 103-01-PLAN.md
 Resume file: None
