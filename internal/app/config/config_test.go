@@ -1268,3 +1268,57 @@ github:
 		}
 	})
 }
+
+// TestGetSlackChannelsTableName verifies the three derivation cases for
+// GetSlackChannelsTableName (Phase 104.3):
+//
+//   - nil receiver → default "km-slack-channels"
+//   - explicit SlackChannelsTableName override → that value wins
+//   - ResourcePrefix set, no override → "{prefix}-slack-channels"
+func TestGetSlackChannelsTableName(t *testing.T) {
+	t.Run("nil receiver returns default", func(t *testing.T) {
+		var c *config.Config
+		got := c.GetSlackChannelsTableName()
+		want := "km-slack-channels"
+		if got != want {
+			t.Errorf("nil receiver: got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("explicit override wins", func(t *testing.T) {
+		c := &config.Config{SlackChannelsTableName: "custom-tbl"}
+		got := c.GetSlackChannelsTableName()
+		want := "custom-tbl"
+		if got != want {
+			t.Errorf("explicit override: got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("prefix-derived name", func(t *testing.T) {
+		c := &config.Config{ResourcePrefix: "sec"}
+		got := c.GetSlackChannelsTableName()
+		want := "sec-slack-channels"
+		if got != want {
+			t.Errorf("prefix-derived: got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("slack_channels_table_name from km-config.yaml is not ignored", func(t *testing.T) {
+		dir := t.TempDir()
+		writeKMConfig(t, dir, "slack_channels_table_name: myorg-slack-channels\n")
+		orig, _ := os.Getwd()
+		t.Cleanup(func() { os.Chdir(orig) })
+		if err := os.Chdir(dir); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		got := cfg.GetSlackChannelsTableName()
+		want := "myorg-slack-channels"
+		if got != want {
+			t.Errorf("km-config.yaml merge: got %q, want %q (merge-list entry missing?)", got, want)
+		}
+	})
+}

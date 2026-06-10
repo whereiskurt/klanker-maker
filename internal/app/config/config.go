@@ -454,6 +454,12 @@ type Config struct {
 	// slack_stream_messages_table_name.
 	SlackStreamMessagesTableName string
 
+	// SlackChannelsTableName is the DynamoDB table name for the Phase 104
+	// alias→channel_id O(1) durable mapping. Default "km-slack-channels";
+	// respects ResourcePrefix when set. Maps to km-config.yaml key
+	// slack_channels_table_name.
+	SlackChannelsTableName string
+
 	// ResourcePrefix is the Phase-66 multi-instance prefix applied to AWS
 	// resource names (e.g. "km", "stg", "kpf"). Default "km" via
 	// GetResourcePrefix(). Phase 66 will populate this from km-config.yaml;
@@ -581,6 +587,7 @@ func Load() (*Config, error) {
 	v.SetDefault("doctor_s3_expire_days", 30)
 	v.SetDefault("slack_threads_table_name", "")
 	v.SetDefault("slack_stream_messages_table_name", "")
+	v.SetDefault("slack_channels_table_name", "")
 	v.SetDefault("resource_prefix", "km")
 	v.SetDefault("email_subdomain", "sandboxes")
 	v.SetDefault("clusters", []interface{}{})
@@ -666,6 +673,10 @@ func Load() (*Config, error) {
 			"doctor_ignore_prefixes",
 			"slack_threads_table_name",
 			"slack_stream_messages_table_name",
+			// Phase 104.3: durable alias→channel_id DDB store. CRITICAL: without
+			// this entry, slack_channels_table_name in km-config.yaml is silently
+			// ignored (project_config_key_merge_list footgun).
+			"slack_channels_table_name",
 			"resource_prefix",
 			"email_subdomain",
 			"container_substrates_enabled",
@@ -754,6 +765,7 @@ func Load() (*Config, error) {
 		DoctorIgnorePrefixes:         v.GetStringSlice("doctor_ignore_prefixes"),
 		SlackThreadsTableName:        v.GetString("slack_threads_table_name"),
 		SlackStreamMessagesTableName: v.GetString("slack_stream_messages_table_name"),
+		SlackChannelsTableName:       v.GetString("slack_channels_table_name"),
 		ResourcePrefix:               v.GetString("resource_prefix"),
 		EmailSubdomain:               v.GetString("email_subdomain"),
 		YAMLDefaults:                 yamlDefaults,
@@ -1063,6 +1075,20 @@ func (c *Config) GetSlackStreamMessagesTableName() string {
 		return c.SlackStreamMessagesTableName
 	}
 	return c.GetResourcePrefix() + "-slack-stream-messages"
+}
+
+// GetSlackChannelsTableName returns the Slack-channels DynamoDB table name.
+// If SlackChannelsTableName is explicitly set, that value wins. Otherwise
+// the name is derived from GetResourcePrefix() + "-slack-channels", which
+// defaults to "km-slack-channels" when no prefix is configured.
+func (c *Config) GetSlackChannelsTableName() string {
+	if c == nil {
+		return "km-slack-channels"
+	}
+	if c.SlackChannelsTableName != "" {
+		return c.SlackChannelsTableName
+	}
+	return c.GetResourcePrefix() + "-slack-channels"
 }
 
 // GetSandboxSessionDocumentName returns the per-install SSM Session Manager
