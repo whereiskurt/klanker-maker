@@ -595,7 +595,15 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			return fmt.Errorf("profile requires Slack notifications but %sslack/bot-token is not configured — run km slack init first", cfg.GetSsmPrefix())
 		}
 		slackClient := slack.NewClient(botToken, nil)
-		chID, perSb, slackErr := resolveSlackChannel(ctx, resolvedProfile, sandboxID, aliasOverride, slackClient, nil, ssmStore, cfg.GetSsmPrefix())
+		// Phase 104.3: build the durable DDB channel store so resolveSlackChannel
+		// hits the O(1) alias→channel_id path on recreate. cfg.GetSlackChannelsTableName()
+		// derives "{prefix}-slack-channels" at runtime — no TF env var required.
+		ddbClientForSlack := dynamodbpkg.NewFromConfig(awsCfg)
+		channelStore := &awspkg.SlackChannelStore{
+			Client:    ddbClientForSlack,
+			TableName: cfg.GetSlackChannelsTableName(),
+		}
+		chID, perSb, slackErr := resolveSlackChannel(ctx, resolvedProfile, sandboxID, aliasOverride, slackClient, channelStore, ssmStore, cfg.GetSsmPrefix())
 		if slackErr != nil {
 			return fmt.Errorf("provision Slack channel: %w", slackErr)
 		}
