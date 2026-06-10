@@ -304,7 +304,7 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	// is in the program allowlist. BOTH required — command-present-alone DOWNGRADES to
 	// internal (the allow gate is the SAME deny-by-default gate as dispatch). Note the
 	// auto-triage path never sets replyToResearcherIntent, so it is always internal.
-	researcherReply := computeReplyToResearcher(replyToResearcherIntent, payload.ActorUsername(), allow)
+	researcherReply := ComputeReplyToResearcher(replyToResearcherIntent, payload.ActorUsername(), allow)
 
 	// ── Steps 8/9: command pass already done → fanout dispatch ───────────────
 	// Wrap the single-target 3-way dispatch in a per-target loop (Pattern 4). Each
@@ -438,12 +438,13 @@ func (h *WebhookHandler) postInternalReply(ctx context.Context, reportID, body s
 	}
 }
 
-// computeReplyToResearcher is the SAFETY-CRITICAL gate. A researcher-visible reply is
+// ComputeReplyToResearcher is the SAFETY-CRITICAL gate. A researcher-visible reply is
 // permitted ONLY when /reply_to_researcher was present AND the actor is in the program
 // allowlist. Command-present-but-not-allowlisted DOWNGRADES to internal (never silently
-// external). Exported-ish via a package function so the reply-gate tests can assert it
-// directly (the per-target primary-only rule is enforced in the fanout loop above).
-func computeReplyToResearcher(commandPresent bool, actor string, allow []string) bool {
+// external). Empty allowlist → false (deny-by-default). Exported so the reply-gate tests
+// can assert the truth table directly (the per-target primary-only rule — only targets[0]
+// may carry an external flag — is enforced in the fanout loop in Handle()).
+func ComputeReplyToResearcher(commandPresent bool, actor string, allow []string) bool {
 	return commandPresent && isInAllowlist(actor, allow)
 }
 
