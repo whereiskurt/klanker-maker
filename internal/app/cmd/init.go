@@ -281,6 +281,14 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			// Phase 104: DynamoDB channels table mapping alias → channel_id for
+			// O(1) Slack channel resolution on alias reuse. No TTL — mapping persists
+			// across destroy/recreate; stale rows self-heal via channel_not_found path.
+			name:    "dynamodb-slack-channels",
+			dir:     filepath.Join(regionDir, "dynamodb-slack-channels"),
+			envReqs: nil,
+		},
+		{
 			// Phase 68: DynamoDB stream-messages table mapping (channel_id, slack_ts)
 			// → transcript byte offset for per-turn Slack streaming. Hook script
 			// writes rows; future Phase B reaction-fork reads them.
