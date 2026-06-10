@@ -37,6 +37,8 @@ Plan 03 (payload parse) + Plan 08 (byte-identity guard) UNBLOCKED: field-paths.m
 
 Carried to Plan 10 (Wave 6 E2E): re-pin every DOCS-SHAPED field-path row + the OQ2 state endpoint against a real HackerOne Sandbox webhook delivery (synthetic-fallback used in Wave 0 per operator pre-authorization). No production program is a target — only the operator's HackerOne Sandbox account.
 
+Plan 103-05 complete (cmd/km-h1 sandbox helper): comment/read/state over HTTP Basic Auth; internal-by-default reply guard enforced at the flag AND JSON-body level (safety layer 4), --reply-to-researcher explicit for external; 429/5xx backoff; state is OQ2 best-effort (POST /reports/{id}/state_changes + KM_H1_STATE_ENDPOINT override) pending the Plan 10 live pinning. 10/10 tests green. Commits f78707d3, 27d3efb4.
+
 Progress: [█████████░] 91%
 
 ## Performance Metrics
