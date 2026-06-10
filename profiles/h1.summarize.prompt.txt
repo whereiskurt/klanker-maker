@@ -1,0 +1,1 @@
+Summarize report #{{report_id}} and its activity timeline for the team. Internal only.

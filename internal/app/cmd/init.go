@@ -708,6 +708,21 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		return fmt.Errorf("AWS credential validation failed: %w", err)
 	}
 
+	// Phase 103: hard-fail on a missing h1 event @file BEFORE exporting/deploying
+	// (parity with PublishH1CommandsToSSM's command @file hard error). Resolved in
+	// place so the export below marshals inlined event prompts into KM_H1_PROGRAMS.
+	if len(cfg.H1.Programs) > 0 {
+		configDir := "."
+		if cfg.ConfigFilePath != "" {
+			configDir = filepath.Dir(cfg.ConfigFilePath)
+		}
+		resolvedH1, rerr := ResolveH1EventPrompts(cfg.H1.Programs, configDir)
+		if rerr != nil {
+			return fmt.Errorf("km init: h1 event prompt: %w", rerr)
+		}
+		cfg.H1.Programs = resolvedH1
+	}
+
 	// Export config values as env vars for Terragrunt's site.hcl get_env() calls
 	// and for the envReqs checks in regionalModules.
 	ExportTerragruntEnvVars(cfg)
@@ -1278,13 +1293,27 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 	// is already set to a DIFFERENT value, emit a drift WARN and do NOT overwrite.
 	// env-block change ⇒ needs a full `km init --dry-run=false`, NOT --sidecars.
 	if len(cfg.H1.Programs) > 0 {
+		// Inline @file event prompts before marshaling — the bridge Lambda has no
+		// filesystem (mirrors command-prompt inlining into SSM). Best-effort here so
+		// the void exporter never crashes a non-init caller; runInit additionally
+		// hard-fails on a missing @file before deploy (parity with commands).
+		exportPrograms := cfg.H1.Programs
+		configDir := "."
+		if cfg.ConfigFilePath != "" {
+			configDir = filepath.Dir(cfg.ConfigFilePath)
+		}
+		if resolved, rerr := ResolveH1EventPrompts(cfg.H1.Programs, configDir); rerr != nil {
+			fmt.Fprintf(os.Stderr, "WARN: h1 event @file prompt unresolved; exporting literal: %v\n", rerr)
+		} else {
+			exportPrograms = resolved
+		}
 		type h1ExportPayload struct {
 			Programs       []config.H1ProgramEntry `json:"programs"`
 			DefaultProfile string                  `json:"default_profile,omitempty"`
 			BotHandle      string                  `json:"bot_handle,omitempty"`
 		}
 		payload := h1ExportPayload{
-			Programs:       cfg.H1.Programs,
+			Programs:       exportPrograms,
 			DefaultProfile: cfg.H1.DefaultProfile,
 			BotHandle:      cfg.H1.BotHandle,
 		}
@@ -1384,6 +1413,53 @@ func resolveCommandPromptFile(configDir, relPath string) (string, []string, erro
 		}
 	}
 	return "", candidates, fmt.Errorf("not found in any of: %s", strings.Join(candidates, ", "))
+}
+
+// ResolveH1EventPrompts returns a copy of the H1 program list with each program's
+// Events[*].Prompt resolved through the same @file convention used for command
+// prompts (PublishH1CommandsToSSM / ResolveCommandPrompts):
+//
+//   - "@@literal"   → "@literal"  (strip one @, no file read)
+//   - "@relative/p" → contents of the first hit on the command-prompt search path
+//     (configDir, then configDir/profiles) — a bare "@p.txt" resolves to
+//     profiles/p.txt; "@profiles/p.txt" still works.
+//   - (other text)  → unchanged
+//   - @file missing → hard error (callers surface to km init exit)
+//
+// Event prompts MUST be inlined here because they travel in the KM_H1_PROGRAMS env
+// var to a filesystem-less Lambda — exactly like command prompts are inlined into
+// SSM. Only the Events maps are copied; all other H1ProgramEntry fields are shared
+// with the input (the input slice's entries are not mutated). configDir must be
+// filepath.Dir(cfg.ConfigFilePath), not the shell CWD.
+func ResolveH1EventPrompts(programs []config.H1ProgramEntry, configDir string) ([]config.H1ProgramEntry, error) {
+	out := make([]config.H1ProgramEntry, len(programs))
+	copy(out, programs)
+	for i := range out {
+		if len(out[i].Events) == 0 {
+			continue
+		}
+		ev := make(map[string]config.H1EventEntry, len(out[i].Events))
+		for name, entry := range out[i].Events {
+			switch {
+			case strings.HasPrefix(entry.Prompt, "@@"):
+				entry.Prompt = entry.Prompt[1:]
+			case strings.HasPrefix(entry.Prompt, "@"):
+				relPath := entry.Prompt[1:]
+				absPath, _, ferr := resolveCommandPromptFile(configDir, relPath)
+				if ferr != nil {
+					return nil, fmt.Errorf("h1 program %q event %q prompt @%s: %w", out[i].Handle, name, relPath, ferr)
+				}
+				data, rerr := os.ReadFile(absPath)
+				if rerr != nil {
+					return nil, fmt.Errorf("h1 program %q event %q prompt @%s: %w", out[i].Handle, name, relPath, rerr)
+				}
+				entry.Prompt = string(data)
+			}
+			ev[name] = entry
+		}
+		out[i].Events = ev
+	}
+	return out, nil
 }
 
 // ResolveCommandPrompts returns a copy of the commands map with each entry's

@@ -1,0 +1,2 @@
+Re-triage report #{{report_id}} "{{title}}" (state {{state}}). Summarize the issue,
+assess severity, and recommend next steps. Post an INTERNAL comment only.

@@ -1,0 +1,3 @@
+A new HackerOne report was submitted to {{program}} (#{{report_id}}: "{{title}}").
+Read the report, assess validity and severity, and post a concise INTERNAL triage
+comment for the security team. Do NOT reply to the researcher.
