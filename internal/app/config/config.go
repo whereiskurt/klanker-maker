@@ -195,6 +195,110 @@ type GithubConfig struct {
 	DefaultRouter *bool `mapstructure:"default_router" yaml:"default_router,omitempty"`
 }
 
+// H1Target is one fanout target for a HackerOne program: an {alias, profile}
+// pair. Multi-target fanout (Phase 103) means a single trigger dispatches the
+// same prompt to every target in a program's Targets list — the GitHub bridge
+// resolved exactly one alias, H1 resolves N. Mirrors the inline {alias, profile}
+// shape in km-config.yaml h1.programs[].targets.
+type H1Target struct {
+	// Alias is the sandbox alias for this target (km create --alias). Optional —
+	// when empty the bridge derives "h1-{handle}" (resolve.defaultAlias analog).
+	Alias string `mapstructure:"alias" yaml:"alias,omitempty" json:"alias,omitempty"`
+
+	// Profile is the SandboxProfile path for cold create. Optional — falls back
+	// to H1Config.DefaultProfile when empty.
+	Profile string `mapstructure:"profile" yaml:"profile,omitempty" json:"profile,omitempty"`
+}
+
+// H1EventEntry maps a HackerOne lifecycle event (e.g. report_created) to the
+// prompt dispatched on auto-triage. An absent/empty Events map leaves a program
+// comment-keyword-only (auto-triage DORMANT by default) — mirrors the
+// dormant-by-default posture used across the Slack/GitHub federation phases.
+type H1EventEntry struct {
+	// Prompt is the template injected as the initial agent turn when this event
+	// fires. May reference report fields / {{args}} like GithubCommandEntry.Prompt.
+	Prompt string `mapstructure:"prompt" yaml:"prompt" json:"prompt"`
+}
+
+// H1CommandEntry defines a named, operator-declared command parsed from a
+// HackerOne comment body (the comment-keyword trigger model). Mirrors
+// GithubCommandEntry (Phase 99) — Description for km h1 status / docs, Prompt as
+// the injected turn template.
+//
+// All fields carry mapstructure tags — required by viper's UnmarshalKey;
+// untagged fields are silently ignored (project_config_key_merge_list pitfall 1).
+type H1CommandEntry struct {
+	// Description is a human-readable label shown in km h1 status and docs.
+	Description string `mapstructure:"description" yaml:"description,omitempty" json:"description,omitempty"`
+
+	// Prompt is the prompt text injected as the initial turn when this command is
+	// dispatched. Required — the bridge skips dispatch if Prompt is empty.
+	Prompt string `mapstructure:"prompt" yaml:"prompt" json:"prompt"`
+}
+
+// H1ProgramEntry maps a HackerOne program (by its program handle, the routing
+// key that replaces GitHub's owner/repo) to its multi-target dispatch config,
+// login allowlist, and the two trigger-model maps: Events (auto-triage) and
+// Commands (comment-keyword). Phase 103.
+//
+// Fields mirror the km-config.yaml h1.programs list-of-objects shape; json tags
+// match the yaml keys so an env-encoded JSON form is self-describing.
+type H1ProgramEntry struct {
+	// Handle is the HackerOne program handle matched against the incoming
+	// webhook's data.report program-handle relationship. Exact match (the
+	// deny-by-default routing key).
+	Handle string `mapstructure:"handle" yaml:"handle" json:"handle"`
+
+	// Targets is the multi-target fanout list — each entry dispatches the same
+	// prompt to its own sandbox (alias+profile) with its own report-id-keyed
+	// thread continuity row.
+	Targets []H1Target `mapstructure:"targets" yaml:"targets,omitempty" json:"targets,omitempty"`
+
+	// Allow is the HackerOne username allowlist, deny-by-default: a comment from
+	// a username not in this list is silently ignored (and gates the
+	// /reply_to_researcher external-reply path).
+	Allow []string `mapstructure:"allow" yaml:"allow,omitempty" json:"allow,omitempty"`
+
+	// BotHandle optionally overrides the install-wide H1Config.BotHandle for this
+	// program (the literal comment-keyword token). Empty => install default.
+	BotHandle string `mapstructure:"bot_handle" yaml:"bot_handle,omitempty" json:"bot_handle,omitempty"`
+
+	// Events is the auto-triage map: H1 lifecycle event type → prompt. DORMANT
+	// when absent/empty (program is comment-keyword-only). Phase 103.
+	Events map[string]H1EventEntry `mapstructure:"events" yaml:"events,omitempty" json:"events,omitempty"`
+
+	// Commands is the comment-context command map: /command name → prompt.
+	// Separate from Events (a program may declare both context sets). Phase 103.
+	Commands map[string]H1CommandEntry `mapstructure:"commands" yaml:"commands,omitempty" json:"commands,omitempty"`
+
+	// DefaultCommand is the per-program command key dispatched when a triggering
+	// comment carries the bot handle but no /command. Must name a key in Commands.
+	// Empty => free-form prompt. Phase 103.
+	DefaultCommand string `mapstructure:"default_command" yaml:"default_command,omitempty" json:"default_command,omitempty"`
+}
+
+// H1Config holds install-level HackerOne bridge defaults that flow into the
+// km-h1-bridge Lambda environment via km init. Phase 103.
+//
+// Maps to km-config.yaml key h1. Absent key → zero value (no error, no programs
+// => dormant — byte-identical to a pre-H1 install). Mirrors GithubConfig.
+type H1Config struct {
+	// BotHandle is the install-wide comment-keyword trigger token (e.g. "@km").
+	// HackerOne internal comments have no bot user to @-mention, so the handle is
+	// a literal substring match in the comment body. Per-program H1ProgramEntry.BotHandle
+	// overrides this.
+	BotHandle string `mapstructure:"bot_handle" yaml:"bot_handle,omitempty" json:"bot_handle,omitempty"`
+
+	// DefaultProfile is the fallback SandboxProfile path used when a matched
+	// target has no Profile set.
+	DefaultProfile string `mapstructure:"default_profile" yaml:"default_profile,omitempty" json:"default_profile,omitempty"`
+
+	// Programs is the list of program-handle-to-targets mappings consumed by the
+	// bridge Lambda to resolve which sandbox(es) to dispatch a report event to.
+	// Uses UnmarshalKey (structured list-of-objects) — same pattern as Github.Repos.
+	Programs []H1ProgramEntry `mapstructure:"programs" yaml:"programs,omitempty" json:"programs,omitempty"`
+}
+
 // Config holds all configuration values for the km CLI.
 type Config struct {
 	// ProfileSearchPaths is the ordered list of directories to search for profiles.
@@ -390,6 +494,11 @@ type Config struct {
 	// Exported as KM_GITHUB_REPOS (JSON) by ExportTerragruntEnvVars when configured.
 	Github GithubConfig `mapstructure:"github" yaml:"github,omitempty"`
 
+	// H1 holds install-level HackerOne bridge defaults (Phase 103). Programs is the
+	// list of program-handle-to-targets mappings consumed by the km-h1-bridge Lambda.
+	// Maps to km-config.yaml key h1. Absent key → zero value (no error, dormant).
+	H1 H1Config `mapstructure:"h1" yaml:"h1,omitempty"`
+
 	// YAMLDefaults holds the raw km-config.yaml values for env-bound keys,
 	// snapshotted during Load() BEFORE viper's AutomaticEnv binds env vars into
 	// the cfg fields. Used by ExportTerragruntEnvVars to detect drift between
@@ -577,6 +686,13 @@ func Load() (*Config, error) {
 			// without this entry, the entire github: block is silently dropped regardless
 			// of km-config.yaml content (project_config_key_merge_list footgun).
 			"github",
+			// Phase 103: h1 block (programs list-of-objects + bot_handle + default_profile).
+			// CRITICAL: without this entry the entire h1: block is silently dropped
+			// regardless of km-config.yaml content (project_config_key_merge_list footgun).
+			// The whole h1: block (including the nested events/commands maps) is decoded
+			// atomically by the single v.UnmarshalKey("h1", &cfg.H1) call below — do NOT
+			// add sibling "h1.*" entries (mirrors the github precedent).
+			"h1",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -702,6 +818,16 @@ func Load() (*Config, error) {
 	// "github" above is the precondition; without it this unmarshal sees an empty map.
 	if err := v.UnmarshalKey("github", &cfg.Github); err != nil {
 		return nil, fmt.Errorf("unmarshal github: %w", err)
+	}
+
+	// Phase 103: h1 is a structured block (programs list-of-objects with nested
+	// events/commands maps + scalar bot_handle/default_profile). Use UnmarshalKey —
+	// same pattern as github — because programs is a list-of-objects and viper's
+	// scalar getters can't decode it. Absent key => zero-value H1Config (no error,
+	// no programs => dormant). The merge-list entry "h1" above is the precondition;
+	// without it this unmarshal sees an empty map (project_config_key_merge_list).
+	if err := v.UnmarshalKey("h1", &cfg.H1); err != nil {
+		return nil, fmt.Errorf("unmarshal h1: %w", err)
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
@@ -997,6 +1123,45 @@ func (c *Config) GetSchedulesTableName() string {
 		return c.SchedulesTableName
 	}
 	return c.GetResourcePrefix() + "-schedules"
+}
+
+// GetH1Config returns the install-level HackerOne bridge config (Phase 103).
+// Absent h1: block => zero-value H1Config (dormant). Callers consume Programs
+// for routing and BotHandle/DefaultProfile as install defaults.
+func (c *Config) GetH1Config() H1Config {
+	return c.H1
+}
+
+// GetH1BotHandle returns the install-wide comment-keyword trigger token
+// (e.g. "@km"). Empty when unset (dormant).
+func (c *Config) GetH1BotHandle() string {
+	return c.H1.BotHandle
+}
+
+// GetH1DefaultProfile returns the install-wide fallback SandboxProfile path used
+// when a matched target has no Profile. Empty when unset.
+func (c *Config) GetH1DefaultProfile() string {
+	return c.H1.DefaultProfile
+}
+
+// GetH1Programs returns the configured HackerOne program routing entries.
+// Nil/empty when the h1: block is absent (dormant).
+func (c *Config) GetH1Programs() []H1ProgramEntry {
+	return c.H1.Programs
+}
+
+// GetH1ProgramBotHandle resolves the effective comment-keyword token for a
+// program handle: the per-program H1ProgramEntry.BotHandle override when set,
+// otherwise the install-wide H1Config.BotHandle. An unknown handle (or one with
+// no override) falls back to the install default. This encodes the precedence so
+// callers (Plan 06/07) do not re-derive it.
+func (c *Config) GetH1ProgramBotHandle(handle string) string {
+	for _, p := range c.H1.Programs {
+		if p.Handle == handle && p.BotHandle != "" {
+			return p.BotHandle
+		}
+	}
+	return c.H1.BotHandle
 }
 
 // awsProfileExists checks whether a named AWS profile is defined in
