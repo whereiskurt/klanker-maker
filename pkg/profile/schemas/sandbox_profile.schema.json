@@ -685,6 +685,24 @@
                 }
               }
             },
+            "h1": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "HackerOne comment-trigger inbound dispatch (Phase 103). When absent, no per-sandbox FIFO queue is provisioned and the km-h1-inbound-poller userdata does NOT render (dormant invariant).",
+              "properties": {
+                "inbound": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Per-sandbox HackerOne inbound FIFO queue configuration.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Provision the per-sandbox h1-inbound FIFO queue at km create AND render the km-h1-inbound-poller userdata heredoc + systemd unit. Default false (absent = dormant, zero SQS/DDB/SSM artifacts, no poller)."
+                    }
+                  }
+                }
+              }
+            },
             "slack": {
               "type": "object",
               "additionalProperties": false,

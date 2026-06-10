@@ -1,0 +1,115 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: h1-triage
+  labels:
+    tier: development
+    tool: h1-triage-agent
+    phase: "103"
+  prefix: h1
+
+# h1-triage — Phase 103 lean profile for HackerOne comment-trigger report triage.
+#
+# Lifecycle: short-lived (2h TTL / 20m idle), teardownPolicy=stop so the DDB
+# record survives for status queries after the EC2 instance stops.
+#
+# Network: proxy enforcement, HackerOne customer API + AWS suffixes only (HTTPS
+# egress). api.hackerone.com is the back-channel the km-h1 helper posts to.
+# Agent: Claude with Bash/Read/Write/Edit/Glob/Grep/WebFetch auto-approved.
+# Inbound: notification.h1.inbound.enabled=true provisions the per-sandbox
+# h1-inbound FIFO queue at km create AND renders the km-h1-inbound-poller
+# (Phase 103 Plan 09) so it can drain HackerOne comment-trigger envelopes and
+# dispatch agent turns. The agent reads the report and replies INTERNAL by
+# default via km-h1 comment.
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "20m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+    initCommands:
+      - "yum install -y git jq"
+
+  # No git source access — the triage agent reads the report and replies entirely
+  # over the HackerOne customer API (km-h1 helper), so no repo clone is needed.
+  sourceAccess:
+    mode: none
+
+  network:
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - "api.hackerone.com"
+        - ".amazonaws.com"
+        - "api.anthropic.com"
+      allowedHosts: []
+
+  iam:
+    roleSessionDuration: "2h"
+    allowedRegions:
+      - us-east-1
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: false
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+
+  agent:
+    default: claude
+    claude:
+      trustedDirectories:
+        - /workspace
+      tools:
+        autoApprove:
+          - Bash
+          - Read
+          - Write
+          - Edit
+          - Glob
+          - Grep
+          - WebFetch
+
+  notification:
+    h1:
+      inbound:
+        enabled: true
+
+  # Phase 103: a cold sandbox provisioned by the H1 bridge does NOT use Bedrock
+  # (useBedrock: false above) — it needs direct API credentials (ANTHROPIC_API_KEY
+  # or Claude OAuth token) injected at boot, plus the HackerOne customer API
+  # Basic-Auth creds for the km-h1 back-channel.
+  #
+  # Operator must provide the bundle encrypted with the shared SOPS KMS key:
+  #   km bootstrap --shared-secrets-key   # one-time, provisions the KMS key
+  #   sops --encrypt --kms <arn> h1-triage-secrets.enc.yaml
+  #   km init --dry-run=false             # re-stages the bundle to S3
+  #
+  # See docs/sandbox-secrets.md (Phase 89) for the full SOPS injection runbook.
+  secrets:
+    sopsFile: h1-triage-secrets.enc.yaml

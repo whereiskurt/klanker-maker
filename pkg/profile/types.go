@@ -88,6 +88,30 @@ type NotificationSpec struct {
 	// Github configures GitHub comment-trigger inbound dispatch (Phase 97).
 	// When nil (absent), no GitHub inbound queue is provisioned (dormant invariant).
 	Github *NotificationGitHubSpec `json:"github,omitempty" yaml:"github,omitempty"`
+	// H1 configures HackerOne comment-trigger inbound dispatch (Phase 103).
+	// When nil (absent), no H1 inbound queue is provisioned and the
+	// km-h1-inbound-poller userdata heredoc does NOT render (dormant invariant —
+	// guarded by the Wave-0 TestUserdataH1ByteIdentity golden).
+	H1 *NotificationH1Spec `json:"h1,omitempty" yaml:"h1,omitempty"`
+}
+
+// NotificationH1Spec configures HackerOne comment-trigger inbound dispatch.
+// Phase 103: per-sandbox FIFO queue provisioned by km create when enabled=true.
+// Mirrors NotificationGitHubSpec.
+type NotificationH1Spec struct {
+	// Inbound configures the per-sandbox HackerOne inbound FIFO queue.
+	Inbound *NotificationH1InboundSpec `json:"inbound,omitempty" yaml:"inbound,omitempty"`
+}
+
+// NotificationH1InboundSpec configures HackerOne comment-trigger dispatch.
+// Mirrors NotificationGitHubInboundSpec / NotificationSlackInboundSpec — tri-state
+// *bool enabled field.
+type NotificationH1InboundSpec struct {
+	// Enabled provisions the per-sandbox h1-inbound FIFO queue at km create AND
+	// renders the km-h1-inbound-poller userdata heredoc + systemd unit.
+	// nil = default false (dormant — zero SQS/DDB/SSM artifacts, no poller).
+	// &true = provision queue + render poller; &false = explicit disable (same as nil).
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
 // NotificationGitHubSpec configures GitHub comment-trigger inbound dispatch.
