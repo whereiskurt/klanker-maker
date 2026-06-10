@@ -23,11 +23,27 @@ type EventEntry struct {
 	Prompt string `json:"prompt"`
 }
 
-// CommandEntry is a named comment-context command parsed from a HackerOne comment
-// body. Mirrors config.H1CommandEntry.
+// CommandEntry is a named comment-context command — the /command name -> prompt
+// map referenced by ProgramEntry.Commands and the Resolve commands return value.
+// It lives here because it is part of ProgramEntry's shape (Plan 103-02 owns
+// ProgramEntry). Mirrors config.H1CommandEntry plus the per-command routing/allow
+// fields the command engine (commands.go, Plan 103-03/05) consumes.
 type CommandEntry struct {
+	// Description is a human-readable summary shown in /help replies and km h1 status.
 	Description string `json:"description,omitempty"`
-	Prompt      string `json:"prompt"`
+
+	// Alias optionally overrides the program/target alias when this command is dispatched.
+	Alias string `json:"alias,omitempty"`
+
+	// Profile optionally overrides the profile when this command is dispatched.
+	Profile string `json:"profile,omitempty"`
+
+	// Allow is the per-command inner allowlist (intersection-narrows the program allowlist).
+	Allow []string `json:"allow,omitempty"`
+
+	// Prompt is the prompt template injected as the initial turn. May contain
+	// "{{args}}" plus report-field refs expanded by the command engine.
+	Prompt string `json:"prompt"`
 }
 
 // ProgramEntry maps a HackerOne program handle (the routing key that replaces
