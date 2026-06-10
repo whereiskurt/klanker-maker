@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 103-09-PLAN.md
-last_updated: "2026-06-10T05:07:34.001Z"
+stopped_at: Completed 103-10 Tasks 1-2 (guard tests + UAT runbook); Task 3 live deploy + reply-visibility UAT awaiting operator
+last_updated: "2026-06-10T05:15:30.501Z"
 last_activity: 2026-06-10
 progress:
   total_phases: 119
-  completed_phases: 105
+  completed_phases: 106
   total_plans: 531
-  completed_plans: 492
+  completed_plans: 493
   percent: 91
 ---
 
@@ -526,6 +526,7 @@ Progress: [█████████░] 91%
 | Phase 103 P07 | 6min | 2 tasks | 6 files |
 | Phase 103 P08 | 19min | 2 tasks | 9 files |
 | Phase 103 P09 | 18 | 2 tasks | 7 files |
+| Phase 103 P10 | 5 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1517,6 +1518,7 @@ Recent decisions affecting current work:
 - [Phase 103]: Plan 07: km-h1-bridge Lambda forks the GitHub bridge entry but DROPS all GitHub App machinery (App creds, JWT reactor, relayer, orphan router) — HackerOne uses HTTP Basic Auth + per-program webhook URLs, so no App-install model or federation relay is needed.
 - [Phase 103]: H1 deploy wiring: lambda-h1-bridge + dynamodb-h1-threads in regionalModules (threads<bridge<ses); km-h1-bridge in lambdaBuilds/Makefile, km-h1 in sidecarBuilds; KM_H1_* env + merged CommandSet to SSM; h1-inbound FIFO 1800s VT + shared DLQ
 - [Phase 103]: Plan 09: km-h1-inbound-poller drains the per-sandbox h1-inbound FIFO; (report_id,target) session resume via UpdateItem with target=KM_SANDBOX_ALIAS; INTERNAL-by-default reply preamble (--reply-to-researcher taught only when envelope flag set); notification.h1.inbound schema field gated by the Wave-0 dormancy golden; profiles/h1-triage.yaml uses sourceAccess:none + api.hackerone.com egress
+- [Phase 103]: Phase 103 deploy surface locked by automated guards (TestLambdaBuildsIncludesH1Bridge + TestRegionalModulesH1BridgeOrdering + config merge-list nested-target guard); H1-DEPLOY-WIRING green. The safety-critical reply-VISIBILITY (internal-by-default, allowlisted-external primary-only, non-allowlisted downgrade) remains the operator's live UAT in 103-UAT.md against the HackerOne Sandbox org prodsec_klanker_maker_test_pro_demo — Task 3 awaiting operator. — Deploy-surface guards mean a future refactor cannot silently re-open a Phase-97 gap; live reply-visibility is unobservable outside the HackerOne UI so it is operator UAT, not automated.
 
 ### Roadmap Evolution
 
@@ -1647,6 +1649,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-10T05:07:27.507Z
-Stopped at: Completed 103-09-PLAN.md
-Resume file: None
+Last session: 2026-06-10T05:15:16.576Z
+Stopped at: Completed 103-10 Tasks 1-2 (guard tests + UAT runbook); Task 3 live deploy + reply-visibility UAT awaiting operator
+Resume file: 103-UAT.md
