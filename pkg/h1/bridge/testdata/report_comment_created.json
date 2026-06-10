@@ -1,0 +1,62 @@
+{
+  "_synthetic": true,
+  "_synthetic_note": "SYNTHETIC FALLBACK (pre-authorized). Modeled on the HackerOne docs webhook payload shape (top-level `data` -> `data.activity` + `data.report`). Inner report-object + activity field paths use the LIVE-CONFIRMED values from 103-CONTEXT.md 'Live sanity test' (2026-06-09 read-only customer-API check): program handle at report.relationships.program.data.attributes.handle, internal flag at activity.attributes.internal (boolean), actor username at activity.relationships.actor.data.attributes.username, comment body at activity.attributes.message. The envelope WRAPPER placement + header casing are UNCONFIRMED here and will be pinned by the real HackerOne Sandbox webhook capture deferred to Plan 10 (Wave 6) E2E. Plan 03 parse must be tolerant of wrapper variance per RESEARCH.md OQ1.",
+  "_synthetic_headers": {
+    "X-H1-Event": "report_comment_created",
+    "X-H1-Delivery": "00000000-0000-4000-8000-000000000002",
+    "X-H1-Signature": "sha256=<HMAC-SHA256(rawBody, programWebhookSecret)>"
+  },
+  "data": {
+    "activity": {
+      "id": "9000002",
+      "type": "activity-comment",
+      "attributes": {
+        "message": "@km please triage this. /reply_to_researcher",
+        "internal": true,
+        "created_at": "2026-06-09T12:05:00.000Z",
+        "updated_at": "2026-06-09T12:05:00.000Z"
+      },
+      "relationships": {
+        "actor": {
+          "data": {
+            "id": "5000002",
+            "type": "user",
+            "attributes": {
+              "username": "synthetic-operator",
+              "name": "Synthetic Operator"
+            }
+          }
+        }
+      }
+    },
+    "report": {
+      "id": "7000001",
+      "type": "report",
+      "attributes": {
+        "title": "Synthetic test report: reflected XSS on /search",
+        "state": "triaged",
+        "created_at": "2026-06-09T12:00:00.000Z"
+      },
+      "relationships": {
+        "program": {
+          "data": {
+            "id": "1000001",
+            "type": "program",
+            "attributes": {
+              "handle": "km-sandbox"
+            }
+          }
+        },
+        "reporter": {
+          "data": {
+            "id": "5000001",
+            "type": "user",
+            "attributes": {
+              "username": "synthetic-researcher"
+            }
+          }
+        }
+      }
+    }
+  }
+}
