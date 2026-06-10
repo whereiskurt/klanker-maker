@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 104-03-PLAN.md (create-handler IAM + SlackChannelStore DDB helper + km create wiring)
-last_updated: "2026-06-10T19:58:24.921Z"
+stopped_at: Completed 104-04-PLAN.md (km slack adopt escape hatch + km doctor km-slack-channels existence check)
+last_updated: "2026-06-10T20:07:33.729Z"
 last_activity: 2026-06-10
 progress:
   total_phases: 120
   completed_phases: 106
   total_plans: 536
-  completed_plans: 496
+  completed_plans: 497
   percent: 91
 ---
 
@@ -530,6 +530,7 @@ Progress: [█████████░] 91%
 | Phase 104 P01 | 1080 | 2 tasks | 11 files |
 | Phase 104 P02 | 137 | 2 tasks | 5 files |
 | Phase 104 P03 | 775 | 3 tasks | 9 files |
+| Phase 104 P04 | 370s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1530,6 +1531,8 @@ Recent decisions affecting current work:
 - [Phase 104]: No dependency block in create-handler live unit for slack-channels table: IAM grant needs only table name string, static pattern mirrors slack-threads
 - [Phase 104]: No TF env var for slack-channels table name: cfg.GetSlackChannelsTableName() derived at runtime in create.go, matching km-slack-threads pattern
 - [Phase 104]: slack_channels_table_name added to viper merge-list in config.go: prevents silent ignore of km-config.yaml key (project_config_key_merge_list footgun)
+- [Phase 104]: CORRECTION #4: km-slack-channels not added to checkOrphanedDDBRows; alias rows survive destroy by design
+- [Phase 104]: DoctorConfigProvider interface extended with GetSlackChannelsTableName() to enable doctor check without type-assertion
 
 ### Roadmap Evolution
 
@@ -1662,6 +1665,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-10T19:58:24.910Z
-Stopped at: Completed 104-03-PLAN.md (create-handler IAM + SlackChannelStore DDB helper + km create wiring)
+Last session: 2026-06-10T20:07:33.718Z
+Stopped at: Completed 104-04-PLAN.md (km slack adopt escape hatch + km doctor km-slack-channels existence check)
 Resume file: None
