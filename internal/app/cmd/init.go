@@ -191,12 +191,168 @@ func ResolveScopedModule(onlyVal string, github, slack, h1, email bool) (string,
 		strings.Join(scopedGatedAllowlist, ", "))
 }
 
+// scopedGateFunc is the Plan 04 injection point for the Tier-2 (ses) pre-apply
+// destroy-class gate. In Plan 03 it defaults to a passthrough no-op so Tier-1
+// modules (lambda-*-bridge, email-handler) work without gate logic. Plan 04
+// replaces this with the real plan+evaluate+ses-preflight path.
+var scopedGateFunc = func(ctx context.Context, runner InitRunner, m regionalModule, acceptDestroys bool) error {
+	return nil
+}
+
 // runInitScopedFunc is the package-level dispatch entry point for scoped km init.
-// Plan 02 sets this to a stub so the dispatch compiles and the guard/resolution tests
-// can run without the real apply path. Plan 03 replaces the stub with the real
-// runInitScoped implementation.
-var runInitScopedFunc = func(cfg *config.Config, awsProfile, region string, verbose bool, module string, dryRun, acceptDestroys bool) error {
-	return fmt.Errorf("runInitScoped not implemented")
+// Plan 02 initialised this to a stub; Plan 03 rebinds it to the real runInitScoped
+// implementation below.
+var runInitScopedFunc = runInitScoped
+
+// RunInitScopedWithRunner is the testable core of the scoped single-module apply
+// path. It filters regionalModules() to the one named module, checks envReqs,
+// and (when dryRun=false) calls runner.Apply with the per-module timeout.
+//
+// Tier-2 (gated) modules delegate to scopedGateFunc before applying; Plan 04
+// replaces that var with the real plan+destroy-class-gate path.
+//
+// Exported so cmd_test (external test package) can call it directly with a
+// mockRunner, mirroring the RunInitWithRunner / RunInitPlanWithRunner pattern.
+func RunInitScopedWithRunner(runner InitRunner, repoRoot, region, module string, dryRun, acceptDestroys bool) error {
+	ctx := context.Background()
+	regionLabel := compiler.RegionLabel(region)
+	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
+
+	if err := ensureRegionHCL(regionDir, regionLabel, region); err != nil {
+		return err
+	}
+
+	// Find the target module in the ordered list.
+	modules := regionalModules(regionDir)
+	var target *regionalModule
+	for i := range modules {
+		if modules[i].name == module {
+			target = &modules[i]
+			break
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("module %q not found in regional module list", module)
+	}
+
+	// Directory existence check: report clearly when the module dir is missing.
+	if _, err := os.Stat(target.dir); os.IsNotExist(err) {
+		return fmt.Errorf("module %q not found: directory %s does not exist (run km init --dry-run=false first to provision it)", module, target.dir)
+	}
+
+	// Tier check: Tier-2 (gated) modules delegate to scopedGateFunc before applying.
+	// Plan 04 replaces scopedGateFunc with the real plan+destroy-class-gate path.
+	if isScopedGated(module) {
+		if err := scopedGateFunc(ctx, runner, *target, acceptDestroys); err != nil {
+			return err
+		}
+	}
+
+	// envReqs check: each required env var must be set (ExportTerragruntEnvVars
+	// sets them from cfg before RunInitScopedWithRunner is called).
+	for _, envVar := range target.envReqs {
+		if os.Getenv(envVar) == "" {
+			return fmt.Errorf("module %s requires %s (not set — run ExportTerragruntEnvVars or set env var)", module, envVar)
+		}
+	}
+
+	// Tier label for user-facing output.
+	tierLabel := "tier-1"
+	if isScopedGated(module) {
+		tierLabel = "tier-2 (gated)"
+	}
+
+	if dryRun {
+		fmt.Printf("Would apply: %s [%s] (run with --dry-run=false to apply)\n", module, tierLabel)
+		return nil
+	}
+
+	// Banner + apply.
+	printBanner(fmt.Sprintf("km init --only %s", module), fmt.Sprintf("%s (%s) [%s]", region, regionLabel, tierLabel))
+
+	fmt.Printf("  Applying %s...", module)
+	timeout := ModuleTimeoutFunc(module)
+	applyCtx, applyCancel := context.WithTimeout(ctx, timeout)
+	err := runner.Apply(applyCtx, target.dir)
+	applyCancel()
+	if err != nil {
+		fmt.Println()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("module %s wedged after %s: %w", module, timeout, err)
+		}
+		return fmt.Errorf("applying %s: %w", module, err)
+	}
+	fmt.Println(" done")
+
+	// email-handler post-apply: capture Lambda ARN for operator visibility.
+	// (Same as RunInitWithRunner:email-handler branch — ARN is informational here
+	// since ses does not apply in the same scoped run.)
+	if module == "email-handler" {
+		outputMap, outErr := runner.Output(ctx, target.dir)
+		if outErr == nil {
+			if arnVal, ok := outputMap["lambda_function_arn"]; ok {
+				arn := fmt.Sprintf("%v", extractValue(arnVal))
+				os.Setenv("KM_EMAIL_HANDLER_ARN", arn) //nolint:errcheck
+				fmt.Printf("  Email handler ARN: %s\n", arn)
+			}
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("Scoped init complete for %s.\n", module)
+	fmt.Printf("Note: this refreshed env+IAM only. For a stale code zip: make build-lambdas && km init --lambdas\n")
+	fmt.Printf("Note: for new resources/tables/queues: km init --dry-run=false\n")
+	return nil
+}
+
+// runInitScoped is the production wrapper for the scoped single-module apply path.
+// It loads AWS config, exports Terragrunt env vars, runs the SSM side effects that
+// the bridge Lambdas depend on, and delegates to RunInitScopedWithRunner.
+//
+// SSM side-effect ordering mirrors runInit (init.go:857-885):
+//  1. ExportTerragruntEnvVars(cfg)         — MUST run first (sets KM_* vars for envReqs + terragrunt)
+//  2. EnsureSlackBotUserIDFromSSM(...)     — unconditional, non-fatal (no-op when not slack)
+//  3. PublishGitHubCommandsToSSM(...)      — gated on module == lambda-github-bridge + cfg.Github.Commands
+//  4. PublishH1CommandsToSSM(...)          — gated on module == lambda-h1-bridge + cfg.H1.Programs
+func runInitScoped(cfg *config.Config, awsProfile, region string, verbose bool, module string, dryRun, acceptDestroys bool) error {
+	ctx := context.Background()
+
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config (profile=%s): %w", awsProfile, err)
+	}
+	if err := awspkg.ValidateCredentials(ctx, awsCfg); err != nil {
+		return fmt.Errorf("AWS credential validation failed: %w", err)
+	}
+
+	// 1. Export KM_* env vars so terragrunt get_env() calls see fresh values.
+	ExportTerragruntEnvVars(cfg)
+
+	// 2. Ensure Slack bot-user-id is cached in env (needed when applying lambda-slack-bridge
+	//    so KM_SLACK_BOT_USER_ID lands in the Lambda env block). Non-fatal.
+	EnsureSlackBotUserIDFromSSM(ctx, cfg, awsCfg)
+
+	// 3. Publish GitHub commands to SSM so the bridge reads the latest config at cold start.
+	if module == "lambda-github-bridge" && len(cfg.Github.Commands) > 0 {
+		ssmClient := ssm.NewFromConfig(awsCfg)
+		if pubErr := PublishGitHubCommandsToSSM(ctx, ssmClient, cfg, os.Stderr); pubErr != nil {
+			return fmt.Errorf("km init --github: github commands: %w", pubErr)
+		}
+	}
+
+	// 4. Publish H1 commands to SSM so the bridge reads the latest config at cold start.
+	if module == "lambda-h1-bridge" && len(cfg.H1.Programs) > 0 {
+		ssmClient := ssm.NewFromConfig(awsCfg)
+		if pubErr := PublishH1CommandsToSSM(ctx, ssmClient, cfg, os.Stderr); pubErr != nil {
+			return fmt.Errorf("km init --h1: h1 commands: %w", pubErr)
+		}
+	}
+
+	repoRoot := findRepoRoot()
+	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	runner.Verbose = verbose
+
+	return RunInitScopedWithRunner(runner, repoRoot, region, module, dryRun, acceptDestroys)
 }
 
 // defaultSESPreflight is the real implementation: loads AWS config and checks
