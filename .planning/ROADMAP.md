@@ -2399,3 +2399,30 @@ Plans:
 - [ ] 104-03-PLAN.md — create-handler IAM (km-operator-policy var+policy, create-handler var+wiring, live input) + `GetSlackChannelsTableName` config getter + `pkg/aws.SlackChannelStore` helper + wire store into `km create` resolution [SLACK-CHAN-STORE, SLACK-CHAN-DEPLOY]
 - [ ] 104-04-PLAN.md — `km slack adopt <alias> <channelID>` (validate + membership + DDB/SSM write-through) + `km doctor` table-existence check [SLACK-CHAN-ADOPT]
 - [ ] 104-05-PLAN.md — docs (`slack-notifications.md` + `CLAUDE.md` phase note + deploy sequence) + deploy-surface audit + live large-workspace UAT (the spec's Phase 0 confirmation, shipped inline via the `slack_resolve` log) [SLACK-CHAN-E2E, SLACK-CHAN-DEPLOY]
+
+### Phase 105: Scoped km init for bridge config — km init --only <module> with sugar aliases --github, --slack, --h1 to apply a single terragrunt module and refresh its Lambda env/IAM instead of the full apply
+
+**Goal:** Let an operator push a bridge config-key edit (`github.*` / `slack.*` / `h1.*` in `km-config.yaml`) into the owning Lambda's env block by applying ONLY that module, instead of the full ~27-module `km init`. Add `km init --only <module>` plus sugar aliases `--github` → `lambda-github-bridge`, `--slack` → `lambda-slack-bridge`, `--h1` → `lambda-h1-bridge`. **Option A (scoped terragrunt apply):** filter the existing `regionalModules()` loop to the selected module and still run `ExportTerragruntEnvVars(cfg)` first, so the module recomputes its env block from yaml-derived `KM_*` vars and stays fully inside terraform state (zero drift; picks up IAM changes too). Chosen over a direct `UpdateFunctionConfiguration` env poke (Option B) because A has no drift footgun and reuses the existing apply loop rather than a parallel deploy path.
+
+**Scope / key decisions:**
+- New flag `--only <module>` validated against a **curated allowlist** — NOT all ~27 `regionalModules()`. Rationale (operator, 2026-06-11): the goal is fast iteration on slack/github/h1/email config edits; full-fleet `--only` access is "too much rope." An unknown/out-of-allowlist `--only` value errors with the allowed set listed.
+- **Two tiers in the allowlist:**
+  - **Tier 1 — cheap (env+IAM, no destroy-class resources):** `lambda-github-bridge`, `lambda-slack-bridge`, `lambda-h1-bridge`, `email-handler`. Exposed via sugar `--github` / `--slack` / `--h1` / `--email`. Fast, no confirmation needed (same safety profile — all are Lambdas with an `environment { variables }` block + scoped IAM).
+  - **Tier 2 — gated (destroy-class):** `ses`. Reachable ONLY via explicit `--only ses` — **no cheap alias** — and MUST route through the destroy-class safety gate (`aws_ses_domain_identity`, `aws_ses_domain_dkim`, `aws_route53_record` DKIM/MX/verification, `aws_ses_receipt_rule`, `aws_s3_bucket_policy`; `ses` is also the last module + owns the consolidated bucket policy). A scoped `ses` apply runs the same curated destroy-class trip-block as `km init --plan` and refuses to apply a protected destroy/replace without `--i-accept-destroys`. This is the "did the dns and all that" path — deliberately heavier and explicit, not one-keystroke.
+- `--email` → `email-handler` only; the SES/DNS layer is NOT touched by the `--email` alias (it's `--only ses`).
+- Implement the allowlist as named slices (tier-1 cheap vs tier-2 gated) so adding a future target is a one-line change + a tier choice.
+- Mutually exclusive with `--sidecars`/`--lambdas`/`--plan` (guard in the `init.go:583-601` dispatch block). NOTE: tier-2 `--only ses` REUSES the destroy-class gate machinery (`RunInitPlanFunc`/curated trip-block) but as a pre-apply gate, not a standalone plan — confirm wiring at plan time.
+- `runInitScoped()` reuses `RunInitWithRunner` (`init.go:1794-1999`) filtered to one module dir; upstream `outputs.json` already exist on a live install so `dependency` blocks resolve.
+- Boundary to DOCUMENT: scoped apply refreshes env + IAM for that module but NOT a stale code zip (still `make build-lambdas` + `--lambdas`) and NOT new resources/wiring (new table/queue ⇒ full `km init`).
+- CLI-only, operator-side: no SandboxProfile schema change, no new TF resource. Deploy = `make build` the km binary.
+
+**Requirements**: INIT-SCOPED-FLAG, INIT-SCOPED-ALIASES, INIT-SCOPED-GUARD, INIT-SCOPED-IMPL, INIT-SCOPED-TESTS, INIT-SCOPED-DOCS
+**Depends on:** None structural (operates on the existing bridge modules from Phases 97/103/95). Relates to the deferred Slack-auto-start idea discussed same session.
+**Plans:** 5 plans
+
+Plans:
+- [ ] 105-01-PLAN.md — Wave 0 TDD scaffold: init_scoped_test.go with 10 named stub tests [INIT-SCOPED-TESTS]
+- [ ] 105-02-PLAN.md — Flags + two-tier curated allowlist + resolveScopedModule + mutual-exclusion guard [INIT-SCOPED-FLAG, INIT-SCOPED-ALIASES, INIT-SCOPED-GUARD]
+- [ ] 105-03-PLAN.md — Tier-1 runInitScoped/RunInitScopedWithRunner (ExportTerragruntEnvVars + SSM republish + single-module apply; dry-run honored) [INIT-SCOPED-IMPL]
+- [ ] 105-04-PLAN.md — Tier-2 --only ses gate: planModule + planreport.Evaluate + SES preflight/Reconfigure (pre-apply destroy-class) [INIT-SCOPED-GUARD, INIT-SCOPED-IMPL]
+- [ ] 105-05-PLAN.md — Docs (7 surfaces) + live UAT (no-drift invariant + ses no-op) [INIT-SCOPED-DOCS, INIT-SCOPED-IMPL]
