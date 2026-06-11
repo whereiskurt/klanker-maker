@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: "Completed 105-01-PLAN.md — Wave 0 TDD scaffold: 10 TestScoped* stubs in init_scoped_test.go"
-last_updated: "2026-06-11T16:46:05.503Z"
+stopped_at: "Completed 105-02-PLAN.md — Wave 1 flags: ResolveScopedModule, scopedCheapAllowlist, scopedGatedAllowlist, 5 new km init flags, 4 tests PASS"
+last_updated: "2026-06-11T16:52:09.089Z"
 last_activity: 2026-06-11
 progress:
   total_phases: 121
   completed_phases: 107
   total_plans: 541
-  completed_plans: 499
+  completed_plans: 500
   percent: 91
 ---
 
@@ -533,6 +533,7 @@ Progress: [█████████░] 91%
 | Phase 104 P04 | 370s | 2 tasks | 5 files |
 | Phase 104-slack-channel-o-1-resolution-on-alias-reuse P05 | 240min | 3 tasks | 2 files |
 | Phase 105 P01 | 62s | 1 tasks | 1 files |
+| Phase 105 P02 | 191 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1539,6 +1540,8 @@ Recent decisions affecting current work:
 - [Phase 104]: Provider-lock-drift vector: stray infra/modules/**/.terraform.lock.hcl files from bare terraform validate runs conflict with root.hcl provider pin; remove before apply
 - [Phase 104]: Archived-channel fast-fail is correct bounded behavior for reuse-after-destroy with archiveOnDestroy profile; does not trigger workspace scan (cache_hit + conversations.info classifier)
 - [Phase 105]: Used package cmd_test for init_scoped_test.go matching existing test file convention; 10 stub tests compile and skip at Wave 0 without referencing unimplemented production symbols
+- [Phase 105]: ResolveScopedModule exported (not unexported) so cmd_test external package can call it directly; mirrors RegionalModules export pattern
+- [Phase 105]: runInitScopedFunc stub var uses package-level-var-seam pattern (like RunInitPlanFunc) so Plan 03 can replace body without touching dispatch code
 
 ### Roadmap Evolution
 
@@ -1672,6 +1675,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-11T16:46:05.491Z
-Stopped at: Completed 105-01-PLAN.md — Wave 0 TDD scaffold: 10 TestScoped* stubs in init_scoped_test.go
+Last session: 2026-06-11T16:52:09.075Z
+Stopped at: Completed 105-02-PLAN.md — Wave 1 flags: ResolveScopedModule, scopedCheapAllowlist, scopedGatedAllowlist, 5 new km init flags, 4 tests PASS
 Resume file: None
