@@ -105,6 +105,100 @@ var RunInitPlanFunc = runInitPlan
 // RunInitPlanFunc pattern above.
 var BuildLambdaZipsFunc = buildLambdaZips
 
+// scopedCheapAllowlist is the Tier-1 set of modules that km init --only / sugar
+// aliases may target without a plan-gate preflight. These are the bridge Lambdas
+// and the email handler — all have bounded, non-destructive apply semantics.
+var scopedCheapAllowlist = []string{
+	"lambda-github-bridge", "lambda-slack-bridge", "lambda-h1-bridge", "email-handler",
+}
+
+// scopedGatedAllowlist is the Tier-2 set of modules that km init --only may target
+// but which require a plan-gate preflight before apply (ses owns the consolidated
+// S3 bucket policy and its replaces can be destructive).
+var scopedGatedAllowlist = []string{"ses"}
+
+// isScopedGated reports whether name is a Tier-2 (plan-gated) module.
+func isScopedGated(name string) bool {
+	for _, m := range scopedGatedAllowlist {
+		if m == name {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveScopedModule maps --only / sugar alias flags to a single canonical module
+// name and validates it against the combined scoped allowlist.
+//
+// Rules:
+//   - At most one of {onlyVal != "", github, slack, h1, email} may be set; >1 → error.
+//   - None set → ("", nil): no scoped request; caller falls through to normal init.
+//   - Sugar alias bools map to: github→lambda-github-bridge, slack→lambda-slack-bridge,
+//     h1→lambda-h1-bridge, email→email-handler.
+//   - onlyVal is used verbatim as the candidate module name.
+//   - Candidate must be in scopedCheapAllowlist ∪ scopedGatedAllowlist; otherwise error
+//     listing the allowed set.
+//
+// Exported so cmd_test (external test package) can call it directly in unit tests.
+func ResolveScopedModule(onlyVal string, github, slack, h1, email bool) (string, error) {
+	// Count how many entry points are set.
+	setCount := 0
+	if onlyVal != "" {
+		setCount++
+	}
+	if github {
+		setCount++
+	}
+	if slack {
+		setCount++
+	}
+	if h1 {
+		setCount++
+	}
+	if email {
+		setCount++
+	}
+	if setCount > 1 {
+		return "", fmt.Errorf("at most one of --only/--github/--slack/--h1/--email may be set")
+	}
+	if setCount == 0 {
+		return "", nil
+	}
+
+	// Resolve alias bools to canonical module name.
+	candidate := onlyVal
+	switch {
+	case github:
+		candidate = "lambda-github-bridge"
+	case slack:
+		candidate = "lambda-slack-bridge"
+	case h1:
+		candidate = "lambda-h1-bridge"
+	case email:
+		candidate = "email-handler"
+	}
+
+	// Validate candidate against the combined allowlist.
+	allowed := append(append([]string{}, scopedCheapAllowlist...), scopedGatedAllowlist...)
+	for _, m := range allowed {
+		if m == candidate {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("unknown --only module %q; allowed: %s (gated, via --only only: %s)",
+		candidate,
+		strings.Join(scopedCheapAllowlist, ", "),
+		strings.Join(scopedGatedAllowlist, ", "))
+}
+
+// runInitScopedFunc is the package-level dispatch entry point for scoped km init.
+// Plan 02 sets this to a stub so the dispatch compiles and the guard/resolution tests
+// can run without the real apply path. Plan 03 replaces the stub with the real
+// runInitScoped implementation.
+var runInitScopedFunc = func(cfg *config.Config, awsProfile, region string, verbose bool, module string, dryRun, acceptDestroys bool) error {
+	return fmt.Errorf("runInitScoped not implemented")
+}
+
 // defaultSESPreflight is the real implementation: loads AWS config and checks
 // whether the shared SES receipt rule set exists.
 func defaultSESPreflight(ctx context.Context) error {
@@ -575,6 +669,8 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 	var dryRun bool
 	var plan bool
 	var acceptDestroys bool
+	var onlyModule string
+	var githubFlag, slackFlag, h1Flag, emailFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -584,12 +680,25 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 			if awsProfile == "" {
 				awsProfile = "klanker-application"
 			}
+			// Phase 105: resolve scoped module flags before any other dispatch.
+			scopedModule, scopedErr := ResolveScopedModule(onlyModule, githubFlag, slackFlag, h1Flag, emailFlag)
+			if scopedErr != nil {
+				return scopedErr
+			}
+			if scopedModule != "" && (plan || sidecarsOnly || lambdasOnly) {
+				return fmt.Errorf("--only/--github/--slack/--h1/--email cannot be combined with --plan, --sidecars, or --lambdas")
+			}
 			// Phase 84.2: --plan always wins over --dry-run / sidecars / lambdas (Decision 1).
 			if plan && (sidecarsOnly || lambdasOnly) {
 				return fmt.Errorf("--plan cannot be combined with --sidecars or --lambdas")
 			}
 			if plan {
 				return RunInitPlanFunc(cfg, awsProfile, region, verbose, acceptDestroys)
+			}
+			// Phase 105: scoped single-module apply path (runInitScopedFunc stub in Plan 02;
+			// replaced by real implementation in Plan 03).
+			if scopedModule != "" {
+				return runInitScopedFunc(cfg, awsProfile, region, verbose, scopedModule, dryRun, acceptDestroys)
 			}
 			if sidecarsOnly || lambdasOnly {
 				return runInitPartial(cfg, awsProfile, region, verbose, sidecarsOnly, lambdasOnly)
@@ -622,6 +731,18 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 		// Surface as panic at startup so the bug is loud (matches MarkHidden usage in create.go).
 		panic(fmt.Sprintf("MarkHidden i-accept-destroys: %v", err))
 	}
+	// Phase 105: scoped single-module flags.
+	cmd.Flags().StringVar(&onlyModule, "only", "",
+		fmt.Sprintf("Apply a single curated terragrunt module (env+IAM only). Allowed: %s; gated (via --only only): %s",
+			strings.Join(scopedCheapAllowlist, ", "), strings.Join(scopedGatedAllowlist, ", ")))
+	cmd.Flags().BoolVar(&githubFlag, "github", false,
+		"Scoped apply of lambda-github-bridge (sugar for --only lambda-github-bridge)")
+	cmd.Flags().BoolVar(&slackFlag, "slack", false,
+		"Scoped apply of lambda-slack-bridge (sugar for --only lambda-slack-bridge)")
+	cmd.Flags().BoolVar(&h1Flag, "h1", false,
+		"Scoped apply of lambda-h1-bridge (sugar for --only lambda-h1-bridge)")
+	cmd.Flags().BoolVar(&emailFlag, "email", false,
+		"Scoped apply of email-handler (sugar for --only email-handler)")
 
 	return cmd
 }
