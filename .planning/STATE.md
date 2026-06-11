@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: "Completed 105-04-PLAN.md — Wave 3: real scopedGateFunc + tier-2 tests; all 10 TestScoped* PASS"
-last_updated: "2026-06-11T17:17:25.154Z"
+stopped_at: Completed 105-05-PLAN.md — docs (7 surfaces) + live UAT PASSED; Phase 105 complete
+last_updated: "2026-06-11T22:13:02.225Z"
 last_activity: 2026-06-11
 progress:
   total_phases: 121
-  completed_phases: 107
+  completed_phases: 108
   total_plans: 541
-  completed_plans: 502
+  completed_plans: 503
   percent: 91
 ---
 
@@ -536,6 +536,7 @@ Progress: [█████████░] 91%
 | Phase 105 P02 | 191 | 1 tasks | 2 files |
 | Phase 105 P03 | 380s | 2 tasks | 2 files |
 | Phase 105 P04 | 480 | 1 tasks | 2 files |
+| Phase 105-scoped-km-init-for-bridge-config P05 | 25min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1546,6 +1547,9 @@ Recent decisions affecting current work:
 - [Phase 105]: runInitScopedFunc stub var uses package-level-var-seam pattern (like RunInitPlanFunc) so Plan 03 can replace body without touching dispatch code
 - [Phase 105]: RunInitScopedWithRunner exported as plain function; scopedGateFunc package var is Plan 04 injection point (no-op in Plan 03); runInitScopedFunc rebound to real runInitScoped
 - [Phase 105]: scopedGateFunc uses planModule+planreport.Evaluate (not RunInitPlanFunc) for single-module pre-apply destroy-class gate; ses preflight+Reconfigure wired inside gate before dryRun branch
+- [Phase 105-05]: skills/init/SKILL.md updated materially — plugin.json + marketplace.json version bump required at next release (project_plugin_version_gates_cache)
+- [Phase 105-05]: Live UAT as behavior-neutral no-op apply proves zero drift without config change; km init --plan follow-up confirmed no residual drift
+- [Phase 105-05]: Deferred pre-existing TestRunInitPlan_ModuleOrder failure (expects 17, regionalModules() has 22) — Phase 105 added zero module entries, confirmed not a Phase 105 regression
 
 ### Roadmap Evolution
 
@@ -1679,6 +1683,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-11T17:17:25.143Z
-Stopped at: Completed 105-04-PLAN.md — Wave 3: real scopedGateFunc + tier-2 tests; all 10 TestScoped* PASS
+Last session: 2026-06-11T22:13:02.214Z
+Stopped at: Completed 105-05-PLAN.md — docs (7 surfaces) + live UAT PASSED; Phase 105 complete
 Resume file: None
