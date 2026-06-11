@@ -43,14 +43,14 @@ created: 2026-06-11
 | 105-02-02 | 02 | 1 | INIT-SCOPED-FLAG | unit | `go test ./internal/app/cmd/ -run TestScopedModuleRejection -v` | ❌ W0 | ⬜ pending |
 | 105-02-03 | 02 | 1 | INIT-SCOPED-ALIASES | unit | `go test ./internal/app/cmd/ -run TestScopedAliases -v` | ❌ W0 | ⬜ pending |
 | 105-02-04 | 02 | 1 | INIT-SCOPED-GUARD | unit | `go test ./internal/app/cmd/ -run TestScopedMutualExclusion -v` | ❌ W0 | ⬜ pending |
-| 105-03-01 | 03 | 1 | INIT-SCOPED-IMPL | unit | `go test ./internal/app/cmd/ -run TestScopedDryRun -v` | ❌ W0 | ⬜ pending |
-| 105-03-02 | 03 | 1 | INIT-SCOPED-IMPL | unit | `go test ./internal/app/cmd/ -run TestScopedApply -v` | ❌ W0 | ⬜ pending |
-| 105-03-03 | 03 | 1 | INIT-SCOPED-IMPL | unit | `go test ./internal/app/cmd/ -run TestScopedEnvVarsExported -v` | ❌ W0 | ⬜ pending |
-| 105-04-01 | 04 | 2 | INIT-SCOPED-GUARD | unit | `go test ./internal/app/cmd/ -run TestScopedTier2Gate -v` | ❌ W0 | ⬜ pending |
-| 105-04-02 | 04 | 2 | INIT-SCOPED-GUARD | unit | `go test ./internal/app/cmd/ -run TestScopedTier2GateBlocked -v` | ❌ W0 | ⬜ pending |
-| 105-04-03 | 04 | 2 | INIT-SCOPED-IMPL | unit | `go test ./internal/app/cmd/ -run TestScopedSesPreflight -v` | ❌ W0 | ⬜ pending |
-| 105-05-01 | 05 | 3 | INIT-SCOPED-DOCS | manual review | grep docs/skill for `--github`/`--slack`/`--h1`/`--email` | Existing | ⬜ pending |
-| 105-05-02 | 05 | 3 | INIT-SCOPED-IMPL (no-drift) | manual UAT | `km init --github --dry-run=false` → `km init --plan` shows no new trips | N/A | ⬜ pending |
+| 105-03-01 | 03 | 2 | INIT-SCOPED-IMPL | unit | `go test ./internal/app/cmd/ -run TestScopedDryRun -v` | ❌ W0 | ⬜ pending |
+| 105-03-02 | 03 | 2 | INIT-SCOPED-IMPL | unit | `go test ./internal/app/cmd/ -run TestScopedApply -v` | ❌ W0 | ⬜ pending |
+| 105-03-03 | 03 | 2 | INIT-SCOPED-IMPL | unit | `go test ./internal/app/cmd/ -run TestScopedEnvVarsExported -v` | ❌ W0 | ⬜ pending |
+| 105-04-01 | 04 | 3 | INIT-SCOPED-GUARD | unit | `go test ./internal/app/cmd/ -run TestScopedTier2Gate -v` | ❌ W0 | ⬜ pending |
+| 105-04-02 | 04 | 3 | INIT-SCOPED-GUARD | unit | `go test ./internal/app/cmd/ -run TestScopedTier2GateBlocked -v` | ❌ W0 | ⬜ pending |
+| 105-04-03 | 04 | 3 | INIT-SCOPED-IMPL | unit | `go test ./internal/app/cmd/ -run TestScopedSesPreflight -v` | ❌ W0 | ⬜ pending |
+| 105-05-01 | 05 | 4 | INIT-SCOPED-DOCS | manual review | grep docs/skill for `--github`/`--slack`/`--h1`/`--email` | Existing | ⬜ pending |
+| 105-05-02 | 05 | 4 | INIT-SCOPED-IMPL (no-drift) | manual UAT | `km init --github --dry-run=false` → `km init --plan` shows no new trips | N/A | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 *Task IDs above are indicative; the planner sets final plan/wave/task numbering. The point is each requirement has an automated test or an explicit manual-UAT row.*
