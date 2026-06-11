@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 104-04-PLAN.md (km slack adopt escape hatch + km doctor km-slack-channels existence check)
-last_updated: "2026-06-10T20:07:33.729Z"
-last_activity: 2026-06-10
+stopped_at: Completed 104-05-PLAN.md — Phase 104 all 5 plans done; live UAT passed
+last_updated: "2026-06-11T00:47:26.535Z"
+last_activity: 2026-06-11
 progress:
   total_phases: 120
-  completed_phases: 106
+  completed_phases: 107
   total_plans: 536
-  completed_plans: 497
+  completed_plans: 498
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 103-01 — all 3 tasks done; synthetic HackerOne webhook bodies + pinned f
 Total Plans in Phase: 10 (103-01 → 103-10)
 Current Plan: 103-01 complete; next 103-02
 Status: in-progress
-Last activity: 2026-06-10
+Last activity: 2026-06-11
 
 Plan 03 (payload parse) + Plan 08 (byte-identity guard) UNBLOCKED: field-paths.md pins the resolve key + safety-critical internal flag (wrapper-tolerant parse directive); TestUserdataH1ByteIdentity green against the pre-H1 dormancy golden.
 
@@ -531,6 +531,7 @@ Progress: [█████████░] 91%
 | Phase 104 P02 | 137 | 2 tasks | 5 files |
 | Phase 104 P03 | 775 | 3 tasks | 9 files |
 | Phase 104 P04 | 370s | 2 tasks | 5 files |
+| Phase 104-slack-channel-o-1-resolution-on-alias-reuse P05 | 240min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1533,6 +1534,9 @@ Recent decisions affecting current work:
 - [Phase 104]: slack_channels_table_name added to viper merge-list in config.go: prevents silent ignore of km-config.yaml key (project_config_key_merge_list footgun)
 - [Phase 104]: CORRECTION #4: km-slack-channels not added to checkOrphanedDDBRows; alias rows survive destroy by design
 - [Phase 104]: DoctorConfigProvider interface extended with GetSlackChannelsTableName() to enable doctor check without type-assertion
+- [Phase 104]: Deploy sequence: make build (binary) BEFORE km init for new DDB module; full km init --dry-run=false (not --sidecars) for table+IAM changes
+- [Phase 104]: Provider-lock-drift vector: stray infra/modules/**/.terraform.lock.hcl files from bare terraform validate runs conflict with root.hcl provider pin; remove before apply
+- [Phase 104]: Archived-channel fast-fail is correct bounded behavior for reuse-after-destroy with archiveOnDestroy profile; does not trigger workspace scan (cache_hit + conversations.info classifier)
 
 ### Roadmap Evolution
 
@@ -1665,6 +1669,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-10T20:07:33.718Z
-Stopped at: Completed 104-04-PLAN.md (km slack adopt escape hatch + km doctor km-slack-channels existence check)
+Last session: 2026-06-11T00:47:26.518Z
+Stopped at: Completed 104-05-PLAN.md — Phase 104 all 5 plans done; live UAT passed
 Resume file: None

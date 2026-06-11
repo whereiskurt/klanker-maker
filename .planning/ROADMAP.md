@@ -2391,7 +2391,7 @@ Plans:
 
 **Requirements**: SLACK-CHAN-BOUND, SLACK-CHAN-LOOKUP, SLACK-CHAN-INFO-CLASS, SLACK-CHAN-STORE, SLACK-CHAN-ADOPT, SLACK-CHAN-DEPLOY, SLACK-CHAN-E2E (defined at plan time; see design spec §3 constraints + §7 failure-mode matrix)
 **Depends on:** Existing Slack per-sandbox create path (Phases 72 invites + 91 inbound + 95/96 routing) and the SSM by-name cache (`05a4415e`, v0.4.901). **Independent of Phase 103** (HackerOne) — sequenced after it only by phase number.
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 - [ ] 104-01-PLAN.md — P0+P1 core: bounded `FindChannelByName` (page cap + ctx-per-page + `ErrScanCapExceeded`), `IsChannelNotFound` classifier, and the lookup-first/budgeted `resolveSlackChannel` state machine with `slack_resolve` observability [SLACK-CHAN-BOUND, SLACK-CHAN-LOOKUP, SLACK-CHAN-INFO-CLASS]
