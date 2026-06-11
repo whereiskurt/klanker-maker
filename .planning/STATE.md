@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: "Completed 105-02-PLAN.md — Wave 1 flags: ResolveScopedModule, scopedCheapAllowlist, scopedGatedAllowlist, 5 new km init flags, 4 tests PASS"
-last_updated: "2026-06-11T16:52:09.089Z"
+stopped_at: "Completed 105-03-PLAN.md — Wave 2 impl: RunInitScopedWithRunner + scopedGateFunc + runInitScoped; 7 TestScoped PASS, 3 SKIP (Plan 04)"
+last_updated: "2026-06-11T17:01:41.173Z"
 last_activity: 2026-06-11
 progress:
   total_phases: 121
   completed_phases: 107
   total_plans: 541
-  completed_plans: 500
+  completed_plans: 501
   percent: 91
 ---
 
@@ -534,6 +534,7 @@ Progress: [█████████░] 91%
 | Phase 104-slack-channel-o-1-resolution-on-alias-reuse P05 | 240min | 3 tasks | 2 files |
 | Phase 105 P01 | 62s | 1 tasks | 1 files |
 | Phase 105 P02 | 191 | 1 tasks | 2 files |
+| Phase 105 P03 | 380s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1542,6 +1543,7 @@ Recent decisions affecting current work:
 - [Phase 105]: Used package cmd_test for init_scoped_test.go matching existing test file convention; 10 stub tests compile and skip at Wave 0 without referencing unimplemented production symbols
 - [Phase 105]: ResolveScopedModule exported (not unexported) so cmd_test external package can call it directly; mirrors RegionalModules export pattern
 - [Phase 105]: runInitScopedFunc stub var uses package-level-var-seam pattern (like RunInitPlanFunc) so Plan 03 can replace body without touching dispatch code
+- [Phase 105]: RunInitScopedWithRunner exported as plain function; scopedGateFunc package var is Plan 04 injection point (no-op in Plan 03); runInitScopedFunc rebound to real runInitScoped
 
 ### Roadmap Evolution
 
@@ -1675,6 +1677,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-11T16:52:09.075Z
-Stopped at: Completed 105-02-PLAN.md — Wave 1 flags: ResolveScopedModule, scopedCheapAllowlist, scopedGatedAllowlist, 5 new km init flags, 4 tests PASS
+Last session: 2026-06-11T17:01:41.162Z
+Stopped at: Completed 105-03-PLAN.md — Wave 2 impl: RunInitScopedWithRunner + scopedGateFunc + runInitScoped; 7 TestScoped PASS, 3 SKIP (Plan 04)
 Resume file: None
