@@ -2418,7 +2418,7 @@ Plans:
 
 **Requirements**: INIT-SCOPED-FLAG, INIT-SCOPED-ALIASES, INIT-SCOPED-GUARD, INIT-SCOPED-IMPL, INIT-SCOPED-TESTS, INIT-SCOPED-DOCS
 **Depends on:** None structural (operates on the existing bridge modules from Phases 97/103/95). Relates to the deferred Slack-auto-start idea discussed same session.
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
 - [ ] 105-01-PLAN.md — Wave 0 TDD scaffold: init_scoped_test.go with 10 named stub tests [INIT-SCOPED-TESTS]
