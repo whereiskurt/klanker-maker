@@ -73,6 +73,44 @@ km init --lambdas      # build Lambda zips locally + bump create-handler env sta
 
 **Existing sandboxes do NOT get new sidecars retroactively.** `km destroy && km create` to roll forward.
 
+### Scoped init — single-module apply (Phase 105)
+
+When you edit a bridge config key in `km-config.yaml` (e.g. `github.default_router`, `h1.programs`, `slack.mention_only`) you can push the change to just that Lambda's env block + IAM **without** running the full ~27-module fleet:
+
+```bash
+# Tier-1 sugar aliases — fast, no confirmation, env+IAM only:
+km init --github --dry-run=false   # applies lambda-github-bridge only
+km init --slack  --dry-run=false   # applies lambda-slack-bridge only
+km init --h1     --dry-run=false   # applies lambda-h1-bridge only
+km init --email  --dry-run=false   # applies email-handler only
+
+# Equivalent long form (--only <module>):
+km init --only lambda-github-bridge --dry-run=false
+
+# Tier-2 — SES/DNS/bucket-policy; routes through destroy-class gate, no cheap alias:
+km init --only ses                 # dry-run=true default; gate runs even in dry-run
+km init --only ses --dry-run=false # apply only after gate passes (or --i-accept-destroys)
+```
+
+**Boundary — what scoped init does and does NOT do:**
+
+| | Scoped `--github`/`--slack`/`--h1`/`--email` | Full `km init --dry-run=false` |
+|---|---|---|
+| Refreshes env block + IAM for ONE module | Yes | Yes (all modules) |
+| Rebuilds a stale Lambda code zip | **No** — use `make build-lambdas` + full `km init` | Yes |
+| Provisions new resources / tables / queues | **No** — use full `km init` | Yes |
+| Republishes SSM command maps / bot-user-id | Yes (github, h1, slack) | Yes |
+| Destroy-class gate | No (tier-1 modules are env+IAM only) | Via `--plan` pre-check |
+| Duration | Seconds (one module) | Minutes (all ~27 modules) |
+
+**`--dry-run` is honored:** default is `true` (shows what would apply without applying). Add `--dry-run=false` to actually apply.
+
+**Mutual exclusion:** `--only`/`--github`/`--slack`/`--h1`/`--email` cannot be combined with `--sidecars`, `--lambdas`, or `--plan`.
+
+**No-drift invariant:** the scoped apply derives from the same `km-config.yaml → ExportTerragruntEnvVars → KM_* → terragrunt` pipeline as a full apply. A subsequent `km init --plan` will show the bridge module as a no-op — proving zero drift.
+
+**Deploy of the scoped-init feature itself:** `make build` only (operator-side binary; no Lambda zip rebuild, no new TF resource).
+
 ## Step 4: Bootstrap Slack (optional)
 
 If sandboxes will post to Slack:

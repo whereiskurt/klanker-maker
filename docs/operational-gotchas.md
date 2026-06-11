@@ -80,6 +80,26 @@ slack-bridge or other Lambdas. The actual zip upload happens via each module's
 fires under a **full `km init`**. For any bridge-only deploy use `make build &&
 km init` (full), not `--lambdas`.
 
+### `km init --github` / `--slack` / `--h1` do NOT rebuild the Lambda zip
+
+Phase 105 adds sugar aliases (`--github`, `--slack`, `--h1`, `--email`) and the
+generic `--only <module>` flag for a **scoped single-module apply** (env block + IAM
+only). These are config-key-push shortcuts — they apply one terragrunt module in
+seconds but do NOT call `buildLambdaZips` and do NOT upload new Lambda code.
+
+When to use each path:
+
+| Change | Path |
+|--------|------|
+| Config-key edit in `km-config.yaml` (env var only) | `km init --github/--slack/--h1 --dry-run=false` |
+| Lambda code change (Go source in `pkg/github/`, etc.) | `make build-lambdas` + `km init --dry-run=false` |
+| Schema field addition (SandboxProfile types.go) | `km init --sidecars` |
+| New TF resource / table / queue | `km init --dry-run=false` (full) |
+
+The no-drift invariant: the scoped apply derives from the same `km-config.yaml → KM_*
+→ terragrunt` pipeline as a full apply, so a subsequent `km init --plan` shows the
+targeted module as a no-op.
+
 ### Schema changes require `km init --sidecars`
 
 Any change to the SandboxProfile schema (`pkg/profile/types.go` +

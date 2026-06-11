@@ -391,6 +391,16 @@ km destroy <sandbox-id> --remote --yes && km create profiles/github-review.yaml 
 > module and only updates on a full terragrunt apply. `--sidecars` rebuilds binaries and
 > forces a Lambda cold-start but does NOT update the env block.
 
+> **Phase 105 scoped shortcut (config-key edits only):** if you only edited a `github.*`
+> config key in `km-config.yaml` (e.g. `github.default_router`, `github.repos`,
+> `github.commands`) and do NOT need new resources or a code-zip rebuild, you can use:
+> ```bash
+> km init --github --dry-run=false   # applies lambda-github-bridge only (env+IAM)
+> ```
+> This completes in seconds and has zero drift — a subsequent `km init --plan` shows the
+> bridge as a no-op. For code changes (`make build-lambdas`) or new TF resources, use the
+> full `km init --dry-run=false`.
+
 ---
 
 ## Dormant Invariant
@@ -541,6 +551,13 @@ km doctor          # → "GitHub peer bridges" OK / WARN
 > `lambda-github-bridge` module's `environment.variables` block, which only updates
 > on a full `km init --dry-run=false` apply. Use `make build-lambdas` (clean) +
 > `km init --dry-run=false` — see memory `feedback_km_init_full_apply`.
+>
+> **Phase 105 scoped shortcut (config-key edits only):** once the relay is already
+> deployed and you only need to update `github.peer_bridges` in `km-config.yaml`:
+> ```bash
+> km init --github --dry-run=false   # applies lambda-github-bridge only (env+IAM)
+> ```
+> Code changes still need `make build-lambdas` + full `km init --dry-run=false`.
 
 The `lambda-github-bridge` module is edited **in place at `v1.1.0`** (additive env
 var, `default=""`, backward-compatible) — no version bump, no `source =` change.
@@ -811,6 +828,13 @@ km doctor
 > `lambda-github-bridge` module's `environment.variables` block, which only updates on
 > a full `km init --dry-run=false` apply. See memory `feedback_km_init_full_apply` and
 > `project_km_init_lambdas_doesnt_deploy`.
+>
+> **Phase 105 scoped shortcut (config-key edits only):** for a pure `github.default_router`
+> flip with no code change needed:
+> ```bash
+> km init --github --dry-run=false   # applies lambda-github-bridge only (env+IAM)
+> ```
+> Completes in seconds; `km init --plan` afterward shows no drift.
 
 **No SandboxProfile schema change ⇒ no sandbox recreate.**
 
@@ -982,6 +1006,8 @@ make build-lambdas
 #    NOT --sidecars: this is a code change to Lambdas managed by their TF module.
 #    --sidecars rebuilds the km binary and cold-starts sidecars but does NOT
 #    update the Lambda code (memory: feedback_km_init_full_apply).
+#    NOTE: for a subsequent pure config-key edit (no code change), use Phase 105
+#    shortcut: km init --github --dry-run=false (applies bridge module only).
 km init --dry-run=false
 
 # 3. Existing sandboxes must be recreated to gain the new poller

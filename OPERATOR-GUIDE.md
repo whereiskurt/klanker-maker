@@ -877,6 +877,28 @@ No SandboxProfile schema change ⇒ no sandbox recreate. Absent or false →
 byte-identical to Phase 100. Full runbook + two-install UAT:
 `docs/github-bridge.md` § Phase 101.
 
+### Scoped init — push a config-key edit to a single Lambda (Phase 105)
+
+When you edit a bridge config key in `km-config.yaml` (e.g. `github.default_router`, `github.repos`, `github.commands`, `h1.programs`, `slack.mention_only`) you can push the change to just that Lambda's env block + IAM without running the full ~27-module fleet:
+
+```bash
+# Sugar aliases — tier-1 (env+IAM only, no destroy-class risk, no confirmation):
+km init --github --dry-run=false   # applies lambda-github-bridge only
+km init --slack  --dry-run=false   # applies lambda-slack-bridge only
+km init --h1     --dry-run=false   # applies lambda-h1-bridge only
+km init --email  --dry-run=false   # applies email-handler only
+
+# Tier-2 (SES/DNS, destroy-class gate fires before apply):
+km init --only ses                 # dry-run=true default — shows what would change
+km init --only ses --dry-run=false # apply after gate passes
+```
+
+**Boundary:** scoped init refreshes the env block + IAM for ONE module. It does **not** rebuild a stale Lambda code zip (still `make build-lambdas` + full `km init`) and does **not** provision new resources, tables, or queues (still full `km init --dry-run=false`).
+
+**No-drift invariant:** the scoped apply derives from the same `km-config.yaml → KM_* → terragrunt` pipeline as a full apply. A subsequent `km init --plan` shows the bridge module as a no-op.
+
+**Deploy of this feature:** `make build` only (operator-side binary; no Lambda zip, no new TF resource). See `klanker:init` skill § Scoped init.
+
 ### SES "not verified" or DKIM still pending
 
 DKIM propagation takes up to 72 hours. After `terragrunt apply` on the ses config, the

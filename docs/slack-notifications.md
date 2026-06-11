@@ -1887,6 +1887,15 @@ km doctor                                                     # verifies slack_b
 km destroy <sandbox-id> --remote --yes && km create <profile>  # picks up new schema field
 ```
 
+> **Phase 105 scoped shortcut (config-key-only edit):** for a pure `slack.*` config key
+> change with no code change needed:
+> ```bash
+> km init --slack --dry-run=false   # applies lambda-slack-bridge only (env+IAM)
+> ```
+> The scoped apply derives from the same `km-config.yaml → KM_* → terragrunt` pipeline;
+> a subsequent `km init --plan` shows the bridge as a no-op. For code changes, use the
+> full `km init --dry-run=false`.
+
 No `export KM_SLACK_*` shell incantations are required after Phase 91.1 — both env vars flow
 through `km init` automatically:
 
@@ -2058,6 +2067,13 @@ no relay occurs). `KM_SLACK_PEER_BRIDGES` is the comma-joined Lambda env var pro
    `environment.variables` Terraform block where `KM_SLACK_PEER_BRIDGES` lives. A full
    `km init` (terragrunt apply) is required.
 
+   > **Phase 105 scoped shortcut (config-key-only edit):** once the relay is already
+   > deployed and you only need to update `slack.peer_bridges` (no code change):
+   > ```bash
+   > km init --slack --dry-run=false   # applies lambda-slack-bridge only (env+IAM)
+   > ```
+   > Code changes still need `make build-lambdas` + full `km init --dry-run=false`.
+
 6. **Verify the env var reached the Lambda:**
    ```bash
    aws lambda get-function-configuration \
@@ -2206,6 +2222,13 @@ km init --dry-run=false
 # Verify:
 km doctor            # confirms KM_SLACK_DEFAULT_ROUTER visible in Lambda env
 ```
+
+> **Phase 105 scoped shortcut (config-key-only edit):** once the relay is already
+> deployed and you only need to update `slack.default_router` (no code change):
+> ```bash
+> km init --slack --dry-run=false   # applies lambda-slack-bridge only (env+IAM)
+> ```
+> Code changes still need `make build-lambdas` + full `km init --dry-run=false`.
 
 Deploy all installs **before** relying on cross-install channel lists in the reply
 (see Pitfall 6 in the Phase 96 research notes: a mixed fleet omits legacy peers'

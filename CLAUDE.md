@@ -18,6 +18,17 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
 - Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
 
+**Phase 105 (2026-06-11) — Scoped `km init` for bridge config (complete):**
+- `km init --only <module>` applies a **single** terragrunt module instead of the full ~27-module fleet. Refreshes the Lambda env block + IAM for that module only. Does NOT rebuild a stale code zip (still `make build-lambdas` + `km init --lambdas`) and does NOT provision new resources/tables/queues (still full `km init --dry-run=false`).
+- **Sugar aliases (tier-1, no confirmation):** `--github` → `lambda-github-bridge`; `--slack` → `lambda-slack-bridge`; `--h1` → `lambda-h1-bridge`; `--email` → `email-handler`. All four are pure env+IAM targets — fast, no destroy-class risk.
+- **Tier-2 gated (no cheap alias):** `--only ses` — routes through the destroy-class safety gate (same curated trip-block as `km init --plan`) as a pre-apply gate; refuses a protected destroy/replace without `--i-accept-destroys`. The `ses` module owns SES domain identities, Route53 records, and the consolidated S3 bucket policy.
+- **SSM side-effect:** scoped `--github`/`--h1`/--slack` also republishes SSM command maps / bot-user-id (same as a full apply; no separate step required).
+- **Mutual exclusion:** `--only`/`--github`/`--slack`/`--h1`/`--email` are mutually exclusive with `--sidecars`, `--lambdas`, and `--plan`.
+- **`--dry-run` honored:** defaults true (shows what would apply); `--dry-run=false` applies.
+- **No-drift invariant:** scoped apply derives from the identical `km-config.yaml → KM_* → terragrunt` pipeline as a full apply; a subsequent `km init --plan` is a no-op.
+- **Deploy = `make build`** (operator-side binary only; no Lambda zip rebuild, no new TF resource).
+- See `klanker:init` skill § Fast-path variants and `OPERATOR-GUIDE.md` § Scoped init.
+
 **Phase 104 (2026-06-10) — O(1) Slack channel resolution on alias reuse (complete):**
 - `km create` on a reused `--alias` (profile has `notification.slack.perSandbox: true` + `archiveOnDestroy: false`) now resolves the existing channel in **bounded, O(1)** time — never the unbounded `conversations.list` workspace scan that previously wedged the create-handler Lambda for the full 900 s.
 - **Root cause fixed:** any transient `conversations.info` error (ratelimited / 5xx / context blip) previously fell through to an unbounded paginated scan. Phase 104 classifies the error: only a definitive `channel_not_found` invalidates the stored mapping; every other error triggers a bounded retry (2× / 500 ms) then optimistic use of the stored ID — never a scan.
@@ -104,6 +115,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | GitHub bridge agent verbs — `/claude` / `/codex` per-thread agent select in PR comments | `docs/github-bridge.md` § Phase 102 |
 | HackerOne comment-trigger bridge — program webhook → sandbox agent → report comment (auto-triage + `@`-handle, multi-target fanout, internal-by-default replies) | `docs/h1-bridge.md` (Phase 103) |
 | O(1) Slack channel resolution on alias reuse, `km-slack-channels` table, `km slack adopt`, `KM_SLACK_RESOLVE_BUDGET` | `docs/slack-notifications.md` § Phase 104 |
+| Scoped `km init` — `--only <module>` / `--github` / `--slack` / `--h1` / `--email` (tier-1 env+IAM fast-path) + `--only ses` (tier-2 destroy-class gated) | `klanker:init` skill § Fast-path variants |
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |
@@ -158,7 +170,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role
-- `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy, `--plan` to preview with destroy-class safety gate, `--dry-run=false` to actually apply)
+- `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy, `--plan` to preview with destroy-class safety gate, `--dry-run=false` to actually apply, `--only <module>` for a scoped single-module apply; sugar: `--github` / `--slack` / `--h1` / `--email` (tier-1, env+IAM, no confirmation); `--only ses` (tier-2, destroy-class gated))
 - `km bootstrap --shared-ses` — provision the shared SES rule set (idempotent; `--plan` previews with destroy-class safety gate)
 - `km bootstrap --shared-secrets-key` — provision the shared KMS key for SOPS secret injection (one-time per install; `--plan` previews with destroy-class gate; see `docs/sandbox-secrets.md`)
 - `km bootstrap --all` — chain foundation (SCP/KMS/artifacts) + shared SES rule set in one command; mutex with `--shared-ses`; `--plan` honors the destroy-class gate

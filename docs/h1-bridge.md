@@ -343,6 +343,16 @@ km create profiles/h1-triage.yaml
 
 Existing sandboxes need `km destroy && km create` to gain the `h1-inbound` queue + poller.
 
+> **Phase 105 scoped shortcut (config-key-only edits after initial deploy):**
+> for a pure `h1.*` config key change (e.g. adding a program, updating `h1.allow`,
+> changing event prompts) with no code change needed:
+> ```bash
+> km init --h1 --dry-run=false   # applies lambda-h1-bridge only (env+IAM)
+> ```
+> Scoped apply refreshes the env block + IAM in seconds. It does NOT rebuild the code
+> zip (still `make build-lambdas` + full `km init`) and does NOT provision new resources.
+> A subsequent `km init --plan` shows the bridge as a no-op (zero drift).
+
 ---
 
 ## Dormant invariant
