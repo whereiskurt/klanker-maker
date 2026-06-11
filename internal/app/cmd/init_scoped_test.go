@@ -32,6 +32,9 @@ package cmd_test
 //   cmd.RunInitScopedWithRunner(runner, repoRoot, region, module string, acceptDestroys bool) error
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -260,36 +263,139 @@ func TestScopedMutualExclusion(t *testing.T) {
 	}
 }
 
-// TestScopedDryRun verifies that when --dry-run=true (the default), the scoped
-// path does NOT call runner.Apply.
+// makeModuleDir creates a module directory inside the given regionDir, making it
+// visible to RunInitScopedWithRunner's os.Stat check.
+func makeModuleDir(t *testing.T, regionDir, name string) {
+	t.Helper()
+	dir := filepath.Join(regionDir, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("makeModuleDir %s: %v", name, err)
+	}
+}
+
+// makeScopedRepoRoot creates a minimal repoRoot with the region.hcl and requested
+// module directories created, mirroring the scaffold used by init_test.go.
+// The region "us-east-1" maps to regionLabel "use1".
+func makeScopedRepoRoot(t *testing.T, modules []string) (repoRoot string) {
+	t.Helper()
+	repoRoot = t.TempDir()
+	regionLabel := "use1"
+	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
+
+	// Write region.hcl so ensureRegionHCL is a no-op.
+	if err := os.MkdirAll(regionDir, 0o755); err != nil {
+		t.Fatalf("mkdir regionDir: %v", err)
+	}
+	hcl := fmt.Sprintf("locals {\n  region_label = %q\n  region_full  = %q\n}\n", regionLabel, "us-east-1")
+	if err := os.WriteFile(filepath.Join(regionDir, "region.hcl"), []byte(hcl), 0o644); err != nil {
+		t.Fatalf("write region.hcl: %v", err)
+	}
+
+	for _, mod := range modules {
+		makeModuleDir(t, regionDir, mod)
+	}
+	return repoRoot
+}
+
+// TestScopedDryRun verifies that when dryRun=true, RunInitScopedWithRunner does NOT
+// call runner.Apply (it prints a summary and returns nil).
 //
 // Wave 2 contract (RunInitScopedWithRunner):
 //   - mockRunner.applied must remain empty after RunInitScopedWithRunner with dryRun=true
 //   - Function returns nil (not an error)
 func TestScopedDryRun(t *testing.T) {
-	t.Skip("Phase 105 Wave 2: pending Plan 03 implementation")
+	repoRoot := makeScopedRepoRoot(t, []string{"lambda-github-bridge"})
+	mock := &mockRunner{}
+	// KM_ARTIFACTS_BUCKET required by lambda-github-bridge envReqs.
+	t.Setenv("KM_ARTIFACTS_BUCKET", "test-bucket")
+
+	err := cmd.RunInitScopedWithRunner(mock, repoRoot, "us-east-1", "lambda-github-bridge", true /*dryRun*/, false)
+	if err != nil {
+		t.Fatalf("RunInitScopedWithRunner (dry-run=true): unexpected error: %v", err)
+	}
+	if len(mock.applied) != 0 {
+		t.Errorf("dry-run=true: expected 0 Apply calls, got %d: %v", len(mock.applied), mock.applied)
+	}
 }
 
-// TestScopedApply verifies that when --dry-run=false, the scoped path calls
-// runner.Apply exactly once for the target module directory.
+// TestScopedApply verifies that when dryRun=false, RunInitScopedWithRunner calls
+// runner.Apply exactly once, for the target module directory.
 //
 // Wave 2 contract (RunInitScopedWithRunner):
-//   - mockRunner.applied has exactly one entry after RunInitScopedWithRunner
+//   - mockRunner.applied has exactly one entry
 //   - The entry's path suffix matches the target module name
 func TestScopedApply(t *testing.T) {
-	t.Skip("Phase 105 Wave 2: pending Plan 03 implementation")
+	repoRoot := makeScopedRepoRoot(t, []string{"lambda-github-bridge"})
+	mock := &mockRunner{}
+	t.Setenv("KM_ARTIFACTS_BUCKET", "test-bucket")
+
+	err := cmd.RunInitScopedWithRunner(mock, repoRoot, "us-east-1", "lambda-github-bridge", false /*dryRun*/, false)
+	if err != nil {
+		t.Fatalf("RunInitScopedWithRunner (dry-run=false): unexpected error: %v", err)
+	}
+	if len(mock.applied) != 1 {
+		t.Errorf("expected exactly 1 Apply call, got %d: %v", len(mock.applied), mock.applied)
+	}
+	if len(mock.applied) > 0 && !strings.HasSuffix(mock.applied[0], "lambda-github-bridge") {
+		t.Errorf("applied[0] = %q, want suffix 'lambda-github-bridge'", mock.applied[0])
+	}
+
+	// Also verify that module-not-found returns a clear error.
+	t.Run("module not found", func(t *testing.T) {
+		root2 := makeScopedRepoRoot(t, nil) // no module dirs
+		mock2 := &mockRunner{}
+		err2 := cmd.RunInitScopedWithRunner(mock2, root2, "us-east-1", "lambda-github-bridge", false, false)
+		if err2 == nil {
+			t.Fatal("expected error for missing module dir, got nil")
+		}
+		if !strings.Contains(err2.Error(), "not found") {
+			t.Errorf("error %q does not contain 'not found'", err2.Error())
+		}
+	})
+
+	// Verify envReqs check: KM_ARTIFACTS_BUCKET unset → error naming missing var.
+	t.Run("missing env req", func(t *testing.T) {
+		root3 := makeScopedRepoRoot(t, []string{"lambda-github-bridge"})
+		mock3 := &mockRunner{}
+		// Ensure env var is not set for this sub-test.
+		t.Setenv("KM_ARTIFACTS_BUCKET", "")
+		err3 := cmd.RunInitScopedWithRunner(mock3, root3, "us-east-1", "lambda-github-bridge", false, false)
+		if err3 == nil {
+			t.Fatal("expected error for missing KM_ARTIFACTS_BUCKET, got nil")
+		}
+		if !strings.Contains(err3.Error(), "KM_ARTIFACTS_BUCKET") {
+			t.Errorf("error %q does not name missing env var KM_ARTIFACTS_BUCKET", err3.Error())
+		}
+	})
 }
 
-// TestScopedEnvVarsExported verifies that ExportTerragruntEnvVars (which sets
-// KM_ARTIFACTS_BUCKET, KM_RESOURCE_PREFIX, etc.) is called before runner.Apply.
+// TestScopedEnvVarsExported verifies that ExportTerragruntEnvVars sets KM_ARTIFACTS_BUCKET
+// from cfg.ArtifactsBucket before the apply path runs.
 //
-// Wave 2 contract (runInitScoped):
-//   - After RunInitScopedWithRunner returns, t.Setenv-injected KM_* vars must be
-//     visible (i.e. ExportTerragruntEnvVars ran and did not clear them).
-//   - Alternatively: wrap ExportTerragruntEnvVars via a package-level var and
-//     assert it was called (mirroring BuildLambdaZipsFunc pattern).
+// Wave 2 contract (runInitScoped production wrapper):
+//   - runInitScoped calls ExportTerragruntEnvVars(cfg) FIRST, which sets KM_ARTIFACTS_BUCKET
+//     from cfg.ArtifactsBucket when the env var is not already set.
+//   - This test calls ExportTerragruntEnvVars directly (the same call runInitScoped makes)
+//     to assert the contract that RunInitScopedWithRunner relies on.
 func TestScopedEnvVarsExported(t *testing.T) {
-	t.Skip("Phase 105 Wave 2: pending Plan 03 implementation")
+	// runInitScoped calls ExportTerragruntEnvVars(cfg) as its first action (before applying).
+	// We test this contract directly: ExportTerragruntEnvVars with a cfg that has
+	// ArtifactsBucket set must write KM_ARTIFACTS_BUCKET into the environment.
+
+	// Ensure the var is unset before we call ExportTerragruntEnvVars.
+	t.Setenv("KM_ARTIFACTS_BUCKET", "")
+
+	cfg := &config.Config{
+		ArtifactsBucket: "my-test-artifacts-bucket",
+	}
+
+	// Call ExportTerragruntEnvVars the same way runInitScoped does (first thing before apply).
+	cmd.ExportTerragruntEnvVars(cfg)
+
+	got := os.Getenv("KM_ARTIFACTS_BUCKET")
+	if got != cfg.ArtifactsBucket {
+		t.Errorf("after ExportTerragruntEnvVars: KM_ARTIFACTS_BUCKET = %q, want %q", got, cfg.ArtifactsBucket)
+	}
 }
 
 // TestScopedTier2Gate verifies that for --only ses the plan is run (via
