@@ -191,11 +191,44 @@ func ResolveScopedModule(onlyVal string, github, slack, h1, email bool) (string,
 		strings.Join(scopedGatedAllowlist, ", "))
 }
 
-// scopedGateFunc is the Plan 04 injection point for the Tier-2 (ses) pre-apply
-// destroy-class gate. In Plan 03 it defaults to a passthrough no-op so Tier-1
-// modules (lambda-*-bridge, email-handler) work without gate logic. Plan 04
-// replaces this with the real plan+evaluate+ses-preflight path.
+// scopedGateFunc is the Tier-2 (ses) pre-apply destroy-class gate.
+// It runs planModule for the single target module, evaluates with
+// planreport.Evaluate, and — for the ses module — also replicates the
+// InitSESPreflight + runner.Reconfigure step from RunInitWithRunner:1845-1870.
+//
+// The gate runs BEFORE the dryRun/apply branch so that --only ses --dry-run
+// (the default) still surfaces trips without applying.
 var scopedGateFunc = func(ctx context.Context, runner InitRunner, m regionalModule, acceptDestroys bool) error {
+	report, err := planModule(ctx, runner, m, false)
+	if err != nil {
+		return fmt.Errorf("planning %s: %w", m.name, err)
+	}
+	result := planreport.Evaluate([]planreport.Report{report}, acceptDestroys)
+	invoker := fmt.Sprintf("km init --only %s", m.name)
+	if result.Blocked {
+		printTripBlock(invoker, result.Trips)
+		return fmt.Errorf("destroy-class gate tripped (re-run with --i-accept-destroys to override)")
+	}
+	if len(result.Trips) > 0 {
+		printTripBlock(invoker, result.Trips)
+		fmt.Println("  (override active via --i-accept-destroys)")
+	}
+	// ses special handling — replicate RunInitWithRunner ses branch (init.go:1845-1870):
+	// InitSESPreflight ensures the shared rule set exists; Reconfigure is required
+	// because the ses module source moved v1→v2 (omitting it silently wedges the backend).
+	if m.name == "ses" {
+		if InitSESPreflight != nil {
+			if err := InitSESPreflight(ctx); err != nil {
+				return err
+			}
+		}
+		rcfgCtx, cancel := context.WithTimeout(ctx, reconfigureTimeout)
+		rcfgErr := runner.Reconfigure(rcfgCtx, m.dir)
+		cancel()
+		if rcfgErr != nil {
+			return fmt.Errorf("reconfiguring %s backend: %w", m.name, rcfgErr)
+		}
+	}
 	return nil
 }
 

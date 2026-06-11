@@ -32,6 +32,7 @@ package cmd_test
 //   cmd.RunInitScopedWithRunner(runner, repoRoot, region, module string, acceptDestroys bool) error
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -398,35 +399,163 @@ func TestScopedEnvVarsExported(t *testing.T) {
 	}
 }
 
+// mockReconfigurePlanRunner wraps mockPlanRunner and records Reconfigure calls
+// so TestScopedSesPreflight can verify Reconfigure is invoked for --only ses.
+type mockReconfigurePlanRunner struct {
+	mockPlanRunner
+	reconfigured []string
+}
+
+func (m *mockReconfigurePlanRunner) Reconfigure(_ context.Context, dir string) error {
+	m.reconfigured = append(m.reconfigured, dir)
+	return nil
+}
+
 // TestScopedTier2Gate verifies that for --only ses the plan is run (via
 // mockPlanRunner.planned) BEFORE Apply is called (via mockPlanRunner.applied).
 //
-// Wave 2/3 contract (RunInitScopedWithRunner, tier-2 path):
-//   - mockPlanRunner.planned must contain the ses module dir
-//   - mockPlanRunner.applied must contain the ses module dir
-//   - planned[0] comes before applied[0] in call order (gate runs first)
+// Plan 04 contract (RunInitScopedWithRunner, tier-2 path):
+//   - mockPlanRunner.planned must contain the ses module dir (gate ran plan)
+//   - mockPlanRunner.applied must contain the ses module dir (apply ran)
+//   - planned[0] is populated before applied[0] (gate runs first)
 func TestScopedTier2Gate(t *testing.T) {
-	t.Skip("Phase 105 Wave 2: pending Plan 03 implementation")
+	repoRoot := makeScopedRepoRoot(t, []string{"ses"})
+	// ses requires KM_ROUTE53_ZONE_ID per its envReqs.
+	t.Setenv("KM_ROUTE53_ZONE_ID", "Z12345TEST")
+
+	// Suppress InitSESPreflight (would try real AWS) for this test.
+	origPreflight := cmd.InitSESPreflight
+	cmd.InitSESPreflight = func(_ context.Context) error { return nil }
+	t.Cleanup(func() { cmd.InitSESPreflight = origPreflight })
+
+	mock := &mockPlanRunner{}
+	// dryRun=false so Apply runs; acceptDestroys=false with a clean (no-destroy) plan.
+	err := cmd.RunInitScopedWithRunner(mock, repoRoot, "us-east-1", "ses", false /*dryRun*/, false)
+	if err != nil {
+		t.Fatalf("RunInitScopedWithRunner (ses, clean plan): unexpected error: %v", err)
+	}
+
+	sesDir := filepath.Join(repoRoot, "infra", "live", "use1", "ses")
+
+	// Gate must have run plan (planned contains ses dir).
+	found := false
+	for _, p := range mock.planned {
+		if strings.HasSuffix(p, "ses") || p == sesDir {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("gate did not plan ses: planned = %v", mock.planned)
+	}
+
+	// Apply must have run (applied contains ses dir).
+	if len(mock.applied) == 0 {
+		t.Errorf("expected Apply to be called for ses, got 0 Apply calls")
+	} else if !strings.HasSuffix(mock.applied[0], "ses") {
+		t.Errorf("applied[0] = %q, want suffix 'ses'", mock.applied[0])
+	}
 }
 
 // TestScopedTier2GateBlocked verifies that when the plan output contains a
 // destroy-class change, the gate trips and Apply is NOT called.
 //
-// Wave 2/3 contract (RunInitScopedWithRunner, tier-2 path):
-//   - mockPlanRunner.planJSON["ses"] = destroyPlanJSON (a plan with a destroy action)
-//   - RunInitScopedWithRunner returns a non-nil error (gate tripped)
+// Plan 04 contract (RunInitScopedWithRunner, tier-2 path):
+//   - mockPlanRunner.planJSON[sesDir] = destroyPlanJSON (protected destroy)
+//   - RunInitScopedWithRunner returns a non-nil "destroy-class gate tripped" error
 //   - mockPlanRunner.applied must remain empty (Apply never called)
+//   - With acceptDestroys=true the gate is overridden and Apply IS called
 func TestScopedTier2GateBlocked(t *testing.T) {
-	t.Skip("Phase 105 Wave 2: pending Plan 03 implementation")
+	repoRoot := makeScopedRepoRoot(t, []string{"ses"})
+	t.Setenv("KM_ROUTE53_ZONE_ID", "Z12345TEST")
+
+	// Load the existing protected-destroy fixture used by plan tests.
+	tripJSON := loadPhase84TripFixture(t)
+	sesDir := filepath.Join(repoRoot, "infra", "live", "use1", "ses")
+
+	// Suppress InitSESPreflight so only the gate logic is tested.
+	origPreflight := cmd.InitSESPreflight
+	cmd.InitSESPreflight = func(_ context.Context) error { return nil }
+	t.Cleanup(func() { cmd.InitSESPreflight = origPreflight })
+
+	t.Run("blocked without acceptDestroys", func(t *testing.T) {
+		mock := &mockPlanRunner{
+			planJSON: map[string][]byte{sesDir: tripJSON},
+		}
+		var runErr error
+		_ = captureStdout(t, func() {
+			runErr = cmd.RunInitScopedWithRunner(mock, repoRoot, "us-east-1", "ses", false /*dryRun*/, false /*acceptDestroys*/)
+		})
+		if runErr == nil {
+			t.Fatal("expected non-nil error when gate trips on protected destroy, got nil")
+		}
+		if !strings.Contains(runErr.Error(), "destroy-class gate tripped") {
+			t.Errorf("error = %q, want to contain 'destroy-class gate tripped'", runErr.Error())
+		}
+		if len(mock.applied) != 0 {
+			t.Errorf("Apply must NOT be called when gate blocks; got %d calls: %v", len(mock.applied), mock.applied)
+		}
+	})
+
+	t.Run("overridden with acceptDestroys=true", func(t *testing.T) {
+		mock := &mockPlanRunner{
+			planJSON: map[string][]byte{sesDir: tripJSON},
+		}
+		var runErr error
+		_ = captureStdout(t, func() {
+			runErr = cmd.RunInitScopedWithRunner(mock, repoRoot, "us-east-1", "ses", false /*dryRun*/, true /*acceptDestroys*/)
+		})
+		if runErr != nil {
+			t.Fatalf("expected nil error with acceptDestroys=true override, got: %v", runErr)
+		}
+		if len(mock.applied) == 0 {
+			t.Errorf("expected Apply to be called when acceptDestroys=true overrides gate")
+		}
+	})
 }
 
 // TestScopedSesPreflight verifies that the SES preflight function and
 // runner.Reconfigure are called for --only ses before Apply.
 //
-// Wave 2/3 contract (RunInitScopedWithRunner, ses branch):
-//   - Override cmd.InitSESPreflight to record it was called
-//   - mockRunner.Reconfigure records the ses dir
-//   - Both must fire before mockRunner.Apply records the ses dir
+// Plan 04 contract (RunInitScopedWithRunner, ses branch):
+//   - cmd.InitSESPreflight (package var spy) is invoked before Apply
+//   - mockReconfigurePlanRunner.Reconfigure records the ses dir before Apply
+//   - Both fire before Apply (ordering: plan → preflight → reconfigure → apply)
 func TestScopedSesPreflight(t *testing.T) {
-	t.Skip("Phase 105 Wave 2: pending Plan 03 implementation")
+	repoRoot := makeScopedRepoRoot(t, []string{"ses"})
+	t.Setenv("KM_ROUTE53_ZONE_ID", "Z12345TEST")
+
+	sesDir := filepath.Join(repoRoot, "infra", "live", "use1", "ses")
+
+	// Replace InitSESPreflight with a spy that records it was called.
+	preflightCalled := false
+	origPreflight := cmd.InitSESPreflight
+	cmd.InitSESPreflight = func(_ context.Context) error {
+		preflightCalled = true
+		return nil
+	}
+	t.Cleanup(func() { cmd.InitSESPreflight = origPreflight })
+
+	mock := &mockReconfigurePlanRunner{}
+	err := cmd.RunInitScopedWithRunner(mock, repoRoot, "us-east-1", "ses", false /*dryRun*/, false)
+	if err != nil {
+		t.Fatalf("RunInitScopedWithRunner (ses, preflight test): unexpected error: %v", err)
+	}
+
+	// InitSESPreflight must have been called.
+	if !preflightCalled {
+		t.Error("InitSESPreflight was not called for --only ses")
+	}
+
+	// Reconfigure must have been called with the ses dir.
+	if len(mock.reconfigured) == 0 {
+		t.Error("Reconfigure was not called for --only ses")
+	} else if !strings.HasSuffix(mock.reconfigured[0], "ses") && mock.reconfigured[0] != sesDir {
+		t.Errorf("Reconfigure called with %q, want ses dir %q", mock.reconfigured[0], sesDir)
+	}
+
+	// Apply must also have been called (the full path completed).
+	if len(mock.applied) == 0 {
+		t.Error("Apply was not called after preflight+reconfigure for ses")
+	}
 }
