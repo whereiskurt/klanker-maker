@@ -129,12 +129,23 @@ type mockSandboxStatusWriter struct {
 	called    bool
 	sandboxID string
 	err       error
+
+	// Phase 109: DeleteSandboxRow tracking (orphaned stopped-row self-heal).
+	deleteCalled     bool
+	deletedSandboxID string
+	deleteErr        error
 }
 
 func (m *mockSandboxStatusWriter) SetStatusRunning(_ context.Context, sandboxID string) error {
 	m.called = true
 	m.sandboxID = sandboxID
 	return m.err
+}
+
+func (m *mockSandboxStatusWriter) DeleteSandboxRow(_ context.Context, sandboxID string) error {
+	m.deleteCalled = true
+	m.deletedSandboxID = sandboxID
+	return m.deleteErr
 }
 
 // Compile-time check: mockSandboxStatusWriter must satisfy bridge.SandboxStatusWriter.

@@ -1937,3 +1937,97 @@ km doctor
   `cmd/km-github/marker_cmd_test.go` and `pkg/github/marker_test.go`.
 - **Manual:** drive the agent to post the same body twice in one turn → exactly one
   comment lands. Two separate mentions → two comments.
+
+## Phase 109 — Self-heal orphaned `stopped` alias rows (resume-or-cold-create)
+
+> **Phase 109 (2026-06-12) — GitHub bridge self-heals an orphaned `stopped` row.**
+>
+> When a `{prefix}-sandboxes` row lingers with `status=stopped` but its EC2 instance
+> is **gone** (terminated out from under km), the resume path used to log a non-fatal
+> error and enqueue to a per-sandbox FIFO with **no live poller** — the message stranded
+> and the bot silently no-op'd on cold start. The fix: detect "no resumable instance",
+> delete the stale row, and **cold-create** instead.
+
+### Symptom
+
+A PR @-mention on a long-idle alias produced:
+
+```
+INFO  github-bridge: auto-resume alias=github-bot sandbox_id=github-e903e795 status=stopped
+ERROR github-bridge: auto-resume failed (non-fatal; enqueue continues)
+      err="github-bridge: no stopped/stopping EC2 instances found for sandbox github-e903e795 (tag sec:sandbox-id)"
+```
+
+The comment was then enqueued to `sec-github-inbound-github-e903e795.fifo` (a dead
+queue) and never answered. Cold-create was unreachable because the `stopped` row still
+held the alias, so `ResolveByAliasWithStatus` returned `(id, "stopped", nil)` —
+`err == nil` skipped the cold-create branch. The orphaned row permanently shadowed
+cold-create.
+
+### The fix — terminal vs transient resume failure
+
+`EC2Resumer.StartSandbox` now wraps an exported sentinel on the terminal "no instance"
+path:
+
+```go
+var ErrNoResumableInstance = errors.New("github-bridge: no resumable EC2 instance")
+// len(found)==0 → fmt.Errorf("...: %w", ErrNoResumableInstance)
+```
+
+A transient `DescribeInstances` / `StartInstances` API error is **not** wrapped — it keeps
+the log-non-fatal + enqueue behavior so the FIFO redelivers once the box recovers.
+
+`WebhookHandler.Handle` branches the resume failure with `errors.Is`:
+
+- **`ErrNoResumableInstance`** → `StatusWriter.DeleteSandboxRow(sandboxID)` (clears the
+  stale row so the alias becomes absent — avoiding the **ambiguous-alias trap** where a
+  second row under the same alias would make every future comment resolve as ambiguous),
+  then `Publisher.PutSandboxCreate(...)`. **No enqueue, no thread upsert.**
+- **any other (transient) error** → unchanged: log non-fatal, enqueue, FIFO redelivers.
+- **success** → unchanged: `SetStatusRunning` + enqueue.
+
+A genuinely `stopped`/`paused` (hibernated) instance still reports `stopped`/`stopping`
+to the filter and resumes exactly as before — only the no-instance case self-heals.
+
+### Files
+
+- `pkg/github/bridge/aws_adapters.go` — `ErrNoResumableInstance` sentinel + wrap in
+  `StartSandbox`; `DynamoSandboxStatusWriter.DeleteSandboxRow` (single `DeleteItem` keyed
+  by `sandbox_id`; `DynamoUpdateItemClient` widened with `DeleteItem`).
+- `pkg/github/bridge/interfaces.go` — `SandboxStatusWriter` extended with `DeleteSandboxRow`.
+- `pkg/github/bridge/webhook_handler.go` — the resume-branch `errors.Is` fork.
+- `infra/modules/lambda-github-bridge/v1.1.0/main.tf` — `dynamodb:DeleteItem` added to the
+  `DDBSandboxesUpdateItem` statement (still no `PutItem`).
+
+### Deploy sequence (Phase 109)
+
+Pure bridge-Lambda code + one IAM statement. **No SandboxProfile schema change → no
+sandbox recreate.**
+
+```bash
+make build-lambdas           # rebuild the bridge Lambda zip
+km init --dry-run=false      # full apply — picks up the new DeleteItem IAM statement
+                             # (NOT --sidecars; --github also suffices ONLY if you accept
+                             #  it refreshes env+IAM, which it does — IAM change is covered)
+km doctor
+```
+
+### Verification
+
+- **Unit:** `EC2Resumer.StartSandbox` with no matching instances returns an error for
+  which `errors.Is(err, ErrNoResumableInstance)` is true; a `DescribeInstances` API error
+  does **not** match. The handler test asserts the orphan path deletes the row + cold-creates
+  and does **not** enqueue/upsert; genuinely-stopped and transient-error paths still enqueue.
+  Covered in `pkg/github/bridge/aws_adapters_test.go` and
+  `pkg/github/bridge/webhook_handler_phase109_test.go`.
+- **Manual:** orphan a test alias (terminate its instance, leave `status=stopped`),
+  @-mention on a PR → the bridge logs `orphaned stopped row … cold-creating`, a new instance
+  is created, and no message strands in the old FIFO.
+
+### Out of scope
+
+The orphaned per-sandbox FIFO queue and lingering management Lambdas (`token-refresher`,
+`budget-enforcer`) are **not** GC'd here — only the DDB row is deleted. They become harmless
+garbage flagged by `km doctor`'s stale-resource check; full cleanup is `km destroy <id>`.
+The H1 bridge (`pkg/h1/bridge`) carries the **identical fix** (ported in lockstep — see
+`docs/h1-bridge.md` § Phase 109).

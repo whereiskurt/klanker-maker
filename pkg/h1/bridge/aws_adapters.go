@@ -70,14 +70,25 @@ type DynamoH1ThreadClient interface {
 	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
 }
 
-// DynamoUpdateItemClient is the minimal DynamoDB interface required for an
-// UpdateItem call. Used by DynamoSandboxStatusWriter.
+// DynamoUpdateItemClient is the minimal DynamoDB interface required by
+// DynamoSandboxStatusWriter: UpdateItem (flip status=running after a successful
+// auto-resume) and DeleteItem (Phase 109: clear an orphaned status=stopped row whose
+// EC2 instance is gone, so the alias becomes absent for cold-create).
 type DynamoUpdateItemClient interface {
 	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+	DeleteItem(ctx context.Context, params *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
 }
 
 // ErrNonceReplayed is returned conceptually when the delivery GUID was already seen.
 var ErrNonceReplayed = errors.New("h1-bridge: delivery GUID already seen (replay)")
+
+// ErrNoResumableInstance is returned (wrapped) by EC2Resumer.StartSandbox when no
+// stopped/stopping EC2 instance exists for the sandbox. The instance is gone — an
+// orphaned alias row (status=stopped, instance terminated out from under km). The
+// caller branches on errors.Is to fall back to cold-create rather than enqueue to a
+// dead per-sandbox queue. A transient DescribeInstances/StartInstances API error is
+// deliberately NOT wrapped with this sentinel (it must retain log-and-enqueue retry).
+var ErrNoResumableInstance = errors.New("h1-bridge: no resumable EC2 instance")
 
 const (
 	// H1DeliveryNoncePrefix isolates X-H1-Delivery GUIDs in the shared nonces
@@ -436,7 +447,10 @@ func (r *EC2Resumer) StartSandbox(ctx context.Context, sandboxID string) error {
 		}
 	}
 	if len(found) == 0 {
-		return fmt.Errorf("h1-bridge: no stopped/stopping EC2 instances found for sandbox %s (tag %s)", sandboxID, tagKey)
+		// Terminal: the instance is gone (orphaned alias row). Wrap the sentinel so
+		// the caller can branch with errors.Is and fall back to cold-create.
+		return fmt.Errorf("h1-bridge: no stopped/stopping EC2 instances found for sandbox %s (tag %s): %w",
+			sandboxID, tagKey, ErrNoResumableInstance)
 	}
 
 	const stoppingPollInterval = 2 * time.Second
@@ -522,6 +536,23 @@ func (w *DynamoSandboxStatusWriter) SetStatusRunning(ctx context.Context, sandbo
 	})
 	if err != nil {
 		return fmt.Errorf("h1-bridge: SetStatusRunning for %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
+// DeleteSandboxRow removes the km-sandboxes row for sandboxID via a single DeleteItem
+// keyed by sandbox_id. Phase 109: called to clear an orphaned alias row (status=stopped,
+// EC2 instance gone) so the alias resolves as absent and the subsequent cold-create does
+// not trip the ambiguous-alias guard. Non-fatal in the caller.
+func (w *DynamoSandboxStatusWriter) DeleteSandboxRow(ctx context.Context, sandboxID string) error {
+	_, err := w.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: awssdk.String(w.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("h1-bridge: delete stale sandbox row %s: %w", sandboxID, err)
 	}
 	return nil
 }

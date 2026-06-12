@@ -195,6 +195,48 @@ func TestEC2Resumer_DescribeError(t *testing.T) {
 }
 
 // ============================================================
+// TestEC2Resumer_NoInstances_IsErrNoResumableInstance (Phase 109)
+// ============================================================
+
+// TestEC2Resumer_NoInstances_IsErrNoResumableInstance verifies that the
+// "no stopped/stopping instances found" terminal failure wraps the exported
+// ErrNoResumableInstance sentinel so the caller can branch with errors.Is and
+// fall back to cold-create instead of enqueuing to a dead queue.
+func TestEC2Resumer_NoInstances_IsErrNoResumableInstance(t *testing.T) {
+	fake := &fakeEC2Client{
+		describeResponses: []*ec2.DescribeInstancesOutput{emptyDescribe()},
+	}
+	resumer := &bridge.EC2Resumer{Client: fake, SandboxIDTagKey: "km:sandbox-id"}
+
+	err := resumer.StartSandbox(context.Background(), "sb-gone")
+	if err == nil {
+		t.Fatal("expected error when no resumable instances exist")
+	}
+	if !errors.Is(err, bridge.ErrNoResumableInstance) {
+		t.Errorf("errors.Is(err, ErrNoResumableInstance) = false; want true (err=%v)", err)
+	}
+	if fake.startCalled {
+		t.Error("StartInstances must NOT be called when no instances found")
+	}
+}
+
+// TestEC2Resumer_DescribeError_NotErrNoResumableInstance verifies that a
+// transient DescribeInstances API error does NOT satisfy errors.Is for the
+// sentinel — the caller must keep its log-and-enqueue (retry) behavior for it.
+func TestEC2Resumer_DescribeError_NotErrNoResumableInstance(t *testing.T) {
+	fake := &fakeEC2Client{describeErr: errors.New("AWS: RequestExpired")}
+	resumer := &bridge.EC2Resumer{Client: fake, SandboxIDTagKey: "km:sandbox-id"}
+
+	err := resumer.StartSandbox(context.Background(), "sb-err")
+	if err == nil {
+		t.Fatal("expected error from DescribeInstances API failure")
+	}
+	if errors.Is(err, bridge.ErrNoResumableInstance) {
+		t.Error("a transient DescribeInstances error must NOT match ErrNoResumableInstance")
+	}
+}
+
+// ============================================================
 // Fake EventBridge client
 // ============================================================
 

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -510,30 +511,53 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 			}
 		} else if (status == "stopped" || status == "paused") && h.Resumer != nil {
 			// Resume path: start the EC2 instance, then enqueue so the prompt drains
-			// once the box boots. Resumer error is non-fatal (logged); enqueue still
-			// happens so the prompt is not lost on a transient StartInstances failure.
+			// once the box boots. A TRANSIENT Resumer error is non-fatal (logged); the
+			// enqueue still happens so the prompt is not lost. But a TERMINAL
+			// ErrNoResumableInstance (the instance is gone — an orphaned stopped row)
+			// must NOT enqueue to the dead per-sandbox queue: instead delete the stale
+			// row (so the alias becomes absent → no ambiguous-alias trap) and cold-create.
 			h.log().Info("github-bridge: auto-resume", "alias", alias, "sandbox_id", sandboxID, "status", status)
-			if rErr := h.Resumer.StartSandbox(ctx, sandboxID); rErr != nil {
-				h.log().Error("github-bridge: auto-resume failed (non-fatal; enqueue continues)", "err", rErr, "sandbox_id", sandboxID)
-			} else if h.StatusWriter != nil {
-				// Gap B fix (98-06): flip km-sandboxes status=running so km list / km resume
-				// see running state and a follow-up @-mention doesn't re-fire StartInstances.
-				// UpdateItem only — do NOT PutItem (SandboxMetadata lossy round-trip footgun).
-				if swErr := h.StatusWriter.SetStatusRunning(ctx, sandboxID); swErr != nil {
-					h.log().Warn("github-bridge: status write-back failed (non-fatal; enqueue continues)",
-						"err", swErr, "sandbox_id", sandboxID)
-				} else {
-					h.log().Info("github-bridge: status write-back running", "sandbox_id", sandboxID)
+			rErr := h.Resumer.StartSandbox(ctx, sandboxID)
+			if rErr != nil && errors.Is(rErr, ErrNoResumableInstance) {
+				// Orphaned alias row: status=stopped/paused but the EC2 instance is gone.
+				// Self-heal: delete the stale row, then cold-create. Skip the enqueue (no
+				// live poller) and the thread upsert (no live sandbox_id to record). The
+				// cold-created box gets its thread row on the first reply / next warm turn.
+				h.log().Warn("github-bridge: orphaned stopped row (no instance); cold-creating",
+					"alias", alias, "sandbox_id", sandboxID)
+				if h.StatusWriter != nil {
+					if dErr := h.StatusWriter.DeleteSandboxRow(ctx, sandboxID); dErr != nil {
+						h.log().Error("github-bridge: delete stale row failed (cold-create may hit ambiguous-alias)",
+							"err", dErr, "sandbox_id", sandboxID)
+					}
 				}
-			}
-			if queueURL, qErr := h.Resolver.GitHubQueueURL(ctx, sandboxID); qErr != nil {
-				h.log().Error("github-bridge: lookup github queue URL (resume path)", "sandbox_id", sandboxID, "err", qErr)
+				if pubErr := h.Publisher.PutSandboxCreate(ctx, alias, profile, string(envJSON)); pubErr != nil {
+					h.log().Error("github-bridge: publish SandboxCreate (orphan fallback)", "err", pubErr)
+				}
 			} else {
-				if sErr := h.SQS.Send(ctx, queueURL, string(envJSON), groupID, dedupID); sErr != nil {
-					h.log().Error("github-bridge: SQS enqueue (resume path)", "err", sErr)
-				} else if h.Threads != nil {
-					if uErr := h.Threads.Upsert(ctx, payload.Repository.FullName, payload.Issue.Number, sandboxID); uErr != nil {
-						h.log().Warn("github-bridge: thread upsert failed (non-fatal, resume path)", "err", uErr)
+				// Success OR transient error → enqueue (existing behavior).
+				if rErr != nil {
+					h.log().Error("github-bridge: auto-resume failed (non-fatal; enqueue continues)", "err", rErr, "sandbox_id", sandboxID)
+				} else if h.StatusWriter != nil {
+					// Gap B fix (98-06): flip km-sandboxes status=running so km list / km resume
+					// see running state and a follow-up @-mention doesn't re-fire StartInstances.
+					// UpdateItem only — do NOT PutItem (SandboxMetadata lossy round-trip footgun).
+					if swErr := h.StatusWriter.SetStatusRunning(ctx, sandboxID); swErr != nil {
+						h.log().Warn("github-bridge: status write-back failed (non-fatal; enqueue continues)",
+							"err", swErr, "sandbox_id", sandboxID)
+					} else {
+						h.log().Info("github-bridge: status write-back running", "sandbox_id", sandboxID)
+					}
+				}
+				if queueURL, qErr := h.Resolver.GitHubQueueURL(ctx, sandboxID); qErr != nil {
+					h.log().Error("github-bridge: lookup github queue URL (resume path)", "sandbox_id", sandboxID, "err", qErr)
+				} else {
+					if sErr := h.SQS.Send(ctx, queueURL, string(envJSON), groupID, dedupID); sErr != nil {
+						h.log().Error("github-bridge: SQS enqueue (resume path)", "err", sErr)
+					} else if h.Threads != nil {
+						if uErr := h.Threads.Upsert(ctx, payload.Repository.FullName, payload.Issue.Number, sandboxID); uErr != nil {
+							h.log().Warn("github-bridge: thread upsert failed (non-fatal, resume path)", "err", uErr)
+						}
 					}
 				}
 			}

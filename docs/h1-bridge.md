@@ -515,3 +515,63 @@ km doctor
 **Bridge Lambdas / IAM / Terraform:** UNAFFECTED. No scoped `km init --h1` step required.
 
 **Slack poller:** EXCLUDED — byte-identical to pre-Phase-106.
+
+## Phase 109 — Self-heal orphaned `stopped` alias rows (resume-or-cold-create)
+
+> **Phase 109 (2026-06-12) — H1 bridge self-heals an orphaned `stopped` row.**
+>
+> The HackerOne port of the GitHub-bridge fix (`docs/github-bridge.md` § Phase 109).
+> When a `{prefix}-sandboxes` row lingers with `status=stopped` but its EC2 instance
+> is **gone**, the resume path used to log a non-fatal error and enqueue to a per-sandbox
+> h1-inbound FIFO with **no live poller** — the comment stranded. The fix: detect "no
+> resumable instance", delete the stale row, and **cold-create** instead.
+
+### The fix
+
+`EC2Resumer.StartSandbox` wraps the exported sentinel `ErrNoResumableInstance` on the
+terminal `len(found)==0` path (a transient `DescribeInstances`/`StartInstances` API error
+is **not** wrapped — it keeps log-non-fatal + enqueue). `dispatchTarget` branches the
+resume failure with `errors.Is`:
+
+- **`ErrNoResumableInstance`** → `StatusWriter.DeleteSandboxRow(sandboxID)` (clears the
+  stale row so the alias becomes absent — avoiding the **ambiguous-alias trap**), then
+  `Publisher.PutSandboxCreate(...)`. **No enqueue, no thread upsert.**
+- **any other (transient) error** → unchanged: log non-fatal, enqueue, FIFO redelivers.
+- **success** → unchanged: `SetStatusRunning` + enqueue.
+
+Multi-target fanout is unaffected: each target dispatches independently through
+`dispatchTarget`, so one target self-healing does not touch the others.
+
+### Files
+
+- `pkg/h1/bridge/aws_adapters.go` — `ErrNoResumableInstance` sentinel + wrap in
+  `StartSandbox`; `DynamoSandboxStatusWriter.DeleteSandboxRow` (single `DeleteItem` keyed
+  by `sandbox_id`; `DynamoUpdateItemClient` widened with `DeleteItem`).
+- `pkg/h1/bridge/interfaces.go` — `SandboxStatusWriter` extended with `DeleteSandboxRow`.
+- `pkg/h1/bridge/webhook_handler.go` — the `dispatchTarget` resume-branch `errors.Is` fork.
+- `infra/modules/lambda-h1-bridge/v1.0.0/main.tf` — `dynamodb:DeleteItem` added to the
+  `DDBSandboxesUpdateItem` statement (still no `PutItem`).
+
+### Deploy sequence (Phase 109)
+
+Pure bridge-Lambda code + one IAM statement. **No SandboxProfile schema change → no
+sandbox recreate.**
+
+```bash
+make build-lambdas           # rebuild the H1 bridge Lambda zip
+km init --dry-run=false      # full apply — picks up the new DeleteItem IAM statement
+                             # (km init --h1 also covers the env+IAM change)
+km doctor
+```
+
+### Verification
+
+- **Unit:** `EC2Resumer.StartSandbox` with no matching instances returns an error for which
+  `errors.Is(err, ErrNoResumableInstance)` is true; a `DescribeInstances` API error does
+  **not** match. The handler test asserts the orphan path deletes the row + cold-creates and
+  does **not** enqueue/upsert; the transient-error path still enqueues. Covered in
+  `pkg/h1/bridge/aws_adapters_phase109_test.go` and
+  `pkg/h1/bridge/webhook_handler_phase109_test.go`.
+- **Manual:** orphan a test alias (terminate its instance, leave `status=stopped`), trigger
+  the program webhook → the bridge logs `orphaned stopped row … cold-creating`, a new
+  instance is created, and no message strands in the old FIFO.

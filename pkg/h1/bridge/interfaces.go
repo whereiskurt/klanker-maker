@@ -78,6 +78,13 @@ type SandboxStatusWriter interface {
 	// SetStatusRunning sets status="running" on the km-sandboxes row for the given
 	// sandboxID after a successful auto-resume. Non-fatal in the caller.
 	SetStatusRunning(ctx context.Context, sandboxID string) error
+
+	// DeleteSandboxRow removes the km-sandboxes row for sandboxID. Used to clear an
+	// orphaned alias row (status=stopped, instance gone) so the alias becomes absent
+	// and the subsequent cold-create does not trip the ambiguous-alias guard
+	// (ResolveByAliasWithStatus rejects an alias matching more than one row).
+	// Non-fatal in the caller — a delete failure is logged; the cold-create still fires.
+	DeleteSandboxRow(ctx context.Context, sandboxID string) error
 }
 
 // EventBridgePublisher publishes a SandboxCreate EventBridge event (cold path).

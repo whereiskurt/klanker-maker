@@ -34,6 +34,7 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -387,9 +388,33 @@ func (h *WebhookHandler) dispatchTarget(ctx context.Context, target Target, repo
 	}
 
 	if (status == "stopped" || status == "paused") && h.Resumer != nil {
-		// Resume path: start the box, then enqueue so the prompt drains on boot.
+		// Resume path: start the box, then enqueue so the prompt drains on boot. A
+		// TRANSIENT Resumer error is non-fatal (logged) and the enqueue still happens.
+		// But a TERMINAL ErrNoResumableInstance (the instance is gone — an orphaned
+		// stopped row) must NOT enqueue to the dead per-sandbox queue: instead delete
+		// the stale row (so the alias becomes absent → no ambiguous-alias trap) and
+		// cold-create.
 		h.log().Info("h1-bridge: auto-resume", "alias", alias, "sandbox_id", sandboxID, "status", status)
-		if rErr := h.Resumer.StartSandbox(ctx, sandboxID); rErr != nil {
+		rErr := h.Resumer.StartSandbox(ctx, sandboxID)
+		if rErr != nil && errors.Is(rErr, ErrNoResumableInstance) {
+			// Orphaned alias row: status=stopped/paused but the EC2 instance is gone.
+			// Self-heal: delete the stale row, then cold-create. Skip the enqueue (no
+			// live poller) and the thread upsert (no live sandbox_id to record). The
+			// cold-created box gets its thread row on the first reply / next warm turn.
+			h.log().Warn("h1-bridge: orphaned stopped row (no instance); cold-creating",
+				"alias", alias, "sandbox_id", sandboxID)
+			if h.StatusWriter != nil {
+				if dErr := h.StatusWriter.DeleteSandboxRow(ctx, sandboxID); dErr != nil {
+					h.log().Error("h1-bridge: delete stale row failed (cold-create may hit ambiguous-alias)",
+						"err", dErr, "sandbox_id", sandboxID)
+				}
+			}
+			if pErr := h.Publisher.PutSandboxCreate(ctx, alias, profile, envJSON); pErr != nil {
+				h.log().Error("h1-bridge: publish SandboxCreate (orphan fallback)", "err", pErr)
+			}
+			return true
+		}
+		if rErr != nil {
 			h.log().Error("h1-bridge: auto-resume failed (non-fatal; enqueue continues)", "err", rErr, "sandbox_id", sandboxID)
 		} else if h.StatusWriter != nil {
 			if swErr := h.StatusWriter.SetStatusRunning(ctx, sandboxID); swErr != nil {
