@@ -2455,7 +2455,7 @@ Plans:
 
 **Requirements**: RESUME-HINT-FORMAT, RESUME-HINT-MINT, RESUME-HINT-GITHUB, RESUME-HINT-H1, RESUME-HINT-SLACK-EXCLUDED, RESUME-HINT-TESTS, RESUME-HINT-DOCS (defined at plan time)
 **Depends on:** GitHub bridge poller (Phases 97/102 — session id extraction + `km-github-threads`) and the HackerOne bridge poller (Phase 103 — `km-h1` INTERNAL-by-default + session continuity). No structural dependency on Phase 105.
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 - [ ] 106-01-PLAN.md — Wave 0 RED test stubs (GitHub resume-hint test + extend H1 enabled-poller wantSubstrings)
