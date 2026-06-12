@@ -1961,6 +1961,7 @@ while true; do
       cd /workspace 2>/dev/null || true
       claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
         --dangerously-skip-permissions $RESUME_ARG \
+        --append-system-prompt 'When replying you are posting into a Slack channel, not a terminal or a GitHub comment. Wrap all code, file paths, commands, shell output, logs, and any tabular or columnar data in triple-backtick fenced blocks so they render in monospace. Prefer short bullet lists over wide Markdown tables; when a table is unavoidable keep it to a few narrow columns. Keep replies concise and skimmable.' \
         > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
       echo \$? > '$RUN_DIR/exit_code'
     " || true

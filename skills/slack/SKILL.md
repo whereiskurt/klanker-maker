@@ -111,6 +111,10 @@ echo 'KM_SLACK_RENDER=plain' | sudo tee -a /etc/km/notify.env
 # next outbound post on this sandbox → falls back to literal markdown
 ```
 
+**Tables render aligned.** In `mrkdwn` and `blocks` modes, a Markdown pipe table is reflowed into a column-aligned monospace grid inside a ``` fence — cells are padded to the widest value per column and the raw `|---|` separator becomes a width-matched rule — so it reads as a real table in Slack instead of ragged literal pipes. No action needed; it is automatic.
+
+**Claude is told it is posting to Slack.** The Slack-inbound poller passes `--append-system-prompt` to `claude -p`, instructing it to fence code/paths/logs/tabular data in ``` and prefer bullet lists over wide tables. This hint is Slack-only — the GitHub and HackerOne pollers (native-markdown surfaces) do not get it. Existing sandboxes pick it up only after `km destroy && km create`.
+
 ## End-of-Task Pattern
 
 Use this when finishing an interactive task and pinging the operator:

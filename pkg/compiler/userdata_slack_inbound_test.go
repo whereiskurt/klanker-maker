@@ -80,6 +80,34 @@ func TestUserdata_SlackInboundPollerSkipped(t *testing.T) {
 	}
 }
 
+// TestUserdata_SlackInboundClaudeFormatHint verifies that the Slack-inbound
+// Claude dispatch carries a Slack-output formatting hint via
+// --append-system-prompt, so Claude fences code/tables and avoids wide tables
+// that render badly in Slack's mrkdwn. The hint must be Slack-only: the GitHub
+// and HackerOne inbound dispatches (native-markdown surfaces) must NOT get it.
+func TestUserdata_SlackInboundClaudeFormatHint(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	out := compileInboundUserData(t, p)
+
+	// Mechanism: an --append-system-prompt flag on the Slack-inbound claude -p call.
+	if !strings.Contains(out, "--append-system-prompt") {
+		t.Fatalf("Slack-inbound claude dispatch must pass --append-system-prompt with a Slack formatting hint\n%s", abbreviateUD(out))
+	}
+	// Substance: the hint names Slack and instructs fenced code blocks.
+	for _, want := range []string{"Slack", "triple-backtick"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("Slack formatting hint must mention %q\n%s", want, abbreviateUD(out))
+		}
+	}
+
+	// Slack-only: a profile with no Slack inbound must not carry the hint.
+	p2 := minimalSlackInboundProfile(t, false)
+	out2 := compileInboundUserData(t, p2)
+	if strings.Contains(out2, "--append-system-prompt") {
+		t.Fatalf("non-Slack-inbound profile must not carry the Slack formatting hint")
+	}
+}
+
 // TestUserdata_SlackInboundEnvVar verifies that when inbound is enabled
 // /etc/profile.d/km-notify-env.sh exports both KM_SLACK_INBOUND_QUEUE_URL and
 // KM_SLACK_THREADS_TABLE, and that neither appears when inbound is disabled.
