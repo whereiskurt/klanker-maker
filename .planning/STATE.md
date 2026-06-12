@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 107-03-PLAN.md — uninit tests reconciled to 22-module inventory
-last_updated: "2026-06-12T02:01:09.129Z"
+stopped_at: Completed 107-02-PLAN.md — email SSM mock paths aligned to /km/sandbox/... prefix-scoped convention
+last_updated: "2026-06-12T02:02:48.177Z"
 last_activity: 2026-06-12
 progress:
   total_phases: 123
   completed_phases: 108
   total_plans: 553
-  completed_plans: 506
+  completed_plans: 507
   percent: 91
 ---
 
@@ -539,6 +539,7 @@ Progress: [█████████░] 91%
 | Phase 105-scoped-km-init-for-bridge-config P05 | 25min | 2 tasks | 7 files |
 | Phase 107 P01 | 2min | 1 tasks | 1 files |
 | Phase 107 P03 | 51s | 1 tasks | 1 files |
+| Phase 107 P02 | 3min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1555,6 +1556,7 @@ Recent decisions affecting current work:
 - [Phase 107]: Tests assert current production behavior; production code (execDockerShell) is authoritative — bash --login login shell and always-present -u sandbox/root user flag
 - [Phase 107]: Replaced stale PLACEHOLDER_OPERATOR_KEY with PLACEHOLDER_SIDECAR_ROLE_ARN to maintain placeholder coverage intent; updated runCreateRemote signature with budget params verbatim from create.go:2074
 - [Phase 107]: wantOrder slice is exact reverse of regionalModules(); two count consts annotated with regionalModules()==22 for future maintenance
+- [Phase 107]: Re-keyed email SSM mock seeds from /sandbox/... to /km/sandbox/... to match SigningKeyPath/EncryptionKeyPath prefix-scoped convention
 
 ### Roadmap Evolution
 
@@ -1690,6 +1692,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-12T02:01:09.117Z
-Stopped at: Completed 107-03-PLAN.md — uninit tests reconciled to 22-module inventory
+Last session: 2026-06-12T02:02:48.165Z
+Stopped at: Completed 107-02-PLAN.md — email SSM mock paths aligned to /km/sandbox/... prefix-scoped convention
 Resume file: None
