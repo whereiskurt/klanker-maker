@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 106-02-PLAN.md — GitHub post-on-mint resume-hint block GREEN
-last_updated: "2026-06-12T02:54:53.882Z"
+stopped_at: Completed 106-03-PLAN.md — H1 inbound poller post-on-mint internal resume-hint block GREEN
+last_updated: "2026-06-12T02:57:58.923Z"
 last_activity: 2026-06-12
 progress:
   total_phases: 123
   completed_phases: 109
   total_plans: 553
-  completed_plans: 513
+  completed_plans: 514
   percent: 91
 ---
 
@@ -545,6 +545,7 @@ Progress: [█████████░] 91%
 | Phase 107-07 P07 | 5 | 1 tasks | 1 files |
 | Phase 106 P01 | 92s | 2 tasks | 2 files |
 | Phase 106-session-resume-hint-on-github-hackerone-bridge-replies-post-on-mint P02 | 180s | 2 tasks | 2 files |
+| Phase 106 P03 | 31537673s | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1571,6 +1572,7 @@ Recent decisions affecting current work:
 - [Phase 106]: Locked post-on-mint condition as literal string assertion to prevent silent drift
 - [Phase 106]: Go raw string literal forbids literal backticks in printf format — used plain text for /workspace and sandbox id references in hint body
 - [Phase 106]: Recaptured learn.v2 golden after GITHUBINBOUND heredoc change — no-recapture rule applies to H1-free/GitHub-inbound-free dormancy goldens only
+- [Phase 106]: H1 resume-hint is internal-only: km-h1 comment bare form (no --reply-to-researcher) preserves safety layer — hint never visible to external researcher
 
 ### Roadmap Evolution
 
@@ -1706,6 +1708,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-12T02:54:53.867Z
-Stopped at: Completed 106-02-PLAN.md — GitHub post-on-mint resume-hint block GREEN
+Last session: 2026-06-12T02:57:58.912Z
+Stopped at: Completed 106-03-PLAN.md — H1 inbound poller post-on-mint internal resume-hint block GREEN
 Resume file: None
