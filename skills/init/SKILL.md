@@ -231,15 +231,32 @@ Idempotent. Second run reports `Tagged: 0`. Required when running outside `km co
 
 ## Rollout sequence template
 
-When you edit km source (CLI, sidecar, userdata template, or Lambda code):
+When you edit km source (CLI, sidecar, or Lambda/userdata code):
 
 ```bash
-make build                                  # always first
-km init --sidecars                          # if sidecars/* or userdata template changed
-km init --dry-run=false                     # if Terraform modules or Lambda code changed
+make build                                  # always first (operator-side binary)
+km init --sidecars                          # if sidecars/* changed (re-uploads sidecar binaries only)
+make build-lambdas                          # if create-handler-embedded userdata (e.g. pollers in
+                                            #   pkg/compiler/userdata.go) or any Lambda code changed
+km init --dry-run=false                     # uploads the new Lambda zips + any TF/IAM changes via terragrunt
 km doctor                                   # confirm health
-# Existing sandboxes do NOT get new sidecars — km destroy && km create to roll forward
+# Existing sandboxes do NOT get new poller heredocs — km destroy && km create to roll forward
 ```
+
+**Important distinction — `--sidecars` vs `make build-lambdas` + `km init --dry-run=false`:**
+
+- `km init --sidecars` rebuilds + uploads **only the sidecar binaries** (the km binary and
+  sidecar executables bundled into the sidecars S3 zip). It does **NOT** re-upload the
+  create-handler Lambda zip. A `pkg/compiler/userdata.go` edit is invisible to running
+  `km create` paths until a full `km init --dry-run=false`.
+- **Create-handler-embedded userdata edits** (Phase 106 class: poller resume-hint in
+  `pkg/compiler/userdata.go`, any other poller heredoc change) deploy via:
+  `make build-lambdas` + `km init --dry-run=false`. NOT `--sidecars`.
+- **Scoped `km init --github`/`--h1`/`--slack`/`--email`** refresh that bridge module's
+  env block + IAM only — they do **NOT** re-upload the create-handler zip. Use these only
+  for pure config-key changes to the named bridge Lambda.
+- The Fast-path table above confirms: "Rebuilds a stale Lambda code zip → No, use
+  make build-lambdas + full km init".
 
 `km init --lambdas` alone is **insufficient** for bridge Lambda deploys — it builds the zip locally but does not upload it via terragrunt. Use `km init --dry-run=false`.
 

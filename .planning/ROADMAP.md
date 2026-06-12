@@ -2455,13 +2455,13 @@ Plans:
 
 **Requirements**: RESUME-HINT-FORMAT, RESUME-HINT-MINT, RESUME-HINT-GITHUB, RESUME-HINT-H1, RESUME-HINT-SLACK-EXCLUDED, RESUME-HINT-TESTS, RESUME-HINT-DOCS (defined at plan time)
 **Depends on:** GitHub bridge poller (Phases 97/102 — session id extraction + `km-github-threads`) and the HackerOne bridge poller (Phase 103 — `km-h1` INTERNAL-by-default + session continuity). No structural dependency on Phase 105.
-**Plans:** 1/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [ ] 106-01-PLAN.md — Wave 0 RED test stubs (GitHub resume-hint test + extend H1 enabled-poller wantSubstrings)
 - [ ] 106-02-PLAN.md — GitHub poller post-on-mint resume-hint block in userdata.go (Slack byte-identical)
 - [ ] 106-03-PLAN.md — HackerOne poller post-on-mint resume-hint block (internal-only) in userdata.go
-- [ ] 106-04-PLAN.md — Docs: github-bridge.md + h1-bridge.md Phase 106 sections + CLAUDE.md note
+- [x] 106-04-PLAN.md — Docs: github-bridge.md + h1-bridge.md Phase 106 sections + CLAUDE.md note (completed 2026-06-12)
 
 ### Phase 107: Reconcile 22 stale internal/app/cmd unit tests with current production behavior (test-hygiene only, no production code change)
 

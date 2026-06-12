@@ -18,6 +18,15 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
 - Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
 
+**Phase 106 (2026-06-11) — Session-resume hint on GitHub + HackerOne bridge replies (post-on-mint) (complete):**
+- After a bridge agent turn, the sandbox-side poller posts ONE collapsed `<details>` resume-hint comment carrying the sandbox id, run-from `/workspace`, and the agent-correct resume command: `claude --resume <id>` (Claude) or `codex exec resume <id>` (Codex), branched on `EFFECTIVE_AGENT`, plus the freshly minted session id.
+- **Post-on-mint:** fires only when the session id is new or changed (first turn or Gap-E cross-box re-mint) ⇒ exactly once per stable thread. Best-effort `|| true` — never blocks the SQS ack.
+- **H1 hint is INTERNAL by default** (`km-h1 comment`, no `--reply-to-researcher`) — it lands on the internal/team comment track, NEVER visible to the external HackerOne researcher.
+- **GitHub + HackerOne pollers only.** Slack poller deliberately EXCLUDED — byte-identical to pre-Phase-106.
+- **Pure `pkg/compiler/userdata.go` change.** No SandboxProfile schema change, no new TF resource, no new DDB column, no bridge Lambda or IAM change.
+- **Deploy = `make build-lambdas` + `km init --dry-run=false`** (NOT `--sidecars` — `--sidecars` only re-uploads sidecar binaries, not the create-handler zip; NOT `km init --github`/`--h1` — those refresh bridge env+IAM only). Existing sandboxes need `km destroy && km create`.
+- See `docs/github-bridge.md` § Phase 106 and `docs/h1-bridge.md` § Phase 106.
+
 **Phase 105 (2026-06-11) — Scoped `km init` for bridge config (complete):**
 - `km init --only <module>` applies a **single** terragrunt module instead of the full ~27-module fleet. Refreshes the Lambda env block + IAM for that module only. Does NOT rebuild a stale code zip (still `make build-lambdas` + `km init --lambdas`) and does NOT provision new resources/tables/queues (still full `km init --dry-run=false`).
 - **Sugar aliases (tier-1, no confirmation):** `--github` → `lambda-github-bridge`; `--slack` → `lambda-slack-bridge`; `--h1` → `lambda-h1-bridge`; `--email` → `email-handler`. All four are pure env+IAM targets — fast, no destroy-class risk.

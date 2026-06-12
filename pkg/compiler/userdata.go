@@ -1961,6 +1961,7 @@ while true; do
       cd /workspace 2>/dev/null || true
       claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
         --dangerously-skip-permissions $RESUME_ARG \
+        --append-system-prompt 'When replying you are posting into a Slack channel, not a terminal or a GitHub comment. Wrap all code, file paths, commands, shell output, logs, and any tabular or columnar data in triple-backtick fenced blocks so they render in monospace. Prefer short bullet lists over wide Markdown tables; when a table is unavoidable keep it to a few narrow columns. Keep replies concise and skimmable.' \
         > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
       echo \$? > '$RUN_DIR/exit_code'
     " || true
@@ -2396,6 +2397,19 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
         --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_GITHUB_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
         --region "$REGION" 2>/dev/null || true
       echo "[km-github-inbound-poller] Session updated — repo=$REPO PR=#$NUMBER session=${NEW_GITHUB_SESSION:0:8}... agent=$EFFECTIVE_AGENT"
+      # Phase 106: post resume-hint fold on session mint (first turn or Gap-E re-mint).
+      # Post-on-mint: fires only when the session id is new or changed. Best-effort
+      # (|| true) — a failed hint post MUST NOT block the SQS ack or turn completion.
+      if [ -n "$NEW_GITHUB_SESSION" ] && [ "$NEW_GITHUB_SESSION" != "${GITHUB_SESSION:-}" ]; then
+        if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+          RESUME_CMD="codex exec resume $NEW_GITHUB_SESSION"
+        else
+          RESUME_CMD="claude --resume $NEW_GITHUB_SESSION"
+        fi
+        HINT_BODY=$(printf '<details>\n<summary>🔧 Resume this agent session</summary>\n\nOn sandbox %s, from the /workspace folder run: %s\n</details>' \
+          "$SANDBOX_ID" "$RESUME_CMD")
+        /opt/km/bin/km-github comment --repo "$REPO" --number "$NUMBER" --body "$HINT_BODY" || true
+      fi
     fi
 
     # Ack-then-log: delete message before logging so a crash can't cause duplicate dispatch.
@@ -2706,6 +2720,19 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
         --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_H1_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
         --region "$REGION" 2>/dev/null || true
       echo "[km-h1-inbound-poller] Session updated — report=$REPORT_ID target=$TARGET session=${NEW_H1_SESSION:0:8}... agent=$EFFECTIVE_AGENT"
+      # Phase 106: post resume-hint fold on session mint (internal by default — the hint
+      # never goes external; safety layer preserved). Best-effort (|| true) — a failed
+      # hint post MUST NOT block the SQS ack or turn completion.
+      if [ -n "$NEW_H1_SESSION" ] && [ "$NEW_H1_SESSION" != "${H1_SESSION:-}" ]; then
+        if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+          RESUME_CMD="codex exec resume $NEW_H1_SESSION"
+        else
+          RESUME_CMD="claude --resume $NEW_H1_SESSION"
+        fi
+        HINT_BODY=$(printf '<details>\n<summary>🔧 Resume this agent session</summary>\n\nOn sandbox %s, from the /workspace folder run: %s\n</details>' \
+          "$SANDBOX_ID" "$RESUME_CMD")
+        /opt/km/bin/km-h1 comment --report "$REPORT_ID" --body "$HINT_BODY" || true
+      fi
     fi
 
     # Ack-then-log: delete the message AFTER a successful turn (DeleteMessage only on

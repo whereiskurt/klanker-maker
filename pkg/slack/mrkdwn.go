@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // segKind classifies a tokenizer segment.
@@ -441,15 +442,15 @@ func fencePipeTables(s string) string {
 		return s
 	}
 
-	// Rebuild lines, inserting fences around runs.
+	// Rebuild lines, inserting fences around runs. Each run is reflowed into a
+	// column-aligned grid (reflowTable) so the table reads correctly in Slack's
+	// monospace code block instead of as ragged literal pipes.
 	var out []string
 	runIdx := 0
 	for lineIdx := 0; lineIdx < len(lines); lineIdx++ {
 		if runIdx < len(runs) && lineIdx == runs[runIdx].start {
 			out = append(out, "```")
-			for j := runs[runIdx].start; j < runs[runIdx].end; j++ {
-				out = append(out, lines[j])
-			}
+			out = append(out, reflowTable(lines[runs[runIdx].start:runs[runIdx].end])...)
 			out = append(out, "```")
 			lineIdx = runs[runIdx].end - 1 // will be incremented by loop
 			runIdx++
@@ -458,6 +459,103 @@ func fencePipeTables(s string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// reSepCell matches a GFM table separator cell: dashes with optional alignment
+// colons (e.g. `---`, `:--`, `:-:`, `--:`).
+var reSepCell = regexp.MustCompile(`^:?-+:?$`)
+
+// reflowTable rewrites a run of pipe-table lines into a column-aligned monospace
+// grid: cells are padded to the widest value in their column, the GFM separator
+// row (`|---|---|`) is reflowed into a width-matched rule, and ragged rows are
+// padded out to the column count. The result is what renders cleanly inside a
+// Slack ``` code block. Cell text is preserved verbatim (backticks and all) —
+// only surrounding whitespace is normalised.
+func reflowTable(lines []string) []string {
+	type prow struct {
+		cells []string
+		isSep bool
+	}
+	rows := make([]prow, 0, len(lines))
+	maxCols := 0
+	for _, ln := range lines {
+		cells := splitTableRow(ln)
+		if len(cells) > maxCols {
+			maxCols = len(cells)
+		}
+		rows = append(rows, prow{cells: cells, isSep: isSeparatorRow(cells)})
+	}
+
+	// Column widths come from data rows only — separator rows don't constrain width.
+	widths := make([]int, maxCols)
+	for _, r := range rows {
+		if r.isSep {
+			continue
+		}
+		for i, c := range r.cells {
+			if w := utf8.RuneCountInString(c); w > widths[i] {
+				widths[i] = w
+			}
+		}
+	}
+
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		var sb strings.Builder
+		sb.WriteByte('|')
+		for i := 0; i < maxCols; i++ {
+			if r.isSep {
+				sb.WriteByte(' ')
+				sb.WriteString(strings.Repeat("-", widths[i]))
+				sb.WriteString(" |")
+				continue
+			}
+			var cell string
+			if i < len(r.cells) {
+				cell = r.cells[i]
+			}
+			pad := widths[i] - utf8.RuneCountInString(cell)
+			if pad < 0 {
+				pad = 0
+			}
+			sb.WriteByte(' ')
+			sb.WriteString(cell)
+			sb.WriteString(strings.Repeat(" ", pad))
+			sb.WriteString(" |")
+		}
+		out = append(out, sb.String())
+	}
+	return out
+}
+
+// splitTableRow parses one pipe-table line into trimmed cells, stripping the
+// outer pipes and honouring escaped `\|` as literal pipe characters within a cell.
+func splitTableRow(line string) []string {
+	const ph = "\x00KMPIPE\x00"
+	s := strings.TrimSpace(line)
+	s = strings.TrimPrefix(s, "|")
+	s = strings.TrimSuffix(s, "|")
+	s = strings.ReplaceAll(s, `\|`, ph)
+	parts := strings.Split(s, "|")
+	cells := make([]string, len(parts))
+	for i, p := range parts {
+		cells[i] = strings.TrimSpace(strings.ReplaceAll(p, ph, "|"))
+	}
+	return cells
+}
+
+// isSeparatorRow reports whether every cell is a GFM separator cell (dashes with
+// optional alignment colons), i.e. the `|---|---|` rule under a table header.
+func isSeparatorRow(cells []string) bool {
+	if len(cells) == 0 {
+		return false
+	}
+	for _, c := range cells {
+		if !reSepCell.MatchString(c) {
+			return false
+		}
+	}
+	return true
 }
 
 // isPipeLine returns true if a line looks like a pipe-table row and is NOT

@@ -203,6 +203,117 @@ func TestMrkdwnify_PipeTable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// REND-07b: Pipe-table column reflow (Slack-output quality)
+//
+// A GFM table is not just fenced — it is reflowed so columns align in Slack's
+// monospace code block and the raw `|---|---|` separator becomes a width-matched
+// rule. This is the fix for "tables aren't looking right" in Slack.
+// ---------------------------------------------------------------------------
+
+// tableRowLines returns the lines of `s` that look like rendered table rows
+// (trimmed, starting with `|`).
+func tableRowLines(s string) []string {
+	var rows []string
+	for _, ln := range strings.Split(s, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), "|") {
+			rows = append(rows, ln)
+		}
+	}
+	return rows
+}
+
+// pipeIndexes returns the byte offsets of every `|` in a line.
+func pipeIndexes(s string) []int {
+	var idx []int
+	for i := 0; i < len(s); i++ {
+		if s[i] == '|' {
+			idx = append(idx, i)
+		}
+	}
+	return idx
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestMrkdwnify_PipeTableReflow(t *testing.T) {
+	input := "| Folder | Count |\n" +
+		"|--------|-------|\n" +
+		"| vendor | 189 |\n" +
+		"| build | 216 |\n"
+	got := Mrkdwnify(input)
+
+	// Must be wrapped in a balanced ``` fence.
+	if c := strings.Count(got, "```"); c < 2 || c%2 != 0 {
+		t.Fatalf("expected a balanced ``` fence; got %d markers in:\n%s", c, got)
+	}
+
+	// The raw GFM separator row must be reflowed into an aligned rule, not kept
+	// verbatim.
+	if strings.Contains(got, "|--------|-------|") {
+		t.Errorf("raw GFM separator row should be reflowed away, got:\n%s", got)
+	}
+
+	rows := tableRowLines(got)
+	if len(rows) != 4 {
+		t.Fatalf("expected 4 table rows (header, rule, 2 data); got %d:\n%s", len(rows), got)
+	}
+
+	// Every row must be the same byte length (aligned grid) and have identical
+	// pipe positions.
+	width := len(rows[0])
+	want := pipeIndexes(rows[0])
+	for _, r := range rows {
+		if len(r) != width {
+			t.Errorf("misaligned row (len %d != %d): %q\nfull:\n%s", len(r), width, r, got)
+		}
+		if !equalInts(pipeIndexes(r), want) {
+			t.Errorf("pipe columns not aligned in row %q (want cols %v)\nfull:\n%s", r, want, got)
+		}
+	}
+
+	// Cell content must survive the reflow.
+	for _, cell := range []string{"Folder", "Count", "vendor", "189", "build", "216"} {
+		if !strings.Contains(got, cell) {
+			t.Errorf("reflow dropped cell %q:\n%s", cell, got)
+		}
+	}
+}
+
+// A pipe-line run with no separator row (just data) still aligns into a grid.
+func TestMrkdwnify_PipeTableReflowNoSeparator(t *testing.T) {
+	input := "| alpha | 1 |\n| b | 4242 |\n"
+	got := Mrkdwnify(input)
+	rows := tableRowLines(got)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 aligned rows; got %d:\n%s", len(rows), got)
+	}
+	if !equalInts(pipeIndexes(rows[0]), pipeIndexes(rows[1])) {
+		t.Errorf("rows not column-aligned:\n%s", got)
+	}
+}
+
+// Reflow is idempotent: once a table is reflowed-and-fenced, a second pass
+// leaves it byte-for-byte unchanged (the fence makes it a code segment).
+func TestMrkdwnify_PipeTableReflowIdempotent(t *testing.T) {
+	input := "| Folder | Count |\n|--------|-------|\n| vendor | 189 |\n| build | 216 |\n"
+	once := Mrkdwnify(input)
+	twice := Mrkdwnify(once)
+	if once != twice {
+		t.Errorf("reflow not idempotent:\n once:\n%s\n twice:\n%s", once, twice)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // REND-08: Code fence byte-preservation (property test)
 // ---------------------------------------------------------------------------
 

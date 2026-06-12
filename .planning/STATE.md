@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 106-01-PLAN.md — Wave 0 RED test scaffold for Phase 106 resume-hint
-last_updated: "2026-06-12T02:49:02.518Z"
+stopped_at: "Completed 106-04-PLAN.md — Phase 106 operator documentation complete (4 files: github-bridge.md, h1-bridge.md, CLAUDE.md, skills/init/SKILL.md)"
+last_updated: "2026-06-12T03:07:25.321Z"
 last_activity: 2026-06-12
 progress:
   total_phases: 123
-  completed_phases: 109
+  completed_phases: 110
   total_plans: 553
-  completed_plans: 512
+  completed_plans: 515
   percent: 91
 ---
 
@@ -544,6 +544,9 @@ Progress: [█████████░] 91%
 | Phase 107-reconcile-22-stale-internal-app-cmd-unit-tests P04 | 4min | 2 tasks | 4 files |
 | Phase 107-07 P07 | 5 | 1 tasks | 1 files |
 | Phase 106 P01 | 92s | 2 tasks | 2 files |
+| Phase 106-session-resume-hint-on-github-hackerone-bridge-replies-post-on-mint P02 | 180s | 2 tasks | 2 files |
+| Phase 106 P03 | 31537673s | 2 tasks | 1 files |
+| Phase 106-session-resume-hint-on-github-hackerone-bridge-replies-post-on-mint P04 | 131s | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1568,6 +1571,12 @@ Recent decisions affecting current work:
 - [Phase 107-07]: NewShellCmdWithFetcher RunE discriminates pre-flight vs session-exit errors via errors.As; session-exit errors still swallowed to avoid spurious cobra output
 - [Phase 106]: Scoped GitHub hint assertions to extractGitHubInboundPoller output to prove hint lives inside the poller block
 - [Phase 106]: Locked post-on-mint condition as literal string assertion to prevent silent drift
+- [Phase 106]: Go raw string literal forbids literal backticks in printf format — used plain text for /workspace and sandbox id references in hint body
+- [Phase 106]: Recaptured learn.v2 golden after GITHUBINBOUND heredoc change — no-recapture rule applies to H1-free/GitHub-inbound-free dormancy goldens only
+- [Phase 106]: H1 resume-hint is internal-only: km-h1 comment bare form (no --reply-to-researcher) preserves safety layer — hint never visible to external researcher
+- [Phase 106]: /workspace is the locked run-from directory for resume commands in both GitHub and H1 poller hints
+- [Phase 106]: H1 resume hint is INTERNAL-only (no --reply-to-researcher); researcher visibility is a P0 bug
+- [Phase 106]: SKILL.md corrected: create-handler-embedded userdata edits deploy via make build-lambdas + km init --dry-run=false, NOT --sidecars
 
 ### Roadmap Evolution
 
@@ -1703,6 +1712,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-12T02:49:02.469Z
-Stopped at: Completed 106-01-PLAN.md — Wave 0 RED test scaffold for Phase 106 resume-hint
+Last session: 2026-06-12T03:03:03.139Z
+Stopped at: Completed 106-04-PLAN.md — Phase 106 operator documentation complete (4 files: github-bridge.md, h1-bridge.md, CLAUDE.md, skills/init/SKILL.md)
 Resume file: None

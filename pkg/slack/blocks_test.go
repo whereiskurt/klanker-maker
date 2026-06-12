@@ -434,10 +434,16 @@ func TestBlocks_PipeTableFenced(t *testing.T) {
 	if strings.Count(joined, "```")%2 != 0 {
 		t.Fatalf("unbalanced ``` fence in rendered section:\n%s", joined)
 	}
-	for _, row := range []string{"| vendor | 189 |", "| build  | 216 |"} {
+	// Rows are reflowed into a column-aligned grid (the `189`/`216` cells are
+	// padded to the `Count` column width) and the raw `|---|` separator becomes a
+	// width-matched rule.
+	for _, row := range []string{"| vendor | 189   |", "| build  | 216   |", "| ------ | ----- |"} {
 		if !strings.Contains(joined, row) {
-			t.Errorf("fenced section missing table row %q:\n%s", row, joined)
+			t.Errorf("fenced section missing aligned table row %q:\n%s", row, joined)
 		}
+	}
+	if strings.Contains(joined, "|--------|-------|") {
+		t.Errorf("raw GFM separator row should be reflowed away:\n%s", joined)
 	}
 }
 

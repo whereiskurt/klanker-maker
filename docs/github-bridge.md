@@ -1741,3 +1741,85 @@ command" reply is posted.
 
 **H. `km github status`** — Run `km github status`. Confirm the commands section appears
 with all configured commands, their descriptions/targets, and the effective default per repo.
+
+---
+
+## Phase 106 — Resume-hint on bridge replies (post-on-mint)
+
+> **Phase 106 (2026-06-11) — Session-resume hint on GitHub bridge replies (post-on-mint).**
+>
+> After a bridge agent turn completes, the sandbox-side poller posts ONE additional
+> collapsed `<details>` comment carrying the operator resume handle. The hint fires only
+> when the session id is new or changed (post-on-mint semantics), so a stable thread
+> produces exactly one hint comment — typically on the first turn. Slack is
+> deliberately excluded.
+
+### What the hint contains
+
+The collapsed `<details>` fold includes:
+
+- **Sandbox id** (`$SANDBOX_ID`) — for context.
+- **Run-from directory: `/workspace`** — the session transcript lives at
+  `/home/sandbox/.claude/projects/-workspace/<session-id>.jsonl`, but `--resume` keys
+  off the current working directory, so the resume command **must** be run from
+  `/workspace` (not `/home/sandbox`).
+- **Agent-correct resume command** — branched on `EFFECTIVE_AGENT`:
+  - Claude: `claude --resume <session-id>`
+  - Codex: `codex exec resume <session-id>`
+- **The minted session id** — the freshly issued or resumed id from this turn.
+
+Because PR comments are visible to all repo collaborators, the hint is wrapped in a
+`<details>` fold (collapsed by default). The session ids themselves are not exploitable
+without AWS/SSM access to the sandbox, so no redaction is applied.
+
+### Post-on-mint semantics
+
+The hint block is gated by a comparison of `NEW_GITHUB_SESSION` against the previously
+stored session id (`${GITHUB_SESSION:-}`). It fires only when the value is non-empty
+**and** differs from the stored value — i.e., on:
+
+1. **First turn** — no stored session id; `NEW_GITHUB_SESSION` is always new.
+2. **Gap-E cross-box re-mint** — a new sandbox was cold-created for the same alias;
+   the session id changes.
+
+Common case: exactly **one** hint comment per thread. If the same sandbox handles
+all turns (warm path), subsequent turns produce no additional hint.
+
+### Robustness
+
+The hint post is best-effort — it runs as:
+
+```bash
+/opt/km/bin/km-github comment --repo "$REPO" --number "$NUMBER" --body "$HINT_BODY" || true
+```
+
+The `|| true` guard ensures a transient API error (rate-limit, network blip) never
+blocks the SQS ack. The agent's main output is unaffected.
+
+### Deploy surface
+
+Phase 106 is a `pkg/compiler/userdata.go` change embedded in the **create-handler
+Lambda zip**. There are no new Terraform resources, no SandboxProfile schema changes,
+no new DDB columns, and no changes to bridge Lambdas or IAM.
+
+```bash
+# 1. Rebuild the create-handler Lambda zip (userdata.go is embedded here).
+#    NOT --sidecars (--sidecars only re-uploads sidecar binaries, not the create-handler zip).
+#    NOT km init --github/--h1 (those refresh bridge env+IAM only, not the create-handler zip).
+make build-lambdas
+
+# 2. Full terragrunt apply — uploads the new create-handler zip.
+km init --dry-run=false
+
+# 3. Existing sandboxes must be recreated to gain the new poller.
+km destroy <sandbox-id> --remote --yes
+km create profiles/github-review.yaml --alias gh-myrepo
+
+# 4. Verify.
+km doctor
+```
+
+**Bridge Lambdas / IAM / Terraform:** UNAFFECTED. No scoped `km init --github` step required.
+
+**Slack poller:** EXCLUDED — byte-identical to pre-Phase-106. Operators can ask the
+agent to share its session interactively in chat.
