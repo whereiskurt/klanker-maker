@@ -300,6 +300,13 @@ resource "aws_lambda_function" "h1_bridge" {
   timeout     = 60
   memory_size = 256
 
+  # Encrypt env vars under the customer-managed platform CMK (var.kms_key_arn, an
+  # IAM-delegating key) instead of the aws/lambda managed key. The role's identity
+  # kms:Decrypt (scoped to var.kms_key_arn above) then authorizes env decryption
+  # DIRECTLY — no role-pinned KMS grant — so a role-recreating km init can no longer
+  # orphan the grant and 502 the function. null = managed-key default when unset.
+  kms_key_arn = var.kms_key_arn != "" ? var.kms_key_arn : null
+
   environment {
     variables = {
       KM_RESOURCE_PREFIX      = var.resource_prefix
@@ -324,8 +331,9 @@ resource "aws_lambda_function" "h1_bridge" {
     "km:managed"   = "true"
   })
 
-  # CLAUDE.md memory: replace_triggered_by on IAM role to avoid stale
-  # aws/lambda KMS grants when the IAM role is recreated.
+  # Belt-and-suspenders: replace the function when the IAM role is recreated. With
+  # kms_key_arn set above, env decrypt is grant-independent so this is no longer the
+  # primary safeguard (the CMK is) — kept as harmless defense-in-depth.
   lifecycle {
     replace_triggered_by = [aws_iam_role.h1_bridge]
   }

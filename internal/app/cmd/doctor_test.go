@@ -640,23 +640,23 @@ func (c *testConfig) GetProfileSearchPaths() []string  { return nil }
 func (c *testConfig) GetSlackStreamMessagesTableName() string {
 	return "km-slack-stream-messages"
 }
-func (c *testConfig) GetResourcePrefix() string         { return "km" }
-func (c *testConfig) GetDoctorIgnorePrefixes() []string { return nil }
-func (c *testConfig) GetEmailDomain() string            { return "sandboxes.klankermaker.ai" }
-func (c *testConfig) GetSsmPrefix() string              { return "/km/" }
-func (c *testConfig) GetSlackPeerBridges() []string     { return nil }
-func (c *testConfig) GetSlackThreadsTableName() string  { return "km-slack-threads" }
-func (c *testConfig) GetSandboxTableName() string       { return "km-sandboxes" }
-func (c *testConfig) GetClusterRoleNames() []string     { return nil }
+func (c *testConfig) GetResourcePrefix() string                { return "km" }
+func (c *testConfig) GetDoctorIgnorePrefixes() []string        { return nil }
+func (c *testConfig) GetEmailDomain() string                   { return "sandboxes.klankermaker.ai" }
+func (c *testConfig) GetSsmPrefix() string                     { return "/km/" }
+func (c *testConfig) GetSlackPeerBridges() []string            { return nil }
+func (c *testConfig) GetSlackThreadsTableName() string         { return "km-slack-threads" }
+func (c *testConfig) GetSandboxTableName() string              { return "km-sandboxes" }
+func (c *testConfig) GetClusterRoleNames() []string            { return nil }
 func (c *testConfig) GetGithubRepos() []appcfg.GithubRepoEntry { return nil }
 func (c *testConfig) GetGithubDefaultProfile() string          { return "" }
 func (c *testConfig) GetGithubCommands() map[string]appcfg.GithubCommandEntry {
 	return nil
 }
-func (c *testConfig) GetGithubDefaultCommand() string    { return "" }
-func (c *testConfig) GetGithubPeerBridges() []string     { return nil }
-func (c *testConfig) GetConfigFilePath() string          { return "" }
-func (c *testConfig) GetSlackChannelsTableName() string  { return "km-slack-channels" }
+func (c *testConfig) GetGithubDefaultCommand() string   { return "" }
+func (c *testConfig) GetGithubPeerBridges() []string    { return nil }
+func (c *testConfig) GetConfigFilePath() string         { return "" }
+func (c *testConfig) GetSlackChannelsTableName() string { return "km-slack-channels" }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -988,14 +988,14 @@ func (c *testDoctorConfig) GetProfileSearchPaths() []string  { return nil }
 func (c *testDoctorConfig) GetSlackStreamMessagesTableName() string {
 	return "km-slack-stream-messages"
 }
-func (c *testDoctorConfig) GetResourcePrefix() string         { return "km" }
-func (c *testDoctorConfig) GetDoctorIgnorePrefixes() []string { return nil }
-func (c *testDoctorConfig) GetEmailDomain() string            { return "sandboxes.klankermaker.ai" }
-func (c *testDoctorConfig) GetSsmPrefix() string              { return "/km/" }
-func (c *testDoctorConfig) GetSlackPeerBridges() []string     { return nil }
-func (c *testDoctorConfig) GetSlackThreadsTableName() string  { return "km-slack-threads" }
-func (c *testDoctorConfig) GetSandboxTableName() string       { return "km-sandboxes" }
-func (c *testDoctorConfig) GetClusterRoleNames() []string     { return nil }
+func (c *testDoctorConfig) GetResourcePrefix() string                { return "km" }
+func (c *testDoctorConfig) GetDoctorIgnorePrefixes() []string        { return nil }
+func (c *testDoctorConfig) GetEmailDomain() string                   { return "sandboxes.klankermaker.ai" }
+func (c *testDoctorConfig) GetSsmPrefix() string                     { return "/km/" }
+func (c *testDoctorConfig) GetSlackPeerBridges() []string            { return nil }
+func (c *testDoctorConfig) GetSlackThreadsTableName() string         { return "km-slack-threads" }
+func (c *testDoctorConfig) GetSandboxTableName() string              { return "km-sandboxes" }
+func (c *testDoctorConfig) GetClusterRoleNames() []string            { return nil }
 func (c *testDoctorConfig) GetGithubRepos() []appcfg.GithubRepoEntry { return nil }
 func (c *testDoctorConfig) GetGithubDefaultProfile() string          { return "" }
 func (c *testDoctorConfig) GetGithubCommands() map[string]appcfg.GithubCommandEntry {
@@ -1091,6 +1091,51 @@ func TestDoctorLambda_NotFound(t *testing.T) {
 
 func TestDoctorLambda_NilClient(t *testing.T) {
 	result := checkLambdaFunction(context.Background(), nil, "km-ttl-handler")
+	if result.Status != CheckSkipped {
+		t.Errorf("expected CheckSkipped for nil client, got %s", result.Status)
+	}
+}
+
+// checkBridgeEnvKMSKey WARNs when a bridge Lambda still encrypts its env vars with
+// the aws/lambda managed key (durable CMK fix not applied → role recreation can 502).
+
+func TestCheckBridgeEnvKMSKey_OnManagedKey_Warns(t *testing.T) {
+	// Configuration with no KMSKeyArn ⇒ aws/lambda managed key.
+	client := &mockLambdaClient{output: &lambdasvc.GetFunctionOutput{
+		Configuration: &lambdatypes.FunctionConfiguration{FunctionName: aws.String("sec-github-bridge")},
+	}}
+	result := checkBridgeEnvKMSKey(context.Background(), client, "sec-github-bridge")
+	if result.Status != CheckWarn {
+		t.Fatalf("expected CheckWarn for a function on the managed key, got %s: %s", result.Status, result.Message)
+	}
+	if !containsString(result.Remediation, "update-function-configuration") {
+		t.Errorf("remediation should include the update-function-configuration one-liner, got: %s", result.Remediation)
+	}
+}
+
+func TestCheckBridgeEnvKMSKey_OnCMK_OK(t *testing.T) {
+	client := &mockLambdaClient{output: &lambdasvc.GetFunctionOutput{
+		Configuration: &lambdatypes.FunctionConfiguration{
+			FunctionName: aws.String("sec-github-bridge"),
+			KMSKeyArn:    aws.String("arn:aws:kms:us-east-1:123456789012:key/abc-123"),
+		},
+	}}
+	result := checkBridgeEnvKMSKey(context.Background(), client, "sec-github-bridge")
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK when the function uses a CMK, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckBridgeEnvKMSKey_NotDeployed_Skips(t *testing.T) {
+	client := &mockLambdaClient{err: &lambdatypes.ResourceNotFoundException{Message: aws.String("nope")}}
+	result := checkBridgeEnvKMSKey(context.Background(), client, "sec-github-bridge")
+	if result.Status != CheckSkipped {
+		t.Errorf("expected CheckSkipped when the function is not deployed, got %s", result.Status)
+	}
+}
+
+func TestCheckBridgeEnvKMSKey_NilClient_Skips(t *testing.T) {
+	result := checkBridgeEnvKMSKey(context.Background(), nil, "sec-github-bridge")
 	if result.Status != CheckSkipped {
 		t.Errorf("expected CheckSkipped for nil client, got %s", result.Status)
 	}

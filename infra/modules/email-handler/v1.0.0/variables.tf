@@ -66,3 +66,9 @@ variable "state_prefix" {
   description = "Terragrunt state-bucket prefix (e.g. 'tf-km', 'tf-rg'). Used in IAM policies that read sandbox metadata from S3."
   default     = "tf-km"
 }
+
+variable "kms_key_arn" {
+  description = "Customer-managed platform KMS key ARN for Lambda env-var encryption. When set, the function encrypts env vars under this IAM-delegating CMK so the role's identity kms:Decrypt authorizes decryption directly (survives role recreation). Empty = aws/lambda managed-key default."
+  type        = string
+  default     = ""
+}

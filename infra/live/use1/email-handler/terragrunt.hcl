@@ -1,6 +1,6 @@
 locals {
-  repo_root  = dirname(find_in_parent_folders("CLAUDE.md"))
-  site_vars  = read_terragrunt_config("${local.repo_root}/infra/live/site.hcl")
+  repo_root = dirname(find_in_parent_folders("CLAUDE.md"))
+  site_vars = read_terragrunt_config("${local.repo_root}/infra/live/site.hcl")
 
   region_config = read_terragrunt_config("${get_terragrunt_dir()}/../region.hcl")
   region_label  = local.region_config.locals.region_label
@@ -40,6 +40,7 @@ inputs = {
   lambda_zip_path      = "${local.repo_root}/build/email-create-handler.zip"
   scheduler_role_arn   = get_env("KM_SCHEDULER_ROLE_ARN", "")
   create_handler_arn   = get_env("KM_CREATE_HANDLER_ARN", "")
+  kms_key_arn          = get_env("KM_PLATFORM_KMS_KEY_ARN", "")
   resource_prefix      = local.site_vars.locals.site.label
   sandbox_table_name   = "${local.site_vars.locals.site.label}-sandboxes"
   safe_phrase_ssm_key  = "/${local.site_vars.locals.site.label}/config/remote-create/safe-phrase"

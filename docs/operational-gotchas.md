@@ -114,20 +114,45 @@ Lambda behavior.
 - Diagnose: `aws logs tail /aws/lambda/km-create-handler --since 30m | grep <id>`.
 - Recover: `km destroy <id> --remote --yes` to clear the stub, then re-create.
 
-### Lambdas need `replace_triggered_by = [role]`
+### Lambda env-var decrypt must ride a customer-managed CMK, not a KMS grant
 
-All management Lambda modules wire `lifecycle { replace_triggered_by =
-[aws_iam_role.X] }`. Without it, when terragrunt recreates an IAM role the Lambda's
-cached KMS grant on the AWS-managed `aws/lambda` key stays bound to the **old**
-role's unique ID (`AROA…`). The Lambda keeps its name but loses decrypt ability —
-cold starts fail silently with `KMSAccessDeniedException` before writing any logs.
-Invocations succeed at the AWS API level (metrics show 0 errors) but the runtime
-never starts; events pile up with no visible failure.
+When terragrunt recreates a Lambda's IAM role, the Lambda's env-var decrypt **grant**
+on the AWS-managed `aws/lambda` key stays bound to the **old** role's unique ID
+(`AROA…`). The function keeps its name but loses decrypt ability — cold starts fail
+with `KMSAccessDeniedException` **before writing any logs** (HTTP 502 at a Function URL;
+metrics show 0 errors). For the GitHub bridge this looks like: PR @-mentions get no 👀
+and no dispatch, with zero recent invocations. Slack/H1/email-handler/create-handler
+share the exposure.
 
-Debugging "Lambda doesn't fire": `aws kms list-grants --key-id alias/aws/lambda`
-and look for grantee principals with unique-IDs (`AROA…`) rather than role ARNs.
-If a role was recently replaced, only `aws lambda delete-function` +
-`terragrunt apply` recovers a Lambda missing `replace_triggered_by`.
+**`replace_triggered_by = [role]` is NOT a reliable safeguard.** Every Lambda module
+still carries it, but the 2026-06-12 (`sec`/us-east-1) incident recreated the role and
+the function still ended up with only the stale grant. Treat it as harmless
+defense-in-depth, not the fix.
+
+**The durable fix** is to encrypt env vars with a customer-managed CMK whose key policy
+delegates to IAM root, so the role's identity-based `kms:Decrypt` authorizes env
+decryption **directly** — no grant. The platform key `alias/km-platform-{prefix}-{label}`
+(created by `km bootstrap`, AWS default key policy ⇒ root delegation present) is reused.
+Each `aws_lambda_function` sets `kms_key_arn = var.kms_key_arn != "" ? var.kms_key_arn : null`
+and the role's identity `kms:Decrypt` is scoped to `var.kms_key_arn`.
+
+**Plumbing gotcha that this exposed:** `KM_PLATFORM_KMS_KEY_ARN` is consumed by
+terragrunt (`get_env(...)`) but for a long time **no Go code ever set it** — so every
+function silently stayed on the managed key. `km init` now resolves the platform alias →
+**key ARN** (aliases aren't valid IAM-policy resources) via `exportPlatformKMSKeyARN`
+after `ExportTerragruntEnvVars` (runInit / runInitScoped / runInitPlan).
+
+**Detection:** `km doctor` (`checkBridgeEnvKMSKey`) WARNs per bridge/handler Lambda whose
+`GetFunction.Configuration.KMSKeyArn` is empty. **Immediate unblock:**
+`aws lambda update-function-configuration --function-name <fn> --kms-key-arn <cmk-arn>`
+re-mints the grant for the current role (re-broken by the next role-recreating `km init`
+until the CMK plumbing is deployed). **Durable deploy:** `make build-lambdas` +
+`km init --dry-run=false`. Per-sandbox `token-refresher`/`budget-enforcer` share the
+exposure but were out of scope (they need sandbox recreate to adopt).
+
+Debugging "Lambda doesn't fire": `aws kms list-grants --key-id alias/aws/lambda` and look
+for grantee principals with unique-IDs (`AROA…`) that no longer match the function's
+current execution-role `RoleId`.
 
 ---
 

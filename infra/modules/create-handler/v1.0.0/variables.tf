@@ -97,3 +97,9 @@ variable "slack_channels_table_name" {
   type        = string
   default     = ""
 }
+
+variable "kms_key_arn" {
+  description = "Customer-managed platform KMS key ARN for Lambda env-var encryption. When set, the function encrypts env vars under this IAM-delegating CMK so the role's identity kms:Decrypt authorizes decryption directly (survives role recreation). Empty = aws/lambda managed-key default."
+  type        = string
+  default     = ""
+}
