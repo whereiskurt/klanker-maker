@@ -429,3 +429,89 @@ A `RUN_H1_E2E=1`-gated harness lives at `test/e2e/h1/e2e_test.go` (skips clean w
 - **Orphan-program helpful reply** (Phase 101 analog).
 - **Report attachment** download/upload through the bridge/helper.
 - **`km doctor` HackerOne checks.**
+
+---
+
+## Phase 106 — Resume-hint on bridge replies (post-on-mint)
+
+> **Phase 106 (2026-06-11) — Session-resume hint on HackerOne bridge replies (post-on-mint).**
+>
+> After a bridge agent turn completes, the sandbox-side H1 poller posts ONE additional
+> collapsed `<details>` comment carrying the operator resume handle. The hint fires only
+> when the session id is new or changed (post-on-mint semantics), so a stable thread
+> produces exactly one hint comment — typically on the first turn.
+
+### INTERNAL-only safety property
+
+The hint is posted via `km-h1 comment --report "$REPORT_ID" --body "$HINT_BODY"` — the
+**bare form, without `--reply-to-researcher`**. `km-h1 comment` defaults `internal:true`,
+which means the activity is posted on the **internal / team** comment track in HackerOne.
+
+**The hint is never visible to the external researcher.** This is a hard safety property:
+the hint contains the sandbox id and the session id; exposing either to a researcher would
+be a security boundary violation. The `--reply-to-researcher` flag must not be added to
+the hint call.
+
+### What the hint contains
+
+The collapsed `<details>` fold includes:
+
+- **Sandbox id** (`$SANDBOX_ID`) — for internal context.
+- **Run-from directory: `/workspace`** — the session transcript lives at
+  `/home/sandbox/.claude/projects/-workspace/<session-id>.jsonl`, but `--resume` keys
+  off the current working directory, so the resume command **must** be run from
+  `/workspace` (not `/home/sandbox`).
+- **Agent-correct resume command** — branched on `EFFECTIVE_AGENT`:
+  - Claude: `claude --resume <session-id>`
+  - Codex: `codex exec resume <session-id>`
+- **The minted session id** — the freshly issued or resumed id from this turn.
+
+### Post-on-mint semantics
+
+The hint block is gated by a comparison of `NEW_H1_SESSION` against the previously
+stored session id (`${H1_SESSION:-}`). It fires only when the value is non-empty
+**and** differs from the stored value — i.e., on:
+
+1. **First turn** — no stored session id; `NEW_H1_SESSION` is always new.
+2. **Gap-E cross-box re-mint** — a new sandbox was cold-created for the same alias;
+   the session id changes.
+
+Common case: exactly **one** hint comment per thread. Subsequent turns on the same
+sandbox produce no additional hint.
+
+### Robustness
+
+The hint post is best-effort — it runs as:
+
+```bash
+/opt/km/bin/km-h1 comment --report "$REPORT_ID" --body "$HINT_BODY" || true
+```
+
+The `|| true` guard ensures a transient API error never blocks the SQS ack.
+
+### Deploy surface
+
+Phase 106 is a `pkg/compiler/userdata.go` change embedded in the **create-handler
+Lambda zip**. There are no new Terraform resources, no SandboxProfile schema changes,
+no new DDB columns, and no changes to bridge Lambdas or IAM.
+
+```bash
+# 1. Rebuild the create-handler Lambda zip (userdata.go is embedded here).
+#    NOT --sidecars (--sidecars only re-uploads sidecar binaries, not the create-handler zip).
+#    NOT km init --h1 (that refreshes bridge env+IAM only, not the create-handler zip).
+make build-lambdas
+
+# 2. Full terragrunt apply — uploads the new create-handler zip.
+km init --dry-run=false
+
+# 3. Existing sandboxes must be recreated to gain the new poller.
+km destroy <sandbox-id> --remote --yes
+km create profiles/h1-triage.yaml --alias h1-myprogram
+
+# 4. Verify.
+km doctor
+```
+
+**Bridge Lambdas / IAM / Terraform:** UNAFFECTED. No scoped `km init --h1` step required.
+
+**Slack poller:** EXCLUDED — byte-identical to pre-Phase-106.
