@@ -2481,9 +2481,16 @@ Plans:
 - **Verification:** `go test ./internal/app/cmd/ -count=1` exits 0 with the explicit `ok` summary (read `go test`'s OWN exit, not a piped one — see [[feedback_check_go_test_exit_not_pipe]]). Also confirm no NEW failures introduced and the existing green tests (incl. Phase 105 `TestScoped*`, `TestRunInitPlan_ModuleOrder`) still pass.
 - **Parallelizable by subsystem** — the 22 tests live in ~10 separate `*_test.go` files with no shared fixtures, so plans can fan out per file/subsystem.
 
-**Requirements**: TBD (derive at plan time — likely one per subsystem cluster: TEST-HYGIENE-SHELL / -EMAIL / -UNINIT / -STATEBUCKET / -CREATE / -MISC / -TRIAGE / -GREEN)
-**Depends on:** None functional. Independent of Phases 105/106. (Phase 106 is an unrelated parallel feature; this only touches `internal/app/cmd/*_test.go`.)
-**Plans:** 0 plans
+**Requirements**: TEST-HYGIENE-SHELL, TEST-HYGIENE-EMAIL, TEST-HYGIENE-UNINIT, TEST-HYGIENE-STATEBUCKET, TEST-HYGIENE-CREATE, TEST-HYGIENE-MISC, TEST-HYGIENE-SHELL-FIX, TEST-HYGIENE-GREEN, TEST-HYGIENE-TRIAGE (derived at plan time, one per subsystem cluster; SHELL-FIX is the one approved production escalation; TRIAGE is the no-stray-prod-edits diff-shape guardrail folded into the green gate)
+**Depends on:** None functional. Independent of Phases 105/106. (Phase 106 is an unrelated parallel feature; this only touches `internal/app/cmd/*_test.go` plus one approved `shell.go` fix.)
+**Plans:** 8 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 107 to break down)
+- [ ] 107-01-PLAN.md — Wave 1: shell-docker (TestShellDocker* → `bash --login` + always `-u sandbox`)
+- [ ] 107-02-PLAN.md — Wave 1: email (re-key SSM mocks to `/km/sandbox/{id}/signing|encryption-key`)
+- [ ] 107-03-PLAN.md — Wave 1: uninit (wantOrder = reverse of 22-module regionalModules(); two counts 19→22)
+- [ ] 107-04-PLAN.md — Wave 1: state-bucket guards (list/lock/unlock/status reconciled to DynamoDB-primary behavior)
+- [ ] 107-05-PLAN.md — Wave 1: create (drop PLACEHOLDER_OPERATOR_KEY; update runCreateRemote signature grep)
+- [ ] 107-06-PLAN.md — Wave 1: misc (agent-auth `claude auth status` route; at-list future time; learn-output ""; EFS err==nil)
+- [ ] 107-07-PLAN.md — Wave 2: shell escalation — the ONE approved production fix (shell.go RunE returns pre-flight errors), own commit
+- [ ] 107-08-PLAN.md — Wave 3: green gate — full-suite ok+EXIT=0 (own exit), 22→0, green-stays-green, diff-shape guardrail
