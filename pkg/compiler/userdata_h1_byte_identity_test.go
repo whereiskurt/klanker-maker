@@ -158,6 +158,13 @@ func TestUserdataH1EnabledRendersPoller(t *testing.T) {
 		`\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}`, // (report_id,target) key (literal backslashes inside the heredoc)
 		"update-item",                                           // UpdateItem (not PutItem) write-back
 		"km-h1 comment --report $REPORT_ID",                     // internal-by-default reply preamble
+		// Phase 106 resume-hint markers
+		`<details>`,                                              // collapsible fold opener in the H1 poller
+		`🔧 Resume`,                                              // locked summary wording
+		`claude --resume`,                                        // Claude resume branch
+		`codex exec resume`,                                      // Codex resume branch
+		`/workspace`,                                             // run-from directory
+		`"$NEW_H1_SESSION" != "${H1_SESSION:-}"`,                 // post-on-mint condition for H1
 	}
 	for _, sub := range wantSubstrings {
 		if !strings.Contains(got, sub) {
