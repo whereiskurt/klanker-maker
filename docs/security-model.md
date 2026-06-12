@@ -36,7 +36,7 @@ Klanker Maker's security model is built on four principles:
 
 **Defense in depth.** No single layer is trusted to hold. Network egress is enforced at up to four independent layers: Security Groups (L3/L4), eBPF cgroup programs (kernel-level connect/egress filtering), DNS proxy or resolver (application-layer domain filtering), and HTTP proxy (application-layer host filtering). In proxy mode, iptables DNAT ensures traffic cannot bypass the proxy sidecars. In eBPF mode, cgroup-attached BPF programs enforce allowlists in the kernel — even root users cannot bypass them. IMDSv2 prevents SSRF-based credential theft even if application code is compromised. Secret redaction in audit logs prevents credential leakage even if log storage is breached.
 
-**Assume agent compromise.** The platform assumes the AI agent running inside the sandbox will attempt to escape its constraints. The agent has shell access, can execute arbitrary code within its allowed tool set (`agent.allowedTools`), and may try to exfiltrate data, escalate privileges, or pivot to other infrastructure. Every design decision starts from this assumption.
+**Assume agent compromise.** The platform assumes the AI agent running inside the sandbox will attempt to escape its constraints. The agent has shell access, can execute arbitrary code within its allowed tool set (gated by `spec.agent.claude.tools`), and may try to exfiltrate data, escalate privileges, or pivot to other infrastructure. Every design decision starts from this assumption.
 
 ---
 
@@ -224,9 +224,9 @@ Each sandbox gets its own IAM role and instance profile. The role is scoped with
 
 **Per-sandbox role:** The IAM role name includes the sandbox ID and region label (`km-ec2spot-ssm-{sandbox_id}-{region_label}`), preventing cross-sandbox role confusion.
 
-**Session duration:** Configurable via `identity.roleSessionDuration` in the profile. The `compileIAMPolicy` function in `pkg/compiler/security.go` parses the Go duration string and sets `max_session_duration` on the IAM role. Default is 3600 seconds (1 hour). Short sessions limit the window of exposure if credentials are compromised.
+**Session duration:** Configurable via `iam.roleSessionDuration` in the profile. The `compileIAMPolicy` function in `pkg/compiler/security.go` parses the Go duration string and sets `max_session_duration` on the IAM role. Default is 3600 seconds (1 hour). Short sessions limit the window of exposure if credentials are compromised.
 
-**Region lock:** When `identity.allowedRegions` is non-empty, an inline policy is attached that restricts all API calls to the specified regions using an `aws:RequestedRegion` condition:
+**Region lock:** When `iam.allowedRegions` is non-empty, an inline policy is attached that restricts all API calls to the specified regions using an `aws:RequestedRegion` condition:
 
 ```json
 {
@@ -303,7 +303,7 @@ sourceAccess:
 
 - `allowedRepos`: glob patterns specifying which repositories can be cloned or fetched. `github.com/*` allows any repo on GitHub; `github.com/whereiskurt/*` restricts to a specific organization.
 - `allowedRefs`: branch/tag patterns restricting which refs the agent can push to. Supports bash glob wildcards (`feature/*`, `fix/*`). See "AllowedRefs Enforcement" below for implementation details.
-The `hardened` profile has `agent.allowedTools: [read_file]` and no GitHub configuration at all -- zero repository access.
+The `hardened` profile constrains tools via `spec.agent.claude.tools` and has no GitHub configuration at all -- zero repository access.
 
 **Deny-by-default contract:** Both a nil `sourceAccess.github` AND an explicitly empty `allowedRepos: []` result in zero GitHub token infrastructure being provisioned. The compiler gates all token infrastructure (GitHub token Lambda/EventBridge, per-sandbox SSM parameter, `github_token_inputs` HCL block, and the `GIT_ASKPASS` credential helper in EC2 user-data) behind the condition `GitHub != nil && len(AllowedRepos) > 0`. No token means no access -- this is the primary access control layer.
 
@@ -672,7 +672,7 @@ spec:
 **Threat:** An AI agent exploits a vulnerability in the runtime environment, kernel, or sidecar to gain arbitrary code execution outside the sandbox constraints.
 
 **Mitigations (layered):**
-1. The agent is already running as an unprivileged user with constrained `agent.allowedTools`.
+1. The agent is already running as an unprivileged user with tools constrained by `spec.agent.claude.tools`.
 2. Filesystem bind mounts prevent modification of system binaries and configuration.
 3. Even with arbitrary code execution, Security Groups block all egress except DNS (UDP 53) and HTTPS (TCP 443).
 4. Even with arbitrary network access on allowed ports, the DNS proxy returns NXDOMAIN for non-allowed domains and the HTTP proxy returns 403 for non-allowed hosts.
