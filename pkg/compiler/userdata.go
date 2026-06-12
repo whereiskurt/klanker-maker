@@ -2396,6 +2396,19 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
         --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_GITHUB_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
         --region "$REGION" 2>/dev/null || true
       echo "[km-github-inbound-poller] Session updated — repo=$REPO PR=#$NUMBER session=${NEW_GITHUB_SESSION:0:8}... agent=$EFFECTIVE_AGENT"
+      # Phase 106: post resume-hint fold on session mint (first turn or Gap-E re-mint).
+      # Post-on-mint: fires only when the session id is new or changed. Best-effort
+      # (|| true) — a failed hint post MUST NOT block the SQS ack or turn completion.
+      if [ -n "$NEW_GITHUB_SESSION" ] && [ "$NEW_GITHUB_SESSION" != "${GITHUB_SESSION:-}" ]; then
+        if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+          RESUME_CMD="codex exec resume $NEW_GITHUB_SESSION"
+        else
+          RESUME_CMD="claude --resume $NEW_GITHUB_SESSION"
+        fi
+        HINT_BODY=$(printf '<details>\n<summary>🔧 Resume this agent session</summary>\n\nOn sandbox %s, from the /workspace folder run: %s\n</details>' \
+          "$SANDBOX_ID" "$RESUME_CMD")
+        /opt/km/bin/km-github comment --repo "$REPO" --number "$NUMBER" --body "$HINT_BODY" || true
+      fi
     fi
 
     # Ack-then-log: delete message before logging so a crash can't cause duplicate dispatch.
