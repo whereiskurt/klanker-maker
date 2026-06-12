@@ -2719,6 +2719,19 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
         --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_H1_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
         --region "$REGION" 2>/dev/null || true
       echo "[km-h1-inbound-poller] Session updated — report=$REPORT_ID target=$TARGET session=${NEW_H1_SESSION:0:8}... agent=$EFFECTIVE_AGENT"
+      # Phase 106: post resume-hint fold on session mint (internal by default — the hint
+      # never goes external; safety layer preserved). Best-effort (|| true) — a failed
+      # hint post MUST NOT block the SQS ack or turn completion.
+      if [ -n "$NEW_H1_SESSION" ] && [ "$NEW_H1_SESSION" != "${H1_SESSION:-}" ]; then
+        if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+          RESUME_CMD="codex exec resume $NEW_H1_SESSION"
+        else
+          RESUME_CMD="claude --resume $NEW_H1_SESSION"
+        fi
+        HINT_BODY=$(printf '<details>\n<summary>🔧 Resume this agent session</summary>\n\nOn sandbox %s, from the /workspace folder run: %s\n</details>' \
+          "$SANDBOX_ID" "$RESUME_CMD")
+        /opt/km/bin/km-h1 comment --report "$REPORT_ID" --body "$HINT_BODY" || true
+      fi
     fi
 
     # Ack-then-log: delete the message AFTER a successful turn (DeleteMessage only on
