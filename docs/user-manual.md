@@ -1169,7 +1169,7 @@ km vscode status <sandbox-id>
 other subcommands — full sandbox ID (`lrn2-ee9499b5`), alias (`my-poc`), or list-row
 number.
 
-**Profile field:** add `spec.cli.vscodeEnabled: false` to opt out (default is true).
+**Profile field:** add `spec.runtime.vscode.enabled: false` to opt out (default is true).
 When false, sshd is not enabled at boot and `km vscode start` returns a clean error.
 
 **Common errors:**

@@ -7,10 +7,10 @@ Klanker Maker uses a GitHub App to provide sandboxes with scoped, short-lived ac
 ### 1. Create the GitHub App
 
 ```bash
-km github
+km configure github --setup
 ```
 
-This opens a browser to create a GitHub App via the manifest flow. The App is created as public so it can be installed on multiple accounts. Credentials are stored in SSM automatically.
+This opens a browser to create a GitHub App via the manifest flow. The App is created as public so it can be installed on multiple accounts. Credentials are stored in SSM automatically. (`km github init/manifest/status` manage the bridge config after the App exists.)
 
 ### 2. Install the App
 

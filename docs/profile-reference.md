@@ -63,7 +63,7 @@ Each duration value must match the pattern `^[0-9]+(s|m|h|d)$` (a single integer
 | Validation | Must be exactly `klankermaker.ai/v1alpha2` |
 
 The API version of the SandboxProfile resource. Currently only `v1alpha2` is
-supported (bumped from `v1alpha2` in Phase 92; `v1alpha2` is now rejected).
+supported (bumped from `v1alpha1` in Phase 92; `v1alpha1` is now rejected).
 
 ```yaml
 apiVersion: klankermaker.ai/v1alpha2
@@ -691,14 +691,14 @@ spec:
 | Default    | -- (empty)                     |
 | Validation | Keys must be absolute file paths; values are file contents |
 
-Map of absolute file paths to their contents. Each entry is written to the sandbox filesystem during bootstrap, owned by the sandbox user. Use this to pre-seed tool configuration files (e.g. Claude settings.json, Goose config, .gitconfig). Written after `initCommands`.
+Map of absolute file paths to their contents. Each entry is written to the sandbox filesystem during bootstrap, owned by the sandbox user. Use this to pre-seed tool configuration files (e.g. Goose config, `.gitconfig`). Written after `initCommands`.
+
+> **Phase 92:** the `"/home/sandbox/.claude/settings.json"` key is **forbidden** here — `~/.claude/settings.json` is synthesized from `spec.agent.claude.tools.*` + `trustedDirectories` (see [`docs/agent-tool-gating.md`](agent-tool-gating.md)). Inlining it alongside the typed `spec.agent.claude` block is a hard `km validate` error.
 
 ```yaml
 spec:
   execution:
     configFiles:
-      "/home/sandbox/.claude/settings.json": |
-        {"trustedDirectories":["/home/sandbox","/workspace"]}
       "/home/sandbox/.gitconfig": |
         [user]
           name = Sandbox
@@ -1207,11 +1207,31 @@ km validate learned.*.yaml            # validate before use
 
 ## `spec.agent`
 
+Selects the default agent and declares structured Claude/Codex tool gating. The
+compiler synthesizes `~/.claude/settings.json` (canonical `permissions.allow` /
+`permissions.deny`) and `~/.codex/config.toml` from this block.
+
+```yaml
+spec:
+  agent:
+    default: claude          # claude | codex (absence ≡ claude)
+    claude:
+      trustedDirectories: [/home/sandbox, /workspace]
+      tools:
+        autoApprove: [Bash, Read, Write, Edit, Glob, Grep]
+        deny: []
+      args: []               # extra `claude` CLI args
+    codex:
+      args: []               # extra `codex` CLI args
+```
+
+- `agent.default` drives `km shell` / `km agent run` / Slack-inbound dispatch and writes `KM_AGENT`.
+- Inlining `configFiles["/home/sandbox/.claude/settings.json"]` alongside `agent.claude.tools.*` is a hard `km validate` error (mixed mode).
+- Full field reference and the Codex asymmetry note: [`docs/agent-tool-gating.md`](agent-tool-gating.md).
+
 > **Phase 92 (2026-05-31):** the dead top-level `spec.agent:` block
-> (`maxConcurrentTasks`, `taskTimeout`, `allowedTools`) was **removed** — it was
-> never read by any code path, and the schema now rejects it. A new `agent:`
-> block with structured tool-gating semantics is re-introduced later in Phase 92
-> (Waves 4/5); this section will be rewritten with the new shape when that lands.
+> (`maxConcurrentTasks`, `taskTimeout`, `allowedTools`) was **removed**; this is
+> the structured tool-gating block that replaced it (Waves 4/5).
 
 ---
 
@@ -1476,7 +1496,7 @@ Operator-side defaults for `km shell` / `km agent` commands. These settings do n
 | Default    | `false`                        |
 | Validation | Boolean                        |
 
-Makes `--no-bedrock` the default for `km shell` and `km agent run`. The sandbox is still provisioned with Bedrock environment variables; this only affects the operator's connection. Override on the CLI with `--bedrock`.
+Makes `--no-bedrock` the default for `km shell` and `km agent run`. The sandbox is still provisioned with Bedrock environment variables; this only affects the operator's connection. Pass `--no-bedrock` explicitly per-invocation when this is unset (there is no positive `--bedrock` flag).
 
 ```yaml
 spec:
@@ -1484,15 +1504,15 @@ spec:
     noBedrock: true
 ```
 
-### `spec.cli.vscodeEnabled`
+### `spec.runtime.vscode.enabled`
 
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.cli.vscodeEnabled`       |
-| Type       | bool (pointer; omit = true)    |
-| Required   | No                             |
-| Default    | `true` when omitted            |
-| Validation | Boolean                        |
+| Property   | Value                                |
+|------------|--------------------------------------|
+| YAML path  | `spec.runtime.vscode.enabled`        |
+| Type       | bool (pointer; omit = true)          |
+| Required   | No                                   |
+| Default    | `true` when omitted                  |
+| Validation | Boolean                              |
 
 Provisions sshd and writes the operator's pubkey to `/home/sandbox/.ssh/authorized_keys`
 at boot so VS Code Remote-SSH (over SSM port-forward) can land in `/workspace`. When
@@ -1500,10 +1520,13 @@ true, `km create` also generates a per-sandbox ed25519 keypair at `~/.km/keys/<i
 the operator's laptop. Set to `false` for sandboxes that should not accept SSH
 connections of any kind. See [`docs/vscode.md`](vscode.md) for the full operator guide.
 
+> **Phase 92:** moved from `spec.cli.vscodeEnabled` to `spec.runtime.vscode.enabled`; the old path is rejected by `km validate`.
+
 ```yaml
 spec:
-  cli:
-    vscodeEnabled: false   # opt out — no sshd, no authorized_keys, no keypair
+  runtime:
+    vscode:
+      enabled: false   # opt out — no sshd, no authorized_keys, no keypair
 ```
 
 ---

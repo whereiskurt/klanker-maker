@@ -144,7 +144,7 @@ generated:
    `--force` is provided.
 3. **Remote SSM probe** — confirms sshd is active and `/home/sandbox/.ssh/authorized_keys`
    exists. Failure modes:
-   - `vscodeEnabled:false` (sshd inactive AND authkeys absent): "VS Code not enabled in
+   - `runtime.vscode.enabled:false` (sshd inactive AND authkeys absent): "VS Code not enabled in
      this sandbox's profile" — rekey can't enable VS Code retroactively.
    - sshd inactive but authkeys present: "sshd is not running" — recover via
      `km shell <id> -- sudo systemctl start sshd`.
@@ -188,14 +188,14 @@ $ km vscode rekey sb-abc12345 --yes
 Rekey complete. Reconnect VS Code to pick up the new key.
 ```
 
-**Pre-vscode sandbox (or `vscodeEnabled:false`):**
+**Pre-vscode sandbox (or `runtime.vscode.enabled:false`):**
 
 ```
 $ km vscode rekey sb-old00001
 ✓ EC2 instance running (i-0... in us-east-1)
-✗ VS Code not enabled in this sandbox's profile (set spec.cli.vscodeEnabled: true and recreate the sandbox)
+✗ VS Code not enabled in this sandbox's profile (set spec.runtime.vscode.enabled: true and recreate the sandbox)
 
-Hint: this sandbox was created with vscodeEnabled:false or before VS Code support was added.
+Hint: this sandbox was created with runtime.vscode.enabled:false or before VS Code support was added.
 Rekey can't enable VS Code retroactively. Run: km destroy sb-old00001 --remote --yes && km create <profile.yaml>
 ```
 
@@ -236,7 +236,7 @@ your existing access to the sandbox is preserved.
 |---|---|
 | "sandbox is not running" | `km resume <id>`, wait for `km list` to show `running`, retry rekey |
 | "Sandbox is locked" | `km unlock <id>` first, OR `km vscode rekey <id> --force` |
-| "VS Code not enabled in this sandbox's profile" | Rekey cannot help; `km destroy <id> --remote --yes && km create <profile.yaml>` with `spec.cli.vscodeEnabled: true` (the default) |
+| "VS Code not enabled in this sandbox's profile" | Rekey cannot help; `km destroy <id> --remote --yes && km create <profile.yaml>` with `spec.runtime.vscode.enabled: true` (the default) |
 | "sshd is not running" | `km shell <id> -- sudo systemctl start sshd`, then retry rekey |
 | "remote key install verification failed" | Inspect via `km shell <id> -- cat ~/.ssh/authorized_keys`, then `km vscode rekey <id>` to retry |
 | VS Code can't connect after rekey | Quit and reopen VS Code; the existing connection used the old key. New connections pick up the new key transparently. |
@@ -247,16 +247,19 @@ your existing access to the sandbox is preserved.
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
-| `vscodeEnabled` | bool* | true | Provision sshd + authorized_keys at sandbox boot. Set `false` to skip entirely. |
+| `spec.runtime.vscode.enabled` | bool* | true | Provision sshd + authorized_keys at sandbox boot. Set `false` to skip entirely. |
+
+> **Phase 92:** this field moved from `spec.cli.vscodeEnabled` to `spec.runtime.vscode.enabled`; the old path is rejected by `km validate`.
 
 ```yaml
 spec:
-  cli:
-    vscodeEnabled: false   # disable if this sandbox never needs VS Code access
+  runtime:
+    vscode:
+      enabled: false   # disable if this sandbox never needs VS Code access
 ```
 
-Set `vscodeEnabled: false` in profiles that do not need IDE access (e.g., headless agent
-sandboxes). Sandboxes without `vscodeEnabled: true` do NOT get sshd provisioning retroactively —
+Set `runtime.vscode.enabled: false` in profiles that do not need IDE access (e.g., headless agent
+sandboxes). Sandboxes without `runtime.vscode.enabled: true` do NOT get sshd provisioning retroactively —
 `km destroy` + `km create` to provision.
 
 ---
@@ -269,7 +272,7 @@ km vscode status <sandbox-id>
 ```
 
 **`km vscode start <sandbox-id>`**
-- Verifies sshd is active and authorized_keys is present (fails fast if `vscodeEnabled: false`).
+- Verifies sshd is active and authorized_keys is present (fails fast if `runtime.vscode.enabled: false`).
 - Upserts a managed Host entry in `~/.ssh/config`.
 - Prints connection instructions.
 - Opens a foreground SSM port-forward (same primitive as `km shell --ports`).
@@ -315,7 +318,7 @@ Host km-lrn2-abc123
 
 ## Sandbox-side state
 
-Cloud-init userdata (gated on `vscodeEnabled: true`) runs at boot:
+Cloud-init userdata (gated on `runtime.vscode.enabled: true`) runs at boot:
 
 1. `systemctl enable --now sshd` — AL2023 ships openssh-server but sshd is often disabled by
    default. Both `enable` AND `start` are required.
@@ -384,8 +387,8 @@ Cross-machine portability gap. Keys are generated on the creation machine only. 
 See [Limitations](#limitations).
 
 **"VS Code not enabled in this sandbox's profile"**
-The profile had `spec.cli.vscodeEnabled: false`. sshd was not provisioned at boot.
-Recreate the sandbox with the default (`vscodeEnabled` omitted = true).
+The profile had `spec.runtime.vscode.enabled: false`. sshd was not provisioned at boot.
+Recreate the sandbox with the default (`runtime.vscode.enabled` omitted = true).
 
 **"local port N is already in use — pick a different one with --local-port"**
 Another process holds the port. `km vscode start` probes the local port before
@@ -408,7 +411,7 @@ Check: `km vscode status $SB`. If sshd is active but SSH fails, the sandbox may 
 provisioned without VS Code support. `km destroy $SB --remote --yes && km create ...` to reprovision.
 
 **sshd not active after `km vscode status`**
-The sandbox was created with `vscodeEnabled: false` or without VS Code support. Reprovision.
+The sandbox was created with `runtime.vscode.enabled: false` or without VS Code support. Reprovision.
 
 ---
 
@@ -429,7 +432,7 @@ The sandbox was created with `vscodeEnabled: false` or without VS Code support. 
   `UserKnownHostsFile /dev/null`. Defense-in-depth comes from SSM/IAM authentication of the
   target instance; proper TOFU or cert-based host trust is a follow-up.
 
-- **Existing sandboxes need reprovisioning.** Sandboxes created without `vscodeEnabled: true` do NOT get
+- **Existing sandboxes need reprovisioning.** Sandboxes created without `runtime.vscode.enabled: true` do NOT get
   sshd provisioning retroactively. `km destroy` + `km create` required.
 
 ---

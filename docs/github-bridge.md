@@ -292,8 +292,9 @@ km github init
 ```
 
 Optional flags:
-- `--bot-token` — override SSM-sourced bot token for initial setup
-- `--force` — re-run even if bot-login is already cached
+- `--bot-login` — override the bot login handle (default `km-{prefix}-github-bridge[bot]`)
+- `--bridge-url` — bridge Lambda URL to store in SSM (set after `km init` provides the function URL)
+- `--force` — re-run even if bot-login is already cached (rotates the webhook secret)
 
 ### km github manifest
 

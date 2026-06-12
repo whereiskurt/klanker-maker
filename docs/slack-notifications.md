@@ -87,7 +87,7 @@ The built-in `profiles/*.yaml` that enable `perSandbox` set `channelName: "sb-{p
 
 1. **Pro Slack workspace** at klankermaker.ai (or a test workspace). Slack Connect (`conversations.inviteShared`) requires Pro tier or higher; the free tier returns `not_allowed_token_type`.
 
-2. **Custom Slack App** installed in the workspace with the full bot-scope set (14 scopes today). The canonical, version-current scope list is rendered by `km slack manifest`; paste the output into Slack admin → Apps → Build → New App → From manifest. Maintaining a hand-curated scope list in docs invariably drifts — see § Security Model § Complete bot scope inventory for the audit-friendly per-scope justification.
+2. **Custom Slack App** installed in the workspace with the full bot-scope set (15 scopes today). The canonical, version-current scope list is rendered by `km slack manifest`; paste the output into Slack admin → Apps → Build → New App → From manifest. Maintaining a hand-curated scope list in docs invariably drifts — see § Security Model § Complete bot scope inventory for the audit-friendly per-scope justification.
 
 3. **Bot token** (`xoxb-...`) captured from the Slack App's OAuth & Permissions page.
 
@@ -622,7 +622,7 @@ Render the canonical list at any time — this is the single source of truth:
 km slack manifest | jq -r '.oauth_config.scopes.bot[]'
 ```
 
-Audit-friendly per-scope table (14 scopes as of Phase 75 + Phase 72 + the
+Audit-friendly per-scope table (15 scopes as of Phase 75 + Phase 72 + the
 `groups:read` follow-up):
 
 | Scope | Slack API methods used | Why klanker needs it | Notes |
@@ -640,7 +640,8 @@ Audit-friendly per-scope table (14 scopes as of Phase 75 + Phase 72 + the
 | `reactions:write` | `reactions.add` | 👀 ACK on every accepted inbound Slack message (user feedback that the sandbox saw the message) | Independent of message delivery — failure logged but does not block reply |
 | `files:write` | `files.getUploadURLExternal`, `files.completeUploadExternal` | End-of-response transcript upload (gzipped JSONL) into the per-sandbox thread | Required only for `notification.slack.transcript.enabled: true` |
 | `files:read` | `files.info`; private-URL download with the bot token | Download user-attached files from inbound posts into `/workspace/.km-slack/attachments/` | Required for inbound file-attachment support (Phase 75) |
-| `users:read.email` | `users.lookupByEmail` | Auto-detect whether an invite address is a workspace member (regular invite) or external (Slack Connect); used by `km slack init`, `km slack invite`, and the `km create` auto-invite loop | Strictly narrower than `users:read` — does not enumerate the workspace directory |
+| `users:read.email` | `users.lookupByEmail` | Auto-detect whether an invite address is a workspace member (regular invite) or external (Slack Connect); used by `km slack init`, `km slack invite`, and the `km create` auto-invite loop | Resolves explicit operator-provided emails only — never enumerates the workspace directory |
+| `users:read` | (companion to `users:read.email`) | **Required companion** of `users:read.email` — Slack treats `.email` as an add-on, so `users.lookupByEmail` only works when both are granted and the manifest must list both | Without it, the email lookup fails even though `users:read.email` appears granted (see `docs/slack-app-permissions.md`) |
 
 #### Scopes deliberately NOT requested
 
@@ -651,7 +652,6 @@ the manifest, with the rationale:
 |---|---|
 | Any User Token Scope | Integration is purely server-to-server; no user-impersonation. The manifest declares only Bot Token Scopes. |
 | Legacy `bot` scope | Deprecated by Slack — granular bot scopes only. |
-| `users:read` | Klanker only resolves *explicit* email addresses provided by the operator; it never enumerates the workspace directory. `users:read.email` is the narrower scope sufficient for `lookupByEmail`. |
 | `chat:write.public` | The bot must be explicitly invited to channels before posting. This is an intentional guardrail — if a channel ID drifts, the bot fails with `not_in_channel` rather than silently posting somewhere else. |
 | `chat:write.customize` | The bot posts under its installed display name and avatar uniformly. No per-message identity override. |
 | `im:read` / `im:write` / `im:history` | No DMs. All interaction happens in named channels (shared or per-sandbox). |
@@ -1526,7 +1526,7 @@ never touch the raw Slack bot token.
 ### km doctor checks (Phase 70)
 
 - **`codex_version_supports_jsonl`** — for each sandbox with
-  `spec.cli.agent: codex`, verifies the installed Codex binary supports
+  `spec.agent.default: codex`, verifies the installed Codex binary supports
   `--json` output (JSONL stream). WARN on mismatch.
 - **`agent_type_consistency`** — for each `km-slack-threads` row with
   `agent_type` set, confirms the corresponding profile still declares the same
