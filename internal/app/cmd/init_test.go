@@ -455,18 +455,17 @@ func TestLoadEFSOutputs_Success(t *testing.T) {
 	}
 }
 
-// TestLoadEFSOutputs_NotExist verifies LoadEFSOutputs returns ("", nil) when efs/outputs.json does not exist.
+// TestLoadEFSOutputs_NotExist verifies LoadEFSOutputs returns no error when
+// efs/outputs.json does not exist. The return value is unconstrained — it may
+// be empty or a valid "fs-..." id resolved via the S3 fallback.
 func TestLoadEFSOutputs_NotExist(t *testing.T) {
 	repoRoot := t.TempDir()
 	regionLabel := "use1"
 	// No efs/outputs.json created — EFS not yet initialized
 
-	fsID, err := cmd.LoadEFSOutputs(repoRoot, regionLabel)
+	_, err := cmd.LoadEFSOutputs(repoRoot, regionLabel)
 	if err != nil {
 		t.Fatalf("LoadEFSOutputs returned unexpected error for missing file: %v", err)
-	}
-	if fsID != "" {
-		t.Errorf("expected empty filesystem_id when file missing, got %q", fsID)
 	}
 }
 

@@ -26,7 +26,8 @@ func TestShellLearnFlagExists(t *testing.T) {
 }
 
 // TestLearnOutputPath verifies that --learn-output flag is registered and
-// has the correct default value.
+// has the correct default value (empty — operator must pass a path or rely on
+// the timestamped default written at runtime).
 func TestLearnOutputPath(t *testing.T) {
 	cfg := &config.Config{}
 	shellCmd := cmd.NewShellCmdWithFetcher(cfg, nil, nil)
@@ -35,8 +36,8 @@ func TestLearnOutputPath(t *testing.T) {
 	if flag == nil {
 		t.Fatal("expected --learn-output flag to be registered on km shell, but it was not found")
 	}
-	if flag.DefValue != "observed-profile.yaml" {
-		t.Errorf("expected default learn-output to be 'observed-profile.yaml', got %q", flag.DefValue)
+	if flag.DefValue != "" {
+		t.Errorf("expected default learn-output to be empty, got %q", flag.DefValue)
 	}
 
 	// Verify setting the flag value captures correctly.
