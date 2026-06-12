@@ -69,17 +69,27 @@ type DynamoGitHubThreadClient interface {
 	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
 }
 
-// DynamoUpdateItemClient is the minimal DynamoDB interface required to perform
-// an UpdateItem call. Used by DynamoSandboxStatusWriter to flip status=running
-// on the km-sandboxes row after a successful auto-resume. Kept narrow to avoid
-// widening DynamoQueryPutter (which would force all existing fakes to implement
-// UpdateItem just for this path).
+// DynamoUpdateItemClient is the minimal DynamoDB interface required by
+// DynamoSandboxStatusWriter: UpdateItem (flip status=running after a successful
+// auto-resume) and DeleteItem (Phase 109: clear an orphaned status=stopped row
+// whose EC2 instance is gone, so the alias becomes absent for cold-create). Kept
+// narrow to avoid widening DynamoQueryPutter (which would force all existing fakes
+// to implement these methods just for this path).
 type DynamoUpdateItemClient interface {
 	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+	DeleteItem(ctx context.Context, params *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
 }
 
 // ErrNonceReplayed is returned by DynamoGitHubNonceStore when the key was already inserted.
 var ErrNonceReplayed = errors.New("github-bridge: delivery GUID already seen (replay)")
+
+// ErrNoResumableInstance is returned (wrapped) by EC2Resumer.StartSandbox when no
+// stopped/stopping EC2 instance exists for the sandbox. The instance is gone — an
+// orphaned alias row (status=stopped, instance terminated out from under km). The
+// caller branches on errors.Is to fall back to cold-create rather than enqueue to a
+// dead per-sandbox queue. A transient DescribeInstances/StartInstances API error is
+// deliberately NOT wrapped with this sentinel (it must retain log-and-enqueue retry).
+var ErrNoResumableInstance = errors.New("github-bridge: no resumable EC2 instance")
 
 // ============================================================
 // SSMSecretFetcher — webhook signing secret
@@ -537,7 +547,10 @@ func (r *EC2Resumer) StartSandbox(ctx context.Context, sandboxID string) error {
 		}
 	}
 	if len(found) == 0 {
-		return fmt.Errorf("github-bridge: no stopped/stopping EC2 instances found for sandbox %s (tag %s)", sandboxID, tagKey)
+		// Terminal: the instance is gone (orphaned alias row). Wrap the sentinel so
+		// the caller can branch with errors.Is and fall back to cold-create.
+		return fmt.Errorf("github-bridge: no stopped/stopping EC2 instances found for sandbox %s (tag %s): %w",
+			sandboxID, tagKey, ErrNoResumableInstance)
 	}
 
 	// Collect instance IDs to start. For "stopping" instances, we wait briefly
@@ -645,6 +658,24 @@ func (w *DynamoSandboxStatusWriter) SetStatusRunning(ctx context.Context, sandbo
 	})
 	if err != nil {
 		return fmt.Errorf("github-bridge: SetStatusRunning for %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
+// DeleteSandboxRow removes the km-sandboxes row for sandboxID via a single
+// DeleteItem keyed by sandbox_id. Phase 109: called to clear an orphaned alias
+// row (status=stopped, EC2 instance gone) so the alias resolves as absent and the
+// subsequent cold-create does not trip the ambiguous-alias guard. Non-fatal in
+// the caller — a failure is logged and the cold-create still fires.
+func (w *DynamoSandboxStatusWriter) DeleteSandboxRow(ctx context.Context, sandboxID string) error {
+	_, err := w.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: awssdk.String(w.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("github-bridge: delete stale sandbox row %s: %w", sandboxID, err)
 	}
 	return nil
 }

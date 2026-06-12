@@ -141,8 +141,10 @@ resource "aws_iam_role_policy" "dynamodb_nonce" {
 # Policy: DynamoDB — alias-index GSI query (warm-path alias→sandbox_id resolution)
 # + GetItem on base table (h1_inbound_queue_url attribute lookup)
 # + UpdateItem on base table (status write-back after auto-resume)
-# CRITICAL: UpdateItem only — full-row PutItem is intentionally excluded to avoid
-# the SandboxMetadata lossy round-trip footgun (attributes not in the struct are stripped).
+# + DeleteItem on base table (Phase 109: clear an orphaned status=stopped row whose
+#   EC2 instance is gone, so the alias resolves as absent for cold-create).
+# CRITICAL: UpdateItem/DeleteItem only — full-row PutItem is intentionally excluded to
+# avoid the SandboxMetadata lossy round-trip footgun (attributes not in the struct are stripped).
 resource "aws_iam_role_policy" "dynamodb_sandboxes" {
   name = "${local.function_name}-dynamodb-sandboxes"
   role = aws_iam_role.h1_bridge.id
@@ -167,9 +169,13 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
       {
         Sid    = "DDBSandboxesUpdateItem"
         Effect = "Allow"
-        # UpdateItem only — allows the bridge to flip status=running after auto-resume
-        # without granting full write access to sandbox rows.
-        Action   = ["dynamodb:UpdateItem"]
+        # UpdateItem flips status=running after auto-resume; DeleteItem (Phase 109)
+        # clears an orphaned status=stopped row whose instance is gone. PutItem is
+        # still excluded — no full-row write access to sandbox rows.
+        Action = [
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+        ]
         Resource = var.sandboxes_table_arn
       }
     ]

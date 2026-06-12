@@ -114,9 +114,9 @@ func (r *fakeResumer) StartSandbox(_ context.Context, sandboxID string) error {
 }
 
 type fakePublisher struct {
-	mu     sync.Mutex
-	calls  []struct{ alias, profile, env string }
-	err    error
+	mu    sync.Mutex
+	calls []struct{ alias, profile, env string }
+	err   error
 }
 
 func (p *fakePublisher) PutSandboxCreate(_ context.Context, alias, profile, env string) error {
@@ -143,13 +143,36 @@ func (s *fakeSQS) Send(_ context.Context, queueURL, body, groupID, dedupID strin
 	return s.err
 }
 
+// fakeStatusWriter tracks SetStatusRunning + DeleteSandboxRow (Phase 109).
+type fakeStatusWriter struct {
+	mu          sync.Mutex
+	setCalls    []string
+	deleteCalls []string
+	setErr      error
+	deleteErr   error
+}
+
+func (w *fakeStatusWriter) SetStatusRunning(_ context.Context, sandboxID string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.setCalls = append(w.setCalls, sandboxID)
+	return w.setErr
+}
+
+func (w *fakeStatusWriter) DeleteSandboxRow(_ context.Context, sandboxID string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.deleteCalls = append(w.deleteCalls, sandboxID)
+	return w.deleteErr
+}
+
 type threadRow struct{ reportID, target, sandboxID string }
 
 type fakeThreadStore struct {
-	mu       sync.Mutex
-	known    map[string]map[string]string // reportID → target → sandboxID (pre-seeded "known" rows)
-	upserts  []threadRow
-	lookErr  error
+	mu      sync.Mutex
+	known   map[string]map[string]string // reportID → target → sandboxID (pre-seeded "known" rows)
+	upserts []threadRow
+	lookErr error
 }
 
 func (t *fakeThreadStore) LookupSandbox(_ context.Context, reportID, target string) (string, string, string, error) {
@@ -269,6 +292,7 @@ func baseHandler(programs []bridge.ProgramEntry, fakes *handlerFakes) *bridge.We
 		SQS:            fakes.sqs,
 		Threads:        fakes.threads,
 		Commenter:      fakes.commenter,
+		StatusWriter:   fakes.statusWriter,
 		Entries:        programs,
 		DefaultProfile: "h1-review",
 		BotHandle:      "@km",
@@ -276,26 +300,28 @@ func baseHandler(programs []bridge.ProgramEntry, fakes *handlerFakes) *bridge.We
 }
 
 type handlerFakes struct {
-	secret    *fakeSecret
-	nonce     *fakeNonce
-	resolver  *fakeResolver
-	resumer   *fakeResumer
-	publisher *fakePublisher
-	sqs       *fakeSQS
-	threads   *fakeThreadStore
-	commenter *fakeCommenter
+	secret       *fakeSecret
+	nonce        *fakeNonce
+	resolver     *fakeResolver
+	resumer      *fakeResumer
+	publisher    *fakePublisher
+	sqs          *fakeSQS
+	threads      *fakeThreadStore
+	commenter    *fakeCommenter
+	statusWriter *fakeStatusWriter
 }
 
 func newFakes() *handlerFakes {
 	return &handlerFakes{
-		secret:    &fakeSecret{secret: "s3cr3t"},
-		nonce:     &fakeNonce{},
-		resolver:  &fakeResolver{statuses: map[string]string{}, missing: map[string]bool{}},
-		resumer:   &fakeResumer{},
-		publisher: &fakePublisher{},
-		sqs:       &fakeSQS{},
-		threads:   &fakeThreadStore{known: map[string]map[string]string{}},
-		commenter: &fakeCommenter{},
+		secret:       &fakeSecret{secret: "s3cr3t"},
+		nonce:        &fakeNonce{},
+		resolver:     &fakeResolver{statuses: map[string]string{}, missing: map[string]bool{}},
+		resumer:      &fakeResumer{},
+		publisher:    &fakePublisher{},
+		sqs:          &fakeSQS{},
+		threads:      &fakeThreadStore{known: map[string]map[string]string{}},
+		commenter:    &fakeCommenter{},
+		statusWriter: &fakeStatusWriter{},
 	}
 }
 
