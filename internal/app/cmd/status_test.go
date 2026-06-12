@@ -277,8 +277,13 @@ func TestStatusCmd_BudgetOmittedWhenNoBudget(t *testing.T) {
 	}
 }
 
-// TestStatusCmd_EmptyStateBucketError verifies that km status returns a clear error
+// TestStatusCmd_EmptyStateBucketError verifies that km status returns an error
 // when StateBucket is empty and no fetcher is injected (real fetcher path).
+//
+// DynamoDB is the primary metadata store (Phase 104+). The DynamoDB-first lookup
+// returns "sandbox not found: <id>" when the table is unreachable or the row is
+// absent — this is the expected error in unit environments. The legacy "state bucket
+// not configured" guard only fires on the S3 fallback path (after ResourceNotFoundException).
 func TestStatusCmd_EmptyStateBucketError(t *testing.T) {
 	cfg := &config.Config{StateBucket: ""}
 	root := &cobra.Command{Use: "km"}
@@ -297,7 +302,8 @@ func TestStatusCmd_EmptyStateBucketError(t *testing.T) {
 	}
 	errMsg := err.Error()
 	if !strings.Contains(errMsg, "state bucket not configured") &&
-		!strings.Contains(errMsg, "get sandbox metadata") {
+		!strings.Contains(errMsg, "get sandbox metadata") &&
+		!strings.Contains(errMsg, "sandbox not found") {
 		t.Errorf("expected metadata-related error, got: %v", err)
 	}
 }

@@ -172,9 +172,15 @@ func TestListCmd_Empty(t *testing.T) {
 	}
 }
 
-// TestListCmd_EmptyStateBucketError verifies that km list returns a clear error
-// when StateBucket is empty and no lister is injected (real lister path).
-func TestListCmd_EmptyStateBucketError(t *testing.T) {
+// TestListCmd_EmptyStateBucketNoLongerErrors verifies that km list does NOT return the
+// legacy "state bucket not configured" guard error when StateBucket is empty.
+//
+// DynamoDB is the primary metadata store (Phase 104+). The bucket guard only fires on
+// the S3 fallback path, which is reached only after a ResourceNotFoundException from
+// DynamoDB. In a unit-test environment (no real DynamoDB table) the DynamoDB error is
+// NOT a ResourceNotFoundException, so the guard never fires and the command returns nil
+// or a DynamoDB connectivity error — never the old bucket-guard message.
+func TestListCmd_EmptyStateBucketNoLongerErrors(t *testing.T) {
 	cfg := &config.Config{StateBucket: ""}
 	root := &cobra.Command{Use: "km"}
 	// nil lister forces the real lister construction path
@@ -187,11 +193,11 @@ func TestListCmd_EmptyStateBucketError(t *testing.T) {
 	root.SetArgs([]string{"list"})
 
 	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected error when StateBucket is empty, got nil")
-	}
-	if !strings.Contains(err.Error(), "state bucket not configured") {
-		t.Errorf("expected 'state bucket not configured' in error, got: %v", err)
+	// The legacy "state bucket not configured" guard must NOT be triggered; the
+	// DynamoDB-primary path may return nil or a DynamoDB error, but never the
+	// old bucket-guard message.
+	if err != nil && strings.Contains(err.Error(), "state bucket not configured") {
+		t.Errorf("legacy 'state bucket not configured' guard must not fire on DynamoDB-primary path; got: %v", err)
 	}
 }
 
