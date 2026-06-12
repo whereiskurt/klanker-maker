@@ -81,7 +81,7 @@ func TestCreateDockerWritesComposeFile(t *testing.T) {
 		{"compose file path", `"docker-compose.yml"`},
 		{"compose YAML write", "os.WriteFile(composeFilePath"},
 		{"placeholder replacement for sandbox role ARN", "PLACEHOLDER_SANDBOX_ROLE_ARN"},
-		{"placeholder replacement for operator key", "PLACEHOLDER_OPERATOR_KEY"},
+		{"placeholder replacement for sidecar role ARN", "PLACEHOLDER_SIDECAR_ROLE_ARN"},
 		{"DockerComposeExecFunc var (overridable)", "DockerComposeExecFunc"},
 	}
 	for _, c := range checks {
