@@ -322,7 +322,7 @@ func TestEmailSend_InvalidFromSandboxID(t *testing.T) {
 	cfg := testEmailCfg()
 	privB64, _ := genEd25519Pair(t)
 	mockSSM := newEmailMockSSM(map[string]string{
-		"/sandbox/INVALID/signing-key": privB64,
+		"/km/sandbox/INVALID/signing-key": privB64,
 	})
 	mockSES := &emailMockSES{}
 	mockIdentity := &emailMockIdentity{}
@@ -353,7 +353,7 @@ func TestEmailSend_InvalidToSandboxID(t *testing.T) {
 	cfg := testEmailCfg()
 	privB64, _ := genEd25519Pair(t)
 	mockSSM := newEmailMockSSM(map[string]string{
-		"/sandbox/sb-sender1/signing-key": privB64,
+		"/km/sandbox/sb-sender1/signing-key": privB64,
 	})
 	mockSES := &emailMockSES{}
 	mockIdentity := &emailMockIdentity{}
@@ -384,7 +384,7 @@ func TestEmailSend_SuccessNoAttachments(t *testing.T) {
 	cfg := testEmailCfg()
 	privB64, _ := genEd25519Pair(t)
 	mockSSM := newEmailMockSSM(map[string]string{
-		"/sandbox/sb-sender1/signing-key": privB64,
+		"/km/sandbox/sb-sender1/signing-key": privB64,
 	})
 	mockSES := &emailMockSES{}
 	mockIdentity := &emailMockIdentity{} // no identity rows → no encryption
@@ -424,7 +424,7 @@ func TestEmailSend_TwoAttachments(t *testing.T) {
 	cfg := testEmailCfg()
 	privB64, _ := genEd25519Pair(t)
 	mockSSM := newEmailMockSSM(map[string]string{
-		"/sandbox/sb-sender1/signing-key": privB64,
+		"/km/sandbox/sb-sender1/signing-key": privB64,
 	})
 	mockSES := &emailMockSES{}
 	mockIdentity := &emailMockIdentity{}
@@ -477,7 +477,7 @@ func TestEmailSend_BodyFromStdin(t *testing.T) {
 	cfg := testEmailCfg()
 	privB64, _ := genEd25519Pair(t)
 	mockSSM := newEmailMockSSM(map[string]string{
-		"/sandbox/sb-sender1/signing-key": privB64,
+		"/km/sandbox/sb-sender1/signing-key": privB64,
 	})
 	mockSES := &emailMockSES{}
 	mockIdentity := &emailMockIdentity{}
@@ -776,7 +776,7 @@ func TestEmailRead_EncryptedMessageAutoDecrypts(t *testing.T) {
 		},
 	}
 	mockSSM := newEmailMockSSM(map[string]string{
-		fmt.Sprintf("/sandbox/%s/encryption-key", sandboxID): privB64,
+		fmt.Sprintf("/km/sandbox/%s/encryption-key", sandboxID): privB64,
 	})
 
 	readDeps := &cmd.EmailReadDeps{S3Client: mockS3, SSMParam: mockSSM, Identity: mockIdentity}

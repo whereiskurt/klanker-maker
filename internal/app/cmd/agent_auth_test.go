@@ -801,9 +801,11 @@ func TestRunAgentAuthClaude_TeesAndCleans(t *testing.T) {
 		// Conflict check returns empty (no agent session)
 		// Detector poll returns nothing (timeout path; we don't care here)
 		// Credentials check returns "ok" so the function returns nil
+		// Auth status check returns loggedIn:true (verifyClaudeAuthStatus post-exit check)
 		routedOutputs: []authSSMRoute{
 			{cmdSubstr: "tmux list-sessions", output: ""},
 			{cmdSubstr: "test -f '/home/sandbox/.claude/.credentials.json'", output: "ok"},
+			{cmdSubstr: "claude auth status", output: `{"loggedIn": true}`},
 		},
 	}
 

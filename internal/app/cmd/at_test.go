@@ -3,6 +3,7 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -422,6 +423,10 @@ func TestAtList_Empty(t *testing.T) {
 func TestAtList_WithRecords(t *testing.T) {
 	cfg := testAtConfig()
 	createdAt := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	// Use a dynamic future time so the reconcile-stale-schedule pass never prunes this fixture.
+	futureTime := time.Now().UTC().Add(48 * time.Hour)
+	futureCronExpr := fmt.Sprintf("at(%s)", futureTime.Format("2006-01-02T15:04:05"))
+	futureTimeExpr := futureTime.Format("2006-01-02 15:04 UTC")
 	dynamo := &mockDynamoAtAPI{
 		scanOutputs: []*dynamodb.ScanOutput{
 			{
@@ -430,8 +435,8 @@ func TestAtList_WithRecords(t *testing.T) {
 						"schedule_name": &dynamodbtypes.AttributeValueMemberS{Value: "km-at-kill-sb-001"},
 						"command":       &dynamodbtypes.AttributeValueMemberS{Value: "kill"},
 						"sandbox_id":    &dynamodbtypes.AttributeValueMemberS{Value: "sb-001"},
-						"time_expr":     &dynamodbtypes.AttributeValueMemberS{Value: "tomorrow at 9am"},
-						"cron_expr":     &dynamodbtypes.AttributeValueMemberS{Value: "at(2026-04-04T09:00:00)"},
+						"time_expr":     &dynamodbtypes.AttributeValueMemberS{Value: futureTimeExpr},
+						"cron_expr":     &dynamodbtypes.AttributeValueMemberS{Value: futureCronExpr},
 						"is_recurring":  &dynamodbtypes.AttributeValueMemberBOOL{Value: false},
 						"status":        &dynamodbtypes.AttributeValueMemberS{Value: "active"},
 						"created_at":    &dynamodbtypes.AttributeValueMemberS{Value: createdAt.UTC().Format(time.RFC3339)},

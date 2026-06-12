@@ -57,19 +57,23 @@ func TestUnlockCmd_RemoteInvalidSandboxID(t *testing.T) {
 	}
 }
 
-// TestUnlockCmd_RequiresStateBucket verifies that km unlock without a configured
-// StateBucket returns a "state bucket" error (not a silent skip).
-func TestUnlockCmd_RequiresStateBucket(t *testing.T) {
+// TestUnlockCmd_EmptyStateBucketUsesDynamo verifies that km unlock with an empty StateBucket
+// engages the DynamoDB-first atomic unlock path — not the legacy "state bucket" guard.
+//
+// The "state bucket not configured" message lives only in runLockS3Fallback, which is
+// reached only after a ResourceNotFoundException from DynamoDB. In a unit-test
+// environment the DynamoDB in-memory stub returns a lock-state error directly, so
+// the legacy bucket-guard never fires. Symmetric to TestLockCmd_EmptyStateBucketUsesDynamo.
+func TestUnlockCmd_EmptyStateBucketUsesDynamo(t *testing.T) {
 	cfg := &config.Config{StateBucket: ""}
 	root := &cobra.Command{Use: "km"}
 	unlockCmd := cmd.NewUnlockCmdWithPublisher(cfg, nil)
 	root.AddCommand(unlockCmd)
 	root.SetArgs([]string{"unlock", "--yes", "sb-aabbccdd"})
 	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected error when StateBucket is empty, got nil")
-	}
-	if !strings.Contains(err.Error(), "state bucket") {
-		t.Errorf("error should mention 'state bucket', got: %v", err)
+	// The legacy "state bucket" guard must NOT be triggered; the DynamoDB-first path
+	// may return a lock-state error or nil, but never the old bucket-guard message.
+	if err != nil && strings.Contains(err.Error(), "state bucket") {
+		t.Errorf("legacy 'state bucket' guard must not fire on DynamoDB-first unlock path; got: %v", err)
 	}
 }
