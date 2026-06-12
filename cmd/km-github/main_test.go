@@ -121,7 +121,7 @@ func TestRunComment_RequestShape(t *testing.T) {
 	github.GitHubAPIBaseURL = srv.URL
 	defer func() { github.GitHubAPIBaseURL = original }()
 
-	code := runCommentWith("owner/repo", 42, "test comment body", "test-token", io.Discard)
+	code := runCommentWith("owner/repo", 42, "test comment body", "test-token", "", io.Discard)
 	if code != 0 {
 		t.Fatalf("runCommentWith returned %d; want 0", code)
 	}
@@ -171,7 +171,7 @@ func TestRunReview_RequestShape(t *testing.T) {
 	github.GitHubAPIBaseURL = srv.URL
 	defer func() { github.GitHubAPIBaseURL = original }()
 
-	code := runReviewWith("owner/repo", 7, "COMMENT", "LGTM in general", "", "test-token", io.Discard)
+	code := runReviewWith("owner/repo", 7, "COMMENT", "LGTM in general", "", "test-token", "", io.Discard)
 	if code != 0 {
 		t.Fatalf("runReviewWith returned %d; want 0", code)
 	}
@@ -208,7 +208,7 @@ func TestRunReview_ApproveEvent(t *testing.T) {
 	defer func() { github.GitHubAPIBaseURL = original }()
 
 	// APPROVE without a body should succeed.
-	code := runReviewWith("org/repo", 1, "APPROVE", "", "", "test-token", io.Discard)
+	code := runReviewWith("org/repo", 1, "APPROVE", "", "", "test-token", "", io.Discard)
 	if code != 0 {
 		t.Fatalf("runReviewWith(APPROVE) returned %d; want 0", code)
 	}
@@ -231,7 +231,7 @@ func TestRunReview_RequestChanges(t *testing.T) {
 
 	// REQUEST_CHANGES without body → error.
 	var stderr strings.Builder
-	code := runReviewWith("org/repo", 1, "REQUEST_CHANGES", "", "", "test-token", &stderr)
+	code := runReviewWith("org/repo", 1, "REQUEST_CHANGES", "", "", "test-token", "", &stderr)
 	if code == 0 {
 		t.Fatalf("runReviewWith(REQUEST_CHANGES, emptyBody) should fail but returned 0")
 	}
@@ -253,7 +253,7 @@ func TestRunReview_CommentRequiresBody(t *testing.T) {
 	defer func() { github.GitHubAPIBaseURL = original }()
 
 	var stderr strings.Builder
-	code := runReviewWith("org/repo", 1, "COMMENT", "", "", "test-token", &stderr)
+	code := runReviewWith("org/repo", 1, "COMMENT", "", "", "test-token", "", &stderr)
 	if code == 0 {
 		t.Fatalf("runReviewWith(COMMENT, emptyBody) should fail but returned 0")
 	}
@@ -262,7 +262,7 @@ func TestRunReview_CommentRequiresBody(t *testing.T) {
 // TestRunReview_InvalidEvent verifies that an invalid event returns a non-zero exit code.
 func TestRunReview_InvalidEvent(t *testing.T) {
 	var stderr strings.Builder
-	code := runReviewWith("org/repo", 1, "MERGE", "some body", "", "test-token", &stderr)
+	code := runReviewWith("org/repo", 1, "MERGE", "some body", "", "test-token", "", &stderr)
 	if code == 0 {
 		t.Fatalf("runReviewWith(MERGE) should fail but returned 0")
 	}
@@ -290,7 +290,7 @@ func TestRunReview_CommitIDOptional(t *testing.T) {
 
 	// Without commit_id.
 	capturedBody = nil
-	code := runReviewWith("org/repo", 5, "APPROVE", "", "", "test-token", io.Discard)
+	code := runReviewWith("org/repo", 5, "APPROVE", "", "", "test-token", "", io.Discard)
 	if code != 0 {
 		t.Fatalf("runReviewWith without commit_id = %d; want 0", code)
 	}
@@ -300,7 +300,7 @@ func TestRunReview_CommitIDOptional(t *testing.T) {
 
 	// With commit_id.
 	capturedBody = nil
-	code = runReviewWith("org/repo", 5, "APPROVE", "", "abc123", "test-token", io.Discard)
+	code = runReviewWith("org/repo", 5, "APPROVE", "", "abc123", "test-token", "", io.Discard)
 	if code != 0 {
 		t.Fatalf("runReviewWith with commit_id = %d; want 0", code)
 	}
