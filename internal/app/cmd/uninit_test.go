@@ -72,19 +72,29 @@ func TestUninitDestroyOrder(t *testing.T) {
 		t.Fatal("expected Destroy to be called for modules, got 0 calls")
 	}
 
-	// Reverse of regionalModules() apply order. Adding a module to init.go
-	// should automatically extend this list — if this test starts failing
-	// because a new module was added, update the slice here too (and
-	// double-check the reverse order respects dependencies).
+	// Reverse of the 22-module regionalModules() apply order (init.go).
+	// Adding a module to regionalModules() in init.go requires extending this
+	// slice too — keep it the exact reverse of that list (regionalModules()==22).
 	wantOrder := []string{
 		"ses",
+		// Phase 103 (lambda-h1-bridge + dynamodb-h1-threads):
+		"lambda-h1-bridge",
+		"dynamodb-h1-threads",
+		// Phase 97/100 (lambda-github-bridge):
 		"lambda-github-bridge",
+		// Phase 63 (lambda-slack-bridge):
 		"lambda-slack-bridge",
-		// Phase 99.1 (sqs-inbound-dlq) + Phase 98 (dynamodb-github-threads) additions:
+		// Phase 99.1 (sqs-inbound-dlq):
 		"sqs-inbound-dlq",
+		// Phase 98 (dynamodb-github-threads):
 		"dynamodb-github-threads",
+		// Phase 68 (dynamodb-slack-stream-messages):
 		"dynamodb-slack-stream-messages",
+		// Phase 104 (dynamodb-slack-channels):
+		"dynamodb-slack-channels",
+		// Phase 67 (dynamodb-slack-threads):
 		"dynamodb-slack-threads",
+		// Phase 63 (dynamodb-slack-nonces):
 		"dynamodb-slack-nonces",
 		"email-handler",
 		"ttl-handler",
@@ -217,8 +227,8 @@ func TestUninitContinuesPastModuleErrors(t *testing.T) {
 
 	// All modules should still be attempted (one module's destroy error is
 	// non-fatal; uninit warns and continues to the next). Count matches the full
-	// regionalModules() inventory (same as TestUninitDestroyOrder).
-	const wantCalls = 19
+	// regionalModules() inventory (regionalModules()==22; same as TestUninitDestroyOrder).
+	const wantCalls = 22
 	if len(runner.calls) != wantCalls {
 		t.Errorf("expected %d Destroy calls (all modules attempted), got %d: %v", wantCalls, len(runner.calls), runner.calls)
 	}
@@ -461,10 +471,10 @@ func TestUninitDetectsBackendDrift(t *testing.T) {
 		t.Fatalf("uninit should not return error on backend drift; should continue and surface in summary: %v", err)
 	}
 	// All modules should still be attempted — backend drift on one module is
-	// non-fatal. Count must match the full regionalModules() inventory (the same
-	// count asserted by TestUninitDestroyOrder's wantOrder).
-	if len(runner.calls) != 19 {
-		t.Errorf("expected 19 Destroy calls (continue past drift), got %d", len(runner.calls))
+	// non-fatal. Count must match the full regionalModules() inventory
+	// (regionalModules()==22; the same count as TestUninitDestroyOrder's wantOrder).
+	if len(runner.calls) != 22 {
+		t.Errorf("expected %d Destroy calls (continue past drift), got %d", 22, len(runner.calls))
 	}
 }
 
