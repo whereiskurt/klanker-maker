@@ -2084,6 +2084,7 @@ while true; do
       # Codex resume — subcommand form (per Plan 70-00 spike). NOT --resume flag.
       # codex exec resume SESSION PROMPT --flags is the canonical 2026 syntax.
       sudo -u sandbox bash -lc "
+        export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
         export KM_CODEX_RUN_ID='$RUN_ID'
@@ -2097,6 +2098,7 @@ while true; do
     else
       # Codex first turn — no prior session.
       sudo -u sandbox bash -lc "
+        export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
         export KM_CODEX_RUN_ID='$RUN_ID'
@@ -2119,6 +2121,7 @@ while true; do
     # notify-hook needs (KM_SLACK_BRIDGE_URL/CHANNEL_ID/SANDBOX_ID,
     # OTEL_EXPORTER_OTLP_*) in case .bash_profile does not chain.
     sudo -u sandbox bash -lc "
+      export HOME=/home/sandbox
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
       # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
       export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -2463,6 +2466,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
       # reset above clears GITHUB_SESSION, so a switch TO codex always lands in the
       # else-branch below as a fresh first turn (never resumes the other agent).
       sudo -u sandbox bash -lc "
+        export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
         export KM_GITHUB_REPLY_AGENT='codex'
@@ -2475,6 +2479,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
     else
       # Codex first turn — no prior session for this (repo, number).
       sudo -u sandbox bash -lc "
+        export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
         export KM_GITHUB_REPLY_AGENT='codex'
@@ -2488,6 +2493,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
     # Claude path (default). Pass --resume when a prior session exists.
     # KM_GITHUB_REPLY_AGENT (exported inline) drives the km-github "via Claude" footer.
     sudo -u sandbox bash -lc "
+      export HOME=/home/sandbox
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
       export PATH=\"/home/sandbox/.local/bin:\$PATH\"
       export KM_GITHUB_REPLY_AGENT='claude'
@@ -2518,6 +2524,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
           --region "$REGION" 2>/dev/null || true
       fi
       sudo -u sandbox bash -lc "
+        export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
         export KM_GITHUB_REPLY_AGENT='claude'

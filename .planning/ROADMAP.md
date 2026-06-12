@@ -2426,3 +2426,64 @@ Plans:
 - [ ] 105-03-PLAN.md — Tier-1 runInitScoped/RunInitScopedWithRunner (ExportTerragruntEnvVars + SSM republish + single-module apply; dry-run honored) [INIT-SCOPED-IMPL]
 - [ ] 105-04-PLAN.md — Tier-2 --only ses gate: planModule + planreport.Evaluate + SES preflight/Reconfigure (pre-apply destroy-class) [INIT-SCOPED-GUARD, INIT-SCOPED-IMPL]
 - [ ] 105-05-PLAN.md — Docs (7 surfaces) + live UAT (no-drift invariant + ses no-op) [INIT-SCOPED-DOCS, INIT-SCOPED-IMPL]
+
+### Phase 106: Session-resume hint on GitHub + HackerOne bridge replies (post-on-mint)
+
+**Goal:** After a bridge agent turn, surface the operator-facing `--resume` handle directly in the GitHub PR/issue reply and the HackerOne report — so an operator can re-attach to the exact Claude/Codex session without querying DynamoDB. Each relevant poller posts ONE extra collapsed comment carrying the run-from directory + the agent-correct resume command, keyed on the freshly-extracted session id. **Scope: GitHub + HackerOne pollers only — Slack is deliberately excluded** (operator can ask for the handle interactively in the Slack chat; no value in pushing it into every Slack reply).
+
+**Design (settled via brainstorming, operator 2026-06-11):**
+- **What the hint says** — a GitHub-flavored collapsible `<details>` fold appended as a standalone comment:
+  ```markdown
+  <details>
+  <summary>🔧 Resume this agent session</summary>
+
+  On sandbox `sb-1a2b3c4d`, from the `/workspace` folder use `claude --resume 9f8e7d6c-…`
+  </details>
+  ```
+  Claude → `claude --resume <id>`; Codex → `codex exec resume <id>` (branch on `EFFECTIVE_AGENT`, which each poller already computes).
+- **Run-from directory is `/workspace`, NOT `/home/sandbox`** (verified). The agent dispatches with `cd /workspace` (`userdata.go:2329/2305` GH, `2616/2627/2639` H1) but `HOME=/home/sandbox` (`userdata.go:3208`, `SANDBOX_HOME` `:3089`). The session transcript *files* live at `/home/sandbox/.claude/projects/-workspace/<id>.jsonl`, but Claude derives the project bucket from **cwd**, so `--resume` must be invoked from `/workspace` or it reports "No conversation found." The hint must point at `/workspace`.
+- **Injection point = the poller, not the agent.** The agent posts its own reply *mid-run* via `km-github comment` / `km-h1`, BEFORE the session id is known. The authoritative handle (`NEW_GITHUB_SESSION` / `NEW_H1_SESSION`) is only extracted *after* the run (`userdata.go:2375–2380` GH; H1 analog ~`2660`). So the poller posts the hint itself, right after extraction / DDB write-back (~`2391` GH). This is a *second*, collapsed comment per qualifying turn — accepted over alternatives (pre-minting `claude --session-id` fails for Codex fresh threads; PATCHing the agent's comment requires capturing its comment id, not currently surfaced).
+- **Post-on-mint frequency (NOT every turn, NOT strictly turn-1).** Post the fold ONLY when the session id is newly minted: no prior stored session (true first turn) **OR** `NEW_*_SESSION` differs from the pre-run stored value (a Gap-E / cross-box re-mint, `userdata.go:2336–2347`). In the stable common case (Claude keeps its id on `--resume`; Codex thread_id is stable) this fires **exactly once per thread**; if the session ever rotates, it self-heals by re-posting the live handle. The poller already holds both old (`GITHUB_SESSION`) and new (`NEW_GITHUB_SESSION`) values at the write-back site → a one-line `if`.
+- **HackerOne safety bonus:** `km-h1` posts INTERNAL by default, so on H1 the resume hint lands on the internal/team comment — never visible to the external researcher. (GitHub PR comments are visible to all repo collaborators; the collapsed fold is the agreed mitigation — the ids aren't independently exploitable without AWS/SSM access.)
+- **Sandbox id** for the hint comes from the poller's own environment (it already knows it — `sandbox_id` is written to the threads tables); confirm the exact env/metadata var at plan time.
+
+**Scope / key decisions:**
+- **Files:** `pkg/compiler/userdata.go` — GitHub poller block (post-run, ~`2382`) and H1 poller block (post-run, ~`2660`). No change to the `km-github` / `km-h1` Go helpers — pollers call them as-is with a constructed body. **Slack poller (`1535–2085`) untouched / byte-identical.**
+- **Best-effort, non-blocking:** the hint `km-github comment` / `km-h1` call is `|| true` — a failed hint post never blocks the SQS message ack or the turn completion.
+- **Deploy:** poller is compiled into userdata → existing sandboxes need `km destroy && km create` to pick it up; bridge Lambdas unaffected (no Lambda/IAM/TF change). Operator deploy = `make build-lambdas` (create-handler compiles userdata) + the recreate; confirm at plan time whether the GitHub/H1 userdata byte-identity golden tests need a deliberate golden refresh.
+- **No SandboxProfile schema change, no new TF resource, no DDB schema change** (reuses existing `agent_session_id` / `agent_type` columns).
+
+**Requirements**: RESUME-HINT-FORMAT, RESUME-HINT-MINT, RESUME-HINT-GITHUB, RESUME-HINT-H1, RESUME-HINT-SLACK-EXCLUDED, RESUME-HINT-TESTS, RESUME-HINT-DOCS (defined at plan time)
+**Depends on:** GitHub bridge poller (Phases 97/102 — session id extraction + `km-github-threads`) and the HackerOne bridge poller (Phase 103 — `km-h1` INTERNAL-by-default + session continuity). No structural dependency on Phase 105.
+**Plans:** 4 plans
+
+Plans:
+- [ ] 106-01-PLAN.md — Wave 0 RED test stubs (GitHub resume-hint test + extend H1 enabled-poller wantSubstrings)
+- [ ] 106-02-PLAN.md — GitHub poller post-on-mint resume-hint block in userdata.go (Slack byte-identical)
+- [ ] 106-03-PLAN.md — HackerOne poller post-on-mint resume-hint block (internal-only) in userdata.go
+- [ ] 106-04-PLAN.md — Docs: github-bridge.md + h1-bridge.md Phase 106 sections + CLAUDE.md note
+
+### Phase 107: Reconcile 22 stale internal/app/cmd unit tests with current production behavior (test-hygiene only, no production code change)
+
+**Goal:** Get `go test ./internal/app/cmd/` to a clean, trustworthy green by reconciling 22 deterministically-failing unit tests whose assertions drifted out of sync with current production behavior. These are PRE-EXISTING failures (verified identical on `a0e33fa8` / Phase 104 complete and on post-Phase-105 HEAD `97899062` — NOT introduced by any recent phase), discovered during Phase 105 when a piped exit code masked the real `go test` FAIL. Test-hygiene ONLY: the production behavior is the source of truth; update each stale assertion to match what the code actually does today. **Do NOT change production code to satisfy an old test** unless investigation proves the *code* (not the test) is the genuine bug — and if so, that's a flagged escalation, not a silent test edit.
+
+**The 22 tests (by subsystem):**
+- shell: `TestShellDockerContainerName` (expects `/bin/bash`, code emits `bash --login`), `TestShellDockerNoRootFlag` (expects no `-u`, code always adds `-u sandbox`), `TestShellCmd_StoppedSandbox`, `TestShellCmd_UnknownSubstrate`, `TestShellCmd_MissingInstanceID`
+- email: `TestEmailSend_SuccessNoAttachments`, `TestEmailSend_TwoAttachments`, `TestEmailSend_BodyFromStdin`, `TestEmailRead_EncryptedMessageAutoDecrypts`
+- uninit: `TestUninitDestroyOrder`, `TestUninitContinuesPastModuleErrors`, `TestUninitDetectsBackendDrift`
+- state-bucket guards: `TestListCmd_EmptyStateBucketError` (expects error on empty bucket, code returns nil), `TestLockCmd_RequiresStateBucket`, `TestUnlockCmd_RequiresStateBucket`, `TestStatusCmd_EmptyStateBucketError`
+- create/docker: `TestCreateDockerWritesComposeFile`, `TestApplyLifecycleOverrides_RunCreateRemoteSignature`
+- misc: `TestRunAgentAuthClaude_TeesAndCleans`, `TestAtList_WithRecords`, `TestLoadEFSOutputs_NotExist`, `TestLearnOutputPath`
+
+**Scope / key decisions:**
+- **Per-test triage first:** for each, determine whether the TEST is stale (assertion lags code → update test) or the CODE regressed (behavior is actually wrong → do NOT fix here; flag it as a separate bug for the user to decide). Most appear to be the former (stale test), but a few — e.g. `TestListCmd_EmptyStateBucketError` (a missing-guard that returns nil instead of erroring) — could be a real lost guard; treat those as escalations, not silent test rewrites.
+- **No production code changes** in the default path (test files only). Any case requiring a code change is surfaced to the user, not bundled.
+- **Verification:** `go test ./internal/app/cmd/ -count=1` exits 0 with the explicit `ok` summary (read `go test`'s OWN exit, not a piped one — see [[feedback_check_go_test_exit_not_pipe]]). Also confirm no NEW failures introduced and the existing green tests (incl. Phase 105 `TestScoped*`, `TestRunInitPlan_ModuleOrder`) still pass.
+- **Parallelizable by subsystem** — the 22 tests live in ~10 separate `*_test.go` files with no shared fixtures, so plans can fan out per file/subsystem.
+
+**Requirements**: TBD (derive at plan time — likely one per subsystem cluster: TEST-HYGIENE-SHELL / -EMAIL / -UNINIT / -STATEBUCKET / -CREATE / -MISC / -TRIAGE / -GREEN)
+**Depends on:** None functional. Independent of Phases 105/106. (Phase 106 is an unrelated parallel feature; this only touches `internal/app/cmd/*_test.go`.)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 107 to break down)
