@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 107-02-PLAN.md — email SSM mock paths aligned to /km/sandbox/... prefix-scoped convention
-last_updated: "2026-06-12T02:02:48.177Z"
+stopped_at: Completed 107-06-PLAN.md — 4 misc tests reconciled (agent-auth, at-list, learn-output, EFS not-exist)
+last_updated: "2026-06-12T02:04:40.721Z"
 last_activity: 2026-06-12
 progress:
   total_phases: 123
   completed_phases: 108
   total_plans: 553
-  completed_plans: 507
+  completed_plans: 509
   percent: 91
 ---
 
@@ -540,6 +540,7 @@ Progress: [█████████░] 91%
 | Phase 107 P01 | 2min | 1 tasks | 1 files |
 | Phase 107 P03 | 51s | 1 tasks | 1 files |
 | Phase 107 P02 | 3min | 1 tasks | 1 files |
+| Phase 107-reconcile-22-stale-internal-app-cmd-unit-tests P06 | 225 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1557,6 +1558,8 @@ Recent decisions affecting current work:
 - [Phase 107]: Replaced stale PLACEHOLDER_OPERATOR_KEY with PLACEHOLDER_SIDECAR_ROLE_ARN to maintain placeholder coverage intent; updated runCreateRemote signature with budget params verbatim from create.go:2074
 - [Phase 107]: wantOrder slice is exact reverse of regionalModules(); two count consts annotated with regionalModules()==22 for future maintenance
 - [Phase 107]: Re-keyed email SSM mock seeds from /sandbox/... to /km/sandbox/... to match SigningKeyPath/EncryptionKeyPath prefix-scoped convention
+- [Phase 107-06]: TEST-21 locked: TestLoadEFSOutputs_NotExist asserts only err==nil; S3 fallback return value is unconstrained
+- [Phase 107-06]: Dynamic future time in at-list fixture: now.Add(48h) eliminates hardcoded-date staleness permanently
 
 ### Roadmap Evolution
 
@@ -1692,6 +1695,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-12T02:02:48.165Z
-Stopped at: Completed 107-02-PLAN.md — email SSM mock paths aligned to /km/sandbox/... prefix-scoped convention
+Last session: 2026-06-12T02:04:40.711Z
+Stopped at: Completed 107-06-PLAN.md — 4 misc tests reconciled (agent-auth, at-list, learn-output, EFS not-exist)
 Resume file: None
