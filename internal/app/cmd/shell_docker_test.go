@@ -47,9 +47,9 @@ func TestShellDockerContainerName(t *testing.T) {
 		t.Errorf("expected container name %q in args, got: %s", expectedContainer, fullCmd)
 	}
 
-	// Must include /bin/bash
-	if !strings.Contains(fullCmd, "/bin/bash") {
-		t.Errorf("expected '/bin/bash' in docker exec args, got: %s", fullCmd)
+	// Must use a login shell (bash --login) so /etc/profile.d/ scripts run.
+	if !strings.Contains(fullCmd, "bash --login") {
+		t.Errorf("expected 'bash --login' in docker exec args, got: %s", fullCmd)
 	}
 }
 
@@ -96,7 +96,8 @@ func TestShellDockerRootFlag(t *testing.T) {
 	}
 }
 
-// TestShellDockerNoRootFlag verifies that without --root, args do NOT include -u root.
+// TestShellDockerNoRootFlag verifies that without --root, exec runs as the
+// unprivileged sandbox user (-u sandbox, never -u root).
 func TestShellDockerNoRootFlag(t *testing.T) {
 	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
 
@@ -119,9 +120,12 @@ func TestShellDockerNoRootFlag(t *testing.T) {
 
 	fullCmd := strings.Join(capturedArgs, " ")
 
-	// Must NOT include -u root when --root is not passed
-	if strings.Contains(fullCmd, "-u") {
-		t.Errorf("expected NO '-u' in docker exec args without --root, got: %s", fullCmd)
+	// Without --root, exec must run as the unprivileged sandbox user (-u sandbox, never -u root).
+	if !strings.Contains(fullCmd, "-u sandbox") {
+		t.Errorf("expected '-u sandbox' in docker exec args without --root, got: %s", fullCmd)
+	}
+	if strings.Contains(fullCmd, "-u root") {
+		t.Errorf("expected NO '-u root' in docker exec args without --root, got: %s", fullCmd)
 	}
 }
 
