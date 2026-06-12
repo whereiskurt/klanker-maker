@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 107-04-PLAN.md — state-bucket-guard test reconciliation; all 4 tests green
-last_updated: "2026-06-12T02:05:00.712Z"
+stopped_at: Completed 107-07-PLAN.md — shell pre-flight error fix; TestShellCmd_Stopped/Unknown/MissingInstance all PASS
+last_updated: "2026-06-12T02:10:06.836Z"
 last_activity: 2026-06-12
 progress:
   total_phases: 123
   completed_phases: 108
   total_plans: 553
-  completed_plans: 509
+  completed_plans: 510
   percent: 91
 ---
 
@@ -542,6 +542,7 @@ Progress: [█████████░] 91%
 | Phase 107 P02 | 3min | 1 tasks | 1 files |
 | Phase 107-reconcile-22-stale-internal-app-cmd-unit-tests P06 | 225 | 2 tasks | 4 files |
 | Phase 107-reconcile-22-stale-internal-app-cmd-unit-tests P04 | 4min | 2 tasks | 4 files |
+| Phase 107-07 P07 | 5 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1562,6 +1563,8 @@ Recent decisions affecting current work:
 - [Phase 107-06]: TEST-21 locked: TestLoadEFSOutputs_NotExist asserts only err==nil; S3 fallback return value is unconstrained
 - [Phase 107-06]: Dynamic future time in at-list fixture: now.Add(48h) eliminates hardcoded-date staleness permanently
 - [Phase 107-reconcile-22-stale-internal-app-cmd-unit-tests]: State-bucket guard tests: inverted negative assertions replace legacy guard expectations — DynamoDB-primary means guard only fires on S3 fallback after ResourceNotFoundException
+- [Phase 107-07]: preflightError wrapper struct (not sentinel var) preserves Unwrap() for substring test assertions
+- [Phase 107-07]: NewShellCmdWithFetcher RunE discriminates pre-flight vs session-exit errors via errors.As; session-exit errors still swallowed to avoid spurious cobra output
 
 ### Roadmap Evolution
 
@@ -1697,6 +1700,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-12T02:05:00.701Z
-Stopped at: Completed 107-04-PLAN.md — state-bucket-guard test reconciliation; all 4 tests green
+Last session: 2026-06-12T02:10:06.818Z
+Stopped at: Completed 107-07-PLAN.md — shell pre-flight error fix; TestShellCmd_Stopped/Unknown/MissingInstance all PASS
 Resume file: None

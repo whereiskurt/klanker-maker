@@ -2483,7 +2483,7 @@ Plans:
 
 **Requirements**: TEST-HYGIENE-SHELL, TEST-HYGIENE-EMAIL, TEST-HYGIENE-UNINIT, TEST-HYGIENE-STATEBUCKET, TEST-HYGIENE-CREATE, TEST-HYGIENE-MISC, TEST-HYGIENE-SHELL-FIX, TEST-HYGIENE-GREEN, TEST-HYGIENE-TRIAGE (derived at plan time, one per subsystem cluster; SHELL-FIX is the one approved production escalation; TRIAGE is the no-stray-prod-edits diff-shape guardrail folded into the green gate)
 **Depends on:** None functional. Independent of Phases 105/106. (Phase 106 is an unrelated parallel feature; this only touches `internal/app/cmd/*_test.go` plus one approved `shell.go` fix.)
-**Plans:** 6/8 plans executed
+**Plans:** 7/8 plans executed
 
 Plans:
 - [ ] 107-01-PLAN.md — Wave 1: shell-docker (TestShellDocker* → `bash --login` + always `-u sandbox`)
