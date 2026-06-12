@@ -1,9 +1,9 @@
 ---
 phase: 107
 slug: reconcile-22-stale-internal-app-cmd-unit-tests
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: approved
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-06-11
 ---
 
@@ -87,4 +87,4 @@ exist and run. No stubs, fixtures, or framework install needed.*
 - [ ] Feedback latency < 600s
 - [ ] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-11 (plan-checker VERIFICATION PASSED, first iteration)
