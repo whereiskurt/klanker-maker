@@ -7,7 +7,7 @@ description: Connect local desktop VS Code to a sandbox via SSM port-forward + p
 
 Operator-side workflow for connecting desktop VS Code into a sandbox over SSM + ssh. `km` generates a per-sandbox ed25519 keypair on the operator workstation, ships the public key via userdata, and writes an `~/.ssh/config` Host entry that tunnels through `aws ssm start-session`.
 
-**Audience:** the operator running `km` on their workstation. The sandbox just needs `vscodeEnabled: true` in its profile (the default).
+**Audience:** the operator running `km` on their workstation. The sandbox just needs `runtime.vscode.enabled: true` in its profile (the default).
 
 ## Cross-references
 
@@ -16,9 +16,11 @@ Operator-side workflow for connecting desktop VS Code into a sandbox over SSM + 
 
 ## Profile field
 
-| Field (under `spec.cli`) | Type | Default | Purpose |
+| Field (under `spec.runtime.vscode`) | Type | Default | Purpose |
 |---|---|---|---|
-| `vscodeEnabled` | bool* | true | Provision sshd + authorized_keys at sandbox boot. Set false to skip. |
+| `enabled` | bool* | true | Provision sshd + authorized_keys at sandbox boot. Set false to skip. |
+
+Phase 92 moved this field from `spec.cli.vscodeEnabled` to `spec.runtime.vscode.enabled`; the old path is rejected by `km validate`.
 
 `bool*` = pointer-bool with profile-inheritance semantics; omit to use parent/default.
 
@@ -40,7 +42,7 @@ make build
 km init --sidecars
 ```
 
-Without `km init --sidecars`, `km create --remote` against a vscodeEnabled profile produces a sandbox with broken authorized_keys (silent SSH failure).
+Without `km init --sidecars`, `km create --remote` against a `runtime.vscode.enabled` profile produces a sandbox with broken authorized_keys (silent SSH failure).
 
 ## Per-sandbox workflow
 
@@ -83,11 +85,11 @@ Solves:
 Pre-flight gates (any failure = no key changes):
 - EC2 instance must be `running` (not `stopped` / `pending`)
 - `km lock` must not block (override with `--force`)
-- Sandbox must have been created with `vscodeEnabled: true` — pre-vscodeEnabled sandboxes get a clear hard error pointing at `km destroy && km create`
+- Sandbox must have been created with `runtime.vscode.enabled: true` — sandboxes created without it get a clear hard error pointing at `km destroy && km create`
 
 ## Operator notes
 
-- **Existing sandboxes** provisioned without `vscodeEnabled: true` do NOT get sshd retroactively. `km destroy && km create` to provision.
+- **Existing sandboxes** provisioned without `runtime.vscode.enabled: true` do NOT get sshd retroactively. `km destroy && km create` to provision.
 - **Cross-machine portability:** keys live on the creation machine only. Operators who want to `km vscode start` from a different laptop must run `km vscode rekey` there, OR manually copy `~/.km/keys/<sandbox-id>*` from the original laptop.
 - **One operator per sandbox** (single authorized_keys entry in v1).
 - **`km destroy` cleans up** the local keypair files AND the ssh-config Host block. Manual cleanup is only needed when a sandbox is wiped out-of-band (region deleted, DynamoDB row removed, etc.).
