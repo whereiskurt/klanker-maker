@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -27,6 +28,17 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/allowlistgen"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
+
+// preflightError wraps errors that occur before any interactive session is started
+// (e.g. stopped sandbox, unsupported substrate, missing EC2 instance ARN). This
+// allows NewShellCmdWithFetcher's RunE to distinguish pre-flight errors — which
+// must be returned to the operator — from session-exit errors produced by the
+// actual execFn call, which are intentionally swallowed to avoid spurious cobra
+// output after a normal interactive session end (see TestShellCmd_MissingSSMDoc).
+type preflightError struct{ err error }
+
+func (e *preflightError) Error() string { return e.err.Error() }
+func (e *preflightError) Unwrap() error  { return e.err }
 
 // ShellExecFunc is the function signature for executing the AWS CLI subprocess.
 // It is package-level so tests can replace it to capture args without executing.
@@ -277,10 +289,11 @@ Port forwarding:
 			notifyPerm, notifyIdle := resolveNotifyFlags(cmd)
 			// Plan 68-07: resolve transcript-stream override from CLI flags.
 			transcriptStream := resolveTranscriptFlag(cmd)
-			// Run the shell (blocks until user exits). The exec error is
-			// deliberately discarded in the non-learn path so cobra does not
-			// print a spurious error after a normal session exit (see the
-			// TestShellCmd_MissingSSMDoc comment for context).
+			// Run the shell (blocks until user exits). Pre-flight errors (stopped
+			// sandbox, unsupported substrate, missing instance ARN) are returned
+			// to the operator. Session-exit errors from execFn are deliberately
+			// discarded so cobra does not print a spurious error after a normal
+			// interactive session end (see TestShellCmd_MissingSSMDoc for context).
 			runErr := runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream)
 
 			// --learn post-exit: generate profile from observed traffic.
@@ -292,6 +305,13 @@ Port forwarding:
 					return runErr
 				}
 				return runLearnPostExit(ctx, cfg, fetcher, sandboxID, learnOutput, amiFlag)
+			}
+			// Return pre-flight errors (tagged by runShellWithSSM) so the operator
+			// sees a meaningful message. Swallow session-exit errors from execFn
+			// to avoid spurious cobra output after a normal interactive exit.
+			var pf *preflightError
+			if errors.As(runErr, &pf) {
+				return runErr
 			}
 			return nil
 		},
@@ -354,18 +374,18 @@ func runShellWithSSM(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetc
 
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 	if err != nil {
-		return fmt.Errorf("fetch sandbox: %w", err)
+		return &preflightError{fmt.Errorf("fetch sandbox: %w", err)}
 	}
 
 	if rec.Status == "stopped" {
-		return fmt.Errorf("sandbox %s is stopped — start it with 'km budget add %s --compute <amount>' first", sandboxID, sandboxID)
+		return &preflightError{fmt.Errorf("sandbox %s is stopped — start it with 'km budget add %s --compute <amount>' first", sandboxID, sandboxID)}
 	}
 
 	switch rec.Substrate {
 	case "ec2", "ec2spot", "ec2demand":
 		instanceID, err := extractResourceID(rec.Resources, ":instance/")
 		if err != nil {
-			return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
+			return &preflightError{fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)}
 		}
 
 		// Phase 78 (AUTH-11): when --no-bedrock is active and an SSM client is
@@ -396,17 +416,17 @@ func runShellWithSSM(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetc
 	case "ecs":
 		clusterARN, err := findResourceARN(rec.Resources, ":cluster/")
 		if err != nil {
-			return fmt.Errorf("find ECS cluster for sandbox %s: %w", sandboxID, err)
+			return &preflightError{fmt.Errorf("find ECS cluster for sandbox %s: %w", sandboxID, err)}
 		}
 		taskARN, err := findResourceARN(rec.Resources, ":task/")
 		if err != nil {
-			return fmt.Errorf("find ECS task for sandbox %s: %w", sandboxID, err)
+			return &preflightError{fmt.Errorf("find ECS task for sandbox %s: %w", sandboxID, err)}
 		}
 		return execECSCommand(ctx, clusterARN, taskARN, rec.Region, execFn)
 	case "docker":
 		return execDockerShell(ctx, sandboxID, asRoot, execFn)
 	default:
-		return fmt.Errorf("unsupported substrate %q for km shell", rec.Substrate)
+		return &preflightError{fmt.Errorf("unsupported substrate %q for km shell", rec.Substrate)}
 	}
 }
 
