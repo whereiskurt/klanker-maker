@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 105-05-PLAN.md — docs (7 surfaces) + live UAT PASSED; Phase 105 complete
-last_updated: "2026-06-11T22:17:00.388Z"
-last_activity: 2026-06-11
+stopped_at: Completed 107-01-PLAN.md — docker-shell test reconciliation; TestShellDockerContainerName + TestShellDockerNoRootFlag PASS
+last_updated: "2026-06-12T02:00:57.748Z"
+last_activity: 2026-06-12
 progress:
-  total_phases: 121
+  total_phases: 123
   completed_phases: 108
-  total_plans: 541
-  completed_plans: 503
+  total_plans: 553
+  completed_plans: 506
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 103-01 — all 3 tasks done; synthetic HackerOne webhook bodies + pinned f
 Total Plans in Phase: 10 (103-01 → 103-10)
 Current Plan: 103-01 complete; next 103-02
 Status: in-progress
-Last activity: 2026-06-11
+Last activity: 2026-06-12
 
 Plan 03 (payload parse) + Plan 08 (byte-identity guard) UNBLOCKED: field-paths.md pins the resolve key + safety-critical internal flag (wrapper-tolerant parse directive); TestUserdataH1ByteIdentity green against the pre-H1 dormancy golden.
 
@@ -537,6 +537,7 @@ Progress: [█████████░] 91%
 | Phase 105 P03 | 380s | 2 tasks | 2 files |
 | Phase 105 P04 | 480 | 1 tasks | 2 files |
 | Phase 105-scoped-km-init-for-bridge-config P05 | 25min | 2 tasks | 7 files |
+| Phase 107 P01 | 2min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1550,6 +1551,7 @@ Recent decisions affecting current work:
 - [Phase 105-05]: skills/init/SKILL.md updated materially — plugin.json + marketplace.json version bump required at next release (project_plugin_version_gates_cache)
 - [Phase 105-05]: Live UAT as behavior-neutral no-op apply proves zero drift without config change; km init --plan follow-up confirmed no residual drift
 - [Phase 105-05]: Deferred pre-existing TestRunInitPlan_ModuleOrder failure (expects 17, regionalModules() has 22) — Phase 105 added zero module entries, confirmed not a Phase 105 regression
+- [Phase 107]: Tests assert current production behavior; production code (execDockerShell) is authoritative — bash --login login shell and always-present -u sandbox/root user flag
 
 ### Roadmap Evolution
 
@@ -1685,6 +1687,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-11T22:13:02.214Z
-Stopped at: Completed 105-05-PLAN.md — docs (7 surfaces) + live UAT PASSED; Phase 105 complete
+Last session: 2026-06-12T02:00:47.111Z
+Stopped at: Completed 107-01-PLAN.md — docker-shell test reconciliation; TestShellDockerContainerName + TestShellDockerNoRootFlag PASS
 Resume file: None
