@@ -1824,3 +1824,116 @@ km doctor
 
 **Slack poller:** EXCLUDED — byte-identical to pre-Phase-106. Operators can ask the
 agent to share its session interactively in chat.
+
+## Phase 108 — Per-turn idempotency guard (no duplicate PR comments)
+
+> **Phase 108 (2026-06-12) — GitHub bridge per-turn idempotency guard.**
+>
+> A single @-mention could make the sandbox agent post **two byte-identical** PR
+> comments (or reviews) seconds apart. The fix is a per-turn idempotency guard at the
+> `km-github` helper layer — the single chokepoint every post flows through.
+
+### Symptom
+
+One `@bot`-mention → two identical issue comments ~5 s apart. Because the two posts are
+*byte-identical* (not two independent generations, which would differ in prose), they
+came from **one** agent generation published **twice** — the agent called
+`km-github comment` (or `review`) twice in the same turn.
+
+### Root cause
+
+Both posts hit GitHub's comment/review API with the same body, and **GitHub issue
+comments and reviews are not idempotent**. The agent double-posts because:
+
+1. **Conflicting posting mandates.** The poller hard-codes a "post your reply
+   (REQUIRED)" directive into every prompt. When the user *also* invokes a skill whose
+   workflow tells the agent to post a PR review, the agent composes the body once and
+   publishes it twice — once per instruction source.
+2. **Self-retry of a call that secretly succeeded.** The agent's first
+   `km-github comment` Bash call looks like it failed (slow GitHub response / ambiguous
+   exit) so it re-runs it; the first had actually posted. ~5 s is classic retry timing.
+
+This is **not** SQS redelivery (a redelivered envelope re-invokes `claude -p`, takes
+minutes, and produces *different* prose), nor federated double-ownership (two installs →
+two different sandboxes → two different runs → different text). The 300 s→1800 s
+visibility guard (`pkg/compiler/userdata.go`) is unrelated and working.
+
+### The guard — hidden marker + pre-post duplicate check
+
+When posting a comment or review, the helper:
+
+1. Embeds an invisible HTML-comment marker keyed to the current turn:
+   `\n\n<!-- km-turn:$KM_GITHUB_TURN_ID -->` (HTML comments do not render in GitHub
+   markdown). This is **separate** from the visible `<sub>🤖 via Claude</sub>`
+   attribution footer (Phase 102 follow-up) — that footer stays.
+2. **Before** posting, GETs the issue's existing comments (for `comment`) or the PR's
+   reviews (for `review`) and scans each body for the same marker. If found, it
+   **no-ops** (exit 0, logs `duplicate suppressed (km-turn:… already posted)`).
+3. Otherwise appends the marker to the body and POSTs as before.
+
+**Per-turn, not per-PR.** The marker is keyed on the poller's `RUN_ID` (one value per
+dispatched turn), so two *separate* legitimate mentions on the same PR each compute a
+different marker and each post. A bodyless `APPROVE` review gets the marker as its whole
+body, so even APPROVE is idempotent.
+
+**Fail-open.** If the pre-post duplicate-check GET errors (ratelimit / 5xx / transport),
+the helper logs it and **posts anyway** — a failed *read* must never strand a legitimate
+*reply*. The scan paginates (`per_page=100`, following `Link: rel="next"`) so a comment
+posted seconds earlier — which sorts last — is still found.
+
+### `KM_GITHUB_TURN_ID` plumbing
+
+The poller exports `KM_GITHUB_TURN_ID='$RUN_ID'` inline into all four agent-dispatch
+`sudo -u sandbox bash -lc` blocks of `km-github-inbound-poller` (codex resume, codex
+first-turn, claude main, claude `--resume` retry), mirroring how `KM_GITHUB_REPLY_AGENT`
+is exported. An **empty** `KM_GITHUB_TURN_ID` (every manual `km-github` invocation)
+disables both the marker append and the duplicate-check ⇒ byte-identical to
+pre-Phase-108.
+
+### Files
+
+- `pkg/github/marker.go` *(new)* — `TurnMarker(id)`, `CommentMarkerExists(...)`,
+  `ReviewMarkerExists(...)` (paginated list + marker scan; fail-open contract).
+- `cmd/km-github/main.go` — `runCommentWith` / `runReviewWith` take a `turnID`: pre-post
+  check + marker append. `KM_GITHUB_TURN_ID` read in the outer `runComment` / `runReview`.
+- `pkg/compiler/userdata.go` — export `KM_GITHUB_TURN_ID` into the four poller dispatch
+  blocks.
+
+No SandboxProfile schema change, no new TF resource, no new DDB column, no bridge Lambda
+or IAM change. Slack and HackerOne pollers untouched.
+
+### Deploy sequence (Phase 108)
+
+The change spans **both** the create-handler-compiled userdata (the env-var export)
+**and** the `km-github` sidecar binary (the marker logic). A full `km init` covers both:
+it applies the new create-handler zip **and** rebuilds+uploads the `km-github` sidecar
+via `buildAndUploadSidecars` (the helper is delivered to the box from
+`s3://<artifacts>/sidecars/km-github`, **not** by `make sidecars`).
+
+```bash
+# 1. Rebuild the create-handler Lambda zip (embeds the new userdata).
+make build-lambdas
+
+# 2. Full terragrunt apply — uploads the new create-handler zip AND re-uploads the
+#    km-github sidecar binary. NOT --sidecars (that skips the create-handler zip);
+#    NOT km init --github (that refreshes only the bridge Lambda env+IAM).
+km init --dry-run=false
+
+# 3. Existing sandboxes must be recreated to gain the new userdata env-var export
+#    and to download the freshly-uploaded km-github sidecar at boot.
+km destroy <sandbox-id> --remote --yes
+km create profiles/github-review.yaml --alias gh-myrepo
+
+# 4. Verify.
+km doctor
+```
+
+### Verification
+
+- **Unit:** given a fake GitHub API that already returns a comment/review containing
+  `<!-- km-turn:ABC -->`, `runCommentWith` / `runReviewWith` with `turnID=ABC` must
+  **not** POST (skip + exit 0); with a fresh/absent turn id they POST (marker appended);
+  a failing duplicate-check GET still POSTs (fail-open). Covered in
+  `cmd/km-github/marker_cmd_test.go` and `pkg/github/marker_test.go`.
+- **Manual:** drive the agent to post the same body twice in one turn → exactly one
+  comment lands. Two separate mentions → two comments.

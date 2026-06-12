@@ -2306,6 +2306,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
         export KM_GITHUB_REPLY_AGENT='codex'
+        export KM_GITHUB_TURN_ID='$RUN_ID'
         cd /workspace 2>/dev/null || true
         codex exec resume '$GITHUB_SESSION' \"\$(cat '$PROMPT_FILE')\" \
           --json --dangerously-bypass-approvals-and-sandbox \
@@ -2319,6 +2320,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
         export KM_GITHUB_REPLY_AGENT='codex'
+        export KM_GITHUB_TURN_ID='$RUN_ID'
         cd /workspace 2>/dev/null || true
         codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
           > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
@@ -2333,6 +2335,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
       export PATH=\"/home/sandbox/.local/bin:\$PATH\"
       export KM_GITHUB_REPLY_AGENT='claude'
+      export KM_GITHUB_TURN_ID='$RUN_ID'
       cd /workspace 2>/dev/null || true
       claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
         --dangerously-skip-permissions $RESUME_ARG \
@@ -2364,6 +2367,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
         export KM_GITHUB_REPLY_AGENT='claude'
+        export KM_GITHUB_TURN_ID='$RUN_ID'
         cd /workspace 2>/dev/null || true
         claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
           --dangerously-skip-permissions \

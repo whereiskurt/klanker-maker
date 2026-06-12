@@ -142,13 +142,20 @@ func runComment(args []string, stderr io.Writer) int {
 	}
 
 	body = attributionFooter(body, os.Getenv(replyAgentEnv))
-	return runCommentWith(repo, number, body, token, stderr)
+	return runCommentWith(repo, number, body, token, os.Getenv(turnIDEnv), stderr)
 }
 
 // replyAgentEnv is set by the GitHub inbound poller (exported inline into the
 // agent's dispatch shell) to the EFFECTIVE_AGENT for the turn — "claude" or
 // "codex". It is the signal that a comment/review is an agent-dispatched reply.
 const replyAgentEnv = "KM_GITHUB_REPLY_AGENT"
+
+// turnIDEnv is set by the GitHub inbound poller (exported inline into the agent's
+// dispatch shell) to the poller's per-turn RUN_ID. It keys the per-turn
+// idempotency marker that suppresses duplicate posts when the agent invokes
+// km-github comment/review twice in one turn (github-bridge double-post fix).
+// Empty for manual km-github invocations → marker + duplicate-check disabled.
+const turnIDEnv = "KM_GITHUB_TURN_ID"
 
 // attributionFooter appends a "via <Agent>" footer so a reader can tell whether
 // Claude or Codex produced an agent-dispatched reply (Phase 102 follow-up).
@@ -167,14 +174,44 @@ func attributionFooter(body, agent string) string {
 	return body + "\n\n<sub>🤖 via " + label + "</sub>"
 }
 
+// appendTurnMarker appends the hidden per-turn idempotency marker to body. An
+// empty body (e.g. a bodyless APPROVE review) becomes the marker alone so even
+// that post is idempotent; a non-empty body keeps a blank-line separator so the
+// marker stays invisible in rendered markdown.
+func appendTurnMarker(body, marker string) string {
+	if body == "" {
+		return marker
+	}
+	return body + "\n\n" + marker
+}
+
 // runCommentWith is the testable inner entry point for the comment subcommand.
 // Tests inject a token and point GitHubAPIBaseURL at an httptest server.
-func runCommentWith(repo string, number int, body, token string, stderr io.Writer) int {
+//
+// turnID is the per-turn idempotency key (the poller's RUN_ID via
+// KM_GITHUB_TURN_ID). When non-empty, the helper scans the issue's existing
+// comments for this turn's hidden marker and no-ops if it is already present
+// (the agent posted the same body earlier this turn), then appends the marker to
+// the body it posts. Empty turnID disables the guard (manual km-github use).
+func runCommentWith(repo string, number int, body, token, turnID string, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() { <-sigCh; cancel() }()
+
+	if marker := github.TurnMarker(turnID); marker != "" {
+		exists, err := github.CommentMarkerExists(ctx, repo, number, token, marker)
+		switch {
+		case err != nil:
+			// Fail open: a failed read must not strand a legitimate reply.
+			fmt.Fprintf(stderr, "km-github comment: duplicate-check failed, posting anyway: %v\n", err)
+		case exists:
+			fmt.Fprintf(stderr, "km-github comment: duplicate suppressed (km-turn:%s already posted)\n", turnID)
+			return 0
+		}
+		body = appendTurnMarker(body, marker)
+	}
 
 	url := fmt.Sprintf("%s/repos/%s/issues/%d/comments", github.GitHubAPIBaseURL, repo, number)
 	payload := map[string]string{"body": body}
@@ -236,7 +273,7 @@ func runReview(args []string, stderr io.Writer) int {
 	if body != "" {
 		body = attributionFooter(body, os.Getenv(replyAgentEnv))
 	}
-	return runReviewWith(repo, number, event, body, commitID, token, stderr)
+	return runReviewWith(repo, number, event, body, commitID, token, os.Getenv(turnIDEnv), stderr)
 }
 
 // reviewPayload is the JSON body for the GitHub Pull Request review API.
@@ -249,7 +286,11 @@ type reviewPayload struct {
 
 // runReviewWith is the testable inner entry point for the review subcommand.
 // Tests inject a token and point GitHubAPIBaseURL at an httptest server.
-func runReviewWith(repo string, number int, event, body, commitID, token string, stderr io.Writer) int {
+//
+// turnID drives the same per-turn idempotency guard as runCommentWith: when
+// non-empty the helper scans the PR's existing reviews for this turn's marker,
+// no-ops if present, and appends the marker to the posted body. Empty disables it.
+func runReviewWith(repo string, number int, event, body, commitID, token, turnID string, stderr io.Writer) int {
 	// Validate event.
 	if !validReviewEvents[event] {
 		fmt.Fprintf(stderr, "km-github review: invalid --event %q; valid values: APPROVE, COMMENT, REQUEST_CHANGES\n", event)
@@ -267,6 +308,18 @@ func runReviewWith(repo string, number int, event, body, commitID, token string,
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() { <-sigCh; cancel() }()
+
+	if marker := github.TurnMarker(turnID); marker != "" {
+		exists, err := github.ReviewMarkerExists(ctx, repo, number, token, marker)
+		switch {
+		case err != nil:
+			fmt.Fprintf(stderr, "km-github review: duplicate-check failed, posting anyway: %v\n", err)
+		case exists:
+			fmt.Fprintf(stderr, "km-github review: duplicate suppressed (km-turn:%s already posted)\n", turnID)
+			return 0
+		}
+		body = appendTurnMarker(body, marker)
+	}
 
 	url := fmt.Sprintf("%s/repos/%s/pulls/%d/reviews", github.GitHubAPIBaseURL, repo, number)
 	payload := reviewPayload{
