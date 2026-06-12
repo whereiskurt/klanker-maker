@@ -317,3 +317,39 @@ func TestUserdata_GitHubInboundPoller_Phase102AgentVerbs(t *testing.T) {
 		t.Errorf("stale 'codex:' colon wording still present in codex-missing guard; expected /codex slash verb")
 	}
 }
+
+// TestUserdata_GitHubInboundPoller_ResumeHint verifies Phase 106's post-on-mint resume
+// hint behavior inside the GitHub inbound poller. After a qualifying agent turn the
+// poller posts a collapsed <details> comment carrying the operator-facing resume command,
+// run-from directory, and sandbox id — exactly once per newly-minted session id.
+//
+// Contract (post-on-mint): the hint is posted ONLY when
+//   "$NEW_GITHUB_SESSION" != "${GITHUB_SESSION:-}"
+//
+// meaning a fresh mint or a Gap-E re-mint. Every assertion below is SCOPED to the
+// extracted GITHUBINBOUND heredoc body to prove the hint lives inside the GitHub poller
+// rather than anywhere else in the rendered userdata.
+//
+// This test is RED at Phase 106 Wave 0 (plan 01) — it will go GREEN when Wave 1
+// (plan 02) adds the hint block to userdata.go.
+func TestUserdata_GitHubInboundPoller_ResumeHint(t *testing.T) {
+	p := minimalGitHubInboundProfile(t, true)
+	out := compileGitHubInboundUserData(t, p)
+	poller := extractGitHubInboundPoller(t, out)
+
+	must := []string{
+		`<details>`,                                               // collapsible fold opener
+		`🔧 Resume`,                                               // locked summary emoji+wording
+		`claude --resume`,                                         // Claude resume branch
+		`codex exec resume`,                                       // Codex resume branch
+		`/workspace`,                                              // run-from directory (NOT /home/sandbox)
+		`SANDBOX_ID`,                                              // sandbox id referenced in the hint body
+		`|| true`,                                                 // best-effort non-blocking guard on the hint post
+		`"$NEW_GITHUB_SESSION" != "${GITHUB_SESSION:-}"`,          // post-on-mint condition (exact guard)
+	}
+	for _, s := range must {
+		if !strings.Contains(poller, s) {
+			t.Fatalf("Phase 106 resume-hint substring missing from GitHub inbound poller: %q\n%s", s, abbreviateUD(poller))
+		}
+	}
+}
