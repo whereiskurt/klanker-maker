@@ -168,10 +168,14 @@ resource "aws_iam_role_policy" "kms_decrypt" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "KMSDecrypt"
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = "arn:aws:kms:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:key/*"
+        Sid    = "KMSDecrypt"
+        Effect = "Allow"
+        Action = ["kms:Decrypt"]
+        # When the platform CMK is wired (var.kms_key_arn), scope decrypt to it — this
+        # is the identity authorization that lets the function decrypt env vars encrypted
+        # under the IAM-delegating CMK (grant-independent, survives role recreation).
+        # Falls back to the account key/* wildcard when no CMK is configured.
+        Resource = var.kms_key_arn != "" ? var.kms_key_arn : "arn:aws:kms:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:key/*"
       }
     ]
   })
@@ -243,6 +247,11 @@ resource "aws_lambda_function" "email_handler" {
   timeout       = 120
   memory_size   = 256
   architectures = ["arm64"]
+
+  # Encrypt env vars under the IAM-delegating platform CMK (var.kms_key_arn) so the
+  # role's identity kms:Decrypt authorizes decryption directly — no role-pinned grant
+  # to orphan on role recreate. null = aws/lambda managed-key default when unset.
+  kms_key_arn = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   environment {
     variables = {

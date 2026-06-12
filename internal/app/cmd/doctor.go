@@ -1803,6 +1803,49 @@ func checkLambdaFunction(ctx context.Context, client LambdaGetFunctionAPI, funcN
 	}
 }
 
+// checkBridgeEnvKMSKey WARNs when a bridge/handler Lambda still encrypts its env
+// vars with the aws/lambda managed key (KMSKeyArn unset). On the managed key, env
+// decryption rides on a KMS grant pinned to the execution role's unique-ID; a
+// role-recreating km init orphans that grant and the function dies before logging
+// (HTTP 502, no CloudWatch logs). The durable fix sets a customer-managed CMK so the
+// role's identity kms:Decrypt authorizes decryption directly (grant-independent).
+//
+// CheckSkipped when the client is nil or the function isn't deployed (existence is
+// covered elsewhere). CheckOK when a CMK ARN is set.
+func checkBridgeEnvKMSKey(ctx context.Context, client LambdaGetFunctionAPI, funcName string) CheckResult {
+	name := fmt.Sprintf("Lambda env KMS (%s)", funcName)
+	if client == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "Lambda client not available"}
+	}
+	out, err := client.GetFunction(ctx, &lambda.GetFunctionInput{
+		FunctionName: awssdk.String(funcName),
+	})
+	if err != nil {
+		var notFound *lambdatypes.ResourceNotFoundException
+		if errors.As(err, &notFound) {
+			return CheckResult{Name: name, Status: CheckSkipped, Message: fmt.Sprintf("function %q not deployed", funcName)}
+		}
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: fmt.Sprintf("could not read %q config: %v", funcName, err),
+		}
+	}
+	if out.Configuration != nil && awssdk.ToString(out.Configuration.KMSKeyArn) != "" {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckOK,
+			Message: "env vars encrypted with customer-managed CMK (grant-independent)",
+		}
+	}
+	return CheckResult{
+		Name:        name,
+		Status:      CheckWarn,
+		Message:     fmt.Sprintf("%q env vars on the aws/lambda managed key — a role-recreating km init can orphan the KMS grant and 502 the function with no logs", funcName),
+		Remediation: fmt.Sprintf("Run 'km init --dry-run=false' to adopt the platform CMK (durable). Immediate unblock: aws lambda update-function-configuration --function-name %s --kms-key-arn <platform-cmk-or-managed-arn>", funcName),
+	}
+}
+
 // checkSESIdentity verifies the SES domain identity is verified.
 // The identity checked is the email domain (e.g. "sandboxes.klankermaker.ai") from cfg.GetEmailDomain().
 // Returns CheckSkipped when client is nil, CheckWarn when not found or not verified.
@@ -3680,6 +3723,21 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkLambdaFunction(ctx, lambdaClient, ttlHandlerName)
 	})
+
+	// Bridge/handler env-var KMS check: WARN when a platform Lambda still encrypts
+	// env vars with the aws/lambda managed key, where a role-recreating km init can
+	// orphan the KMS grant and 502 the function. Each deployed-but-unwired function is
+	// flagged with the durable + immediate remediation. Not-deployed functions SKIP.
+	bridgeLambdaPrefix := cfg.GetResourcePrefix()
+	for _, suffix := range []string{
+		"-github-bridge", "-slack-bridge", "-h1-bridge",
+		"-email-create-handler", "-create-handler",
+	} {
+		fnName := bridgeLambdaPrefix + suffix
+		checks = append(checks, func(ctx context.Context) CheckResult {
+			return checkBridgeEnvKMSKey(ctx, lambdaClient, fnName)
+		})
+	}
 
 	// SES domain identity check.
 	sesClient := deps.SESClient

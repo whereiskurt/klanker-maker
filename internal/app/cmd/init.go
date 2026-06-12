@@ -26,6 +26,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
@@ -360,6 +361,7 @@ func runInitScoped(cfg *config.Config, awsProfile, region string, verbose bool, 
 
 	// 1. Export KM_* env vars so terragrunt get_env() calls see fresh values.
 	ExportTerragruntEnvVars(cfg)
+	exportPlatformKMSKeyARN(ctx, awsCfg, cfg)
 
 	// 2. Ensure Slack bot-user-id is cached in env (needed when applying lambda-slack-bridge
 	//    so KM_SLACK_BOT_USER_ID lands in the Lambda env block). Non-fatal.
@@ -981,15 +983,15 @@ func runInitDryRun(cfg *config.Config, region string) error {
 	// Terraform modules
 	// Build a map of env vars that runInit would set from config before applying.
 	configEnv := map[string]bool{
-		"KM_ARTIFACTS_BUCKET": cfg.ArtifactsBucket != "",
-		"KM_ROUTE53_ZONE_ID":  cfg.Route53ZoneID != "",
-		"KM_DOMAIN":           cfg.Domain != "",
-		"KM_REGION":           cfg.PrimaryRegion != "",
-		"KM_OPERATOR_EMAIL":   cfg.OperatorEmail != "",
-		"KM_SCHEDULER_ROLE_ARN": cfg.SchedulerRoleARN != "",
+		"KM_ARTIFACTS_BUCKET":      cfg.ArtifactsBucket != "",
+		"KM_ROUTE53_ZONE_ID":       cfg.Route53ZoneID != "",
+		"KM_DOMAIN":                cfg.Domain != "",
+		"KM_REGION":                cfg.PrimaryRegion != "",
+		"KM_OPERATOR_EMAIL":        cfg.OperatorEmail != "",
+		"KM_SCHEDULER_ROLE_ARN":    cfg.SchedulerRoleARN != "",
 		"KM_ACCOUNTS_ORGANIZATION": cfg.OrganizationAccountID != "",
 		"KM_ACCOUNTS_DNS_PARENT":   cfg.DNSParentAccountID != "",
-		"KM_ACCOUNTS_APPLICATION": cfg.ApplicationAccountID != "",
+		"KM_ACCOUNTS_APPLICATION":  cfg.ApplicationAccountID != "",
 	}
 
 	fmt.Printf(" 11. Apply regional infrastructure modules (in order):\n")
@@ -1044,6 +1046,9 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	// Export config values as env vars for Terragrunt's site.hcl get_env() calls
 	// and for the envReqs checks in regionalModules.
 	ExportTerragruntEnvVars(cfg)
+	// Resolve the platform CMK ARN so bridge/handler Lambdas encrypt env vars under it
+	// (grant-independent decrypt; survives role recreation).
+	exportPlatformKMSKeyARN(ctx, awsCfg, cfg)
 
 	// Phase 91.1: auto-populate KM_SLACK_BOT_USER_ID from SSM at
 	// {prefix}slack/bot-user-id (written by km slack init / rotate-token).
@@ -1378,6 +1383,37 @@ func runInitPartial(cfg *config.Config, awsProfile, region string, verbose, side
 // the foundation MX/DKIM/verification records because KM_ROUTE53_ZONE_ID was unset).
 // Renamed in plan 84.1-01 Task 2 from its prior, narrower-scoped name — single
 // canonical helper across all 8 production callers, NO shim (H5, plan-checker rev 1).
+// exportPlatformKMSKeyARN resolves the platform KMS alias (cfg.GetPlatformKMSAlias,
+// created by km bootstrap) to its underlying key ARN and exports it as
+// KM_PLATFORM_KMS_KEY_ARN, which terragrunt feeds into the bridge/handler Lambda
+// `kms_key_arn` input (get_env("KM_PLATFORM_KMS_KEY_ARN","")).
+//
+// Why this matters: with kms_key_arn set, a Lambda encrypts its env vars under the
+// customer-managed platform CMK (whose default key policy delegates to IAM root), so
+// the execution role's identity-based kms:Decrypt authorizes env decryption DIRECTLY —
+// no KMS grant. Without it, Lambda falls back to the aws/lambda managed key, whose
+// decrypt rides on a role-pinned grant that a role-recreating km init orphans → the
+// function 502s with no logs (the incident this fixes).
+//
+// Fail-soft: respects an operator-set value; if the alias can't be resolved (e.g. a
+// fresh install before km bootstrap), logs an info line and leaves the var unset
+// (managed-key fallback — no worse than before).
+func exportPlatformKMSKeyARN(ctx context.Context, awsCfg aws.Config, cfg *config.Config) {
+	if os.Getenv("KM_PLATFORM_KMS_KEY_ARN") != "" {
+		return // operator override or already resolved this run
+	}
+	alias := cfg.GetPlatformKMSAlias()
+	if alias == "" {
+		return
+	}
+	arn, err := awspkg.ResolveKeyARN(ctx, kms.NewFromConfig(awsCfg), alias)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  [info] platform KMS key %s not resolved (%v); Lambda env vars stay on the aws/lambda managed key\n", alias, err)
+		return
+	}
+	os.Setenv("KM_PLATFORM_KMS_KEY_ARN", arn) //nolint:errcheck
+}
+
 func ExportTerragruntEnvVars(cfg *config.Config) {
 	// Phase 84.3: warnAndSetEnv emits a drift WARN to stderr when an env var is
 	// already set to a different value than the yaml-configured value, then sets
@@ -2339,6 +2375,7 @@ func runInitPlan(cfg *config.Config, awsProfile, region string, verbose, acceptD
 	// 2. Export env vars — Phase 84.1-01 contract (init.go ExportTerragruntEnvVars pattern).
 	//    MUST happen exactly once before any terragrunt invocation.
 	ExportTerragruntEnvVars(cfg)
+	exportPlatformKMSKeyARN(ctx, awsCfg, cfg)
 
 	// 3. Construct runner (Verbose=false — RunInitPlanWithRunner captures stdout
 	//    per-module and echoes based on verbose flag post-hoc).
@@ -3445,12 +3482,12 @@ func ensureProxyCACert(repoRoot, bucket string) error {
 
 	// Create self-signed CA certificate (valid 5 years)
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "km-platform-ca"},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(5 * 365 * 24 * time.Hour),
-		IsCA:         true,
-		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "km-platform-ca"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 	}
 

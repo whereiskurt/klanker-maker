@@ -64,8 +64,8 @@ module "km_operator_policy" {
   dynamodb_budget_table_arn = var.dynamodb_budget_table_arn
   sandbox_table_name        = var.sandbox_table_name
   identities_table_name     = var.identities_table_name
-  slack_threads_table_name   = var.slack_threads_table_name
-  slack_channels_table_name  = var.slack_channels_table_name
+  slack_threads_table_name  = var.slack_threads_table_name
+  slack_channels_table_name = var.slack_channels_table_name
 }
 
 # ============================================================
@@ -92,6 +92,12 @@ resource "aws_lambda_function" "create_handler" {
   ephemeral_storage {
     size = 10240
   }
+
+  # Encrypt env vars under the IAM-delegating platform CMK (var.kms_key_arn) so the
+  # role's identity kms:Decrypt (the create-handler role already holds kms:* on *)
+  # authorizes decryption directly — no role-pinned grant to orphan on role recreate.
+  # null = aws/lambda managed-key default when unset.
+  kms_key_arn = var.kms_key_arn != "" ? var.kms_key_arn : null
 
   environment {
     variables = {

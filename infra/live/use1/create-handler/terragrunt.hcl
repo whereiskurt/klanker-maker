@@ -1,6 +1,6 @@
 locals {
-  repo_root  = dirname(find_in_parent_folders("CLAUDE.md"))
-  site_vars  = read_terragrunt_config("${local.repo_root}/infra/live/site.hcl")
+  repo_root = dirname(find_in_parent_folders("CLAUDE.md"))
+  site_vars = read_terragrunt_config("${local.repo_root}/infra/live/site.hcl")
 
   # Region from region.hcl in the parent directory (e.g., infra/live/use1/region.hcl)
   region_config = read_terragrunt_config("${get_terragrunt_dir()}/../region.hcl")
@@ -50,21 +50,22 @@ inputs = {
   # DynamoDB budget table ARN — derived from site.label to support custom prefixes
   dynamodb_budget_table_arn = "arn:aws:dynamodb:${local.region_full}:${local.account_id}:table/${local.site_vars.locals.site.label}-budgets"
   # email_create_handler_arn — set after deploying the email-create-handler Lambda (22-02)
-  email_create_handler_arn  = get_env("KM_EMAIL_CREATE_HANDLER_ARN", "")
-  resource_prefix            = local.site_vars.locals.site.label
-  sandbox_table_name         = "${local.site_vars.locals.site.label}-sandboxes"
-  identities_table_name      = "${local.site_vars.locals.site.label}-identities"
+  email_create_handler_arn = get_env("KM_EMAIL_CREATE_HANDLER_ARN", "")
+  resource_prefix          = local.site_vars.locals.site.label
+  sandbox_table_name       = "${local.site_vars.locals.site.label}-sandboxes"
+  identities_table_name    = "${local.site_vars.locals.site.label}-identities"
+  kms_key_arn              = get_env("KM_PLATFORM_KMS_KEY_ARN", "")
 
   # Phase 91.6 — closes Phase 67-07 IAM gap. Without this grant, the
   # postReadyAnnouncement upsert into km-slack-threads silently fails with
   # AccessDeniedException and Sandbox Ready threads have no anchor row, so
   # user replies in them get blocked by the mention-only filter instead of
   # triggering the Phase 91.3 thread-bypass. Empty value disables the grant.
-  slack_threads_table_name   = "${local.site_vars.locals.site.label}-slack-threads"
+  slack_threads_table_name = "${local.site_vars.locals.site.label}-slack-threads"
 
   # Phase 104.3 — O(1) alias→channel_id lookup via km-slack-channels DDB table.
   # Static string (no dependency block) — the IAM grant needs only the table NAME,
   # not an ARN output, so a dependency on the slack-channels unit is not required
   # and would break km init --plan on fresh installs. Mirrors the slack_threads pattern.
-  slack_channels_table_name  = "${local.site_vars.locals.site.label}-slack-channels"
+  slack_channels_table_name = "${local.site_vars.locals.site.label}-slack-channels"
 }
