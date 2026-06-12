@@ -146,22 +146,29 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 
 - `km validate <profile.yaml>` — validate a SandboxProfile
 - `km create <profile.yaml>` — provision a sandbox (`--no-bedrock`, `--docker`, `--alias`, `--on-demand`, `--prompt <text-or-@file>` repeatable, `--wait`)
-- `km destroy <sandbox-id>` — teardown a sandbox (`--remote` by default; `km kill` is an alias)
+- `km clone <source> [new-alias]` — duplicate one or more running sandboxes from the source's stored profile (`--count`, `--alias`, `--no-copy` to skip the `$HOME` copy, `--ai`/`--compute`/`--ttl`/`--idle`/`--on-demand`/`--no-bedrock` overrides)
+- `km destroy <sandbox-id>` — teardown a sandbox (`--remote` by default, `--yes` to skip confirmation; `km kill` is an alias)
 - `km pause <sandbox-id>` — hibernate/pause an EC2 or Docker instance (preserves infra)
 - `km resume <sandbox-id>` — resume a paused or stopped sandbox
 - `km lock <sandbox-id>` — safety lock preventing destroy/stop/pause (atomic DynamoDB)
 - `km unlock <sandbox-id>` — remove safety lock (requires confirmation or `--yes`)
-- `km list` — list sandboxes (narrow default, `--wide` for all columns)
+- `km stop <sandbox-id>` — stop the EC2 instance, preserving infrastructure for restart (`--remote`); distinct from `km pause` (hibernate)
+- `km extend <sandbox-id> <duration>` — extend a sandbox's TTL or change its idle timeout (`--idle`, `--remote`)
+- `km list` — list sandboxes (narrow default, `--wide` for all columns, `--auth` for per-sandbox agent-login state, `--json`, `--tags`, `--reset` to reset local numbering)
+- `km status <sandbox-id>` — detailed state, resources, and budget for a single sandbox
+- `km logs <sandbox-id>` — tail CloudWatch audit logs for a sandbox (`--follow`, `--stream <name>`)
 - `km agent <sandbox-id> --claude` — interactive Claude session via SSM (`--no-bedrock` for direct API)
 - `km agent run <sandbox-id> --prompt "..."` — fire-and-forget non-interactive Claude in tmux (`--wait`, `--interactive`, `--no-bedrock`, `--auto-start`)
 - `km agent attach <sandbox-id>` — attach to a running agent's tmux session (Ctrl-B d to detach)
 - `km agent results <sandbox-id>` — fetch latest run output (`--run <id>` for specific run)
 - `km agent list <sandbox-id>` — list all agent runs with status and output size (`--queue` to list on-box prompt queue entries instead)
+- `km agent auth <sandbox-id> --claude|--codex` — authenticate the claude/codex CLI inside a sandbox via SSM (interactive login flow over the SSM session)
 - `km at '<time>' <cmd>` — schedule deferred/recurring operations; supports `create`, `destroy`, `kill`, `stop`, `pause`, `resume`, `extend`, `budget-add`, `agent run` (`km schedule` is an alias)
 - `km at list` / `km at cancel <name>` — manage scheduled operations
 - `km email send` — send signed email between sandboxes or to/from operator (`--from`, `--to`, `--cc`, `--use-bcc`, `--reply-to`)
 - `km email read <sandbox>` — read sandbox mailbox with signature verification and auto-decryption (`--json`, `--mark-read`)
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (`--prompts`, `--events`, `--tools`, `--timeline`)
+- `km budget add <sandbox-id>` — top up a sandbox's compute or AI budget; auto-resumes the sandbox if it was budget-suspended
 - `km slack init` — bootstrap Slack integration (`--bot-token`, `--invite-email`, `--shared-channel`, `--signing-secret`, `--force`); also caches `bot_user_id` at `{prefix}/slack/bot-user-id` (Phase 91)
 - `km slack test` — end-to-end smoke test through the bridge
 - `km slack status` — print SSM-backed Slack config
@@ -169,6 +176,9 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km slack manifest` — render a deployment-specific Slack App manifest to stdout (`--app-name`)
 - `km slack rotate-token --bot-token <new>` — rotate Slack bot token + cold-start the bridge
 - `km slack rotate-signing-secret --signing-secret <new>` — rotate Slack App signing secret
+- `km slack adopt <alias> <channelID>` — seed the alias→channel DDB mapping for an externally-created channel so the next `km create` resolves it O(1) (Phase 104)
+- `km github init` / `km github manifest` / `km github status` — manage the GitHub App bridge: cache bot-login + record bridge-url in SSM, render the App manifest JSON, print SSM-backed config
+- `km h1 init` / `km h1 status` — manage the HackerOne webhook bridge: mint webhook secret + capture Basic-Auth creds, print SSM-backed config (no `manifest` subcommand — H1 has no App-manifest concept)
 - `km vscode start <sandbox-id>` — open SSM port-forward + ssh-config Host entry for VS Code Remote-SSH (`--local-port`)
 - `km vscode status <sandbox-id>` — check sshd state + authorized_keys presence
 - `km vscode rekey <sandbox-id>` — rotate per-sandbox keypair without `km destroy && km create` (`--force`, `--yes`)
@@ -186,6 +196,11 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km env [--aws-profile]` — print exportable `KM_*` block for `eval $(km env)` to drive terragrunt directly (excludes `AWS_PROFILE` by default; `KM_ACCOUNTS_TERRAFORM` intentionally omitted)
 - `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn`, `--ami`)
 - `km ami list` / `km ami bake <sandbox-id>` / `km ami copy <ami-id> --region <dest>` / `km ami delete <ami-id>` — operator-baked AMI lifecycle
+- `km rsync save|load|list|view|delete <sandbox-id>` — snapshot and restore the sandbox user's `$HOME` to/from S3
+- `km roll creds` — rotate all platform + sandbox credentials
+- `km configure` — interactive wizard to generate `km-config.yaml` (`km configure github` configures the GitHub App)
+- `km uninit` — tear down all shared regional infrastructure for a region (`--yes`, `--force` if active sandboxes exist, `--include-scp`; NO `--dry-run` — confirmation is `--yes`)
+- `km unbootstrap` — tear down platform-foundational resources: SSM params, buckets, KMS key (`--include-zone` to also delete the Route53 zone, `--kms-deletion-window`, `--yes`)
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
 - `km doctor` — validate platform health (config, credentials, SES, Lambda, VPC, stale resources, AMIs, EBS, Slack inbound, presence daemon, etc.; `--all-regions`, `--backfill-tags`, `--ignore-prefix=<csv>` to treat sibling installs' cross-install resources as known)
 

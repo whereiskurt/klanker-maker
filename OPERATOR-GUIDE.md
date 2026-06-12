@@ -1287,8 +1287,8 @@ make build-lambdas              # prereq for `km init --plan`: builds the 6 Lamb
 ./bin/km destroy <sandbox-id> --remote --yes
 
 # 7. Clean teardown
-./bin/km uninit --dry-run=false
-./bin/km unbootstrap --dry-run=false
+./bin/km uninit --yes
+./bin/km unbootstrap --yes
 ```
 
 #### How it works

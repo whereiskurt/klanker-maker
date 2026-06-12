@@ -18,22 +18,27 @@ This document is the operator guide. For the full design narrative, see
 | Per-message agent selection | Profile-only (one agent per sandbox) | Slack message prefix `claude:` / `codex:` overrides per-turn |
 | Mid-thread agent switch | Not supported | Cross-agent prefix in an existing thread spawns a new top-level + handoff post |
 | DDB schema | Claude-only `claude_session_id` | Same column reused agent-agnostic; new attrs `agent_type` + `last_assistant_msg` |
-| Profile field | `spec.cli` had Claude-specific args only | New `spec.cli.agent: claude \| codex` (default `claude`) |
+| Profile field | `spec.cli` had Claude-specific args only | New `spec.agent.default: claude \| codex` (default `claude`) |
 
 ## Profile schema
 
-`spec.cli.agent` selects the default agent for **this sandbox**:
+`spec.agent.default` selects the default agent for **this sandbox**:
 
 ```yaml
 spec:
-  cli:
-    agent: codex  # or "claude"; absence ≡ claude
-    notifyEmailEnabled: true
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true
-    notifyOnPermission: true
-    notifyOnIdle: true
+  agent:
+    default: codex  # or "claude"; absence ≡ claude
+  notification:
+    email:
+      enabled: true
+    slack:
+      enabled: true
+      perSandbox: true
+      inbound:
+        enabled: true
+    events:
+      onPermission: true
+      onIdle: true
 ```
 
 Validation: `km validate <profile.yaml>` rejects any value other than `claude`
@@ -193,7 +198,7 @@ for a fresh thread). Existing Phase 67 behavior, unchanged.
 **Case 2 — prefix on a fresh thread:**
 
 ```
-[#sb-x channel, profile has spec.cli.agent: claude]
+[#sb-x channel, profile has spec.agent.default: claude]
 Operator: codex: list workspace files
 ```
 
@@ -308,7 +313,7 @@ Phase 70 updates the doctor checks first planned as hook-based:
 
 - **`codex_version_supports_jsonl`** (replaces the original
   `codex_hook_config_present`) — for each sandbox with
-  `spec.cli.agent: codex`, SSM RunCommand probes `codex --version` and
+  `spec.agent.default: codex`, SSM RunCommand probes `codex --version` and
   `codex exec --help | grep -- --json` to verify the installed binary supports
   the JSONL output format. WARN on mismatch. Skipped when no codex sandboxes
   exist.

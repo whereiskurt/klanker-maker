@@ -29,7 +29,7 @@ echo "KM_SANDBOX_ALIAS=$KM_SANDBOX_ALIAS"
 echo "KM_SANDBOX_DOMAIN=$KM_SANDBOX_DOMAIN"
 echo "KM_ARTIFACTS_BUCKET=$KM_ARTIFACTS_BUCKET"
 echo "KM_ALIAS_EMAIL=$KM_ALIAS_EMAIL"
-# Slack-related (only populated when notifySlackEnabled: true in profile)
+# Slack-related (only populated when notification.slack.enabled: true in profile)
 echo "KM_NOTIFY_SLACK_ENABLED=$KM_NOTIFY_SLACK_ENABLED"
 echo "KM_SLACK_CHANNEL_ID=$KM_SLACK_CHANNEL_ID"
 echo "KM_SLACK_BRIDGE_URL=$KM_SLACK_BRIDGE_URL"

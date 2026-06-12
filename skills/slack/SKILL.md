@@ -20,7 +20,7 @@ This skill posts a message from inside a sandbox to its per-sandbox Slack channe
 
 ## Step 1: Confirm Slack Is Wired Up
 
-Slack posting is **opt-in per profile**. If the sandbox wasn't created with `notifySlackEnabled: true`, the env vars below will be empty and posting will fail.
+Slack posting is **opt-in per profile**. If the sandbox wasn't created with `notification.slack.enabled: true`, the env vars below will be empty and posting will fail.
 
 ```bash
 echo "KM_NOTIFY_SLACK_ENABLED=$KM_NOTIFY_SLACK_ENABLED"  # must be 1
@@ -30,7 +30,7 @@ test -x /opt/km/bin/km-slack && echo "km-slack: OK" || echo "km-slack: MISSING"
 ```
 
 If any of these are empty/missing, **stop and tell the user**. Slack delivery requires:
-- The profile sets `spec.cli.notifySlackEnabled: true` (and usually `notifySlackPerSandbox: true`)
+- The profile sets `spec.notification.slack.enabled: true` (and usually `notification.slack.perSandbox: true`)
 - The sandbox was created **after** `km init --sidecars` shipped the km-slack binary
 - The signing key at `/sandbox/$KM_SANDBOX_ID/signing-key` is reachable (same key as `km-send`)
 
@@ -152,7 +152,7 @@ Pick one leading glyph so the operator can scan a busy channel:
 
 ## Transcript Streaming (read-only awareness)
 
-When the profile sets `notifySlackTranscriptEnabled: true` (and `notifySlackEnabled` + `notifySlackPerSandbox`), every Claude turn auto-streams to the sandbox's Slack channel:
+When the profile sets `notification.slack.transcript.enabled: true` (and `notification.slack.enabled` + `notification.slack.perSandbox`), every Claude turn auto-streams to the sandbox's Slack channel:
 
 - Per-turn assistant text + tool one-liners post into a thread under the channel root
 - The final transcript is uploaded as a gzipped JSONL file at Stop (unless the channel is Slack-Connect — see below)
@@ -166,7 +166,7 @@ aws s3 ls s3://${KM_ARTIFACTS_BUCKET}/transcripts/<sandbox-id>/
 
 ## Inbound Slack Messages (bidirectional chat)
 
-When the profile sets `notifySlackInboundEnabled: true`, operator messages in `#sb-{id}` channels become Claude turns inside the sandbox. The pipeline:
+When the profile sets `notification.slack.inbound.enabled: true`, operator messages in `#sb-{id}` channels become Claude turns inside the sandbox. The pipeline:
 
 1. Slack `message` event → bridge Lambda (HMAC-verified)
 2. Bridge ACKs with 👀 reaction, enqueues to per-sandbox SQS FIFO
@@ -220,10 +220,10 @@ On the very first turn of a thread the row isn't written yet (the poller stores 
 | Symptom | Cause | Action |
 |---|---|---|
 | `KM_SANDBOX_ID env var not set` | Not running inside a provisioned sandbox | Run `klanker:sandbox` first to confirm environment |
-| `KM_SLACK_BRIDGE_URL env var not set` | Profile didn't enable Slack, or sandbox predates Slack support | Recreate sandbox with `notifySlackEnabled: true`, or post via email instead (`klanker:email`) |
+| `KM_SLACK_BRIDGE_URL env var not set` | Profile didn't enable Slack, or sandbox predates Slack support | Recreate sandbox with `notification.slack.enabled: true`, or post via email instead (`klanker:email`) |
 | `AWS_REGION (or AWS_DEFAULT_REGION) not set` | Stripped env in a systemd unit or minimal shell | Re-source `/etc/profile.d/km-notify-env.sh` or set `AWS_DEFAULT_REGION` from IMDS |
 | `load signing key: ssm GetParameter ... AccessDenied` | IAM role lost SSM read, or wrong `KM_RESOURCE_PREFIX` | Verify the sandbox role still has `ssm:GetParameter` on `/{prefix}/sandbox/{id}/signing-key` |
-| `bridge returned not-ok: channel_not_found` | Channel ID stale (channel archived or wrong ID) | Verify `$KM_SLACK_CHANNEL_ID` matches a live channel; per-sandbox channels archive at `km destroy` if `slackArchiveOnDestroy: true` |
+| `bridge returned not-ok: channel_not_found` | Channel ID stale (channel archived or wrong ID) | Verify `$KM_SLACK_CHANNEL_ID` matches a live channel; per-sandbox channels archive at `km destroy` if `notification.slack.archiveOnDestroy: true` |
 | `bridge returned not-ok: not_in_channel` | Bot was removed from the channel | Operator must `/invite @<bot>` in the channel |
 | `body file ... exceeds 40960 bytes` | 40 KB cap hit | Trim body or split into multiple posts |
 | Exit code 0 but message not visible | Likely a Slack Connect external-share quirk on per-sandbox channels | Check `km otel` for the post event; the message may still be delivered, just rendered differently for external participants |
