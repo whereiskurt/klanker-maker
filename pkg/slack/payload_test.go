@@ -117,10 +117,11 @@ func TestCanonicalJSON_FieldOrderAlphabetical(t *testing.T) {
 	// fields (content_type, filename, s3_key, size_bytes); they serialize
 	// as zero values for non-upload actions so canonical signing remains
 	// deterministic across all action types. Phase 70 added message_ts and text.
+	// Phase 110 added session_id (alphabetical: after s3_key, before sender_id).
 	fields := []string{
 		`"action"`, `"blocks"`, `"body"`, `"channel"`, `"content_type"`, `"filename"`,
-		`"message_ts"`, `"nonce"`, `"s3_key"`, `"sender_id"`, `"size_bytes"`, `"subject"`,
-		`"text"`, `"thread_ts"`, `"timestamp"`, `"version"`,
+		`"message_ts"`, `"nonce"`, `"s3_key"`, `"session_id"`, `"sender_id"`, `"size_bytes"`,
+		`"subject"`, `"text"`, `"thread_ts"`, `"timestamp"`, `"version"`,
 	}
 	last := 0
 	for _, field := range fields {
@@ -141,7 +142,7 @@ func TestCanonicalJSON_FieldOrderAlphabetical(t *testing.T) {
 	// Phase 74 PR2 added "blocks" between "action" and "body" (alphabetical).
 	// Phase 70 added "message_ts" (after filename, before nonce) and "text"
 	// (after subject, before thread_ts).
-	golden := `{"action":"post","blocks":"","body":"hello","channel":"C0123ABC","content_type":"","filename":"","message_ts":"","nonce":"00000000000000000000000000000000","s3_key":"","sender_id":"sb-abc123","size_bytes":0,"subject":"[sb-abc123] needs permission","text":"","thread_ts":"","timestamp":1714280400,"version":1}`
+	golden := `{"action":"post","blocks":"","body":"hello","channel":"C0123ABC","content_type":"","filename":"","message_ts":"","nonce":"00000000000000000000000000000000","s3_key":"","session_id":"","sender_id":"sb-abc123","size_bytes":0,"subject":"[sb-abc123] needs permission","text":"","thread_ts":"","timestamp":1714280400,"version":1}`
 	if s != golden {
 		t.Errorf("canonical JSON mismatch:\n  got:  %s\n  want: %s", s, golden)
 	}
@@ -241,6 +242,64 @@ func TestPayload_PermalinkAction(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"message_ts":"1701000000.001"`) {
 		t.Errorf("canonical JSON missing message_ts; got: %s", string(b))
+	}
+}
+
+// TestCanonicalJSON_SessionID asserts that a non-empty SessionID serializes with
+// "session_id" appearing AFTER "s3_key" and BEFORE "sender_id" in the canonical
+// JSON bytes. Phase 110 Plan 02: the field must sit in alphabetical-by-tag position
+// so sign/verify produce byte-identical output on both sender and verifier sides.
+func TestCanonicalJSON_SessionID(t *testing.T) {
+	env := makeFixedEnvelope()
+	env.SessionID = "01JXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+	b, err := slack.CanonicalJSON(env)
+	if err != nil {
+		t.Fatalf("CanonicalJSON: %v", err)
+	}
+	s := string(b)
+
+	s3KeyPos := strings.Index(s, `"s3_key"`)
+	sessionPos := strings.Index(s, `"session_id"`)
+	senderPos := strings.Index(s, `"sender_id"`)
+
+	if s3KeyPos < 0 {
+		t.Fatalf("s3_key not found in canonical JSON: %s", s)
+	}
+	if sessionPos < 0 {
+		t.Fatalf("session_id not found in canonical JSON: %s", s)
+	}
+	if senderPos < 0 {
+		t.Fatalf("sender_id not found in canonical JSON: %s", s)
+	}
+
+	if sessionPos <= s3KeyPos {
+		t.Errorf("session_id (pos %d) must appear AFTER s3_key (pos %d); got: %s", sessionPos, s3KeyPos, s)
+	}
+	if sessionPos >= senderPos {
+		t.Errorf("session_id (pos %d) must appear BEFORE sender_id (pos %d); got: %s", sessionPos, senderPos, s)
+	}
+
+	// Also confirm the value round-trips.
+	if !strings.Contains(s, `"session_id":"01JXXXXXXXXXXXXXXXXXXXXXXXXX"`) {
+		t.Errorf("session_id value not found in canonical JSON: %s", s)
+	}
+}
+
+// TestCanonicalJSON_ZeroSessionID asserts that a zero-valued SessionID still
+// serializes the key (back-compat with existing signers that don't set it).
+func TestCanonicalJSON_ZeroSessionID(t *testing.T) {
+	env := makeFixedEnvelope()
+	// SessionID is zero-valued (empty string).
+
+	b, err := slack.CanonicalJSON(env)
+	if err != nil {
+		t.Fatalf("CanonicalJSON: %v", err)
+	}
+	s := string(b)
+
+	if !strings.Contains(s, `"session_id":""`) {
+		t.Errorf("zero session_id key not found in canonical JSON: %s", s)
 	}
 }
 

@@ -33,12 +33,13 @@ const EnvelopeVersion = 1
 
 // Allowed actions on the bridge envelope.
 const (
-	ActionPost      = "post"
-	ActionArchive   = "archive"
-	ActionTest      = "test"
-	ActionUpload    = "upload"
-	ActionPermalink = "permalink" // Phase 70 — wraps chat.getPermalink
-	ActionUpdate    = "update"    // Phase 70 — wraps chat.update
+	ActionPost         = "post"
+	ActionArchive      = "archive"
+	ActionTest         = "test"
+	ActionUpload       = "upload"
+	ActionPermalink    = "permalink"     // Phase 70 — wraps chat.getPermalink
+	ActionUpdate       = "update"        // Phase 70 — wraps chat.update
+	ActionLookupThread = "lookup-thread" // Phase 110 — session_id → (channel_id, thread_ts)
 )
 
 // SenderOperator is the canonical sender_id for operator-signed envelopes.
@@ -83,6 +84,7 @@ type SlackEnvelope struct {
 	MessageTS   string `json:"message_ts"` // Phase 70 — used by permalink, update actions
 	Nonce       string `json:"nonce"`
 	S3Key       string `json:"s3_key"`
+	SessionID   string `json:"session_id"` // Phase 110 — lookup-thread: session id to resolve to (channel_id, thread_ts)
 	SenderID    string `json:"sender_id"`
 	SizeBytes   int64  `json:"size_bytes"`
 	Subject     string `json:"subject"`
