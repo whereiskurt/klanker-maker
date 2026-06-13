@@ -185,9 +185,25 @@ Deployed to us-east-1 (`make build && make build-lambdas && km init --dry-run=fa
 
 **Bug #2 found + fixed during UAT (commit `c130cf19`):** `pkg/slack.Client.ChannelInfo` sent `conversations.info` as POST+JSON, but that legacy method rejects a JSON body with `invalid_arguments` ("missing required field: channel") — it must be form-encoded. The call errored on every real invocation. Three downstream effects, all fixed by switching to `callForm`: (a) `km slack adopt` failed; (b) Phase 104 `validateStoredChannel` always fell to optimistic-trust (never validated); (c) **Phase 110's own dead-channel detection** (`km doctor` + `prune-threads`) treated the error as transient and **never flagged a dead channel** — i.e. the initial doctor "✓ no dead channels" in this UAT was a FALSE PASS. After the fix, dead-channel detection genuinely works (re-verified live with a seeded non-existent channel: doctor WARNs, prune lists+deletes). Regression test added asserting form encoding.
 
-All UAT Slack messages and seeded DDB rows were cleaned up; tables returned to prior state (threads=1 original row, channels=0).
+## Sandbox-side Live UAT (2026-06-13, throwaway sandbox `learnpolite-e6038dd6`)
 
-**Deferred (explicit operator choice — "operator-only, no spend"):** items #2 (sandbox-side `km-slack reply` end-to-end) and #3 (Codex auto-detect) require a live sandbox + poller turn. Covered by unit tests; defer live confirmation to next natural sandbox use.
+Spun up a real slack-enabled sandbox and verified the sandbox→bridge path end-to-end (seeded GSI rows; no poller turn needed). All passed:
+
+| Test | Path | Result |
+|------|------|--------|
+| A | `km-slack reply -session <id>` (GSI hit) | ✅ Resolved via signed `lookup-thread`→bridge→GSI and posted **into the bound thread**. |
+| B | `-session <unknown>` (GSI miss) | ✅ Fell back to a top-level channel-root post (no error). |
+| C | cross-sandbox `-session` (row owned by another sandbox) | ✅ Bridge filtered by `sandbox_id == sender` → not found → channel-root; the other sandbox's thread received **nothing**. **Sandbox-never-reads-another's-threads boundary holds.** |
+| D | no `-session` → auto-detect newest `~/.claude/projects/**/<id>.jsonl` | ✅ Auto-detected the session stem, resolved via bridge, posted into the bound thread. |
+
+**Two MORE integration bugs found + fixed during sandbox UAT** (unit tests on each side passed; the sandbox↔bridge wire contract was never exercised together until now):
+
+- **Bug #3 (commit `2ea712bf`):** the bridge's parse-step `missing_fields` guard required a non-empty `Channel` for *every* action, but the sandbox correctly sends `lookup-thread` with an empty channel (it RESOLVES one). Real `km-slack reply --session` got `400 missing_fields` → silent channel-root fallback. The lookup-thread unit tests had masked it with `Channel:"ignored"`; helper now sends `Channel:""` (real envelope). Exempted lookup-thread from the channel requirement (SessionID still validated at dispatch).
+- **Bug #4 (commit `042b3450`):** `wireEventsHandler()` set `Threads` only on the `EventsHandler`; the signed-action `Handler` (built in `init()`) never got it → `h.Threads == nil` → `500 threads_store_unavailable` → silent channel-root fallback. Added `handler.Threads = threadStore`. Cold-start wiring gap (Handler unit tests set Threads directly).
+
+After both fixes (rebuilt + redeployed via `make build-lambdas` + `km init --slack`), tests A–D all pass. Sandbox destroyed; all seeded rows + UAT messages cleaned up; UAT channel archived. Tables back to baseline (threads=1 original row, channels=0).
+
+**Remaining deferred:** item #3 (Codex auto-detect) — the Claude auto-detect path is verified (Test D); the Codex branch (`$KM_AGENT=codex`) is LOW-confidence best-effort WARN-and-skip per research and would need a Codex sandbox. Acceptable to defer.
 
 ---
 
