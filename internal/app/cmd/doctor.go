@@ -543,6 +543,12 @@ type DoctorDeps struct {
 	// SetS3Lifecycle opts checkS3LifecyclePolicy into installing an S3 lifecycle rule
 	// expiring transient artifact prefixes. Idempotent; preserves unrelated rules.
 	SetS3Lifecycle bool
+
+	// Phase 110 Plan 06 — dead-channel doctor checks.
+	// SlackDeadChannelChecker probes conversations.info to test whether a Slack
+	// channel still exists. Nil causes both dead-channel checks to return SKIPPED
+	// (bot token absent or Slack not configured).
+	SlackDeadChannelChecker SlackChannelChecker
 }
 
 // =============================================================================
@@ -4102,6 +4108,28 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// Phase 110 Plan 06 — dead-channel doctor checks.
+	// Both checks SKIP when SlackDeadChannelChecker is nil (bot token absent).
+	// Both use DDBScanDeleteClient (already has Scan) to avoid adding a new field.
+	// Error→Warn downgrade mirrors the checkSlackBotUserIDCached registration pattern.
+	slackDeadChecker := deps.SlackDeadChannelChecker
+	slackThreadsTableForDoctor := cfg.GetSlackThreadsTableName()
+	slackChannelsTableForDoctor := cfg.GetSlackChannelsTableName()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackThreadDeadChannels(ctx, deps.DDBScanDeleteClient, slackThreadsTableForDoctor, slackDeadChecker)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackChannelDeadAlias(ctx, deps.DDBScanDeleteClient, slackChannelsTableForDoctor, slackDeadChecker)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	// Phase 100 — GitHub federated-relay peer-bridge validation. Gated on github
 	// being configured (non-empty repos), mirroring the Slack peer check. The own
 	// bridge URL comes from SSM {prefix}config/github/bridge-url (the same param
@@ -4537,6 +4565,18 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.CWLogsCleanupClient = cloudwatchlogs.NewFromConfig(awsCfg)
 	deps.DDBScanDeleteClient = dynamodb.NewFromConfig(awsCfg)
 	deps.S3LifecycleClient = s3.NewFromConfig(awsCfg)
+
+	// Phase 110 Plan 06 — dead-channel doctor checks.
+	// Wire the Slack channel checker only when the bot token is available in SSM.
+	// SKIP-safe: SlackDeadChannelChecker remains nil when the token is absent.
+	botToken, btErr := ssmClientForSlack.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           awssdk.String(cfg.GetSsmPrefix() + "slack/bot-token"),
+		WithDecryption: awssdk.Bool(true),
+	})
+	if btErr == nil && botToken.Parameter != nil && awssdk.ToString(botToken.Parameter.Value) != "" {
+		slackClientForDoctor := slackpkg.NewClient(awssdk.ToString(botToken.Parameter.Value), nil)
+		deps.SlackDeadChannelChecker = &slackClientChannelChecker{client: slackClientForDoctor}
+	}
 
 	return deps
 }
