@@ -3,9 +3,9 @@ package cmd
 import (
 	"bytes"
 	"context"
-	cryptorand "crypto/rand"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	cryptorand "crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -134,7 +134,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		Use:   "create <profile.yaml>",
 		Short: "Provision a new sandbox from a profile",
 		Long:  helpText("create"),
-		Args: cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if awsProfile == "" && os.Getenv("KM_REMOTE_CREATE") == "" {
 				awsProfile = "klanker-terraform"
@@ -446,6 +446,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// km create runs terragrunt directly; without this, non-default prefix
 	// installs hit 403 HeadBucket. Same pattern as runInit / slack.go.
 	ExportTerragruntEnvVars(cfg)
+	// Resolve the platform CMK ARN so the per-sandbox budget-enforcer Lambda encrypts
+	// its env vars under it (grant-independent decrypt; survives role recreation).
+	exportPlatformKMSKeyARN(ctx, awsCfg, cfg)
 
 	// Step 5c: Enforce sandbox limit before any provisioning.
 	if cfg.StateBucket != "" {
@@ -1430,8 +1433,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				log.Warn().Err(phraseErr).Str("sandbox_id", sandboxID).
 					Msg("Step 12d: failed to store safe phrase in SSM (non-fatal)")
 			} else {
-			fmt.Fprintf(os.Stderr, "  ✓ Safe phrase: %s\n", phrase)
-			fmt.Printf("    Email: %s@%s\n", sandboxID, cfg.GetEmailDomain())
+				fmt.Fprintf(os.Stderr, "  ✓ Safe phrase: %s\n", phrase)
+				fmt.Printf("    Email: %s@%s\n", sandboxID, cfg.GetEmailDomain())
 				log.Info().Str("sandbox_id", sandboxID).
 					Msg("Step 12d: safe phrase stored in SSM")
 			}
@@ -2023,11 +2026,11 @@ func generateSelfSignedCA(cn string) (certPEM []byte, keyPEM []byte, err error) 
 
 	serial, _ := cryptorand.Int(cryptorand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: cn, Organization: []string{"klankermaker"}},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: cn, Organization: []string{"klankermaker"}},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		MaxPathLen:            0,
@@ -2445,9 +2448,9 @@ func extractRepoOwner(repo string) string {
 //  2. If NO concrete owner could be extracted (all wildcards / bare repos), the
 //     function enumerates /km/config/github/installations/ via GetParametersByPath
 //     BEFORE consulting the legacy key:
-//       - exactly one installation parameter -> auto-select and return its value
-//       - two or more -> return *ErrAmbiguousInstallation with sorted candidates
-//       - zero -> fall through to legacy /km/config/github/installation-id
+//     - exactly one installation parameter -> auto-select and return its value
+//     - two or more -> return *ErrAmbiguousInstallation with sorted candidates
+//     - zero -> fall through to legacy /km/config/github/installation-id
 //     A non-nil enumeration error is treated as a soft failure and we still try
 //     the legacy key (preserves graceful degradation on AccessDenied).
 //  3. If the legacy key is also missing (ParameterNotFound), returns ErrGitHubNotConfigured.
@@ -2818,7 +2821,7 @@ func applyBudgetOverrides(p *profile.SandboxProfile, computeOverride, aiOverride
 // e.g. "16hr" → "16h", "30min" → "30m", "2hrs" → "2h"
 // formatInitCommandLines returns the two lines that go into /tmp/km-init.sh
 // for a single profile initCommand: a `[km-init] <cmd>` echo and the command
-// itself. Single quotes inside cmd are escaped using the standard `'\''`
+// itself. Single quotes inside cmd are escaped using the standard `'\”`
 // dance (close quote, literal quote, reopen quote) so the surrounding echo
 // quotes can never close prematurely. Without escaping, a cmd like
 // `su - sandbox -c 'nvm install 22'` makes the echo line shell-parse as

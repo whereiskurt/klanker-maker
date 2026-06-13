@@ -89,6 +89,10 @@ inputs = merge(
     state_bucket       = get_env("KM_ARTIFACTS_BUCKET", "")
     email_domain       = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
     operator_email     = get_env("KM_OPERATOR_EMAIL", "")
+    # Platform CMK ARN for Lambda env-var encryption (grant-independent decrypt that
+    # survives role recreation). Empty ⇒ aws/lambda managed-key fallback. Set by
+    # km create via exportPlatformKMSKeyARN (resolves the platform alias → key ARN).
+    kms_key_arn        = get_env("KM_PLATFORM_KMS_KEY_ARN", "")
 
     # Resolved from parent sandbox terraform outputs and appended to service.hcl
     # after the main sandbox apply (create.go Step 12c).
