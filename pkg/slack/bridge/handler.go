@@ -91,7 +91,13 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		logger.WarnContext(ctx, "bridge: bad_envelope", "step", "parse", "error", err.Error(), "status", 400)
 		return errResp(400, "bad_envelope")
 	}
-	if env.Action == "" || env.SenderID == "" || env.Channel == "" || env.Nonce == "" || env.Timestamp == 0 || env.Version == 0 {
+	// Channel is required for every action EXCEPT lookup-thread, which carries no
+	// channel of its own — it RESOLVES (channel_id, thread_ts) from the
+	// session-index GSI using SessionID (validated downstream at the dispatch).
+	// The sandbox correctly sends lookup-thread with an empty Channel, so the
+	// guard must not reject it here.
+	channelRequired := env.Action != slack.ActionLookupThread
+	if env.Action == "" || env.SenderID == "" || env.Nonce == "" || env.Timestamp == 0 || env.Version == 0 || (channelRequired && env.Channel == "") {
 		logger.WarnContext(ctx, "bridge: missing_fields", "step", "parse", "action", env.Action, "sender_id", env.SenderID, "status", 400)
 		return errResp(400, "missing_fields")
 	}

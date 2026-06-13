@@ -63,7 +63,7 @@ func makeLookupEnv(senderID, sessionID string) *slack.SlackEnvelope {
 	return &slack.SlackEnvelope{
 		Action:    slack.ActionLookupThread,
 		Body:      "",
-		Channel:   "ignored", // required by missing_fields guard; ownership check bypassed
+		Channel:   "", // sandbox sends NO channel for lookup-thread (it RESOLVES one); the missing_fields guard must not reject this
 		Nonce:     "aabbccddeeff00112233445566778810",
 		SenderID:  senderID,
 		SessionID: sessionID,
