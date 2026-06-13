@@ -229,6 +229,102 @@ On the very first turn of a thread the row isn't written yet (the poller stores 
 | Exit code 0 but message not visible | Likely a Slack Connect external-share quirk on per-sandbox channels | Check `km otel` for the post event; the message may still be delivered, just rendered differently for external participants |
 | Final transcript `.jsonl.gz` upload silently fails | Per-sandbox channels are Slack-Connect-shared; `files.completeUploadExternal` rejects external-shared channels | Pull transcript from S3: `aws s3 ls s3://${KM_ARTIFACTS_BUCKET}/transcripts/<sandbox-id>/` |
 
+## Session-aware Reply (km-slack reply)
+
+`km-slack reply` is the smart alternative to `km-slack post` when you want to thread a message into an existing conversation without knowing the thread timestamp in advance.  It resolves the target thread via a four-step chain (first hit wins):
+
+### Resolution Order
+
+| Priority | Source | How it works |
+|---|---|---|
+| 1 | `--thread <ts>` + `--channel <id>` | Posts directly into that thread. Both flags are required together. |
+| 2 | `$KM_SLACK_THREAD_TS` env var | Set automatically by the inbound poller when a bridge turn is running. Use this to reply to the message that triggered the current agent turn. |
+| 3 | Session ID (`--session <id>` or auto-detected) | Looks up the session in the `session-index` GSI via the bridge Lambda. Returns the `(channel_id, thread_ts)` of the thread the session was last active in. |
+| 4 | Channel root fallback | Posts a new top-level message to `$KM_SLACK_CHANNEL_ID`. Always succeeds as long as Slack is configured. |
+
+### Session Auto-detect Heuristic
+
+When no `--session` flag is given, `km-slack reply` auto-detects the current session:
+
+- **Claude (`$KM_AGENT=claude` or unset):** scans `~/.claude/projects/**/*.jsonl` and picks the file with the newest modification time. The session ID is the filename stem (UUID without `.jsonl`).
+- **Codex (`$KM_AGENT=codex`):** LOW-confidence path. Attempts to read from `~/.codex/store/`. If no session file is found, `km-slack reply` logs a warning to stderr and falls through to channel-root fallback (exit 0, no error).
+
+Auto-detect fires only when neither `--thread` nor `$KM_SLACK_THREAD_TS` is set.
+
+### Flags
+
+```
+km-slack reply [flags]
+  --thread <ts>     Parent thread timestamp (requires --channel)
+  --channel <id>    Slack channel ID (requires --thread)
+  --session <id>    Explicit session ID; bypasses auto-detect
+  --body <file>     Path to the message body file (required; stdin rejected)
+  --render plain|mrkdwn|blocks  Render mode (default: plain)
+```
+
+### Basic usage
+
+```bash
+# Reply into the current bridge-turn's thread (step 2: $KM_SLACK_THREAD_TS)
+cat > /tmp/reply.txt << 'EOF'
+✅ Done. Tests green, ready for review.
+EOF
+/opt/km/bin/km-slack reply --body /tmp/reply.txt
+
+# Reply using an explicit session ID (step 3)
+/opt/km/bin/km-slack reply --session "a1b2c3d4-..." --body /tmp/reply.txt
+
+# Force a specific thread (step 1)
+/opt/km/bin/km-slack reply \
+  --thread "1717000000.123456" \
+  --channel "$KM_SLACK_CHANNEL_ID" \
+  --body /tmp/reply.txt
+```
+
+### When Slack is not configured
+
+If `$KM_SLACK_CHANNEL_ID` is empty (the sandbox was created without `notification.slack.enabled: true`), `km-slack reply` exits non-zero with the message:
+
+```
+Slack not configured for this sandbox; re-create with notification.slack.enabled: true
+```
+
+### Operator-side equivalent
+
+Operators can send a reply from their local machine using `km slack reply`:
+
+```bash
+# Via session ID (queries the session-index GSI directly with operator AWS creds)
+km slack reply --session "a1b2c3d4-..." --body /tmp/reply.txt
+
+# Via explicit thread + channel
+km slack reply --thread "1717000000.123456" --channel "CXXXXXXXX" --body /tmp/reply.txt
+
+# Via sandbox alias (falls back to channel root of the sandbox's bound channel)
+km slack reply --alias my-sandbox --body /tmp/reply.txt
+```
+
+### Repair Commands
+
+When thread or channel mappings go stale (a channel was archived or deleted), use these operator repair commands:
+
+| Command | What it does |
+|---|---|
+| `km slack threads <sandbox-id>` | List all `km-slack-threads` rows for a sandbox (O(n) DDB Scan) |
+| `km slack forget-thread --session <id>` | Delete the thread row for a specific session ID |
+| `km slack forget-thread --thread <ts> --channel <id>` | Delete a thread row by exact DDB key |
+| `km slack prune-threads [sandbox] [--dry-run]` | Scan all rows, probe each channel via `conversations.info`, delete rows pointing at gone channels |
+| `km slack forget-channel <alias>` | Delete the alias→channel mapping from `km-slack-channels` (inverse of `km slack adopt`) |
+
+`km doctor` checks for dead channel mappings automatically:
+
+- **Slack thread dead channels** — WARN when any row in `km-slack-threads` points at a non-existent channel. Remediation: `km slack prune-threads`.
+- **Slack channel dead alias** — WARN when any alias in `km-slack-channels` maps to a deleted channel. Remediation: `km slack forget-channel <alias>` + `km slack adopt <alias> <new-channel-id>`.
+
+Both checks are SKIP-safe when the Slack bot token is absent.
+
+---
+
 ## When NOT to Use This Skill
 
 - **Operator action requests** — use `klanker:operator` (email-based natural-language interpreter). Slack posts are one-way notifications; the operator inbox is bidirectional and triggers `km` commands.
