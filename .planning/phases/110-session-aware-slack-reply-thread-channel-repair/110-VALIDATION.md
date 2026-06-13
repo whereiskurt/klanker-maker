@@ -41,17 +41,17 @@ created: 2026-06-12
 | Task ID | Plan | Wave | Scope | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------|-----------|-------------------|-------------|--------|
 | 110-01-* | 01 | 1 | 1 GSI v1.1.0 | manual/TF | `terraform plan` in module dir + `km init --plan` no-op | ❌ W0 (TF, no go test) | ⬜ pending |
-| 110-02-* | 02 | 2 | 2 bridge lookup-thread dispatch | unit | `go test ./pkg/slack/bridge/ -run TestHandler_LookupThread` | ❌ W0 | ⬜ pending |
-| 110-02-* | 02 | 2 | 2 missing SessionID → 400 | unit | `go test ./pkg/slack/bridge/ -run TestHandler_LookupThread_MissingSessionID` | ❌ W0 | ⬜ pending |
-| 110-02-* | 02 | 2 | 2 cross-sandbox → found:false | unit | `go test ./pkg/slack/bridge/ -run TestHandler_LookupThread_WrongSandbox` | ❌ W0 | ⬜ pending |
-| 110-02-* | 02 | 2 | 2 canonical-JSON determinism w/ SessionID | unit | `go test ./pkg/slack/ -run TestCanonicalJSON` | ✅ (extend) | ⬜ pending |
-| 110-03-* | 03 | 3 | 3 reply resolution chain order | unit | `go test ./cmd/km-slack/ -run TestRunReply` | ❌ W0 | ⬜ pending |
-| 110-03-* | 03 | 3 | 3 auto-detect newest Claude session | unit | `go test ./cmd/km-slack/ -run TestAutoDetectClaudeSession` | ❌ W0 | ⬜ pending |
-| 110-03-* | 03 | 3 | 3 fallback to channel root | unit | `go test ./cmd/km-slack/ -run TestRunReply_FallbackToChannelRoot` | ❌ W0 | ⬜ pending |
-| 110-04-* | 04 | 3 | 4 operator reply session→GSI→post | unit | `go test ./internal/app/cmd/ -run TestRunSlackReply` | ❌ W0 | ⬜ pending |
-| 110-05-* | 05 | 3 | 5 forget-thread deletes row | unit | `go test ./internal/app/cmd/ -run TestRunSlackForgetThread` | ❌ W0 | ⬜ pending |
-| 110-05-* | 05 | 3 | 5 prune-threads --dry-run lists only | unit | `go test ./internal/app/cmd/ -run TestRunSlackPruneThreads_DryRun` | ❌ W0 | ⬜ pending |
-| 110-05-* | 05 | 3 | 5 forget-channel deletes alias row | unit | `go test ./internal/app/cmd/ -run TestRunSlackForgetChannel` | ❌ W0 | ⬜ pending |
+| 110-02-* | 02 | 1 | 2 bridge lookup-thread dispatch | unit | `go test ./pkg/slack/bridge/ -run TestHandler_LookupThread` | ❌ W0 | ⬜ pending |
+| 110-02-* | 02 | 1 | 2 missing SessionID → 400 | unit | `go test ./pkg/slack/bridge/ -run TestHandler_LookupThread_MissingSessionID` | ❌ W0 | ⬜ pending |
+| 110-02-* | 02 | 1 | 2 cross-sandbox → found:false | unit | `go test ./pkg/slack/bridge/ -run TestHandler_LookupThread_WrongSandbox` | ❌ W0 | ⬜ pending |
+| 110-02-* | 02 | 1 | 2 canonical-JSON determinism w/ SessionID | unit | `go test ./pkg/slack/ -run TestCanonicalJSON` | ✅ (extend) | ⬜ pending |
+| 110-03-* | 03 | 2 | 3 reply resolution chain order | unit | `go test ./cmd/km-slack/ -run TestRunReply` | ❌ W0 | ⬜ pending |
+| 110-03-* | 03 | 2 | 3 auto-detect newest Claude session | unit | `go test ./cmd/km-slack/ -run TestAutoDetectClaudeSession` | ❌ W0 | ⬜ pending |
+| 110-03-* | 03 | 2 | 3 fallback to channel root | unit | `go test ./cmd/km-slack/ -run TestRunReply_FallbackToChannelRoot` | ❌ W0 | ⬜ pending |
+| 110-04-* | 04 | 2 | 4 operator reply session→GSI→post | unit | `go test ./internal/app/cmd/ -run TestRunSlackReply` | ❌ W0 | ⬜ pending |
+| 110-05-* | 05 | 2 | 5 forget-thread deletes row | unit | `go test ./internal/app/cmd/ -run TestRunSlackForgetThread` | ❌ W0 | ⬜ pending |
+| 110-05-* | 05 | 2 | 5 prune-threads --dry-run lists only | unit | `go test ./internal/app/cmd/ -run TestRunSlackPruneThreads_DryRun` | ❌ W0 | ⬜ pending |
+| 110-05-* | 05 | 2 | 5 forget-channel deletes alias row | unit | `go test ./internal/app/cmd/ -run TestRunSlackForgetChannel` | ❌ W0 | ⬜ pending |
 | 110-06-* | 06 | 3 | 6 doctor dead-channel WARN | unit | `go test ./internal/app/cmd/ -run TestCheckSlackThreadDeadChannels` | ❌ W0 | ⬜ pending |
 | 110-06-* | 06 | 3 | 6 doctor dead-alias WARN | unit | `go test ./internal/app/cmd/ -run TestCheckSlackChannelDeadAlias` | ❌ W0 | ⬜ pending |
 
