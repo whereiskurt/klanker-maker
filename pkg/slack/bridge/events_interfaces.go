@@ -88,6 +88,11 @@ type SlackThreadStore interface {
 	// claude_session_id), so this signal fires as soon as the bot's first
 	// mention-triggered dispatch enqueues, not after the poller responds.
 	LookupSandbox(ctx context.Context, channelID, threadTS string) (sandboxID string, err error)
+	// LookupBySession Queries the session-index GSI for sessionID, returns the
+	// (channelID, threadTS, agentType) of the row owned by sandboxID. Returns
+	// empty strings (not error) when no owned row exists or on a cross-sandbox
+	// lookup (sandbox-never-reads-DDB boundary). Phase 110 Plan 02.
+	LookupBySession(ctx context.Context, sessionID, sandboxID string) (channelID, threadTS, agentType string, err error)
 }
 
 // SandboxByChannelFetcher resolves a Slack channel_id to sandbox routing info

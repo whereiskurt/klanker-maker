@@ -911,6 +911,73 @@ func (s *DDBThreadStore) LookupSandbox(ctx context.Context, channelID, threadTS 
 	return "", nil
 }
 
+// LookupBySession Queries the session-index GSI for sessionID, returns the
+// (channelID, threadTS, agentType) of the row owned by sandboxID. Returns empty
+// strings (not error) when no row exists or when the matching row belongs to a
+// different sandbox (sandbox-never-reads-DDB boundary). Phase 110 Plan 02.
+//
+// The GSI is KEYS_ONLY projection, so the Query returns only (channel_id,
+// thread_ts) table keys. For each returned key we issue a GetItem on the base
+// table to read sandbox_id and agent_type, then return the first row whose
+// sandbox_id matches the requesting sandboxID.
+func (s *DDBThreadStore) LookupBySession(ctx context.Context, sessionID, sandboxID string) (channelID, threadTS, agentType string, err error) {
+	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              awssdk.String(s.TableName),
+		IndexName:              awssdk.String("session-index"),
+		KeyConditionExpression: awssdk.String("claude_session_id = :sid"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":sid": &dynamodbtypes.AttributeValueMemberS{Value: sessionID},
+		},
+	})
+	if err != nil {
+		return "", "", "", fmt.Errorf("threads lookup-by-session query: %w", err)
+	}
+	for _, item := range out.Items {
+		// GSI KEYS_ONLY: item contains channel_id and thread_ts only.
+		chAttr, hasChannel := item["channel_id"]
+		tsAttr, hasTS := item["thread_ts"]
+		if !hasChannel || !hasTS {
+			continue
+		}
+		chSV, ok1 := chAttr.(*dynamodbtypes.AttributeValueMemberS)
+		tsSV, ok2 := tsAttr.(*dynamodbtypes.AttributeValueMemberS)
+		if !ok1 || !ok2 {
+			continue
+		}
+		// GetItem on base table to retrieve sandbox_id + agent_type.
+		getOut, getErr := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+			TableName: awssdk.String(s.TableName),
+			Key: map[string]dynamodbtypes.AttributeValue{
+				"channel_id": &dynamodbtypes.AttributeValueMemberS{Value: chSV.Value},
+				"thread_ts":  &dynamodbtypes.AttributeValueMemberS{Value: tsSV.Value},
+			},
+		})
+		if getErr != nil {
+			return "", "", "", fmt.Errorf("threads lookup-by-session get: %w", getErr)
+		}
+		if getOut.Item == nil {
+			continue
+		}
+		sbAttr, hasSB := getOut.Item["sandbox_id"]
+		if !hasSB {
+			continue
+		}
+		sbSV, ok3 := sbAttr.(*dynamodbtypes.AttributeValueMemberS)
+		if !ok3 || sbSV.Value != sandboxID {
+			// Row exists but belongs to a different sandbox — enforce boundary.
+			continue
+		}
+		agentType = ""
+		if agAttr, hasAgent := getOut.Item["agent_type"]; hasAgent {
+			if agSV, ok4 := agAttr.(*dynamodbtypes.AttributeValueMemberS); ok4 {
+				agentType = agSV.Value
+			}
+		}
+		return chSV.Value, tsSV.Value, agentType, nil
+	}
+	return "", "", "", nil
+}
+
 // Upsert creates a new thread row keyed by (channelID, threadTS) only if one
 // does not already exist (attribute_not_exists condition). ConditionalCheckFailed
 // means the row already exists — this is the idempotent success path; we MUST NOT

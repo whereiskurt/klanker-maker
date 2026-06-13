@@ -153,6 +153,9 @@ func (f *fakeThreads) LookupSandbox(ctx context.Context, ch, ts string) (string,
 	}
 	return f.sandboxByThread[ch+"|"+ts], nil
 }
+func (f *fakeThreads) LookupBySession(_ context.Context, _, _ string) (string, string, string, error) {
+	return "", "", "", nil
+}
 
 type fakeSQS struct {
 	sends []struct{ url, body, group, dedup string }
