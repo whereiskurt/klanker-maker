@@ -232,7 +232,7 @@ func newNoSuchLifecycleErr() *noSuchLifecycleConfigErr {
 
 // TestDoctor_S3LifecyclePolicy_NilClient_Skipped: nil client → SKIPPED.
 func TestDoctor_S3LifecyclePolicy_NilClient_Skipped(t *testing.T) {
-	r := checkS3LifecyclePolicy(context.Background(), nil, "bucket", 30, false, false)
+	r := checkS3LifecyclePolicy(context.Background(), nil, "bucket", 30, false, false, "km")
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED for nil client, got %s: %s", r.Status, r.Message)
 	}
@@ -241,7 +241,7 @@ func TestDoctor_S3LifecyclePolicy_NilClient_Skipped(t *testing.T) {
 // TestDoctor_S3LifecyclePolicy_EmptyBucket_Skipped: empty bucket → SKIPPED.
 func TestDoctor_S3LifecyclePolicy_EmptyBucket_Skipped(t *testing.T) {
 	m := &mockS3Lifecycle{}
-	r := checkS3LifecyclePolicy(context.Background(), m, "", 30, false, false)
+	r := checkS3LifecyclePolicy(context.Background(), m, "", 30, false, false, "km")
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED for empty bucket, got %s: %s", r.Status, r.Message)
 	}
@@ -261,7 +261,7 @@ func TestDoctor_S3LifecyclePolicy_Missing(t *testing.T) {
 			return &s3.PutBucketLifecycleConfigurationOutput{}, nil
 		},
 	}
-	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, true, false)
+	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, true, false, "km")
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN for missing lifecycle, got %s: %s", r.Status, r.Message)
 	}
@@ -290,7 +290,7 @@ func TestDoctor_S3LifecyclePolicy_MissingNoSetFlag(t *testing.T) {
 		},
 	}
 	// dryRun=false but setLifecycle=false
-	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, false)
+	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, false, "km")
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s: %s", r.Status, r.Message)
 	}
@@ -331,7 +331,7 @@ func TestDoctor_S3LifecyclePolicy_AlreadySet(t *testing.T) {
 			return &s3.PutBucketLifecycleConfigurationOutput{}, nil
 		},
 	}
-	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, true)
+	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, true, "km")
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK when all prefixes already covered, got %s: %s", r.Status, r.Message)
 	}
@@ -371,7 +371,7 @@ func TestDoctor_S3LifecyclePolicy_SetMergesPreservesExisting(t *testing.T) {
 			return &s3.PutBucketLifecycleConfigurationOutput{}, nil
 		},
 	}
-	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, true)
+	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, true, "km")
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK after successful set, got %s: %s", r.Status, r.Message)
 	}
@@ -431,7 +431,7 @@ func TestDoctor_S3LifecyclePolicy_Idempotent(t *testing.T) {
 			return &s3.PutBucketLifecycleConfigurationOutput{}, nil
 		},
 	}
-	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, true)
+	r := checkS3LifecyclePolicy(context.Background(), m, "my-bucket", 30, false, true, "km")
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK on second run (idempotent), got %s: %s", r.Status, r.Message)
 	}

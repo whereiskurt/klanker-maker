@@ -4182,8 +4182,9 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	s3LifecycleBucket := cfg.GetArtifactsBucket()
 	setS3Lifecycle := deps.SetS3Lifecycle
 	s3ExpireDays := int32(cfg.GetDoctorS3ExpireDays())
+	s3ResourcePrefix := cfg.GetResourcePrefix()
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkS3LifecyclePolicy(ctx, s3Lifecycle, s3LifecycleBucket, s3ExpireDays, dryRun, setS3Lifecycle)
+		return checkS3LifecyclePolicy(ctx, s3Lifecycle, s3LifecycleBucket, s3ExpireDays, dryRun, setS3Lifecycle, s3ResourcePrefix)
 	})
 
 	// Phase 79: km-presence daemon liveness check. Demote ERROR to WARN —

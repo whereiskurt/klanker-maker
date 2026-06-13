@@ -249,6 +249,7 @@ func checkS3LifecyclePolicy(
 	expireDays int32,
 	dryRun bool,
 	setLifecycle bool,
+	resourcePrefix string,
 ) CheckResult {
 	name := "S3 lifecycle expiry (transient prefixes)"
 	if client == nil {
@@ -348,7 +349,7 @@ func checkS3LifecyclePolicy(
 
 	newRulesAdded := 0
 	for _, p := range uncovered {
-		ruleID := "km-doctor-expire-" + strings.ReplaceAll(p, "/", "")
+		ruleID := resourcePrefix + "-doctor-expire-" + strings.ReplaceAll(p, "/", "")
 		if existingIDs[ruleID] {
 			// Already present by ID (partial prior run) — skip.
 			continue

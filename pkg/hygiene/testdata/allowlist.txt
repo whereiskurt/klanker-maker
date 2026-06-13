@@ -30,8 +30,20 @@ pkg/ebpf/sni/sni.go:km-sni-%s
 
 # ── FALLBACK: literal is only reached when a KM_* env var is empty; the env is
 #    injected prefix-aware on the live path (km init / compiler userdata).
-cmd/configui/handlers_secrets.go:/km/
 sidecars/audit-log/cmd/main.go:/km/sandboxes/%s/
+
+# ── LEGACY-BACKCOMPAT: perSandboxFamilies() in doctor_log_groups.go intentionally
+#    scans for BOTH the current {prefix}-named log groups AND historical "km"-named
+#    groups (the default prefix used before multi-install support). On a non-km install
+#    these legacy filters catch orphaned resources that were created under the original
+#    "km" prefix before an operator migrated to a new prefix. The dedup logic in
+#    checkStaleLogGroups collapses them when prefix=="km" (identical filter strings).
+#    Changing these to use the dynamic prefix would silently miss those orphaned groups.
+#    Covered by TestDoctor_StaleLogGroups_KmPrefix + TestDoctor_StaleLogGroups_BothNames.
+internal/app/cmd/doctor_log_groups.go:/aws/lambda/km-budget-enforcer-
+internal/app/cmd/doctor_log_groups.go:/aws/lambda/km-github-token-refresher-
+internal/app/cmd/doctor_log_groups.go:/km/sandboxes/
+internal/app/cmd/doctor_log_groups.go:/km/sidecars/
 
 # ── DEFERRED: real multi-install bugs, substrate-scoped, tracked for the
 #    follow-up (Docker/ECS/github-token + the suspected-stale budget role).
