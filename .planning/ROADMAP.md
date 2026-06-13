@@ -2555,9 +2555,9 @@ Plans:
 **Plans:** 6/6 plans complete
 
 Plans:
-- [ ] 110-01-PLAN.md — session-index GSI on km-slack-threads (module v1.0.0→v1.1.0)
-- [ ] 110-02-PLAN.md — envelope SessionID field + bridge lookup-thread signed action
-- [ ] 110-03-PLAN.md — sandbox km-slack reply (4-step resolution chain + Claude auto-detect)
-- [ ] 110-04-PLAN.md — operator km slack reply (--session GSI / --thread+--channel / --sandbox)
-- [ ] 110-05-PLAN.md — operator repair cmds (threads / forget-thread / prune-threads / forget-channel)
-- [ ] 110-06-PLAN.md — km doctor dead-channel/dead-alias WARNs + klanker:slack skill + plugin bump
+- [x] 110-01-PLAN.md — session-index GSI on km-slack-threads (module v1.0.0→v1.1.0)
+- [x] 110-02-PLAN.md — envelope SessionID field + bridge lookup-thread signed action
+- [x] 110-03-PLAN.md — sandbox km-slack reply (4-step resolution chain + Claude auto-detect)
+- [x] 110-04-PLAN.md — operator km slack reply (--session GSI / --thread+--channel / --sandbox)
+- [x] 110-05-PLAN.md — operator repair cmds (threads / forget-thread / prune-threads / forget-channel)
+- [x] 110-06-PLAN.md — km doctor dead-channel/dead-alias WARNs + klanker:slack skill + plugin bump
