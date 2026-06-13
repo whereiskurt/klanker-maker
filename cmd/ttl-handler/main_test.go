@@ -201,6 +201,9 @@ func TestHandleTTLEvent_UploadsArtifactsWhenConfigured(t *testing.T) {
 		Bucket:        "test-bucket",
 		OperatorEmail: "",
 		Domain:        "sandboxes.klankermaker.ai",
+		// No-op teardown: keeps the destroy path off the real AWS SDK fallback
+		// (sdkOnlyTeardown → IMDS) so the test exercises artifact handling only.
+		TeardownFunc: func(ctx context.Context, sandboxID string) error { return nil },
 	}
 	// The artifact path /tmp/test-artifact.log won't exist, but PutObject won't be called
 	// for missing files — however, UploadArtifacts WILL be called (returning 0 uploaded).
@@ -226,6 +229,7 @@ func TestHandleTTLEvent_NoArtifactsSectionSafe(t *testing.T) {
 		Bucket:        "test-bucket",
 		OperatorEmail: "",
 		Domain:        "sandboxes.klankermaker.ai",
+		TeardownFunc:  func(ctx context.Context, sandboxID string) error { return nil },
 	}
 	err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"})
 	if err != nil {
@@ -279,6 +283,7 @@ func TestHandleTTLEvent_DeletesSchedule(t *testing.T) {
 		Bucket:        "test-bucket",
 		OperatorEmail: "",
 		Domain:        "sandboxes.klankermaker.ai",
+		TeardownFunc:  func(ctx context.Context, sandboxID string) error { return nil },
 	}
 	err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"})
 	if err != nil {
@@ -399,11 +404,14 @@ func TestHandleTTLEvent_DeletesSopsBundle(t *testing.T) {
 }
 
 // TestHandleTTLEvent_NoTeardownWhenNil: When TeardownFunc is nil, HandleTTLEvent
-// completes without error (backward compatible).
+// falls back to the SDK-only teardown and completes without error (backward compat).
+// SDKTeardownFunc is injected with a no-op so the fallback branch is exercised
+// without making real AWS/IMDS calls (the production default is sdkOnlyTeardown).
 func TestHandleTTLEvent_NoTeardownWhenNil(t *testing.T) {
 	mockS3 := &mockS3GetPutAPI{
 		getBody: profileNoArtifacts,
 	}
+	sdkFallbackCalled := false
 	h := &TTLHandler{
 		S3Client:      mockS3,
 		SESClient:     &mockSESAPI{},
@@ -411,11 +419,18 @@ func TestHandleTTLEvent_NoTeardownWhenNil(t *testing.T) {
 		Bucket:        "test-bucket",
 		OperatorEmail: "",
 		Domain:        "sandboxes.klankermaker.ai",
-		TeardownFunc:  nil, // explicitly nil — backward compat
+		TeardownFunc:  nil, // explicitly nil — exercises the SDK-only fallback branch
+		SDKTeardownFunc: func(ctx context.Context, h *TTLHandler, sandboxID string) error {
+			sdkFallbackCalled = true
+			return nil
+		},
 	}
 	err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"})
 	if err != nil {
 		t.Fatalf("expected no error when TeardownFunc is nil, got: %v", err)
+	}
+	if !sdkFallbackCalled {
+		t.Error("expected SDK-only teardown fallback to be invoked when TeardownFunc is nil")
 	}
 }
 
@@ -458,6 +473,7 @@ func TestHandleTTLEvent_ProfileDownloadFailureIsNonFatal(t *testing.T) {
 		Bucket:        "test-bucket",
 		OperatorEmail: "",
 		Domain:        "sandboxes.klankermaker.ai",
+		TeardownFunc:  func(ctx context.Context, sandboxID string) error { return nil },
 	}
 	err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"})
 	if err != nil {

@@ -124,8 +124,13 @@ type TTLHandler struct {
 	// BudgetTable is the DynamoDB table name for budget tracking (default "km-budgets").
 	BudgetTable string
 	// TeardownFunc destroys the sandbox resources after TTL expiry or idle detection.
-	// If nil, teardown is skipped (backward compatible with existing tests).
+	// If nil, the SDK-only fallback (SDKTeardownFunc) runs instead.
 	TeardownFunc func(ctx context.Context, sandboxID string) error
+	// SDKTeardownFunc is the fallback destroy path used when TeardownFunc is nil
+	// (no terraform binary bundled). It defaults to sdkOnlyTeardown in main(); it
+	// is an injectable seam so unit tests can exercise the nil-TeardownFunc branch
+	// without making real AWS/IMDS calls. If nil, defaults to sdkOnlyTeardown.
+	SDKTeardownFunc func(ctx context.Context, h *TTLHandler, sandboxID string) error
 }
 
 // getEmailDomain returns the sandbox email domain from the KM_EMAIL_DOMAIN env var.
@@ -940,7 +945,11 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 	} else {
 		// Fallback: no terraform binary — terminate EC2 and clean up via SDK.
 		log.Warn().Str("sandbox_id", sandboxID).Msg("no terraform — using SDK-only teardown")
-		if err := sdkOnlyTeardown(ctx, h, sandboxID); err != nil {
+		sdkTeardown := h.SDKTeardownFunc
+		if sdkTeardown == nil {
+			sdkTeardown = sdkOnlyTeardown
+		}
+		if err := sdkTeardown(ctx, h, sandboxID); err != nil {
 			log.Error().Err(err).Str("sandbox_id", sandboxID).Msg("SDK-only teardown failed")
 			return fmt.Errorf("sdk teardown sandbox %s: %w", sandboxID, err)
 		}
