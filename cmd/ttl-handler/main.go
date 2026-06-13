@@ -1054,8 +1054,12 @@ func eventLabel(event TTLEvent) string {
 }
 
 // readMetadataBestEffort reads sandbox metadata from DynamoDB by sandbox ID.
-// Returns nil on any error — callers should treat metadata as optional enrichment.
+// Returns nil on any error or when client is nil — callers should treat metadata
+// as optional enrichment only.
 func readMetadataBestEffort(ctx context.Context, client awspkg.SandboxMetadataAPI, tableName, sandboxID string) *awspkg.SandboxMetadata {
+	if client == nil {
+		return nil
+	}
 	meta, err := awspkg.ReadSandboxMetadataDynamo(ctx, client, tableName, sandboxID)
 	if err != nil {
 		return nil

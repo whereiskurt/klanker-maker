@@ -244,12 +244,15 @@ func TestHandleTTLEvent_SendsNotificationWhenEmailSet(t *testing.T) {
 	}
 	mockSES := &mockSESAPI{}
 	h := &TTLHandler{
-		S3Client:      mockS3,
-		SESClient:     mockSES,
-		Scheduler:     &mockSchedulerAPI{},
-		Bucket:        "test-bucket",
-		OperatorEmail: "ops@example.com",
-		Domain:        "sandboxes.klankermaker.ai",
+		S3Client:         mockS3,
+		SESClient:        mockSES,
+		Scheduler:        &mockSchedulerAPI{},
+		DynamoClient:     &mockDynamoLock{locked: false},
+		SandboxTableName: "km-sandbox-metadata",
+		Bucket:           "test-bucket",
+		OperatorEmail:    "ops@example.com",
+		Domain:           "sandboxes.klankermaker.ai",
+		TeardownFunc:     func(ctx context.Context, sandboxID string) error { return nil },
 	}
 	err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"})
 	if err != nil {
