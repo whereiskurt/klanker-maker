@@ -174,17 +174,20 @@ Deployed to us-east-1 (`make build && make build-lambdas && km init --dry-run=fa
 | 1 | GSI provisioning + ACTIVE + no-drift | ✅ `session-index` reached ACTIVE (initial `km init` wedged only on km's 3-min per-module timeout vs the async GSI-activation wait — re-run reconciled state cleanly, no drift). GSI query returns Count=0 for a missing key (queryable, correctly keyed). |
 | 6 | Operator `km slack reply --session` (GSI hit → post into bound thread) | ✅ Seeded a poller-style row (session→channel/thread), `km slack reply --session` resolved via GSI and posted into the thread. **Surfaced + fixed a latent bug** (see below). |
 | — | `km slack threads <sandbox>` | ✅ Listed the seeded row (session_id + agent populated). |
-| 4 | `km slack prune-threads --dry-run` | ✅ Correctly reported "no dead-channel rows found" against a live channel (no deletes). |
+| 4 | `km slack prune-threads` (dead row) | ✅ Seeded a row pointing at a non-existent channel: `--dry-run` listed it ("1 dead-channel row(s) would delete"), real run deleted it. (NOTE: required the `conversations.info` fix below — initial dry-run false-passed.) |
 | — | `km slack forget-thread --session` | ✅ Deleted the row (GSI Count=0 after). |
 | — | `km slack forget-channel <alias>` | ✅ Deleted a real seeded km-slack-channels alias row. |
-| 5 | `km doctor` dead-channel/dead-alias checks | ✅ Both checks live and passing: `✓ Slack thread dead channels (1 channel probed)`, `✓ Slack channel dead alias`. |
+| 5 | `km doctor` dead-channel/dead-alias checks | ✅ Genuinely verified after the `conversations.info` fix: a seeded dead-channel row produced `⚠ Slack thread dead channels: 1 dead channel(s)... C00DEADDEAD`; clean again after prune. (Initial run was a FALSE PASS — see bug #2 below.) |
+| — | `km slack adopt` (Phase 104) | ✅ Verified after the `conversations.info` fix: `adopted #sb-uat110-alias`. |
 | — | `lambda-slack-bridge` deploy | ✅ Applied; new `lookup-thread` handler live. |
 
-**Bug found + fixed during UAT (commit `65e8bbaf`):** `pkg/slack.Client.PostMessage` could not decode `chat.postMessage` responses — `SlackAPIResponse.Channel` was typed as an object but the API returns `channel` as a bare string. Latent since 2026-04-29 (the bridge's own poster and `km slack test`-through-the-bridge never exercised this direct decode); Phase 110's operator `km slack reply` is the first direct caller. Fixed with a polymorphic `SlackChannelField` (mirrors the existing `SlackUserField` pattern) + regression test. After the fix, `km slack reply --session` posts cleanly (exit 0). All UAT Slack messages and seeded DDB rows were cleaned up; tables returned to prior state.
+**Bug #1 found + fixed during UAT (commit `65e8bbaf`):** `pkg/slack.Client.PostMessage` could not decode `chat.postMessage` responses — `SlackAPIResponse.Channel` was typed as an object but the API returns `channel` as a bare string. Latent since 2026-04-29 (the bridge's own poster and `km slack test`-through-the-bridge never exercised this direct decode); Phase 110's operator `km slack reply` is the first direct caller. Fixed with a polymorphic `SlackChannelField` (mirrors the existing `SlackUserField` pattern) + regression test. After the fix, `km slack reply --session` posts cleanly (exit 0).
+
+**Bug #2 found + fixed during UAT (commit `c130cf19`):** `pkg/slack.Client.ChannelInfo` sent `conversations.info` as POST+JSON, but that legacy method rejects a JSON body with `invalid_arguments` ("missing required field: channel") — it must be form-encoded. The call errored on every real invocation. Three downstream effects, all fixed by switching to `callForm`: (a) `km slack adopt` failed; (b) Phase 104 `validateStoredChannel` always fell to optimistic-trust (never validated); (c) **Phase 110's own dead-channel detection** (`km doctor` + `prune-threads`) treated the error as transient and **never flagged a dead channel** — i.e. the initial doctor "✓ no dead channels" in this UAT was a FALSE PASS. After the fix, dead-channel detection genuinely works (re-verified live with a seeded non-existent channel: doctor WARNs, prune lists+deletes). Regression test added asserting form encoding.
+
+All UAT Slack messages and seeded DDB rows were cleaned up; tables returned to prior state (threads=1 original row, channels=0).
 
 **Deferred (explicit operator choice — "operator-only, no spend"):** items #2 (sandbox-side `km-slack reply` end-to-end) and #3 (Codex auto-detect) require a live sandbox + poller turn. Covered by unit tests; defer live confirmation to next natural sandbox use.
-
-**Unrelated pre-existing bug noted (NOT Phase 110, NOT fixed):** `km slack adopt` (Phase 104) fails `conversations.info: invalid_arguments` — it calls `conversations.info` with the wrong arg encoding. Phase 110's own doctor dead-channel check calls `conversations.info` correctly. Tracked for a separate fix.
 
 ---
 
