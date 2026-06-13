@@ -147,6 +147,11 @@ func newSlackCmdInternal(cfg *config.Config, deps *SlackCmdDeps) *cobra.Command 
 	slackCmd.AddCommand(newSlackInviteCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackAdoptCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackReplyCmd(cfg, deps))
+	// Phase 110-05: operator repair commands
+	slackCmd.AddCommand(newSlackThreadsCmd(cfg, deps))
+	slackCmd.AddCommand(newSlackForgetThreadCmd(cfg, deps))
+	slackCmd.AddCommand(newSlackPruneThreadsCmd(cfg, deps))
+	slackCmd.AddCommand(newSlackForgetChannelCmd(cfg, deps))
 	return slackCmd
 }
 
