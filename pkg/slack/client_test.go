@@ -141,6 +141,42 @@ func TestClient_PostMessage_BoldHeader(t *testing.T) {
 	}
 }
 
+// TestClient_PostMessage_StringChannelResponse is the regression for the
+// chat.postMessage decode bug: real Slack returns "channel" as a bare string
+// (the channel ID), but SlackAPIResponse.Channel was typed as an object —
+// decode failed with "cannot unmarshal string into ... .channel". The mocks in
+// the other PostMessage tests omit "channel", so they never caught it. This one
+// includes the real string shape.
+func TestClient_PostMessage_StringChannelResponse(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Real chat.postMessage shape: channel is a STRING, not an object.
+		w.Write([]byte(`{"ok":true,"ts":"9.9","channel":"C0B9MLES7BJ"}`))
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	got, err := c.PostMessage(context.Background(), "C0B9MLES7BJ", "", "hello", "1.2")
+	if err != nil {
+		t.Fatalf("PostMessage with string channel response: %v", err)
+	}
+	if got != "9.9" {
+		t.Errorf("ts = %q; want %q", got, "9.9")
+	}
+}
+
+// TestSlackChannelField_ObjectShape confirms the object shape (conversations.info)
+// still decodes all three fields after the polymorphic-field change.
+func TestSlackChannelField_ObjectShape(t *testing.T) {
+	var r slack.SlackAPIResponse
+	if err := json.Unmarshal([]byte(`{"ok":true,"channel":{"id":"C1","is_member":true,"num_members":7}}`), &r); err != nil {
+		t.Fatalf("decode object channel: %v", err)
+	}
+	if r.Channel.ID != "C1" || !r.Channel.IsMember || r.Channel.NumMembers != 7 {
+		t.Errorf("got %+v; want {C1 true 7}", r.Channel)
+	}
+}
+
 func TestClient_PostMessage_WithThreadTS(t *testing.T) {
 	var capturedBody []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

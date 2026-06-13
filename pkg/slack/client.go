@@ -43,11 +43,11 @@ type SlackAPIResponse struct {
 	Error     string `json:"error,omitempty"`
 	TS        string `json:"ts,omitempty"`
 	Permalink string `json:"permalink,omitempty"` // Phase 70 — chat.getPermalink response
-	Channel   struct {
-		ID         string `json:"id"`
-		IsMember   bool   `json:"is_member"`
-		NumMembers int    `json:"num_members"`
-	} `json:"channel,omitempty"`
+	// Channel is polymorphic: conversations.info/create return an object
+	// ({"id","is_member","num_members"}) while chat.postMessage returns a bare
+	// string (the channel ID). SlackChannelField tolerates both — see its
+	// UnmarshalJSON. (Mirrors SlackUserField for the "user" field.)
+	Channel SlackChannelField `json:"channel,omitempty"`
 	// User is populated by users.lookupByEmail (object shape). The same field
 	// in auth.test responses is a string (the bot username), so SlackUserField
 	// tolerates both — string shape decodes to an empty User with ID == "".
@@ -86,6 +86,45 @@ func (u *SlackUserField) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	u.ID = obj.ID
+	return nil
+}
+
+// SlackChannelField decodes the polymorphic "channel" field returned by Slack:
+//   - chat.postMessage returns "channel": "C0123..." (a string — the channel ID)
+//   - conversations.info/create return "channel": {"id": "C...", "is_member": ..., "num_members": ...}
+//
+// The string shape decodes to SlackChannelField{ID: "C0123..."} (IsMember /
+// NumMembers stay zero — chat.postMessage doesn't report them); the object shape
+// decodes all three. Readers of resp.Channel.{ID,IsMember,NumMembers} are
+// unaffected. (Mirrors SlackUserField for the "user" field.)
+type SlackChannelField struct {
+	ID         string
+	IsMember   bool
+	NumMembers int
+}
+
+func (c *SlackChannelField) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '"' {
+		// String shape (chat.postMessage) — the bare channel ID.
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		c.ID = s
+		return nil
+	}
+	var obj struct {
+		ID         string `json:"id"`
+		IsMember   bool   `json:"is_member"`
+		NumMembers int    `json:"num_members"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return err
+	}
+	c.ID, c.IsMember, c.NumMembers = obj.ID, obj.IsMember, obj.NumMembers
 	return nil
 }
 
