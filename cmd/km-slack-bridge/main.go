@@ -232,6 +232,13 @@ func wireEventsHandler() {
 		TableName: threadsTable,
 	}
 
+	// Phase 110 — the signed-action Handler (built in init(), before threadsTable
+	// is resolved here) also needs the thread store for the lookup-thread action.
+	// Without this, h.Threads is nil at runtime and lookup-thread returns
+	// 500 threads_store_unavailable, so a sandbox `km-slack reply --session`
+	// silently falls back to channel root instead of posting into its thread.
+	handler.Threads = threadStore
+
 	sandboxResolver := &bridge.DDBSandboxByChannel{
 		Client:    initDDB,
 		TableName: sandboxesTable,
