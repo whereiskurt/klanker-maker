@@ -2494,3 +2494,70 @@ Plans:
 - [ ] 107-06-PLAN.md — Wave 1: misc (agent-auth `claude auth status` route; at-list future time; learn-output ""; EFS err==nil)
 - [ ] 107-07-PLAN.md — Wave 2: shell escalation — the ONE approved production fix (shell.go RunE returns pre-flight errors), own commit
 - [ ] 107-08-PLAN.md — Wave 3: green gate — full-suite ok+EXIT=0 (own exit), 22→0, green-stays-green, diff-shape guardrail
+
+### Phase 108: GitHub bridge per-turn idempotency guard — no duplicate PR comments
+
+> ⚠️ Backfilled into the roadmap 2026-06-12. This phase was **shipped as a fix-commit** (`b5a0cbf9`, merged) and documented in CLAUDE.md + `docs/github-bridge.md` § Phase 108 **without going through the GSD plan workflow** — so there are no `108-*-PLAN.md` files. Entry added retroactively so the roadmap is a complete record and `gsd-tools` numbering doesn't collide.
+
+**Goal:** Stop a single @-mention from making the sandbox agent post **two byte-identical** PR comments/reviews seconds apart. Root cause: the agent invoked `km-github comment`/`review` twice in one turn (the poller's hard "post your reply (REQUIRED)" mandate colliding with an invoked skill's own post instruction, or a self-retry of a call that secretly succeeded). GitHub issue comments/reviews are NOT idempotent.
+
+**What shipped:**
+- **Fix at the helper chokepoint** (`cmd/km-github/`): every post embeds an invisible per-turn marker `<!-- km-turn:$KM_GITHUB_TURN_ID -->` and, before posting, scans the issue's existing comments / the PR's existing reviews for that same marker — if present, no-ops (exit 0, logs `duplicate suppressed`). Marker keyed on the poller's `RUN_ID`, so two *separate* legitimate mentions on the same PR each still post.
+- **Fail-open:** if the pre-post duplicate-check GET errors, the helper posts anyway (never strand a legitimate reply because a read failed) — but logs it. Check paginates (`per_page=100`, follows `Link: rel="next"`).
+- **`KM_GITHUB_TURN_ID`** exported inline into all four agent-dispatch `sudo` blocks of the github inbound poller (codex resume/first, claude main/retry). Empty for manual `km-github` invocations ⇒ marker + duplicate-check disabled ⇒ byte-identical to pre-Phase-108.
+- **Pure helper + `pkg/compiler/userdata.go` change.** New `pkg/github/marker.go` (`TurnMarker` / `CommentMarkerExists` / `ReviewMarkerExists`). No SandboxProfile schema change, no new TF resource, no new DDB column, no bridge Lambda or IAM change. Slack/H1 pollers untouched.
+
+**Deploy:** `make build-lambdas` + `km init --dry-run=false` (NOT `--sidecars`) — the full `km init` rebuilds+uploads the `km-github` sidecar binary via `buildAndUploadSidecars`. Existing sandboxes need `km destroy && km create` to gain the new userdata env-var export + new sidecar.
+
+**Requirements**: (retro — not formally tracked)
+**Depends on:** GitHub bridge poller (Phases 97/102).
+**Plans:** Shipped outside GSD (fix-commit `b5a0cbf9`); no PLAN.md files.
+
+### Phase 109: GitHub bridge self-heals orphaned `stopped` alias rows (resume-or-cold-create)
+
+> ⚠️ Backfilled into the roadmap 2026-06-12. **Shipped as a fix-commit** (`eac8ed8b`, merged PR #23) and documented in CLAUDE.md + `docs/github-bridge.md` § Phase 109 / `docs/h1-bridge.md` § Phase 109 **outside the GSD plan workflow** — no `109-*-PLAN.md` files. Entry added retroactively for a complete record + numbering integrity.
+
+**Goal:** Stop an orphaned `{prefix}-sandboxes` row (`status=stopped` but the EC2 instance is **gone** — terminated out from under km) from permanently shadowing cold-create. Previously the resume branch logged a non-fatal error and enqueued to a per-sandbox FIFO with **no live poller**, so the comment stranded and the bot silently no-op'd on cold start (`ResolveByAliasWithStatus` returned `(id,"stopped",nil)` so `err==nil` skipped cold-create).
+
+**What shipped:**
+- **Fix:** `EC2Resumer.StartSandbox` wraps an exported sentinel `ErrNoResumableInstance` on the terminal `len(found)==0` path (transient `DescribeInstances`/`StartInstances` errors are NOT wrapped — they keep log-non-fatal + enqueue). `WebhookHandler.Handle` branches the resume failure with `errors.Is`: terminal ⇒ `StatusWriter.DeleteSandboxRow(id)` (clears the stale row, dodges the ambiguous-alias trap) then `Publisher.PutSandboxCreate` (cold-create), no enqueue / no thread upsert; transient ⇒ unchanged enqueue; success ⇒ unchanged. Genuinely stopped/paused (hibernated) instances still resume as before.
+- **Pure bridge-Lambda code + one IAM statement.** `SandboxStatusWriter` extended with `DeleteSandboxRow`; `DynamoSandboxStatusWriter.DeleteSandboxRow` = single `DeleteItem` keyed by `sandbox_id`; `infra/modules/lambda-github-bridge/v1.1.0` adds `dynamodb:DeleteItem` to the existing `DDBSandboxesUpdateItem` statement (still no `PutItem`). No schema/TF-resource/DDB-column change.
+- **Ported to the H1 bridge in lockstep (parity):** identical fix in `pkg/h1/bridge/{aws_adapters,interfaces,webhook_handler}.go`; `infra/modules/lambda-h1-bridge/v1.0.0` gets the same `dynamodb:DeleteItem` grant. Slack bridge has no resume-or-cold-create path (no change).
+- **Out of scope (noted):** the orphaned FIFO queue + per-sandbox Lambdas are not GC'd (only the DDB row); harmless garbage flagged by `km doctor`, cleaned by `km destroy <id>`.
+
+**Deploy:** `make build-lambdas` + `km init --dry-run=false` (NOT `--sidecars` — the IAM/env block updates only on full terragrunt apply; `km init --github` / `--h1` also cover the env+IAM change for the respective bridge). No sandbox recreate.
+
+**Requirements**: (retro — not formally tracked)
+**Depends on:** GitHub bridge (Phases 97/100/101) + H1 bridge (Phase 103).
+**Plans:** Shipped outside GSD (fix-commit `eac8ed8b`, PR #23); no PLAN.md files.
+
+### Phase 110: Session-aware Slack reply + thread/channel repair
+
+> Note: numbered 110 (not 108) — Phases 108/109 are completed GitHub-bridge follow-ups (now backfilled above) that were shipped as fix-commits. 110 avoids the collision.
+
+**Goal:** From a `claude/codex --resume` session, post to the Slack thread bound to that session — and fall back to the sandbox channel root when no thread is bound. Add operator cleanup commands for stale/wrong thread and channel mappings (manually-deleted channels, wrong thread/session resolution).
+
+**Scope:**
+1. **GSI** `session-index` (hash `claude_session_id`, KEYS_ONLY) on `km-slack-threads` (module v1.0.0→v1.1.0). Initial bridge upsert omits `claude_session_id`, so only poller-written rows enter the index (no empty-string key collisions).
+2. **Bridge** `km-slack-bridge`: new Ed25519-signed `lookup-thread` action (payload `{session_id}`) → Query GSI → `{found, channel_id, thread_ts, agent_type}`, filtered to rows whose `sandbox_id` == requesting sandbox (preserves sandbox-never-reads-DDB boundary).
+3. **Sandbox-side** `km-slack reply`: resolution chain (first hit wins) — explicit `--thread`; `$KM_SLACK_THREAD_TS`; session id (`--session` or auto-detected newest `~/.claude/projects/**/<id>.jsonl` / `~/.codex`, branched on `$KM_AGENT`) → bridge `lookup-thread`; else top-level to `$KM_SLACK_CHANNEL_ID`. Reuses signed post path; `--body /file`, `--render` honored.
+4. **Operator-side** `km slack reply`: `--session` queries GSI directly (operator creds, no bridge); `--sandbox`/`--alias` resolves channel for root fallback; `--thread`+`--channel` posts verbatim. Posts via Slack `chat.postMessage` with bot token (same client as `km slack test`/`invite`).
+5. **Cleanup/repair** (operator-side): `km slack threads <sandbox-id|--alias>` (read-only list); `km slack forget-thread (--session | --thread+--channel)`; `km slack prune-threads [sandbox] [--dry-run]` (validate vs Slack, drop dead-channel/dead-thread rows); `km slack forget-channel <alias>`; reply/repair detects dead `slack_channel_id` (manually-deleted channel) and clears the assumption.
+6. **km doctor**: WARN on thread rows pointing at non-existent channels and alias rows whose channel is gone.
+7. **Skill doc** `klanker:slack`: new section documenting `km-slack reply` resolution order, auto-detect heuristic, `--session`/`--thread` overrides, channel-root fallback; cross-link operator `km slack reply` + repair commands. Plugin version bump.
+
+**Edge cases (document, not fix):** stale (non-latest) session id → GSI miss → channel-root fallback; session never driven by poller → no row → fallback; codex rows reuse `claude_session_id` column (Phase 70 hangover) → GSI handles both agents.
+
+**Deploy:** `make build` + `make build-lambdas` → `km init --dry-run=false` (GSI + bridge = full terragrunt apply, NOT `--sidecars`). Existing sandboxes need `km destroy && km create` to gain the new `km-slack reply` sidecar.
+
+**Requirements**: TBD
+**Depends on:** Existing Slack bridge + inbound poller (Phases 67/70/91/95) and `km-slack-channels` table (Phase 104). No dependency on Phase 107.
+**Plans:** 6 plans
+
+Plans:
+- [ ] 110-01-PLAN.md — session-index GSI on km-slack-threads (module v1.0.0→v1.1.0)
+- [ ] 110-02-PLAN.md — envelope SessionID field + bridge lookup-thread signed action
+- [ ] 110-03-PLAN.md — sandbox km-slack reply (4-step resolution chain + Claude auto-detect)
+- [ ] 110-04-PLAN.md — operator km slack reply (--session GSI / --thread+--channel / --sandbox)
+- [ ] 110-05-PLAN.md — operator repair cmds (threads / forget-thread / prune-threads / forget-channel)
+- [ ] 110-06-PLAN.md — km doctor dead-channel/dead-alias WARNs + klanker:slack skill + plugin bump
