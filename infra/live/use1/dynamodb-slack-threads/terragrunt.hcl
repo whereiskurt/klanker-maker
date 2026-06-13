@@ -29,7 +29,7 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/dynamodb-slack-threads/v1.0.0"
+  source = "${local.repo_root}/infra/modules/dynamodb-slack-threads/v1.1.0"
 }
 
 inputs = {
