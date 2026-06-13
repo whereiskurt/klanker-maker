@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: "Completed 110-05-PLAN.md — operator slack repair commands: threads/forget-thread/prune-threads/forget-channel"
-last_updated: "2026-06-13T03:29:32.510Z"
+stopped_at: "Completed 110-06-PLAN.md — km doctor dead-channel checks + klanker:slack skill section + plugin 0.4.8"
+last_updated: "2026-06-13T03:47:39.809Z"
 last_activity: 2026-06-13
 progress:
   total_phases: 126
-  completed_phases: 110
+  completed_phases: 111
   total_plans: 559
-  completed_plans: 520
+  completed_plans: 521
   percent: 91
 ---
 
@@ -552,6 +552,7 @@ Progress: [█████████░] 91%
 | Phase 110-session-aware-slack-reply-thread-channel-repair P03 | 325s | 2 tasks | 4 files |
 | Phase 110 P04 | 834 | 2 tasks | 4 files |
 | Phase 110 P05 | 847s | 2 tasks | 3 files |
+| Phase 110-session-aware-slack-reply-thread-channel-repair P06 | 876s | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1591,6 +1592,8 @@ Recent decisions affecting current work:
 - [Phase 110]: km slack reply: narrow SlackPostAPI + SlackThreadLookupAPI interfaces in slack_reply.go; operator passes sandboxID='' to LookupBySession to bypass ownership filter
 - [Phase 110]: DDBRepairAPI narrow interface in slack_repair.go for operator-only DDB repair (Scan+Query+GetItem+DeleteItem+PutItem)
 - [Phase 110]: prune-threads transient Slack errors skip row (never delete); only channel_not_found is definitive dead
+- [Phase 110-06]: DoctorDDBScanAPI narrow interface reuses DDBScanDeleteClient (no new DoctorDeps field needed); SlackDeadChannelChecker wired from SSM bot-token in initRealDepsWithExisting
+- [Phase 110-06]: Both dead-channel checks SKIP when bot token absent (nil SlackDeadChannelChecker); Error→Warn downgrade at registration mirrors Phase 95 pattern
 
 ### Roadmap Evolution
 
@@ -1729,6 +1732,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-13T03:29:32.498Z
-Stopped at: Completed 110-05-PLAN.md — operator slack repair commands: threads/forget-thread/prune-threads/forget-channel
+Last session: 2026-06-13T03:47:39.797Z
+Stopped at: Completed 110-06-PLAN.md — km doctor dead-channel checks + klanker:slack skill section + plugin 0.4.8
 Resume file: None
