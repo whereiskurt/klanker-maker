@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 110-01-PLAN.md — session-index GSI on km-slack-threads (v1.0.0→v1.1.0 module bump, live unit repointed)
-last_updated: "2026-06-13T02:49:22.385Z"
+stopped_at: Completed 110-02-PLAN.md — lookup-thread bridge action + SessionID field + LookupBySession adapter
+last_updated: "2026-06-13T02:53:21.346Z"
 last_activity: 2026-06-13
 progress:
   total_phases: 126
   completed_phases: 110
   total_plans: 559
-  completed_plans: 516
+  completed_plans: 517
   percent: 91
 ---
 
@@ -548,6 +548,7 @@ Progress: [█████████░] 91%
 | Phase 106 P03 | 31537673s | 2 tasks | 1 files |
 | Phase 106-session-resume-hint-on-github-hackerone-bridge-replies-post-on-mint P04 | 131s | 3 tasks | 4 files |
 | Phase 110-session-aware-slack-reply-thread-channel-repair P01 | 113s | 2 tasks | 4 files |
+| Phase 110-session-aware-slack-reply-thread-channel-repair P02 | 309s | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1579,6 +1580,8 @@ Recent decisions affecting current work:
 - [Phase 106]: H1 resume hint is INTERNAL-only (no --reply-to-researcher); researcher visibility is a P0 bug
 - [Phase 106]: SKILL.md corrected: create-handler-embedded userdata edits deploy via make build-lambdas + km init --dry-run=false, NOT --sidecars
 - [Phase 110]: KEYS_ONLY projection for session-index GSI minimizes storage; caller resolves full row via primary key lookup after session→key resolution
+- [Phase 110-session-aware-slack-reply-thread-channel-repair]: EnvelopeVersion stays at 1 — SessionID is additive zero-valued field (backward-compatible)
+- [Phase 110-session-aware-slack-reply-thread-channel-repair]: lookup-thread bypasses channel-ownership check; security enforced by sandbox_id filter in LookupBySession
 
 ### Roadmap Evolution
 
@@ -1717,6 +1720,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-13T02:49:22.369Z
-Stopped at: Completed 110-01-PLAN.md — session-index GSI on km-slack-threads (v1.0.0→v1.1.0 module bump, live unit repointed)
+Last session: 2026-06-13T02:53:21.309Z
+Stopped at: Completed 110-02-PLAN.md — lookup-thread bridge action + SessionID field + LookupBySession adapter
 Resume file: None

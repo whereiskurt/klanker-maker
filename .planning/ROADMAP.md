@@ -2552,7 +2552,7 @@ Plans:
 
 **Requirements**: TBD
 **Depends on:** Existing Slack bridge + inbound poller (Phases 67/70/91/95) and `km-slack-channels` table (Phase 104). No dependency on Phase 107.
-**Plans:** 1/6 plans executed
+**Plans:** 2/6 plans executed
 
 Plans:
 - [ ] 110-01-PLAN.md — session-index GSI on km-slack-threads (module v1.0.0→v1.1.0)
