@@ -165,30 +165,30 @@ func TestKmSlackPost_BridgeReturns401_Exit1(t *testing.T) {
 	}
 }
 
-// TestKmSlackPost_BridgeReturns503ThenSuccess_Exit0 — 503 twice then 200 → exit 0.
-func TestKmSlackPost_BridgeReturns503ThenSuccess_Exit0(t *testing.T) {
+// TestKmSlackPost_BridgeReturns503_FailsFast — 503 → fail fast, no retry.
+// PostToBridge deliberately does NOT retry on 5xx: the bridge has already
+// reserved the nonce in DynamoDB; a retry of the same envelope would trigger
+// "replayed_nonce" 401 and mask the real upstream error. Policy shipped
+// 2026-05-01 (commit 5af20326); see pkg/slack/client.go PostToBridge comment.
+func TestKmSlackPost_BridgeReturns503_FailsFast(t *testing.T) {
 	_, priv := genKey(t)
 	bodyPath := writeTmpBody(t, "test")
 
 	var callCount int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
-		if n < 3 {
-			w.WriteHeader(503)
-			fmt.Fprintln(w, `{"error":"service unavailable"}`)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"ok":true,"ts":"5.6"}`)
+		atomic.AddInt32(&callCount, 1)
+		w.WriteHeader(503)
+		fmt.Fprintln(w, `{"error":"service unavailable"}`)
 	}))
 	defer ts.Close()
 
 	_, err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "subj", bodyPath, "", "plain")
-	if err != nil {
-		t.Fatalf("expected success after 503 retries, got: %v", err)
+	if err == nil {
+		t.Fatal("expected error for 503 response")
 	}
-	if count := atomic.LoadInt32(&callCount); count != 3 {
-		t.Errorf("expected 3 requests (2×503 + 1×200), got %d", count)
+	// Fail-fast: only 1 request (no retry on 5xx)
+	if count := atomic.LoadInt32(&callCount); count != 1 {
+		t.Errorf("expected 1 request on 503, got %d", count)
 	}
 }
 
