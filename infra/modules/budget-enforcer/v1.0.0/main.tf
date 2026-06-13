@@ -227,6 +227,12 @@ resource "aws_lambda_function" "budget_enforcer" {
   timeout     = 60
   memory_size = 128
 
+  # Encrypt env vars under the IAM-delegating platform CMK (var.kms_key_arn) so the
+  # role's identity kms:Decrypt (granted below) authorizes env decryption directly —
+  # no role-pinned grant to orphan on role recreate. null = aws/lambda managed-key
+  # default when unset (fail-soft on installs where the CMK ARN isn't plumbed).
+  kms_key_arn = var.kms_key_arn != "" ? var.kms_key_arn : null
+
   environment {
     variables = {
       KM_BUDGET_TABLE = var.budget_table_name
@@ -249,10 +255,33 @@ resource "aws_lambda_function" "budget_enforcer" {
     "km:managed"    = "true"
   }
 
-  # Replace Lambda if role is replaced — Lambda env-var KMS grants bind to role unique-ID
+  # Belt-and-suspenders: replace on role change. With kms_key_arn set above, env
+  # decrypt is grant-independent so this is no longer the primary safeguard.
   lifecycle {
     replace_triggered_by = [aws_iam_role.budget_enforcer]
   }
+}
+
+# Policy: KMS — decrypt env vars encrypted under the platform CMK (var.kms_key_arn).
+# count-gated: only created when the CMK ARN is plumbed; absent ⇒ managed-key fallback
+# (no policy needed). This is the identity authorization that makes env decrypt
+# grant-independent so role recreation can't strand the function.
+resource "aws_iam_role_policy" "kms_decrypt" {
+  count = var.kms_key_arn != "" ? 1 : 0
+  name  = "${var.resource_prefix}-budget-enforcer-kms-${var.sandbox_id}"
+  role  = aws_iam_role.budget_enforcer.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "KMSDecryptEnv"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = var.kms_key_arn
+      }
+    ]
+  })
 }
 
 # CloudWatch Log Group for Lambda logs (30-day retention)

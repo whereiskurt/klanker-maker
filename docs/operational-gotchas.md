@@ -147,8 +147,18 @@ after `ExportTerragruntEnvVars` (runInit / runInitScoped / runInitPlan).
 `aws lambda update-function-configuration --function-name <fn> --kms-key-arn <cmk-arn>`
 re-mints the grant for the current role (re-broken by the next role-recreating `km init`
 until the CMK plumbing is deployed). **Durable deploy:** `make build-lambdas` +
-`km init --dry-run=false`. Per-sandbox `token-refresher`/`budget-enforcer` share the
-exposure but were out of scope (they need sandbox recreate to adopt).
+`km init --dry-run=false`.
+
+**Per-sandbox Lambdas (`github-token-refresher`, `budget-enforcer`) are covered too.**
+`github-token` reuses its **own** module CMK (`aws_kms_key.github_token`, already
+root-delegating, role already holds `kms:Decrypt`) — set `kms_key_arn` on the function,
+done. `budget-enforcer` uses the **platform** CMK via the same `var.kms_key_arn` +
+`get_env("KM_PLATFORM_KMS_KEY_ARN","")` pattern: the compiler emits the input into the
+generated `budget-enforcer/terragrunt.hcl`, and **`km create` exports the resolved key
+ARN** (same `exportPlatformKMSKeyARN` helper as `km init`). These provision only at
+`km create`, so **existing sandboxes must be recreated** (`km destroy && km create`) to
+adopt the fix; new sandboxes get it once the create-handler runs the updated `km`
+binary + module code. Fail-soft: empty env ⇒ managed-key fallback (never blocks a create).
 
 Debugging "Lambda doesn't fire": `aws kms list-grants --key-id alias/aws/lambda` and look
 for grantee principals with unique-IDs (`AROA…`) that no longer match the function's

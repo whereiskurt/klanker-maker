@@ -17,21 +17,22 @@ func TestGenerateBudgetEnforcerHCL_EC2(t *testing.T) {
 
 	checks := []string{
 		"budget-enforcer/v1.0.0",
-		"sb-ec2test1",                    // sandbox_id in state key
-		"lambda_zip_path",                // required module input
-		"build/budget-enforcer.zip",      // path matches Makefile build-lambdas output
-		"budget_table_arn",               // constructed from accounts.application
-		"budget_enforcer_inputs",         // reads inputs from service.hcl
-		"read_terragrunt_config",         // standard Terragrunt pattern
-		"find_in_parent_folders",         // standard Terragrunt include pattern
-		"remote_state",                   // S3 backend declaration
+		"sb-ec2test1",               // sandbox_id in state key
+		"lambda_zip_path",           // required module input
+		"build/budget-enforcer.zip", // path matches Makefile build-lambdas output
+		"budget_table_arn",          // constructed from accounts.application
+		"budget_enforcer_inputs",    // reads inputs from service.hcl
+		"read_terragrunt_config",    // standard Terragrunt pattern
+		"find_in_parent_folders",    // standard Terragrunt include pattern
+		"remote_state",              // S3 backend declaration
 		"sandboxes/sb-ec2test1/budget-enforcer/terraform.tfstate", // per-sandbox state key
-		"role_arn",                       // IAM role ARN from service.hcl
-		"instance_id",                    // EC2 instance ID from service.hcl
+		"role_arn",    // IAM role ARN from service.hcl
+		"instance_id", // EC2 instance ID from service.hcl
 		// Values resolved from parent sandbox outputs via service.hcl locals
-		"budget_enforcer_instance_id",    // instance_id read from sandbox-outputs.hcl
-		"budget_enforcer_role_arn",       // role_arn read from sandbox-outputs.hcl
-		"sandbox-outputs.hcl",           // separate HCL file for post-apply outputs
+		"budget_enforcer_instance_id",                                 // instance_id read from sandbox-outputs.hcl
+		"budget_enforcer_role_arn",                                    // role_arn read from sandbox-outputs.hcl
+		"sandbox-outputs.hcl",                                         // separate HCL file for post-apply outputs
+		`kms_key_arn        = get_env("KM_PLATFORM_KMS_KEY_ARN", "")`, // platform CMK for env-var encryption (grant-independent decrypt)
 	}
 	for _, want := range checks {
 		if !strings.Contains(hcl, want) {

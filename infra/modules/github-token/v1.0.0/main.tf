@@ -136,6 +136,13 @@ resource "aws_lambda_function" "github_token_refresher" {
   timeout     = 60
   memory_size = 128
 
+  # Encrypt env vars under this module's own customer-managed CMK (root-delegating
+  # key policy above) instead of the aws/lambda managed key. The role's identity
+  # kms:Decrypt on aws_kms_key.github_token (granted below) then authorizes env
+  # decryption DIRECTLY — no role-pinned grant — so a role-recreating apply can no
+  # longer orphan the grant and 502 the function with no logs.
+  kms_key_arn = aws_kms_key.github_token.arn
+
   environment {
     variables = {
       KM_GITHUB_SSM_CONFIG_PREFIX = "/${var.resource_prefix}/config/github"
@@ -148,7 +155,8 @@ resource "aws_lambda_function" "github_token_refresher" {
     "km:managed"    = "true"
   }
 
-  # Replace Lambda if role is replaced — Lambda env-var KMS grants bind to role unique-ID
+  # Belt-and-suspenders: replace on role change. With kms_key_arn set above, env
+  # decrypt is grant-independent so this is no longer the primary safeguard.
   lifecycle {
     replace_triggered_by = [aws_iam_role.github_token_refresher]
   }
