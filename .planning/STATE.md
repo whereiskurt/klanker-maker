@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 110-03-PLAN.md — km-slack reply subcommand + 4-step resolution chain
-last_updated: "2026-06-13T03:02:52.948Z"
+stopped_at: Completed 110-04-PLAN.md — operator km slack reply with session GSI + verbatim + channel-root
+last_updated: "2026-06-13T03:11:58.752Z"
 last_activity: 2026-06-13
 progress:
   total_phases: 126
   completed_phases: 110
   total_plans: 559
-  completed_plans: 518
+  completed_plans: 519
   percent: 91
 ---
 
@@ -550,6 +550,7 @@ Progress: [█████████░] 91%
 | Phase 110-session-aware-slack-reply-thread-channel-repair P01 | 113s | 2 tasks | 4 files |
 | Phase 110-session-aware-slack-reply-thread-channel-repair P02 | 309s | 3 tasks | 7 files |
 | Phase 110-session-aware-slack-reply-thread-channel-repair P03 | 325s | 2 tasks | 4 files |
+| Phase 110 P04 | 834 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1586,6 +1587,7 @@ Recent decisions affecting current work:
 - [Phase 110]: lookupThreadBySession uses raw http.DefaultClient.Do (not PostToBridge) — lookup-thread failure falls through to channel root; response shape differs from post response
 - [Phase 110]: claudeProjectsRoot is package-level var (not env var) so tests inject temp dir without t.Setenv races
 - [Phase 110]: PostResponse extended with Found/ChannelID/ThreadTS/AgentType (omitempty) — not a new type; all existing callers unaffected
+- [Phase 110]: km slack reply: narrow SlackPostAPI + SlackThreadLookupAPI interfaces in slack_reply.go; operator passes sandboxID='' to LookupBySession to bypass ownership filter
 
 ### Roadmap Evolution
 
@@ -1724,6 +1726,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-13T03:02:52.936Z
-Stopped at: Completed 110-03-PLAN.md — km-slack reply subcommand + 4-step resolution chain
+Last session: 2026-06-13T03:11:58.739Z
+Stopped at: Completed 110-04-PLAN.md — operator km slack reply with session GSI + verbatim + channel-root
 Resume file: None
