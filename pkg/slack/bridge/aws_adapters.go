@@ -963,7 +963,12 @@ func (s *DDBThreadStore) LookupBySession(ctx context.Context, sessionID, sandbox
 			continue
 		}
 		sbSV, ok3 := sbAttr.(*dynamodbtypes.AttributeValueMemberS)
-		if !ok3 || sbSV.Value != sandboxID {
+		if !ok3 {
+			continue
+		}
+		// sandboxID=="" means operator mode: skip ownership filter, return first match.
+		// sandboxID!="" means sandbox-side: enforce sandbox-never-reads-DDB boundary.
+		if sandboxID != "" && sbSV.Value != sandboxID {
 			// Row exists but belongs to a different sandbox — enforce boundary.
 			continue
 		}
