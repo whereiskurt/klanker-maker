@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 110-02-PLAN.md — lookup-thread bridge action + SessionID field + LookupBySession adapter
-last_updated: "2026-06-13T02:53:21.346Z"
+stopped_at: Completed 110-03-PLAN.md — km-slack reply subcommand + 4-step resolution chain
+last_updated: "2026-06-13T03:02:52.948Z"
 last_activity: 2026-06-13
 progress:
   total_phases: 126
   completed_phases: 110
   total_plans: 559
-  completed_plans: 517
+  completed_plans: 518
   percent: 91
 ---
 
@@ -549,6 +549,7 @@ Progress: [█████████░] 91%
 | Phase 106-session-resume-hint-on-github-hackerone-bridge-replies-post-on-mint P04 | 131s | 3 tasks | 4 files |
 | Phase 110-session-aware-slack-reply-thread-channel-repair P01 | 113s | 2 tasks | 4 files |
 | Phase 110-session-aware-slack-reply-thread-channel-repair P02 | 309s | 3 tasks | 7 files |
+| Phase 110-session-aware-slack-reply-thread-channel-repair P03 | 325s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1582,6 +1583,9 @@ Recent decisions affecting current work:
 - [Phase 110]: KEYS_ONLY projection for session-index GSI minimizes storage; caller resolves full row via primary key lookup after session→key resolution
 - [Phase 110-session-aware-slack-reply-thread-channel-repair]: EnvelopeVersion stays at 1 — SessionID is additive zero-valued field (backward-compatible)
 - [Phase 110-session-aware-slack-reply-thread-channel-repair]: lookup-thread bypasses channel-ownership check; security enforced by sandbox_id filter in LookupBySession
+- [Phase 110]: lookupThreadBySession uses raw http.DefaultClient.Do (not PostToBridge) — lookup-thread failure falls through to channel root; response shape differs from post response
+- [Phase 110]: claudeProjectsRoot is package-level var (not env var) so tests inject temp dir without t.Setenv races
+- [Phase 110]: PostResponse extended with Found/ChannelID/ThreadTS/AgentType (omitempty) — not a new type; all existing callers unaffected
 
 ### Roadmap Evolution
 
@@ -1720,6 +1724,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-13T02:53:21.309Z
-Stopped at: Completed 110-02-PLAN.md — lookup-thread bridge action + SessionID field + LookupBySession adapter
+Last session: 2026-06-13T03:02:52.936Z
+Stopped at: Completed 110-03-PLAN.md — km-slack reply subcommand + 4-step resolution chain
 Resume file: None
