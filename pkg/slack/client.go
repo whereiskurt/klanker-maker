@@ -803,9 +803,16 @@ func (c *Client) InviteShared(ctx context.Context, channelID, email string) erro
 // a member (is_member field). Used by km create override-mode validation to
 // give early feedback before infra is provisioned.
 func (c *Client) ChannelInfo(ctx context.Context, channelID string) (int, bool, error) {
-	resp, err := c.callJSON(ctx, "conversations.info", map[string]any{
-		"channel":             channelID,
-		"include_num_members": true,
+	// conversations.info is a legacy read method that REJECTS a JSON body with
+	// invalid_arguments ("missing required field: channel") — it must be sent
+	// form-encoded (same class as users.lookupByEmail). callJSON here silently
+	// errored on every call, which made km slack adopt fail, made Phase 104's
+	// validateStoredChannel always fall to optimistic-trust, and made the
+	// Phase 110 dead-channel checks treat every probe as transient (never
+	// flagging a truly dead channel). Use callForm.
+	resp, err := c.callForm(ctx, "conversations.info", url.Values{
+		"channel":             {channelID},
+		"include_num_members": {"true"},
 	})
 	if err != nil {
 		return 0, false, err

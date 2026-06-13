@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -268,6 +269,38 @@ func TestClient_ChannelInfo_BotIsMember(t *testing.T) {
 	}
 	if count != 7 {
 		t.Errorf("memberCount = %d; want 7", count)
+	}
+}
+
+// TestClient_ChannelInfo_SendsFormEncoded is the regression for the bug where
+// ChannelInfo used callJSON: conversations.info REJECTS a JSON body with
+// invalid_arguments ("missing required field: channel") and must be form-encoded.
+// The other ChannelInfo tests pass against a mock that ignores the request
+// encoding, so they never caught it. This one asserts the wire format.
+func TestClient_ChannelInfo_SendsFormEncoded(t *testing.T) {
+	var gotContentType, gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(slackOK(map[string]any{"channel": map[string]any{"id": "C0123ABC", "is_member": true, "num_members": 2}}))
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	if _, _, err := c.ChannelInfo(context.Background(), "C0123ABC"); err != nil {
+		t.Fatalf("ChannelInfo: %v", err)
+	}
+	if !strings.HasPrefix(gotContentType, "application/x-www-form-urlencoded") {
+		t.Errorf("Content-Type = %q; want application/x-www-form-urlencoded (NOT JSON — conversations.info rejects JSON)", gotContentType)
+	}
+	form, err := url.ParseQuery(gotBody)
+	if err != nil {
+		t.Fatalf("body is not form-encoded (%q): %v", gotBody, err)
+	}
+	if form.Get("channel") != "C0123ABC" {
+		t.Errorf("form channel = %q; want C0123ABC (body: %q)", form.Get("channel"), gotBody)
 	}
 }
 
