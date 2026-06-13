@@ -58,6 +58,12 @@ type Handler struct {
 	S3Getter          S3ObjectGetter
 	FileUploader      SlackFileUploader
 	MissingFilesWrite bool // set by main.go cold-start scope probe
+
+	// Phase 110 — ActionLookupThread support. Queries the session-index GSI
+	// on km-slack-threads to resolve a session_id → (channel_id, thread_ts).
+	// May be nil if the bridge binary was built before Phase 110 (lookup-thread
+	// will return 500 in that case, but all other actions are unaffected).
+	Threads SlackThreadStore
 }
 
 // jsonResp builds a Response with a JSON body.
@@ -93,7 +99,7 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		logger.WarnContext(ctx, "bridge: unsupported_version", "step", "parse", "version", env.Version, "status", 400)
 		return errResp(400, "unsupported_version")
 	}
-	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate {
+	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate && env.Action != slack.ActionLookupThread {
 		logger.WarnContext(ctx, "bridge: unknown_action", "step", "parse", "action", env.Action, "status", 400)
 		return errResp(400, "unknown_action")
 	}
@@ -218,26 +224,32 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 			)
 			return errResp(403, "sandbox_action_forbidden")
 		}
-		// Sandbox post: channel must match owned channel.
-		owned, err := h.Channels.OwnedChannel(ctx, env.SenderID)
-		if err != nil {
-			logger.ErrorContext(ctx, "bridge: channel_lookup_failed",
-				"step", "authz",
-				"sender_id", env.SenderID,
-				"error", err.Error(),
-				"status", 500,
-			)
-			return errResp(500, "channel_lookup_failed")
-		}
-		if owned == "" || owned != env.Channel {
-			logger.WarnContext(ctx, "bridge: channel_mismatch",
-				"step", "authz",
-				"sender_id", env.SenderID,
-				"channel", env.Channel,
-				"owned_channel", owned,
-				"status", 403,
-			)
-			return errResp(403, "channel_mismatch")
+		// ActionLookupThread: sandbox supplies a session_id, not a channel.
+		// Channel-ownership cannot apply. The sandbox_id filter inside
+		// LookupBySession enforces the sandbox-never-reads-DDB boundary instead
+		// (pitfall 1 from RESEARCH.md). Skip the channel ownership check.
+		if env.Action != slack.ActionLookupThread {
+			// Sandbox post/upload/permalink/update: channel must match owned channel.
+			owned, err := h.Channels.OwnedChannel(ctx, env.SenderID)
+			if err != nil {
+				logger.ErrorContext(ctx, "bridge: channel_lookup_failed",
+					"step", "authz",
+					"sender_id", env.SenderID,
+					"error", err.Error(),
+					"status", 500,
+				)
+				return errResp(500, "channel_lookup_failed")
+			}
+			if owned == "" || owned != env.Channel {
+				logger.WarnContext(ctx, "bridge: channel_mismatch",
+					"step", "authz",
+					"sender_id", env.SenderID,
+					"channel", env.Channel,
+					"owned_channel", owned,
+					"status", 403,
+				)
+				return errResp(403, "channel_mismatch")
+			}
 		}
 	}
 
@@ -456,6 +468,62 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		}
 		logger.InfoContext(ctx, "bridge: ok", "action", env.Action, "channel", env.Channel, "ts", ts, "status", 200)
 		return slackResponse(ts, nil)
+
+	case slack.ActionLookupThread:
+		// Phase 110 — resolve session_id → (channel_id, thread_ts, agent_type).
+		// Channel-ownership is NOT checked (step 6 above bypasses it for this action).
+		// Security: LookupBySession filters results to rows owned by env.SenderID,
+		// so a sandbox can only see its own threads (sandbox-never-reads-DDB boundary).
+		if env.SessionID == "" {
+			logger.WarnContext(ctx, "bridge: missing_session_id",
+				"step", "dispatch",
+				"action", env.Action,
+				"sender_id", env.SenderID,
+				"status", 400,
+			)
+			return errResp(400, "missing_session_id")
+		}
+		if h.Threads == nil {
+			logger.ErrorContext(ctx, "bridge: threads_store_nil",
+				"step", "dispatch",
+				"action", env.Action,
+				"status", 500,
+			)
+			return errResp(500, "threads_store_unavailable")
+		}
+		chanID, ts, agentType, err := h.Threads.LookupBySession(ctx, env.SessionID, env.SenderID)
+		if err != nil {
+			logger.ErrorContext(ctx, "bridge: lookup_by_session_failed",
+				"step", "dispatch",
+				"action", env.Action,
+				"sender_id", env.SenderID,
+				"error", err.Error(),
+				"status", 500,
+			)
+			return slackResponse("", err)
+		}
+		if chanID == "" {
+			logger.InfoContext(ctx, "bridge: lookup_thread_not_found",
+				"action", env.Action,
+				"sender_id", env.SenderID,
+				"status", 200,
+			)
+			return jsonResp(200, map[string]any{"ok": true, "found": false})
+		}
+		logger.InfoContext(ctx, "bridge: ok",
+			"action", env.Action,
+			"sender_id", env.SenderID,
+			"channel_id", chanID,
+			"thread_ts", ts,
+			"status", 200,
+		)
+		return jsonResp(200, map[string]any{
+			"ok":         true,
+			"found":      true,
+			"channel_id": chanID,
+			"thread_ts":  ts,
+			"agent_type": agentType,
+		})
 	}
 	return errResp(500, "internal") // unreachable
 }
