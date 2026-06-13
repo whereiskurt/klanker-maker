@@ -193,19 +193,25 @@ Examples:
 			slackClient := kmslack.NewClient(token, nil)
 
 			// Build DDB thread lookup for --session mode.
+			// Use deps.ThreadLookup when pre-wired (e.g. via buildSlackCmdDeps),
+			// otherwise build from config (e.g. when deps were partially injected).
 			var threadLookup SlackThreadLookupAPI
-			awsCfg, loadErr := kmaws.LoadAWSConfigInRegion(ctx, cfg.AWSProfile, func() string {
-				r := cfg.PrimaryRegion
-				if r == "" {
-					return "us-east-1"
-				}
-				return r
-			}())
-			if loadErr == nil {
-				ddbClient := dynamodb.NewFromConfig(awsCfg)
-				threadLookup = &slackbridge.DDBThreadStore{
-					Client:    ddbClient,
-					TableName: cfg.GetSlackThreadsTableName(),
+			if deps.ThreadLookup != nil {
+				threadLookup = deps.ThreadLookup
+			} else {
+				awsCfg, loadErr := kmaws.LoadAWSConfigInRegion(ctx, cfg.AWSProfile, func() string {
+					r := cfg.PrimaryRegion
+					if r == "" {
+						return "us-east-1"
+					}
+					return r
+				}())
+				if loadErr == nil {
+					ddbClient := dynamodb.NewFromConfig(awsCfg)
+					threadLookup = &slackbridge.DDBThreadStore{
+						Client:    ddbClient,
+						TableName: cfg.GetSlackThreadsTableName(),
+					}
 				}
 			}
 

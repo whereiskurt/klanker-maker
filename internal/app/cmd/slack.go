@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
@@ -27,6 +28,7 @@ import (
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	kmslack "github.com/whereiskurt/klanker-maker/pkg/slack"
+	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
 
@@ -76,14 +78,19 @@ type SlackPrompter interface {
 // SlackCmdDeps bundles all injectable dependencies for the km slack command tree.
 // Production: NewSlackCmd → buildSlackCmdDeps. Tests: construct directly with fakes.
 type SlackCmdDeps struct {
-	NewSlackAPI       func(token string) SlackInitAPI
+	NewSlackAPI func(token string) SlackInitAPI
 	// Slack is the full Slack client used by km create and km slack invite.
 	// Implements both SlackAPI and slack.InviteAPI. Populated by
 	// buildSlackCmdDeps from the bot token in SSM.
-	Slack             SlackAPI
-	SSM               SlackSSMStore
-	Terragrunt        SlackTerragruntRunner
-	Prompter          SlackPrompter
+	Slack      SlackAPI
+	SSM        SlackSSMStore
+	Terragrunt SlackTerragruntRunner
+	Prompter   SlackPrompter
+	// ThreadLookup is the km-slack-threads GSI lookup client used by
+	// km slack reply --session (Phase 110-04). Operator queries the
+	// session-index GSI directly with operator AWS creds (no bridge).
+	// Populated by buildSlackCmdDeps from the DDB client. Tests inject a fake.
+	ThreadLookup      SlackThreadLookupAPI
 	OperatorKeyLoader func(ctx context.Context, region string) (ed25519.PrivateKey, error)
 	BridgePoster      func(ctx context.Context, bridgeURL string, env *kmslack.SlackEnvelope, sig []byte) (*kmslack.PostResponse, error)
 	// BridgeColdStart force-cold-starts the km-slack-bridge Lambda to invalidate
@@ -139,6 +146,7 @@ func newSlackCmdInternal(cfg *config.Config, deps *SlackCmdDeps) *cobra.Command 
 	slackCmd.AddCommand(newSlackManifestCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackInviteCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackAdoptCmd(cfg, deps))
+	slackCmd.AddCommand(newSlackReplyCmd(cfg, deps))
 	return slackCmd
 }
 
@@ -836,14 +844,23 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 	ssmClient := ssm.NewFromConfig(awsCfg)
 	tgRunner := terragrunt.NewRunner(awsProfile, repoRoot)
 
+	// Build the km-slack-threads DDB client for km slack reply --session.
+	// The operator queries the session-index GSI directly with operator AWS creds.
+	ddbClient := dynamodb.NewFromConfig(awsCfg)
+	threadLookup := &slackbridge.DDBThreadStore{
+		Client:    ddbClient,
+		TableName: cfg.GetSlackThreadsTableName(),
+	}
+
 	awsCfgForBridge := awsCfg // capture for closure
 	return &SlackCmdDeps{
 		NewSlackAPI: func(token string) SlackInitAPI {
 			return kmslack.NewClient(token, nil)
 		},
-		SSM:        &slackSSMStore{client: ssmClient, kmsKey: kmsKey},
-		Terragrunt: &slackTerragruntRunner{inner: tgRunner},
-		Prompter:   &slackPrompter{},
+		SSM:          &slackSSMStore{client: ssmClient, kmsKey: kmsKey},
+		Terragrunt:   &slackTerragruntRunner{inner: tgRunner},
+		Prompter:     &slackPrompter{},
+		ThreadLookup: threadLookup,
 		OperatorKeyLoader: func(ctx context.Context, _ string) (ed25519.PrivateKey, error) {
 			return loadSlackOperatorKey(ctx, ssmClient, cfg.GetResourcePrefix())
 		},
