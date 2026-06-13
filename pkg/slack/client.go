@@ -799,6 +799,12 @@ type PostResponse struct {
 	TS        string `json:"ts,omitempty"`
 	Error     string `json:"error,omitempty"`
 	Permalink string `json:"permalink,omitempty"` // Phase 70 — populated by ActionPermalink response
+
+	// Phase 110 — lookup-thread action response fields.
+	Found     bool   `json:"found,omitempty"`     // true when session maps to a live thread row
+	ChannelID string `json:"channel_id,omitempty"` // populated when found=true
+	ThreadTS  string `json:"thread_ts,omitempty"`  // populated when found=true
+	AgentType string `json:"agent_type,omitempty"` // populated when found=true
 }
 
 // BridgeBackoff is the retry schedule for network-level errors in PostToBridge.

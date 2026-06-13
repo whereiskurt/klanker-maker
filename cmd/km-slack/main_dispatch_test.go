@@ -75,3 +75,47 @@ func TestDispatch_RecordMapping(t *testing.T) {
 		t.Fatalf("expected missing-required message; got %q", buf.String())
 	}
 }
+
+// TestDispatch_Reply — dispatcher routes "reply" to runReply, which without
+// --body returns exit 2 with the "required" message. The route itself is
+// confirmed by reaching runReply (not the "unknown subcommand" path).
+func TestDispatch_Reply(t *testing.T) {
+	var buf bytes.Buffer
+	// Without --body, runReply exits 2 with "required" message.
+	code := dispatch([]string{"reply"}, &buf)
+	if code == 0 {
+		t.Fatalf("expected non-zero (reply requires --body); got %d", code)
+	}
+	if strings.Contains(buf.String(), "unknown subcommand") {
+		t.Fatalf("expected reply to be routed (not unknown subcommand); got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "--body is required") {
+		t.Fatalf("expected '--body is required' in stderr; got %q", buf.String())
+	}
+}
+
+// TestDispatch_Reply_SlackNotConfigured — when $KM_SLACK_CHANNEL_ID is empty
+// and no --channel/--thread flags are provided but --body is given, reply
+// must exit non-zero with the "Slack not configured" message instead of
+// panicking or crashing. This covers the risk-7 guard path.
+//
+// Note: runReply requires KM_SANDBOX_ID and KM_SLACK_BRIDGE_URL before calling
+// runReplyWith; to exercise the "Slack not configured" guard we'd need to set
+// those env vars too and bypass SSM. The TestRunReplyWith_SlackNotConfigured
+// test in main_reply_test.go covers this path directly via runReplyWith. This
+// test confirms the dispatch table routes to runReply correctly.
+func TestDispatch_Reply_Routes(t *testing.T) {
+	var buf bytes.Buffer
+	// Pass --body with a non-existent file; runReply will fail flag validation
+	// for KM_SANDBOX_ID before file-not-found, proving dispatch reached runReply.
+	t.Setenv("KM_SANDBOX_ID", "")
+	t.Setenv("KM_SLACK_BRIDGE_URL", "")
+	code := dispatch([]string{"reply", "--body", "/tmp/km-slack-reply-test-body.txt"}, &buf)
+	if code == 0 {
+		t.Fatalf("expected non-zero; got %d", code)
+	}
+	// Must NOT say "unknown subcommand".
+	if strings.Contains(buf.String(), "unknown subcommand") {
+		t.Fatalf("reply not dispatched: got unknown-subcommand; stderr=%q", buf.String())
+	}
+}

@@ -10,6 +10,7 @@
 //	km-slack upload         --channel C... --thread ts --s3-key transcripts/sb-x/y --filename name.gz \
 //	                        --content-type application/gzip --size-bytes 12345
 //	km-slack record-mapping --channel C... --slack-ts 1.2 --offset 1024 --session sid
+//	km-slack reply          [--session id] [--thread ts [--channel C...]] [--body /file] [--render plain|mrkdwn|blocks]
 //
 // Required env (post + upload): KM_SANDBOX_ID, KM_SLACK_BRIDGE_URL, AWS_REGION
 // (or AWS_DEFAULT_REGION).
@@ -17,15 +18,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -64,6 +69,8 @@ func dispatch(args []string, stderr io.Writer) int {
 		return runPermalink(args[1:], stderr)
 	case "update":
 		return runUpdate(args[1:], stderr)
+	case "reply":
+		return runReply(args[1:], stderr)
 	case "-h", "--help", "help":
 		usage(stderr)
 		return 0
@@ -81,7 +88,9 @@ Subcommands:
   upload         Upload a file via the bridge (3-step flow), referencing an S3 key.
   record-mapping Write a (channel_id, slack_ts) → transcript-offset row to DDB.
   permalink      Resolve a Slack permalink URL for --channel + --ts.
-  update         Edit a previously-posted bot message via --channel, --ts, and --text/--body.`)
+  update         Edit a previously-posted bot message via --channel, --ts, and --text/--body.
+  reply          Post a reply into the thread bound to the current session (4-step resolution chain).
+                 Resolution: --thread > $KM_SLACK_THREAD_TS > session-id lookup > channel root.`)
 }
 
 // runPost is the Phase 63 post subcommand entry point. Returns a process exit
@@ -616,6 +625,313 @@ func runUpdateWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, brid
 		return fmt.Errorf("bridge returned not-ok: %s", resp.Error)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Phase 110 Plan 03: km-slack reply — session-aware thread resolution
+// ---------------------------------------------------------------------------
+
+// claudeProjectsRoot is the directory scanned by autoDetectClaudeSession.
+// Overridable in tests via package-level assignment.
+var claudeProjectsRoot = filepath.Join(os.Getenv("HOME"), ".claude", "projects")
+
+// codexStoreRoot is the directory scanned by autoDetectCodexSession.
+// Overridable in tests.
+var codexStoreRoot = filepath.Join(os.Getenv("HOME"), ".codex", "store")
+
+// runReplyOptions carries the parsed flags for runReplyWith. Separated from
+// the flag-parsing entry point (runReply) so tests can construct options
+// directly without constructing an os.Args-style slice.
+type runReplyOptions struct {
+	// session is the explicit --session flag value (may be empty; falls back to auto-detect).
+	session string
+	// channel is the explicit --channel flag value (optional; defaults to KM_SLACK_CHANNEL_ID).
+	channel string
+	// thread is the explicit --thread flag value (optional; triggers step 1 of resolution chain).
+	thread string
+	// subject is the optional --subject flag value (forwarded to the post envelope).
+	subject string
+	// bodyPath is the --body flag value (required; path to a file).
+	bodyPath string
+	// render is the --render flag value (default "plain").
+	render string
+}
+
+// runReply is the dispatch entry point for the "reply" subcommand.
+func runReply(args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("reply", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var opts runReplyOptions
+	fs.StringVar(&opts.session, "session", "", "Explicit session id; if empty, auto-detected from newest session file")
+	fs.StringVar(&opts.channel, "channel", "", "Slack channel ID override (default: $KM_SLACK_CHANNEL_ID)")
+	fs.StringVar(&opts.thread, "thread", "", "Explicit thread parent ts (step 1: requires --channel or $KM_SLACK_CHANNEL_ID)")
+	fs.StringVar(&opts.subject, "subject", "", "Optional subject text")
+	fs.StringVar(&opts.bodyPath, "body", "", "Path to body file (required)")
+	fs.StringVar(&opts.render, "render", "", "Render mode: plain (default), mrkdwn, blocks")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	if opts.bodyPath == "" {
+		fmt.Fprintln(stderr, "km-slack reply: --body is required")
+		return 2
+	}
+	if opts.bodyPath == "-" {
+		fmt.Fprintln(stderr, "km-slack reply: stdin not supported (use a file path)")
+		return 1
+	}
+
+	// Resolve render mode: explicit flag > KM_SLACK_RENDER env > "plain".
+	if opts.render == "" {
+		opts.render = os.Getenv("KM_SLACK_RENDER")
+	}
+	if opts.render == "" {
+		opts.render = "plain"
+	}
+	switch opts.render {
+	case "plain", "mrkdwn", "blocks":
+		// valid
+	default:
+		fmt.Fprintf(stderr, "km-slack reply: unknown --render value %q; falling back to plain\n", opts.render)
+		opts.render = "plain"
+	}
+
+	sandboxID := os.Getenv("KM_SANDBOX_ID")
+	bridgeURL := os.Getenv("KM_SLACK_BRIDGE_URL")
+	if sandboxID == "" {
+		fmt.Fprintln(stderr, "km-slack reply: KM_SANDBOX_ID env var not set")
+		return 1
+	}
+	if bridgeURL == "" {
+		fmt.Fprintln(stderr, "km-slack reply: KM_SLACK_BRIDGE_URL env var not set")
+		return 1
+	}
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = os.Getenv("AWS_DEFAULT_REGION")
+	}
+	if region == "" {
+		fmt.Fprintln(stderr, "km-slack reply: AWS_REGION (or AWS_DEFAULT_REGION) not set")
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() { <-sigCh; cancel() }()
+
+	priv, err := loadPrivateKey(ctx, region, sandboxID)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack reply: load signing key: %v\n", err)
+		return 1
+	}
+
+	if err := runReplyWith(ctx, priv, sandboxID, bridgeURL, opts); err != nil {
+		fmt.Fprintf(stderr, "km-slack reply: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// runReplyWith is the testable inner entry point for the reply subcommand.
+// Tests inject an ephemeral key, stub bridge URL, and options directly.
+//
+// Resolution chain (first-hit-wins):
+//  1. opts.thread non-empty → post to (opts.channel or KM_SLACK_CHANNEL_ID, opts.thread)
+//  2. $KM_SLACK_THREAD_TS non-empty → post to (KM_SLACK_CHANNEL_ID, that ts)
+//  3. session id (opts.session or auto-detect) → bridge lookup-thread → on found:true post to result
+//  4. fallback: top-level post to KM_SLACK_CHANNEL_ID
+//
+// The sandbox NEVER reads DynamoDB directly; step 3 resolves via the bridge
+// lookup-thread action (Plan 02).
+func runReplyWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL string, opts runReplyOptions) error {
+	envChannel := os.Getenv("KM_SLACK_CHANNEL_ID")
+	envThreadTS := os.Getenv("KM_SLACK_THREAD_TS")
+
+	// Resolve effective channel: explicit flag beats env.
+	effectiveChannel := opts.channel
+	if effectiveChannel == "" {
+		effectiveChannel = envChannel
+	}
+
+	// Guard: we need a destination channel for any post or fallback.
+	if effectiveChannel == "" && opts.thread == "" {
+		return errors.New("Slack not configured for this sandbox; re-create with notification.slack.enabled: true")
+	}
+
+	var resolvedChannel, resolvedThread string
+
+	// Step 1: explicit --thread flag.
+	if opts.thread != "" {
+		// Require a channel.
+		if effectiveChannel == "" {
+			return errors.New("km-slack reply: --thread requires --channel or $KM_SLACK_CHANNEL_ID")
+		}
+		resolvedChannel = effectiveChannel
+		resolvedThread = opts.thread
+	}
+
+	// Step 2: $KM_SLACK_THREAD_TS env var.
+	if resolvedChannel == "" && envThreadTS != "" {
+		resolvedChannel = effectiveChannel
+		resolvedThread = envThreadTS
+	}
+
+	// Step 3: session-id → bridge lookup-thread.
+	if resolvedChannel == "" {
+		sessionID := opts.session
+		if sessionID == "" {
+			sessionID = autoDetectSession()
+		}
+		if sessionID != "" {
+			ch, ts, lookupErr := lookupThreadBySession(ctx, priv, sandboxID, bridgeURL, sessionID)
+			if lookupErr != nil {
+				// Log the error but don't fail — fall through to channel root.
+				fmt.Fprintf(os.Stderr, "km-slack reply: lookup-thread error (falling back to channel root): %v\n", lookupErr)
+			} else if ch != "" {
+				resolvedChannel = ch
+				resolvedThread = ts
+			}
+		} else {
+			// No session auto-detected (Codex or no files found) — warn and fall through.
+			fmt.Fprintf(os.Stderr, "km-slack reply: no session id resolved; falling back to channel root\n")
+		}
+	}
+
+	// Step 4: fallback to channel root.
+	if resolvedChannel == "" {
+		resolvedChannel = effectiveChannel
+		resolvedThread = ""
+	}
+
+	if resolvedChannel == "" {
+		return errors.New("Slack not configured for this sandbox; re-create with notification.slack.enabled: true")
+	}
+
+	// Reuse the existing runWith post path with the resolved (channel, thread).
+	_, err := runWith(ctx, priv, sandboxID, bridgeURL, resolvedChannel, opts.subject, opts.bodyPath, resolvedThread, opts.render)
+	return err
+}
+
+// lookupThreadBySession posts a signed ActionLookupThread envelope to the bridge
+// and returns (channelID, threadTS) on a found:true response, or ("","","") on found:false.
+// Returns an error only on network failure or non-2xx; found:false is NOT an error.
+func lookupThreadBySession(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, sessionID string) (channelID, threadTS string, err error) {
+	env, buildErr := slack.BuildEnvelope(slack.ActionLookupThread, sandboxID, "", "", "", "")
+	if buildErr != nil {
+		return "", "", fmt.Errorf("build lookup-thread envelope: %w", buildErr)
+	}
+	env.SessionID = sessionID
+
+	canonical, sig, signErr := slack.SignEnvelope(env, priv)
+	if signErr != nil {
+		return "", "", fmt.Errorf("sign lookup-thread envelope: %w", signErr)
+	}
+	sigB64 := base64.StdEncoding.EncodeToString(sig)
+
+	req, reqErr := http.NewRequestWithContext(ctx, "POST", bridgeURL, bytes.NewReader(canonical))
+	if reqErr != nil {
+		return "", "", fmt.Errorf("build request: %w", reqErr)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-KM-Sender-ID", sandboxID)
+	req.Header.Set("X-KM-Signature", sigB64)
+
+	resp, httpErr := http.DefaultClient.Do(req)
+	if httpErr != nil {
+		return "", "", fmt.Errorf("lookup-thread HTTP: %w", httpErr)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", fmt.Errorf("lookup-thread bridge returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var pr slack.PostResponse
+	if jsonErr := json.Unmarshal(respBody, &pr); jsonErr != nil {
+		return "", "", fmt.Errorf("decode lookup-thread response: %w", jsonErr)
+	}
+	if !pr.OK {
+		return "", "", fmt.Errorf("lookup-thread bridge error: %s", pr.Error)
+	}
+	if !pr.Found {
+		return "", "", nil // found:false — caller falls through to channel root
+	}
+	return pr.ChannelID, pr.ThreadTS, nil
+}
+
+// autoDetectSession branches on $KM_AGENT and returns a session id, or "" if none found.
+// Never errors — on Codex with no resolvable path, returns "" so caller falls through
+// to channel-root fallback.
+func autoDetectSession() string {
+	agent := os.Getenv("KM_AGENT")
+	if agent == "codex" {
+		id := autoDetectCodexSession()
+		if id == "" {
+			fmt.Fprintf(os.Stderr, "km-slack reply: WARN: KM_AGENT=codex but no session file found under %s; falling back to channel root\n", codexStoreRoot)
+		}
+		return id
+	}
+	// Default: claude path.
+	return autoDetectClaudeSession()
+}
+
+// autoDetectClaudeSession walks claudeProjectsRoot recursively for *.jsonl files
+// and returns the UUID stem of the newest by mtime. Returns "" if none found.
+func autoDetectClaudeSession() string {
+	root := claudeProjectsRoot
+	var newest string
+	var newestTime time.Time
+
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		if info.ModTime().After(newestTime) {
+			newestTime = info.ModTime()
+			newest = path
+		}
+		return nil
+	})
+	if newest == "" {
+		return ""
+	}
+	base := filepath.Base(newest)
+	// Strip .jsonl extension to get the session UUID.
+	return base[:len(base)-len(".jsonl")]
+}
+
+// autoDetectCodexSession walks codexStoreRoot for the newest session file
+// (best-effort; LOW-confidence path per OQ1). Returns "" if nothing found.
+func autoDetectCodexSession() string {
+	root := codexStoreRoot
+	var newest string
+	var newestTime time.Time
+
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		if info.ModTime().After(newestTime) {
+			newestTime = info.ModTime()
+			newest = path
+		}
+		return nil
+	})
+	if newest == "" {
+		return ""
+	}
+	base := filepath.Base(newest)
+	// Strip extension to get session id.
+	if ext := filepath.Ext(base); ext != "" {
+		return base[:len(base)-len(ext)]
+	}
+	return base
 }
 
 // loadPrivateKey fetches /{resource_prefix}/sandbox/{sandboxID}/signing-key
