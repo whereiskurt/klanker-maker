@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: "Completed 106-04-PLAN.md — Phase 106 operator documentation complete (4 files: github-bridge.md, h1-bridge.md, CLAUDE.md, skills/init/SKILL.md)"
-last_updated: "2026-06-12T03:07:25.321Z"
-last_activity: 2026-06-12
+stopped_at: Completed 110-01-PLAN.md — session-index GSI on km-slack-threads (v1.0.0→v1.1.0 module bump, live unit repointed)
+last_updated: "2026-06-13T02:49:22.385Z"
+last_activity: 2026-06-13
 progress:
-  total_phases: 123
+  total_phases: 126
   completed_phases: 110
-  total_plans: 553
-  completed_plans: 515
+  total_plans: 559
+  completed_plans: 516
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 103-01 — all 3 tasks done; synthetic HackerOne webhook bodies + pinned f
 Total Plans in Phase: 10 (103-01 → 103-10)
 Current Plan: 103-01 complete; next 103-02
 Status: in-progress
-Last activity: 2026-06-12
+Last activity: 2026-06-13
 
 Plan 03 (payload parse) + Plan 08 (byte-identity guard) UNBLOCKED: field-paths.md pins the resolve key + safety-critical internal flag (wrapper-tolerant parse directive); TestUserdataH1ByteIdentity green against the pre-H1 dormancy golden.
 
@@ -547,6 +547,7 @@ Progress: [█████████░] 91%
 | Phase 106-session-resume-hint-on-github-hackerone-bridge-replies-post-on-mint P02 | 180s | 2 tasks | 2 files |
 | Phase 106 P03 | 31537673s | 2 tasks | 1 files |
 | Phase 106-session-resume-hint-on-github-hackerone-bridge-replies-post-on-mint P04 | 131s | 3 tasks | 4 files |
+| Phase 110-session-aware-slack-reply-thread-channel-repair P01 | 113s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1577,6 +1578,7 @@ Recent decisions affecting current work:
 - [Phase 106]: /workspace is the locked run-from directory for resume commands in both GitHub and H1 poller hints
 - [Phase 106]: H1 resume hint is INTERNAL-only (no --reply-to-researcher); researcher visibility is a P0 bug
 - [Phase 106]: SKILL.md corrected: create-handler-embedded userdata edits deploy via make build-lambdas + km init --dry-run=false, NOT --sidecars
+- [Phase 110]: KEYS_ONLY projection for session-index GSI minimizes storage; caller resolves full row via primary key lookup after session→key resolution
 
 ### Roadmap Evolution
 
@@ -1589,6 +1591,9 @@ Recent decisions affecting current work:
 - Phase 18 added: Loose Ends — km init deploys all regional infra, km uninit teardown, bootstrap KMS, github-token graceful skip, state_bucket auto-config (discovered during live testing 2026-03-23)
 - Phase 21 added: Bug fixes and mini-features — budget precision (4 decimal places), polish, small enhancements
 - Phase 99.1 inserted after Phase 99: Harden github/slack inbound pollers against FIFO poison-message wedge via shared per-install DLQ + RedrivePolicy (URGENT — production-risk gap found live in Phase 99 UAT 2026-06-08; poison message head-of-line-blocks FIFO group, wedges poller, only purge recovers)
+- Phase 108 backfilled (retro): GitHub bridge per-turn idempotency guard (`<!-- km-turn:$KM_GITHUB_TURN_ID -->` marker, no duplicate PR comments) — shipped as fix-commit b5a0cbf9 outside GSD, added to roadmap 2026-06-12 for complete record.
+- Phase 109 backfilled (retro): GitHub bridge self-heals orphaned `stopped` alias rows (resume-or-cold-create via ErrNoResumableInstance + DeleteSandboxRow; H1 parity) — shipped as fix-commit eac8ed8b / PR #23 outside GSD, added to roadmap 2026-06-12.
+- Phase 110 added: Session-aware Slack reply + thread/channel repair — `km-slack reply` (sandbox) + `km slack reply`/cleanup commands (operator) to post to the thread bound to a `--resume` session via a new `claude_session_id` GSI + bridge `lookup-thread` action; channel-root fallback; repair stale thread/channel mappings. NOTE: numbered 110 not 108 — Phases 108/109 are completed-but-unroadmapped GitHub-bridge fix-commits (CLAUDE.md + docs/github-bridge.md); gsd-tools' integer-max scan would have collided.
 
 ### Pending Todos
 
@@ -1712,6 +1717,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-12T03:03:03.139Z
-Stopped at: Completed 106-04-PLAN.md — Phase 106 operator documentation complete (4 files: github-bridge.md, h1-bridge.md, CLAUDE.md, skills/init/SKILL.md)
+Last session: 2026-06-13T02:49:22.369Z
+Stopped at: Completed 110-01-PLAN.md — session-index GSI on km-slack-threads (v1.0.0→v1.1.0 module bump, live unit repointed)
 Resume file: None
