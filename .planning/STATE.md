@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 111-02-PLAN.md — buildTableBlock transformer wired into renderRich (RICH-04..09)
-last_updated: "2026-06-14T15:39:08.154Z"
+stopped_at: Completed 111-03-PLAN.md — blocks-rich wired into km-slack runPost+runReply+runWith (RICH-14/15/16)
+last_updated: "2026-06-14T15:44:50.061Z"
 last_activity: 2026-06-14
 progress:
   total_phases: 129
   completed_phases: 111
   total_plans: 566
-  completed_plans: 523
+  completed_plans: 524
   percent: 91
 ---
 
@@ -555,6 +555,7 @@ Progress: [█████████░] 91%
 | Phase 110-session-aware-slack-reply-thread-channel-repair P06 | 876s | 2 tasks | 6 files |
 | Phase 111-rich-slack-rendering-markdown-and-table-blocks-opt-in P01 | 204 | 2 tasks | 4 files |
 | Phase 111-rich-slack-rendering-markdown-and-table-blocks-opt-in P02 | 268s | 2 tasks | 6 files |
+| Phase 111-rich-slack-rendering-markdown-and-table-blocks-opt-in P03 | 2min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1599,6 +1600,8 @@ Recent decisions affecting current work:
 - [Phase 111-rich-slack-rendering-markdown-and-table-blocks-opt-in]: RenderRich skips Mrkdwnify for verbatim GFM in markdown blocks (would double-convert links); 12K cumulative cap returns ok=false (fail-soft to Tier-2)
 - [Phase 111-02]: v1 body cell simplification: only header row uses rich_text/bold; body cells are raw_number or raw_text — no rich_text body encoder in v1
 - [Phase 111-02]: Guard fallback reuses fencePipeTables exactly — detection parity guaranteed via shared isPipeLine from mrkdwn.go
+- [Phase 111-03]: KM_SLACK_AI_FOOTER is sandbox-side only (os.Getenv in runWith), NOT compiler-emitted — golden tests protected (RICH-20)
+- [Phase 111-03]: blocks-rich fallback chain: RenderRich ok=false → RenderBlocks → Mrkdwnify (full Tier-3→Tier-2→Tier-1 degradation, no partial output)
 
 ### Roadmap Evolution
 
@@ -1739,6 +1742,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-14T15:39:08.143Z
-Stopped at: Completed 111-02-PLAN.md — buildTableBlock transformer wired into renderRich (RICH-04..09)
+Last session: 2026-06-14T15:44:50.050Z
+Stopped at: Completed 111-03-PLAN.md — blocks-rich wired into km-slack runPost+runReply+runWith (RICH-14/15/16)
 Resume file: None
