@@ -2239,6 +2239,8 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 	platformPrefixes := []string{
 		rolePrefix + "create-handler", rolePrefix + "ttl-", rolePrefix + "org-admin", rolePrefix + "email-create-handler",
 		rolePrefix + "slack-bridge",
+		rolePrefix + "github-bridge", // GitHub comment-trigger bridge Lambda (Phase 97)
+		rolePrefix + "h1-bridge",     // HackerOne webhook bridge Lambda (Phase 103)
 		rolePrefix + "email-handler", rolePrefix + "ecs-spot-handler",
 		rolePrefix + "cluster-",        // Phase 80 cross-account IRSA roles
 		rolePrefix + "s3-replication-", // Phase 84.4 — prefix-parameterized via v2.0.0

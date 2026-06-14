@@ -183,6 +183,49 @@ func TestCheckStaleIAMRoles_ClusterRoleProtectedByPrefix(t *testing.T) {
 	}
 }
 
+// TestCheckStaleIAMRoles_BridgeRolesProtected asserts the GitHub and HackerOne
+// bridge Lambda execution roles ({prefix}-github-bridge-role /
+// {prefix}-h1-bridge-role) are NEVER classified stale, even with zero active
+// sandboxes — they are install-scoped platform infra, not per-sandbox. The
+// per-sandbox github-token-* roles for a destroyed sandbox in the same listing
+// MUST still be torn down (they carry the dead sandbox ID and are not platform
+// infra). Regression guard: these bridge roles were missing from
+// platformPrefixes, so a `km doctor --dry-run=false` would have deleted them and
+// broken the live bridges.
+func TestCheckStaleIAMRoles_BridgeRolesProtected(t *testing.T) {
+	githubBridge := "km-github-bridge-role"
+	h1Bridge := "km-h1-bridge-role"
+	slackBridge := "km-slack-bridge-role"
+	deadSandboxRole := "km-github-token-refresher-learn-c89dbd12"
+	iamFake := &fakeIAMCleanup{
+		roles: []string{githubBridge, h1Bridge, slackBridge, deadSandboxRole},
+		inlinePolicies: map[string][]string{
+			githubBridge:    {},
+			h1Bridge:        {},
+			slackBridge:     {},
+			deadSandboxRole: {},
+		},
+	}
+	// No live sandboxes — every per-sandbox role is stale-eligible.
+	lister := &fakeSandboxLister{records: []kmaws.SandboxRecord{}}
+
+	r := checkStaleIAMRoles(context.Background(), iamFake, lister, false, "km", nil)
+
+	if r.Status != CheckWarn {
+		t.Fatalf("expected CheckWarn (one stale per-sandbox role found), got %s: %s", r.Status, r.Message)
+	}
+	for _, protected := range []string{githubBridge, h1Bridge, slackBridge} {
+		for _, deleted := range iamFake.deletedRoles {
+			if deleted == protected {
+				t.Errorf("platform bridge role %q must NEVER be deleted", protected)
+			}
+		}
+	}
+	if len(iamFake.deletedRoles) != 1 || iamFake.deletedRoles[0] != deadSandboxRole {
+		t.Errorf("expected only the dead-sandbox role %q deleted, got %v", deadSandboxRole, iamFake.deletedRoles)
+	}
+}
+
 // TestCheckStaleIAMRoles_HappyPath confirms a clean role tears down end-to-end
 // with no errors emitted in the message.
 func TestCheckStaleIAMRoles_HappyPath(t *testing.T) {
