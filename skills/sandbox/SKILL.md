@@ -171,23 +171,33 @@ Understand what egress is permitted and how it is enforced. Network section is p
 ```bash
 echo "=== C: Network Position ==="
 
-# C1. Infer enforcement mode — there is NO KM_ENFORCEMENT env var on-box; infer from runtime signals
+# C1. Infer enforcement mode — there is NO KM_ENFORCEMENT env var on-box; infer from runtime
+# signals. Proxy is detected from HTTPS_PROXY / the injected CA (no root needed); the iptables
+# DNAT count is a best-effort EXTRA signal (needs iptables read perms — 0 on non-privileged boxes,
+# which is why it is not the sole proxy signal).
 EBPF_ACTIVE=$(systemctl is-active km-ebpf-enforcer.service 2>/dev/null || echo inactive)
-IPTABLES_DNAT=$(iptables -t nat -L OUTPUT -n 2>/dev/null | grep -c DNAT || echo 0)
+DNAT_OUT=$(iptables -t nat -L OUTPUT -n 2>/dev/null | grep -c DNAT)   # grep -c always prints one integer
+IPTABLES_DNAT=${DNAT_OUT:-0}
+PROXY_ACTIVE=no
+if [ -n "$HTTPS_PROXY" ] || [ -f /usr/local/share/ca-certificates/km-proxy-ca.crt ] || [ "$IPTABLES_DNAT" -gt 0 ] 2>/dev/null; then
+  PROXY_ACTIVE=yes
+fi
 
-if [ "$EBPF_ACTIVE" = "active" ] && [ "$IPTABLES_DNAT" -gt 0 ]; then
+if [ "$EBPF_ACTIVE" = "active" ] && [ "$PROXY_ACTIVE" = "yes" ]; then
   INFERRED_MODE="both"
 elif [ "$EBPF_ACTIVE" = "active" ]; then
   INFERRED_MODE="ebpf"
-elif [ "$IPTABLES_DNAT" -gt 0 ]; then
+elif [ "$PROXY_ACTIVE" = "yes" ]; then
   INFERRED_MODE="proxy"
 else
   INFERRED_MODE="unknown"
 fi
-echo "Inferred enforcement mode: $INFERRED_MODE (ebpf-enforcer=$EBPF_ACTIVE, DNAT rules=$IPTABLES_DNAT)"
+echo "Inferred enforcement mode: $INFERRED_MODE (ebpf-enforcer=$EBPF_ACTIVE, proxy=$PROXY_ACTIVE, DNAT rules=$IPTABLES_DNAT)"
 
 if [ "$PROFILE_AVAILABLE" = "1" ]; then
-  PROFILE_MODE=$(echo "$KM_PROFILE" | grep -A2 '^  network:' | grep 'enforcement:' | awk '{print $2}' | head -1)
+  # `enforcement:` is unique to spec.network — match it directly (a shallow -A context window
+  # misses it because it sits below the egress: sub-block).
+  PROFILE_MODE=$(echo "$KM_PROFILE" | grep -E '^[[:space:]]+enforcement:' | awk '{print $2}' | head -1)
   echo "Profile spec.network.enforcement: ${PROFILE_MODE:-(not set, default=proxy)}"
   if [ -n "$PROFILE_MODE" ] && [ "$PROFILE_MODE" != "$INFERRED_MODE" ]; then
     echo "[WARN] enforcement mode mismatch: profile=$PROFILE_MODE inferred=$INFERRED_MODE"
@@ -204,33 +214,52 @@ KM_EBPF_CGROUP="/sys/fs/cgroup/km.slice/km-${KM_SANDBOX_ID}.scope"
 [ -d "$KM_EBPF_CGROUP" ] \
   && echo "eBPF cgroup: present ($KM_EBPF_CGROUP)" \
   || echo "eBPF cgroup: absent"
-echo "DNS resolver: $(cat /etc/resolv.conf | grep ^nameserver | head -2)"
+echo "DNS resolver: $(grep ^nameserver /etc/resolv.conf | head -2 | tr '\n' ' ')"
 
-# C3. Egress allowlist from profile
+# C3. Egress allowlist from profile — block-scoped to the allowedHosts / allowedDNSSuffixes lists
+# only (a flat `grep '- '` over the whole network: block scoops unrelated list items like
+# allowedRegions, initCommands, and trustedDirectories).
 if [ "$PROFILE_AVAILABLE" = "1" ]; then
   echo "--- Egress allowlist (from profile) ---"
-  echo "$KM_PROFILE" | grep -A50 'network:' | grep -E '^\s+-\s+' | head -20 | sed 's/^/  /'
+  echo "$KM_PROFILE" | awk '
+    /^[[:space:]]*(allowedHosts|allowedDNSSuffixes):/ { inlist=1; print "  " $0; next }
+    inlist && /^[[:space:]]*-[[:space:]]/            { print "  " $0; next }
+    inlist && /^[[:space:]]*[A-Za-z]/                { inlist=0 }
+  ' | head -20
 fi
 
-# C4. Safe-active confirmation: ONE allowed + ONE known-blocked host
+# C4. Safe-active confirmation: ONE allowed + ONE known-blocked host.
 # NOTE: These are the ONLY two outbound requests this section makes.
 # They will appear in `km otel` output — this is expected operator behavior.
 echo "--- Active egress probe (2 requests only) ---"
 
-# Pick an allowed host from the allowlist (profile) or fall back to a commonly-permitted domain
+# Pick a CONCRETE allowed host from allowedHosts (skip wildcards / glob patterns); fall back to a
+# commonly-permitted domain when the allowlist is wildcard-only.
 if [ "$PROFILE_AVAILABLE" = "1" ]; then
-  ALLOWED_HOST=$(echo "$KM_PROFILE" | grep -A50 'network:' | grep -E '^\s+-\s+[a-z]' | head -1 | awk '{print $2}' | tr -d '"')
+  ALLOWED_HOST=$(echo "$KM_PROFILE" | awk '
+    /^[[:space:]]*allowedHosts:/      { inlist=1; next }
+    inlist && /^[[:space:]]*-[[:space:]]/ {
+      h=$2; gsub(/"/,"",h);
+      if (h != "*" && h !~ /\*/) { print h; exit }
+      next
+    }
+    inlist && /^[[:space:]]*[A-Za-z]/ { inlist=0 }
+  ')
 fi
-ALLOWED_HOST=${ALLOWED_HOST:-api.anthropic.com}  # always in the allowlist for Claude sandboxes
+ALLOWED_HOST=${ALLOWED_HOST:-api.anthropic.com}  # always permitted on Claude sandboxes
 
 echo "Testing ALLOWED host: $ALLOWED_HOST"
-ALLOWED_CODE=$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "https://$ALLOWED_HOST/" 2>&1 || echo "blocked/timeout")
-echo "  Result: $ALLOWED_CODE (expect 2xx/3xx/4xx = reachable; timeout/000 = blocked)"
+# `-w '%{http_code}'` already prints 000 on connection failure/timeout — do NOT add `|| echo 000`
+# (that double-emits, e.g. "000000"); default an empty value instead.
+ALLOWED_CODE=$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "https://$ALLOWED_HOST/" 2>/dev/null); ALLOWED_CODE=${ALLOWED_CODE:-000}
+echo "  Result: $ALLOWED_CODE (2xx/3xx/4xx = reachable; 000/timeout = blocked)"
 
-BLOCKED_HOST="evil.example.com"  # never in any allowlist
+# Known-blocked host. NOTE: on a WILDCARD allowlist (allowedHosts: ["*"], e.g. learn profiles)
+# nothing is blocked, so this probe also succeeds — that is correct, not a failure.
+BLOCKED_HOST="evil.example.com"  # not in a normal allowlist
 echo "Testing BLOCKED host: $BLOCKED_HOST"
-BLOCKED_CODE=$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "https://$BLOCKED_HOST/" 2>&1 || echo "blocked/timeout")
-echo "  Result: $BLOCKED_CODE (expect timeout/000 = correctly blocked)"
+BLOCKED_CODE=$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "https://$BLOCKED_HOST/" 2>/dev/null); BLOCKED_CODE=${BLOCKED_CODE:-000}
+echo "  Result: $BLOCKED_CODE (000/timeout = correctly blocked; 2xx/3xx = allowlist is wildcard)"
 ```
 
 ---
