@@ -2543,8 +2543,11 @@ intentionally NOT run — running it would double-convert `[l](u)` links to `<u|
 `{"type":"table","column_settings":[...],"rows":[[cell,…],…]}` blocks instead of monospace
 fenced grids:
 - Column alignment from the delimiter row (`:--` left, `:-:` center, `--:` right).
-- Header row → `rich_text` bold cells.
-- Pure-numeric body cells → `raw_number`; everything else → `raw_text`.
+- Header row → `rich_text` bold cells (wrapped in the required `rich_text_section`; a flat
+  element list is rejected by Slack with `invalid_blocks`).
+- Body cells → `raw_text` (all of them). Numeric columns still right-align via
+  `column_settings`; the `raw_number` cell type is deferred (its value-field schema is
+  undocumented and was rejected in live UAT).
 - Ragged rows are padded to the column count with empty `raw_text` cells.
 - Guards: >20 columns or >100 rows trigger the monospace `fencePipeTables` fallback instead.
 
