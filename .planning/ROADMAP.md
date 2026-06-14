@@ -2627,9 +2627,11 @@ Plans:
 
 **Requirements**: TBD
 **Depends on:** Existing compiler/userdata pipeline + `klanker:sandbox`/`klanker:slack` skills. No dependency on Phases 110/111/112.
-**Plans:** 0 plans
+**Plans:** 3 plans
 **Context:** `.planning/phases/113-sandbox-self-awareness-on-box-profile-plus-capability-network-privilege-self-census-in-klanker-sandbox/113-CONTEXT.md`
 **Spec:** `docs/superpowers/specs/2026-06-14-sandbox-self-awareness-design.md`
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 113 to break down — likely: 01 userdata profile-write + round-trip test; 02 skill self-census rewrite + plugin bump; 03 docs + live UAT + redaction sign-off)
+- [ ] 113-01-PLAN.md — userdata: thread ProfileYAML + write /opt/km/.km-profile.yaml block; round-trip unit tests; regenerate 3 goldens (Wave 1)
+- [ ] 113-02-PLAN.md — rewrite skills/sandbox/SKILL.md into six-section self-census (A–F) + graceful fallback; plugin version bump (Wave 2)
+- [ ] 113-03-PLAN.md — docs + live UAT (km create → km shell → census end-to-end); profile written VERBATIM, no redaction (Wave 3)
