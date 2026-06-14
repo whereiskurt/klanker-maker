@@ -1,7 +1,8 @@
 ---
 phase: 111-rich-slack-rendering-markdown-and-table-blocks-opt-in
 verified: 2026-06-14T16:21:24Z
-status: human_needed
+status: passed
+uat_resolved: 2026-06-14
 score: 20/20 must-haves verified
 human_verification:
   - test: "Send a prose+table+links message with KM_SLACK_RENDER=blocks-rich on a real sandbox and view in Slack desktop client"
@@ -12,6 +13,17 @@ human_verification:
     why_human: "Mobile rendering of GA block types is not programmatically assertable"
   - test: "Post a message exceeding 12K cumulative markdown chars with KM_SLACK_RENDER=blocks-rich"
     expected: "Message is delivered via Tier-2 blocks fallback (no dropped message); Slack does not reject the payload"
+uat_resolution: |
+  Live E2E on sandbox slacktest01 (#sb-learn-slacktest01), 2026-06-14. PASSED with one
+  real bug found + fixed: the table block was rejected by Slack with invalid_blocks —
+  rich_text header cells were FLAT (need the rich_text_section wrapper) and raw_number's
+  value-field is undocumented/rejected. Fixed in f8271c17 (nested rich_text_section header,
+  all-raw_text body) + doc 06760ab5; regenerated RenderRich output posts ok:true to
+  chat.postMessage and renders correctly on Slack desktop (operator-confirmed screenshots:
+  headings, clickable link anchors, bold/italic/code, lists, tables w/ bold headers +
+  L/C/R alignment, wide-table monospace fallback, code-fence guard, AI footer, 12K-cap
+  Tier-2 fallback). Remaining low-risk eyeball items (mobile client, email text fallback)
+  deferred to the operator; not blockers. Phase marked complete per operator decision.
     why_human: "Slack's actual rejection response on oversized payloads is not unit-assertable"
   - test: "Verify table block rich_text bold header-cell schema is accepted by the Slack API"
     expected: "Header row renders bold in the table block; Slack does not reject the payload with a schema error"
