@@ -724,6 +724,181 @@ cat >> /etc/profile.d/km-profile-env.sh << EOF
 export OTEL_RESOURCE_ATTRIBUTES="sandbox_id=sb-phase92-baseline,profile_name=learn,substrate=ec2"
 EOF
 echo "[km-bootstrap] Claude Code OTEL telemetry configured"
+# ============================================================
+# 2.10. Profile on-box: write rendered profile for agent self-census (Phase 113)
+# ============================================================
+mkdir -p /opt/km
+cat > /opt/km/.km-profile.yaml << 'KM_PROFILE_EOF'
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: learn
+  labels:
+    tier: development
+    tool: learning-sandbox-unsafe
+  prefix: learn
+spec:
+  lifecycle:
+    ttl: 8h
+    idleTimeout: 1h
+    teardownPolicy: stop
+  runtime:
+    substrate: ec2
+    spot: false
+    instanceType: t3.2xlarge
+    region: us-east-1
+    rootVolumeSize: 80
+    additionalVolume:
+      size: 30
+      mountPoint: /data
+    ami: amazon-linux-2023
+    mountEFS: true
+    efsMountPoint: /shared
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      GOOSE_MODE: auto
+      GOOSE_TELEMETRY_ENABLED: "false"
+      OPENAI_API_KEY: ""
+      SANDBOX_MODE: learn-v2-direct-api
+    initCommands:
+    - yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip tmux cronie
+    - systemctl enable crond; systemctl start crond
+    - HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash
+    - cp -r /root/.local/bin/goose /usr/local/bin/goose-bin || true
+    - "printf 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\\nexport OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318\\n' > /etc/profile.d/km-zz-goose-otel.sh"
+    - cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt
+    - echo export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt >> /etc/profile.d/km-zz-goose-otel.sh
+    - mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose-bin /usr/local/bin/goose && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true
+    - npm install -g @anthropic-ai/claude-code@2.1.132
+    - curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.133.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz
+    - tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex
+    - mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex && chown -R sandbox:sandbox /home/sandbox/.codex
+    - mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local
+    - "su - sandbox -c 'cd /workspace && git config --global user.name \"Learner Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+    - git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && mkdir -p /home/sandbox/.claude/plugins/marketplaces && ln -sfn /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 /home/sandbox/.claude/plugins/marketplaces/klanker-maker && KM_SHA=$(git -C /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 rev-parse HEAD) && KM_NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z) && printf '{"version":2,"plugins":{"klanker@klanker-maker":[{"scope":"user","installPath":"/home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0","version":"0.1.0","installedAt":"%s","lastUpdated":"%s","gitCommitSha":"%s"}]}}' "$KM_NOW" "$KM_NOW" "$KM_SHA" > /home/sandbox/.claude/plugins/installed_plugins.json && chown -R sandbox:sandbox /home/sandbox/.claude/plugins || true
+    - "su - sandbox -c 'cd /workspace && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash'"
+    - "su - sandbox -c 'nvm install 22'"
+    - "su - sandbox -c 'npx -y get-shit-done-cc --claude --codex --global'"
+    - "su - sandbox -c 'curl -fsSL https://herdr.dev/install.sh | sh'"
+    rsyncPaths:
+    - .gitconfig
+    - .config/goose
+    - .claude
+    - .claude.json
+    - .codex
+    privileged: true
+    configFiles:
+      /home/sandbox/.claude/plugins/known_marketplaces.json: "{\"klanker-maker\":{\"source\":{\"source\":\"github\",\"repo\":\"whereiskurt/klanker-maker\"},\"installLocation\":\"/home/sandbox/.claude/plugins/marketplaces/klanker-maker\",\"lastUpdated\":\"2026-04-16T00:00:00Z\"}}\n"
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+      - "*"
+      allowedRefs:
+      - "*"
+  network:
+    egress:
+      allowedDNSSuffixes:
+      - "*"
+      allowedHosts:
+      - "*"
+    enforcement: both
+  iam:
+    roleSessionDuration: 1h
+    allowedRegions:
+    - us-east-1
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+    tlsCapture:
+      enabled: true
+      libraries:
+      - openssl
+    learnMode: true
+  artifacts:
+    paths:
+    - /workspace
+    maxSizeMB: 500
+  budget:
+    compute:
+      maxSpendUSD: 0.5
+    ai:
+      maxSpendUSD: 2.0
+    warningThreshold: 0.8
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+    - "*"
+  cli:
+    noBedrock: true
+  agent:
+    default: claude
+    claude:
+      trustedDirectories:
+      - /home/sandbox
+      - /workspace
+      tools:
+        autoApprove:
+        - Bash
+        - Read
+        - Write
+        - Edit
+        - Glob
+        - Grep
+        - WebFetch
+        - WebSearch
+        - NotebookEdit
+      args:
+      - --dangerously-skip-permissions
+  notification:
+    events:
+      onPermission: false
+      onIdle: false
+    email:
+      enabled: false
+    slack:
+      enabled: true
+      perSandbox: true
+      channelName: sb-{profile}-{alias}
+      archiveOnDestroy: false
+      inbound:
+        enabled: true
+      invites:
+        emails:
+        - whereiskurt@gmail.com
+    github:
+      inbound:
+        enabled: true
+KM_PROFILE_EOF
+chmod 0644 /opt/km/.km-profile.yaml
+chown sandbox:sandbox /opt/km/.km-profile.yaml
+echo "[km-bootstrap] Profile written to /opt/km/.km-profile.yaml"
 
 # ============================================================
 # 3. Secret injection: fetch allowed SSM paths and export as env vars
@@ -4035,6 +4210,16 @@ cat > '/home/sandbox/.claude/settings.json' << 'KM_CONFIG_EOF'
         "hooks": [
           {
             "command": "/opt/km/bin/km-notify-hook Stop",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "command": "/opt/km/bin/km-notify-hook SubagentStop",
             "type": "command"
           }
         ]

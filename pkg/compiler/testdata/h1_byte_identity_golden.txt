@@ -184,6 +184,66 @@ cat >> /etc/profile.d/km-profile-env.sh << EOF
 export OTEL_RESOURCE_ATTRIBUTES="sandbox_id=sb-phase103-baseline,profile_name=ec2-basic-test,substrate=ec2"
 EOF
 echo "[km-bootstrap] Claude Code OTEL telemetry configured"
+# ============================================================
+# 2.10. Profile on-box: write rendered profile for agent self-census (Phase 113)
+# ============================================================
+mkdir -p /opt/km
+cat > /opt/km/.km-profile.yaml << 'KM_PROFILE_EOF'
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: ec2-basic-test
+  labels:
+    tier: test
+spec:
+  lifecycle:
+    ttl: 4h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes:
+      - .amazonaws.com
+      allowedHosts:
+      - api.github.com
+  iam:
+    roleSessionDuration: 1h
+    allowedRegions:
+    - us-east-1
+  sidecars:
+    dnsProxy:
+      enabled: false
+      image: ""
+    httpProxy:
+      enabled: false
+      image: ""
+    auditLog:
+      enabled: false
+      image: ""
+    tracing:
+      enabled: false
+      image: ""
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/network
+KM_PROFILE_EOF
+chmod 0644 /opt/km/.km-profile.yaml
+chown sandbox:sandbox /opt/km/.km-profile.yaml
+echo "[km-bootstrap] Profile written to /opt/km/.km-profile.yaml"
 
 # ============================================================
 # 3. Secret injection: fetch allowed SSM paths and export as env vars

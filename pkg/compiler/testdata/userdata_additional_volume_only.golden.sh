@@ -658,6 +658,64 @@ cat >> /etc/profile.d/km-profile-env.sh << EOF
 export OTEL_RESOURCE_ATTRIBUTES="sandbox_id=test-sb,profile_name=test-profile,substrate=ec2"
 EOF
 echo "[km-bootstrap] Claude Code OTEL telemetry configured"
+# ============================================================
+# 2.10. Profile on-box: write rendered profile for agent self-census (Phase 113)
+# ============================================================
+mkdir -p /opt/km
+cat > /opt/km/.km-profile.yaml << 'KM_PROFILE_EOF'
+apiVersion: ""
+kind: ""
+metadata:
+  name: test-profile
+spec:
+  lifecycle:
+    ttl: ""
+    idleTimeout: ""
+    teardownPolicy: ""
+  runtime:
+    substrate: ec2
+    spot: false
+    instanceType: ""
+    region: us-east-1
+    additionalVolume:
+      size: 30
+      mountPoint: /data
+  execution:
+    shell: ""
+    workingDir: ""
+  sourceAccess:
+    mode: ""
+  network:
+    egress:
+      allowedDNSSuffixes:
+      - example.com
+      allowedHosts:
+      - api.example.com
+  iam:
+    roleSessionDuration: ""
+    allowedRegions: []
+  sidecars:
+    dnsProxy:
+      enabled: false
+      image: ""
+    httpProxy:
+      enabled: false
+      image: ""
+    auditLog:
+      enabled: false
+      image: ""
+    tracing:
+      enabled: false
+      image: ""
+  observability:
+    commandLog:
+      destination: ""
+    networkLog:
+      destination: ""
+KM_PROFILE_EOF
+chmod 0644 /opt/km/.km-profile.yaml
+chown sandbox:sandbox /opt/km/.km-profile.yaml
+echo "[km-bootstrap] Profile written to /opt/km/.km-profile.yaml"
 
 # ============================================================
 # 3. Secret injection: fetch allowed SSM paths and export as env vars

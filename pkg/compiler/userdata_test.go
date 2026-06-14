@@ -2034,6 +2034,15 @@ func TestUserdataAdditionalVolumeOnly_GoldenByteIdentical(t *testing.T) {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
 
+	// Phase 113: env-gated capture guard so future phases can regenerate this golden
+	// without patching the test. Mirror pattern from TestCapturePre92Userdata.
+	if os.Getenv("CAPTURE_ADDVOL_GOLDEN") == "1" {
+		if writeErr := os.WriteFile(goldenPath, []byte(got), 0o644); writeErr != nil {
+			t.Fatalf("failed to write golden: %v", writeErr)
+		}
+		t.Skip("captured additional_volume golden")
+	}
+
 	want, err := os.ReadFile(goldenPath)
 	if err != nil {
 		t.Fatalf("golden file not found at %s: %v\nRun tests once after implementing the refactor to generate the golden file.", goldenPath, err)
