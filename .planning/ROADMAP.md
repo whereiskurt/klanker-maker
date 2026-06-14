@@ -2581,13 +2581,13 @@ Plans:
 
 **Requirements**: RICH-01 through RICH-20 (see 111-RESEARCH.md § Validation Architecture / 111-VALIDATION.md)
 **Depends on:** Phase 110 (Slack reply/render path) + existing Tier-2 Block Kit renderer (Phase 74). Backing spec: `.planning/research/slack-markdown-block.md`.
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [ ] 111-01-PLAN.md — Tier-3 renderRich prose skeleton: markdown/header/context blocks, 12K cumulative + 50-block caps, fail-soft recover (RICH-01,02,03,10,11,12,13,19)
 - [ ] 111-02-PLAN.md — GFM-table → table-block transformer (alignment, bold rich_text header, raw_number/raw_text cells, ragged pad, >20col/>100row → monospace fallback) wired into renderRich (RICH-04,05,06,07,08,09)
 - [ ] 111-03-PLAN.md — cmd/km-slack wiring: blocks-rich in runPost+runReply validation, runWith dispatch + RenderBlocks/Mrkdwnify fallback chain, KM_SLACK_AI_FOOTER (RICH-14,15,16)
-- [ ] 111-04-PLAN.md — mixed golden corpus + default-path/userdata regression guards + docs/slack-notifications.md § Phase 111 + skill blocks-rich row + plugin version bump (RICH-17,18,20)
+- [x] 111-04-PLAN.md — mixed golden corpus + default-path/userdata regression guards + docs/slack-notifications.md § Phase 111 + skill blocks-rich row + plugin version bump (RICH-17,18,20) (completed 2026-06-14)
 
 ### Phase 112: Flip Slack render default to blocks-rich after soak
 
