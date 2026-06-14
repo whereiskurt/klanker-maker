@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: Completed 111-01-PLAN.md — RenderRich Tier-3 prose skeleton + RICH-01..13,19 tests
-last_updated: "2026-06-14T15:31:11.008Z"
+stopped_at: Completed 111-02-PLAN.md — buildTableBlock transformer wired into renderRich (RICH-04..09)
+last_updated: "2026-06-14T15:39:08.154Z"
 last_activity: 2026-06-14
 progress:
   total_phases: 129
   completed_phases: 111
-  total_plans: 564
-  completed_plans: 522
+  total_plans: 566
+  completed_plans: 523
   percent: 91
 ---
 
@@ -554,6 +554,7 @@ Progress: [█████████░] 91%
 | Phase 110 P05 | 847s | 2 tasks | 3 files |
 | Phase 110-session-aware-slack-reply-thread-channel-repair P06 | 876s | 2 tasks | 6 files |
 | Phase 111-rich-slack-rendering-markdown-and-table-blocks-opt-in P01 | 204 | 2 tasks | 4 files |
+| Phase 111-rich-slack-rendering-markdown-and-table-blocks-opt-in P02 | 268s | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1596,6 +1597,8 @@ Recent decisions affecting current work:
 - [Phase 110-06]: DoctorDDBScanAPI narrow interface reuses DDBScanDeleteClient (no new DoctorDeps field needed); SlackDeadChannelChecker wired from SSM bot-token in initRealDepsWithExisting
 - [Phase 110-06]: Both dead-channel checks SKIP when bot token absent (nil SlackDeadChannelChecker); Error→Warn downgrade at registration mirrors Phase 95 pattern
 - [Phase 111-rich-slack-rendering-markdown-and-table-blocks-opt-in]: RenderRich skips Mrkdwnify for verbatim GFM in markdown blocks (would double-convert links); 12K cumulative cap returns ok=false (fail-soft to Tier-2)
+- [Phase 111-02]: v1 body cell simplification: only header row uses rich_text/bold; body cells are raw_number or raw_text — no rich_text body encoder in v1
+- [Phase 111-02]: Guard fallback reuses fencePipeTables exactly — detection parity guaranteed via shared isPipeLine from mrkdwn.go
 
 ### Roadmap Evolution
 
@@ -1736,6 +1739,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-14T15:31:10.995Z
-Stopped at: Completed 111-01-PLAN.md — RenderRich Tier-3 prose skeleton + RICH-01..13,19 tests
+Last session: 2026-06-14T15:39:08.143Z
+Stopped at: Completed 111-02-PLAN.md — buildTableBlock transformer wired into renderRich (RICH-04..09)
 Resume file: None
