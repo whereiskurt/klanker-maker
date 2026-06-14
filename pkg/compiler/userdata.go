@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"time"
 
+	yaml "github.com/goccy/go-yaml"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
@@ -447,6 +448,19 @@ cat >> /etc/profile.d/km-profile-env.sh << EOF
 export OTEL_RESOURCE_ATTRIBUTES="sandbox_id={{ .SandboxID }},profile_name={{ .ProfileName }},substrate={{ .Substrate }}"
 EOF
 echo "[km-bootstrap] Claude Code OTEL telemetry configured"
+{{- end }}
+
+{{- if .ProfileYAML }}
+# ============================================================
+# 2.10. Profile on-box: write rendered profile for agent self-census (Phase 113)
+# ============================================================
+mkdir -p /opt/km
+cat > /opt/km/.km-profile.yaml << 'KM_PROFILE_EOF'
+{{ .ProfileYAML -}}
+KM_PROFILE_EOF
+chmod 0644 /opt/km/.km-profile.yaml
+chown sandbox:sandbox /opt/km/.km-profile.yaml
+echo "[km-bootstrap] Profile written to /opt/km/.km-profile.yaml"
 {{- end }}
 
 # ============================================================
@@ -4921,6 +4935,12 @@ type userDataParams struct {
 	// (Phase 103 Plan 09). DORMANCY INVARIANT: when false the H1 poller block must
 	// NOT render — guarded by the Wave-0 TestUserdataH1ByteIdentity golden.
 	H1InboundEnabled bool
+	// ProfileYAML is the rendered SandboxProfile serialized to YAML, written to
+	// /opt/km/.km-profile.yaml during boot so the on-box agent can read its own
+	// declarative configuration without S3 or IAM. Set from yaml.Marshal(p) inside
+	// generateUserData(). Empty string skips the profile-write block (never happens in
+	// practice — a valid *profile.SandboxProfile always marshals). Phase 113.
+	ProfileYAML string
 }
 
 // parseUserDataTemplate parses the userDataTemplate and returns the compiled template.
@@ -5722,6 +5742,14 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 			params.DesktopKasmPass = network.DesktopKasmPass
 		}
 	}
+
+	// Phase 113: marshal the profile to YAML for the on-box self-census file.
+	// Marshal here (not from raw file bytes) so any mutations applied before
+	// compiler.Compile() — noBedrock, ttl/idle overrides — are reflected.
+	if profileYAMLBytes, marshalErr := yaml.Marshal(p); marshalErr == nil {
+		params.ProfileYAML = string(profileYAMLBytes)
+	}
+	// else: non-fatal; profile-write block is skipped (ProfileYAML empty).
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, params); err != nil {
