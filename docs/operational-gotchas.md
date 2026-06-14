@@ -521,3 +521,71 @@ a separate set exists per sibling install). A bare `aws`/`km` call with no
 `AWS_PROFILE` finds no credentials. For terragrunt-driving km commands also
 `eval $(km env)` first (see the env-export gotcha above); the terraform cross-account
 role uses the `-terraform` profile.
+
+---
+
+## Sandbox self-awareness (Phase 113)
+
+### On-box profile file: `/opt/km/.km-profile.yaml`
+
+Every EC2 sandbox now writes its rendered profile to `/opt/km/.km-profile.yaml` at boot
+(mode 0644, owned sandbox:sandbox), produced by `yaml.Marshal` of the `userDataParams`
+struct immediately before `tmpl.Execute` in `generateUserData()`.
+
+**Semantic equivalence, not byte-identity.** The S3 copy at
+`artifacts/{sandbox-id}/.km-profile.yaml` is the *raw uploaded bytes* of the source YAML
+file (computed in `create.go` after `Compile()` returns — the raw bytes are unreachable
+inside the compiler without a signature change). The on-box copy is `yaml.Marshal` of the
+parsed struct, so it will NOT be byte-identical to the S3 copy: field ordering, comments,
+and zero-value fields may differ. It is however arguably MORE faithful to what was actually
+provisioned — it captures post-resolution mutations like `--no-bedrock` and TTL/idle
+overrides applied to the struct before the template executes. Assert **semantic
+equivalence** via a round-trip parse (same `apiVersion`, `metadata.name`, and key `spec`
+values), not a byte diff.
+
+**Written VERBATIM — no redaction.** The agent runs as the sandbox user, which can already
+read everything the profile's `spec.execution.configFiles` materializes on disk. Secrets
+are injected from SSM at runtime; the profile carries SSM *paths*, not values, and the
+sandbox role already grants those reads. The on-box file exposes nothing new.
+
+**Pre-Phase-113 boxes** (provisioned before this change was deployed) will not have the
+file. The `klanker:sandbox` skill degrades gracefully: when `/opt/km/.km-profile.yaml` is
+absent it falls back to env-var census + live probes and never errors.
+
+### `klanker:sandbox` six-section self-census
+
+`skills/sandbox/SKILL.md` is now a structured six-section self-census (A–F):
+
+| Section | What it probes |
+|---------|---------------|
+| A — Identity | `KM_SANDBOX_ID`, `KM_SANDBOX_ALIAS`, agent type (env + profile) |
+| B — Capability Census | Sidecar helper binaries, email policy, Slack post-back/inbound/transcript pollers via `systemctl is-active`, runtime features (VS Code, desktop, budget/TTL, storage) |
+| C — Network Position | Enforcement mode inferred from `systemctl is-active km-ebpf-enforcer` + iptables DNAT count; proxy/CA/eBPF passive signals; profile egress allowlist; **exactly two safe-active curls** (one allowed host, one known-blocked) to confirm the boundary empirically |
+| D — Privilege & Restrictions | `sudo -n true` cross-checked against `spec.execution.privileged`; each restriction explained with WHY (do not fight locked-down behavior) |
+| E — Slack Publish-Back Readiness | `KM_NOTIFY_SLACK_ENABLED`, `KM_SLACK_CHANNEL_ID`, `KM_SLACK_BRIDGE_URL`, `KM_SLACK_THREAD_TS` — cross-links `klanker:slack` |
+| F — Self-Diagnosis Summary | One-paragraph posture statement |
+
+The two curls in Section C are the **only traffic-generating step** in the census — they
+will appear in `km otel`. The allowed curl (`api.anthropic.com` or a profile-declared
+host) should return an HTTP response; the blocked curl (`evil.example.com`) should
+timeout or be reset. Any other curl fired in the census is a bug.
+
+### Deploy surface (Phase 113)
+
+```
+make build-lambdas     # cross-compile all Lambda zips (includes create-handler carrying new userdata)
+km init --dry-run=false   # full terragrunt apply to upload the updated create-handler zip
+```
+
+**NOT `--sidecars`** — the create-handler is a Lambda zip, not a sidecar binary; `--sidecars`
+does not rebuild or upload Lambda zips.
+
+Plugin version bump required: `plugin.json` and `marketplace.json` must be kept in lockstep
+(bumped to `0.4.10` in Phase 113 Plan 02) so clients invalidate the cached skill content.
+Without the bump, `/plugin update` keeps the old cached `skills/sandbox/SKILL.md`.
+
+**Existing sandboxes** gain `/opt/km/.km-profile.yaml` only on `km destroy && km create`.
+A running sandbox provisioned before the deploy has no profile file on disk; the skill
+degrades gracefully (pre-Phase-113 fallback path).
+
+**No schema change, no new TF resource, no new DDB column, no bridge Lambda change, no IAM change.**
