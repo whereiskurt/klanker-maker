@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 103-01 complete; next 103-02
 status: in-progress
-stopped_at: "Completed 110-06-PLAN.md — km doctor dead-channel checks + klanker:slack skill section + plugin 0.4.8"
-last_updated: "2026-06-13T12:00:45.415Z"
-last_activity: 2026-06-13
+stopped_at: Completed 111-01-PLAN.md — RenderRich Tier-3 prose skeleton + RICH-01..13,19 tests
+last_updated: "2026-06-14T15:31:11.008Z"
+last_activity: 2026-06-14
 progress:
-  total_phases: 126
+  total_phases: 129
   completed_phases: 111
-  total_plans: 559
-  completed_plans: 521
+  total_plans: 564
+  completed_plans: 522
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 103-01 — all 3 tasks done; synthetic HackerOne webhook bodies + pinned f
 Total Plans in Phase: 10 (103-01 → 103-10)
 Current Plan: 103-01 complete; next 103-02
 Status: in-progress
-Last activity: 2026-06-13
+Last activity: 2026-06-14
 
 Plan 03 (payload parse) + Plan 08 (byte-identity guard) UNBLOCKED: field-paths.md pins the resolve key + safety-critical internal flag (wrapper-tolerant parse directive); TestUserdataH1ByteIdentity green against the pre-H1 dormancy golden.
 
@@ -553,6 +553,7 @@ Progress: [█████████░] 91%
 | Phase 110 P04 | 834 | 2 tasks | 4 files |
 | Phase 110 P05 | 847s | 2 tasks | 3 files |
 | Phase 110-session-aware-slack-reply-thread-channel-repair P06 | 876s | 2 tasks | 6 files |
+| Phase 111-rich-slack-rendering-markdown-and-table-blocks-opt-in P01 | 204 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1594,6 +1595,7 @@ Recent decisions affecting current work:
 - [Phase 110]: prune-threads transient Slack errors skip row (never delete); only channel_not_found is definitive dead
 - [Phase 110-06]: DoctorDDBScanAPI narrow interface reuses DDBScanDeleteClient (no new DoctorDeps field needed); SlackDeadChannelChecker wired from SSM bot-token in initRealDepsWithExisting
 - [Phase 110-06]: Both dead-channel checks SKIP when bot token absent (nil SlackDeadChannelChecker); Error→Warn downgrade at registration mirrors Phase 95 pattern
+- [Phase 111-rich-slack-rendering-markdown-and-table-blocks-opt-in]: RenderRich skips Mrkdwnify for verbatim GFM in markdown blocks (would double-convert links); 12K cumulative cap returns ok=false (fail-soft to Tier-2)
 
 ### Roadmap Evolution
 
@@ -1734,6 +1736,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-13T03:47:39.797Z
-Stopped at: Completed 110-06-PLAN.md — km doctor dead-channel checks + klanker:slack skill section + plugin 0.4.8
+Last session: 2026-06-14T15:31:10.995Z
+Stopped at: Completed 111-01-PLAN.md — RenderRich Tier-3 prose skeleton + RICH-01..13,19 tests
 Resume file: None
