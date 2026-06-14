@@ -110,7 +110,7 @@ func runPost(args []string, stderr io.Writer) int {
 	fs.StringVar(&subject, "subject", "", "Optional subject text (rendered as bold header by bridge; omit for clean threaded replies)")
 	fs.StringVar(&bodyPath, "body", "", "Path to body file (stdin '-' NOT supported)")
 	fs.StringVar(&thread, "thread", "", "Thread parent ts")
-	fs.StringVar(&renderMode, "render", "", "Render mode: plain (default, no-op), mrkdwn (Phase 74 Tier 1 transformer), blocks (Phase 74 PR2 Tier 2 Block Kit; falls back to mrkdwn on 50-block cap)")
+	fs.StringVar(&renderMode, "render", "", "Render mode: plain (default, no-op), mrkdwn (Phase 74 Tier 1 transformer), blocks (Phase 74 PR2 Tier 2 Block Kit; falls back to mrkdwn on 50-block cap), blocks-rich (Phase 111 Tier 3 markdown/table blocks, opt-in; falls back to blocks then mrkdwn)")
 	fs.BoolVar(&newMessage, "new-message", false, "Post as new top-level message (omits thread_ts); prints ts=<value> to stdout for poller capture. Phase 70.")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -123,7 +123,7 @@ func runPost(args []string, stderr io.Writer) int {
 		renderMode = "plain"
 	}
 	switch renderMode {
-	case "plain", "mrkdwn", "blocks":
+	case "plain", "mrkdwn", "blocks", "blocks-rich":
 		// valid
 	default:
 		fmt.Fprintf(stderr, "km-slack post: unknown --render value %q; falling back to plain\n", renderMode)
@@ -363,6 +363,27 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 	var rendered string
 	var blocksJSON string
 	switch renderMode {
+	case "blocks-rich":
+		// Tier 3: attempt RenderRich (markdown + table blocks, GFM-verbatim prose).
+		// KM_SLACK_AI_FOOTER=true appends a trailing AI-disclaimer context block.
+		// On ok==false (12K cap, 50-block cap, or panic), degrade to Tier 2 (RenderBlocks).
+		// If Tier 2 also returns ok==false, degrade to Tier 1 (Mrkdwnify).
+		aiFooter := os.Getenv("KM_SLACK_AI_FOOTER") == "true"
+		bj, fallback, okRR := slack.RenderRich(string(body), aiFooter)
+		if okRR {
+			rendered = fallback
+			blocksJSON = bj
+		} else {
+			// Tier 2 fallback.
+			bj2, fallback2, okBK := slack.RenderBlocks(string(body))
+			if okBK {
+				rendered = fallback2
+				blocksJSON = bj2
+			} else {
+				// Tier 1 final fallback.
+				rendered = slack.Mrkdwnify(string(body))
+			}
+		}
 	case "blocks":
 		// Tier 2: attempt Block Kit rendering. On ok==false (50-block cap or
 		// panic), degrade to Mrkdwnify (Tier 1). The fallback path is indistinguishable
@@ -667,7 +688,7 @@ func runReply(args []string, stderr io.Writer) int {
 	fs.StringVar(&opts.thread, "thread", "", "Explicit thread parent ts (step 1: requires --channel or $KM_SLACK_CHANNEL_ID)")
 	fs.StringVar(&opts.subject, "subject", "", "Optional subject text")
 	fs.StringVar(&opts.bodyPath, "body", "", "Path to body file (required)")
-	fs.StringVar(&opts.render, "render", "", "Render mode: plain (default), mrkdwn, blocks")
+	fs.StringVar(&opts.render, "render", "", "Render mode: plain (default), mrkdwn, blocks, blocks-rich (Phase 111 Tier 3 opt-in)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -689,7 +710,7 @@ func runReply(args []string, stderr io.Writer) int {
 		opts.render = "plain"
 	}
 	switch opts.render {
-	case "plain", "mrkdwn", "blocks":
+	case "plain", "mrkdwn", "blocks", "blocks-rich":
 		// valid
 	default:
 		fmt.Fprintf(stderr, "km-slack reply: unknown --render value %q; falling back to plain\n", opts.render)
