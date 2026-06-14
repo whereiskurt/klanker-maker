@@ -101,6 +101,7 @@ THREAD_FLAG=""
 | `plain` | Literal text, markdown not interpreted | Logs, traces, anything where preserving raw characters matters |
 | `mrkdwn` | CommonMark → Slack mrkdwn (bold, italic, links, code preserved byte-for-byte) | Short status posts with light formatting |
 | `blocks` | Block Kit (header / section / context / divider), auto-fallback to mrkdwn at the 50-block cap | Long structured output, transcript-style content, anything with multiple headings |
+| `blocks-rich` | Tier-3 opt-in (Phase 111): prose → native `markdown` blocks (verbatim GFM, clickable `[label](url)` anchors), GFM pipe tables → dedicated `table` blocks (not monospace grids), H1 → `header`, 🔧 → `context`; falls back to `blocks` on cap hit | Reports with tables, research summaries with native anchor links, structured output where table readability matters. Set `KM_SLACK_AI_FOOTER=true` in `/etc/km/notify.env` to append an AI-disclaimer footer. See `docs/slack-notifications.md` § Phase 111. |
 
 Default for no-flag callers is `plain` (preserves the behavior of legacy callers).
 
