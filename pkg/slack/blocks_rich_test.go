@@ -1,26 +1,35 @@
 // Package slack — blocks_rich_test.go
-// RICH-01..RICH-03, RICH-10..RICH-13, RICH-19 + TestRichCorpus (prose case).
+// RICH-01..RICH-03, RICH-04..RICH-09, RICH-10..RICH-13, RICH-19 + TestRichCorpus.
 // Tests for the Tier-3 RenderRich renderer (pkg/slack.RenderRich).
 //
 // These tests cover:
 //   RICH-01: prose → markdown block (verbatim GFM, no mrkdwn conversion)
 //   RICH-02: leading H1 → header block (not inside markdown block)
 //   RICH-03: tool lines → context block (same as Tier-2)
+//   RICH-04: GFM table → table block with correct column_settings alignment
+//   RICH-05: table header row → rich_text bold cells
+//   RICH-06: pure-numeric body cells → raw_number type
+//   RICH-07: ragged rows padded to column count
+//   RICH-08: table >20 cols → guard fires → ok=false from buildTableBlock
+//   RICH-09: table >100 rows → guard fires → ok=false from buildTableBlock
 //   RICH-10: 12K cumulative markdown-block cap → ok=false
 //   RICH-11: 50-block cap → ok=false
 //   RICH-12: panic inside transformer → ok=false (fail-soft recover)
 //   RICH-13: H1 inside code fence NOT promoted to header block
 //   RICH-19: output is valid Block Kit JSON (all blocks have a non-empty "type")
 //
-// TestRichCorpus tests the prose golden fixture:
+// TestRichCorpus tests the golden corpus fixtures:
 //   rich-prose-basic.md → rich-prose-basic.expected-blocks.json
+//   rich-table-basic.md → rich-table-basic.expected-blocks.json
 //
-// Note: Table-related RICH-04..RICH-09 are covered in Plan 02.
+// TestRichTable_GuardFallback asserts the >20-col guard emits monospace fallback.
+//
 // Note: cmd/km-slack RICH-14..RICH-16 are covered in Plan 03.
 package slack
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -278,6 +287,241 @@ func TestRichBlocks_StructuralValidity(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// RICH-04..RICH-09: Table transformer unit tests (Plan 02)
+// ---------------------------------------------------------------------------
+
+// minimalTable is a helper that returns a 3-col GFM pipe-table with mixed alignment.
+// Used by multiple table tests.
+//
+//	| Name     | Count | Score |
+//	|:---------|:-----:|------:|
+//	| Alice    | 5     | 98.5  |
+//	| Bob      | 10    | 3.14  |
+func minimalTableLines() []string {
+	return []string{
+		"| Name     | Count | Score |",
+		"|:---------|:-----:|------:|",
+		"| Alice    | 5     | 98.5  |",
+		"| Bob      | 10    | 3.14  |",
+	}
+}
+
+// TestRichTable_Alignment (RICH-04): delimiter row `:--|:-:|--:` →
+// column_settings align left/center/right.
+func TestRichTable_Alignment(t *testing.T) {
+	tb, ok := buildTableBlock(minimalTableLines())
+	if !ok {
+		t.Fatal("buildTableBlock returned ok=false for a valid 3-col table")
+	}
+	if len(tb.ColumnSettings) != 3 {
+		t.Fatalf("expected 3 column_settings; got %d", len(tb.ColumnSettings))
+	}
+	wants := []string{"left", "center", "right"}
+	for i, want := range wants {
+		if tb.ColumnSettings[i].Align != want {
+			t.Errorf("column %d align = %q; want %q", i, tb.ColumnSettings[i].Align, want)
+		}
+		if tb.ColumnSettings[i].IsWrapped {
+			t.Errorf("column %d is_wrapped should be false for v1", i)
+		}
+	}
+}
+
+// TestRichTable_HeaderBold (RICH-05): header row cells are rich_text with bold style.
+func TestRichTable_HeaderBold(t *testing.T) {
+	tb, ok := buildTableBlock(minimalTableLines())
+	if !ok {
+		t.Fatal("buildTableBlock returned ok=false")
+	}
+	if len(tb.Rows) == 0 {
+		t.Fatal("no rows")
+	}
+	headerRow := tb.Rows[0]
+	if len(headerRow) != 3 {
+		t.Fatalf("header row has %d cells; want 3", len(headerRow))
+	}
+	for i, cell := range headerRow {
+		if cell.Type != "rich_text" {
+			t.Errorf("header cell[%d] type = %q; want rich_text", i, cell.Type)
+		}
+		if len(cell.Elements) == 0 {
+			t.Errorf("header cell[%d] has no elements", i)
+			continue
+		}
+		el := cell.Elements[0]
+		if el.Type != "text" {
+			t.Errorf("header cell[%d] element type = %q; want text", i, el.Type)
+		}
+		if el.Style == nil || !el.Style.Bold {
+			t.Errorf("header cell[%d] element should have bold style", i)
+		}
+	}
+	// Verify the header text values.
+	wantTexts := []string{"Name", "Count", "Score"}
+	for i, want := range wantTexts {
+		if headerRow[i].Elements[0].Text != want {
+			t.Errorf("header cell[%d] text = %q; want %q", i, headerRow[i].Elements[0].Text, want)
+		}
+	}
+}
+
+// TestRichTable_RawNumber (RICH-06): pure-numeric body cells → raw_number;
+// non-numeric cells → raw_text.
+func TestRichTable_RawNumber(t *testing.T) {
+	lines := []string{
+		"| Label  | Value | Notes |",
+		"|--------|-------|-------|",
+		"| hello  | 42    | plain |",
+		"| world  | 3.14  | text  |",
+		"| commas | 1,000 | num   |",
+	}
+	tb, ok := buildTableBlock(lines)
+	if !ok {
+		t.Fatal("buildTableBlock returned ok=false")
+	}
+	// Rows[0] = header, Rows[1..3] = body.
+	if len(tb.Rows) != 4 {
+		t.Fatalf("expected 4 rows (1 header + 3 body); got %d", len(tb.Rows))
+	}
+	type cellCheck struct {
+		row, col  int
+		wantType  string
+		wantText  string
+	}
+	checks := []cellCheck{
+		{1, 0, "raw_text", "hello"},
+		{1, 1, "raw_number", "42"},
+		{1, 2, "raw_text", "plain"},
+		{2, 0, "raw_text", "world"},
+		{2, 1, "raw_number", "3.14"},
+		{3, 1, "raw_number", "1,000"},
+	}
+	for _, c := range checks {
+		cell := tb.Rows[c.row][c.col]
+		if cell.Type != c.wantType {
+			t.Errorf("row %d col %d type = %q; want %q", c.row, c.col, cell.Type, c.wantType)
+		}
+		if cell.Text != c.wantText {
+			t.Errorf("row %d col %d text = %q; want %q", c.row, c.col, cell.Text, c.wantText)
+		}
+	}
+}
+
+// TestRichTable_RaggedPad (RICH-07): a body row with fewer cells than the header
+// is padded to numCols with empty raw_text cells.
+func TestRichTable_RaggedPad(t *testing.T) {
+	lines := []string{
+		"| A | B | C |",
+		"|---|---|---|",
+		"| x |",    // only 1 cell — ragged
+		"| p | q | r |",
+	}
+	tb, ok := buildTableBlock(lines)
+	if !ok {
+		t.Fatal("buildTableBlock returned ok=false")
+	}
+	// Rows[0]=header, Rows[1]=ragged, Rows[2]=full
+	if len(tb.Rows) != 3 {
+		t.Fatalf("expected 3 rows; got %d", len(tb.Rows))
+	}
+	raggedRow := tb.Rows[1]
+	if len(raggedRow) != 3 {
+		t.Fatalf("ragged row should be padded to 3 cells; got %d", len(raggedRow))
+	}
+	// Cell[0] should have 'x'; cells[1] and [2] should be empty raw_text.
+	if raggedRow[0].Text != "x" {
+		t.Errorf("ragged row cell[0] text = %q; want %q", raggedRow[0].Text, "x")
+	}
+	for i := 1; i < 3; i++ {
+		if raggedRow[i].Type != "raw_text" {
+			t.Errorf("ragged row cell[%d] type = %q; want raw_text", i, raggedRow[i].Type)
+		}
+		if raggedRow[i].Text != "" {
+			t.Errorf("ragged row cell[%d] text = %q; want empty", i, raggedRow[i].Text)
+		}
+	}
+}
+
+// TestRichTable_ColsGuard (RICH-08): a table with >20 columns → buildTableBlock
+// returns ok=false.
+func TestRichTable_ColsGuard(t *testing.T) {
+	// Build a 21-column table.
+	makeRow := func(prefix string) string {
+		cells := make([]string, 21)
+		for i := range cells {
+			cells[i] = fmt.Sprintf(" %s%d ", prefix, i+1)
+		}
+		return "|" + strings.Join(cells, "|") + "|"
+	}
+	sepRow := "|" + strings.Repeat(":--|", 21)
+	lines := []string{
+		makeRow("h"),
+		sepRow,
+		makeRow("v"),
+	}
+	_, ok := buildTableBlock(lines)
+	if ok {
+		t.Error("buildTableBlock should return ok=false for a table with >20 columns")
+	}
+}
+
+// TestRichTable_RowsGuard (RICH-09): a table with >100 data rows → buildTableBlock
+// returns ok=false.
+func TestRichTable_RowsGuard(t *testing.T) {
+	lines := []string{
+		"| A | B |",
+		"|---|---|",
+	}
+	// Add 101 body rows.
+	for i := 0; i < 101; i++ {
+		lines = append(lines, fmt.Sprintf("| row%d | val%d |", i, i))
+	}
+	_, ok := buildTableBlock(lines)
+	if ok {
+		t.Error("buildTableBlock should return ok=false for a table with >100 data rows")
+	}
+}
+
+// TestRichTable_GuardFallback: a >20-col table through RenderRich emits a
+// monospace fenced markdown block (the fencePipeTables fallback), NOT a
+// {"type":"table"} block.
+func TestRichTable_GuardFallback(t *testing.T) {
+	input, err := os.ReadFile("testdata/rich-table-guards.md")
+	if err != nil {
+		t.Fatalf("read guard fixture: %v", err)
+	}
+	bj, _, ok := RenderRich(string(input), false)
+	if !ok {
+		t.Fatal("RenderRich returned ok=false (expected fallback, not failure)")
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal([]byte(bj), &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Must NOT contain a "table" block.
+	for _, b := range blocks {
+		if b["type"] == "table" {
+			t.Errorf("guard fixture should NOT produce a table block; got: %s", bj)
+		}
+	}
+	// Must contain a "markdown" block (the fencePipeTables fallback wraps in ```).
+	found := false
+	for _, b := range blocks {
+		if b["type"] == "markdown" {
+			txt, _ := b["text"].(string)
+			if strings.Contains(txt, "```") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Errorf("guard fixture should produce a markdown block with ``` fence; got: %s", bj)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestRichCorpus walks the rich-*.md fixtures and compares RenderRich output
 // to the rich-*.expected-blocks.json golden files.
 // This is the prose-only case (Plan 01). Plan 04 will extend this to table
