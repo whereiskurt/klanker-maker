@@ -1,0 +1,16 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Build Complete",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "text": "This task demonstrates **bold text**, _italic text_, and a [clickable link](https://example.com) that renders natively in Slack.\n\nThe second paragraph shows inline `code` and confirms that GFM is passed through verbatim without mrkdwn conversion.",
+      "type": "markdown"
+    }
+  ],
+  "text": "Build Complete\n\nThis task demonstrates bold text, italic text, and a clickable link that renders natively in Slack.\n\nThe second paragraph shows inline code and confirms that GFM is passed through verbatim without mrkdwn conversion."
+}
