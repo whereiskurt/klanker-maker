@@ -1,8 +1,8 @@
 ---
 phase: 113
 slug: sandbox-self-awareness-on-box-profile-plus-capability-network-privilege-self-census-in-klanker-sandbox
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-14
 ---
@@ -66,7 +66,7 @@ NOTE: capture the command's OWN exit code (not a piped `tail`) — see `feedback
 |----------|-------------|------------|-------------------|
 | Census sections A–F run clean on a live box | phase goal | Requires a provisioned sandbox + SSM; not unit-testable | `km create <slack-profile>` → `km shell <id>` → run the skill's census block; confirm capabilities enumerated, network boundary confirmed (the 1 allowed + 1 blocked curl), sudo state correct |
 | Graceful degradation on pre-Phase-113 box | CONTEXT decision | Needs an old sandbox lacking `/opt/km/.km-profile.yaml` | On a sandbox without the file, run census section A — must fall back to env+probes, never error |
-| `/opt/km/.km-profile.yaml` present + verbatim | platform deliverable | On-box filesystem check | `km shell <id>` → `cat /opt/km/.km-profile.yaml`; diff against `aws s3 cp s3://$BUCKET/artifacts/<id>/.km-profile.yaml -` (must be byte-identical) |
+| `/opt/km/.km-profile.yaml` present + semantically equivalent | platform deliverable | On-box filesystem check | `km shell <id>` → `cat /opt/km/.km-profile.yaml`; round-trip parse vs `aws s3 cp s3://$BUCKET/artifacts/<id>/.km-profile.yaml -`. NOT byte-identical: the on-box file is `yaml.Marshal` of the parsed struct (formatting/ordering/comments differ from the raw S3 bytes); compare `apiVersion`/`kind`/`metadata.name`/key spec values instead |
 
 ---
 
@@ -77,6 +77,6 @@ NOTE: capture the command's OWN exit code (not a piped `tail`) — see `feedback
 - [ ] Wave 0 covers all MISSING references (new test file + 3 golden regens)
 - [ ] No watch-mode flags
 - [ ] Feedback latency < 120s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-14 (plan-checker VERIFICATION PASSED, iteration 2)
