@@ -10,14 +10,16 @@
 //   - splitTableRow  — parse pipe-separated cells, honour \| escaping
 //   - isSeparatorRow — detect the |:---|---:| delimiter row
 //
-// v1 cell simplification (per CONTEXT.md / RESEARCH Open Question 1):
-//   - Header row → rich_text with bold style
-//   - Body cells → raw_number (pure numeric) or raw_text (everything else)
+// v1 cell schema (refined after live Slack UAT, Phase 111):
+//   - Header row → rich_text with bold style, wrapped in the mandatory
+//     rich_text_section (a flat element list is rejected with invalid_blocks)
+//   - Body cells → raw_text (always); numeric right-alignment comes from
+//     column_settings, and raw_number is deferred (its value-field schema is
+//     undocumented and rejected our guesses in UAT)
 //   - No rich_text encoder for body cells (code spans/lists degrade to raw_text)
 package slack
 
 import (
-	"regexp"
 	"strings"
 )
 
@@ -42,16 +44,27 @@ type columnSetting struct {
 }
 
 // tableCell is one cell in the table block.
-// Type is one of "raw_text", "raw_number", or "rich_text".
-//   - raw_text / raw_number: use Text field.
+// Type is one of "raw_text" or "rich_text" (v1 — raw_number deferred; see classifyCell).
+//   - raw_text: use Text field.
 //   - rich_text: use Elements field (header bold cells only in v1).
 type tableCell struct {
 	Type     string            `json:"type"`
 	Text     string            `json:"text,omitempty"`
-	Elements []richTextElement `json:"elements,omitempty"`
+	Elements []richTextSection `json:"elements,omitempty"`
 }
 
-// richTextElement is a sub-element of a rich_text table cell.
+// richTextSection wraps the leaf text elements of a rich_text table cell.
+// Slack's rich_text REQUIRES this section nesting — a flat
+// elements:[{type:"text"}] is rejected with invalid_blocks (confirmed via live
+// Slack UAT, Phase 111). The valid shape is:
+//
+//	{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text",...}]}]}
+type richTextSection struct {
+	Type     string            `json:"type"` // always "rich_text_section"
+	Elements []richTextElement `json:"elements"`
+}
+
+// richTextElement is a leaf text element inside a rich_text_section.
 // In v1 only the header row uses this (bold style).
 type richTextElement struct {
 	Type  string   `json:"type"`            // always "text"
@@ -63,14 +76,6 @@ type richTextElement struct {
 type rtStyle struct {
 	Bold bool `json:"bold,omitempty"`
 }
-
-// ---------------------------------------------------------------------------
-// reNumeric matches a pure-numeric cell value (integer or decimal, optional
-// sign and commas as thousand-separators, optional leading/trailing whitespace).
-// Examples that match: "42", "3.14", "1,000", "+99", "-0.5"
-// Examples that do NOT match: "n/a", "1.2.3", "hello", ""
-// ---------------------------------------------------------------------------
-var reNumeric = regexp.MustCompile(`^\s*[-+]?[\d,]*\.?\d+\s*$`)
 
 // ---------------------------------------------------------------------------
 // buildTableBlock — main entry point
@@ -194,28 +199,31 @@ func alignFromSep(cell string) string {
 	}
 }
 
-// classifyCell assigns the appropriate raw cell type for a body cell.
-// Pure-numeric values → raw_number; everything else → raw_text.
-// v1: cells with inline markup also degrade to raw_text (no rich_text body encoder).
+// classifyCell assigns the raw cell type for a body cell.
+// v1: ALL body cells are raw_text. Numeric right-alignment is already provided by
+// column_settings (derived from the GFM `--:` delimiter), and Slack's raw_number
+// cell schema is undocumented — both the `number` and `text` value-field guesses
+// were rejected with invalid_blocks in live UAT — so raw_number is deferred.
 func classifyCell(text string) tableCell {
-	trimmed := strings.TrimSpace(text)
-	if reNumeric.MatchString(text) {
-		return tableCell{Type: "raw_number", Text: trimmed}
-	}
-	return tableCell{Type: "raw_text", Text: trimmed}
+	return tableCell{Type: "raw_text", Text: strings.TrimSpace(text)}
 }
 
-// makeBoldCell creates a rich_text cell with a single bold text element.
-// Used for the header row only.
+// makeBoldCell creates a rich_text cell with a single bold text element, wrapped
+// in the mandatory rich_text_section (a flat element list is rejected by Slack —
+// see richTextSection). Used for the header row only.
 func makeBoldCell(text string) tableCell {
-	bold := true
 	return tableCell{
 		Type: "rich_text",
-		Elements: []richTextElement{
+		Elements: []richTextSection{
 			{
-				Type:  "text",
-				Text:  strings.TrimSpace(text),
-				Style: &rtStyle{Bold: bold},
+				Type: "rich_text_section",
+				Elements: []richTextElement{
+					{
+						Type:  "text",
+						Text:  strings.TrimSpace(text),
+						Style: &rtStyle{Bold: true},
+					},
+				},
 			},
 		},
 	}

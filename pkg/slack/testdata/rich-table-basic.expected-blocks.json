@@ -27,11 +27,16 @@
           {
             "elements": [
               {
-                "style": {
-                  "bold": true
-                },
-                "text": "Name",
-                "type": "text"
+                "elements": [
+                  {
+                    "style": {
+                      "bold": true
+                    },
+                    "text": "Name",
+                    "type": "text"
+                  }
+                ],
+                "type": "rich_text_section"
               }
             ],
             "type": "rich_text"
@@ -39,11 +44,16 @@
           {
             "elements": [
               {
-                "style": {
-                  "bold": true
-                },
-                "text": "Score",
-                "type": "text"
+                "elements": [
+                  {
+                    "style": {
+                      "bold": true
+                    },
+                    "text": "Score",
+                    "type": "text"
+                  }
+                ],
+                "type": "rich_text_section"
               }
             ],
             "type": "rich_text"
@@ -51,11 +61,16 @@
           {
             "elements": [
               {
-                "style": {
-                  "bold": true
-                },
-                "text": "Rank",
-                "type": "text"
+                "elements": [
+                  {
+                    "style": {
+                      "bold": true
+                    },
+                    "text": "Rank",
+                    "type": "text"
+                  }
+                ],
+                "type": "rich_text_section"
               }
             ],
             "type": "rich_text"
@@ -68,11 +83,11 @@
           },
           {
             "text": "98.5",
-            "type": "raw_number"
+            "type": "raw_text"
           },
           {
             "text": "1",
-            "type": "raw_number"
+            "type": "raw_text"
           }
         ],
         [
@@ -82,11 +97,11 @@
           },
           {
             "text": "3.14",
-            "type": "raw_number"
+            "type": "raw_text"
           },
           {
             "text": "2",
-            "type": "raw_number"
+            "type": "raw_text"
           }
         ],
         [
@@ -100,7 +115,7 @@
           },
           {
             "text": "3",
-            "type": "raw_number"
+            "type": "raw_text"
           }
         ]
       ],

@@ -31,11 +31,16 @@
           {
             "elements": [
               {
-                "style": {
-                  "bold": true
-                },
-                "text": "Tool",
-                "type": "text"
+                "elements": [
+                  {
+                    "style": {
+                      "bold": true
+                    },
+                    "text": "Tool",
+                    "type": "text"
+                  }
+                ],
+                "type": "rich_text_section"
               }
             ],
             "type": "rich_text"
@@ -43,11 +48,16 @@
           {
             "elements": [
               {
-                "style": {
-                  "bold": true
-                },
-                "text": "Status",
-                "type": "text"
+                "elements": [
+                  {
+                    "style": {
+                      "bold": true
+                    },
+                    "text": "Status",
+                    "type": "text"
+                  }
+                ],
+                "type": "rich_text_section"
               }
             ],
             "type": "rich_text"
@@ -55,11 +65,16 @@
           {
             "elements": [
               {
-                "style": {
-                  "bold": true
-                },
-                "text": "Score",
-                "type": "text"
+                "elements": [
+                  {
+                    "style": {
+                      "bold": true
+                    },
+                    "text": "Score",
+                    "type": "text"
+                  }
+                ],
+                "type": "rich_text_section"
               }
             ],
             "type": "rich_text"
@@ -76,7 +91,7 @@
           },
           {
             "text": "100",
-            "type": "raw_number"
+            "type": "raw_text"
           }
         ],
         [
@@ -90,7 +105,7 @@
           },
           {
             "text": "98.5",
-            "type": "raw_number"
+            "type": "raw_text"
           }
         ],
         [
@@ -104,7 +119,7 @@
           },
           {
             "text": "72",
-            "type": "raw_number"
+            "type": "raw_text"
           }
         ]
       ],

@@ -346,11 +346,17 @@ func TestRichTable_HeaderBold(t *testing.T) {
 		if cell.Type != "rich_text" {
 			t.Errorf("header cell[%d] type = %q; want rich_text", i, cell.Type)
 		}
-		if len(cell.Elements) == 0 {
-			t.Errorf("header cell[%d] has no elements", i)
+		// Slack requires the rich_text_section nesting (flat element list is rejected).
+		if len(cell.Elements) == 0 || cell.Elements[0].Type != "rich_text_section" {
+			t.Errorf("header cell[%d] missing rich_text_section wrapper", i)
 			continue
 		}
-		el := cell.Elements[0]
+		sec := cell.Elements[0]
+		if len(sec.Elements) == 0 {
+			t.Errorf("header cell[%d] section has no text elements", i)
+			continue
+		}
+		el := sec.Elements[0]
 		if el.Type != "text" {
 			t.Errorf("header cell[%d] element type = %q; want text", i, el.Type)
 		}
@@ -358,17 +364,19 @@ func TestRichTable_HeaderBold(t *testing.T) {
 			t.Errorf("header cell[%d] element should have bold style", i)
 		}
 	}
-	// Verify the header text values.
+	// Verify the header text values (nested: cell → section → text element).
 	wantTexts := []string{"Name", "Count", "Score"}
 	for i, want := range wantTexts {
-		if headerRow[i].Elements[0].Text != want {
-			t.Errorf("header cell[%d] text = %q; want %q", i, headerRow[i].Elements[0].Text, want)
+		if got := headerRow[i].Elements[0].Elements[0].Text; got != want {
+			t.Errorf("header cell[%d] text = %q; want %q", i, got, want)
 		}
 	}
 }
 
-// TestRichTable_RawNumber (RICH-06): pure-numeric body cells → raw_number;
-// non-numeric cells → raw_text.
+// TestRichTable_RawNumber (RICH-06): v1 maps ALL body cells to raw_text — including
+// pure-numeric ones. raw_number is deferred (its Slack value-field schema is
+// undocumented and was rejected with invalid_blocks in live UAT); numeric columns
+// still right-align via column_settings.
 func TestRichTable_RawNumber(t *testing.T) {
 	lines := []string{
 		"| Label  | Value | Notes |",
@@ -392,11 +400,11 @@ func TestRichTable_RawNumber(t *testing.T) {
 	}
 	checks := []cellCheck{
 		{1, 0, "raw_text", "hello"},
-		{1, 1, "raw_number", "42"},
+		{1, 1, "raw_text", "42"},
 		{1, 2, "raw_text", "plain"},
 		{2, 0, "raw_text", "world"},
-		{2, 1, "raw_number", "3.14"},
-		{3, 1, "raw_number", "1,000"},
+		{2, 1, "raw_text", "3.14"},
+		{3, 1, "raw_text", "1,000"},
 	}
 	for _, c := range checks {
 		cell := tb.Rows[c.row][c.col]
