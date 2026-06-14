@@ -231,7 +231,7 @@ event="${1:?event-name required}"
 #      - Stop fires when EITHER idle-ping (Phase 62/63) OR transcript streaming
 #        (Phase 68) is enabled — both can run side-by-side.
 case "$event" in
-  PostToolUse)
+  PostToolUse|SubagentStop)
     [[ "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]] || exit 0
     ;;
   Notification|PermissionRequest)
@@ -422,6 +422,22 @@ if [[ "$event" == "PostToolUse" ]]; then
     exit 0
   fi
   _km_stream_drain "$pt_sid" "$pt_transcript"
+  exit 0
+fi
+
+# 4b. SubagentStop: a Task subagent finished. Drain its (separate) transcript
+#     into the thread, then exit. Mirrors PostToolUse; never falls through to the
+#     email/slack-root branches. For inbound poller turns KM_SLACK_THREAD_TS is
+#     set so the drain lands in the same thread as the parent agent; otherwise the
+#     subagent gets its own auto-thread (a sub-conversation), which is acceptable.
+if [[ "$event" == "SubagentStop" ]]; then
+  ss_sid=$(echo "$payload" | jq -r '.session_id // ""' 2>/dev/null || echo "")
+  ss_transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
+  if [[ -z "$ss_sid" || -z "$ss_transcript" ]]; then
+    echo "[km-notify-hook] SubagentStop: missing session_id/transcript_path" >&2
+    exit 0
+  fi
+  _km_stream_drain "$ss_sid" "$ss_transcript"
   exit 0
 fi
 
@@ -2214,6 +2230,16 @@ cat > '/home/sandbox/.claude/settings.json' << 'KM_CONFIG_EOF'
         "hooks": [
           {
             "command": "/opt/km/bin/km-notify-hook Stop",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "command": "/opt/km/bin/km-notify-hook SubagentStop",
             "type": "command"
           }
         ]

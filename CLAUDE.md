@@ -14,7 +14,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `spec.cli.vscodeEnabled` → `spec.runtime.vscode.enabled`.
 - `spec.cli.{agent,claudeArgs,codexArgs}` → `spec.agent:` block (`default` / `claude.args` / `codex.args`). `spec.cli` is now `noBedrock`-only.
 - Inlined `configFiles["/home/sandbox/.claude/settings.json"]` REMOVED everywhere; settings.json is synthesized from `spec.agent.claude.tools.*` + `trustedDirectories` (canonical `permissions.allow` / `permissions.deny`). Codex `config.toml` is synthesized too — Codex has no native tool gating, so it ships inert hooks + an asymmetry note. See `docs/agent-tool-gating.md`.
-- Mixed mode (typed `agent.claude.tools.*` + inlined settings.json) is a hard `km validate` error.
+- Mixed mode (typed `agent.claude.*` + inlined settings.json) is now SUPPORTED via deep-merge: the compiler merges synthesized typed keys (permissions/trustedDirectories win) ON TOP of the inlined file, preserving operator keys like `enabledPlugins`/`env`/`model` (`compiler.mergeSynthesizedClaudeSettings`). It was previously a hard `km validate` error (the Phase 92 Wave 4 "no-merge" decision), which silently dropped those keys whenever a typed field was set. `km-notify` hooks now include `SubagentStop` (drains a finished Task subagent's transcript into the Slack thread) alongside `Notification`/`Stop`/`PostToolUse`. See `docs/agent-tool-gating.md`.
 - Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
 - Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
 

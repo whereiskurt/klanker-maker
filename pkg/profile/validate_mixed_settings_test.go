@@ -1,26 +1,22 @@
 package profile
 
 import (
-	"strings"
 	"testing"
 )
 
-// TestValidate_MixedAgentClaudeAndInlinedConfigFiles_Errors verifies the locked
-// decision that populating agent.claude.tools.autoApprove AND inlining
-// execution.configFiles[".claude/settings.json"] simultaneously is a hard
-// validation error. No merge fallback — the two configuration surfaces are
-// mutually exclusive.
+// TestValidate_MixedAgentClaudeAndInlinedConfigFiles_Allowed verifies that the
+// former Phase 92 (Wave 4) VC-6 hard rejection has been LIFTED: a profile may now
+// populate spec.agent.claude.tools.autoApprove AND inline a Claude settings.json
+// via execution.configFiles simultaneously. The compiler's Wave-5 synthesizer
+// deep-merges the typed output on top of the inlined file (typed allow/deny win;
+// operator keys like enabledPlugins are preserved) rather than clobbering it, so
+// the two surfaces are no longer mutually exclusive. The old rejection caused
+// silent data loss and left no way to express enabledPlugins under typed gating.
 //
-// RED STATE (Wave 0): behind the phase92_wave4 build tag, NOT compiled by the
-// default build. References the post-phase API (Spec.Agent, AgentSpec,
-// AgentClaudeSpec, AgentToolsSpec) plus the mixed-mode check that Wave 4 adds to
-// ValidateSemantic. Wave 4 removes the build tag after the validator lands; its
-// "task done" criterion is:
-//
-//	go test ./pkg/profile/ -tags phase92_wave4 -run TestValidate_MixedAgentClaudeAndInlinedConfigFiles_Errors  // GREEN
-//
-// VC-6
-func TestValidate_MixedAgentClaudeAndInlinedConfigFiles_Errors(t *testing.T) {
+// Coexistence must NOT produce a validation error. (Merge semantics are exercised
+// at the compiler layer in pkg/compiler — see
+// TestUserData_InlinedSettingsPreservedAlongsideTypedAgent.)
+func TestValidate_MixedAgentClaudeAndInlinedConfigFiles_Allowed(t *testing.T) {
 	p := &SandboxProfile{
 		APIVersion: "klankermaker.example.com/v1",
 		Kind:       "SandboxProfile",
@@ -33,24 +29,15 @@ func TestValidate_MixedAgentClaudeAndInlinedConfigFiles_Errors(t *testing.T) {
 			},
 			Execution: ExecutionSpec{
 				ConfigFiles: map[string]string{
-					"/home/sandbox/.claude/settings.json": `{"autoApprove":["Bash"]}`,
+					"/home/sandbox/.claude/settings.json": `{"enabledPlugins":{"superpowers@marketplace":true}}`,
 				},
 			},
 		},
 	}
 
-	errs := ValidateSemantic(p)
-	if len(errs) == 0 {
-		t.Fatalf("expected validation error for mixed mode, got none")
-	}
-
-	var combined strings.Builder
-	for _, e := range errs {
-		combined.WriteString(e.Error())
-		combined.WriteString("\n")
-	}
-	msg := combined.String()
-	if !strings.Contains(msg, "agent.claude.tools.autoApprove") || !strings.Contains(msg, "configFiles") {
-		t.Errorf("error must reference both fields by name, got: %s", msg)
+	for _, e := range ValidateSemantic(p) {
+		if e.Path == `spec.execution.configFiles["/home/sandbox/.claude/settings.json"]` {
+			t.Errorf("mixed-mode should no longer be rejected, got error: %s", e.Error())
+		}
 	}
 }

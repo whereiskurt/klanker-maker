@@ -32,7 +32,10 @@ func TestUserdataKmPrefixByteIdentity(t *testing.T) {
 	}
 
 	// Render using the same learn.v2 profile + fixed inputs as the Phase 92 baseline.
-	got := generateLearnV2Userdata(t)
+	// Strip the deliberate post-baseline SubagentStop script additions so the REST
+	// comparison stays a byte-identical km→km no-op (the settings.json SubagentStop
+	// hook entry is handled by assertClaudeSettingsSemanticEquivalence).
+	got := stripSubagentStopScript(generateLearnV2Userdata(t))
 
 	// Fast path: verbatim byte-identity (expected on km prefix, no settings.json drift).
 	if got == string(want) {

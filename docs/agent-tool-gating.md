@@ -86,18 +86,30 @@ Therefore:
   network allowlist (`spec.network.enforcement: ebpf | both`) and Codex's own
   `sandbox_mode` filesystem scoping.
 
-## No-merge-with-`configFiles` rule (locked decision)
+## Deep-merge with `configFiles` (supersedes the old "no-merge" locked decision)
 
-A profile that populates **both** `agent.claude.tools.autoApprove`/`deny` **and**
-an inlined `execution.configFiles["/home/sandbox/.claude/settings.json"]` is a
-**hard validation error** (`km validate` fails). There is no merge fallback —
-pick one mode.
+A profile MAY populate **both** the typed `agent.claude.*` block **and** an inlined
+`execution.configFiles["/home/sandbox/.claude/settings.json"]`. The compiler
+**deep-merges** the synthesized typed output ON TOP of the inlined file rather than
+clobbering it (`compiler.mergeSynthesizedClaudeSettings`):
 
-Rationale: the synthesizer cannot know whether to trust the inline JSON or
-override it with the typed fields. Silently merging is confusing; silently
-preferring one breaks the operator's mental model. The mixed-mode validator
-(`pkg/profile/validate.go`, Phase 92 Wave 4) rejects the conflict with a clear
-`ValidationError` naming both paths.
+- `permissions` — sub-map merge: typed `allow`/`deny`/passthrough win on collision,
+  while inlined `permissions` sub-keys the synthesizer does not set (e.g.
+  `additionalDirectories`) are preserved.
+- `trustedDirectories` (and any other top-level typed key) — the typed value wins
+  (the typed block is the canonical source).
+- **Every other inlined top-level key is carried through untouched** —
+  `enabledPlugins`, `env`, `model`, `statusLine`, `enabledMcpjsonServers`, …
+
+This is the **only** way to set keys with no typed equivalent (e.g. `enabledPlugins`)
+while still using typed tool gating.
+
+> **History:** Phase 92 Wave 4 originally made this combination a hard `km validate`
+> error (the "no-merge" locked decision). That was lifted: the wholesale-overwrite
+> seeding step silently dropped operator keys (`enabledPlugins`, `model`, …) whenever
+> any typed `agent.claude` field was set, and there was no way to express
+> `enabledPlugins` under typed gating. The deterministic deep-merge above (typed wins
+> on the keys it owns) removes the ambiguity the validator was guarding against.
 
 ## Migrating from pre-Phase-92 inlined JSON
 

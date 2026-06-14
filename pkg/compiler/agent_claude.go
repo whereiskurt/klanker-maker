@@ -1,6 +1,10 @@
 package compiler
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
@@ -77,4 +81,59 @@ func synthesizeClaudeSettings(agent *profile.AgentSpec) (map[string]any, error) 
 	}
 
 	return out, nil
+}
+
+// mergeSynthesizedClaudeSettings deep-merges the typed-synthesized settings keys
+// ON TOP of an operator's inlined ~/.claude/settings.json (the configFiles entry),
+// rather than clobbering it. This is the fix for the silent-data-loss bug where
+// any populated spec.agent.claude field caused the Wave-5 seeding step to
+// overwrite the inlined file wholesale — dropping operator keys the synthesizer
+// does not own (enabledPlugins, env, model, statusLine, enabledMcpjsonServers, …).
+//
+// Merge semantics (typed wins on the keys it owns; everything else preserved):
+//   - "permissions": sub-map merge — typed allow/deny/passthrough sub-keys win on
+//     collision, but inlined permissions sub-keys the synthesizer did not set
+//     (e.g. additionalDirectories) are preserved.
+//   - "trustedDirectories" (and any other top-level typed key): typed value
+//     replaces the inlined value (the typed block is the canonical source).
+//   - All other inlined top-level keys (enabledPlugins, env, model, …) are
+//     carried through untouched.
+//
+// `inlined` is the raw JSON string from configFiles (may be empty). `typed` is the
+// output of synthesizeClaudeSettings. Returns the merged JSON string. Errors iff
+// the inlined JSON is malformed (fail-fast — same contract as the downstream
+// mergeNotifyHookIntoSettings).
+func mergeSynthesizedClaudeSettings(inlined string, typed map[string]any) (string, error) {
+	const settingsPath = "/home/sandbox/.claude/settings.json"
+
+	base := map[string]any{}
+	if strings.TrimSpace(inlined) != "" {
+		if err := json.Unmarshal([]byte(inlined), &base); err != nil {
+			return "", fmt.Errorf("invalid JSON in spec.execution.configFiles[%q]: %w", settingsPath, err)
+		}
+	}
+
+	for k, v := range typed {
+		if k == "permissions" {
+			typedPerms, _ := v.(map[string]any)
+			basePerms, _ := base["permissions"].(map[string]any)
+			if basePerms == nil {
+				basePerms = map[string]any{}
+			}
+			// Typed allow/deny/passthrough win over any inlined permissions
+			// sub-keys; inlined sub-keys the synthesizer did not set survive.
+			for pk, pv := range typedPerms {
+				basePerms[pk] = pv
+			}
+			base["permissions"] = basePerms
+			continue
+		}
+		base[k] = v
+	}
+
+	buf, err := json.MarshalIndent(base, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal merged claude settings.json: %w", err)
+	}
+	return string(buf), nil
 }

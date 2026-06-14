@@ -113,7 +113,10 @@ func TestUserdataLearnV2Phase92ByteIdentity(t *testing.T) {
 		t.Fatalf("read golden %s: %v (Wave 0 baseline capture was not committed)", golden, err)
 	}
 
-	got := generateLearnV2Userdata(t)
+	// Strip the deliberate post-baseline SubagentStop script additions so the REST
+	// comparison still pins byte-identity to the frozen pre-92 baseline. The
+	// settings.json SubagentStop hook entry is handled by the semantic check.
+	got := stripSubagentStopScript(generateLearnV2Userdata(t))
 
 	// Fast path: if the output is verbatim byte-identical (e.g. running this test
 	// on pre-Phase-92 main, or if the canonical form ever matches the legacy
@@ -196,10 +199,59 @@ func assertClaudeSettingsSemanticEquivalence(t *testing.T, oldBlob, newBlob stri
 			oldS["trustedDirectories"], newS["trustedDirectories"])
 	}
 
+	// SubagentStop is a DELIBERATE post-baseline hook addition (a new feature, not
+	// part of the Phase 92 migration). Assert it is present + correct, then strip it
+	// so the migration guard below still pins that the migration left the
+	// Notification/Stop/PostToolUse hooks byte-identical to the pre-92 baseline.
+	if h, ok := newS["hooks"].(map[string]any); ok {
+		assertSingleHookCmd(t, h, "SubagentStop", "/opt/km/bin/km-notify-hook SubagentStop")
+		delete(h, "SubagentStop")
+	}
+
 	if !reflect.DeepEqual(oldS["hooks"], newS["hooks"]) {
 		t.Errorf("km-notify hooks changed by the Phase 92 migration:\n  baseline: %v\n  generated: %v",
 			oldS["hooks"], newS["hooks"])
 	}
+}
+
+// assertSingleHookCmd verifies hooks[event] is a one-entry array whose single
+// command equals want. Used to pin a deliberately-added hook (e.g. SubagentStop).
+func assertSingleHookCmd(t *testing.T, hooks map[string]any, event, want string) {
+	t.Helper()
+	arr, ok := hooks[event].([]any)
+	if !ok || len(arr) == 0 {
+		t.Errorf("expected hooks[%q] to be a non-empty array, got %#v", event, hooks[event])
+		return
+	}
+	entry, _ := arr[len(arr)-1].(map[string]any)
+	inner, _ := entry["hooks"].([]any)
+	if len(inner) == 0 {
+		t.Errorf("hooks[%q] last entry has no inner hooks: %#v", event, entry)
+		return
+	}
+	cmd, _ := inner[0].(map[string]any)
+	if got, _ := cmd["command"].(string); got != want {
+		t.Errorf("hooks[%q] command = %q, want %q", event, got, want)
+	}
+}
+
+// stripSubagentStopScript removes the deliberate post-baseline SubagentStop
+// additions from a rendered km-notify-hook script so the Phase 92 / km-prefix
+// migration guards can compare the REST of the userdata byte-for-byte against the
+// frozen pre-92 baseline. It reverts the gate-case line and excises the "# 4b."
+// handler block (anchored on the stable "# 4b. SubagentStop" / "# 5. Build
+// subject" comment markers). The settings.json SubagentStop hook ENTRY lives in
+// the settings blob and is handled separately by assertClaudeSettingsSemanticEquivalence.
+func stripSubagentStopScript(userdata string) string {
+	out := strings.Replace(userdata, "  PostToolUse|SubagentStop)\n", "  PostToolUse)\n", 1)
+	const blockStart = "# 4b. SubagentStop:"
+	const blockEnd = "# 5. Build subject + body for the email/slack-root path."
+	start := strings.Index(out, blockStart)
+	end := strings.Index(out, blockEnd)
+	if start >= 0 && end > start {
+		out = out[:start] + out[end:]
+	}
+	return out
 }
 
 // effectiveAutoApprove returns the auto-approved tool set from either the legacy

@@ -43,6 +43,10 @@ func TestUserData_PostToolUseHookRegistered(t *testing.T) {
 	if drillHookCmd(t, got, "Stop") != "/opt/km/bin/km-notify-hook Stop" {
 		t.Errorf("Stop hook missing or wrong after PostToolUse addition")
 	}
+	// SubagentStop hook: drains a finished Task subagent's transcript into the thread.
+	if drillHookCmd(t, got, "SubagentStop") != "/opt/km/bin/km-notify-hook SubagentStop" {
+		t.Errorf("SubagentStop hook missing or wrong")
+	}
 }
 
 // transcriptProfile builds a Slack-enabled profile with notifySlackTranscriptEnabled

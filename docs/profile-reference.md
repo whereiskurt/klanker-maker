@@ -1226,7 +1226,7 @@ spec:
 ```
 
 - `agent.default` drives `km shell` / `km agent run` / Slack-inbound dispatch and writes `KM_AGENT`.
-- Inlining `configFiles["/home/sandbox/.claude/settings.json"]` alongside `agent.claude.tools.*` is a hard `km validate` error (mixed mode).
+- Inlining `configFiles["/home/sandbox/.claude/settings.json"]` alongside `agent.claude.*` is supported: the compiler deep-merges the synthesized typed keys (permissions/trustedDirectories win) ON TOP of the inlined file, preserving operator keys like `enabledPlugins`/`env`/`model`. (Earlier builds rejected this as "mixed mode".)
 - Full field reference and the Codex asymmetry note: [`docs/agent-tool-gating.md`](agent-tool-gating.md).
 
 > **Phase 92 (2026-05-31):** the dead top-level `spec.agent:` block

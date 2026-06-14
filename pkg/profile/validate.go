@@ -467,13 +467,15 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	// Phase 87 SNAP-02: Layer 1 semantic validation for additionalSnapshots.
 	errs = append(errs, validateAdditionalSnapshots(p)...)
 
-	// Phase 92 (Wave 4) VC-6: mixed-mode rejection. Populating
-	// agent.claude.tools.autoApprove/deny AND inlining a Claude settings.json via
-	// execution.configFiles is a hard error — the two configuration surfaces are
-	// mutually exclusive (no merge fallback, per the CONTEXT.md locked decision).
-	// Wave 5's synthesizer owns settings.json generation from the typed block;
-	// an inlined file would silently shadow or conflict with it.
-	errs = append(errs, validateAgentClaudeNoMixedMode(p)...)
+	// NOTE (mixed-mode now SUPPORTED): inlining a Claude settings.json via
+	// execution.configFiles ALONGSIDE the typed spec.agent.claude block is no
+	// longer a hard error. The Wave-5 synthesizer deep-merges its typed output
+	// (permissions.allow/deny, trustedDirectories) ON TOP of the inlined file
+	// (see compiler.mergeSynthesizedClaudeSettings) — typed keys win on collision,
+	// while operator keys the synthesizer does not own (enabledPlugins, env, model,
+	// …) are preserved. The old VC-6 rejection caused silent data loss whenever a
+	// typed field was set, and left no way to express enabledPlugins under typed
+	// tool gating, so it was lifted.
 
 	// Phase 89 SOPS-02: spec.secrets.sopsFile must end with .enc.yaml (offline check).
 	// File existence and sops: block presence are layered on by callers
@@ -489,45 +491,6 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	}
 
 	return errs
-}
-
-// validateAgentClaudeNoMixedMode enforces the Phase 92 (Wave 4) VC-6 locked
-// decision: a profile may NOT both populate spec.agent.claude.tools
-// (autoApprove or deny) AND inline a Claude settings.json via
-// spec.execution.configFiles. The structured agent.claude.tools block and an
-// inlined settings.json are two mutually exclusive ways to configure tool
-// gating — Wave 5's synthesizer generates settings.json from the typed block, so
-// an inlined file would silently shadow or conflict with the synthesized output.
-//
-// Returns a single hard ValidationError (no warning, no merge fallback) whose
-// message references BOTH the agent.claude.tools.autoApprove field and the
-// offending configFiles path so the operator can resolve the conflict.
-func validateAgentClaudeNoMixedMode(p *SandboxProfile) []ValidationError {
-	if p.Spec.Agent == nil || p.Spec.Agent.Claude == nil {
-		return nil
-	}
-	if len(p.Spec.Agent.Claude.Tools.AutoApprove) == 0 && len(p.Spec.Agent.Claude.Tools.Deny) == 0 {
-		return nil
-	}
-	if p.Spec.Execution.ConfigFiles == nil {
-		return nil
-	}
-	// Candidate paths an operator might use to inline the Claude settings.json.
-	candidates := []string{
-		"/home/sandbox/.claude/settings.json",
-		"~/.claude/settings.json",
-		".claude/settings.json",
-	}
-	for _, path := range candidates {
-		if _, ok := p.Spec.Execution.ConfigFiles[path]; ok {
-			return []ValidationError{{
-				Path: fmt.Sprintf("spec.execution.configFiles[%q]", path),
-				Message: "cannot inline a Claude settings.json via configFiles when spec.agent.claude.tools.autoApprove (or .deny) is populated; " +
-					"pick one mode — the typed spec.agent.claude.tools.* block OR the inlined configFiles entry, not both",
-			}}
-		}
-	}
-	return nil
 }
 
 // rawAMIIDPatternLocal matches a raw EC2 AMI ID: "ami-" followed by 8-17 lowercase hex chars.

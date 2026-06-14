@@ -635,7 +635,7 @@ event="${1:?event-name required}"
 #      - Stop fires when EITHER idle-ping (Phase 62/63) OR transcript streaming
 #        (Phase 68) is enabled — both can run side-by-side.
 case "$event" in
-  PostToolUse)
+  PostToolUse|SubagentStop)
     [[ "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]] || exit 0
     ;;
   Notification|PermissionRequest)
@@ -826,6 +826,22 @@ if [[ "$event" == "PostToolUse" ]]; then
     exit 0
   fi
   _km_stream_drain "$pt_sid" "$pt_transcript"
+  exit 0
+fi
+
+# 4b. SubagentStop: a Task subagent finished. Drain its (separate) transcript
+#     into the thread, then exit. Mirrors PostToolUse; never falls through to the
+#     email/slack-root branches. For inbound poller turns KM_SLACK_THREAD_TS is
+#     set so the drain lands in the same thread as the parent agent; otherwise the
+#     subagent gets its own auto-thread (a sub-conversation), which is acceptable.
+if [[ "$event" == "SubagentStop" ]]; then
+  ss_sid=$(echo "$payload" | jq -r '.session_id // ""' 2>/dev/null || echo "")
+  ss_transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
+  if [[ -z "$ss_sid" || -z "$ss_transcript" ]]; then
+    echo "[km-notify-hook] SubagentStop: missing session_id/transcript_path" >&2
+    exit 0
+  fi
+  _km_stream_drain "$ss_sid" "$ss_transcript"
   exit 0
 fi
 
@@ -5177,6 +5193,11 @@ func mergeNotifyHookIntoSettings(configFiles map[string]string) (map[string]stri
 	// (matches Phase 62/63 pattern) and the script gates at runtime via
 	// KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED.
 	appendKMHook("PostToolUse", "/opt/km/bin/km-notify-hook PostToolUse")
+	// SubagentStop: drain a finished Task subagent's (separate) transcript into
+	// the Slack thread so long multi-subagent runs surface intermediate progress.
+	// Unconditional entry; the script gates at runtime via
+	// KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED (same as PostToolUse).
+	appendKMHook("SubagentStop", "/opt/km/bin/km-notify-hook SubagentStop")
 
 	settings["hooks"] = hooks
 
@@ -5512,15 +5533,24 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		if serr != nil {
 			return "", fmt.Errorf("synthesizeClaudeSettings: %w", serr)
 		}
-		// Only seed the configFiles entry when the synthesizer produced keys.
-		// When empty (codex-default profiles), mergeNotifyHookIntoSettings still
-		// writes a hooks-only settings.json — byte-identical to pre-Phase-92.
-		if len(settings) > 0 {
-			buf, merr := json.MarshalIndent(settings, "", "  ")
+		// Deep-merge the typed-synthesized keys ON TOP of any operator-inlined
+		// settings.json rather than clobbering it. This preserves operator keys
+		// the synthesizer does not own (enabledPlugins, env, model, …) while the
+		// typed permissions/trustedDirectories win on the keys they own. See
+		// mergeSynthesizedClaudeSettings.
+		//
+		// Only seed the configFiles entry when there is something to write — a
+		// populated synthesizer output OR an operator-inlined file. When BOTH are
+		// empty (codex-default profiles with no inlined settings), leave the entry
+		// absent so mergeNotifyHookIntoSettings writes a hooks-only settings.json —
+		// byte-identical to pre-Phase-92.
+		inlinedSettings := cf[claudeSettingsPath]
+		if len(settings) > 0 || strings.TrimSpace(inlinedSettings) != "" {
+			merged, merr := mergeSynthesizedClaudeSettings(inlinedSettings, settings)
 			if merr != nil {
-				return "", fmt.Errorf("marshal synthesized claude settings.json: %w", merr)
+				return "", merr
 			}
-			cf[claudeSettingsPath] = string(buf)
+			cf[claudeSettingsPath] = merged
 		}
 		params.ConfigFiles = cf
 	}
