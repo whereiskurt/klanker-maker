@@ -1,0 +1,111 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Results Summary",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "column_settings": [
+        {
+          "align": "left",
+          "is_wrapped": false
+        },
+        {
+          "align": "center",
+          "is_wrapped": false
+        },
+        {
+          "align": "right",
+          "is_wrapped": false
+        }
+      ],
+      "rows": [
+        [
+          {
+            "elements": [
+              {
+                "style": {
+                  "bold": true
+                },
+                "text": "Name",
+                "type": "text"
+              }
+            ],
+            "type": "rich_text"
+          },
+          {
+            "elements": [
+              {
+                "style": {
+                  "bold": true
+                },
+                "text": "Score",
+                "type": "text"
+              }
+            ],
+            "type": "rich_text"
+          },
+          {
+            "elements": [
+              {
+                "style": {
+                  "bold": true
+                },
+                "text": "Rank",
+                "type": "text"
+              }
+            ],
+            "type": "rich_text"
+          }
+        ],
+        [
+          {
+            "text": "Alice",
+            "type": "raw_text"
+          },
+          {
+            "text": "98.5",
+            "type": "raw_number"
+          },
+          {
+            "text": "1",
+            "type": "raw_number"
+          }
+        ],
+        [
+          {
+            "text": "Bob",
+            "type": "raw_text"
+          },
+          {
+            "text": "3.14",
+            "type": "raw_number"
+          },
+          {
+            "text": "2",
+            "type": "raw_number"
+          }
+        ],
+        [
+          {
+            "text": "Charlie",
+            "type": "raw_text"
+          },
+          {
+            "text": "plain",
+            "type": "raw_text"
+          },
+          {
+            "text": "3",
+            "type": "raw_number"
+          }
+        ]
+      ],
+      "type": "table"
+    }
+  ],
+  "text": "Results Summary\n\n| Name     | Score  | Rank |\n|:---------|:------:|-----:|\n| Alice    | 98.5   | 1    |\n| Bob      | 3.14   | 2    |\n| Charlie  | plain  | 3    |"
+}

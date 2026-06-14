@@ -261,9 +261,10 @@ func TestRichBlocks_StructuralValidity(t *testing.T) {
 		"```\n# not a header\n```\n\nafter fence.\n",
 	}
 	validTypes := map[string]bool{
-		"header":  true,
+		"header":   true,
 		"markdown": true,
-		"context": true,
+		"context":  true,
+		"table":    true,
 	}
 	for _, input := range inputs {
 		bj, _, ok := RenderRich(input, false)

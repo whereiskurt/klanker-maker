@@ -85,12 +85,18 @@ func renderRich(input string, aiFooter bool) (blocksJSON, fallbackText string, o
 				capHit = true
 			}
 		case segRichTable:
-			// Plan 02: replace with buildTableBlock.
-			// For now, emit the table lines verbatim as a markdown block
-			// (same monospace reflow as Tier-2 uses as fallback).
-			tableText := fencePipeTables(strings.Join(seg.lines, "\n"))
-			mdb := blockMarkdown{Type: "markdown", Text: tableText}
-			blocks = append(blocks, mdb)
+			tb, tableOK := buildTableBlock(seg.lines)
+			if tableOK {
+				blocks = append(blocks, tb)
+			} else {
+				// Guard hit (>20 cols / >100 rows) or malformed table —
+				// fall back to the existing fencePipeTables monospace reflow,
+				// emitted as a markdown block (valid GFM fenced code block).
+				tableText := fencePipeTables(strings.Join(seg.lines, "\n"))
+				blocks = append(blocks, blockMarkdown{Type: "markdown", Text: tableText})
+			}
+			// Tables don't render in the text fallback — append stripped lines
+			// as plain text (same as today's Tier-2 behaviour).
 			for _, l := range seg.lines {
 				fallbackLines = append(fallbackLines, stripForFallback(l))
 			}
