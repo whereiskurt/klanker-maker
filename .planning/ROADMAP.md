@@ -2627,7 +2627,7 @@ Plans:
 
 **Requirements**: TBD
 **Depends on:** Existing compiler/userdata pipeline + `klanker:sandbox`/`klanker:slack` skills. No dependency on Phases 110/111/112.
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 **Context:** `.planning/phases/113-sandbox-self-awareness-on-box-profile-plus-capability-network-privilege-self-census-in-klanker-sandbox/113-CONTEXT.md`
 **Spec:** `docs/superpowers/specs/2026-06-14-sandbox-self-awareness-design.md`
 
