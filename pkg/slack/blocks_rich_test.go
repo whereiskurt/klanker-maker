@@ -523,10 +523,101 @@ func TestRichTable_GuardFallback(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestRichDefaultPathFrozen (RICH-18): regression guard asserting the default
+// Tier-2 `blocks` corpus is unmodified by Phase 111 work.
+// This test mirrors TestBlocksCorpus but is explicitly named so that the
+// RICH-18 requirement is traceable — `go test -run TestRichDefaultPathFrozen`
+// catches any accidental change to the default render path.
+//
+// The blocks-*.expected-blocks.json files use two fixture formats:
+//   - single-key: plain JSON array  (most fixtures)
+//   - two-key:    {"blocks":[...],"text":"..."}  (e.g. blocks-plain-text-fallback)
+// Both are handled here.
+func TestRichDefaultPathFrozen(t *testing.T) {
+	// Walk blocks-*.md fixtures and verify RenderBlocks (Tier-2) output is
+	// byte-identical to their expected-blocks.json golden files.
+	// These goldens must NEVER change as a result of Phase 111 changes.
+	matches, err := filepath.Glob("testdata/blocks-*.md")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("no blocks corpus fixtures found (default-path frozen guard failed)")
+	}
+	for _, md := range matches {
+		base := strings.TrimSuffix(md, ".md")
+		// Skip fixtures that have no companion expected file or use dedicated tests.
+		if strings.Contains(base, "50block-fallback") || strings.Contains(base, "section-overflow") {
+			continue
+		}
+		expectedPath := base + ".expected-blocks.json"
+		if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
+			t.Logf("skipping %s: no expected-blocks.json", filepath.Base(md))
+			continue
+		}
+		t.Run(filepath.Base(base), func(t *testing.T) {
+			input, err := os.ReadFile(md)
+			if err != nil {
+				t.Fatalf("read input: %v", err)
+			}
+			expectedRaw, err := os.ReadFile(expectedPath)
+			if err != nil {
+				t.Fatalf("read expected: %v", err)
+			}
+			bj, fallback, ok := RenderBlocks(string(input))
+			if !ok {
+				t.Logf("skipping %s: RenderBlocks ok=false (expected for cap fixtures)", filepath.Base(md))
+				return
+			}
+
+			// Handle both fixture formats (same logic as TestBlocksCorpus).
+			// Try two-key format first; fall back to single-key plain array.
+			var twoKey struct {
+				Blocks json.RawMessage `json:"blocks"`
+				Text   string          `json:"text"`
+			}
+			if err2 := json.Unmarshal(expectedRaw, &twoKey); err2 == nil && twoKey.Blocks != nil {
+				// Two-key format.
+				var gotBlocks, wantBlocks []map[string]any
+				if err3 := json.Unmarshal([]byte(bj), &gotBlocks); err3 != nil {
+					t.Fatalf("unmarshal got blocks: %v", err3)
+				}
+				if err3 := json.Unmarshal(twoKey.Blocks, &wantBlocks); err3 != nil {
+					t.Fatalf("unmarshal want blocks: %v", err3)
+				}
+				gotJ, _ := json.Marshal(gotBlocks)
+				wantJ, _ := json.Marshal(wantBlocks)
+				if string(gotJ) != string(wantJ) {
+					t.Errorf("REGRESSION: default blocks corpus changed (Phase 111 must not touch Tier-2):\n  got:  %s\n  want: %s", gotJ, wantJ)
+				}
+				if fallback != twoKey.Text {
+					t.Errorf("REGRESSION: fallback text changed:\n  got:  %q\n  want: %q", fallback, twoKey.Text)
+				}
+				return
+			}
+
+			// Single-key format: expectedRaw is the blocks array directly.
+			var gotBlocks, wantBlocks []map[string]any
+			if err3 := json.Unmarshal([]byte(bj), &gotBlocks); err3 != nil {
+				t.Fatalf("unmarshal got blocks: %v", err3)
+			}
+			if err3 := json.Unmarshal(expectedRaw, &wantBlocks); err3 != nil {
+				t.Fatalf("unmarshal want blocks: %v", err3)
+			}
+			gotJ, _ := json.Marshal(gotBlocks)
+			wantJ, _ := json.Marshal(wantBlocks)
+			if string(gotJ) != string(wantJ) {
+				t.Errorf("REGRESSION: default blocks corpus changed (Phase 111 must not touch Tier-2):\n  got:  %s\n  want: %s", gotJ, wantJ)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestRichCorpus walks the rich-*.md fixtures and compares RenderRich output
 // to the rich-*.expected-blocks.json golden files.
-// This is the prose-only case (Plan 01). Plan 04 will extend this to table
-// and mixed fixtures.
+// Covers: rich-prose-basic (Plan 01), rich-table-basic (Plan 02),
+//         rich-mixed (Plan 04: H1 + prose + table + tool line).
 //
 // Fixture format: two-key JSON object {"blocks":[...],"text":"..."}.
 func TestRichCorpus(t *testing.T) {

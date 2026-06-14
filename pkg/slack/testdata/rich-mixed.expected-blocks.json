@@ -1,0 +1,124 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Analysis Report",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "text": "Reviewed the results and found a [detailed breakdown](https://example.com/report) of the findings.",
+      "type": "markdown"
+    },
+    {
+      "column_settings": [
+        {
+          "align": "left",
+          "is_wrapped": false
+        },
+        {
+          "align": "center",
+          "is_wrapped": false
+        },
+        {
+          "align": "right",
+          "is_wrapped": false
+        }
+      ],
+      "rows": [
+        [
+          {
+            "elements": [
+              {
+                "style": {
+                  "bold": true
+                },
+                "text": "Tool",
+                "type": "text"
+              }
+            ],
+            "type": "rich_text"
+          },
+          {
+            "elements": [
+              {
+                "style": {
+                  "bold": true
+                },
+                "text": "Status",
+                "type": "text"
+              }
+            ],
+            "type": "rich_text"
+          },
+          {
+            "elements": [
+              {
+                "style": {
+                  "bold": true
+                },
+                "text": "Score",
+                "type": "text"
+              }
+            ],
+            "type": "rich_text"
+          }
+        ],
+        [
+          {
+            "text": "linter",
+            "type": "raw_text"
+          },
+          {
+            "text": "pass",
+            "type": "raw_text"
+          },
+          {
+            "text": "100",
+            "type": "raw_number"
+          }
+        ],
+        [
+          {
+            "text": "tests",
+            "type": "raw_text"
+          },
+          {
+            "text": "pass",
+            "type": "raw_text"
+          },
+          {
+            "text": "98.5",
+            "type": "raw_number"
+          }
+        ],
+        [
+          {
+            "text": "coverage",
+            "type": "raw_text"
+          },
+          {
+            "text": "partial",
+            "type": "raw_text"
+          },
+          {
+            "text": "72",
+            "type": "raw_number"
+          }
+        ]
+      ],
+      "type": "table"
+    },
+    {
+      "elements": [
+        {
+          "text": "🔧 Edit: /workspace/report.go (lines 42–58)",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "Analysis Report\n\nReviewed the results and found a detailed breakdown of the findings.\n\n| Tool       | Status  | Score |\n|:-----------|:-------:|------:|\n| linter     | pass    | 100   |\n| tests      | pass    | 98.5  |\n| coverage   | partial | 72    |\n\n🔧 Edit: /workspace/report.go (lines 42–58)"
+}
