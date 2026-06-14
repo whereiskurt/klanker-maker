@@ -345,9 +345,22 @@ func checkSlackInboundStaleQueues(
 	// for the next minute. Cutoff comfortably exceeds the worst-case
 	// km create gap.
 	provisioningCutoff := time.Now().Add(-10 * time.Minute)
+
+	// The shared per-install Slack-inbound DLQ ({prefix}-slack-inbound-dlq.fifo)
+	// is matched by the "{prefix}-slack-inbound-" ListQueues prefix but is
+	// install-scoped and intentionally has NO DDB row — sibling sandboxes redrive
+	// poison envelopes into it (Phase 99.1). Exclude it so it is never reported as
+	// a stale orphan and, with --delete-sqs, never deleted out from under live
+	// sandboxes. km uninit owns the shared DLQ's lifecycle. See
+	// destroy_slack_inbound.go CONTEXT D5.
+	dlqSuffix := "/" + kmaws.SlackInboundDLQName(resourcePrefix)
+
 	var stale []string
 	skippedYoung := 0
 	for _, qURL := range listOut.QueueUrls {
+		if strings.HasSuffix(qURL, dlqSuffix) {
+			continue
+		}
 		if _, ok := known[qURL]; ok {
 			continue
 		}

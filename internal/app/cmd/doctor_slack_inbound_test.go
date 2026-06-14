@@ -136,6 +136,54 @@ func TestDoctor_SlackInboundStaleQueues_FoundOrphans(t *testing.T) {
 	}
 }
 
+// TestDoctor_SlackInboundStaleQueues_ExcludesSharedDLQ: the shared per-install
+// DLQ ({prefix}-slack-inbound-dlq.fifo) is matched by the ListQueues prefix and
+// has no DDB row, but must NEVER be reported as stale (or it would be deleted by
+// --delete-sqs out from under live sandboxes that redrive into it). A real
+// orphan alongside it is still surfaced.
+func TestDoctor_SlackInboundStaleQueues_ExcludesSharedDLQ(t *testing.T) {
+	sqsCli := &fakeSQS{
+		listResult: []string{
+			"https://sqs/km-slack-inbound-sb-a.fifo",
+			"https://sqs/km-slack-inbound-dlq.fifo",
+			"https://sqs/km-slack-inbound-orphan.fifo",
+		},
+	}
+	listInbound := func(_ context.Context) ([]inboundRow, error) {
+		return []inboundRow{
+			{SandboxID: "sb-a", QueueURL: "https://sqs/km-slack-inbound-sb-a.fifo"},
+		}, nil
+	}
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, false, nil)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN for the real orphan, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if strings.Contains(r.Message, "dlq") {
+		t.Errorf("shared DLQ must not be reported as stale, got: %s", r.Message)
+	}
+	if !strings.Contains(r.Message, "orphan") {
+		t.Errorf("expected the real orphan to still be surfaced, got: %s", r.Message)
+	}
+	if !strings.Contains(r.Message, "1 stale inbound queue(s)") {
+		t.Errorf("expected exactly 1 stale queue (DLQ excluded), got: %s", r.Message)
+	}
+}
+
+// TestDoctor_SlackInboundStaleQueues_OnlySharedDLQ: when the ONLY queue matching
+// the prefix is the shared DLQ, the check reports OK (no stale orphans).
+func TestDoctor_SlackInboundStaleQueues_OnlySharedDLQ(t *testing.T) {
+	sqsCli := &fakeSQS{
+		listResult: []string{"https://sqs/km-slack-inbound-dlq.fifo"},
+	}
+	listInbound := func(_ context.Context) ([]inboundRow, error) {
+		return []inboundRow{}, nil
+	}
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, false, nil)
+	if r.Status != CheckOK {
+		t.Fatalf("expected OK when only the shared DLQ is present, got %s (msg=%s)", r.Status, r.Message)
+	}
+}
+
 // TestDoctor_SlackInboundStaleQueues_AllAccountedFor: every SQS queue has a
 // matching DDB row → OK.
 func TestDoctor_SlackInboundStaleQueues_AllAccountedFor(t *testing.T) {
