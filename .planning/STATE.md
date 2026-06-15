@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 113-03-PLAN.md (docs + live UAT; phase 113 ready for verification)
-last_updated: "2026-06-14T18:29:41.025Z"
-last_activity: 2026-06-14
+stopped_at: Completed 114-01-PLAN.md (EC2 resume primitives for slack bridge)
+last_updated: "2026-06-15T16:12:38.459Z"
+last_activity: 2026-06-15
 progress:
-  total_phases: 129
+  total_phases: 130
   completed_phases: 113
-  total_plans: 566
-  completed_plans: 528
+  total_plans: 569
+  completed_plans: 529
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-14
+Last activity: 2026-06-15
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -565,6 +565,7 @@ Progress: [█████████░] 91%
 | Phase 113 P01 | 15min | 3 tasks | 6 files |
 | Phase 113 P02 | 2min | 2 tasks | 3 files |
 | Phase 113 P03 | 20min | 2 tasks | 3 files |
+| Phase 114-slack-bridge-auto-resume P01 | 215s | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1616,6 +1617,9 @@ Recent decisions affecting current work:
 - [Phase 113]: klanker:sandbox skill rewritten as six-section self-census (A-F) with PROFILE_AVAILABLE graceful fallback for pre-Phase-113 sandboxes; plugin 0.4.10 bumped in lockstep
 - [Phase 113]: Redaction sign-off: write VERBATIM (no embeddable-secret field found; profile carries SSM paths not values)
 - [Phase 113]: On-box /opt/km/.km-profile.yaml is semantically equivalent (NOT byte-identical) to S3 copy — UAT-confirmed on slacktest02
+- [Phase 114-slack-bridge-auto-resume]: SandboxStatusWriter interface has no DeleteSandboxRow — slack bridge has no cold-create publisher
+- [Phase 114-slack-bridge-auto-resume]: sandboxIDTagKey() hardcodes km:sandbox-id (Phase-109 fix); ResourcePrefix retained on struct but inert
+- [Phase 114-slack-bridge-auto-resume]: DynamoSandboxStatusWriter.Client typed DDBUpdateItemAPI (existing slack-bridge interface) not a new narrow type — avoids RESEARCH.md Pitfall 6
 
 ### Roadmap Evolution
 
@@ -1757,6 +1761,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-14T18:25:51.464Z
-Stopped at: Completed 113-03-PLAN.md (docs + live UAT; phase 113 ready for verification)
+Last session: 2026-06-15T16:12:38.449Z
+Stopped at: Completed 114-01-PLAN.md (EC2 resume primitives for slack bridge)
 Resume file: None
