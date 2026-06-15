@@ -39,13 +39,17 @@ type fakeEC2Client struct {
 	describeResponses []*ec2.DescribeInstancesOutput
 	describeCallCount int
 	describeErr       error
+	// describeInputs records every DescribeInstancesInput so tests can assert the
+	// filters (e.g. the tag key the resumer derived). Empty until DescribeInstances runs.
+	describeInputs []*ec2.DescribeInstancesInput
 
 	startCalled     bool
 	startInstanceIDs []string
 	startErr        error
 }
 
-func (f *fakeEC2Client) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+func (f *fakeEC2Client) DescribeInstances(_ context.Context, params *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	f.describeInputs = append(f.describeInputs, params)
 	if f.describeErr != nil {
 		return nil, f.describeErr
 	}
@@ -110,6 +114,54 @@ func TestEC2Resumer_StoppedInstance(t *testing.T) {
 	}
 	if len(fake.startInstanceIDs) != 1 || fake.startInstanceIDs[0] != "i-stopped123" {
 		t.Errorf("StartInstances called with %v; want [i-stopped123]", fake.startInstanceIDs)
+	}
+}
+
+// ============================================================
+// TestEC2Resumer_NonKmPrefix_FiltersOnKmSandboxIdTag — non-"km" prefix regression
+// ============================================================
+
+// TestEC2Resumer_NonKmPrefix_FiltersOnKmSandboxIdTag is the regression for the
+// 2026-06-12 incident on the `sec` install. On a non-"km" resource_prefix the resumer
+// derived the EC2 tag key from ResourcePrefix ("sec:sandbox-id"), a tag km never
+// applies — km always tags sandbox instances "km:sandbox-id" regardless of
+// resource_prefix (the prefix lives in the separate "km:resource-prefix" tag). The
+// filter matched nothing → StartSandbox returned ErrNoResumableInstance → the Phase-109
+// self-heal needlessly deleted the alias row and cold-created a fresh sandbox even
+// though the stopped instance was sitting there fully resumable.
+//
+// This reproduces the PRODUCTION wiring (ResourcePrefix set, SandboxIDTagKey empty),
+// which the other resumer tests never exercise — they all set SandboxIDTagKey
+// explicitly, hiding the buggy derivation branch.
+func TestEC2Resumer_NonKmPrefix_FiltersOnKmSandboxIdTag(t *testing.T) {
+	fake := &fakeEC2Client{
+		describeResponses: []*ec2.DescribeInstancesOutput{
+			singleReservation(makeInstance("i-stopped123", ec2types.InstanceStateNameStopped)),
+		},
+	}
+	// Wire it exactly like cmd/km-github-bridge/main.go: ResourcePrefix set, no SandboxIDTagKey.
+	resumer := &bridge.EC2Resumer{Client: fake, ResourcePrefix: "sec"}
+
+	if err := resumer.StartSandbox(context.Background(), "gh-cc433b2e"); err != nil {
+		t.Fatalf("StartSandbox on a non-km prefix install must resume the stopped instance, got: %v", err)
+	}
+	if !fake.startCalled {
+		t.Fatal("StartInstances must be called — the stopped instance is resumable")
+	}
+
+	// The crux: the DescribeInstances filter must key on "tag:km:sandbox-id",
+	// NOT "tag:sec:sandbox-id".
+	if len(fake.describeInputs) == 0 {
+		t.Fatal("DescribeInstances was never called")
+	}
+	var sandboxTagFilter string
+	for _, fil := range fake.describeInputs[0].Filters {
+		if fil.Name != nil && strings.HasSuffix(*fil.Name, ":sandbox-id") {
+			sandboxTagFilter = *fil.Name
+		}
+	}
+	if sandboxTagFilter != "tag:km:sandbox-id" {
+		t.Errorf("resume filter tag key = %q; want \"tag:km:sandbox-id\" (km tags instances km:sandbox-id regardless of resource_prefix)", sandboxTagFilter)
 	}
 }
 

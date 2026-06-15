@@ -7,6 +7,7 @@ package bridge_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -20,12 +21,16 @@ type fakeEC2Client struct {
 	describeResponses []*ec2.DescribeInstancesOutput
 	describeCallCount int
 	describeErr       error
+	// describeInputs records every DescribeInstancesInput so tests can assert the
+	// filters (e.g. the tag key the resumer derived). Empty until DescribeInstances runs.
+	describeInputs []*ec2.DescribeInstancesInput
 
 	startCalled bool
 	startErr    error
 }
 
-func (f *fakeEC2Client) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+func (f *fakeEC2Client) DescribeInstances(_ context.Context, params *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	f.describeInputs = append(f.describeInputs, params)
 	if f.describeErr != nil {
 		return nil, f.describeErr
 	}
@@ -84,6 +89,43 @@ func TestEC2Resumer_DescribeError_NotErrNoResumableInstance(t *testing.T) {
 	}
 	if errors.Is(err, bridge.ErrNoResumableInstance) {
 		t.Error("a transient DescribeInstances error must NOT match ErrNoResumableInstance")
+	}
+}
+
+// TestEC2Resumer_NonKmPrefix_FiltersOnKmSandboxIdTag is the H1 mirror of the GitHub
+// regression for the 2026-06-12 `sec`-install incident: on a non-"km" resource_prefix
+// the resumer derived the tag key from ResourcePrefix ("sec:sandbox-id"), which km never
+// applies — km always tags instances "km:sandbox-id" regardless of resource_prefix. The
+// filter matched nothing → ErrNoResumableInstance → needless delete + cold-create. This
+// reproduces the production wiring (ResourcePrefix set, SandboxIDTagKey empty).
+func TestEC2Resumer_NonKmPrefix_FiltersOnKmSandboxIdTag(t *testing.T) {
+	fake := &fakeEC2Client{
+		describeResponses: []*ec2.DescribeInstancesOutput{
+			{Reservations: []ec2types.Reservation{{Instances: []ec2types.Instance{
+				makeInstance("i-stopped1", ec2types.InstanceStateNameStopped),
+			}}}},
+		},
+	}
+	// Wire it exactly like cmd/km-h1-bridge/main.go: ResourcePrefix set, no SandboxIDTagKey.
+	resumer := &bridge.EC2Resumer{Client: fake, ResourcePrefix: "sec"}
+
+	if err := resumer.StartSandbox(context.Background(), "h1-cc433b2e"); err != nil {
+		t.Fatalf("StartSandbox on a non-km prefix install must resume the stopped instance, got: %v", err)
+	}
+	if !fake.startCalled {
+		t.Fatal("StartInstances must be called — the stopped instance is resumable")
+	}
+	if len(fake.describeInputs) == 0 {
+		t.Fatal("DescribeInstances was never called")
+	}
+	var sandboxTagFilter string
+	for _, fil := range fake.describeInputs[0].Filters {
+		if fil.Name != nil && strings.HasSuffix(*fil.Name, ":sandbox-id") {
+			sandboxTagFilter = *fil.Name
+		}
+	}
+	if sandboxTagFilter != "tag:km:sandbox-id" {
+		t.Errorf("resume filter tag key = %q; want \"tag:km:sandbox-id\" (km tags instances km:sandbox-id regardless of resource_prefix)", sandboxTagFilter)
 	}
 }
 
