@@ -108,6 +108,21 @@ type EventsHandler struct {
 	// no cooldown is applied (not recommended in production; main.go always wires it
 	// together with DefaultRouter=true).
 	RouterCooldown RouterCooldownStore
+
+	// Phase 114: auto-resume. When Resumer is non-nil and info.Paused, the step-9
+	// branch starts the stopped/paused EC2 instance so the on-box poller boots and
+	// drains the message enqueued at step 8. nil => byte-identical to pre-Phase-114
+	// (pause-hint only); the nil-invariant MUST be maintained (see
+	// TestEventsHandler_NilResumer_PauseHintOnly).
+	Resumer SandboxResumer
+	// Phase 114: after a successful (or transient-error, optimistic) resume, flip the
+	// km-sandboxes row to status=running so a follow-up message takes the warm path.
+	// nil => status not flipped (graceful degradation). UpdateItem, never PutItem.
+	StatusWriter SandboxStatusWriter
+	// Phase 114: distinct hinter used only on the orphan/degraded path
+	// (ErrNoResumableInstance — instance gone, no cold-create in v1). Carries the
+	// "couldn't auto-resume; ask an operator" text. nil => orphan path logs only.
+	OrphanHinter PauseHintPoster
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -452,22 +467,57 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		h.log().Info("events: enqueued", "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", threadTS, "event_id", env.EventID)
 	}
 
-	// 9. Paused-sandbox hint (LOCKED in CONTEXT.md "Edge Cases").
-	//    Fire-and-forget so Slack still gets a 200 within the 3s ack window.
-	//    The PauseHinter implementation enforces the 1h cooldown internally;
-	//    handler is just a trigger.
-	if info.Paused && h.PauseHinter != nil {
+	// 9. Resume-or-hint (Phase 114). The message is ALREADY enqueued at step 8 in all
+	//    cases — resume failure NEVER strands the prompt (same fail-soft contract as the
+	//    GitHub Phase-109 path). Runs ONLY after the mention-only/thread-bypass filter
+	//    (step 5b) and enqueue (step 8), so idle chatter never wakes the box.
+	//
+	//    SYNCHRONOUS (not a goroutine) — same Phase 75.2 lesson as the step-10 reactor:
+	//    AWS Lambda freezes the runtime when Handle returns; a goroutine mid-StartInstances
+	//    would see its wall-clock context elapse during the freeze and thaw to find every
+	//    AWS call timed out. The bounded sub-context fits inside the 60s Lambda timeout; if
+	//    the work pushes past Slack's 3s ack window, Slack re-fires the event and the
+	//    event_id dedup in step 6 returns an immediate 200 (already-seen).
+	if info.Paused {
+		sid := info.SandboxID
 		ch, ts := msg.Channel, threadTS
-		go func() {
-			// Use a fresh context — request ctx may be canceled after the
-			// 200 response is written. Use a short deadline so the goroutine
-			// never lingers.
-			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := h.PauseHinter.PostIfCooldownExpired(bgCtx, ch, ts); err != nil {
+		resumeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		if h.Resumer != nil {
+			err := h.Resumer.StartSandbox(resumeCtx, sid)
+			if err != nil && errors.Is(err, ErrNoResumableInstance) {
+				// Orphan: instance gone. v1 has no cold-create. Degraded hint, leave row.
+				h.log().Warn("events: auto-resume: no resumable instance (orphaned row)",
+					"sandbox", sid, "channel", ch)
+				if h.OrphanHinter != nil {
+					if herr := h.OrphanHinter.PostIfCooldownExpired(resumeCtx, ch, ts); herr != nil {
+						h.log().Warn("events: auto-resume: orphan hint post failed", "err", herr, "channel", ch, "thread_ts", ts)
+					}
+				}
+			} else {
+				if err != nil {
+					h.log().Warn("events: auto-resume: transient StartInstances error (enqueue continues, flipping status optimistically)",
+						"sandbox", sid, "err", err)
+				}
+				// Success OR transient error: optimistically flip status (fail-soft).
+				if h.StatusWriter != nil {
+					if werr := h.StatusWriter.SetStatusRunning(resumeCtx, sid); werr != nil {
+						h.log().Warn("events: auto-resume: SetStatusRunning failed (non-fatal)", "sandbox", sid, "err", werr)
+					}
+				}
+				if h.PauseHinter != nil {
+					if herr := h.PauseHinter.PostIfCooldownExpired(resumeCtx, ch, ts); herr != nil {
+						h.log().Warn("events: auto-resume: wake hint post failed", "err", herr, "channel", ch, "thread_ts", ts)
+					}
+				}
+			}
+		} else if h.PauseHinter != nil {
+			// nil Resumer: byte-identical to pre-Phase-114 (pause-hint only), now
+			// running synchronously (same rationale as the step-10 reactor).
+			if err := h.PauseHinter.PostIfCooldownExpired(resumeCtx, ch, ts); err != nil {
 				h.log().Warn("events: pause hint post failed", "err", err, "channel", ch, "thread_ts", ts)
 			}
-		}()
+		}
+		cancel()
 	}
 
 	// 10. ACK reaction (Phase 67.1; synchronous since Phase 75.2's lesson).

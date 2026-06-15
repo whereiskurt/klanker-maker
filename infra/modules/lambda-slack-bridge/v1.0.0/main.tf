@@ -214,6 +214,40 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes_pause_hint" {
   })
 }
 
+# Phase 114: auto-resume. Grants the bridge StartInstances on paused/stopped sandbox
+# instances so an inbound Slack message to a paused sandbox wakes the box. Mirrors the
+# GitHub bridge ec2_resume policy (lambda-github-bridge/v1.1.0). DescribeInstances has no
+# resource-level conditions (Resource = "*"); StartInstances is scoped to instances tagged
+# with this install's resource-prefix. dynamodb:UpdateItem on km-sandboxes is already
+# granted by dynamodb_sandboxes_pause_hint above (SetStatusRunning reuses it).
+resource "aws_iam_role_policy" "ec2_resume" {
+  name = "${local.function_name}-ec2-resume"
+  role = aws_iam_role.slack_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EC2DescribeInstances"
+        Effect   = "Allow"
+        Action   = ["ec2:DescribeInstances"]
+        Resource = "*"
+      },
+      {
+        Sid      = "EC2StartInstances"
+        Effect   = "Allow"
+        Action   = ["ec2:StartInstances"]
+        Resource = "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:instance/*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/km:resource-prefix" = var.resource_prefix
+          }
+        }
+      }
+    ]
+  })
+}
+
 # Phase 68: bridge reads transcripts under transcripts/* on the artifacts bucket.
 # The IAM grant is intentionally broad (cross-sandbox) — the bridge enforces
 # per-sandbox prefix at envelope-validation time inside handler.go before

@@ -166,3 +166,20 @@ type EventNonceStore interface {
 type Reactor interface {
 	Add(ctx context.Context, channel, ts, emoji string) error
 }
+
+// SandboxResumer starts a stopped or paused EC2 sandbox instance. Phase 114:
+// used by EventsHandler at the step-9 paused branch — start the box so the on-box
+// poller boots and drains the already-enqueued message. Errors are non-fatal in the
+// caller (the message is already enqueued at step 8); the next message retries.
+type SandboxResumer interface {
+	StartSandbox(ctx context.Context, sandboxID string) error
+}
+
+// SandboxStatusWriter flips the km-sandboxes status to running after a successful
+// auto-resume so a follow-up message takes the warm path (FetchByChannel returns
+// Paused==false) instead of re-firing StartInstances. Slack-scoped subset of the
+// GitHub bridge interface: NO DeleteSandboxRow (the slack bridge has no cold-create).
+// MUST use UpdateItem, never PutItem (SandboxMetadata lossy round-trip footgun).
+type SandboxStatusWriter interface {
+	SetStatusRunning(ctx context.Context, sandboxID string) error
+}

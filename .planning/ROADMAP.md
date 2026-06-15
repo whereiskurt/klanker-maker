@@ -2635,3 +2635,15 @@ Plans:
 - [ ] 113-01-PLAN.md — userdata: thread ProfileYAML + write /opt/km/.km-profile.yaml block; round-trip unit tests; regenerate 3 goldens (Wave 1)
 - [ ] 113-02-PLAN.md — rewrite skills/sandbox/SKILL.md into six-section self-census (A–F) + graceful fallback; plugin version bump (Wave 2)
 - [ ] 113-03-PLAN.md — docs + live UAT (km create → km shell → census end-to-end); profile written VERBATIM, no redaction (Wave 3)
+
+### Phase 114: Slack bridge auto-resume: start a paused or stopped sandbox when an inbound Slack thread or channel message would be dispatched to it (resume-only Slack analog of the GitHub and H1 Phase-109 resume path)
+
+**Goal:** When an inbound Slack message targets a paused/stopped sandbox AND would otherwise be dispatched (passed the mention-only / thread-bypass filter and was enqueued at step 8), the km-slack-bridge Lambda starts the EC2 instance so the on-box poller boots and drains the already-queued message. Resume-only: an orphaned row (instance terminated) degrades to an informative hint with no cold-create. No SandboxProfile/DDB schema change; no sandbox recreate.
+**Requirements**: SLACK-RESUME-EC2RESUMER, SLACK-RESUME-STATUSWRITER, SLACK-RESUME-HANDLER, SLACK-RESUME-ORPHAN, SLACK-RESUME-BACKCOMPAT, SLACK-RESUME-SYNCHRONOUS, SLACK-RESUME-WIRING, SLACK-RESUME-IAM, SLACK-RESUME-DOCS
+**Depends on:** Phase 113
+**Plans:** 3/3 plans complete
+
+Plans:
+- [ ] 114-01-PLAN.md — Port EC2Resumer + ErrNoResumableInstance + DynamoSandboxStatusWriter + SandboxResumer/SandboxStatusWriter interfaces into pkg/slack/bridge (+ unit tests, mock EC2 + DDB)
+- [ ] 114-02-PLAN.md — EventsHandler step-9 synchronous resume-or-hint branch (paused→resume+flip+enqueue; orphan→degraded hint; transient→optimistic flip; running→no resume; nil Resumer→byte-identical) + resume-branch tests
+- [x] 114-03-PLAN.md — Wiring (EC2 client + Resumer/StatusWriter/OrphanHinter in main.go) + ec2_resume IAM policy on lambda-slack-bridge + docs § Phase 114 (deploy: make build-lambdas + km init --slack, NOT --sidecars) (completed 2026-06-15)

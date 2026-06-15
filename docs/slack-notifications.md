@@ -2623,3 +2623,135 @@ km init --sidecars        # upload new km-slack binary to S3 + cold-start Lambda
 
 Existing sandboxes pick up `blocks-rich` only after `km destroy && km create` — the sidecar
 binary is baked into the sandbox at create time.
+
+---
+
+## Phase 114 — Slack bridge auto-resume
+
+**What it does:** When an inbound Slack message targets a sandbox in `paused` or `stopped` state
+AND that message would otherwise be dispatched (it already passed the mention-only / thread-bypass
+filter and was enqueued to the per-sandbox FIFO), the `km-slack-bridge` Lambda calls
+`ec2:StartInstances` to wake the EC2 instance. Once the instance is up, the on-box inbound poller
+boots, drains the already-enqueued message, and the agent replies in the thread as normal.
+
+This is the Slack analog of the GitHub/H1 Phase-109 resume-or-cold-create path.
+**Resume-only** — there is no cold-create path for Slack (Slack has no `SandboxCreate`
+EventBridge publisher).
+
+### Trigger gate
+
+Resume fires **only at the existing step-9 paused branch** — i.e., only after the message
+passed the mention-only / thread-bypass filter (step 5b) and was enqueued to SQS (step 8).
+Idle channel chatter that would not dispatch **never** wakes the box. The dispatch and
+enqueue behavior for running sandboxes is byte-identical to pre-Phase-114.
+
+### Wake UX
+
+The bridge posts a threaded hint immediately after triggering the resume:
+
+| Path | Hint text |
+|------|-----------|
+| Resume triggered (nominal) | "Sandbox is waking up — your message is queued and will be answered shortly." |
+| Orphan / degraded (instance gone, row still paused) | "Couldn't auto-resume this sandbox (the instance is gone). Ask an operator to recreate it with `km create`." |
+
+Both hints use a 1-hour cooldown at the `km-sandboxes` row level — whichever fires first
+suppresses the other for that window (correct behavior for the pair).
+
+### Synchronous design
+
+`StartInstances` and the DDB status flip (`SetStatusRunning`) run **synchronously** inside
+`Handle`, not in a goroutine. This mirrors the Phase 75.2 lesson: goroutines mid-flight when
+`Handle` returns have their context elapse during the Lambda freeze. The 3-second Slack ack
+window is protected by the step-6 `event_id` dedup — if `StartInstances` pushes past 3 seconds,
+Slack's retry hits the dedup and returns 200 immediately.
+
+The resume context uses a 15-second sub-timeout from the request context, staying well within
+the Lambda's 60-second timeout.
+
+### Back-compat invariant
+
+`h.Resumer == nil` (pre-deploy Lambda image) → byte-identical to pre-Phase-114: the
+`PauseHinter` fires as before, posting the old "message queued" hint. No behavior change
+until `make build-lambdas` + `km init --slack` deploys the new image.
+
+### IAM
+
+One additive policy (`aws_iam_role_policy.ec2_resume`) on the `km-slack-bridge` Lambda role:
+
+| Statement | Action | Resource | Condition |
+|-----------|--------|----------|-----------|
+| `EC2DescribeInstances` | `ec2:DescribeInstances` | `*` (Describe has no resource conditions) | — |
+| `EC2StartInstances` | `ec2:StartInstances` | `arn:aws:ec2:{region}:{account}:instance/*` | `aws:ResourceTag/km:resource-prefix == {prefix}` |
+
+`dynamodb:UpdateItem` on `km-sandboxes` (for `SetStatusRunning`) is already granted by the
+existing `dynamodb_sandboxes_pause_hint` policy — **no new DDB grant**.
+
+### Deploy surface
+
+```bash
+make build-lambdas          # rebuild the bridge zip carrying the new EC2 client wiring
+km init --slack             # tier-1 env+IAM fast-path: applies the new ec2_resume policy
+# OR
+km init --dry-run=false     # full apply (also applies ec2_resume policy)
+```
+
+**NOT `--sidecars`** — `--sidecars` rebuilds sidecar binaries and cold-starts the Lambda, but
+does NOT update the Lambda's IAM role. The EC2 client in the binary is harmless without the
+grant (it logs `UnauthorizedOperation` and falls through to the already-enqueued message —
+fail-soft), but the feature does not work until the IAM policy is applied via a full
+`km init --slack` or `km init --dry-run=false`.
+
+**No SandboxProfile schema change. No DynamoDB schema change. No sandbox recreate required.**
+Existing paused sandboxes gain resume-on-message immediately after the bridge deploy.
+
+### E2E UAT
+
+Perform the following after deploying:
+
+1. **Paused sandbox resume:** `km pause <id>` a running Slack-bound sandbox. Post a message
+   in its channel. Verify the bridge logs `event_type=resume_triggered` and the sandbox wakes.
+   The agent replies to the message.
+
+2. **Stopped sandbox resume:** `km stop <id>` a running sandbox. Post a message. Verify
+   `StartInstances` is called and the sandbox comes up.
+
+3. **Orphan / degraded path:** Manually terminate the EC2 instance (without `km destroy`)
+   leaving the DDB row in `paused` state. Post a message. Verify the bridge posts the
+   "Couldn't auto-resume" orphan hint and the row is left in place.
+
+4. **Warm regression:** Post a message to a running sandbox. Verify behavior is byte-identical
+   to pre-Phase-114 (SQS enqueue, 👀 reaction, no resume path triggered).
+
+5. **Mention-only guard:** With `KM_SLACK_MENTION_ONLY=true`, post a message without
+   `@bot-mention` to a paused sandbox. Verify the message is dropped before step-9 —
+   `StartInstances` is NOT called.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `UnauthorizedOperation` on `StartInstances` in bridge logs | `km init --slack` (or `--dry-run=false`) not yet run; `ec2_resume` IAM policy absent | Run `km init --slack --dry-run=false` |
+| Bridge posts pause hint, no resume | Old Lambda image (binary predates Phase 114) | Run `make build-lambdas` then `km init --slack --dry-run=false` |
+| Sandbox stays stopped after hint | On-box inbound poller not yet running (instance still starting) | Wait 30–60s for boot; the already-enqueued SQS message has a visibility timeout and will be drained on poller start |
+| "Couldn't auto-resume" posted for a live sandbox | EC2 instance terminated out-of-band (row is an orphan) | `km create <profile> --alias <alias>` to recreate; existing DDB row left in place (no cold-create in Phase 114) |
+| Resume never fires; `info.Paused` always false | **(Fixed in Phase 114)** `FetchByChannel` historically read the km-sandboxes `state` attribute, but the lifecycle attribute is `status`. This latent Phase-67 bug also silently disabled the pause-hint. Ensure the bridge build includes the `status` fix. |
+
+### E2E validation (2026-06-15, install `km`)
+
+Validated live against a `learn.v2.polite` sandbox via signed synthetic Slack Events
+webhooks (the bridge drops bot messages, so the bot token cannot self-trigger; a
+HMAC-signed `event_callback` impersonating a human user exercises the full path):
+
+- **paused → resume** (`km pause`, `status=paused`): `StartInstances` fired under the new
+  `ec2_resume` IAM grant, DDB `status` flipped to `running`, the "Sandbox is waking up…"
+  hint posted, the box booted, and the on-box poller drained the FIFO.
+- **stopped → resume** (`km stop`, `status=stopped`): same resume path; the second waking
+  hint was correctly suppressed by the `DDBPauseHinter` 1h cooldown (`last_pause_hint_ts`).
+- **running (negative):** a message to a running sandbox triggered no resume, no hint,
+  no status change — byte-identical warm path.
+- **Bug found + fixed mid-UAT:** the `state`→`status` attribute fix above. Caught only by
+  live E2E — the prior unit test encoded the same wrong attribute name in its mock.
+
+Note: the synthetic-webhook method fabricates a Slack `ts`, so threaded replies and the
+👀 reaction (which need a real message) don't render — harmless test-harness artifacts,
+not bridge behavior.

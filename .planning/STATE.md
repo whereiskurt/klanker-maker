@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 113-03-PLAN.md (docs + live UAT; phase 113 ready for verification)
-last_updated: "2026-06-14T18:29:41.025Z"
-last_activity: 2026-06-14
+stopped_at: Completed 114-03-PLAN.md (EC2 wiring + IAM ec2_resume policy + docs Phase 114)
+last_updated: "2026-06-15T17:32:00.349Z"
+last_activity: 2026-06-15
 progress:
-  total_phases: 129
-  completed_phases: 113
-  total_plans: 566
-  completed_plans: 528
+  total_phases: 130
+  completed_phases: 114
+  total_plans: 569
+  completed_plans: 531
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-14
+Last activity: 2026-06-15
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -565,6 +565,9 @@ Progress: [█████████░] 91%
 | Phase 113 P01 | 15min | 3 tasks | 6 files |
 | Phase 113 P02 | 2min | 2 tasks | 3 files |
 | Phase 113 P03 | 20min | 2 tasks | 3 files |
+| Phase 114-slack-bridge-auto-resume P01 | 215s | 2 tasks | 3 files |
+| Phase 114 P02 | 600s | 2 tasks | 2 files |
+| Phase 114-slack-bridge-auto-resume P03 | 666s | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1616,6 +1619,12 @@ Recent decisions affecting current work:
 - [Phase 113]: klanker:sandbox skill rewritten as six-section self-census (A-F) with PROFILE_AVAILABLE graceful fallback for pre-Phase-113 sandboxes; plugin 0.4.10 bumped in lockstep
 - [Phase 113]: Redaction sign-off: write VERBATIM (no embeddable-secret field found; profile carries SSM paths not values)
 - [Phase 113]: On-box /opt/km/.km-profile.yaml is semantically equivalent (NOT byte-identical) to S3 copy — UAT-confirmed on slacktest02
+- [Phase 114-slack-bridge-auto-resume]: SandboxStatusWriter interface has no DeleteSandboxRow — slack bridge has no cold-create publisher
+- [Phase 114-slack-bridge-auto-resume]: sandboxIDTagKey() hardcodes km:sandbox-id (Phase-109 fix); ResourcePrefix retained on struct but inert
+- [Phase 114-slack-bridge-auto-resume]: DynamoSandboxStatusWriter.Client typed DDBUpdateItemAPI (existing slack-bridge interface) not a new narrow type — avoids RESEARCH.md Pitfall 6
+- [Phase 114]: Step-9 runs SYNCHRONOUSLY (Phase 75.2 lesson): StartSandbox+SetStatusRunning in Handle before return; 3s ack window protected by event_id dedup
+- [Phase 114]: nil Resumer => byte-identical pre-Phase-114 behavior (pause-hint only); ErrNoResumableInstance => OrphanHinter; transient => optimistic SetStatusRunning+PauseHinter
+- [Phase 114-slack-bridge-auto-resume]: initEC2Client constructed in init() alongside other AWS clients (cfg is local to init); wireEventsHandler() assigns Resumer/StatusWriter/OrphanHinter; PauseHinter HintText updated to resume-aware waking-up message; deploy surface: make build-lambdas + km init --slack (NOT --sidecars)
 
 ### Roadmap Evolution
 
@@ -1631,6 +1640,7 @@ Recent decisions affecting current work:
 - Phase 108 backfilled (retro): GitHub bridge per-turn idempotency guard (`<!-- km-turn:$KM_GITHUB_TURN_ID -->` marker, no duplicate PR comments) — shipped as fix-commit b5a0cbf9 outside GSD, added to roadmap 2026-06-12 for complete record.
 - Phase 109 backfilled (retro): GitHub bridge self-heals orphaned `stopped` alias rows (resume-or-cold-create via ErrNoResumableInstance + DeleteSandboxRow; H1 parity) — shipped as fix-commit eac8ed8b / PR #23 outside GSD, added to roadmap 2026-06-12.
 - Phase 110 added: Session-aware Slack reply + thread/channel repair — `km-slack reply` (sandbox) + `km slack reply`/cleanup commands (operator) to post to the thread bound to a `--resume` session via a new `claude_session_id` GSI + bridge `lookup-thread` action; channel-root fallback; repair stale thread/channel mappings. NOTE: numbered 110 not 108 — Phases 108/109 are completed-but-unroadmapped GitHub-bridge fix-commits (CLAUDE.md + docs/github-bridge.md); gsd-tools' integer-max scan would have collided.
+- Phase 114 added: Slack bridge auto-resume — start a paused/stopped sandbox when an inbound Slack thread/channel message would be dispatched to it (resume-only Slack analog of the GitHub/H1 Phase-109 path; no cold-create, no budget awareness). Design spec: `docs/superpowers/specs/2026-06-15-slack-resume-on-thread-message-design.md`. NOTE: numbered 114 not 111 — phase dirs run 93–113 (111/112/113 exist), and 108/109 are unroadmapped fix-commits.
 
 ### Pending Todos
 
@@ -1756,6 +1766,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-14T18:25:51.464Z
-Stopped at: Completed 113-03-PLAN.md (docs + live UAT; phase 113 ready for verification)
+Last session: 2026-06-15T16:34:13.444Z
+Stopped at: Completed 114-03-PLAN.md (EC2 wiring + IAM ec2_resume policy + docs Phase 114)
 Resume file: None
