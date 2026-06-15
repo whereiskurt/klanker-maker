@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 114-03-PLAN.md (EC2 wiring + IAM ec2_resume policy + docs Phase 114)
-last_updated: "2026-06-15T17:32:00.349Z"
+stopped_at: Completed 115-01-PLAN.md (Wave 0 RED test scaffold for Phase 115 event router)
+last_updated: "2026-06-15T23:37:42.634Z"
 last_activity: 2026-06-15
 progress:
-  total_phases: 130
+  total_phases: 131
   completed_phases: 114
-  total_plans: 569
-  completed_plans: 531
+  total_plans: 575
+  completed_plans: 532
   percent: 91
 ---
 
@@ -568,6 +568,7 @@ Progress: [█████████░] 91%
 | Phase 114-slack-bridge-auto-resume P01 | 215s | 2 tasks | 3 files |
 | Phase 114 P02 | 600s | 2 tasks | 2 files |
 | Phase 114-slack-bridge-auto-resume P03 | 666s | 2 tasks | 3 files |
+| Phase 115-generic-github-webhook-event-prompt-router P01 | 286 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1625,6 +1626,7 @@ Recent decisions affecting current work:
 - [Phase 114]: Step-9 runs SYNCHRONOUSLY (Phase 75.2 lesson): StartSandbox+SetStatusRunning in Handle before return; 3s ack window protected by event_id dedup
 - [Phase 114]: nil Resumer => byte-identical pre-Phase-114 behavior (pause-hint only); ErrNoResumableInstance => OrphanHinter; transient => optimistic SetStatusRunning+PauseHinter
 - [Phase 114-slack-bridge-auto-resume]: initEC2Client constructed in init() alongside other AWS clients (cfg is local to init); wireEventsHandler() assigns Resumer/StatusWriter/OrphanHinter; PauseHinter HintText updated to resume-aware waking-up message; deploy surface: make build-lambdas + km init --slack (NOT --sidecars)
+- [Phase 115-01]: TDD Wave 0 RED scaffold: 5 test additions (2 new files, 3 additions) covering all unit-testable Phase 115 requirements; GH-EVENT-POLLER + GH-EVENT-E2E are manual-only
 
 ### Roadmap Evolution
 
@@ -1766,6 +1768,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-15T16:34:13.444Z
-Stopped at: Completed 114-03-PLAN.md (EC2 wiring + IAM ec2_resume policy + docs Phase 114)
+Last session: 2026-06-15T23:37:42.623Z
+Stopped at: Completed 115-01-PLAN.md (Wave 0 RED test scaffold for Phase 115 event router)
 Resume file: None
