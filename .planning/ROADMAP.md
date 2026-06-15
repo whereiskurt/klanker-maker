@@ -2655,7 +2655,7 @@ Plans:
 **Depends on:** Phase 102
 **Design spec:** docs/superpowers/specs/2026-06-15-github-webhook-event-router-design.md
 
-**Plans:** 1/6 plans executed
+**Plans:** 2/6 plans executed
 
 Plans:
 - [ ] 115-01-PLAN.md — Wave 0 RED test scaffolds: event_router_test (router+template), webhook_handler_phase115_test (gating/dispatch/cooldown), config/manifest/doctor test additions (GH-EVENT-ROUTER,TEMPLATE,GATING,DISPATCH,COOLDOWN,CONFIG,MANIFEST,DOCTOR) [wave 1]
