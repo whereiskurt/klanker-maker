@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 114-01-PLAN.md (EC2 resume primitives for slack bridge)
-last_updated: "2026-06-15T16:12:38.459Z"
+stopped_at: Completed 114-02-PLAN.md (EventsHandler resume-or-hint branch + 6 tests)
+last_updated: "2026-06-15T16:19:57.984Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 130
   completed_phases: 113
   total_plans: 569
-  completed_plans: 529
+  completed_plans: 530
   percent: 91
 ---
 
@@ -566,6 +566,7 @@ Progress: [█████████░] 91%
 | Phase 113 P02 | 2min | 2 tasks | 3 files |
 | Phase 113 P03 | 20min | 2 tasks | 3 files |
 | Phase 114-slack-bridge-auto-resume P01 | 215s | 2 tasks | 3 files |
+| Phase 114 P02 | 600s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1620,6 +1621,8 @@ Recent decisions affecting current work:
 - [Phase 114-slack-bridge-auto-resume]: SandboxStatusWriter interface has no DeleteSandboxRow — slack bridge has no cold-create publisher
 - [Phase 114-slack-bridge-auto-resume]: sandboxIDTagKey() hardcodes km:sandbox-id (Phase-109 fix); ResourcePrefix retained on struct but inert
 - [Phase 114-slack-bridge-auto-resume]: DynamoSandboxStatusWriter.Client typed DDBUpdateItemAPI (existing slack-bridge interface) not a new narrow type — avoids RESEARCH.md Pitfall 6
+- [Phase 114]: Step-9 runs SYNCHRONOUSLY (Phase 75.2 lesson): StartSandbox+SetStatusRunning in Handle before return; 3s ack window protected by event_id dedup
+- [Phase 114]: nil Resumer => byte-identical pre-Phase-114 behavior (pause-hint only); ErrNoResumableInstance => OrphanHinter; transient => optimistic SetStatusRunning+PauseHinter
 
 ### Roadmap Evolution
 
@@ -1761,6 +1764,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-15T16:12:38.449Z
-Stopped at: Completed 114-01-PLAN.md (EC2 resume primitives for slack bridge)
+Last session: 2026-06-15T16:19:57.973Z
+Stopped at: Completed 114-02-PLAN.md (EventsHandler resume-or-hint branch + 6 tests)
 Resume file: None
