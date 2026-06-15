@@ -1057,7 +1057,12 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 	if v, ok := item["slack_inbound_queue_url"].(*dynamodbtypes.AttributeValueMemberS); ok {
 		info.QueueURL = v.Value
 	}
-	if v, ok := item["state"].(*dynamodbtypes.AttributeValueMemberS); ok {
+	// Phase 114: the km-sandboxes lifecycle attribute is "status" (see pkg/aws.SandboxRecord
+	// `json:"status"` and the github bridge's status read), NOT "state". This read was
+	// keyed on "state" since Phase 67, so info.Paused was ALWAYS false in production —
+	// silently disabling the paused-hint, and (until this fix) the Phase 114 auto-resume gate.
+	// Caught by live E2E on 2026-06-15.
+	if v, ok := item["status"].(*dynamodbtypes.AttributeValueMemberS); ok {
 		info.Paused = v.Value == "paused" || v.Value == "stopped"
 	}
 	// Phase 91.5: per-sandbox react_always override. Attribute is written by

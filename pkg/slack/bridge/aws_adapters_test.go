@@ -751,33 +751,79 @@ func TestDDBSandboxByChannel_NoMatch(t *testing.T) {
 	}
 }
 
+// TestDDBSandboxByChannel_Found_Paused — Phase 114 regression guard. The
+// km-sandboxes lifecycle attribute is "status" (pkg/aws.SandboxRecord
+// `json:"status"`), NOT "state". Before the fix, FetchByChannel read "state",
+// so info.Paused was always false in production (paused-hint + auto-resume both
+// silently dead). The earlier version of this test set the WRONG attribute
+// ("state") in its mock, so it matched the bug and passed — caught only by live
+// E2E on 2026-06-15. Each case below asserts the real attribute drives Paused
+// and that a legacy "state" attribute is ignored.
 func TestDDBSandboxByChannel_Found_Paused(t *testing.T) {
-	mock := &mockDDBQueryGetPut{
-		query: func(ctx context.Context, in *dynamodb.QueryInput, opts ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
-			return &dynamodb.QueryOutput{
-				Items: []map[string]dynamodbtypes.AttributeValue{
-					{
-						"sandbox_id":             &dynamodbtypes.AttributeValueMemberS{Value: "sb-X"},
-						"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs.../q.fifo"},
-						"state":                  &dynamodbtypes.AttributeValueMemberS{Value: "paused"},
-					},
-				},
-			}, nil
+	cases := []struct {
+		name       string
+		item       map[string]dynamodbtypes.AttributeValue
+		wantPaused bool
+	}{
+		{
+			name: "status=paused → Paused",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-X"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs.../q.fifo"},
+				"status":                  &dynamodbtypes.AttributeValueMemberS{Value: "paused"},
+			},
+			wantPaused: true,
+		},
+		{
+			name: "status=stopped → Paused",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-X"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs.../q.fifo"},
+				"status":                  &dynamodbtypes.AttributeValueMemberS{Value: "stopped"},
+			},
+			wantPaused: true,
+		},
+		{
+			name: "status=running → not Paused",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-X"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs.../q.fifo"},
+				"status":                  &dynamodbtypes.AttributeValueMemberS{Value: "running"},
+			},
+			wantPaused: false,
+		},
+		{
+			name: "legacy state=paused but no status → ignored, not Paused",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-X"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs.../q.fifo"},
+				"state":                   &dynamodbtypes.AttributeValueMemberS{Value: "paused"},
+			},
+			wantPaused: false,
 		},
 	}
-	f := &bridge.DDBSandboxByChannel{Client: mock, TableName: "km-sandboxes", IndexName: "slack_channel_id-index"}
-	info, err := f.FetchByChannel(context.Background(), "C1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if info.SandboxID != "sb-X" {
-		t.Errorf("expected sb-X, got %q", info.SandboxID)
-	}
-	if !info.Paused {
-		t.Error("expected Paused=true for state=paused")
-	}
-	if info.QueueURL == "" {
-		t.Error("expected non-empty QueueURL")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockDDBQueryGetPut{
+				query: func(ctx context.Context, in *dynamodb.QueryInput, opts ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+					return &dynamodb.QueryOutput{Items: []map[string]dynamodbtypes.AttributeValue{tc.item}}, nil
+				},
+			}
+			f := &bridge.DDBSandboxByChannel{Client: mock, TableName: "km-sandboxes", IndexName: "slack_channel_id-index"}
+			info, err := f.FetchByChannel(context.Background(), "C1")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if info.SandboxID != "sb-X" {
+				t.Errorf("expected sb-X, got %q", info.SandboxID)
+			}
+			if info.Paused != tc.wantPaused {
+				t.Errorf("Paused=%v, want %v", info.Paused, tc.wantPaused)
+			}
+			if info.QueueURL == "" {
+				t.Error("expected non-empty QueueURL")
+			}
+		})
 	}
 }
 
