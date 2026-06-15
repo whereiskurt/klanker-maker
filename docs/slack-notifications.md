@@ -2734,3 +2734,24 @@ Perform the following after deploying:
 | Bridge posts pause hint, no resume | Old Lambda image (binary predates Phase 114) | Run `make build-lambdas` then `km init --slack --dry-run=false` |
 | Sandbox stays stopped after hint | On-box inbound poller not yet running (instance still starting) | Wait 30–60s for boot; the already-enqueued SQS message has a visibility timeout and will be drained on poller start |
 | "Couldn't auto-resume" posted for a live sandbox | EC2 instance terminated out-of-band (row is an orphan) | `km create <profile> --alias <alias>` to recreate; existing DDB row left in place (no cold-create in Phase 114) |
+| Resume never fires; `info.Paused` always false | **(Fixed in Phase 114)** `FetchByChannel` historically read the km-sandboxes `state` attribute, but the lifecycle attribute is `status`. This latent Phase-67 bug also silently disabled the pause-hint. Ensure the bridge build includes the `status` fix. |
+
+### E2E validation (2026-06-15, install `km`)
+
+Validated live against a `learn.v2.polite` sandbox via signed synthetic Slack Events
+webhooks (the bridge drops bot messages, so the bot token cannot self-trigger; a
+HMAC-signed `event_callback` impersonating a human user exercises the full path):
+
+- **paused → resume** (`km pause`, `status=paused`): `StartInstances` fired under the new
+  `ec2_resume` IAM grant, DDB `status` flipped to `running`, the "Sandbox is waking up…"
+  hint posted, the box booted, and the on-box poller drained the FIFO.
+- **stopped → resume** (`km stop`, `status=stopped`): same resume path; the second waking
+  hint was correctly suppressed by the `DDBPauseHinter` 1h cooldown (`last_pause_hint_ts`).
+- **running (negative):** a message to a running sandbox triggered no resume, no hint,
+  no status change — byte-identical warm path.
+- **Bug found + fixed mid-UAT:** the `state`→`status` attribute fix above. Caught only by
+  live E2E — the prior unit test encoded the same wrong attribute name in its mock.
+
+Note: the synthetic-webhook method fabricates a Slack `ts`, so threaded replies and the
+👀 reaction (which need a real message) don't render — harmless test-harness artifacts,
+not bridge behavior.
