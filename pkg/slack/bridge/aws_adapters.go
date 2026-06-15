@@ -45,6 +45,8 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -1485,4 +1487,209 @@ func (l *DDBRunningChannelLister) ListRunning(ctx context.Context) ([]SandboxCha
 	}
 
 	return results, nil
+}
+
+// ============================================================
+// Phase 114: EC2Resumer — starts stopped EC2 sandbox instances (warm-resume path)
+// ============================================================
+
+// EC2StartAPI is the narrow EC2 interface required by EC2Resumer.
+// *ec2.Client satisfies this interface.
+type EC2StartAPI interface {
+	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+	StartInstances(ctx context.Context, params *ec2.StartInstancesInput, optFns ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error)
+}
+
+// ErrNoResumableInstance is returned (wrapped) by EC2Resumer.StartSandbox when no
+// stopped/stopping EC2 instance exists for the sandbox. The instance is gone — an
+// orphaned alias row (status=stopped, instance terminated out from under km). The
+// caller branches on errors.Is to post a degraded hint and leave the row in place
+// (no cold-create — the Slack bridge has no SandboxCreate publisher).
+// A transient DescribeInstances/StartInstances API error is deliberately NOT wrapped
+// with this sentinel (it must retain the fail-soft log path).
+var ErrNoResumableInstance = errors.New("slack-bridge: no resumable EC2 instance")
+
+// EC2Resumer implements SandboxResumer by finding stopped EC2 instances tagged
+// with the km sandbox-id tag and starting them. Mirrors the resume path in
+// internal/app/cmd/resume.go:95-115.
+type EC2Resumer struct {
+	Client          EC2StartAPI
+	SandboxIDTagKey string // e.g. "km:sandbox-id" (km standard sandbox tag); default when empty
+	ResourcePrefix  string // INERT: retained for wiring compat, no longer read (see sandboxIDTagKey)
+}
+
+func (r *EC2Resumer) sandboxIDTagKey() string {
+	if r.SandboxIDTagKey != "" {
+		return r.SandboxIDTagKey
+	}
+	// km ALWAYS tags sandbox instances "km:sandbox-id" regardless of resource_prefix
+	// (the prefix lives in the separate "km:resource-prefix" tag). Deriving
+	// "{prefix}:sandbox-id" matched nothing on non-"km" installs, which made StartSandbox
+	// falsely report ErrNoResumableInstance and triggered the Phase-109 delete+cold-create
+	// self-heal for fully-resumable stopped boxes. The CLI resume path
+	// (internal/app/cmd/resume.go) hardcodes "tag:km:sandbox-id" — mirror it here.
+	// ResourcePrefix is retained on the struct but no longer read (Option A; inert).
+	// Phase-109 fix: commits e6b9ca75 / d8007920.
+	return "km:sandbox-id"
+}
+
+// StartSandbox finds stopped (or stopping) EC2 instances tagged with the km
+// sandbox-id tag equal to sandboxID and calls StartInstances on them. Returns
+// nil when at least one instance was started, or an error describing the failure.
+//
+// The filter includes "stopping" in addition to "stopped" (Gap C fix from the
+// GitHub bridge): a quick pause→@-mention can find the box still transitioning
+// through "stopping". When a "stopping" instance is found, StartSandbox waits
+// briefly (≤ stoppingPollTimeout in small increments) for it to reach "stopped"
+// before calling StartInstances. The wait is bounded so it does not block the
+// 200 ack window; the message is already enqueued so a partial wait is acceptable.
+func (r *EC2Resumer) StartSandbox(ctx context.Context, sandboxID string) error {
+	tagKey := r.sandboxIDTagKey()
+
+	// Widen the filter to catch instances that are mid-transition (stopping→stopped).
+	descOut, err := r.Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:" + tagKey), Values: []string{sandboxID}},
+			{Name: awssdk.String("instance-state-name"), Values: []string{"stopped", "stopping"}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("slack-bridge: EC2Resumer.DescribeInstances for %s: %w", sandboxID, err)
+	}
+
+	type foundInst struct {
+		id       string
+		stopping bool // true = state is "stopping", false = "stopped"
+	}
+	var found []foundInst
+	for _, res := range descOut.Reservations {
+		for _, inst := range res.Instances {
+			if inst.InstanceId == nil || *inst.InstanceId == "" {
+				continue
+			}
+			isStopping := inst.State != nil &&
+				inst.State.Name == ec2types.InstanceStateNameStopping
+			found = append(found, foundInst{id: *inst.InstanceId, stopping: isStopping})
+		}
+	}
+	if len(found) == 0 {
+		// Terminal: the instance is gone (orphaned alias row). Wrap the sentinel so
+		// the caller can branch with errors.Is and post a degraded hint.
+		return fmt.Errorf("slack-bridge: no stopped/stopping EC2 instances found for sandbox %s (tag %s): %w",
+			sandboxID, tagKey, ErrNoResumableInstance)
+	}
+
+	// Collect instance IDs to start. For "stopping" instances, we wait briefly
+	// for them to reach "stopped" before calling StartInstances (which rejects
+	// instances not yet in the stopped state). The poll is bounded at
+	// stoppingPollTimeout; if the instance is still stopping when the deadline
+	// arrives we attempt StartInstances anyway — EC2 may accept it or the message
+	// will be re-delivered via FIFO visibility timeout.
+	const stoppingPollInterval = 2 * time.Second
+	const stoppingPollTimeout = 8 * time.Second
+
+	allStopping := true
+	for _, fi := range found {
+		if !fi.stopping {
+			allStopping = false
+			break
+		}
+	}
+
+	if allStopping {
+		// All matched instances are still stopping. Poll until at least one reaches
+		// "stopped" or the timeout expires. Bounded so we don't block the ack window.
+		deadline := time.Now().Add(stoppingPollTimeout)
+		for time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				// Context cancelled — attempt StartInstances with current IDs anyway.
+				goto doStart
+			case <-time.After(stoppingPollInterval):
+			}
+			// Re-query — narrow to "stopped" only to detect transition.
+			rePoll, pollErr := r.Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+				Filters: []ec2types.Filter{
+					{Name: awssdk.String("tag:" + tagKey), Values: []string{sandboxID}},
+					{Name: awssdk.String("instance-state-name"), Values: []string{"stopped"}},
+				},
+			})
+			if pollErr != nil {
+				// Transient describe error — continue polling.
+				continue
+			}
+			var stoppedNow []foundInst
+			for _, res := range rePoll.Reservations {
+				for _, inst := range res.Instances {
+					if inst.InstanceId != nil && *inst.InstanceId != "" {
+						stoppedNow = append(stoppedNow, foundInst{id: *inst.InstanceId})
+					}
+				}
+			}
+			if len(stoppedNow) > 0 {
+				found = stoppedNow // replace with the now-stopped set
+				break
+			}
+		}
+	}
+
+doStart:
+	var instanceIDs []string
+	for _, fi := range found {
+		instanceIDs = append(instanceIDs, fi.id)
+	}
+
+	if _, err := r.Client.StartInstances(ctx, &ec2.StartInstancesInput{
+		InstanceIds: instanceIDs,
+	}); err != nil {
+		return fmt.Errorf("slack-bridge: EC2Resumer.StartInstances for %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
+// ============================================================
+// Phase 114: DynamoSandboxStatusWriter — SandboxStatusWriter backed by km-sandboxes
+// ============================================================
+
+// DynamoSandboxStatusWriter implements SandboxStatusWriter by performing a
+// DynamoDB UpdateItem on the km-sandboxes table. Only the status attribute is
+// updated — full-row PutItem is intentionally avoided because it strips all
+// attributes not present in the SandboxMetadata struct (the lossy round-trip
+// footgun documented in project memory SandboxMetadata lossy round-trip).
+//
+// Client is typed DDBUpdateItemAPI (the existing slack-bridge DynamoDB interface
+// at aws_adapters.go:1233) — NOT the GitHub bridge's DynamoUpdateItemClient (which
+// also carries DeleteItem). This avoids RESEARCH.md Pitfall 6: the Slack bridge
+// has no cold-create publisher, so there is no orphaned-row delete path and no
+// need to widen the DDB interface.
+type DynamoSandboxStatusWriter struct {
+	Client    DDBUpdateItemAPI // has UpdateItem; NO DeleteItem (Slack has no cold-create)
+	TableName string           // e.g. "km-sandboxes"
+}
+
+// SetStatusRunning sets status="running" on the km-sandboxes row for sandboxID
+// using UpdateItem (not PutItem). Called after a successful EC2 StartInstances
+// so km list / km resume reflect the running state and a follow-up @-mention
+// reads status=running and takes the warm enqueue path without a redundant
+// StartInstances call. Errors are non-fatal in the caller (logged, not returned
+// as a failure).
+func (w *DynamoSandboxStatusWriter) SetStatusRunning(ctx context.Context, sandboxID string) error {
+	_, err := w.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(w.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		UpdateExpression: awssdk.String("SET #st = :running"),
+		// Use an expression attribute name because "status" is a DynamoDB reserved word.
+		ExpressionAttributeNames: map[string]string{
+			"#st": "status",
+		},
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":running": &dynamodbtypes.AttributeValueMemberS{Value: "running"},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("slack-bridge: SetStatusRunning for %s: %w", sandboxID, err)
+	}
+	return nil
 }
