@@ -51,9 +51,14 @@ type InstallField struct {
 }
 
 // RepositoryField is the subset of the repository object we need.
+// GitHub sends html_url at the repository level for repository/created and
+// push events; it is the canonical web URL of the repo (e.g.
+// "https://github.com/owner/repo"). Phase 115 adds HTMLURL to populate the
+// {{html_url}} template var in EventRule.Prompt.
 type RepositoryField struct {
 	FullName      string `json:"full_name"`       // "owner/repo"
 	DefaultBranch string `json:"default_branch"`  // "main", "master", etc.
+	HTMLURL       string `json:"html_url"`         // "https://github.com/owner/repo"
 }
 
 // GitHubEnvelope is the message enqueued to the per-sandbox github-inbound

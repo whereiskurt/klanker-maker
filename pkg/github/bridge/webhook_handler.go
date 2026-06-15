@@ -162,6 +162,12 @@ type WebhookHandler struct {
 	// Nil ⇒ no cooldown gate (still gated by DefaultRouter+mention).
 	OrphanCooldown DeliveryNonceStore
 
+	// EventRules is the parsed github.events config (set at cold-start from
+	// KM_GITHUB_EVENTS). When nil or empty, Handle() is byte-identical to
+	// Phase 114 for all non-issue_comment events (dormant-by-default).
+	// Populated at Lambda cold-start in cmd/km-github-bridge/main.go. Phase 115.
+	EventRules []EventRule
+
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
 }
