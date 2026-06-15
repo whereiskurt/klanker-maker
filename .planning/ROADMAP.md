@@ -2647,3 +2647,20 @@ Plans:
 - [ ] 114-01-PLAN.md — Port EC2Resumer + ErrNoResumableInstance + DynamoSandboxStatusWriter + SandboxResumer/SandboxStatusWriter interfaces into pkg/slack/bridge (+ unit tests, mock EC2 + DDB)
 - [ ] 114-02-PLAN.md — EventsHandler step-9 synchronous resume-or-hint branch (paused→resume+flip+enqueue; orphan→degraded hint; transient→optimistic flip; running→no resume; nil Resumer→byte-identical) + resume-branch tests
 - [x] 114-03-PLAN.md — Wiring (EC2 client + Resumer/StatusWriter/OrphanHinter in main.go) + ec2_resume IAM policy on lambda-slack-bridge + docs § Phase 114 (deploy: make build-lambdas + km init --slack, NOT --sidecars) (completed 2026-06-15)
+
+### Phase 115: Generic GitHub webhook event → prompt router — map autonomous (non-issue_comment) webhook event types to an agent prompt, with new-repo (repository/created) as the first use case
+
+**Goal:** Add a second ingress class to the `km-github-bridge`: a `github.events:` config block maps a webhook event type (`repository`, `push`, `release`, …) + repo-glob scope to a prompt template that runs in a sandbox. The handler branches on `x-github-event` — `issue_comment` keeps its existing human-gated path; other types route through a first-match `EventRouter` (org+glob gating, config-side `exclude:` opt-out, no actor allowlist, no-match ⇒ drop 200). Matched rules expand the prompt with payload vars, build a `GitHubEnvelope` (`Kind=<event>`, `Number=0`), and reuse the existing warm/resume/cold-create dispatch; the agent decides the outcome via `km-*` helpers. Opt-in per-(event,repo,action) cooldown (default off) guards against cold-create storms. No SandboxProfile/DDB schema change; new `KM_GITHUB_EVENTS` env block + manifest event/scope additions.
+**Requirements**: GH-EVENT-CONFIG, GH-EVENT-ROUTER, GH-EVENT-GATING, GH-EVENT-TEMPLATE, GH-EVENT-DISPATCH, GH-EVENT-COOLDOWN, GH-EVENT-MANIFEST, GH-EVENT-POLLER, GH-EVENT-DOCTOR, GH-EVENT-DOCS, GH-EVENT-E2E
+**Depends on:** Phase 102
+**Design spec:** docs/superpowers/specs/2026-06-15-github-webhook-event-router-design.md
+
+**Plans:** 6 plans
+
+Plans:
+- [ ] 115-01-PLAN.md — Wave 0 RED test scaffolds: event_router_test (router+template), webhook_handler_phase115_test (gating/dispatch/cooldown), config/manifest/doctor test additions (GH-EVENT-ROUTER,TEMPLATE,GATING,DISPATCH,COOLDOWN,CONFIG,MANIFEST,DOCTOR) [wave 1]
+- [ ] 115-02-PLAN.md — Pure core: EventRouter matcher (exact-before-glob first-match + exclude) + ExpandEventTemplate + payload.go HTMLURL; GithubEventRule struct + Events field (no new merge entry) (GH-EVENT-ROUTER,TEMPLATE,CONFIG) [wave 2]
+- [ ] 115-03-PLAN.md — webhook_handler two-branch switch + handleEventRoute (parse→dedup→match→cooldown→expand→envelope→dispatch); EventRules field; Lambda cold-start KM_GITHUB_EVENTS wiring (GH-EVENT-GATING,DISPATCH,COOLDOWN) [wave 3]
+- [ ] 115-04-PLAN.md — KM_GITHUB_EVENTS export in ExportTerragruntEnvVars + terragrunt get_env + module v1.1.0 variable + Lambda env entry (both halves) (GH-EVENT-CONFIG) [wave 3]
+- [ ] 115-05-PLAN.md — Manifest default_events union + metadata:read implied scope; checkGitHubEventsValid doctor check + registration (GH-EVENT-MANIFEST,DOCTOR) [wave 3]
+- [ ] 115-06-PLAN.md — Poller Number==0/Kind tolerance (event preamble, no pull/0/head) + docs § Phase 115 + live E2E UAT checkpoint (GH-EVENT-POLLER,DOCS,E2E) [wave 4, non-autonomous]
