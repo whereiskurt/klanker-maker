@@ -489,17 +489,21 @@ type EC2StartAPI interface {
 // internal/app/cmd/resume.go:95-115.
 type EC2Resumer struct {
 	Client          EC2StartAPI
-	SandboxIDTagKey string // e.g. "km:sandbox-id" (km standard sandbox tag)
-	ResourcePrefix  string // e.g. "km" — used to default SandboxIDTagKey when empty
+	SandboxIDTagKey string // e.g. "km:sandbox-id" (km standard sandbox tag); default when empty
+	ResourcePrefix  string // INERT: retained for wiring compat, no longer read (see sandboxIDTagKey)
 }
 
 func (r *EC2Resumer) sandboxIDTagKey() string {
 	if r.SandboxIDTagKey != "" {
 		return r.SandboxIDTagKey
 	}
-	if r.ResourcePrefix != "" {
-		return r.ResourcePrefix + ":sandbox-id"
-	}
+	// km ALWAYS tags sandbox instances "km:sandbox-id" regardless of resource_prefix
+	// (the prefix lives in the separate "km:resource-prefix" tag). Deriving
+	// "{prefix}:sandbox-id" matched nothing on non-"km" installs, which made StartSandbox
+	// falsely report ErrNoResumableInstance and triggered the Phase-109 delete+cold-create
+	// self-heal for fully-resumable stopped boxes. The CLI resume path
+	// (internal/app/cmd/resume.go) hardcodes "tag:km:sandbox-id" — mirror it here.
+	// ResourcePrefix is retained on the struct but no longer read (Option A; inert).
 	return "km:sandbox-id"
 }
 
