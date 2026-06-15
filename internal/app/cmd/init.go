@@ -1685,6 +1685,31 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 		}
 	}
 
+	// Phase 115: KM_GITHUB_EVENTS — JSON-encoded github.events event->prompt rules.
+	// Exported only when github.events: is configured (len > 0); absent block leaves
+	// KM_GITHUB_EVENTS unset (event routing dormant, byte-identical to Phase 114).
+	// env-wins: when the env var is already set to a DIFFERENT value, emit a drift
+	// WARN and do NOT overwrite. Mirrors the KM_GITHUB_REPOS export block exactly.
+	// Value is JSON-marshalled so the Lambda can parse the structured rules slice
+	// without bespoke split/decode logic. Struct kept inline; no new config helper.
+	// env-block change => needs a full `km init --github` or `km init --dry-run=false`,
+	// NOT --sidecars.
+	if len(cfg.Github.Events) > 0 {
+		type githubEventsPayload struct {
+			Events []config.GithubEventRule `json:"events"`
+		}
+		payload := githubEventsPayload{Events: cfg.Github.Events}
+		jsonBytes, err := json.Marshal(payload)
+		if err == nil {
+			yamlGithubEvents := string(jsonBytes)
+			if envVal := os.Getenv("KM_GITHUB_EVENTS"); envVal != "" && envVal != yamlGithubEvents {
+				fmt.Fprintf(os.Stderr, "WARN: KM_GITHUB_EVENTS=%s (env) overrides km-config.yaml github.events=%s\n", envVal, yamlGithubEvents)
+			} else if envVal == "" {
+				os.Setenv("KM_GITHUB_EVENTS", yamlGithubEvents) //nolint:errcheck
+			}
+		}
+	}
+
 	// Phase 103: KM_H1_PROGRAMS — JSON-encoded HackerOne program-to-target routing.
 	// Consumed by infra/live/use1/lambda-h1-bridge/terragrunt.hcl get_env("KM_H1_PROGRAMS")
 	// and parsed by km-h1-bridge main.go into []bridge.ProgramEntry. Gate: only export

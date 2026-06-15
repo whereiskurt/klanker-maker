@@ -1654,6 +1654,74 @@ func checkGitHubCommandsSSMParam(ctx context.Context, ssmClient SSMReadAPI, ssmP
 	}
 }
 
+// checkGitHubEventsValid validates the github.events block from km-config.yaml.
+// Phase 115: GH-EVENT-DOCTOR.
+//
+// Checks (pure-config, no live AWS calls):
+//  1. Malformed match glob — filepath.Match returns an error for patterns like "owner/[".
+//  2. Malformed exclude globs — same filepath.Match error check.
+//  3. Profile resolvable — when a rule declares profile:, the file must exist.
+//
+// Returns SKIPPED when rules is nil or empty (dormant-by-default).
+// Returns WARN on any validation issue; CheckOK when all rules pass.
+func checkGitHubEventsValid(
+	rules []appcfg.GithubEventRule,
+	_ []appcfg.GithubRepoEntry, // reserved for future alias-overlap check
+	_ string, // reserved: defaultProfile
+	configDir string,
+) CheckResult {
+	name := "GitHub Events Config"
+	if len(rules) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "no github.events configured — skipping event rule validation",
+		}
+	}
+
+	var warnings []string
+
+	for i, rule := range rules {
+		label := fmt.Sprintf("rule[%d] on=%s match=%s", i, rule.On, rule.Match)
+
+		// 1. Validate match glob.
+		if _, err := filepath.Match(rule.Match, ""); err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: malformed match glob %q: %v", label, rule.Match, err))
+		}
+
+		// 2. Validate exclude globs.
+		for _, excl := range rule.Exclude {
+			if _, err := filepath.Match(excl, ""); err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: malformed exclude glob %q: %v", label, excl, err))
+			}
+		}
+
+		// 3. Profile resolvable — check file existence when declared.
+		if rule.Profile != "" {
+			profilePath := rule.Profile
+			if !filepath.IsAbs(profilePath) && configDir != "" {
+				profilePath = filepath.Join(configDir, profilePath)
+			}
+			if _, err := os.Stat(profilePath); err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: profile %q not found: %v", label, rule.Profile, err))
+			}
+		}
+	}
+
+	if len(warnings) > 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: strings.Join(warnings, "; "),
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("%d event rule(s) configured — all checks passed", len(rules)),
+	}
+}
+
 // checkCredentialRotationAge warns when any platform credential in SSM Parameter Store
 // has not been updated within the specified threshold. It uses LastModifiedDate as the
 // rotation timestamp source. Missing parameters are skipped gracefully — their existence
