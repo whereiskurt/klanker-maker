@@ -349,6 +349,9 @@ type DoctorDeps struct {
 	// Nil causes checkOrphanSCPs to be skipped.
 	OrgsListAllPoliciesClient OrgsListAllPoliciesAPI
 	SSMReadClient             SSMReadAPI
+	// IdentityRowClient reads the operator public-key row for checkOperatorIdentity
+	// (a GetItem view; DynamoClient is DescribeTable-only). Nil → the check is skipped.
+	IdentityRowClient IdentityRowGetItemAPI
 	// EC2Clients is a map from region name to EC2 client (one per region checked).
 	EC2Clients map[string]EC2DescribeAPI
 	// Lambda client for TTL handler existence check.
@@ -3155,6 +3158,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var setS3Lifecycle bool
 	var withDeletes bool
 	var backfillTags bool
+	var republishOperatorIdentity bool
 	var ignorePrefixes []string
 
 	cmd := &cobra.Command{
@@ -3195,6 +3199,34 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 					cmd.OutOrStdout(),
 				)
 				return backfillErr
+			}
+
+			// --republish-operator-identity: single-purpose self-heal. Re-runs the
+			// idempotent operator key-ensure + public-key publish (the same operation
+			// km init performs), republishing from the surviving SSM signing key when
+			// present. Heals a missing/mangled operator row that makes km slack test /
+			// km email --from operator fail with unknown_sender (incident 2026-06-14),
+			// from ANY cause — including the unattributed row-deletion seen there.
+			if republishOperatorIdentity {
+				ctx := cmd.Context()
+				if ctx == nil {
+					ctx = context.Background()
+				}
+				appConfig, ok := cfg.(*appcfg.Config)
+				if !ok {
+					return fmt.Errorf("--republish-operator-identity requires the standard km config (got %T)", cfg)
+				}
+				awsCfg, err := config.LoadDefaultConfig(ctx, config.WithSharedConfigProfile(provider.GetAWSProfile()))
+				if err != nil {
+					return fmt.Errorf("load AWS config: %w", err)
+				}
+				if err := ensureOperatorIdentity(ctx, appConfig, awsCfg); err != nil {
+					return fmt.Errorf("republish operator identity: %w", err)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(),
+					"✓ Operator identity republished to %s (signing key /%s/sandbox/operator/signing-key)\n",
+					appConfig.GetIdentityTableName(), appConfig.GetResourcePrefix())
+				return nil
 			}
 
 			// --with-deletes is a meta-flag: it OR-merges into every per-resource
@@ -3257,6 +3289,8 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh --delete-ssm --delete-state-digests --delete-logs --delete-ddb-rows. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
 	cmd.Flags().BoolVar(&backfillTags, "backfill-tags", false,
 		"Retrofit km:resource-prefix tag onto pre-Phase-82 resources. Uses tag:GetResources(km:sandbox-id=*) filtered by this install's DDB sandbox table. Default --dry-run=true — pass --dry-run=false to apply.")
+	cmd.Flags().BoolVar(&republishOperatorIdentity, "republish-operator-identity", false,
+		"Self-heal a missing operator public-key row (the unknown_sender failure): re-ensure the operator signing key and republish its public key to {prefix}-identities. Idempotent; republishes from the surviving SSM signing key when present.")
 	cmd.Flags().StringSliceVar(&ignorePrefixes, "ignore-prefix", nil,
 		"Treat these sibling resource_prefix values (other km installs in this account) as KNOWN: their cross-install resources (SCPs, SES rules, sandbox-secrets KMS aliases) report OK instead of WARN. Comma-separated or repeated, e.g. --ignore-prefix=km2,rg. Augments km-config.yaml doctor_ignore_prefixes.")
 	return cmd
@@ -3508,6 +3542,18 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 			r.Status = CheckWarn // identity table is optional
 		}
 		return r
+	})
+
+	// Operator identity row (incident 2026-06-14): the operator public-key row must exist
+	// in the identities table or every operator-signed action fails with unknown_sender.
+	// Catches drift (wedged-init publish, row deletion) that otherwise surfaces only as a
+	// generic bridge not-OK. Skipped when the GetItem client is unavailable.
+	identityRowClient := deps.IdentityRowClient
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if identityRowClient == nil {
+			return CheckResult{Name: "Operator identity", Status: CheckSkipped, Message: "identity client unavailable"}
+		}
+		return checkOperatorIdentity(ctx, identityRowClient, deps.SSMReadClient, identityTable, cfg.GetResourcePrefix())
 	})
 
 	// DynamoDB: slack-channels table — existence/DescribeTable probe only.
@@ -4270,6 +4316,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.STSClient = sts.NewFromConfig(awsCfg)
 	deps.S3Client = s3.NewFromConfig(awsCfg)
 	deps.DynamoClient = dynamodb.NewFromConfig(awsCfg)
+	deps.IdentityRowClient = dynamodb.NewFromConfig(awsCfg)
 	deps.KMSClient = kms.NewFromConfig(awsCfg)
 	deps.SSMReadClient = ssm.NewFromConfig(awsCfg)
 

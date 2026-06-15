@@ -666,6 +666,39 @@ func TestSlackTest_HappyPath(t *testing.T) {
 	}
 }
 
+// km slack test — bridge returns unknown_sender → actionable remediation surfaces (D,
+// incident 2026-06-14). The operator must see the missing-identity cause + the fix, not
+// a bare "bridge returned not-ok: unknown_sender".
+func TestSlackTest_UnknownSender_ActionableError(t *testing.T) {
+	ssm := newFakeSSM(map[string]string{
+		"/sec/slack/bridge-url":        "https://bridge.example.com/",
+		"/sec/slack/shared-channel-id": "C0TEST",
+	})
+	poster := &fakeBridgePoster{resp: &slack.PostResponse{OK: false, Error: "unknown_sender"}}
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	deps := &cmd.SlackCmdDeps{
+		SSM: ssm,
+		OperatorKeyLoader: func(_ context.Context, _ string) (ed25519.PrivateKey, error) {
+			return priv, nil
+		},
+		BridgePoster: poster.Post,
+		Region:       "use1",
+		RepoRoot:     "/repo",
+		SsmPrefix:    "/sec/",
+	}
+
+	var buf bytes.Buffer
+	err := cmd.RunSlackTest(context.Background(), deps, &buf)
+	if err == nil {
+		t.Fatal("expected error when bridge returns unknown_sender, got nil")
+	}
+	for _, want := range []string{"unknown_sender", "sec-identities", "km init", "km doctor --republish-operator-identity"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q (should be the actionable remediation)", err.Error(), want)
+		}
+	}
+}
+
 // 8. km slack test — bridge-url missing → exit 1 with "run km slack init first".
 func TestSlackTest_NoBridgeURL_Exits1(t *testing.T) {
 	ssm := newFakeSSM(nil)

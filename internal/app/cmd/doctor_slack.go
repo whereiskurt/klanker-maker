@@ -138,10 +138,16 @@ func checkSlackTokenValidity(
 		if resp != nil {
 			errMsg = resp.Error
 		}
+		message := fmt.Sprintf("bridge returned not-OK: %s", errMsg)
+		// unknown_sender (missing operator public-key row) → name the exact problem and
+		// the fix instead of a generic not-OK (the incident-2026-06-14 surface).
+		if hint := slackpkg.ExplainBridgeError(errMsg, strings.Trim(ssmPrefix, "/")); hint != "" {
+			message = "bridge rejected operator signature: " + hint
+		}
 		return CheckResult{
 			Name:    "Slack bot token",
 			Status:  CheckWarn,
-			Message: fmt.Sprintf("bridge returned not-OK: %s", errMsg),
+			Message: message,
 		}
 	}
 

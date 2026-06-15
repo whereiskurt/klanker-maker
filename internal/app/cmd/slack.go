@@ -582,6 +582,9 @@ func RunSlackTest(ctx context.Context, d *SlackCmdDeps, w io.Writer) error {
 		return fmt.Errorf("post to bridge: %w", err)
 	}
 	if !resp.OK {
+		if hint := kmslack.ExplainBridgeError(resp.Error, strings.Trim(d.SsmPrefix, "/")); hint != "" {
+			return fmt.Errorf("bridge rejected operator signature: %s", hint)
+		}
 		return fmt.Errorf("bridge returned not-ok: %s", resp.Error)
 	}
 	fmt.Fprintf(w, "km slack test: posted ts=%s\n", resp.TS)

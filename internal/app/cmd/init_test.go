@@ -1305,6 +1305,71 @@ func TestInitExportsGithubDefaultRouter_DriftWarn(t *testing.T) {
 	}
 }
 
+// ---- GSI-backfill timeout bucket (incident 2026-06-14) ----
+
+// TestModuleTimeout_GSIBackfillDDBModules asserts the DDB-threads modules that can
+// trigger an online GSI add/backfill on a populated table get the wider 10-minute
+// bound (matching network), not the 3-minute default. A `dynamodb-slack-threads`
+// session-index GSI backfill on a populated table exceeded the 3m default and wedged
+// km init, which (pre-fix) stranded the operator-identity publish → unknown_sender.
+func TestModuleTimeout_GSIBackfillDDBModules(t *testing.T) {
+	tenMin := 10 * time.Minute
+	for _, name := range []string{"dynamodb-slack-threads", "dynamodb-github-threads", "dynamodb-h1-threads"} {
+		if got := cmd.ModuleTimeoutFunc(name); got != tenMin {
+			t.Errorf("ModuleTimeoutFunc(%q) = %v; want %v (GSI backfill headroom)", name, got, tenMin)
+		}
+	}
+	// Sanity: an unrelated module still gets the 3-minute default.
+	if got := cmd.ModuleTimeoutFunc("dynamodb-sandboxes"); got != 3*time.Minute {
+		t.Errorf("ModuleTimeoutFunc(dynamodb-sandboxes) = %v; want 3m (default bucket unchanged)", got)
+	}
+}
+
+// TestRunInitWithRunner_PublishesOperatorIdentityBeforeLaterModuleWedge is acceptance
+// criterion 1 for the 2026-06-14 incident: a km init whose apply wedges on a module
+// applied AFTER dynamodb-identities must STILL publish the operator identity. The
+// publish fires right after dynamodb-identities applies (PublishOperatorIdentityHook),
+// so a later wedge (here: a dynamodb-slack-threads apply failure standing in for the
+// GSI-backfill timeout) can no longer strand it and leave the platform in unknown_sender.
+func TestRunInitWithRunner_PublishesOperatorIdentityBeforeLaterModuleWedge(t *testing.T) {
+	repoRoot := t.TempDir()
+	regionLabel := "use1"
+	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
+	// Both the identities module and a LATER module must exist so the loop reaches the wedge.
+	for _, m := range []string{"dynamodb-identities", "dynamodb-slack-threads"} {
+		if err := os.MkdirAll(filepath.Join(regionDir, m), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", m, err)
+		}
+	}
+	withShortModuleTimeout(t, 30*time.Second)
+
+	// Record whether — and at what point — the operator-identity publish hook fired.
+	hookFired := false
+	hookFiredBeforeWedge := false
+	orig := cmd.PublishOperatorIdentityHook
+	cmd.PublishOperatorIdentityHook = func(_ context.Context) error {
+		hookFired = true
+		hookFiredBeforeWedge = true // set true when the hook runs; the wedge happens later
+		return nil
+	}
+	t.Cleanup(func() { cmd.PublishOperatorIdentityHook = orig })
+
+	// dynamodb-slack-threads (applied AFTER dynamodb-identities) fails — the GSI-backfill
+	// wedge that aborted init before the old end-of-init publish could run.
+	mock := &mockRunner{failOn: "dynamodb-slack-threads"}
+
+	err := cmd.RunInitWithRunner(mock, repoRoot, "us-east-1")
+	if err == nil {
+		t.Fatal("expected the later-module apply failure to surface, got nil")
+	}
+	if !hookFired {
+		t.Error("operator identity hook did NOT fire — a wedge after dynamodb-identities stranded the publish (the incident bug)")
+	}
+	if !hookFiredBeforeWedge {
+		t.Error("operator identity hook fired too late (after the wedge) — it must run right after dynamodb-identities applies")
+	}
+}
+
 // ---- Phase 84.1-02: per-module timeout tests (GAP-4, GAP-5) ----
 
 // withShortModuleTimeout temporarily overrides cmd.ModuleTimeoutFunc so a

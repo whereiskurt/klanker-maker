@@ -922,6 +922,12 @@ func PostToBridge(ctx context.Context, bridgeURL string, env *SlackEnvelope, sig
 		// 4xx or 5xx: fail fast — do NOT retry.
 		// For 5xx: the bridge has already reserved the nonce; retrying the same
 		// envelope causes "replayed_nonce" 401, masking the real Slack error.
+		// A 404 unknown_sender (missing operator public-key row) gets an actionable
+		// remediation; prefix is unknown at this layer so the generic placeholder is used.
+		if hint := ExplainBridgeError(string(body), ""); hint != "" {
+			return nil, fmt.Errorf("slack: bridge rejected operator signature (%d): %s",
+				resp.StatusCode, hint)
+		}
 		return nil, fmt.Errorf("slack: bridge returned %d: %s",
 			resp.StatusCode, string(body))
 	}

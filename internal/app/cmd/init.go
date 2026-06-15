@@ -88,6 +88,17 @@ type SESPreflightFunc func(ctx context.Context) error
 // Tests replace this variable to exercise the "missing rule set" branch.
 var InitSESPreflight SESPreflightFunc = defaultSESPreflight
 
+// PublishOperatorIdentityHook, when non-nil, is invoked by RunInitWithRunner
+// IMMEDIATELY AFTER the dynamodb-identities module applies successfully — NOT at the
+// end of init. runInit sets it (to ensureOperatorIdentity bound to cfg+awsCfg) so the
+// operator public-key row is published as soon as the {prefix}-identities table exists,
+// decoupled from full-fleet apply success. Before this, the publish ran only at the end
+// of init (Step 5); a wedge on ANY later module (e.g. a dynamodb-slack-threads GSI
+// backfill exceeding its timeout) aborted init first and stranded the publish, leaving
+// the operator with a private key in SSM but no public-key row → km slack test returned
+// unknown_sender (incident 2026-06-14). Nil → skipped (the test/default zero value).
+var PublishOperatorIdentityHook func(ctx context.Context) error
+
 // RunInitPlanFunc is the package-level entry point for km init --plan, exported as a
 // var so cmd_test can override it with a mock to verify routing without needing real
 // AWS credentials / a real terragrunt binary. The default implementation is runInitPlan.
@@ -467,6 +478,16 @@ func RegionalModules(regionDir string) []RegionalModule {
 func defaultModuleTimeout(name string) time.Duration {
 	switch name {
 	case "network", "ses-shared-rule-set":
+		return 10 * time.Minute
+	case "dynamodb-slack-threads", "dynamodb-github-threads", "dynamodb-h1-threads":
+		// GSI add/backfill risk: these modules each gained a *-index GSI in a later
+		// version (e.g. dynamodb-slack-threads/v1.1.0 added session-index). Adding a
+		// GSI to an ALREADY-POPULATED table is an online backfill that can exceed the
+		// 3-minute default — the wrapper then SIGINTs terragrunt (context canceled) and
+		// the apply wedges, even though AWS keeps building the GSI server-side. That
+		// wedge stranded the operator-identity publish (Step 5) → km slack test returned
+		// unknown_sender (incident 2026-06-14). Give them network-grade headroom.
+		// NOTE: when adding a GSI to any other populated dynamodb-* module, add it here.
 		return 10 * time.Minute
 	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge", "lambda-github-bridge", "lambda-h1-bridge":
 		return 5 * time.Minute
@@ -1016,6 +1037,37 @@ func runInitDryRun(cfg *config.Config, region string) error {
 	return nil
 }
 
+// ensureOperatorIdentity provisions the operator's Ed25519 signing key and publishes
+// the matching public-key row to the {prefix}-identities table. Both steps are
+// idempotent: EnsureSandboxIdentity returns the existing SSM key without regenerating
+// (a private key from an earlier-failing init carries forward), and PublishIdentity is
+// a PutItem. Safe to call multiple times per init. Returns a wrapped error on key-gen or
+// publish failure so callers can choose warn-and-continue (km init) or surface-as-check
+// (km doctor --republish-operator-identity, which reuses this exact function).
+//
+// Decoupled from full-fleet apply success (incident 2026-06-14): invoked right after the
+// dynamodb-identities module applies (via PublishOperatorIdentityHook) AND as an
+// end-of-init backstop, so a later-module wedge can no longer strand the publish.
+func ensureOperatorIdentity(ctx context.Context, cfg *config.Config, awsCfg aws.Config) error {
+	ssmClient := ssm.NewFromConfig(awsCfg)
+	kmsKeyAlias := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
+	if kmsKeyAlias == "" {
+		kmsKeyAlias = cfg.GetPlatformKMSAlias()
+	}
+	const operatorID = "operator"
+	pubKey, err := awspkg.EnsureSandboxIdentity(ctx, ssmClient, cfg.GetResourcePrefix(), operatorID, kmsKeyAlias)
+	if err != nil {
+		return fmt.Errorf("operator identity key generation: %w", err)
+	}
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+	operatorEmail := fmt.Sprintf("operator@%s", cfg.GetEmailDomain())
+	if err := awspkg.PublishIdentity(ctx, dynamoClient, cfg.GetIdentityTableName(), operatorID, operatorEmail,
+		pubKey, nil, "required", "required", "off", "operator", []string{"*"}); err != nil {
+		return fmt.Errorf("operator identity publish: %w", err)
+	}
+	return nil
+}
+
 func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error {
 	ctx := context.Background()
 
@@ -1236,42 +1288,38 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	fmt.Println("Applying infrastructure...")
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
+
+	// Publish the operator identity the instant the dynamodb-identities module applies,
+	// not at the end of init — RunInitWithRunner invokes this hook in its module loop
+	// (see PublishOperatorIdentityHook). This decouples the publish from every LATER
+	// module's success; a wedge (e.g. a dynamodb-slack-threads GSI backfill exceeding its
+	// timeout) can no longer abort init before the publish and leave the operator with a
+	// private key in SSM but no public-key row → unknown_sender (incident 2026-06-14).
+	// The end-of-init block below remains as an idempotent backstop. Cleared on return so
+	// a subsequent in-process init re-binds it to its own cfg/awsCfg.
+	PublishOperatorIdentityHook = func(hookCtx context.Context) error {
+		return ensureOperatorIdentity(hookCtx, cfg, awsCfg)
+	}
+	defer func() { PublishOperatorIdentityHook = nil }()
+
 	if err := RunInitWithRunner(runner, repoRoot, region); err != nil {
 		return err
 	}
 
-	// Step 5: Provision operator identity (Ed25519 signing key + DynamoDB public key).
-	// MUST run AFTER terragrunt apply — the dynamodb-identities module above creates
-	// the {prefix}-identities table that PublishIdentity writes to. Running it earlier
-	// (where the safe-phrase / proxy CA steps live) used to fail on first install with
-	// ResourceNotFoundException, leaving the operator with a private key in SSM but no
-	// matching public-key row in DDB. Result: km slack test failed with unknown_sender,
-	// km email send --from operator failed signature verification.
-	//
-	// EnsureSandboxIdentity is idempotent — returns the existing key on re-runs without
-	// regenerating, so a private key created by an earlier-failing init carries forward
-	// and only the publish step needs to succeed on the retry.
+	// Step 5 (idempotent backstop): re-ensure the operator identity at end of init.
+	// On a clean run RunInitWithRunner already published it (the hook above) right after
+	// dynamodb-identities applied, so this is a confirming no-op; it repeats the
+	// idempotent ensure+publish to cover a transient in-loop publish failure. The
+	// {prefix}-identities table must exist by now (dynamodb-identities applied above);
+	// EnsureSandboxIdentity returns the existing SSM key without regenerating, and
+	// PublishIdentity is a PutItem — safe to run twice in one init.
 	{
 		fmt.Println()
 		fmt.Println("Ensuring operator email identity...")
-		ssmClient := ssm.NewFromConfig(awsCfg)
-		kmsKeyAlias := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
-		if kmsKeyAlias == "" {
-			kmsKeyAlias = cfg.GetPlatformKMSAlias()
-		}
-		operatorID := "operator"
-		pubKey, identErr := awspkg.EnsureSandboxIdentity(ctx, ssmClient, cfg.GetResourcePrefix(), operatorID, kmsKeyAlias)
-		if identErr != nil {
-			fmt.Printf("  ⚠ Operator identity key generation failed: %v\n", identErr)
+		if idErr := ensureOperatorIdentity(ctx, cfg, awsCfg); idErr != nil {
+			fmt.Printf("  ⚠ Operator identity: %v\n", idErr)
 		} else {
-			identityTableName := cfg.GetIdentityTableName()
-			operatorEmail := fmt.Sprintf("operator@%s", cfg.GetEmailDomain())
-			dynamoClient := dynamodb.NewFromConfig(awsCfg)
-			if pubErr := awspkg.PublishIdentity(ctx, dynamoClient, identityTableName, operatorID, operatorEmail, pubKey, nil, "required", "required", "off", "operator", []string{"*"}); pubErr != nil {
-				fmt.Printf("  ⚠ Operator identity publish failed: %v\n", pubErr)
-			} else {
-				fmt.Printf("  ✓ Operator identity: Ed25519 key at /%s/sandbox/operator/signing-key\n", cfg.GetResourcePrefix())
-			}
+			fmt.Printf("  ✓ Operator identity: Ed25519 key at /%s/sandbox/operator/signing-key\n", cfg.GetResourcePrefix())
 		}
 	}
 
@@ -2234,6 +2282,22 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 			return fmt.Errorf("applying %s: %w", mod.name, err)
 		}
 		fmt.Println(" done")
+
+		// After dynamodb-identities module: publish the operator identity NOW, not at
+		// end of init. The {prefix}-identities table exists the instant this module
+		// applies; publishing here decouples it from every LATER module's success. A
+		// wedge on a later module (e.g. a dynamodb-slack-threads GSI backfill exceeding
+		// its timeout) used to abort init before the end-of-init publish (Step 5) and
+		// strand the operator public-key row → km slack test unknown_sender (incident
+		// 2026-06-14). Warn-and-continue: a publish hiccup never aborts init, and runInit
+		// re-runs the same idempotent publish as an end-of-init backstop.
+		if mod.name == "dynamodb-identities" && PublishOperatorIdentityHook != nil {
+			if idErr := PublishOperatorIdentityHook(ctx); idErr != nil {
+				fmt.Printf("  ⚠ Operator identity publish failed (will retry at end of init): %v\n", idErr)
+			} else {
+				fmt.Println("  ✓ Operator identity published")
+			}
+		}
 
 		// After network module: capture and save outputs.json
 		if mod.name == "network" {
