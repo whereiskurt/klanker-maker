@@ -1631,6 +1631,7 @@ Recent decisions affecting current work:
 - Phase 108 backfilled (retro): GitHub bridge per-turn idempotency guard (`<!-- km-turn:$KM_GITHUB_TURN_ID -->` marker, no duplicate PR comments) — shipped as fix-commit b5a0cbf9 outside GSD, added to roadmap 2026-06-12 for complete record.
 - Phase 109 backfilled (retro): GitHub bridge self-heals orphaned `stopped` alias rows (resume-or-cold-create via ErrNoResumableInstance + DeleteSandboxRow; H1 parity) — shipped as fix-commit eac8ed8b / PR #23 outside GSD, added to roadmap 2026-06-12.
 - Phase 110 added: Session-aware Slack reply + thread/channel repair — `km-slack reply` (sandbox) + `km slack reply`/cleanup commands (operator) to post to the thread bound to a `--resume` session via a new `claude_session_id` GSI + bridge `lookup-thread` action; channel-root fallback; repair stale thread/channel mappings. NOTE: numbered 110 not 108 — Phases 108/109 are completed-but-unroadmapped GitHub-bridge fix-commits (CLAUDE.md + docs/github-bridge.md); gsd-tools' integer-max scan would have collided.
+- Phase 114 added: Slack bridge auto-resume — start a paused/stopped sandbox when an inbound Slack thread/channel message would be dispatched to it (resume-only Slack analog of the GitHub/H1 Phase-109 path; no cold-create, no budget awareness). Design spec: `docs/superpowers/specs/2026-06-15-slack-resume-on-thread-message-design.md`. NOTE: numbered 114 not 111 — phase dirs run 93–113 (111/112/113 exist), and 108/109 are unroadmapped fix-commits.
 
 ### Pending Todos
 
