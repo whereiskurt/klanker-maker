@@ -99,6 +99,12 @@ inputs = {
   # = byte-identical to Phase 100. Only the federation front-door install sets "true".
   github_default_router = get_env("KM_GITHUB_DEFAULT_ROUTER", "false")
 
+  # Phase 115: github.events event->prompt rules. JSON {events:[...]} from
+  # ExportTerragruntEnvVars (km-config.yaml github.events). Empty = event routing dormant
+  # (byte-identical to Phase 114). Populated by ExportTerragruntEnvVars when
+  # len(cfg.Github.Events) > 0. env-block change => km init --github or --dry-run=false.
+  github_events_json = get_env("KM_GITHUB_EVENTS", "")
+
   # SSM paths for GitHub App credentials (GetSsmPrefix() = "/{prefix}/")
   webhook_secret_path   = "/${local.site_vars.locals.site.label}/config/github/webhook-secret"
   bot_login_path        = "/${local.site_vars.locals.site.label}/config/github/bot-login"
