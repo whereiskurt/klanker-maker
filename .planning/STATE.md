@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 115-02-PLAN.md (EventRouter core: MatchEventRule + ExpandEventTemplate + GithubEventRule config)"
-last_updated: "2026-06-15T23:44:47.627Z"
+stopped_at: "Completed 115-03-PLAN.md (handleEventRoute wired: two-branch event switch, dedup+cooldown+dispatch, KM_GITHUB_EVENTS cold-start parse)"
+last_updated: "2026-06-15T23:52:48.033Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 131
   completed_phases: 114
   total_plans: 575
-  completed_plans: 533
+  completed_plans: 534
   percent: 91
 ---
 
@@ -570,6 +570,7 @@ Progress: [█████████░] 91%
 | Phase 114-slack-bridge-auto-resume P03 | 666s | 2 tasks | 3 files |
 | Phase 115-generic-github-webhook-event-prompt-router P01 | 286 | 3 tasks | 5 files |
 | Phase 115-generic-github-webhook-event-prompt-router P02 | 215s | 2 tasks | 4 files |
+| Phase 115-generic-github-webhook-event-prompt-router P03 | 480 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1629,6 +1630,9 @@ Recent decisions affecting current work:
 - [Phase 114-slack-bridge-auto-resume]: initEC2Client constructed in init() alongside other AWS clients (cfg is local to init); wireEventsHandler() assigns Resumer/StatusWriter/OrphanHinter; PauseHinter HintText updated to resume-aware waking-up message; deploy surface: make build-lambdas + km init --slack (NOT --sidecars)
 - [Phase 115-01]: TDD Wave 0 RED scaffold: 5 test additions (2 new files, 3 additions) covering all unit-testable Phase 115 requirements; GH-EVENT-POLLER + GH-EVENT-E2E are manual-only
 - [Phase 115-generic-github-webhook-event-prompt-router]: WebhookHandler.EventRules added in Plan 02 (not 03) to unblock package compile; isGlob reused from resolve.go; excluded() handles both exact and glob entries
+- [Phase 115-03]: handleEventRoute uses base ResolveByAlias for alias warm path (not status-aware) — autonomous events don't need stopped/paused resume semantics
+- [Phase 115-03]: delivery-GUID dedup runs BEFORE MatchEventRule in handleEventRoute to guard against GitHub retry storms generating duplicate cold-creates
+- [Phase 115-03]: No reaction posted in handleEventRoute — autonomous events have no originating comment (CONTEXT.md hard requirement)
 
 ### Roadmap Evolution
 
@@ -1770,6 +1774,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-15T23:44:47.617Z
-Stopped at: Completed 115-02-PLAN.md (EventRouter core: MatchEventRule + ExpandEventTemplate + GithubEventRule config)
+Last session: 2026-06-15T23:52:48.022Z
+Stopped at: Completed 115-03-PLAN.md (handleEventRoute wired: two-branch event switch, dedup+cooldown+dispatch, KM_GITHUB_EVENTS cold-start parse)
 Resume file: None
