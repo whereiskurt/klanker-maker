@@ -38,6 +38,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -63,6 +64,7 @@ var (
 	initSSMC       *ssm.Client
 	initS3Client   *s3.Client
 	initSQSClient  *sqs.Client
+	initEC2Client  *ec2.Client
 	initPoster     *bridge.SlackPosterAdapter
 	initToken      *bridge.SSMBotTokenFetcher
 	initHTTPClient *http.Client
@@ -79,6 +81,7 @@ func init() {
 
 	initDDB = dynamodb.NewFromConfig(cfg)
 	initSSMC = ssm.NewFromConfig(cfg)
+	initEC2Client = ec2.NewFromConfig(cfg)
 
 	// Defaults derive from KM_RESOURCE_PREFIX so a non-default install
 	// (resource_prefix=kph) gets prefix-correct fallbacks (kph-identities,
@@ -318,10 +321,35 @@ func wireEventsHandler() {
 		SandboxesTableName: sandboxesTable,
 		SandboxByChannel:   sandboxResolver,
 		Post:               postHintFn,
-		HintText:           "Sandbox is paused; message queued. Run `km resume <sandbox-id>` to wake it up.",
+		HintText:           "Sandbox is waking up — your message is queued and will be answered shortly.",
 		CooldownSeconds:    3600,
 	}
 	eventsHandler.PauseHinter = pauseHinter
+
+	// Phase 114: auto-resume wiring. On a paused/stopped sandbox, the events handler
+	// starts the EC2 instance (StartInstances) so the on-box poller boots and drains the
+	// already-enqueued message. The status flip (SetStatusRunning) is the idempotency guard.
+	// Unconditional wiring — no env guard; the IAM grant is always present after the TF
+	// ec2_resume policy applies. Deploy: make build-lambdas + km init --slack (NOT --sidecars).
+	eventsHandler.Resumer = &bridge.EC2Resumer{
+		Client:         initEC2Client,
+		ResourcePrefix: prefix, // INERT — sandboxIDTagKey() hardcodes km:sandbox-id (Phase-109 fix). Kept for documentation.
+	}
+	eventsHandler.StatusWriter = &bridge.DynamoSandboxStatusWriter{
+		Client:    initDDB,
+		TableName: sandboxesTable,
+	}
+	// Distinct hinter for the orphan/degraded path (instance gone, no cold-create in v1).
+	// Shares the 1h cooldown at the km-sandboxes row level with the wake hinter — whichever
+	// fires first suppresses the other for that window (correct behavior).
+	eventsHandler.OrphanHinter = &bridge.DDBPauseHinter{
+		Client:             initDDB,
+		SandboxesTableName: sandboxesTable,
+		SandboxByChannel:   sandboxResolver,
+		Post:               postHintFn,
+		HintText:           "Couldn't auto-resume this sandbox (the instance is gone). Ask an operator to recreate it with `km create`.",
+		CooldownSeconds:    3600,
+	}
 
 	// Phase 67.1: ACK reaction wiring.
 	ackEmoji := os.Getenv("KM_SLACK_ACK_EMOJI")
