@@ -611,9 +611,32 @@ expansion of the Phase 97 comment-trigger MVP.
 | GH-COLD-CREATE | Fix the broken cold-create path (Phase 97: implemented but never exercised — bridge `SandboxCreate` omits `sandbox_id`+`artifact_bucket`, malformed `artifact_prefix`, so `create-handler` rejects). Bridge generates valid `sandbox_id` + correct artifact bucket/prefix; `km init` pre-stages each `github.repos` profile to S3 (`{bucket}/{prefix}/.km-profile.yaml`) so `create-handler` can fetch it; cold-box auth via **SOPS-injected Claude creds** (`spec.secrets.sopsFile`, Phase 89 — not Bedrock) so a fresh box self-authenticates and posts; dispatch unified with GH-X-RESUME (resume if paused/stopped, cold-create only if truly absent). | Planned |
 | GH-X-E2E | Follow-up @-mention continues the session; check run + opened PR visible; shared-alias dispatch across two repos to one sandbox; stopped-alias @-mention auto-resumes and processes (manual; real AWS + GitHub) | Planned |
 
+### Phase 115 — Generic GitHub webhook event → prompt router
+
+These IDs are phase-local and synthetic — they derive from the Phase 115 design
+spec (`docs/superpowers/specs/2026-06-15-github-webhook-event-router-design.md`).
+Feature: a second ingress class into the `km-github-bridge` that maps autonomous
+(non-`issue_comment`) webhook event types to an agent prompt, with new-repo
+(`repository`/`created`) as the first use case.
+
+| ID | Description | Status |
+|----|-------------|--------|
+| GH-EVENT-CONFIG | New `github.events:` config block: `GithubEventRule` struct (`on`, `actions`, `match`, `exclude`, `profile`, `alias`, `agent`, `cooldownSeconds`, `prompt`) on `GithubConfig`, wired through the v2→v merge-list in `config.Load()` + getter; exported to the bridge Lambda as `KM_GITHUB_EVENTS` (JSON) by `km init`, mirroring `KM_GITHUB_REPOS`, with env-wins drift WARN | Planned |
+| GH-EVENT-ROUTER | `webhook_handler.go` branches on `x-github-event`: `issue_comment` → existing path; any other type → `EventRouter`. Router parses a minimal per-event payload (repo full name, action, sender, default branch), then **first-match** selects the rule where `on`==event type, action ∈ `actions` (or empty), repo matches `match` glob, repo matches no `exclude` glob. HMAC-verify + delivery-GUID dedup unchanged and run before the branch | Planned |
+| GH-EVENT-GATING | Org+glob is the trust boundary (no actor allowlist for autonomous events); no matching rule ⇒ drop with 200 OK (byte-identical to today's unknown-event behavior); `exclude:` evaluated in-bridge so it works on a brand-new empty repo | Planned |
+| GH-EVENT-TEMPLATE | Prompt template expansion (reusing `ExpandTemplate`) injects payload-derived vars `{{repo}}`, `{{event}}`, `{{action}}`, `{{sender}}`, `{{default_branch}}`, `{{html_url}}` | Planned |
+| GH-EVENT-DISPATCH | Build `GitHubEnvelope` with `Kind=<event type>`, `Number=0`, `Body=<expanded prompt>`, `Agent=rule.agent`; reuse existing dispatch — rule names a running/stopped `alias` ⇒ warm/resume enqueue, else cold-create via EventBridge `SandboxCreate` | Planned |
+| GH-EVENT-COOLDOWN | Opt-in per-(event, repo, action) cooldown via the nonces table (default `cooldownSeconds: 0` = off; `repository` leaves it off); within a configured window repeated matching events drop with a `github_event_cooldown` log line, preventing cold-create storms on noisy types (`push`) | Planned |
+| GH-EVENT-MANIFEST | `km github manifest` subscribes the union of event types referenced in `github.events:` (e.g. adds `repository`) and the scopes those imply (`metadata: read`; PR-push reuses the existing `contents:write` opt-in); requires App re-install to take effect | Planned |
+| GH-EVENT-POLLER | Sandbox-side inbound poller tolerates `Number==0` / non-`issue_comment` `Kind`, builds an event-appropriate preamble, and dispatches `Body` to the configured agent; outcome (PR/issue/Slack/none) is decided by the prompt + `km-*` helpers | Planned |
+| GH-EVENT-DOCTOR | `km doctor` GitHub event-rule checks: malformed `match`/`exclude` glob, unknown/unsupported event type, missing profile, reserved-token/alias collisions | Planned |
+| GH-EVENT-DOCS | `docs/github-bridge.md` § Phase 115: config reference, gating model, storm control, manifest/scope changes, and deploy surface (`make build-lambdas` + `km init --github`, NOT `--sidecars`; App re-install) | Planned |
+| GH-EVENT-E2E | Create a throwaway repo in the org ⇒ a sandbox cold-creates and the configured prompt runs end-to-end; `exclude:`d repo does not fire (manual; real AWS + GitHub) | Planned |
+
 ---
 
 *Last updated: 2026-06-07 — Phase 97 (GH-APP-SCOPE..GH-E2E, 11 IDs; shipped on warm path, cold-create deferred) and Phase 98 (GH-X-CHECK..GH-X-E2E, 9 IDs incl. GH-X-RESUME auto-resume + GH-COLD-CREATE cold-path fix w/ SOPS auth) synthetic IDs: GitHub App comment-trigger bridge MVP + expansion*
+*Last updated: 2026-06-15 — Phase 115 (GH-EVENT-CONFIG..GH-EVENT-E2E, 11 IDs) synthetic IDs: generic webhook event → prompt router*
 
 *Last updated: 2026-06-02 — Phase 93 synthetic IDs added for plan-checker traceability (15 IDs covering schema, helper, validation, compiler/userdata, credential, CLI, security, profile example, skill, docs, tests)*
 
