@@ -96,17 +96,41 @@ func RunGitHubManifest(ctx context.Context, cfg *config.Config, opts GitHubManif
 		hookURL = "https://example.com/events" // placeholder; operator fills in after Lambda deploy
 	}
 
+	// Phase 115 — GH-EVENT-MANIFEST: build default_events as the union of
+	// "issue_comment" (always present) plus every distinct on: type from
+	// cfg.Github.Events. This ensures the GitHub App is subscribed to every
+	// event type the operator has configured, so GitHub actually delivers them
+	// (Pitfall 5: App not subscribed → no webhook delivery).
+	eventsSet := map[string]bool{"issue_comment": true}
+	for _, rule := range cfg.Github.Events {
+		if rule.On != "" {
+			eventsSet[rule.On] = true
+		}
+	}
+	defaultEvents := make([]string, 0, len(eventsSet))
+	for ev := range eventsSet {
+		defaultEvents = append(defaultEvents, ev)
+	}
+	sort.Strings(defaultEvents)
+
+	defaultPermissions := map[string]string{
+		"issues":        "write",
+		"pull_requests": "write",
+		"contents":      "read",
+		"checks":        "write",
+	}
+	// Phase 115: repository events require metadata:read to receive the
+	// full repository payload (name, html_url, default_branch, etc.).
+	if eventsSet["repository"] {
+		defaultPermissions["metadata"] = "read"
+	}
+
 	payload := githubManifestPayload{
-		Name:   appName,
-		URL:    "https://github.com/whereiskurt/klanker-maker",
-		Public: true,
-		DefaultPermissions: map[string]string{
-			"issues":        "write",
-			"pull_requests": "write",
-			"contents":      "read",
-			"checks":        "write",
-		},
-		DefaultEvents: []string{"issue_comment"},
+		Name:               appName,
+		URL:                "https://github.com/whereiskurt/klanker-maker",
+		Public:             true,
+		DefaultPermissions: defaultPermissions,
+		DefaultEvents:      defaultEvents,
 		HookAttributes: map[string]interface{}{
 			"url":    hookURL,
 			"active": hookActive,
