@@ -160,10 +160,37 @@ test -f /home/sandbox/.codex/auth.json && echo KM_CODEX_OK || echo KM_CODEX_MISS
 
 	// claude: parse loggedIn JSON field — tolerant of spacing differences
 	// between claude CLI versions (matches verifyClaudeAuthStatus in agent_auth.go).
-	claudeLoggedIn = strings.Contains(out, `"loggedIn": true`) || strings.Contains(out, `"loggedIn":true`)
+	claudeLoggedIn = parseClaudeLoggedIn(out)
 
 	// codex: file-based sentinel
 	codexLoggedIn = strings.Contains(out, "KM_CODEX_OK")
 
 	return claudeLoggedIn, codexLoggedIn, nil
+}
+
+// parseClaudeLoggedIn extracts the loggedIn boolean from `claude auth status`
+// JSON output, tolerant of spacing differences across CLI versions.
+func parseClaudeLoggedIn(out string) bool {
+	return strings.Contains(out, `"loggedIn": true`) || strings.Contains(out, `"loggedIn":true`)
+}
+
+// claudeAuthedNoBedrock reports whether the sandbox user's claude CLI is
+// authenticated for DIRECT-API (no-bedrock) execution — i.e. via an OAuth
+// credentials file OR an ANTHROPIC_API_KEY in the login environment, but NOT
+// via Bedrock. It asks `claude auth status` (the authoritative source, robust
+// to credential-file relocation across CLI versions) in the SAME stripped
+// environment the no-bedrock runtime uses (agent.go runtime unsets these vars),
+// so a Bedrock-only box — which a no-bedrock run could not actually use —
+// correctly reports unauthenticated rather than a false positive.
+//
+// Returns (authed, ok). ok=false means the probe itself failed (SSM transient /
+// command error); callers MUST fail-open (proceed) on ok=false, preserving the
+// existing "proceed silently on SSM error" behavior.
+func claudeAuthedNoBedrock(ctx context.Context, ssmClient SSMSendAPI, instanceID string) (authed bool, ok bool) {
+	const probe = `sudo -u sandbox bash -lc 'unset CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL; claude auth status 2>/dev/null'`
+	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, probe)
+	if err != nil {
+		return false, false
+	}
+	return parseClaudeLoggedIn(out), true
 }
