@@ -2655,7 +2655,7 @@ Plans:
 **Depends on:** Phase 102
 **Design spec:** docs/superpowers/specs/2026-06-15-github-webhook-event-router-design.md
 
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans complete
 
 Plans:
 - [ ] 115-01-PLAN.md — Wave 0 RED test scaffolds: event_router_test (router+template), webhook_handler_phase115_test (gating/dispatch/cooldown), config/manifest/doctor test additions (GH-EVENT-ROUTER,TEMPLATE,GATING,DISPATCH,COOLDOWN,CONFIG,MANIFEST,DOCTOR) [wave 1]
@@ -2663,4 +2663,4 @@ Plans:
 - [ ] 115-03-PLAN.md — webhook_handler two-branch switch + handleEventRoute (parse→dedup→match→cooldown→expand→envelope→dispatch); EventRules field; Lambda cold-start KM_GITHUB_EVENTS wiring (GH-EVENT-GATING,DISPATCH,COOLDOWN) [wave 3]
 - [ ] 115-04-PLAN.md — KM_GITHUB_EVENTS export in ExportTerragruntEnvVars + terragrunt get_env + module v1.1.0 variable + Lambda env entry (both halves) (GH-EVENT-CONFIG) [wave 3]
 - [ ] 115-05-PLAN.md — Manifest default_events union + metadata:read implied scope; checkGitHubEventsValid doctor check + registration (GH-EVENT-MANIFEST,DOCTOR) [wave 3]
-- [ ] 115-06-PLAN.md — Poller Number==0/Kind tolerance (event preamble, no pull/0/head) + docs § Phase 115 + live E2E UAT checkpoint (GH-EVENT-POLLER,DOCS,E2E) [wave 4, non-autonomous]
+- [x] 115-06-PLAN.md — Poller Number==0/Kind tolerance (event preamble, no pull/0/head) + docs § Phase 115 + live E2E UAT checkpoint (GH-EVENT-POLLER,DOCS,E2E) [wave 4, non-autonomous] (completed 2026-06-16)

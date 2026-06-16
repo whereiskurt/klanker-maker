@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 115-05-PLAN.md (manifest event union + doctor wiring for GH-EVENT-MANIFEST + GH-EVENT-DOCTOR)
-last_updated: "2026-06-16T00:18:05.117Z"
+stopped_at: "Completed 115-06-PLAN.md Tasks 1-2 (poller surgery + docs); Task 3 is checkpoint:human-verify pending orchestrator E2E"
+last_updated: "2026-06-16T00:37:02.464Z"
 last_activity: 2026-06-16
 progress:
   total_phases: 131
-  completed_phases: 114
+  completed_phases: 115
   total_plans: 575
-  completed_plans: 536
+  completed_plans: 537
   percent: 91
 ---
 
@@ -573,6 +573,7 @@ Progress: [█████████░] 91%
 | Phase 115-generic-github-webhook-event-prompt-router P03 | 480 | 2 tasks | 2 files |
 | Phase 115-generic-github-webhook-event-prompt-router P04 | 296s | 2 tasks | 5 files |
 | Phase 115-generic-github-webhook-event-prompt-router P05 | 829s | 2 tasks | 3 files |
+| Phase 115-generic-github-webhook-event-prompt-router P06 | 855s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1639,6 +1640,8 @@ Recent decisions affecting current work:
 - [Phase 115-04]: KM_GITHUB_EVENTS two-half wiring complete: init.go export + terragrunt get_env + module var + Lambda env (in-place at v1.1.0, additive default-empty, no version bump)
 - [Phase 115-generic-github-webhook-event-prompt-router]: Config-derived manifest events (not hardcoded): cfg.Github.Events iterated in RunGitHubManifest; sort.Strings for determinism; metadata:read injected when repository event configured
 - [Phase 115-generic-github-webhook-event-prompt-router]: GetGithubEvents added to DoctorConfigProvider interface: consistent with all other github.* field access patterns in RunDoctor
+- [Phase 115-generic-github-webhook-event-prompt-router]: Targeted golden update instead of CAPTURE_PRE92_BASELINE=1 regeneration to avoid breaking SubagentStop semantic check in Phase92 byte-identity test
+- [Phase 115-generic-github-webhook-event-prompt-router]: KIND defaults to issue_comment branch when empty — backward compat for pre-Phase-115 bridge envelopes in mixed-version fleet
 
 ### Roadmap Evolution
 
@@ -1780,6 +1783,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-16T00:18:05.107Z
-Stopped at: Completed 115-05-PLAN.md (manifest event union + doctor wiring for GH-EVENT-MANIFEST + GH-EVENT-DOCTOR)
+Last session: 2026-06-16T00:37:02.453Z
+Stopped at: Completed 115-06-PLAN.md Tasks 1-2 (poller surgery + docs); Task 3 is checkpoint:human-verify pending orchestrator E2E
 Resume file: None
