@@ -312,3 +312,70 @@ func TestGitHubStatus_MissingKeys(t *testing.T) {
 		t.Errorf("expected 'not set' indicator for missing keys; got: %s", outStr)
 	}
 }
+
+// ─────────────────────────────────────────────────────────
+// Phase 115 Wave 0 RED scaffold — GH-EVENT-MANIFEST
+// ─────────────────────────────────────────────────────────
+
+// TestRunGitHubManifest_EventUnion verifies that RunGitHubManifest includes
+// event types from github.events rules in default_events (union with "issue_comment").
+//
+// GH-EVENT-MANIFEST: cfg.Github.Events field + the union logic in RunGitHubManifest
+// do not exist yet → compile-fail on cfg.Github.Events = genuine RED Wave 0.
+// Implemented in Phase 115 Plan 05.
+func TestRunGitHubManifest_EventUnion(t *testing.T) {
+	// Build a config with a github.events rule that adds "repository" event.
+	// cfg.Github.Events does not exist yet → compile-fail = RED.
+	cfg := &config.Config{}
+	cfg.Github.Events = []config.GithubEventRule{
+		{
+			On:     "repository",
+			Match:  "myorg/*",
+			Prompt: "New repo {{repo}}",
+		},
+	}
+
+	out := &bytes.Buffer{}
+	err := cmd.RunGitHubManifest(context.Background(), cfg, cmd.GitHubManifestOpts{
+		AppName:   "km-test-event-union",
+		BridgeURL: "https://bridge.example.com/",
+	}, out)
+	if err != nil {
+		t.Fatalf("RunGitHubManifest: %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("RunGitHubManifest output is not valid JSON: %v\nraw: %s", err, out.String())
+	}
+
+	evts, ok := payload["default_events"].([]interface{})
+	if !ok {
+		t.Fatalf("default_events missing or wrong type in manifest")
+	}
+
+	evtSet := make(map[string]bool)
+	for _, e := range evts {
+		if s, ok := e.(string); ok {
+			evtSet[s] = true
+		}
+	}
+
+	// "issue_comment" must always be present
+	if !evtSet["issue_comment"] {
+		t.Errorf("default_events must always include 'issue_comment'; got %v", evts)
+	}
+	// "repository" must be added from the rule
+	if !evtSet["repository"] {
+		t.Errorf("default_events must include 'repository' from github.events rule; got %v", evts)
+	}
+
+	// metadata:read permission must be present when "repository" event is configured
+	perms, ok := payload["default_permissions"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("default_permissions missing or wrong type")
+	}
+	if perms["metadata"] != "read" {
+		t.Errorf("default_permissions.metadata: got %q, want %q (required for repository events)", perms["metadata"], "read")
+	}
+}

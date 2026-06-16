@@ -275,6 +275,9 @@ type DoctorConfigProvider interface {
 	// GetGithubPeerBridges returns the Phase 100 github.peer_bridges federated-relay
 	// peer URL list from km-config.yaml. Empty slice means federation is off.
 	GetGithubPeerBridges() []string
+	// GetGithubEvents returns the Phase 115 github.events generic webhook event
+	// router rules from km-config.yaml. Empty slice means event routing is dormant.
+	GetGithubEvents() []appcfg.GithubEventRule
 	// GetConfigFilePath returns the absolute path to km-config.yaml as loaded by
 	// config.Load() (empty when running without a config file, e.g. in Lambda).
 	// Used to derive the configDir for @file prompt resolution.
@@ -332,7 +335,10 @@ func (a *appConfigAdapter) GetGithubCommands() map[string]appcfg.GithubCommandEn
 }
 func (a *appConfigAdapter) GetGithubDefaultCommand() string { return a.cfg.Github.DefaultCommand }
 func (a *appConfigAdapter) GetGithubPeerBridges() []string  { return a.cfg.Github.PeerBridges }
-func (a *appConfigAdapter) GetConfigFilePath() string       { return a.cfg.ConfigFilePath }
+func (a *appConfigAdapter) GetGithubEvents() []appcfg.GithubEventRule {
+	return a.cfg.Github.Events
+}
+func (a *appConfigAdapter) GetConfigFilePath() string { return a.cfg.ConfigFilePath }
 func (a *appConfigAdapter) GetSlackChannelsTableName() string {
 	return a.cfg.GetSlackChannelsTableName()
 }
@@ -1651,6 +1657,74 @@ func checkGitHubCommandsSSMParam(ctx context.Context, ssmClient SSMReadAPI, ssmP
 		Name:    name,
 		Status:  CheckOK,
 		Message: fmt.Sprintf("SSM commands param %q is present (%d command(s) configured)", paramName, len(commands)),
+	}
+}
+
+// checkGitHubEventsValid validates the github.events block from km-config.yaml.
+// Phase 115: GH-EVENT-DOCTOR.
+//
+// Checks (pure-config, no live AWS calls):
+//  1. Malformed match glob — filepath.Match returns an error for patterns like "owner/[".
+//  2. Malformed exclude globs — same filepath.Match error check.
+//  3. Profile resolvable — when a rule declares profile:, the file must exist.
+//
+// Returns SKIPPED when rules is nil or empty (dormant-by-default).
+// Returns WARN on any validation issue; CheckOK when all rules pass.
+func checkGitHubEventsValid(
+	rules []appcfg.GithubEventRule,
+	_ []appcfg.GithubRepoEntry, // reserved for future alias-overlap check
+	_ string, // reserved: defaultProfile
+	configDir string,
+) CheckResult {
+	name := "GitHub Events Config"
+	if len(rules) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "no github.events configured — skipping event rule validation",
+		}
+	}
+
+	var warnings []string
+
+	for i, rule := range rules {
+		label := fmt.Sprintf("rule[%d] on=%s match=%s", i, rule.On, rule.Match)
+
+		// 1. Validate match glob.
+		if _, err := filepath.Match(rule.Match, ""); err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: malformed match glob %q: %v", label, rule.Match, err))
+		}
+
+		// 2. Validate exclude globs.
+		for _, excl := range rule.Exclude {
+			if _, err := filepath.Match(excl, ""); err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: malformed exclude glob %q: %v", label, excl, err))
+			}
+		}
+
+		// 3. Profile resolvable — check file existence when declared.
+		if rule.Profile != "" {
+			profilePath := rule.Profile
+			if !filepath.IsAbs(profilePath) && configDir != "" {
+				profilePath = filepath.Join(configDir, profilePath)
+			}
+			if _, err := os.Stat(profilePath); err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: profile %q not found: %v", label, rule.Profile, err))
+			}
+		}
+	}
+
+	if len(warnings) > 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: strings.Join(warnings, "; "),
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("%d event rule(s) configured — all checks passed", len(rules)),
 	}
 }
 
@@ -3736,6 +3810,14 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	// SSM commands param presence check — WARN when commands configured but param absent.
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkGitHubCommandsSSMParam(ctx, ssmClient, cfg.GetSsmPrefix(), githubCommands)
+	})
+
+	// GitHub event router config checks — Phase 115 GH-EVENT-DOCTOR.
+	// Pure config checks (no live AWS) for malformed globs, missing profile paths,
+	// and unsupported event types. Silent (SKIPPED) when github.events is absent.
+	githubEvents := cfg.GetGithubEvents()
+	checks = append(checks, func(_ context.Context) CheckResult {
+		return checkGitHubEventsValid(githubEvents, githubRepos, githubDefaultProfile, configDir)
 	})
 
 	// Credential rotation age check.

@@ -136,6 +136,55 @@ type GithubCommandEntry struct {
 	Prompt string `mapstructure:"prompt" yaml:"prompt" json:"prompt"`
 }
 
+// GithubEventRule is a single entry in the github.events config block.
+// It maps a (webhook event type, optional action list, repo match glob) triple
+// to a sandbox + prompt template that fires autonomously on GitHub webhook events.
+// Phase 115.
+//
+// All fields carry mapstructure tags — required by viper's UnmarshalKey;
+// untagged fields are silently ignored (project_config_key_merge_list pitfall 1).
+//
+// The github.events list is decoded by the SINGLE "github" merge-list entry
+// (config.go:699) + the UnmarshalKey("github", &cfg.Github) call (config.go:831).
+// Do NOT add a separate "github.events" merge-list entry — the whole github:
+// block is decoded atomically via UnmarshalKey; a sibling entry would be a no-op
+// or cause parse-order issues (RESEARCH.md Anti-Pattern + Pitfall 2).
+type GithubEventRule struct {
+	// On is the GitHub webhook event type, e.g. "repository", "push", "release".
+	On string `mapstructure:"on" yaml:"on" json:"on"`
+
+	// Actions filters by the action field inside the event payload (e.g. "created").
+	// When empty, all actions for the event type match.
+	Actions []string `mapstructure:"actions" yaml:"actions,omitempty" json:"actions,omitempty"`
+
+	// Match is an exact "owner/repo" or glob "owner/*" pattern matched against
+	// the repository full_name. Exact matches win over globs (same as github.repos).
+	Match string `mapstructure:"match" yaml:"match" json:"match"`
+
+	// Exclude is a list of glob patterns to suppress an otherwise-matching rule.
+	Exclude []string `mapstructure:"exclude" yaml:"exclude,omitempty" json:"exclude,omitempty"`
+
+	// Profile is the SandboxProfile path for cold-sandbox creation. Optional.
+	Profile string `mapstructure:"profile" yaml:"profile,omitempty" json:"profile,omitempty"`
+
+	// Alias is the sandbox alias. When set, the handler uses the warm path (SQS
+	// enqueue); when empty, a fresh sandbox is cold-created (cold path).
+	Alias string `mapstructure:"alias" yaml:"alias,omitempty" json:"alias,omitempty"`
+
+	// Agent overrides the sandbox agent for this dispatch turn: "claude", "codex", or "".
+	Agent string `mapstructure:"agent" yaml:"agent,omitempty" json:"agent,omitempty"`
+
+	// CooldownSeconds, when > 0, suppresses repeated dispatch of the same
+	// (event, repo, action) triple within the given window. 0 = no cooldown.
+	// NOTE: yaml tag is camelCase (cooldownSeconds) to match the CONTEXT.md config
+	// shape; mapstructure/json use snake_case (cooldown_seconds).
+	CooldownSeconds int `mapstructure:"cooldown_seconds" yaml:"cooldownSeconds,omitempty" json:"cooldown_seconds,omitempty"`
+
+	// Prompt is the template injected as the agent's initial turn.
+	// Supports: {{repo}}, {{event}}, {{action}}, {{sender}}, {{default_branch}}, {{html_url}}.
+	Prompt string `mapstructure:"prompt" yaml:"prompt" json:"prompt"`
+}
+
 // GithubConfig holds install-level GitHub defaults that flow into the bridge
 // Lambda environment via km init. Phase 97 Plan 01 adds the github: block.
 // Lambda environment via km init. Phase 97 Plan 01 adds the github: block.
@@ -193,6 +242,18 @@ type GithubConfig struct {
 	// "github.default_router" merge-list entry is required (RESEARCH Pitfall 6,
 	// proven by TestLoadGithubDefaultRouter_Set). Mirrors Phase 100 PeerBridges precedent.
 	DefaultRouter *bool `mapstructure:"default_router" yaml:"default_router,omitempty"`
+
+	// Events is the Phase 115 generic webhook event → prompt router config.
+	// Each entry maps a (event type, action list, repo glob) triple to a sandbox
+	// and a prompt template. When absent/empty, the event routing path is dormant
+	// and Handle() is byte-identical to Phase 114 for all non-issue_comment events.
+	// Exported as KM_GITHUB_EVENTS (JSON-encoded) by ExportTerragruntEnvVars.
+	//
+	// DECODED by the SINGLE existing "github" merge-list entry (config.go:699) +
+	// the v.UnmarshalKey("github", &cfg.Github) call (config.go:831).
+	// NO new "github.events" merge-list entry is needed or permitted — the whole
+	// github: block is decoded atomically (RESEARCH.md Pitfall 2).
+	Events []GithubEventRule `mapstructure:"events" yaml:"events,omitempty" json:"events,omitempty"`
 }
 
 // H1Target is one fanout target for a HackerOne program: an {alias, profile}

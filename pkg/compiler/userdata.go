@@ -2195,10 +2195,15 @@ while true; do
   HTML_URL=$(echo "$BODY" | jq -r '.html_url // empty')
   # Phase 102 Plan 03: parse per-message agent verb (D1). Empty when absent.
   AGENT_OVERRIDE=$(echo "$BODY" | jq -r '.agent // empty' 2>/dev/null || true)
+  # Phase 115: parse event kind and action so non-issue_comment envelopes (Number==0)
+  # can build an event-context preamble instead of a PR-context preamble.
+  KIND=$(echo "$BODY" | jq -r '.kind // empty' 2>/dev/null || true)
+  ACTION=$(echo "$BODY" | jq -r '.action // empty' 2>/dev/null || true)
 
-  # Validate envelope.
-  if [ -z "$REPO" ] || [ -z "$NUMBER" ]; then
-    echo "[km-github-inbound-poller] WARN: malformed envelope (missing repo/number), acking: $BODY"
+  # Validate envelope. NUMBER may be 0 for event-rule envelopes (Phase 115) — only
+  # REPO is required.
+  if [ -z "$REPO" ]; then
+    echo "[km-github-inbound-poller] WARN: malformed envelope (missing repo), acking: $BODY"
     aws sqs delete-message \
       --queue-url "$QUEUE_URL" \
       --receipt-handle "$RECEIPT" \
@@ -2222,9 +2227,13 @@ while true; do
   # If present, resume the session so the agent has memory of prior turns.
   # If absent (first dispatch), no resume arg is passed.
   # Phase 102 Plan 03: also read agent_type so the precedence block can pin the thread agent.
+  # Phase 115: skip the session lookup when NUMBER==0 (event-rule envelopes). Each
+  # autonomous event dispatch is a fresh session — keying on (repo, 0) would incorrectly
+  # merge sessions across different events. Document: event-rule sandboxes can still be
+  # alias: long-lived; they just lack cross-event session continuity.
   GITHUB_SESSION=""
   THREAD_AGENT_TYPE=""
-  if [ -n "$REPO" ] && [ -n "$NUMBER" ]; then
+  if [ -n "$REPO" ] && [ -n "$NUMBER" ] && [ "$NUMBER" != "0" ]; then
     DDB_THREAD=$(aws dynamodb get-item \
       --table-name "$GITHUB_THREADS_TABLE" \
       --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
@@ -2238,7 +2247,12 @@ while true; do
   # pre-Phase-102 rows have no agent_type; treat them as pinned to the profile default).
   [ -z "$THREAD_AGENT_TYPE" ] && THREAD_AGENT_TYPE="$AGENT"
 
-  # Build GitHub context preamble with worktree-per-PR guidance.
+  # Phase 115: build preamble based on KIND. issue_comment (or empty KIND for
+  # backward compat with old envelopes) gets the full PR-context preamble including
+  # the worktree fetch. Non-issue_comment events (Number==0) get an event-context
+  # preamble — no PR ref, no git fetch pull/0/head.
+  if [ "$KIND" = "issue_comment" ] || [ -z "$KIND" ]; then
+  # Build GitHub comment-trigger context preamble with worktree-per-PR guidance.
   # The preamble orients the agent: repo/PR/branch/head + how to work on this PR
   # without colliding with other concurrent PRs in a long-lived sandbox.
   PREAMBLE="[GitHub Comment Trigger]
@@ -2284,6 +2298,18 @@ Your reply reaches the requester ONLY if you post it to GitHub. Available km-git
   git push origin HEAD:<branch-name>
 
 Do NOT only print your answer — it is discarded unless you post it with km-github."
+  else
+  # Phase 115: event-rule envelope (Number==0). Build an event-context preamble.
+  # No PR ref, no git fetch pull/0/head — those only apply to issue_comment turns.
+  PREAMBLE="[GitHub Event Trigger]
+Repository: $REPO
+Event: $KIND / $ACTION
+Sender: $SENDER
+URL: $HTML_URL
+
+--- Task ---
+$COMMENT_BODY"
+  fi
 
   RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
   RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
@@ -2421,7 +2447,10 @@ Do NOT only print your answer — it is discarded unless you post it with km-git
       NEW_GITHUB_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
     fi
 
-    if [ -n "$NEW_GITHUB_SESSION" ] && [ -n "$REPO" ] && [ -n "$NUMBER" ]; then
+    # Phase 115: skip DDB session writeback for event-rule envelopes (NUMBER==0).
+    # A (repo, 0) row would incorrectly merge sessions across different event firings.
+    # The Phase 106 resume-hint comment is also skipped (no originating PR comment to reply to).
+    if [ -n "$NEW_GITHUB_SESSION" ] && [ -n "$REPO" ] && [ -n "$NUMBER" ] && [ "$NUMBER" != "0" ]; then
       # Phase 102 Plan 03: write agent_type alongside agent_session_id (D3 persistence).
       # Pins the thread to EFFECTIVE_AGENT so future turns without a verb default correctly.
       aws dynamodb update-item \

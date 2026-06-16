@@ -653,8 +653,11 @@ func (c *testConfig) GetGithubDefaultProfile() string          { return "" }
 func (c *testConfig) GetGithubCommands() map[string]appcfg.GithubCommandEntry {
 	return nil
 }
-func (c *testConfig) GetGithubDefaultCommand() string   { return "" }
-func (c *testConfig) GetGithubPeerBridges() []string    { return nil }
+func (c *testConfig) GetGithubDefaultCommand() string { return "" }
+func (c *testConfig) GetGithubPeerBridges() []string  { return nil }
+func (c *testConfig) GetGithubEvents() []appcfg.GithubEventRule {
+	return nil
+}
 func (c *testConfig) GetConfigFilePath() string         { return "" }
 func (c *testConfig) GetSlackChannelsTableName() string { return "km-slack-channels" }
 
@@ -1001,8 +1004,11 @@ func (c *testDoctorConfig) GetGithubDefaultProfile() string          { return ""
 func (c *testDoctorConfig) GetGithubCommands() map[string]appcfg.GithubCommandEntry {
 	return nil
 }
-func (c *testDoctorConfig) GetGithubDefaultCommand() string   { return "" }
-func (c *testDoctorConfig) GetGithubPeerBridges() []string    { return nil }
+func (c *testDoctorConfig) GetGithubDefaultCommand() string { return "" }
+func (c *testDoctorConfig) GetGithubPeerBridges() []string  { return nil }
+func (c *testDoctorConfig) GetGithubEvents() []appcfg.GithubEventRule {
+	return nil
+}
 func (c *testDoctorConfig) GetConfigFilePath() string         { return "" }
 func (c *testDoctorConfig) GetSlackChannelsTableName() string { return "km-slack-channels" }
 
@@ -2384,4 +2390,84 @@ func (m *mockS3Lifecycle) PutBucketLifecycleConfiguration(ctx context.Context, i
 		return m.putLifecycleFn(ctx, input, optFns...)
 	}
 	return &s3.PutBucketLifecycleConfigurationOutput{}, nil
+}
+
+// =============================================================================
+// Phase 115 Wave 0 RED scaffold — GH-EVENT-DOCTOR
+//
+// Tests for checkGitHubEventsValid (not yet implemented — compile-fail = RED).
+// Mirrors checkGitHubCommandsValid in doctor_github_commands_test.go.
+// Implemented in Phase 115 Plan 05.
+// =============================================================================
+
+// TestCheckGitHubEventsValid covers the pure-config validation of github.events rules.
+// GH-EVENT-DOCTOR: checkGitHubEventsValid does not exist yet → compile-fail = RED.
+func TestCheckGitHubEventsValid(t *testing.T) {
+	t.Run("empty events returns CheckSkipped", func(t *testing.T) {
+		result := checkGitHubEventsValid(nil, nil, "", "")
+		if result.Status != CheckSkipped {
+			t.Errorf("empty events: got %s, want CheckSkipped", result.Status)
+		}
+	})
+
+	t.Run("rule with malformed glob in match returns WARN", func(t *testing.T) {
+		rules := []appcfg.GithubEventRule{
+			{
+				On:    "repository",
+				Match: "myorg/[", // malformed bracket expression
+				Prompt: "new repo {{repo}}",
+			},
+		}
+		result := checkGitHubEventsValid(rules, nil, "", "")
+		if result.Status != CheckWarn {
+			t.Errorf("malformed match glob: got %s, want CheckWarn", result.Status)
+		}
+		if result.Message == "" {
+			t.Error("expected non-empty message for malformed glob")
+		}
+	})
+
+	t.Run("rule with malformed glob in exclude returns WARN", func(t *testing.T) {
+		rules := []appcfg.GithubEventRule{
+			{
+				On:      "repository",
+				Match:   "myorg/*",
+				Exclude: []string{"myorg/[bad"},
+				Prompt:  "new repo {{repo}}",
+			},
+		}
+		result := checkGitHubEventsValid(rules, nil, "", "")
+		if result.Status != CheckWarn {
+			t.Errorf("malformed exclude glob: got %s, want CheckWarn", result.Status)
+		}
+	})
+
+	t.Run("rule with profile path that does not exist returns WARN", func(t *testing.T) {
+		rules := []appcfg.GithubEventRule{
+			{
+				On:      "repository",
+				Match:   "myorg/*",
+				Profile: "/nonexistent/path/profile.yaml",
+				Prompt:  "new repo {{repo}}",
+			},
+		}
+		result := checkGitHubEventsValid(rules, nil, "", "")
+		if result.Status != CheckWarn {
+			t.Errorf("missing profile: got %s, want CheckWarn", result.Status)
+		}
+	})
+
+	t.Run("rule with valid glob and no profile returns OK", func(t *testing.T) {
+		rules := []appcfg.GithubEventRule{
+			{
+				On:     "repository",
+				Match:  "myorg/*",
+				Prompt: "A new repo {{repo}} was created.",
+			},
+		}
+		result := checkGitHubEventsValid(rules, nil, "", "")
+		if result.Status != CheckOK {
+			t.Errorf("valid rule: got %s (%s), want CheckOK", result.Status, result.Message)
+		}
+	})
 }

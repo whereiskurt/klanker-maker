@@ -51,9 +51,14 @@ type InstallField struct {
 }
 
 // RepositoryField is the subset of the repository object we need.
+// GitHub sends html_url at the repository level for repository/created and
+// push events; it is the canonical web URL of the repo (e.g.
+// "https://github.com/owner/repo"). Phase 115 adds HTMLURL to populate the
+// {{html_url}} template var in EventRule.Prompt.
 type RepositoryField struct {
 	FullName      string `json:"full_name"`       // "owner/repo"
 	DefaultBranch string `json:"default_branch"`  // "main", "master", etc.
+	HTMLURL       string `json:"html_url"`         // "https://github.com/owner/repo"
 }
 
 // GitHubEnvelope is the message enqueued to the per-sandbox github-inbound
@@ -77,6 +82,10 @@ type GitHubEnvelope struct {
 	Repo          string `json:"repo"`
 	Number        int    `json:"number"`
 	Kind          string `json:"kind"`
+	// Action is the webhook action (e.g. "created" for repository events). Set by
+	// the Phase 115 event router; the poller reads it to render the "<event> / <action>"
+	// preamble line. omitempty so issue_comment envelope shapes decode cleanly as "".
+	Action        string `json:"action,omitempty"`
 	CommentID     int64  `json:"comment_id"`
 	HTMLURL       string `json:"html_url"`
 	Sender        string `json:"sender"`

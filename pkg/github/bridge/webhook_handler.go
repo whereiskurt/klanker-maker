@@ -20,6 +20,11 @@ const (
 	// GitHubDeliveryNonceTTLSeconds is the TTL for delivery GUID dedup entries.
 	// 24h window covers GitHub's redelivery window comfortably.
 	GitHubDeliveryNonceTTLSeconds = 86400
+
+	// GitHubEventCooldownPrefix isolates per-(event,repo,action) cooldown keys
+	// in the nonces table. Distinct from GitHubDeliveryNoncePrefix and
+	// "gh-router-cooldown:" (Phase 101 orphan cooldown). Phase 115.
+	GitHubEventCooldownPrefix = "gh-event-cooldown:"
 )
 
 // jsonClaim returns a 200 WebhookResponse with a JSON body {"claimed":<claimed>}.
@@ -162,6 +167,12 @@ type WebhookHandler struct {
 	// Nil ⇒ no cooldown gate (still gated by DefaultRouter+mention).
 	OrphanCooldown DeliveryNonceStore
 
+	// EventRules is the parsed github.events config (set at cold-start from
+	// KM_GITHUB_EVENTS). When nil or empty, Handle() is byte-identical to
+	// Phase 114 for all non-issue_comment events (dormant-by-default).
+	// Populated at Lambda cold-start in cmd/km-github-bridge/main.go. Phase 115.
+	EventRules []EventRule
+
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
 }
@@ -189,9 +200,15 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		return WebhookResponse{StatusCode: 401, Body: "unauthorized"}
 	}
 
-	// Only process issue_comment events (the X-GitHub-Event header).
+	// ── Step 1b: Event-type branch (Phase 115) ──────────────────────────────
+	// issue_comment → existing 11-step path (byte-identical to Phase 114).
+	// any other event type + EventRules non-empty → handleEventRoute.
+	// any other event type + EventRules empty → byte-identical drop (dormant).
 	eventType := req.Headers["x-github-event"]
 	if eventType != "issue_comment" {
+		if len(h.EventRules) > 0 {
+			return h.handleEventRoute(ctx, req, eventType)
+		}
 		h.log().Info("github-bridge: ignoring non-issue_comment event", "event", eventType)
 		return WebhookResponse{StatusCode: 200, Body: "ok"}
 	}
@@ -675,6 +692,164 @@ func isInAllowlist(login string, allow []string) bool {
 // Kept for backward compat if callers need it; prefer InstallIDString.
 func formatInstallID(id int64) string {
 	return strconv.FormatInt(id, 10)
+}
+
+// genericEventPayload is the minimal JSON shape common to most GitHub webhook
+// events. Only the fields needed for event routing and template expansion are
+// captured. Unknown fields are silently ignored (standard json.Unmarshal).
+// Phase 115.
+type genericEventPayload struct {
+	Action       string          `json:"action"`
+	Repository   RepositoryField `json:"repository"`
+	Sender       struct {
+		Login string `json:"login"`
+	} `json:"sender"`
+	Installation InstallField `json:"installation"`
+}
+
+// handleEventRoute processes a non-issue_comment event by matching against
+// h.EventRules and dispatching to the configured sandbox via cold-create or
+// warm FIFO enqueue. It is only called when len(h.EventRules) > 0.
+//
+// Ordering (RESEARCH Pattern 1 + Pitfall 1):
+//  1. Parse minimal generic payload from req.Body.
+//  2. Delivery-GUID dedup FIRST (mirror Step 7 in the issue_comment path).
+//  3. MatchEventRule — first-match across EventRules.
+//  4. Cooldown gate (only when rule.CooldownSeconds > 0).
+//  5. ExpandEventTemplate → build GitHubEnvelope.
+//  6. Dispatch: no alias → cold PutSandboxCreate; alias set → warm SQS.Send.
+//
+// handleEventRoute MUST NOT post a GitHub reaction/comment (autonomous events
+// have no originating comment to react to). Phase 115.
+func (h *WebhookHandler) handleEventRoute(ctx context.Context, req WebhookRequest, eventType string) WebhookResponse {
+	// ── 1. Parse generic payload ──────────────────────────────────────────────
+	var gp genericEventPayload
+	if err := json.Unmarshal(req.RawBody, &gp); err != nil {
+		h.log().Warn("github-bridge: handleEventRoute: malformed payload", "event", eventType, "err", err)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+	if gp.Repository.FullName == "" {
+		h.log().Warn("github-bridge: handleEventRoute: payload missing repository.full_name; dropping",
+			"event", eventType)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+	payload := EventPayload{
+		Repo:          gp.Repository.FullName,
+		Action:        gp.Action,
+		Sender:        gp.Sender.Login,
+		DefaultBranch: gp.Repository.DefaultBranch,
+		HTMLURL:       gp.Repository.HTMLURL,
+	}
+
+	// ── 2. Delivery-GUID dedup (MUST precede match to catch GitHub retries) ──
+	// Mirror the issue_comment dedup at Step 7 / webhook_handler.go:341-353.
+	// Dedup BEFORE match so a retry with a new GUID is still cooldown-gated.
+	deliveryGUID := req.Headers["x-github-delivery"]
+	if deliveryGUID != "" {
+		nonceKey := GitHubDeliveryNoncePrefix + deliveryGUID
+		replayed, err := h.Nonces.CheckAndStore(ctx, nonceKey, GitHubDeliveryNonceTTLSeconds)
+		if err != nil {
+			// Fail-open: proceed on nonce-store errors (mirror issue_comment path).
+			h.log().Error("github-bridge: handleEventRoute: nonce store error (fail-open)", "err", err)
+		} else if replayed {
+			h.log().Info("github-bridge: handleEventRoute: replayed delivery; dropping",
+				"guid", deliveryGUID, "event", eventType)
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+		}
+	}
+
+	// ── 3. Match event rule (first-match, exact-before-glob) ─────────────────
+	rule := MatchEventRule(eventType, payload, h.EventRules)
+	if rule == nil {
+		h.log().Info("github-bridge: handleEventRoute: no matching event rule; dropping",
+			"event", eventType, "repo", payload.Repo, "action", payload.Action)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// ── 4. Cooldown gate (opt-in per rule; skip when CooldownSeconds == 0) ───
+	// key: gh-event-cooldown:{event}:{repo}:{action} (RESEARCH Pattern 5)
+	if rule.CooldownSeconds > 0 {
+		cooldownKey := fmt.Sprintf("%s%s:%s:%s",
+			GitHubEventCooldownPrefix, eventType, payload.Repo, payload.Action)
+		seen, err := h.Nonces.CheckAndStore(ctx, cooldownKey, rule.CooldownSeconds)
+		if err != nil {
+			// Fail-open: proceed on cooldown-store errors.
+			h.log().Error("github-bridge: handleEventRoute: cooldown nonce error (fail-open)",
+				"err", err, "event", eventType, "repo", payload.Repo)
+		} else if seen {
+			h.log().Info("github-bridge: handleEventRoute: event cooldown suppressed",
+				"event", eventType, "repo", payload.Repo, "action", payload.Action,
+				"cooldown_seconds", rule.CooldownSeconds)
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+		}
+	}
+
+	// ── 5. Expand template → build envelope ──────────────────────────────────
+	body := ExpandEventTemplate(rule.Prompt, payload, eventType)
+	profileToUse := rule.Profile
+	if profileToUse == "" {
+		profileToUse = h.DefaultProfile
+	}
+
+	env := GitHubEnvelope{
+		Source:        "github",
+		Repo:          payload.Repo,
+		Number:        0, // event routes have no PR number; poller branches on Kind
+		Kind:          eventType,
+		Action:        payload.Action, // populate so the on-box preamble reads "<event> / <action>"
+		CommentID:     0,
+		HTMLURL:       payload.HTMLURL,
+		Sender:        payload.Sender,
+		Body:          body,
+		InstallID:     InstallIDString(gp.Installation.ID),
+		DefaultBranch: payload.DefaultBranch,
+		Agent:         rule.Agent,
+	}
+
+	envJSON, err := json.Marshal(env)
+	if err != nil {
+		h.log().Error("github-bridge: handleEventRoute: marshal envelope", "err", err)
+		return WebhookResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// ── 6. Dispatch ──────────────────────────────────────────────────────────
+	// Alias empty → cold-create (a new sandbox is provisioned for every matching event).
+	// Alias set → warm enqueue to the per-sandbox github-inbound FIFO queue.
+	if rule.Alias == "" {
+		// Cold path: PutSandboxCreate (alias is empty — no per-sandbox routing).
+		h.log().Info("github-bridge: handleEventRoute: cold create",
+			"event", eventType, "repo", payload.Repo, "profile", profileToUse)
+		if pubErr := h.Publisher.PutSandboxCreate(ctx, "", profileToUse, string(envJSON)); pubErr != nil {
+			h.log().Error("github-bridge: handleEventRoute: publish SandboxCreate", "err", pubErr)
+		}
+	} else {
+		// Warm path: resolve alias → sandbox_id → queue URL → SQS.Send.
+		h.log().Info("github-bridge: handleEventRoute: warm enqueue",
+			"event", eventType, "repo", payload.Repo, "alias", rule.Alias)
+		sandboxID, resolveErr := h.Resolver.ResolveByAlias(ctx, rule.Alias)
+		if resolveErr != nil {
+			// Alias not yet in DDB — cold-create fallback.
+			h.log().Info("github-bridge: handleEventRoute: alias not found; cold-creating",
+				"alias", rule.Alias, "err", resolveErr)
+			if pubErr := h.Publisher.PutSandboxCreate(ctx, rule.Alias, profileToUse, string(envJSON)); pubErr != nil {
+				h.log().Error("github-bridge: handleEventRoute: publish SandboxCreate (alias fallback)", "err", pubErr)
+			}
+		} else {
+			queueURL, qErr := h.Resolver.GitHubQueueURL(ctx, sandboxID)
+			if qErr != nil {
+				h.log().Error("github-bridge: handleEventRoute: lookup queue URL",
+					"sandbox_id", sandboxID, "err", qErr)
+			} else {
+				groupID := fmt.Sprintf("github-event-%s-%s", eventType, payload.Repo)
+				dedupID := fmt.Sprintf("%s-%s", deliveryGUID, groupID)
+				if sErr := h.SQS.Send(ctx, queueURL, string(envJSON), groupID, dedupID); sErr != nil {
+					h.log().Error("github-bridge: handleEventRoute: SQS enqueue", "err", sErr)
+				}
+			}
+		}
+	}
+
+	return WebhookResponse{StatusCode: 200, Body: "ok"}
 }
 
 // lookupRepoDefaultCommand returns the DefaultCommand for the matched RepoEntry

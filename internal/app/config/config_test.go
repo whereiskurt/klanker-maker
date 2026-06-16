@@ -1269,6 +1269,97 @@ github:
 	})
 }
 
+// ---- Phase 115 Wave 0 RED scaffold — GH-EVENT-CONFIG ----
+
+// TestLoadGithubEvents verifies that github.events: in km-config.yaml round-trips
+// into cfg.Github.Events via the existing UnmarshalKey("github", &cfg.Github) call.
+//
+// GH-EVENT-CONFIG: cfg.Github.Events field (GithubEventRule) does not exist yet →
+// compile-fail on cfg.Github.Events reference = genuine RED Wave 0.
+// Implemented in Phase 115 Plan 02.
+//
+// NO-MERGE-ENTRY PROOF (mirrors TestLoadGithubPeerBridges_Set): the "github" block is
+// decoded atomically; adding Events []GithubEventRule to GithubConfig is picked up
+// automatically — NO separate "github.events" merge-list entry is required.
+func TestLoadGithubEvents(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+github:
+    events:
+      - on: repository
+        actions:
+          - created
+        match: "myorg/*"
+        exclude:
+          - "myorg/archive-*"
+        profile: profiles/onboard.yaml
+        cooldown_seconds: 0
+        prompt: "A new repo {{repo}} was created."
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	// cfg.Github.Events does not exist yet → compile-fail = RED
+	if len(cfg.Github.Events) != 1 {
+		t.Fatalf("Github.Events: got len=%d, want 1 (check UnmarshalKey wiring + GithubEventRule struct)", len(cfg.Github.Events))
+	}
+	rule := cfg.Github.Events[0]
+	if rule.On != "repository" {
+		t.Errorf("Events[0].On: got %q, want %q", rule.On, "repository")
+	}
+	if len(rule.Actions) != 1 || rule.Actions[0] != "created" {
+		t.Errorf("Events[0].Actions: got %v, want [created]", rule.Actions)
+	}
+	if rule.Match != "myorg/*" {
+		t.Errorf("Events[0].Match: got %q, want %q", rule.Match, "myorg/*")
+	}
+	if len(rule.Exclude) != 1 || rule.Exclude[0] != "myorg/archive-*" {
+		t.Errorf("Events[0].Exclude: got %v, want [myorg/archive-*]", rule.Exclude)
+	}
+	if rule.Profile != "profiles/onboard.yaml" {
+		t.Errorf("Events[0].Profile: got %q, want %q", rule.Profile, "profiles/onboard.yaml")
+	}
+	if rule.Prompt != "A new repo {{repo}} was created." {
+		t.Errorf("Events[0].Prompt: got %q", rule.Prompt)
+	}
+	if rule.CooldownSeconds != 0 {
+		t.Errorf("Events[0].CooldownSeconds: got %d, want 0", rule.CooldownSeconds)
+	}
+}
+
+// TestLoadGithubEvents_Absent verifies that omitting github.events yields an empty
+// slice — the "event routing off" dormancy sentinel.
+func TestLoadGithubEvents_Absent(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+github:
+    default_profile: github-review
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	// cfg.Github.Events does not exist yet → compile-fail = RED
+	if len(cfg.Github.Events) != 0 {
+		t.Errorf("Github.Events: got %v (len=%d), want empty/nil when github.events absent", cfg.Github.Events, len(cfg.Github.Events))
+	}
+}
+
 // TestGetSlackChannelsTableName verifies the three derivation cases for
 // GetSlackChannelsTableName (Phase 104.3):
 //

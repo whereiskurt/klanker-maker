@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 114-03-PLAN.md (EC2 wiring + IAM ec2_resume policy + docs Phase 114)
-last_updated: "2026-06-15T17:32:00.349Z"
-last_activity: 2026-06-15
+stopped_at: "Completed 115-06-PLAN.md Tasks 1-2 (poller surgery + docs); Task 3 is checkpoint:human-verify pending orchestrator E2E"
+last_updated: "2026-06-16T00:37:02.464Z"
+last_activity: 2026-06-16
 progress:
-  total_phases: 130
-  completed_phases: 114
-  total_plans: 569
-  completed_plans: 531
+  total_phases: 131
+  completed_phases: 115
+  total_plans: 575
+  completed_plans: 537
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-15
+Last activity: 2026-06-16
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -568,6 +568,12 @@ Progress: [█████████░] 91%
 | Phase 114-slack-bridge-auto-resume P01 | 215s | 2 tasks | 3 files |
 | Phase 114 P02 | 600s | 2 tasks | 2 files |
 | Phase 114-slack-bridge-auto-resume P03 | 666s | 2 tasks | 3 files |
+| Phase 115-generic-github-webhook-event-prompt-router P01 | 286 | 3 tasks | 5 files |
+| Phase 115-generic-github-webhook-event-prompt-router P02 | 215s | 2 tasks | 4 files |
+| Phase 115-generic-github-webhook-event-prompt-router P03 | 480 | 2 tasks | 2 files |
+| Phase 115-generic-github-webhook-event-prompt-router P04 | 296s | 2 tasks | 5 files |
+| Phase 115-generic-github-webhook-event-prompt-router P05 | 829s | 2 tasks | 3 files |
+| Phase 115-generic-github-webhook-event-prompt-router P06 | 855s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1625,6 +1631,17 @@ Recent decisions affecting current work:
 - [Phase 114]: Step-9 runs SYNCHRONOUSLY (Phase 75.2 lesson): StartSandbox+SetStatusRunning in Handle before return; 3s ack window protected by event_id dedup
 - [Phase 114]: nil Resumer => byte-identical pre-Phase-114 behavior (pause-hint only); ErrNoResumableInstance => OrphanHinter; transient => optimistic SetStatusRunning+PauseHinter
 - [Phase 114-slack-bridge-auto-resume]: initEC2Client constructed in init() alongside other AWS clients (cfg is local to init); wireEventsHandler() assigns Resumer/StatusWriter/OrphanHinter; PauseHinter HintText updated to resume-aware waking-up message; deploy surface: make build-lambdas + km init --slack (NOT --sidecars)
+- [Phase 115-01]: TDD Wave 0 RED scaffold: 5 test additions (2 new files, 3 additions) covering all unit-testable Phase 115 requirements; GH-EVENT-POLLER + GH-EVENT-E2E are manual-only
+- [Phase 115-generic-github-webhook-event-prompt-router]: WebhookHandler.EventRules added in Plan 02 (not 03) to unblock package compile; isGlob reused from resolve.go; excluded() handles both exact and glob entries
+- [Phase 115-03]: handleEventRoute uses base ResolveByAlias for alias warm path (not status-aware) — autonomous events don't need stopped/paused resume semantics
+- [Phase 115-03]: delivery-GUID dedup runs BEFORE MatchEventRule in handleEventRoute to guard against GitHub retry storms generating duplicate cold-creates
+- [Phase 115-03]: No reaction posted in handleEventRoute — autonomous events have no originating comment (CONTEXT.md hard requirement)
+- [Phase 115-04]: checkGitHubEventsValid added in Plan 04 (not 05): Wave-0 scaffold compile failure blocked TestExport/TestRunInit; implemented full validation inline rather than nil stub
+- [Phase 115-04]: KM_GITHUB_EVENTS two-half wiring complete: init.go export + terragrunt get_env + module var + Lambda env (in-place at v1.1.0, additive default-empty, no version bump)
+- [Phase 115-generic-github-webhook-event-prompt-router]: Config-derived manifest events (not hardcoded): cfg.Github.Events iterated in RunGitHubManifest; sort.Strings for determinism; metadata:read injected when repository event configured
+- [Phase 115-generic-github-webhook-event-prompt-router]: GetGithubEvents added to DoctorConfigProvider interface: consistent with all other github.* field access patterns in RunDoctor
+- [Phase 115-generic-github-webhook-event-prompt-router]: Targeted golden update instead of CAPTURE_PRE92_BASELINE=1 regeneration to avoid breaking SubagentStop semantic check in Phase92 byte-identity test
+- [Phase 115-generic-github-webhook-event-prompt-router]: KIND defaults to issue_comment branch when empty — backward compat for pre-Phase-115 bridge envelopes in mixed-version fleet
 
 ### Roadmap Evolution
 
@@ -1766,6 +1783,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-15T16:34:13.444Z
-Stopped at: Completed 114-03-PLAN.md (EC2 wiring + IAM ec2_resume policy + docs Phase 114)
+Last session: 2026-06-16T00:37:02.453Z
+Stopped at: Completed 115-06-PLAN.md Tasks 1-2 (poller surgery + docs); Task 3 is checkpoint:human-verify pending orchestrator E2E
 Resume file: None

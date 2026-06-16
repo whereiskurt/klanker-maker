@@ -31,8 +31,9 @@ security boundary.
 9. [km doctor GitHub Checks](#km-doctor-github-checks)
 10. [Phase 100 — Federated relay (one App, many installs)](#phase-100--federated-relay-one-app-many-installs)
 11. [Phase 101 — Orphan-repo helpful reply (front-door default router)](#phase-101--orphan-repo-helpful-reply-front-door-default-router)
-12. [Troubleshooting](#troubleshooting)
-13. [See Also](#see-also)
+12. [Phase 115 — Generic event→prompt router](#phase-115--generic-eventprompt-router)
+13. [Troubleshooting](#troubleshooting)
+14. [See Also](#see-also)
 
 ---
 
@@ -2031,3 +2032,196 @@ The orphaned per-sandbox FIFO queue and lingering management Lambdas (`token-ref
 garbage flagged by `km doctor`'s stale-resource check; full cleanup is `km destroy <id>`.
 The H1 bridge (`pkg/h1/bridge`) carries the **identical fix** (ported in lockstep — see
 `docs/h1-bridge.md` § Phase 109).
+
+---
+
+## Phase 115 — Generic event→prompt router
+
+> **Phase 115 (2026-06-16) — Generic GitHub webhook event→prompt router (complete):**
+> Adds a second ingress class to `km-github-bridge`. The existing `issue_comment`
+> path is **byte-identical** after this phase. New: autonomous webhook events
+> (`repository`, `push`, `release`, …) map to a prompt run in a sandbox via
+> first-match rules in `github.events:`. Dormant by default — absent `github.events:`
+> in `km-config.yaml` → `KM_GITHUB_EVENTS` unset → byte-identical to Phase 114.
+
+### What it does
+
+Phase 115 adds an autonomous, event-driven ingress path alongside the human-gated
+`issue_comment` path. Where Phase 97 requires a human to `@km-bot` in a PR comment,
+Phase 115 lets you configure rules that fire automatically when GitHub delivers any
+supported webhook event to the bridge. The first use case is new-repository
+onboarding: when a new repo is created in your org, the bridge cold-creates a sandbox
+and runs a prompt to open a bootstrap PR.
+
+**Key design constraints:**
+- No actor allowlist for autonomous events (the event itself is the trigger).
+- `exclude:` glob is the primary opt-out (works on brand-new empty repos, before any
+  code exists).
+- First-match rule selection (mirrors `Resolve()` in `github.repos:`).
+- Opt-in per-(event, repo, action) cooldown, default off (`cooldownSeconds: 0`).
+- No 👀 reaction for autonomous events — no originating comment to react to.
+- Delivery-GUID dedup runs BEFORE rule matching (prevents duplicate cold-creates on
+  GitHub retries with fresh GUIDs).
+
+### Config shape — `github.events:`
+
+```yaml
+github:
+  events:
+    - on: repository            # GitHub event type (required)
+      actions: [created]        # Action filter — empty means any action
+      match: "your-org/*"       # Org+repo glob, exact-before-glob first-match
+      exclude:                  # Opt-out globs (applied after match)
+        - "your-org/km-e2e-skip-*"
+        - "your-org/terraform-*"
+      profile: profiles/github-review.yaml   # SandboxProfile to cold-create
+      alias: gh-onboard         # Optional: target a long-lived alias sandbox
+      agent: claude             # Optional: agent override (claude | codex)
+      cooldownSeconds: 3600     # Optional: per-(event,repo,action) dedup window (0=off)
+      prompt: |
+        A new repo {{repo}} was created by {{sender}} (default branch
+        {{default_branch}}). Clone it and open a PR adding a minimal CI
+        workflow. URL: {{html_url}}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `on` | string | yes | GitHub event type (`repository`, `push`, `release`, …) |
+| `actions` | []string | no | Action filter; empty = any action |
+| `match` | string | yes | `owner/repo` glob (exact-before-glob, first-match) |
+| `exclude` | []string | no | Opt-out globs applied after `match` passes |
+| `profile` | string | no | SandboxProfile path for cold-create |
+| `alias` | string | no | Long-lived alias (warm path when running, cold-create when absent) |
+| `agent` | string | no | Agent override (`claude` \| `codex`); falls back to profile default |
+| `cooldownSeconds` | int | no | Cooldown window in seconds (0 = off); uses nonces table |
+| `prompt` | string | yes | Prompt template (supports six template vars, see below) |
+
+**Template vars (available in `prompt:`):**
+
+| Var | Value |
+|-----|-------|
+| `{{repo}}` | `owner/repo` full name |
+| `{{event}}` | GitHub event type (same as `on:`) |
+| `{{action}}` | GitHub event action (e.g. `created`) |
+| `{{sender}}` | Login of the user/app that triggered the event |
+| `{{default_branch}}` | Repository default branch (e.g. `main`) |
+| `{{html_url}}` | Repository or entity HTML URL |
+
+### Gating model
+
+The bridge applies rules in order (first-match wins):
+
+1. `on:` must match the `X-GitHub-Event` header.
+2. `actions:` must match the payload `action` field (if non-empty; empty = any).
+3. `match:` glob must match `owner/repo` (exact-before-glob, mirrors `Resolve()`).
+4. `exclude:` globs are checked last — any match suppresses the rule.
+5. No-match → 200 drop (logged but no sandbox dispatch).
+
+**Org-glob example:** `match: "your-org/*"` fires for any repo in your org.
+**Opt-out example:** `exclude: ["your-org/km-e2e-skip-*"]` prevents that prefix from
+triggering; on a brand-new empty repo the exclude fires before any code exists.
+
+### Cooldown
+
+When `cooldownSeconds > 0`, the bridge writes a per-(event, repo, action) key to
+the nonces DynamoDB table using a conditional PutItem. The key format is
+`gh-event-cooldown:{event}:{repo}:{action}`. A second delivery of the same
+(event, repo, action) within the window is silently dropped (200 OK, logged).
+
+Delivery-GUID dedup runs **before** cooldown: a GitHub retry with a new GUID still
+hits the cooldown gate.
+
+The nonces table is the same table used for `issue_comment` delivery dedup and the
+Phase 101 orphan-reply cooldown — no new infrastructure.
+
+### Dormant-by-default invariant
+
+Absent `github.events:` in `km-config.yaml` → `KM_GITHUB_EVENTS` is not set →
+`webhookHandler.EventRules` is nil → non-`issue_comment` events are silently dropped
+with a 200 → byte-identical to Phase 114. The bridge log reads:
+`github-bridge: ignoring non-issue_comment event event=repository`.
+
+When `github.events:` is configured → Lambda cold-start log reads:
+`km-github-bridge: loaded event routing config rule_count=N`.
+
+### Sandbox-side poller (GH-EVENT-POLLER)
+
+The `km-github-inbound-poller` bash in `pkg/compiler/userdata.go` (rendered into
+every sandbox with `notification.github.inbound.enabled: true`) was extended in
+Phase 115 to tolerate event-rule envelopes (`Number=0`, `Kind` != `issue_comment`):
+
+- **Validation:** only `REPO` is required; `NUMBER=0` is valid (bash `"0"` is
+  non-empty, so the pre-Phase-115 `[ -z "$NUMBER" ]` guard was already lenient, but
+  the intent was wrong — the check is now `[ -z "$REPO" ]` only).
+- **Session-continuity lookup:** skipped when `NUMBER=0`. Each event-rule dispatch
+  is a fresh session; keying on `(repo, 0)` would incorrectly merge unrelated events.
+- **Preamble:** branched on `KIND`. `issue_comment` (or empty KIND for back-compat)
+  produces the existing `[GitHub Comment Trigger]` preamble with worktree-per-PR
+  guidance and `git fetch origin pull/${NUMBER}/head`. All other Kinds produce an
+  `[GitHub Event Trigger]` preamble with repo + event type + action + sender + URL
+  + the expanded prompt — **no `pull/0/head`** fetch.
+- **Session writeback:** also skipped when `NUMBER=0` (no PR thread to persist).
+
+**Known limitation:** event-rule dispatches have no cross-event session continuity.
+Each event fires a fresh agent session. Sandboxes with `alias:` can still be
+long-lived (alias: warm path reuses the running sandbox), but consecutive events on
+the same repo/alias do NOT resume the previous session.
+
+### km doctor
+
+`km doctor` adds a `GitHub Events Config` check in the GitHub group:
+
+- **SKIP** when `github.events` is absent or empty.
+- **WARN** on malformed `match:` glob, missing `on:` field, reserved event name
+  collision with `github.commands`, or unreachable `@file` prompt.
+
+### Deploy sequence (Phase 115)
+
+```bash
+# 1. Update km-config.yaml with github.events: rules.
+# 2. Rebuild the bridge Lambda binary:
+make build-lambdas
+
+# 3. Update the Lambda env block (NOT --sidecars — env block requires full apply):
+km init --github
+# OR: km init --dry-run=false (full apply)
+
+# 4. Subscribe the App to new event types:
+km github manifest       # prints manifest JSON
+# Paste into GitHub App → App Manifest → Save → Re-install
+# Required when adding a new 'on:' event type that the App was not subscribed to.
+# 'repository' event requires metadata:read permission (included by default).
+
+# 5. Verify the env reached the Lambda:
+# Inspect bridge Lambda logs for: "loaded event routing config rule_count=N"
+
+km doctor
+```
+
+**NOT required:**
+- `km init --sidecars` — `--sidecars` rebuilds binary zips but does NOT update the
+  Lambda env block; `KM_GITHUB_EVENTS` stays stale.
+- `km init --slack` — only updates the Slack bridge.
+
+**Cold-created sandboxes** get the new poller free (userdata.go change is included in
+the create-handler zip). **Long-lived alias sandboxes** need `km destroy && km create`
+to pick up the Phase 115 poller (`KIND`-branched preamble).
+
+### Verification
+
+- Bridge logs `"loaded event routing config rule_count=N"` on cold-start when
+  `KM_GITHUB_EVENTS` is set and valid.
+- Positive: create a throwaway repo matching a configured rule → `km list` shows a
+  new cold-created sandbox → `km shell <id>` and inspect the agent preamble:
+  it must read `[GitHub Event Trigger]` with no `PR: #0` and no
+  `git fetch origin pull/0/head`.
+- Negative (exclude): create a repo matching an `exclude:` glob → bridge logs
+  `no matching event rule` → no sandbox cold-creates.
+- Dedup: redeliver the same webhook (GitHub App → Advanced → Redeliver) → bridge
+  logs `event cooldown suppressed` (if cooldown configured) or `duplicate delivery
+  suppressed` (GUID dedup) → no second sandbox.
+
+See `.planning/phases/115-generic-github-webhook-event-prompt-router/115-UAT.md` for
+the full live E2E runbook.

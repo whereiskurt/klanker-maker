@@ -11,20 +11,26 @@
 // Returns 200 immediately (within GitHub's ~10s ack window) with a synchronous 👀
 // reaction on the originating comment as the acknowledgement.
 //
+// Phase 115 adds autonomous event routing: non-issue_comment webhook events
+// (e.g. repository/created, push, release) are matched against KM_GITHUB_EVENTS
+// rules and dispatched to a sandbox via cold-create or warm FIFO enqueue.
+// KM_GITHUB_EVENTS absent/empty → event routing dormant (byte-identical to Phase 114).
+//
 // Environment variables (all required unless noted):
 //
-//	KM_RESOURCE_PREFIX       — resource_prefix (default: "km")
-//	KM_GITHUB_REPOS          — JSON array of RepoEntry objects (list-of-objects, Pitfall 2)
+//	KM_RESOURCE_PREFIX        — resource_prefix (default: "km")
+//	KM_GITHUB_REPOS           — JSON array of RepoEntry objects (list-of-objects, Pitfall 2)
 //	KM_GITHUB_DEFAULT_PROFILE — fallback profile name when matched entry has no profile
-//	KM_NONCE_TABLE           — DynamoDB nonces table name (default: {prefix}-slack-bridge-nonces)
-//	KM_SANDBOX_TABLE_NAME    — DynamoDB km-sandboxes table name (default: {prefix}-sandboxes)
-//	KM_WEBHOOK_SECRET_PATH   — SSM path for the GitHub webhook secret (default: /{prefix}/config/github/webhook-secret)
-//	KM_BOT_LOGIN_PATH        — SSM path for the bot-login string (default: /{prefix}/config/github/bot-login)
-//	KM_APP_CLIENT_ID_PATH    — SSM path for the GitHub App client ID (default: /{prefix}/config/github/app-client-id)
-//	KM_PRIVATE_KEY_PATH      — SSM path for the GitHub App RSA private key PEM (default: /{prefix}/config/github/private-key)
-//	KM_INSTALLATION_ID_PATH  — SSM path for the GitHub App installation ID (default: /{prefix}/config/github/installation-id)
-//	KM_ARTIFACTS_BUCKET      — S3 artifacts bucket (for EventBridge artifact_bucket field)
-//	KM_ARTIFACTS_PREFIX      — S3 artifacts prefix (for EventBridge artifact_prefix field)
+//	KM_GITHUB_EVENTS          — JSON {"events":[...EventRule...]} for autonomous event routing (Phase 115)
+//	KM_NONCE_TABLE            — DynamoDB nonces table name (default: {prefix}-slack-bridge-nonces)
+//	KM_SANDBOX_TABLE_NAME     — DynamoDB km-sandboxes table name (default: {prefix}-sandboxes)
+//	KM_WEBHOOK_SECRET_PATH    — SSM path for the GitHub webhook secret (default: /{prefix}/config/github/webhook-secret)
+//	KM_BOT_LOGIN_PATH         — SSM path for the bot-login string (default: /{prefix}/config/github/bot-login)
+//	KM_APP_CLIENT_ID_PATH     — SSM path for the GitHub App client ID (default: /{prefix}/config/github/app-client-id)
+//	KM_PRIVATE_KEY_PATH       — SSM path for the GitHub App RSA private key PEM (default: /{prefix}/config/github/private-key)
+//	KM_INSTALLATION_ID_PATH   — SSM path for the GitHub App installation ID (default: /{prefix}/config/github/installation-id)
+//	KM_ARTIFACTS_BUCKET       — S3 artifacts bucket (for EventBridge artifact_bucket field)
+//	KM_ARTIFACTS_PREFIX       — S3 artifacts prefix (for EventBridge artifact_prefix field)
 package main
 
 import (
@@ -123,6 +129,28 @@ func init() {
 		}
 	} else {
 		slog.Warn("km-github-bridge: KM_GITHUB_REPOS not set; bridge is dormant (all repos silent-drop)")
+	}
+
+	// ── Parse KM_GITHUB_EVENTS JSON (Phase 115: autonomous event routing) ────
+	// Mirrors the KM_GITHUB_REPOS parse block above. Absent/invalid → dormant
+	// (byte-identical to Phase 114 for all non-issue_comment events).
+	// Deploy note: this env var requires km init --github (or --dry-run=false)
+	// to update the Lambda env block — NOT --sidecars (which only rebuilds the zip).
+	var eventRules []bridge.EventRule
+	if raw := os.Getenv("KM_GITHUB_EVENTS"); raw != "" {
+		var ecfg struct {
+			Events []bridge.EventRule `json:"events"`
+		}
+		if err := json.Unmarshal([]byte(raw), &ecfg); err != nil {
+			slog.Warn("km-github-bridge: failed to parse KM_GITHUB_EVENTS; event routing dormant",
+				"err", err)
+		} else {
+			eventRules = ecfg.Events
+			slog.Info("km-github-bridge: loaded event routing config",
+				"rule_count", len(eventRules))
+		}
+	} else {
+		slog.Info("km-github-bridge: KM_GITHUB_EVENTS not set; event routing dormant")
 	}
 
 	// ── Wire the secret fetchers ──────────────────────────────────────────────
@@ -278,6 +306,10 @@ func init() {
 		webhookHandler.OrphanCooldown = nonceStore
 		slog.Info("km-github-bridge: orphan-repo default router ENABLED (front door)")
 	}
+
+	// Phase 115: wire event routing rules. Dormant when eventRules is nil/empty.
+	// Mirrors Relayer + DefaultRouter post-construction assignment pattern.
+	webhookHandler.EventRules = eventRules
 
 	slog.Info("km-github-bridge: cold start",
 		"KM_RESOURCE_PREFIX", prefix,

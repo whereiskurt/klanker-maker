@@ -71,6 +71,12 @@ variable "github_default_router" {
   description = "Front-door orphan-repo router toggle (KM_GITHUB_DEFAULT_ROUTER). \"false\" = dormant (Phase 100 byte-identical). Only the federation front door sets \"true\"."
 }
 
+variable "github_events_json" {
+  description = "JSON-serialized {events:[...]} event->prompt rules (KM_GITHUB_EVENTS). Empty string = event routing dormant (byte-identical to Phase 114)."
+  type        = string
+  default     = ""
+}
+
 variable "webhook_secret_path" {
   description = "SSM path for the GitHub webhook signing secret (SecureString)"
   type        = string
