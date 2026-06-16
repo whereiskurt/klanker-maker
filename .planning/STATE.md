@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 115-03-PLAN.md (handleEventRoute wired: two-branch event switch, dedup+cooldown+dispatch, KM_GITHUB_EVENTS cold-start parse)"
-last_updated: "2026-06-15T23:52:48.033Z"
-last_activity: 2026-06-15
+stopped_at: "Completed 115-04-PLAN.md (KM_GITHUB_EVENTS deploy-surface: init.go export + terragrunt get_env + module var + Lambda env)"
+last_updated: "2026-06-16T00:00:49.125Z"
+last_activity: 2026-06-16
 progress:
   total_phases: 131
   completed_phases: 114
   total_plans: 575
-  completed_plans: 534
+  completed_plans: 535
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-15
+Last activity: 2026-06-16
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -571,6 +571,7 @@ Progress: [█████████░] 91%
 | Phase 115-generic-github-webhook-event-prompt-router P01 | 286 | 3 tasks | 5 files |
 | Phase 115-generic-github-webhook-event-prompt-router P02 | 215s | 2 tasks | 4 files |
 | Phase 115-generic-github-webhook-event-prompt-router P03 | 480 | 2 tasks | 2 files |
+| Phase 115-generic-github-webhook-event-prompt-router P04 | 296s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1633,6 +1634,8 @@ Recent decisions affecting current work:
 - [Phase 115-03]: handleEventRoute uses base ResolveByAlias for alias warm path (not status-aware) — autonomous events don't need stopped/paused resume semantics
 - [Phase 115-03]: delivery-GUID dedup runs BEFORE MatchEventRule in handleEventRoute to guard against GitHub retry storms generating duplicate cold-creates
 - [Phase 115-03]: No reaction posted in handleEventRoute — autonomous events have no originating comment (CONTEXT.md hard requirement)
+- [Phase 115-04]: checkGitHubEventsValid added in Plan 04 (not 05): Wave-0 scaffold compile failure blocked TestExport/TestRunInit; implemented full validation inline rather than nil stub
+- [Phase 115-04]: KM_GITHUB_EVENTS two-half wiring complete: init.go export + terragrunt get_env + module var + Lambda env (in-place at v1.1.0, additive default-empty, no version bump)
 
 ### Roadmap Evolution
 
@@ -1774,6 +1777,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-15T23:52:48.022Z
-Stopped at: Completed 115-03-PLAN.md (handleEventRoute wired: two-branch event switch, dedup+cooldown+dispatch, KM_GITHUB_EVENTS cold-start parse)
+Last session: 2026-06-16T00:00:49.114Z
+Stopped at: Completed 115-04-PLAN.md (KM_GITHUB_EVENTS deploy-surface: init.go export + terragrunt get_env + module var + Lambda env)
 Resume file: None
