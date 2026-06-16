@@ -2189,10 +2189,21 @@ km init --github
 # OR: km init --dry-run=false (full apply)
 
 # 4. Subscribe the App to new event types:
-km github manifest       # prints manifest JSON
+km github manifest       # prints manifest JSON (default_events = union of issue_comment + every on:)
 # Paste into GitHub App → App Manifest → Save → Re-install
 # Required when adding a new 'on:' event type that the App was not subscribed to.
 # 'repository' event requires metadata:read permission (included by default).
+
+# 4a. INSTALL SCOPE (critical for repository/created):
+# A 'repository'/'created' webhook is delivered ONLY to an App installed on the
+# organization with "All repositories" access. A brand-new repo cannot be in a
+# "selected repositories" set at creation time, so a selected-repos install
+# receives NOTHING for repo-create events.
+#   GitHub → Org → Settings → GitHub Apps → <App> → Configure →
+#   Repository access → "All repositories" → Save.
+# NOTE: this is the OPPOSITE of the comment-trigger guidance elsewhere in this doc,
+# which recommends "Only select repositories" for least privilege. If you use the
+# event router for repo-create, you must install org-wide.
 
 # 5. Verify the env reached the Lambda:
 # Inspect bridge Lambda logs for: "loaded event routing config rule_count=N"

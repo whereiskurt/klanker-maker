@@ -101,20 +101,39 @@ listed here only so the set is complete.
 
 ---
 
-## Webhook event: `issue_comment`
+## Webhook event: `issue_comment` (baseline)
 
-km subscribes to exactly **one** event (`default_events: ["issue_comment"]`). GitHub's
+By default km subscribes to exactly **one** event (`default_events: ["issue_comment"]`). GitHub's
 `issue_comment` event fires for comments on **both** issues and pull requests (a PR is
 an issue with code), so this single subscription covers every comment-trigger surface.
 The bridge HMAC-verifies the delivery, dedupes by `X-GitHub-Delivery`, checks the
 @-mention + allowlist, parses Phase 99 commands / Phase 102 agent verbs, ACKs with 👀,
 and dispatches to the per-repo sandbox.
 
-**Why not more events?** km is comment-triggered by design — it reacts to a human
+**Why minimal by default?** km is comment-triggered by design — it reacts to a human
 @-mentioning the bot, not to every push/PR-open. Subscribing to fewer events means a
 smaller attack surface and no wasted Lambda invocations.
 
 **Without it:** no webhooks arrive — the bridge never fires.
+
+## Additional webhook events: `github.events:` autonomous router (Phase 115)
+
+When you configure a `github.events:` block in `km-config.yaml`, `km github manifest`
+emits `default_events` as the **union** of `issue_comment` plus every distinct `on:`
+type referenced in your rules (e.g. `["issue_comment", "repository"]`). This is opt-in:
+absent `github.events:` → still the single-event baseline above. See
+`docs/github-bridge.md` § Phase 115 for the router itself.
+
+- **`repository`** (and any event whose payload you template on) requires **`metadata: read`** —
+  GitHub auto-grants this, and the manifest declares it explicitly when `repository` is present.
+- **Install-scope gotcha (critical):** a **`repository`/`created`** webhook is delivered **only**
+  to an App installed on the **organization with "All repositories"** access. A brand-new repo
+  cannot be in a "selected repositories" set at creation time, so a selected-repos install gets
+  **nothing**. This is the **opposite** of the comment-trigger recommendation (select-repos for
+  least privilege) — if you use the event router for repo-create, you must install org-wide.
+
+**After adding a new `on:` type:** re-run `km github manifest`, update the App's subscribed
+events + permissions, and **re-install** the App so the new subscription + scopes take effect.
 
 ---
 
