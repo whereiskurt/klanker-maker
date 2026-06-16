@@ -275,6 +275,9 @@ type DoctorConfigProvider interface {
 	// GetGithubPeerBridges returns the Phase 100 github.peer_bridges federated-relay
 	// peer URL list from km-config.yaml. Empty slice means federation is off.
 	GetGithubPeerBridges() []string
+	// GetGithubEvents returns the Phase 115 github.events generic webhook event
+	// router rules from km-config.yaml. Empty slice means event routing is dormant.
+	GetGithubEvents() []appcfg.GithubEventRule
 	// GetConfigFilePath returns the absolute path to km-config.yaml as loaded by
 	// config.Load() (empty when running without a config file, e.g. in Lambda).
 	// Used to derive the configDir for @file prompt resolution.
@@ -332,7 +335,10 @@ func (a *appConfigAdapter) GetGithubCommands() map[string]appcfg.GithubCommandEn
 }
 func (a *appConfigAdapter) GetGithubDefaultCommand() string { return a.cfg.Github.DefaultCommand }
 func (a *appConfigAdapter) GetGithubPeerBridges() []string  { return a.cfg.Github.PeerBridges }
-func (a *appConfigAdapter) GetConfigFilePath() string       { return a.cfg.ConfigFilePath }
+func (a *appConfigAdapter) GetGithubEvents() []appcfg.GithubEventRule {
+	return a.cfg.Github.Events
+}
+func (a *appConfigAdapter) GetConfigFilePath() string { return a.cfg.ConfigFilePath }
 func (a *appConfigAdapter) GetSlackChannelsTableName() string {
 	return a.cfg.GetSlackChannelsTableName()
 }
@@ -3804,6 +3810,14 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	// SSM commands param presence check — WARN when commands configured but param absent.
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkGitHubCommandsSSMParam(ctx, ssmClient, cfg.GetSsmPrefix(), githubCommands)
+	})
+
+	// GitHub event router config checks — Phase 115 GH-EVENT-DOCTOR.
+	// Pure config checks (no live AWS) for malformed globs, missing profile paths,
+	// and unsupported event types. Silent (SKIPPED) when github.events is absent.
+	githubEvents := cfg.GetGithubEvents()
+	checks = append(checks, func(_ context.Context) CheckResult {
+		return checkGitHubEventsValid(githubEvents, githubRepos, githubDefaultProfile, configDir)
 	})
 
 	// Credential rotation age check.
