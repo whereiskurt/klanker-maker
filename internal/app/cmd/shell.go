@@ -399,17 +399,18 @@ func runShellWithSSM(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetc
 		// here for the pre-check so tests can inject the client without touching
 		// the production AWS credential path.
 		if noBedrock && ssmClient != nil {
-			checkOut, checkErr := sendSSMAndWait(ctx, ssmClient, instanceID,
-				"stat /home/sandbox/.claude/.credentials.json 2>/dev/null && echo ok || echo missing")
-			if checkErr == nil && strings.TrimSpace(checkOut) == "missing" {
+			authed, ok := claudeAuthedNoBedrock(ctx, ssmClient, instanceID)
+			if ok && !authed {
 				return fmt.Errorf(
 					"claude credentials not found on sandbox %s\n"+
-						"  Run: km agent auth %s --claude\n"+
+						"  Direct-API mode needs either an OAuth login or ANTHROPIC_API_KEY.\n"+
+						"  Run: km agent auth %s --claude  (OAuth)\n"+
+						"  Or ensure the profile injects ANTHROPIC_API_KEY.\n"+
 						"  Then retry: km shell --no-bedrock %s",
 					sandboxID, sandboxID, sandboxID)
 			}
-			// If checkErr != nil (SSM transient), proceed silently — the interactive
-			// session will surface any real auth failure to the operator.
+			// ok == false → SSM transient / probe error → proceed silently; the
+			// interactive session surfaces any real auth failure to the operator.
 		}
 
 		return execSSMSession(ctx, cfg, instanceID, rec.Region, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream, execFn)

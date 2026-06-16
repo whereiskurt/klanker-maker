@@ -121,3 +121,63 @@ func TestResolveInstanceIDByTag_NoInstance(t *testing.T) {
 		t.Fatal("expected error when no instance matches the tag")
 	}
 }
+
+// TestParseClaudeLoggedIn covers both spacing variants `claude auth status`
+// emits across CLI versions, plus the not-logged-in / garbage cases.
+func TestParseClaudeLoggedIn(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"spaced true", `{"loggedIn": true, "authMethod": "api_key"}`, true},
+		{"compact true", `{"loggedIn":true,"authMethod":"claudeai"}`, true},
+		{"spaced false", `{"loggedIn": false, "authMethod": "none"}`, false},
+		{"compact false", `{"loggedIn":false}`, false},
+		{"empty", "", false},
+		{"garbage", "command not found", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := parseClaudeLoggedIn(c.in); got != c.want {
+				t.Errorf("parseClaudeLoggedIn(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// errSSM is an SSMSendAPI whose SendCommand always errors — drives the
+// claudeAuthedNoBedrock fail-open (ok=false) path.
+type errSSM struct{}
+
+func (errSSM) SendCommand(_ context.Context, _ *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
+	return nil, context.DeadlineExceeded
+}
+func (errSSM) GetCommandInvocation(_ context.Context, _ *ssm.GetCommandInvocationInput, _ ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
+	return nil, context.DeadlineExceeded
+}
+
+// TestClaudeAuthedNoBedrock covers the three outcomes: authed, not-authed, and
+// probe-error (fail-open signalled via ok=false).
+func TestClaudeAuthedNoBedrock(t *testing.T) {
+	t.Run("authed via api_key", func(t *testing.T) {
+		authed, ok := claudeAuthedNoBedrock(context.Background(),
+			&stubSSM{stdout: `{"loggedIn": true, "authMethod": "api_key"}`}, "i-0abc")
+		if !ok || !authed {
+			t.Errorf("want authed=true ok=true, got authed=%v ok=%v", authed, ok)
+		}
+	})
+	t.Run("not authed", func(t *testing.T) {
+		authed, ok := claudeAuthedNoBedrock(context.Background(),
+			&stubSSM{stdout: `{"loggedIn": false}`}, "i-0abc")
+		if !ok || authed {
+			t.Errorf("want authed=false ok=true, got authed=%v ok=%v", authed, ok)
+		}
+	})
+	t.Run("probe error fails open", func(t *testing.T) {
+		authed, ok := claudeAuthedNoBedrock(context.Background(), errSSM{}, "i-0abc")
+		if ok {
+			t.Errorf("want ok=false on probe error, got ok=true (authed=%v)", authed)
+		}
+	})
+}

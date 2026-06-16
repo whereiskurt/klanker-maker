@@ -801,18 +801,18 @@ _km_stream_drain() {
   fi
 
   # Post to Slack thread, capturing the returned ts so we can record the mapping.
-  # Phase 74: --render=blocks (Tier 2 Block Kit) by default. Operator can
-  # override per-sandbox with KM_SLACK_RENDER=plain|mrkdwn via
-  # /etc/profile.d/km-notify-env.sh or a systemd EnvironmentFile.
-  # km-slack falls back to Tier 1 mrkdwn automatically when the Block Kit
-  # build exceeds Slack's 50-block cap, so this is safe even for very
-  # long Claude turns.
+  # Phase 112: --render=blocks-rich (Tier 3: native markdown + table blocks) by
+  # default. Operator can override per-sandbox with KM_SLACK_RENDER=blocks|mrkdwn|plain
+  # via /etc/profile.d/km-notify-env.sh or a systemd EnvironmentFile.
+  # km-slack demotes Tier 3 → Tier 2 (blocks) → Tier 1 (mrkdwn) automatically when
+  # a rich render overflows (e.g. the 12K markdown cap or Slack's 50-block cap), so
+  # this is safe even for very long Claude turns.
   local post_resp posted_ts
   post_resp=$(/opt/km/bin/km-slack post \
     --channel "$KM_SLACK_CHANNEL_ID" \
     --thread "$ts" \
     --body "$body_file" \
-    --render "${KM_SLACK_RENDER:-blocks}" 2>&1 || echo "")
+    --render "${KM_SLACK_RENDER:-blocks-rich}" 2>&1 || echo "")
   rm -f "$body_file"
   posted_ts=$(echo "$post_resp" | grep -oE 'ts=[0-9.]+' | head -n1 | sed 's/^ts=//')
 
@@ -2084,17 +2084,17 @@ while true; do
     if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
       POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
       printf '%s' "$RESULT_TEXT" > "$POST_FILE"
-      # Phase 74 (HOOK-01 inbound coverage): --render=blocks (Tier 2 Block Kit) by
-      # default for the poller reply path so Slack-initiated chat sees structured
-      # messages, not literal markdown. Operator override:
-      # KM_SLACK_RENDER=plain|mrkdwn via /etc/km/notify.env or
-      # /etc/profile.d/km-notify-env.sh. km-slack falls back to Tier 1 mrkdwn
-      # automatically when the Block Kit build exceeds Slack's 50-block cap.
+      # Phase 112 (HOOK-01 inbound coverage): --render=blocks-rich (Tier 3: native
+      # markdown + table blocks) by default for the poller reply path so
+      # Slack-initiated chat sees structured messages, not literal markdown. Operator
+      # override: KM_SLACK_RENDER=blocks|mrkdwn|plain via /etc/km/notify.env or
+      # /etc/profile.d/km-notify-env.sh. km-slack demotes Tier 3 → Tier 2 → Tier 1
+      # automatically when a rich render overflows.
       if /opt/km/bin/km-slack post \
            --channel "$KM_SLACK_CHANNEL_ID" \
            --subject "" \
            --thread "$THREAD_TS" \
-           --render "${KM_SLACK_RENDER:-blocks}" \
+           --render "${KM_SLACK_RENDER:-blocks-rich}" \
            --body "$POST_FILE" 2>>"$RUN_DIR/stderr.log"; then
         echo "[km-slack-inbound-poller] Posted reply to Slack (thread=$THREAD_TS, len=${#RESULT_TEXT})"
       else

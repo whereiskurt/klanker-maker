@@ -2517,8 +2517,8 @@ interact with the table.
 
 Phase 111 adds a new opt-in **Tier-3** Slack render mode (`blocks-rich`) that uses Slack's GA
 `markdown` block (Feb 2025) and `table` block (Aug 2025) for richer, native rendering of Claude's
-GFM output. The default render mode stays `blocks` (Tier-2) — flip deferred to Phase 112 after
-real-workspace UAT.
+GFM output. In Phase 111 the default render mode stayed `blocks` (Tier-2) — the flip to
+`blocks-rich` landed in **Phase 112** (see below) after real-workspace UAT.
 
 ### Render mode tiers
 
@@ -2526,8 +2526,8 @@ real-workspace UAT.
 |------|------|--------|----------|
 | 1 | `plain` | Literal text — no formatting | No |
 | 1 | `mrkdwn` | CommonMark → Slack mrkdwn reflow | No |
-| 2 | `blocks` | Block Kit sections/header/context/divider | **Yes** |
-| 3 | `blocks-rich` | `markdown` + `table` blocks (Phase 111 opt-in) | No |
+| 2 | `blocks` | Block Kit sections/header/context/divider | No (was default pre-Phase-112) |
+| 3 | `blocks-rich` | `markdown` + `table` blocks | **Yes (Phase 112)** |
 
 ### What `blocks-rich` does
 
@@ -2623,6 +2623,54 @@ km init --sidecars        # upload new km-slack binary to S3 + cold-start Lambda
 
 Existing sandboxes pick up `blocks-rich` only after `km destroy && km create` — the sidecar
 binary is baked into the sandbox at create time.
+
+---
+
+## Phase 112 — Flip the default render mode to `blocks-rich`
+
+After the Phase 111 soak on real workspaces, Phase 112 makes **`blocks-rich` (Tier-3) the
+default** render mode for sandbox-originated Slack output. Newly-created sandboxes now render
+Claude's GFM as native `markdown` + `table` blocks (clickable link anchors, real tables,
+native headings/lists) instead of the Tier-2 Block Kit sections that were the Phase 111 default.
+
+### What changed
+
+The default lives in the compiled userdata, not the bridge or the binary. Both sandbox-side
+post sites flipped their fallback:
+
+- `_km_stream_drain` (per-turn transcript streaming): `--render "${KM_SLACK_RENDER:-blocks}"`
+  → `--render "${KM_SLACK_RENDER:-blocks-rich}"`
+- the Slack-inbound poller reply post: same flip.
+
+Nothing else moved. `blocks-rich` still **fails soft**: a render that overflows (the 12K
+cumulative markdown cap or Slack's 50-block cap) demotes Tier-3 → Tier-2 (`blocks`) → Tier-1
+(`mrkdwn`) automatically, so even very long Claude turns are safe under the new default.
+
+### Operator override (downgrade) — unchanged
+
+The `KM_SLACK_RENDER` env knob is still the per-sandbox safety valve. To pin a sandbox back to
+the old Tier-2 default (or lower):
+
+```bash
+echo 'KM_SLACK_RENDER=blocks' | sudo tee -a /etc/km/notify.env   # or mrkdwn / plain
+```
+
+`KM_SLACK_RENDER` is a sandbox-side knob only — it is **not** compiler-emitted, so setting it
+does not change userdata byte-identity.
+
+### Deploy
+
+**No SandboxProfile schema change. No new Terraform resource. No DynamoDB column. No bridge
+Lambda change.** The flip is in the compiled userdata, which the create-handler Lambda renders.
+
+```bash
+make build-lambdas        # create-handler zip carries the new userdata default
+km init --dry-run=false   # deploy the create-handler (NOT --sidecars — that does not
+                          # rebuild the create-handler zip that renders userdata)
+```
+
+Existing sandboxes keep their baked-in `blocks` default until `km destroy && km create`; until
+then they render exactly as before. Newly-created sandboxes get `blocks-rich` automatically.
 
 ---
 

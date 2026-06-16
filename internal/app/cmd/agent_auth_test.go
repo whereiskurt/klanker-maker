@@ -492,16 +492,16 @@ func TestBuildClaudeAuthArgs(t *testing.T) {
 // ---- AUTH-11: km shell --no-bedrock missing credentials hint ----
 
 // TestShellCmd_NoBedrock_CredentialsMissingHint verifies that when noBedrock is true
-// and ~/.claude/.credentials.json is missing on the sandbox, runShell returns an
-// error containing the hint before opening an interactive SSM session.
+// and the sandbox claude CLI reports loggedIn=false, runShell returns an error
+// containing the hint before opening an interactive SSM session.
 func TestShellCmd_NoBedrock_CredentialsMissingHint(t *testing.T) {
 	fetcher := newRunningEC2SandboxAuth("sb-nobedrock")
 
-	// noBedrock pre-check SSM client: returns "missing" for the stat check.
+	// noBedrock pre-check SSM client: `claude auth status` reports not-logged-in.
 	// Also intercepts the noBedrock profile.d write (which uses its own client).
 	mockSSM := &authTestSSM{
 		routedOutputs: []authSSMRoute{
-			{cmdSubstr: "stat /home/sandbox/.claude/.credentials.json", output: "missing\n"},
+			{cmdSubstr: "claude auth status", output: `{"loggedIn": false, "authMethod": "none"}`},
 		},
 	}
 
@@ -537,14 +537,16 @@ func TestShellCmd_NoBedrock_CredentialsMissingHint(t *testing.T) {
 	}
 }
 
-// TestShellCmd_NoBedrock_CredentialsPresent verifies that when credentials exist,
-// runShell proceeds normally (no early exit, execFn is called).
+// TestShellCmd_NoBedrock_CredentialsPresent verifies that when the sandbox is
+// authenticated via ANTHROPIC_API_KEY (no OAuth credentials file at all),
+// runShell proceeds normally (no early exit, execFn is called). This is the
+// core regression: the old stat-based gate falsely blocked api_key boxes.
 func TestShellCmd_NoBedrock_CredentialsPresent(t *testing.T) {
 	fetcher := newRunningEC2SandboxAuth("sb-credsok")
 
 	mockSSM := &authTestSSM{
 		routedOutputs: []authSSMRoute{
-			{cmdSubstr: "stat /home/sandbox/.claude/.credentials.json", output: "ok\n"},
+			{cmdSubstr: "claude auth status", output: `{"loggedIn": true, "authMethod": "api_key", "apiKeySource": "ANTHROPIC_API_KEY"}`},
 		},
 	}
 
@@ -576,11 +578,11 @@ func TestShellCmd_NoBedrock_CredentialsPresent(t *testing.T) {
 func TestAgentRun_NoBedrock_CredentialsMissingHint(t *testing.T) {
 	fetcher := newRunningEC2SandboxAuth("sb-run-missing")
 
-	// The pre-check stat command fires before the tmux prep commands.
+	// The `claude auth status` pre-check fires before the tmux prep commands.
 	// We track sendCalls to ensure the tmux setup never fires.
 	mockSSM := &authTestSSM{
 		routedOutputs: []authSSMRoute{
-			{cmdSubstr: "stat /home/sandbox/.claude/.credentials.json", output: "missing\n"},
+			{cmdSubstr: "claude auth status", output: `{"loggedIn": false}`},
 		},
 	}
 
@@ -620,14 +622,15 @@ func TestAgentRun_NoBedrock_CredentialsMissingHint(t *testing.T) {
 	}
 }
 
-// TestAgentRun_NoBedrock_CredentialsPresent verifies that when credentials are present,
-// agent run proceeds normally (tmux session is created).
+// TestAgentRun_NoBedrock_CredentialsPresent verifies that when the sandbox is
+// authenticated via ANTHROPIC_API_KEY (no OAuth credentials file), agent run
+// proceeds normally (tmux session is created). Core regression for the bug.
 func TestAgentRun_NoBedrock_CredentialsPresent(t *testing.T) {
 	fetcher := newRunningEC2SandboxAuth("sb-run-ok")
 
 	mockSSM := &authTestSSM{
 		routedOutputs: []authSSMRoute{
-			{cmdSubstr: "stat /home/sandbox/.claude/.credentials.json", output: "ok\n"},
+			{cmdSubstr: "claude auth status", output: `{"loggedIn": true, "authMethod": "api_key"}`},
 		},
 		// Fallback for all other SSM commands (tmux prep, run, etc.)
 		successOutput: "KM_RUN_ID=20260410T120000Z",
@@ -643,6 +646,31 @@ func TestAgentRun_NoBedrock_CredentialsPresent(t *testing.T) {
 	err := root.Execute()
 	if err != nil && strings.Contains(err.Error(), "claude credentials not found") {
 		t.Errorf("credentials pre-check should pass when credentials are present, got: %v", err)
+	}
+}
+
+// TestAgentRun_NoBedrock_ProbeErrorFailsOpen verifies the pre-check fails OPEN:
+// when the `claude auth status` probe itself errors (SSM transient), the run is
+// NOT blocked with a "credentials not found" error — the agent session is left
+// to surface any real auth failure to the operator. Preserves the pre-fix
+// "proceed silently on SSM error" behavior.
+func TestAgentRun_NoBedrock_ProbeErrorFailsOpen(t *testing.T) {
+	fetcher := newRunningEC2SandboxAuth("sb-run-probeerr")
+
+	// sendErr makes every SendCommand fail — including the probe → ok=false → fail-open.
+	mockSSM := &authTestSSM{sendErr: fmt.Errorf("ssm: throttled")}
+
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	agentCmd := NewAgentCmdWithDeps(cfg, fetcher, func(c *exec.Cmd) error { return nil }, mockSSM, nil, nil)
+	root.AddCommand(agentCmd)
+
+	root.SetArgs([]string{"agent", "run", "sb-run-probeerr", "--prompt", "hello", "--no-bedrock"})
+	err := root.Execute()
+	// The run may fail downstream (the dispatch SendCommand also errors), but it
+	// must NOT be blocked by the credentials pre-check.
+	if err != nil && strings.Contains(err.Error(), "claude credentials not found") {
+		t.Errorf("probe error must fail open (no credentials block), got: %v", err)
 	}
 }
 

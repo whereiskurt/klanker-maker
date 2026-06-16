@@ -443,18 +443,18 @@ _km_stream_drain() {
   fi
 
   # Post to Slack thread, capturing the returned ts so we can record the mapping.
-  # Phase 74: --render=blocks (Tier 2 Block Kit) by default. Operator can
-  # override per-sandbox with KM_SLACK_RENDER=plain|mrkdwn via
-  # /etc/profile.d/km-notify-env.sh or a systemd EnvironmentFile.
-  # km-slack falls back to Tier 1 mrkdwn automatically when the Block Kit
-  # build exceeds Slack's 50-block cap, so this is safe even for very
-  # long Claude turns.
+  # Phase 112: --render=blocks-rich (Tier 3: native markdown + table blocks) by
+  # default. Operator can override per-sandbox with KM_SLACK_RENDER=blocks|mrkdwn|plain
+  # via /etc/profile.d/km-notify-env.sh or a systemd EnvironmentFile.
+  # km-slack demotes Tier 3 → Tier 2 (blocks) → Tier 1 (mrkdwn) automatically when
+  # a rich render overflows (e.g. the 12K markdown cap or Slack's 50-block cap), so
+  # this is safe even for very long Claude turns.
   local post_resp posted_ts
   post_resp=$(/opt/km/bin/km-slack post \
     --channel "$KM_SLACK_CHANNEL_ID" \
     --thread "$ts" \
     --body "$body_file" \
-    --render "${KM_SLACK_RENDER:-blocks}" 2>&1 || echo "")
+    --render "${KM_SLACK_RENDER:-blocks-rich}" 2>&1 || echo "")
   rm -f "$body_file"
   posted_ts=$(echo "$post_resp" | grep -oE 'ts=[0-9.]+' | head -n1 | sed 's/^ts=//')
 

@@ -547,23 +547,29 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 	}
 
 	// Phase 78 (AUTH-12): when --no-bedrock is active for the claude agent type,
-	// pre-check that ~/.claude/.credentials.json exists on the sandbox BEFORE
-	// launching the tmux session. This prevents a confusing silent failure where
-	// the tmux session fires and claude immediately fails at runtime due to a
-	// missing OAuth token. Exit non-zero with a clear hint pointing at km agent auth.
+	// pre-check that the sandbox's claude CLI is authenticated for direct-API
+	// BEFORE launching the tmux session. This prevents a confusing silent failure
+	// where the tmux session fires and claude immediately fails at runtime due to
+	// missing credentials. Exit non-zero with a clear hint pointing at km agent auth.
 	// Codex does not use --no-bedrock (guarded earlier), so only check claude branch.
+	//
+	// The probe asks `claude auth status` (authoritative — counts both OAuth and
+	// ANTHROPIC_API_KEY) in the same Bedrock-stripped env the no-bedrock runtime
+	// uses, rather than stat-ing a hard-coded credentials-file path (which moved
+	// across CLI versions and is blind to ANTHROPIC_API_KEY auth).
 	if noBedrock && agentType != "codex" {
-		checkOut, checkErr := sendSSMAndWait(ctx, ssmClient, instanceID,
-			"stat /home/sandbox/.claude/.credentials.json 2>/dev/null && echo ok || echo missing")
-		if checkErr == nil && strings.TrimSpace(checkOut) == "missing" {
+		authed, ok := claudeAuthedNoBedrock(ctx, ssmClient, instanceID)
+		if ok && !authed {
 			return fmt.Errorf(
 				"claude credentials not found on sandbox %s\n"+
-					"  Run: km agent auth %s --claude\n"+
+					"  Direct-API mode needs either an OAuth login or ANTHROPIC_API_KEY.\n"+
+					"  Run: km agent auth %s --claude  (OAuth)\n"+
+					"  Or ensure the profile injects ANTHROPIC_API_KEY (see iam.allowedSecretPaths).\n"+
 					"  Then retry: km agent run --no-bedrock %s --prompt ...",
 				sandboxID, sandboxID, sandboxID)
 		}
-		// If checkErr != nil (SSM transient), proceed silently — the agent session
-		// will surface any real auth failure to the operator.
+		// ok == false → SSM transient / probe error → proceed silently; the agent
+		// session surfaces any real auth failure to the operator (unchanged).
 	}
 
 	// Load profile args for the selected agent type (avoid unnecessary S3 fetch).
