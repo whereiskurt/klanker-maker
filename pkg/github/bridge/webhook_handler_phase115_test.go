@@ -158,6 +158,12 @@ func TestHandleEventRoute_Dispatch(t *testing.T) {
 		if env.Kind != "repository" {
 			t.Errorf("envelope.Kind=%q, want %q", env.Kind, "repository")
 		}
+		// Action must be propagated so the on-box poller can render the
+		// "<event> / <action>" preamble line (regression: it was previously
+		// dropped — the field was absent from GitHubEnvelope).
+		if env.Action != "created" {
+			t.Errorf("envelope.Action=%q, want %q", env.Action, "created")
+		}
 		// Body must contain the expanded prompt (at minimum "myorg/newrepo")
 		if env.Body == "" {
 			t.Error("envelope.Body must be the expanded prompt (non-empty)")

@@ -796,6 +796,7 @@ func (h *WebhookHandler) handleEventRoute(ctx context.Context, req WebhookReques
 		Repo:          payload.Repo,
 		Number:        0, // event routes have no PR number; poller branches on Kind
 		Kind:          eventType,
+		Action:        payload.Action, // populate so the on-box preamble reads "<event> / <action>"
 		CommentID:     0,
 		HTMLURL:       payload.HTMLURL,
 		Sender:        payload.Sender,

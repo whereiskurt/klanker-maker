@@ -82,6 +82,10 @@ type GitHubEnvelope struct {
 	Repo          string `json:"repo"`
 	Number        int    `json:"number"`
 	Kind          string `json:"kind"`
+	// Action is the webhook action (e.g. "created" for repository events). Set by
+	// the Phase 115 event router; the poller reads it to render the "<event> / <action>"
+	// preamble line. omitempty so issue_comment envelope shapes decode cleanly as "".
+	Action        string `json:"action,omitempty"`
 	CommentID     int64  `json:"comment_id"`
 	HTMLURL       string `json:"html_url"`
 	Sender        string `json:"sender"`
