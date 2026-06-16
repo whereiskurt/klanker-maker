@@ -110,8 +110,9 @@ func TestUserDataOTELLogPromptsAbsent(t *testing.T) {
 }
 
 // TestStreamDrain_RenderFlag (HOOK-01): _km_stream_drain must include the
-// --render "${KM_SLACK_RENDER:-blocks}" flag so operators can downgrade
-// per-sandbox rendering without redeploying the binary.
+// --render "${KM_SLACK_RENDER:-blocks-rich}" flag so operators can downgrade
+// per-sandbox rendering without redeploying the binary. Phase 112 flipped the
+// default from blocks (Tier 2) to blocks-rich (Tier 3).
 func TestStreamDrain_RenderFlag(t *testing.T) {
 	p := baseProfile()
 	ud, err := generateUserData(p, "sb-hook-01", nil, "my-bucket", false, nil)
@@ -120,7 +121,7 @@ func TestStreamDrain_RenderFlag(t *testing.T) {
 	}
 
 	// Assert the streaming hook includes the --render flag.
-	wantSubstr := `--render "${KM_SLACK_RENDER:-blocks}"`
+	wantSubstr := `--render "${KM_SLACK_RENDER:-blocks-rich}"`
 	if !strings.Contains(ud, wantSubstr) {
 		t.Fatalf("expected streaming hook to include %q\n(first 200 chars of userdata: %s)", wantSubstr, ud[:min200(ud)])
 	}

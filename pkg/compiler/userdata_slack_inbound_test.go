@@ -281,16 +281,17 @@ func TestUserdata_PollerAgentRunsInWorkspace(t *testing.T) {
 
 // TestSlackInboundPoller_ReplyPost_RenderFlag — Phase 74 Task 6 (HOOK-01 inbound).
 // Plan 02 Task 4 flipped the Phase 68 transcript-streaming hook
-// (_km_stream_drain) to --render "${KM_SLACK_RENDER:-blocks}" so per-turn
+// (_km_stream_drain) to --render "${KM_SLACK_RENDER:-blocks-rich}" so per-turn
 // streaming renders as Block Kit. But the Slack-inbound poller has its OWN
 // km-slack post call that posts the final .result from `claude -p` back into
 // the Slack thread — and prior to this task that call had no --render flag,
 // so it defaulted to plain. Symptom: operators chatting in #sb-<id> via Slack
 // (the most-used path) saw literal markdown (**bold**, # heading) even though
-// the streaming hook was correctly flipped.
+// the streaming hook was correctly flipped. Phase 112 flipped the shared default
+// from blocks (Tier 2) to blocks-rich (Tier 3: native markdown + table blocks).
 //
 // Assertions:
-//  1. The poller's reply post call carries --render "${KM_SLACK_RENDER:-blocks}"
+//  1. The poller's reply post call carries --render "${KM_SLACK_RENDER:-blocks-rich}"
 //     so it inherits the same Block Kit default + operator safety valve as
 //     _km_stream_drain.
 //  2. The --render flag appears BEFORE --body inside the same km-slack post
@@ -301,9 +302,9 @@ func TestSlackInboundPoller_ReplyPost_RenderFlag(t *testing.T) {
 	out := compileInboundUserData(t, p)
 	poller := extractSlackInboundPoller(t, out)
 
-	wantSubstr := `--render "${KM_SLACK_RENDER:-blocks}"`
+	wantSubstr := `--render "${KM_SLACK_RENDER:-blocks-rich}"`
 	if !strings.Contains(poller, wantSubstr) {
-		t.Fatalf("inbound poller reply post must carry %q so Slack-initiated chat renders as Block Kit (HOOK-01 inbound coverage)\n--- poller excerpt ---\n%s", wantSubstr, abbreviateUD(poller))
+		t.Fatalf("inbound poller reply post must carry %q so Slack-initiated chat renders as rich Block Kit (HOOK-01 inbound coverage)\n--- poller excerpt ---\n%s", wantSubstr, abbreviateUD(poller))
 	}
 
 	// Bound to the km-slack post invocation in the success branch. The earlier
