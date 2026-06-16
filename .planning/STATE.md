@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 115-04-PLAN.md (KM_GITHUB_EVENTS deploy-surface: init.go export + terragrunt get_env + module var + Lambda env)"
-last_updated: "2026-06-16T00:00:49.125Z"
+stopped_at: Completed 115-05-PLAN.md (manifest event union + doctor wiring for GH-EVENT-MANIFEST + GH-EVENT-DOCTOR)
+last_updated: "2026-06-16T00:18:05.117Z"
 last_activity: 2026-06-16
 progress:
   total_phases: 131
   completed_phases: 114
   total_plans: 575
-  completed_plans: 535
+  completed_plans: 536
   percent: 91
 ---
 
@@ -572,6 +572,7 @@ Progress: [█████████░] 91%
 | Phase 115-generic-github-webhook-event-prompt-router P02 | 215s | 2 tasks | 4 files |
 | Phase 115-generic-github-webhook-event-prompt-router P03 | 480 | 2 tasks | 2 files |
 | Phase 115-generic-github-webhook-event-prompt-router P04 | 296s | 2 tasks | 5 files |
+| Phase 115-generic-github-webhook-event-prompt-router P05 | 829s | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1636,6 +1637,8 @@ Recent decisions affecting current work:
 - [Phase 115-03]: No reaction posted in handleEventRoute — autonomous events have no originating comment (CONTEXT.md hard requirement)
 - [Phase 115-04]: checkGitHubEventsValid added in Plan 04 (not 05): Wave-0 scaffold compile failure blocked TestExport/TestRunInit; implemented full validation inline rather than nil stub
 - [Phase 115-04]: KM_GITHUB_EVENTS two-half wiring complete: init.go export + terragrunt get_env + module var + Lambda env (in-place at v1.1.0, additive default-empty, no version bump)
+- [Phase 115-generic-github-webhook-event-prompt-router]: Config-derived manifest events (not hardcoded): cfg.Github.Events iterated in RunGitHubManifest; sort.Strings for determinism; metadata:read injected when repository event configured
+- [Phase 115-generic-github-webhook-event-prompt-router]: GetGithubEvents added to DoctorConfigProvider interface: consistent with all other github.* field access patterns in RunDoctor
 
 ### Roadmap Evolution
 
@@ -1777,6 +1780,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-16T00:00:49.114Z
-Stopped at: Completed 115-04-PLAN.md (KM_GITHUB_EVENTS deploy-surface: init.go export + terragrunt get_env + module var + Lambda env)
+Last session: 2026-06-16T00:18:05.107Z
+Stopped at: Completed 115-05-PLAN.md (manifest event union + doctor wiring for GH-EVENT-MANIFEST + GH-EVENT-DOCTOR)
 Resume file: None
