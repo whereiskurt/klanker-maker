@@ -51,6 +51,14 @@ spec:
     configFiles:
       "/home/sandbox/.claude/plugins/known_marketplaces.json": |
         {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
+      # NOTE: the klanker plugin is installed (above) but intentionally NOT enabled
+      # in THIS base profile. learn.v2.yaml is the frozen byte-identity reference
+      # fixture for the Phase 92 userdata contract
+      # (pkg/compiler TestUserdataLearnV2Phase92ByteIdentity), so its compiled
+      # userdata must not drift. The chatty / polite / codex / desktop variants add
+      # an inlined settings.json with `enabledPlugins: {klanker@klanker-maker: true}`
+      # so klanker:slack and friends load in headless `claude -p`
+      # (km agent run / km at agent run). See the matching block in those profiles.
 
     # For plugin-only snapshots, use rsyncPaths: [".claude/plugins"] in your profile
     rsyncPaths:

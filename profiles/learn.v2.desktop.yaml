@@ -69,6 +69,12 @@ spec:
     configFiles:
       "/home/sandbox/.claude/plugins/known_marketplaces.json": |
         {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
+      # Enable the installed klanker plugin so its skills (klanker:slack, etc.) are
+      # available to headless `claude -p` (km agent run / km at agent run). Without
+      # this, the plugin is installed but not enabled and the skills never load.
+      # Deep-merged on top of the synthesized settings.json (Phase 92).
+      "/home/sandbox/.claude/settings.json": |
+        {"enabledPlugins": {"klanker@klanker-maker": true}}
 
     # For plugin-only snapshots, use rsyncPaths: [".claude/plugins"] in your profile
     rsyncPaths:

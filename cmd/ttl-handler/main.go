@@ -648,41 +648,7 @@ func (h *TTLHandler) handleAgentRun(ctx context.Context, event TTLEvent) error {
 
 	b64Prompt := base64.StdEncoding.EncodeToString([]byte(event.Prompt))
 	runID := time.Now().UTC().Format("20060102T150405Z")
-	noBedrockLines := ""
-	if event.NoBedrock {
-		noBedrockLines = `unset CLAUDE_CODE_USE_BEDROCK
-unset ANTHROPIC_BASE_URL
-unset ANTHROPIC_DEFAULT_SONNET_MODEL
-unset ANTHROPIC_DEFAULT_HAIKU_MODEL
-unset ANTHROPIC_DEFAULT_OPUS_MODEL
-if [ -z "$ANTHROPIC_API_KEY" ] && [ -f "$HOME/.claude/.credentials.json" ]; then
-  OAUTH_TOKEN=$(python3 -c "import json; d=json.load(open('$HOME/.claude/.credentials.json')); print(d.get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
-  if [ -n "$OAUTH_TOKEN" ]; then export ANTHROPIC_API_KEY="$OAUTH_TOKEN"; fi
-fi`
-	}
-
-	bucket := h.Bucket
-	script := fmt.Sprintf(`#!/bin/bash
-export HOME=/home/sandbox
-source /etc/profile.d/km-profile-env.sh 2>/dev/null
-source /etc/profile.d/km-identity.sh 2>/dev/null
-%s
-KM_ARTIFACTS_BUCKET="%s"
-cd /workspace
-RUN_ID="%s"
-RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
-mkdir -p "$RUN_DIR"
-echo "running" > "$RUN_DIR/status"
-PROMPT=$(echo "%s" | base64 -d)
-claude -p "$PROMPT" --output-format json --dangerously-skip-permissions --bare \
-  > "$RUN_DIR/output.json" 2>"$RUN_DIR/stderr.log"
-EC=$?
-if [ $EC -eq 0 ]; then echo "complete" > "$RUN_DIR/status"; else echo "failed" > "$RUN_DIR/status"; echo "$EC" > "$RUN_DIR/exit_code"; fi
-if [ -n "$KM_ARTIFACTS_BUCKET" ] && [ -n "$KM_SANDBOX_ID" ]; then
-  aws s3 cp "$RUN_DIR/output.json" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/output.json" --quiet 2>/dev/null || true
-  aws s3 cp "$RUN_DIR/status" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/status" --quiet 2>/dev/null || true
-fi
-tmux wait-for -S km-done-%s`, noBedrockLines, bucket, runID, b64Prompt, runID)
+	script := buildAgentRunScript(b64Prompt, h.Bucket, runID, event.NoBedrock)
 
 	sessionName := fmt.Sprintf("km-agent-%s", runID)
 	cmds := []string{
@@ -704,6 +670,73 @@ tmux wait-for -S km-done-%s`, noBedrockLines, bucket, runID, b64Prompt, runID)
 	log.Info().Str("sandbox_id", event.SandboxID).Str("instance", instanceID).
 		Str("run_id", runID).Msg("agent dispatched via SSM")
 	return nil
+}
+
+// buildAgentRunScript builds the bash script that runs a scheduled agent prompt
+// on the sandbox via SSM. It is a pure function (no AWS calls) so its output can
+// be unit-tested.
+//
+// It is intentionally kept in parity with the interactive / direct `km agent run`
+// execution context (BuildAgentShellCommands in internal/app/cmd/agent.go). The
+// previous hand-rolled fork diverged in three ways that all silently broke
+// scheduled `km at agent run` on no-bedrock (direct-API) sandboxes:
+//
+//  1. It only sourced km-profile-env.sh + km-identity.sh, so KM_SLACK_* (defined
+//     in km-slack-runtime.sh / km-notify-env.sh) were absent and Slack-posting
+//     skills had no channel/bridge to post to. We now source the full
+//     /etc/profile.d/*.sh set like a login shell.
+//  2. It passed --bare, which Claude Code documents as "Minimal mode: skip hooks,
+//     LSP, plugin sync..." — that suppressed plugin/skill loading (e.g.
+//     klanker:slack) and notification hooks. --bare is now omitted (matching the
+//     Phase 68 decision on the direct path).
+//  3. It injected the Claude OAuth token into ANTHROPIC_API_KEY, which is sent as
+//     the x-api-key header; an sk-ant-oat OAuth token presented that way is
+//     rejected with 401 "Invalid API key". The token must be presented as a
+//     Bearer token via CLAUDE_CODE_OAUTH_TOKEN. We also auto-detect no-bedrock
+//     mode at runtime (empty CLAUDE_CODE_USE_BEDROCK after sourcing profile.d) so
+//     a no-bedrock sandbox authenticates even without an explicit --no-bedrock.
+//
+// noBedrock=true (from `km at ... --no-bedrock`) additionally force-unsets the
+// Bedrock env on an otherwise Bedrock-capable sandbox.
+func buildAgentRunScript(b64Prompt, bucket, runID string, noBedrock bool) string {
+	unsetBedrock := ""
+	if noBedrock {
+		unsetBedrock = `unset CLAUDE_CODE_USE_BEDROCK
+unset ANTHROPIC_BASE_URL
+unset ANTHROPIC_DEFAULT_SONNET_MODEL
+unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+unset ANTHROPIC_DEFAULT_OPUS_MODEL
+`
+	}
+	return fmt.Sprintf(`#!/bin/bash
+export HOME=/home/sandbox
+# Source the full profile.d set like an interactive login shell so KM_SLACK_*,
+# audit, proxy, and agent env are all present (interactive/direct-run parity).
+for f in /etc/profile.d/*.sh; do source "$f" 2>/dev/null; done
+%s# Direct-API (no-bedrock) auth: headless claude needs the OAuth token presented
+# as a Bearer token via CLAUDE_CODE_OAUTH_TOKEN. ANTHROPIC_API_KEY is sent as the
+# x-api-key header and an sk-ant-oat OAuth token is rejected 401 there. Skip when
+# Bedrock is active or a key/token is already set.
+if [ -z "$CLAUDE_CODE_USE_BEDROCK" ] && [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -f "$HOME/.claude/.credentials.json" ]; then
+  OAUTH_TOKEN=$(python3 -c "import json; d=json.load(open('$HOME/.claude/.credentials.json')); print(d.get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
+  if [ -n "$OAUTH_TOKEN" ]; then export CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"; fi
+fi
+KM_ARTIFACTS_BUCKET="%s"
+cd /workspace
+RUN_ID="%s"
+RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
+mkdir -p "$RUN_DIR"
+echo "running" > "$RUN_DIR/status"
+PROMPT=$(echo "%s" | base64 -d)
+claude -p "$PROMPT" --output-format json --dangerously-skip-permissions \
+  > "$RUN_DIR/output.json" 2>"$RUN_DIR/stderr.log"
+EC=$?
+if [ $EC -eq 0 ]; then echo "complete" > "$RUN_DIR/status"; else echo "failed" > "$RUN_DIR/status"; echo "$EC" > "$RUN_DIR/exit_code"; fi
+if [ -n "$KM_ARTIFACTS_BUCKET" ] && [ -n "$KM_SANDBOX_ID" ]; then
+  aws s3 cp "$RUN_DIR/output.json" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/output.json" --quiet 2>/dev/null || true
+  aws s3 cp "$RUN_DIR/status" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/status" --quiet 2>/dev/null || true
+fi
+tmux wait-for -S km-done-%s`, unsetBedrock, bucket, runID, b64Prompt, runID)
 }
 
 // handleScheduleCreate creates an EventBridge Scheduler schedule for a deferred sandbox create.
