@@ -511,11 +511,48 @@ func buildTargetInput(cmdArg string, cmdInfo schedulableCommand, sandboxID, arti
 
 // scheduleTimezone returns the IANA timezone for EventBridge Scheduler.
 // One-time at() expressions are already in UTC, so use "UTC".
-// Recurring cron/rate expressions use local timezone so "daily at noon" means local noon.
+// Recurring cron/rate expressions use the host's local timezone so "daily at
+// 15:00" means 15:00 local — but resolved to a real IANA name (see
+// localIANATimezone), because EventBridge rejects Go's "Local" sentinel.
 func scheduleTimezone(spec atpkg.ScheduleSpec) string {
 	if spec.IsRecurring {
-		return time.Now().Location().String()
+		return localIANATimezone()
 	}
+	return "UTC"
+}
+
+// localIANATimezone returns a valid IANA timezone name for the host, suitable for
+// EventBridge Scheduler's ScheduleExpressionTimezone. On macOS (and other hosts
+// without a named zone loaded) time.Local stringifies to the sentinel "Local",
+// which EventBridge rejects with "ValidationException: Invalid timezone Local".
+// Resolution order: $TZ, an already-named time.Local, the /etc/localtime symlink
+// target (…/zoneinfo/Area/City), then "UTC" as a safe default.
+func localIANATimezone() string {
+	// 1. Explicit TZ env var, if it loads as a real zone.
+	if tz := os.Getenv("TZ"); tz != "" {
+		if _, err := time.LoadLocation(tz); err == nil {
+			return tz
+		}
+	}
+	// 2. A Location that already carries a real IANA name (e.g. "UTC",
+	//    "America/Toronto") — anything other than the "Local" sentinel.
+	if name := time.Now().Location().String(); name != "" && name != "Local" {
+		if _, err := time.LoadLocation(name); err == nil {
+			return name
+		}
+	}
+	// 3. Resolve the /etc/localtime symlink (macOS + Linux), e.g.
+	//    /var/db/timezone/zoneinfo/America/Toronto -> America/Toronto.
+	if p, err := os.Readlink("/etc/localtime"); err == nil {
+		if i := strings.LastIndex(p, "zoneinfo/"); i >= 0 {
+			if cand := p[i+len("zoneinfo/"):]; cand != "" {
+				if _, err := time.LoadLocation(cand); err == nil {
+					return cand
+				}
+			}
+		}
+	}
+	// 4. Safe, always-valid default.
 	return "UTC"
 }
 
