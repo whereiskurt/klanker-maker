@@ -252,10 +252,15 @@ km unlock <sandbox>    # Remove safety lock (requires confirmation)
 ```bash
 km at 'in 2 hours' destroy <sandbox>           # Deferred destroy
 km at '5pm tomorrow' agent run <sandbox> --prompt "nightly tests" --auto-start
-km at 'every day at 9am' agent run <sandbox> --prompt "daily check" --auto-start
+km at 'every day at 15:00' agent run <sandbox> --prompt "daily check" --auto-start   # daily, local time
+km at 'every hour' agent run <sandbox> --prompt "heartbeat" --auto-start             # rate, from creation
+km at 'cron(0 * * * ? *)' agent run <sandbox> --prompt "heartbeat" --auto-start      # top of every hour
+km at 'cron(0/15 * * * ? *)' agent run <sandbox> --prompt "status" --auto-start      # :00/:15/:30/:45
 km at list                                      # List scheduled operations
 km at cancel <schedule-name>                    # Cancel a schedule
 ```
+
+> Recurring `cron()` schedules run in your **local timezone** (e.g. `every day at 15:00` = 15:00 local). `every N minutes/hours` compiles to `rate(...)` and drifts from creation time — use a raw `cron(...)` for clock-aligned firing.
 
 ## Monitoring
 

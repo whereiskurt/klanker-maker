@@ -1503,6 +1503,20 @@ Each command is dispatched to the appropriate Lambda (create-handler for `create
 
 **Budget-add flags:** `km at budget-add` accepts `--compute <USD>` and `--ai <USD>` to specify the amounts to add.
 
+**Recurring time expressions:** the time argument accepts natural-language cadences and raw EventBridge expressions:
+
+| Expression | Compiles to | Fires |
+|------------|-------------|-------|
+| `every 15 minutes` / `every 2 hours` / `every 3 days` | `rate(15 minutes)` … | every N units, measured from creation (drifts off the clock) |
+| `every hour` / `hourly` / `every minute` / `every day` | `rate(1 hour)` … | every 1 unit from creation |
+| `every day at 15:00` / `daily at 9am` | `cron(0 15 * * ? *)` | daily at that local time |
+| `every monday at 8:30am` / `every thursday at 3pm` | `cron(30 8 ? * 2 *)` | weekly on that day/time |
+| `cron(0/15 * * * ? *)` / `rate(45 minutes)` | passed through verbatim | full EventBridge control (e.g. clock-aligned `:00/:15/:30/:45`) |
+
+**Timezone:** recurring `cron()` schedules are interpreted in the **operator host's local timezone** (resolved to a real IANA name such as `America/Toronto`), so `every day at 15:00` means 15:00 local. One-shot `at()` schedules use UTC. To pin a specific zone, set `TZ` before invoking — e.g. `TZ=UTC km at 'every day at 15:00' …`.
+
+> `rate(...)` cadences (`every 15 minutes`, `every hour`) fire relative to *creation* time and drift off clock boundaries. For clock-aligned firing use a raw cron: `cron(0 * * * ? *)` (top of every hour) or `cron(0/15 * * * ? *)` (every 15 min on `:00/:15/:30/:45`).
+
 **Subcommands:**
 
 - **`km at list`** -- Lists all scheduled operations (name, command, target, schedule, status, created date). Use `--utc` to display times in UTC instead of local timezone
@@ -1523,7 +1537,19 @@ km at 'every thursday at 3pm' kill alice
 # Schedule a budget top-up
 km at 'every monday at 9am' budget-add alice --compute 5.00 --ai 2.00
 
-# Raw cron expression
+# Recurring agent run: every day at 15:00 (operator-local time)
+km at 'every day at 15:00' agent run alice --auto-start --prompt "post a status update to Slack"
+
+# Recurring agent run: top of every hour (clock-aligned, verbatim cron)
+km at 'cron(0 * * * ? *)' agent run alice --auto-start --prompt "hourly heartbeat"
+
+# Recurring agent run: every 15 minutes aligned to :00/:15/:30/:45
+km at 'cron(0/15 * * * ? *)' agent run alice --auto-start --prompt "status check"
+
+# Bare cadence: every hour, measured from creation time
+km at 'every hour' agent run alice --auto-start --prompt "status check"
+
+# Raw cron expression (via --cron flag, equivalent to the verbatim form above)
 km at --cron 'cron(0 15 ? * 5 *)' kill sb-abc123
 
 # List all scheduled operations
