@@ -50,6 +50,10 @@ func (m *mockSchedulerAPI) GetSchedule(ctx context.Context, input *scheduler.Get
 	return m.getScheduleOutput, m.getScheduleErr
 }
 
+func (m *mockSchedulerAPI) CreateScheduleGroup(ctx context.Context, input *scheduler.CreateScheduleGroupInput, optFns ...func(*scheduler.Options)) (*scheduler.CreateScheduleGroupOutput, error) {
+	return &scheduler.CreateScheduleGroupOutput{}, nil
+}
+
 // mockDynamoAPI satisfies awspkg.SandboxMetadataAPI for testing.
 type mockDynamoAtAPI struct {
 	putItemInput    *dynamodb.PutItemInput

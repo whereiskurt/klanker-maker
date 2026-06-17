@@ -6,6 +6,8 @@ package aws
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler/types"
@@ -18,6 +20,7 @@ type SchedulerAPI interface {
 	DeleteSchedule(ctx context.Context, input *scheduler.DeleteScheduleInput, optFns ...func(*scheduler.Options)) (*scheduler.DeleteScheduleOutput, error)
 	ListSchedules(ctx context.Context, input *scheduler.ListSchedulesInput, optFns ...func(*scheduler.Options)) (*scheduler.ListSchedulesOutput, error)
 	GetSchedule(ctx context.Context, input *scheduler.GetScheduleInput, optFns ...func(*scheduler.Options)) (*scheduler.GetScheduleOutput, error)
+	CreateScheduleGroup(ctx context.Context, input *scheduler.CreateScheduleGroupInput, optFns ...func(*scheduler.Options)) (*scheduler.CreateScheduleGroupOutput, error)
 }
 
 // CreateTTLSchedule creates an EventBridge Scheduler one-time at() rule that fires at
@@ -57,9 +60,55 @@ func DeleteTTLSchedule(ctx context.Context, client SchedulerAPI, sandboxID, pref
 // CreateAtSchedule creates an EventBridge Scheduler one-time at() rule for a
 // deferred km at action (e.g. kill, stop). Unlike CreateTTLSchedule, the input
 // is always required — km at always provides a fully-built CreateScheduleInput.
+//
+// km at writes every schedule into a named EventBridge Scheduler group
+// ("{prefix}-at"), but nothing provisions that group (it is not Terraform-
+// managed). EventBridge requires a custom group to exist before CreateSchedule
+// can target it, so the first km at on a fresh install — or any install whose
+// group was removed by a teardown — would fail with ResourceNotFoundException.
+//
+// This function self-heals that gap: on ResourceNotFoundException it creates the
+// group (idempotently — ConflictException means it already exists) and retries.
+// New groups are eventually consistent, so the retry is bounded with a small
+// backoff. This mirrors how DeleteAtSchedule swallows ResourceNotFoundException
+// for idempotency.
 func CreateAtSchedule(ctx context.Context, client SchedulerAPI, input *scheduler.CreateScheduleInput) error {
 	_, err := client.CreateSchedule(ctx, input)
-	return err
+	if err == nil {
+		return nil
+	}
+
+	var notFound *types.ResourceNotFoundException
+	if !errors.As(err, &notFound) || input.GroupName == nil {
+		// Unrelated error, or no custom group to create — return as-is.
+		return err
+	}
+
+	// Group missing — create it (idempotent) before retrying.
+	if _, gerr := client.CreateScheduleGroup(ctx, &scheduler.CreateScheduleGroupInput{
+		Name: input.GroupName,
+	}); gerr != nil {
+		var conflict *types.ConflictException
+		if !errors.As(gerr, &conflict) {
+			// ConflictException means the group already exists, which is fine;
+			// anything else is a real failure.
+			return fmt.Errorf("create schedule group %q: %w", *input.GroupName, gerr)
+		}
+	}
+
+	// Retry the create. A brand-new group can take a moment to become usable,
+	// so retry a few times on ResourceNotFoundException with a small backoff.
+	const maxRetries = 4
+	for attempt := 0; ; attempt++ {
+		_, err = client.CreateSchedule(ctx, input)
+		if err == nil {
+			return nil
+		}
+		if !errors.As(err, &notFound) || attempt >= maxRetries {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+	}
 }
 
 // DeleteAtSchedule deletes an EventBridge km-at schedule by name and group.
