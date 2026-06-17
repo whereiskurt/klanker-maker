@@ -2664,3 +2664,26 @@ Plans:
 - [ ] 115-04-PLAN.md — KM_GITHUB_EVENTS export in ExportTerragruntEnvVars + terragrunt get_env + module v1.1.0 variable + Lambda env entry (both halves) (GH-EVENT-CONFIG) [wave 3]
 - [ ] 115-05-PLAN.md — Manifest default_events union + metadata:read implied scope; checkGitHubEventsValid doctor check + registration (GH-EVENT-MANIFEST,DOCTOR) [wave 3]
 - [x] 115-06-PLAN.md — Poller Number==0/Kind tolerance (event preamble, no pull/0/head) + docs § Phase 115 + live E2E UAT checkpoint (GH-EVENT-POLLER,DOCS,E2E) [wave 4, non-autonomous] (completed 2026-06-16)
+
+### Phase 116: km check serverless check runner — per-snippet Lambdas, S3 output capture, config-driven trigger to alias-targeted sandbox dispatch
+
+**Goal:** Operators can author small Python "check" snippets, deploy each as its own SDK-provisioned AWS Lambda (no terragrunt-per-check), run them on a schedule / on demand / as a `github.events` pre-filter, capture their JSON output to the S3 artifact bucket, and — under a config-driven `when_py` predicate — fire an alias-targeted sandbox prompt (resume the paused/stopped box for that alias, else cold-create) carrying an expanded prompt template. Ships with two working example checks in `profiles/checks/` (QOTD internet fetch; simulated Wiz Threat Intel advisories + affected-system counts), deployed and demonstrated end-to-end.
+
+**Authoritative design spec:** `docs/superpowers/specs/2026-06-17-km-check-serverless-runner-design.md` (approved in brainstorming; use as the source of truth for the plan).
+
+**Depends on:** Phase 115
+
+**Success Criteria** (what must be TRUE):
+1. `km check deploy <snippet.py>` provisions a per-check Lambda via the SDK (shared `{prefix}-check-runner` role), records it in the `{prefix}-checks` DDB table, and requires no terragrunt apply per check.
+2. A deployed check runs (scheduled via EventBridge Scheduler, or `km check run <name>`), executes the Python snippet with injected env, and writes its stdout to `s3://{artifacts}/check-runs/<name>/<ts>/output.json`.
+3. A `checks.triggers` entry with a `when_py` predicate (inline or `@file`) evaluates the captured output inline; on a truthy result the bootstrap emits a `CheckDispatch` event and `ttl-handler` performs alias-targeted resume-or-cold-create handing the sandbox the expanded prompt (cooldown-guarded).
+4. The bridge resume-or-cold-create logic is factored into a shared `pkg/dispatch` helper consumed by both the existing bridges (parity preserved) and the new check path.
+5. Two terragrunt scaffolding modules only (`dynamodb-checks` + `check-runner-role`); `km init` deploys them and the `CheckDispatch` rule + widened `ttl-handler` IAM/env.
+6. Packaging: zip + arch-correct `requirements.txt` wheels by default; `--image` container Lambda opt-in with a lazily SDK-created shared ECR repo.
+7. `km check ls|get|logs|schedule|rm|sync` operate the check fleet; `km doctor` reports orphan check Lambdas/schedules and config drift.
+8. The two `profiles/checks/` examples are deployed live and demonstrated: QOTD fetches a quote off the internet; the Wiz example emits advisories + affected-system counts and (with a trigger) fires a sandbox.
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 116 to break down)
