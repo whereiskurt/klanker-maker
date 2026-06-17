@@ -4,6 +4,7 @@ package at
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,11 +38,20 @@ var ebDOW = map[string]int{
 	"sat": 7, "saturday": 7,
 }
 
-// recurringKeywords triggers the custom recurring parser path.
-var recurringKeywords = []string{"every", "each", "weekly", "daily", "monthly", "everyday"}
+// recurringKeywords triggers the custom recurring parser path. Includes the
+// bare "hourly" alias and the verbatim "cron("/"rate(" passthrough prefixes.
+var recurringKeywords = []string{"every", "each", "weekly", "daily", "monthly", "everyday", "hourly", "cron(", "rate("}
 
-// ratePattern matches "every N hours" or "every N minutes".
-var ratePattern = regexp.MustCompile(`(?i)every\s+(\d+)\s+(hours?|minutes?)`)
+// rawSchedulePattern matches a verbatim EventBridge cron()/rate() expression,
+// passed straight through for maximal flexibility (e.g. the clock-aligned
+// "cron(0/15 * * * ? *)").
+var rawSchedulePattern = regexp.MustCompile(`(?i)^\s*(?:cron|rate)\(.+\)\s*$`)
+
+// rateNumPattern matches "every N hours/minutes/days".
+var rateNumPattern = regexp.MustCompile(`(?i)every\s+(\d+)\s+(hours?|minutes?|days?)`)
+
+// rateBarePattern matches the unitary forms "every hour/minute/day" and "hourly".
+var rateBarePattern = regexp.MustCompile(`(?i)^\s*(?:every\s+(hours?|minutes?|days?)|(hourly))\s*$`)
 
 // dayAtPattern matches "every <day> at <time>" or "each <day> at <time>".
 var dayAtPattern = regexp.MustCompile(`(?i)(?:every|each)\s+(\w+)\s+at\s+(\S+)`)
@@ -98,16 +108,20 @@ func parseTimeStr(s string) (hour, minute int, err error) {
 func parseRecurring(expr string) (ScheduleSpec, error) {
 	lower := strings.ToLower(strings.TrimSpace(expr))
 
-	// "every N hours" / "every N minutes" → rate()
-	if m := ratePattern.FindStringSubmatch(lower); m != nil {
-		n := m[1]
-		unit := m[2]
-		// Normalize unit: ensure plural
-		if !strings.HasSuffix(unit, "s") {
-			unit += "s"
-		}
+	// Verbatim EventBridge cron()/rate() expression — passed straight through so
+	// callers can express anything (e.g. clock-aligned "cron(0/15 * * * ? *)").
+	if rawSchedulePattern.MatchString(lower) {
 		return ScheduleSpec{
-			Expression:  fmt.Sprintf("rate(%s %s)", n, unit),
+			Expression:  strings.TrimSpace(expr),
+			IsRecurring: true,
+			HumanExpr:   expr,
+		}, nil
+	}
+
+	// "every N hours/minutes/days", "every hour/minute/day", "hourly" → rate()
+	if n, unit, ok := matchRate(lower); ok {
+		return ScheduleSpec{
+			Expression:  fmt.Sprintf("rate(%s)", rateExpr(n, unit)),
 			IsRecurring: true,
 			HumanExpr:   expr,
 		}, nil
@@ -149,6 +163,38 @@ func parseRecurring(expr string) (ScheduleSpec, error) {
 	}
 
 	return ScheduleSpec{}, fmt.Errorf("cannot parse recurring expression %q", expr)
+}
+
+// matchRate parses a rate-style recurring expression into a count + singular
+// unit ("hour"/"minute"/"day"). The count defaults to 1 for the unitary forms
+// ("every hour", "hourly").
+func matchRate(lower string) (n int, unit string, ok bool) {
+	if m := rateNumPattern.FindStringSubmatch(lower); m != nil {
+		n, _ = strconv.Atoi(m[1])
+		return n, singularUnit(m[2]), true
+	}
+	if m := rateBarePattern.FindStringSubmatch(lower); m != nil {
+		if m[2] != "" { // "hourly"
+			return 1, "hour", true
+		}
+		return 1, singularUnit(m[1]), true
+	}
+	return 0, "", false
+}
+
+// singularUnit strips a trailing plural "s" → "hour"/"minute"/"day".
+func singularUnit(u string) string {
+	return strings.TrimSuffix(strings.ToLower(u), "s")
+}
+
+// rateExpr renders "N unit" for an EventBridge rate() expression, honoring its
+// singular/plural rule: a value of 1 must use the singular unit ("rate(1 hour)"),
+// any other value the plural ("rate(2 hours)").
+func rateExpr(n int, unitSingular string) string {
+	if n == 1 {
+		return "1 " + unitSingular
+	}
+	return fmt.Sprintf("%d %ss", n, unitSingular)
 }
 
 // compactTimeRe matches compact time formats like "845AM", "915pm", "1030AM"
