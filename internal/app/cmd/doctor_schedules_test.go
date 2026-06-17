@@ -55,6 +55,10 @@ func (f *fakeSchedulerForDoctor) GetSchedule(_ context.Context, _ *scheduler.Get
 	return &scheduler.GetScheduleOutput{}, nil
 }
 
+func (f *fakeSchedulerForDoctor) CreateScheduleGroup(_ context.Context, _ *scheduler.CreateScheduleGroupInput, _ ...func(*scheduler.Options)) (*scheduler.CreateScheduleGroupOutput, error) {
+	return &scheduler.CreateScheduleGroupOutput{}, nil
+}
+
 // TestCheckStaleSchedules_KmAtForDestroyedSandbox_FlaggedStale verifies the
 // regression fix: a per-sandbox km-at-* schedule whose sandbox is gone from
 // DDB must be detected as stale. The previous code exempted every km-at-*
