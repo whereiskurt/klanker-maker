@@ -39,6 +39,8 @@ output capture**.
 | 6 | Condition language | **Python predicate block** (`when_py:`), `out` bound; accepts **inline or `@file`** |
 | 7 | Firing | **Alias-targeted resume-or-cold-create** (Stage A Python bootstrap emits `CheckDispatch`; Stage B Go reuses the bridge self-heal) |
 | 8 | Dispatch host | **`ttl-handler`** (no new fleet Lambda); shared `pkg/dispatch` helper |
+| 9 | Network egress | **Open egress (no VPC)** for v1 — checks reach any internet service (Wiz, Slack, etc.); NOT under sandbox eBPF/proxy enforcement |
+| 10 | Packaging | **Zip + `requirements.txt` by default** (arch-correct wheels) + **`--image` container opt-in** (up to 10 GB; lazy SDK-created ECR repo) |
 
 ## Architecture
 
@@ -97,6 +99,41 @@ at deploy.
 
 Non-JSON stdout is still captured to S3 but can never trigger (logged as
 `check_output_not_json`).
+
+## Runtime capability envelope
+
+### Network egress (open, v1)
+
+Check Lambdas are created **without** a `VpcConfig`, so they run in AWS's managed
+network with full NAT'd outbound internet. A check can call any external service —
+Wiz, Slack, PagerDuty, arbitrary SaaS APIs — with no allowlist and no NAT cost.
+
+**Explicit posture note:** checks are therefore **not** subject to the sandbox
+eBPF/proxy network enforcement (that mechanism is EC2-userdata-based and does not
+apply to Lambda). Egress is unrestricted. This is the right default for the use case
+(calling external services) but must be documented prominently in the operator guide:
+a check is a less network-constrained surface than a sandbox. Per-check VPC-attach +
+egress filtering (IP/SG or AWS Network Firewall FQDN allowlist) is a deferred
+follow-up (see Out of scope).
+
+### Packaging (zip default, container opt-in)
+
+- **Default — zip + `requirements.txt`.** A sibling `requirements.txt` is resolved at
+  `km check deploy` with **arch-correct wheels** for the Lambda runtime, not the
+  operator's host:
+  `pip install --platform manylinux2014_aarch64 --only-binary=:all: --target <build> -r requirements.txt`
+  (arm64 to match the `linux/arm64` build target). The snippet + deps are zipped and
+  uploaded (via S3 for packages over the 50 MB direct-upload limit). Covers
+  pure-Python + common pre-built wheels. Cap: ~250 MB unzipped; deps with no aarch64
+  wheel or heavy system libs won't fit — use `--image`.
+- **Opt-in — `--image` container Lambda.** A sibling `Dockerfile`
+  (`FROM public.ecr.aws/lambda/python:3.13`) is built and pushed; the check is created
+  with `PackageType=Image` (up to 10 GB; any dep, any system lib). Requires Docker on
+  the operator host at deploy time; slower cold starts (image checks only).
+  - **ECR repo is lazy + SDK-created** (not a third terragrunt module): on the first
+    `--image` deploy, km `ecr:CreateRepository` `{prefix}-checks` (idempotent) and sets
+    a repo policy granting the Lambda service principal (`lambda.amazonaws.com`) pull.
+    Keeps control-plane fleet growth at the two scaffolding modules.
 
 ## The trigger (decoupled, config-driven)
 
@@ -217,7 +254,7 @@ Mirrors the sandbox verbs:
 
 | Command | Action |
 |---------|--------|
-| `km check deploy <file.py> [--name] [--env] [--secret] [--memory] [--timeout] [--schedule] [--requirements]` | Package + `CreateFunction`/`UpdateFunctionCode`; write DDB row; (re)bake `KM_CHECK_TRIGGER`; create/update schedule |
+| `km check deploy <file.py> [--name] [--env] [--secret] [--memory] [--timeout] [--schedule] [--requirements] [--image]` | Package (zip, or container via `--image`) + `CreateFunction`/`UpdateFunctionCode`; write DDB row; (re)bake `KM_CHECK_TRIGGER`; create/update schedule |
 | `km check run <name> [--env K=V] [--wait]` | Synchronous invoke; print output + trigger/dispatch result |
 | `km check ls [--json]` | List checks (name, schedule, last-run, drift flag) |
 | `km check get <name>` | Detail: arn, env keys, secret paths, schedule, trigger summary, sourceHash |
@@ -228,8 +265,9 @@ Mirrors the sandbox verbs:
 
 ### DDB `{prefix}-checks` row
 
-`name, arn, runtime, memory, timeout, schedule, env (non-secret keys only),
-secretPaths, sourceHash, triggerSummary, createdAt, updatedAt`.
+`name, arn, runtime, packageType (zip|image), imageUri (if image), memory, timeout,
+schedule, env (non-secret keys only), secretPaths, sourceHash, triggerSummary,
+createdAt, updatedAt`.
 
 ## Config plumbing
 
@@ -260,6 +298,9 @@ secretPaths, sourceHash, triggerSummary, createdAt, updatedAt`.
   modules — table + role — plus the `CheckDispatch` EventBridge rule and the widened
   `ttl-handler` IAM/env require a full terragrunt apply, NOT `--sidecars`).
 - **Per check:** `km check deploy` / `km check sync` — pure SDK, seconds, no apply.
+  `--image` checks additionally require Docker on the operator host and lazily
+  `ecr:CreateRepository` the shared `{prefix}-checks` repo on first use (still no
+  terragrunt).
 - **`ttl-handler` code change** (the `check-dispatch` + `check-run` cases, shared
   `pkg/dispatch`): `make build-lambdas` + `km init --dry-run=false`.
 - `make build` the `km` binary **before** `km init` so the new `regionalModules()`
@@ -273,6 +314,8 @@ secretPaths, sourceHash, triggerSummary, createdAt, updatedAt`.
 - Per-check least-privilege IAM roles (shared baseline chosen).
 - A separate scheduled re-evaluator (inline-at-run only).
 - A dedicated `check-dispatcher` Lambda (dispatch hosted in `ttl-handler`).
+- **Per-check VPC-attach + egress filtering** (open egress only in v1; no FQDN
+  allowlist / Network Firewall for checks).
 
 ## Reuse map (anchors)
 
