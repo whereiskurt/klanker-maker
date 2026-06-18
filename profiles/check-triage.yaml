@@ -28,7 +28,9 @@ spec:
 
   runtime:
     substrate: ec2
-    spot: true
+    # On-demand (not spot): a check cold-create should not silently fail on spot
+    # capacity shortfalls. Reliability over cost for the triage box.
+    spot: false
     instanceType: t3.medium
     region: us-east-1
 
