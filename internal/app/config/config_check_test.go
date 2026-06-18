@@ -39,7 +39,10 @@ func chdirChecks(t *testing.T, dir string) {
 //
 //  1. Populated case: a yaml checks.triggers list populates cfg.Checks.Triggers
 //     after config.Load() with the exact field values (check, when_py, alias,
-//     prompt, onAbsent, cooldownSeconds).
+//     prompt, on_absent, cooldown_seconds). Note: yaml keys in km-config.yaml are
+//     snake_case (matching mapstructure tags) — viper normalizes YAML keys to
+//     lowercase so camelCase yaml tags (onAbsent, cooldownSeconds) are for
+//     marshal only, not for km-config.yaml operator consumption.
 //
 //  2. Dormant case: an absent checks: block produces an empty cfg.Checks.Triggers
 //     slice with no error — the "dormant by default" invariant.
@@ -60,8 +63,8 @@ checks:
         return out.get("affected_count", 0) > 5
       alias: security-auditor
       prompt: "Wiz detected {{out.affected_count}} affected systems. Reason: {{reason}}"
-      onAbsent: cold-create
-      cooldownSeconds: 3600
+      on_absent: cold-create
+      cooldown_seconds: 3600
 `)
 		chdirChecks(t, dir)
 
@@ -172,7 +175,7 @@ checks:
   triggers:
     - check: qotd
       alias: qotd-reporter
-      cooldownSeconds: 86400
+      cooldown_seconds: 86400
 `)
 		chdirChecks(t, dir)
 

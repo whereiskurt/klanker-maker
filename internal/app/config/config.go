@@ -1345,6 +1345,19 @@ func (c *Config) GetH1ProgramBotHandle(handle string) string {
 	return c.H1.BotHandle
 }
 
+// GetChecksConfig returns the install-level serverless check-runner config (Phase 116).
+// Absent checks: block => zero-value ChecksConfig (dormant). Callers consume Triggers
+// for dispatch routing; absent Triggers list => no check dispatch fires.
+func (c *Config) GetChecksConfig() ChecksConfig {
+	return c.Checks
+}
+
+// GetChecksTriggers returns the configured check→alias dispatch trigger rules.
+// Nil/empty when the checks: block is absent (dormant — no dispatch fires).
+func (c *Config) GetChecksTriggers() []CheckTrigger {
+	return c.Checks.Triggers
+}
+
 // awsProfileExists checks whether a named AWS profile is defined in
 // ~/.aws/config or ~/.aws/credentials.
 func awsProfileExists(profile string) bool {
