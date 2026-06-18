@@ -360,6 +360,66 @@ type H1Config struct {
 	Programs []H1ProgramEntry `mapstructure:"programs" yaml:"programs,omitempty" json:"programs,omitempty"`
 }
 
+// ChecksConfig holds the install-level serverless check-runner defaults (Phase 116).
+// Maps to km-config.yaml key checks. Absent key → zero value (no error, dormant).
+// Triggers is decoded atomically via UnmarshalKey("checks", &cfg.Checks) — the
+// "checks" merge-list entry is the critical precondition (project_config_key_merge_list).
+//
+// The checks.triggers list mirrors github.events in shape: a config-driven,
+// list-of-objects block where the decision logic (when_py predicate) lives in
+// CONFIG, never in the snippet. Absent config ⇒ no triggers ⇒ check Lambdas
+// still run and capture output but never dispatch sandbox prompts.
+type ChecksConfig struct {
+	// Triggers is the list of check-to-alias dispatch rules. Each rule names a
+	// deployed check Lambda, a Python predicate (when_py), and the alias-targeted
+	// sandbox to receive the prompt when the predicate is truthy.
+	// Absent list → zero-length slice (dormant, no dispatch).
+	Triggers []CheckTrigger `mapstructure:"triggers" yaml:"triggers,omitempty"`
+}
+
+// CheckTrigger defines one check→sandbox dispatch rule for the km check runner.
+// When a check Lambda run produces JSON output that satisfies the when_py predicate,
+// a sandbox prompt is dispatched to the alias-targeted box (resume-or-cold-create).
+//
+// Tag discipline mirrors GithubEventRule (the structural template):
+//   - mapstructure: snake_case (viper/mapstructure decode key)
+//   - yaml: field name used in km-config.yaml; camelCase for multi-word fields
+//     (matches CONTEXT.md config shape: cooldownSeconds, onAbsent)
+type CheckTrigger struct {
+	// Check is the name of the deployed check Lambda (matches the name used in
+	// `km check deploy`). Required — the dispatch rule is inert without it.
+	Check string `mapstructure:"check" yaml:"check"`
+
+	// WhenPy is a Python predicate block. Wrapped as `def _pred(out): <body>` at
+	// runtime; `out` is the parsed JSON output dict. Must return bool or (bool, reason).
+	// Inline or @file (resolved at km check deploy/sync time). Optional — absent
+	// means "always trigger" (useful for testing). Baked into KM_CHECK_TRIGGER.
+	WhenPy string `mapstructure:"when_py" yaml:"when_py,omitempty"`
+
+	// Alias is the sandbox alias targeted for resume-or-cold-create dispatch.
+	// Required — without an alias the rule cannot route to a box.
+	Alias string `mapstructure:"alias" yaml:"alias"`
+
+	// Prompt is the template for the sandbox agent's initial turn.
+	// Supports {{reason}} and {{out.<field>}} substitution. Inline or @file.
+	// Optional — absent sends an empty prompt (the agent uses its default).
+	Prompt string `mapstructure:"prompt" yaml:"prompt,omitempty"`
+
+	// OnAbsent controls cold-sandbox creation when the alias is not found:
+	//   "cold-create" (default) — provision a new sandbox from Profile.
+	//   "skip"                  — do nothing; log check_dispatch_skip.
+	// NOTE: yaml tag is camelCase (onAbsent) to match the CONTEXT.md config shape;
+	// mapstructure uses snake_case (on_absent).
+	OnAbsent string `mapstructure:"on_absent" yaml:"onAbsent,omitempty"`
+
+	// CooldownSeconds, when > 0, suppresses repeated dispatch of the same check
+	// within the given window. 0 = no cooldown. Enforced in Stage B (ttl-handler)
+	// via the nonces table (key "check-trigger:{check}").
+	// NOTE: yaml tag is camelCase (cooldownSeconds) to match the CONTEXT.md config
+	// shape; mapstructure uses snake_case (cooldown_seconds). Mirrors GithubEventRule.
+	CooldownSeconds int `mapstructure:"cooldown_seconds" yaml:"cooldownSeconds,omitempty"`
+}
+
 // Config holds all configuration values for the km CLI.
 type Config struct {
 	// ProfileSearchPaths is the ordered list of directories to search for profiles.
@@ -565,6 +625,13 @@ type Config struct {
 	// list of program-handle-to-targets mappings consumed by the km-h1-bridge Lambda.
 	// Maps to km-config.yaml key h1. Absent key → zero value (no error, dormant).
 	H1 H1Config `mapstructure:"h1" yaml:"h1,omitempty"`
+
+	// Checks holds the install-level serverless check-runner config (Phase 116).
+	// Triggers is the list of check→alias dispatch rules. Maps to km-config.yaml
+	// key checks. Absent key → zero value (no error, dormant — no dispatch fired).
+	// CRITICAL: "checks" must be in the v2→v merge-list in Load() or this block is
+	// silently ignored (project_config_key_merge_list footgun).
+	Checks ChecksConfig `mapstructure:"checks" yaml:"checks,omitempty"`
 
 	// YAMLDefaults holds the raw km-config.yaml values for env-bound keys,
 	// snapshotted during Load() BEFORE viper's AutomaticEnv binds env vars into
