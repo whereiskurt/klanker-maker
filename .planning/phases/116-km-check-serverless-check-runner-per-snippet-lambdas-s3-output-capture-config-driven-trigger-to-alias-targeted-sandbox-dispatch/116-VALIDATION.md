@@ -1,9 +1,9 @@
 ---
 phase: 116
 slug: km-check-serverless-check-runner
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: approved
+nyquist_compliant: true
+wave_0_complete: false  # test stubs are embedded inline as the RED task of each TDD plan (116-02/04/05/06), not a separate Wave 0 plan
 created: 2026-06-17
 ---
 
@@ -95,12 +95,12 @@ Use `-timeout 600s`. The whole-repo suite is currently green
 
 ## Validation Sign-Off
 
-- [ ] All Go tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Python bootstrap has unit coverage (pytest) + live UAT (SKILL/bootstrap bash is invisible to Go goldens — `project_skill_bash_needs_live_uat`)
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 120 s (quick)
-- [ ] `nyquist_compliant: true` set in frontmatter (after planner maps every task)
+- [x] All Go tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Python bootstrap has unit coverage (pytest, 116-04) + live UAT (116-08)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (inline RED tasks per TDD plan)
+- [x] No watch-mode flags
+- [x] Feedback latency < 120 s (quick)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved (planner mapped every task; waves corrected)
