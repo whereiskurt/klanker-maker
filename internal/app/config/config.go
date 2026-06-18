@@ -832,6 +832,13 @@ func Load() (*Config, error) {
 			// atomically by the single v.UnmarshalKey("h1", &cfg.H1) call below — do NOT
 			// add sibling "h1.*" entries (mirrors the github precedent).
 			"h1",
+			// Phase 116: checks block (triggers list-of-objects). CRITICAL: without this
+			// entry the entire checks: block is silently dropped regardless of km-config.yaml
+			// content (project_config_key_merge_list footgun). The whole checks: block is
+			// decoded atomically by v.UnmarshalKey("checks", &cfg.Checks) below — do NOT
+			// add sibling "checks.*" entries (mirrors the github and h1 precedent).
+			// Absent checks: block → zero value → dormant (no trigger dispatch).
+			"checks",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -968,6 +975,26 @@ func Load() (*Config, error) {
 	// without it this unmarshal sees an empty map (project_config_key_merge_list).
 	if err := v.UnmarshalKey("h1", &cfg.H1); err != nil {
 		return nil, fmt.Errorf("unmarshal h1: %w", err)
+	}
+
+	// Phase 116: checks is a structured block (triggers list-of-objects). Use
+	// UnmarshalKey — same pattern as github and h1 — because triggers is a
+	// list-of-objects and viper's scalar getters can't decode it. Absent key =>
+	// zero-value ChecksConfig (no error, no triggers => dormant; no dispatch fired).
+	// The merge-list entry "checks" above is the precondition; without it this
+	// unmarshal sees an empty map (project_config_key_merge_list footgun).
+	// Non-fatal: a YAML parse error in the checks block yields zero value + log;
+	// we never fatal-error on absent or malformed optional config blocks.
+	//
+	// YAMLDefaults snapshot: checks.triggers is a list-of-objects with no scalar
+	// top-level key to snapshot for drift WARN — mirrors the github.events treatment
+	// (github.events is also list-of-objects; no scalar entry in yamlDefaults).
+	// Drift detection for per-check env vars (KM_CHECK_TRIGGER) is handled at
+	// km check deploy / km check sync time (per-Lambda, not at km init).
+	if err := v.UnmarshalKey("checks", &cfg.Checks); err != nil {
+		// non-fatal: absent checks: block → zero value → dormant
+		// Mirrors h1's non-fatal treatment for future forward-compat
+		return nil, fmt.Errorf("unmarshal checks: %w", err)
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
