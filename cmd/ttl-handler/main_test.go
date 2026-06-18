@@ -94,6 +94,10 @@ func (m *mockSchedulerAPI) GetSchedule(ctx context.Context, input *scheduler.Get
 	return &scheduler.GetScheduleOutput{}, nil
 }
 
+func (m *mockSchedulerAPI) CreateScheduleGroup(ctx context.Context, input *scheduler.CreateScheduleGroupInput, optFns ...func(*scheduler.Options)) (*scheduler.CreateScheduleGroupOutput, error) {
+	return &scheduler.CreateScheduleGroupOutput{}, nil
+}
+
 // --------------------------------------------------------------------------
 // A minimal profile YAML to use in tests that require artifact paths.
 // --------------------------------------------------------------------------
@@ -458,6 +462,176 @@ func TestHandleTTLEvent_TeardownFailureReturnsError(t *testing.T) {
 	}
 	if !errors.Is(err, teardownErr) {
 		t.Errorf("expected wrapped teardownErr, got: %v", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Phase 116 Stage B: check-dispatch and check-run tests
+// --------------------------------------------------------------------------
+
+// mockCheckAliasResolver is a test double for checkAliasResolver.
+type mockCheckAliasResolver struct {
+	sandboxID string
+	status    string
+	err       error
+}
+
+func (m *mockCheckAliasResolver) ResolveByAliasWithStatus(_ context.Context, _ string) (string, string, error) {
+	return m.sandboxID, m.status, m.err
+}
+
+// mockCheckAgentRunSink records calls to DispatchAgentRun.
+type mockCheckAgentRunSink struct {
+	calledWith struct{ sandboxID, prompt string }
+	err        error
+	called     bool
+}
+
+func (m *mockCheckAgentRunSink) DispatchAgentRun(_ context.Context, sandboxID, prompt string) error {
+	m.called = true
+	m.calledWith.sandboxID = sandboxID
+	m.calledWith.prompt = prompt
+	return m.err
+}
+
+// mockCheckColdCreateSink records calls to ColdCreate.
+type mockCheckColdCreateSink struct {
+	calledWith struct{ alias, profile, prompt string }
+	err        error
+	called     bool
+}
+
+func (m *mockCheckColdCreateSink) ColdCreate(_ context.Context, alias, profile, prompt string) error {
+	m.called = true
+	m.calledWith.alias = alias
+	m.calledWith.profile = profile
+	m.calledWith.prompt = prompt
+	return m.err
+}
+
+// mockCheckNonceStore always returns (false, nil) — no cooldown suppression.
+type mockCheckNonceStore struct{ alreadySeen bool }
+
+func (m *mockCheckNonceStore) CheckAndStore(_ context.Context, _ string, _ int) (bool, error) {
+	return m.alreadySeen, nil
+}
+
+// mockCheckLambdaInvoker records calls to InvokeCheckLambda.
+type mockCheckLambdaInvoker struct {
+	calledWith string
+	err        error
+	called     bool
+}
+
+func (m *mockCheckLambdaInvoker) InvokeCheckLambda(_ context.Context, functionName string) error {
+	m.called = true
+	m.calledWith = functionName
+	return m.err
+}
+
+// TestHandleCheckDispatch_RunningAlias: a running alias → AgentRunSink invoked; ColdCreate not.
+func TestHandleCheckDispatch_RunningAlias(t *testing.T) {
+	resolver := &mockCheckAliasResolver{sandboxID: "sb-abc123", status: "running"}
+	agentRun := &mockCheckAgentRunSink{}
+	cold := &mockCheckColdCreateSink{}
+	nonces := &mockCheckNonceStore{}
+
+	h := &TTLHandler{
+		SandboxTableName: "km-sandboxes",
+		Bucket:           "test-bucket",
+	}
+
+	event := TTLEvent{
+		EventType:   "check-dispatch",
+		CheckName:   "wiz-intel",
+		Alias:       "vuln-monitor",
+		Prompt:      "Check for new Wiz advisories",
+		ProfileName: "github-review",
+		OnAbsent:    "cold-create",
+	}
+
+	err := h.handleCheckDispatchWithAdapters(context.Background(), event, resolver, agentRun, cold, nonces)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !agentRun.called {
+		t.Error("AgentRunSink.DispatchAgentRun should have been called for a running alias")
+	}
+	if agentRun.calledWith.sandboxID != "sb-abc123" {
+		t.Errorf("expected sandboxID=sb-abc123, got %q", agentRun.calledWith.sandboxID)
+	}
+	if agentRun.calledWith.prompt != event.Prompt {
+		t.Errorf("expected prompt=%q, got %q", event.Prompt, agentRun.calledWith.prompt)
+	}
+	if cold.called {
+		t.Error("ColdCreateSink should NOT be called for a running alias")
+	}
+}
+
+// TestHandleCheckDispatch_AbsentColdCreate: alias absent + on_absent=cold-create → ColdCreate invoked.
+func TestHandleCheckDispatch_AbsentColdCreate(t *testing.T) {
+	resolver := &mockCheckAliasResolver{err: errors.New("alias not found")}
+	agentRun := &mockCheckAgentRunSink{}
+	cold := &mockCheckColdCreateSink{}
+	nonces := &mockCheckNonceStore{}
+
+	h := &TTLHandler{
+		SandboxTableName: "km-sandboxes",
+		Bucket:           "test-bucket",
+	}
+
+	event := TTLEvent{
+		EventType:   "check-dispatch",
+		CheckName:   "wiz-intel",
+		Alias:       "vuln-monitor",
+		Prompt:      "Provision sandbox for Wiz advisory triage",
+		ProfileName: "github-review",
+		OnAbsent:    "cold-create",
+	}
+
+	err := h.handleCheckDispatchWithAdapters(context.Background(), event, resolver, agentRun, cold, nonces)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !cold.called {
+		t.Error("ColdCreateSink.ColdCreate should have been called when alias is absent + on_absent=cold-create")
+	}
+	if cold.calledWith.alias != event.Alias {
+		t.Errorf("expected ColdCreate alias=%q, got %q", event.Alias, cold.calledWith.alias)
+	}
+	if agentRun.called {
+		t.Error("AgentRunSink should NOT be called when alias is absent")
+	}
+}
+
+// TestHandleCheckRun_InvokesCheckLambda: a check-run event triggers lambda:Invoke on {prefix}-check-{name}.
+func TestHandleCheckRun_InvokesCheckLambda(t *testing.T) {
+	invoker := &mockCheckLambdaInvoker{}
+
+	h := &TTLHandler{
+		SandboxTableName: "km-sandboxes",
+		Bucket:           "test-bucket",
+	}
+
+	event := TTLEvent{
+		EventType: "check-run",
+		CheckName: "wiz-intel",
+	}
+
+	err := h.handleCheckRunWithInvoker(context.Background(), event, invoker)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !invoker.called {
+		t.Error("InvokeCheckLambda should have been called")
+	}
+	// Default resource prefix = "km" (env not set in tests).
+	expectedFn := "km-check-wiz-intel"
+	if invoker.calledWith != expectedFn {
+		t.Errorf("expected function name %q, got %q", expectedFn, invoker.calledWith)
 	}
 }
 
