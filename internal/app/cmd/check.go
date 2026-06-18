@@ -26,6 +26,26 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/check"
 )
 
+// checkColdProfileSlug normalises a profile name/path into the SAME slug
+// ttl-handler's checkProfileSlug produces, so km check deploy pre-stages the
+// cold-create profile at the exact S3 key create-handler reads
+// (check-profiles/{slug}/.km-profile.yaml). Keep in lockstep with
+// cmd/ttl-handler/check_dispatch.go checkProfileSlug.
+func checkColdProfileSlug(profile string) string {
+	base := profile
+	if i := strings.LastIndexAny(profile, "/\\"); i >= 0 {
+		base = profile[i+1:]
+	}
+	lc := strings.ToLower(base)
+	for _, ext := range []string{".yaml", ".yml"} {
+		if strings.HasSuffix(lc, ext) {
+			base = base[:len(base)-len(ext)]
+			break
+		}
+	}
+	return strings.ToLower(base)
+}
+
 // NewCheckCmd creates the "km check" parent cobra command with all subcommands.
 func NewCheckCmd(cfg *config.Config) *cobra.Command {
 	parent := &cobra.Command{
@@ -137,6 +157,30 @@ func newCheckDeployCmd(cfg *config.Config) *cobra.Command {
 			awsCfg, err := checkLoadAWSConfig(ctx, cfg)
 			if err != nil {
 				return err
+			}
+
+			// Cold-create profile pre-stage (Phase 116 live-UAT fix). On a cold-create
+			// dispatch, ttl-handler's ttlColdCreateSink points create-handler at
+			// s3://{artifacts}/check-profiles/{slug}/.km-profile.yaml. Upload the raw
+			// profile YAML here so the cold path can actually provision a box. Mirrors
+			// PreStageGitHubProfiles; the warm/resume path needs no profile, so this is
+			// skipped when the trigger has no profile or on_absent=skip.
+			if triggerCfg != nil && triggerCfg.Profile != "" && triggerCfg.OnAbsent != "skip" {
+				slug := checkColdProfileSlug(triggerCfg.Profile)
+				profilePath := "profiles/" + slug + ".yaml"
+				pdata, rerr := os.ReadFile(profilePath)
+				if rerr != nil {
+					return fmt.Errorf("km check deploy: cold-create profile %q not found at %s (needed for on_absent=cold-create): %w", triggerCfg.Profile, profilePath, rerr)
+				}
+				pkey := "check-profiles/" + slug + "/.km-profile.yaml"
+				if _, perr := s3.NewFromConfig(awsCfg).PutObject(ctx, &s3.PutObjectInput{
+					Bucket: aws.String(cfg.ArtifactsBucket),
+					Key:    aws.String(pkey),
+					Body:   strings.NewReader(string(pdata)),
+				}); perr != nil {
+					return fmt.Errorf("km check deploy: pre-stage cold-create profile to s3://%s/%s: %w", cfg.ArtifactsBucket, pkey, perr)
+				}
+				fmt.Printf("  pre-staged cold-create profile: s3://%s/%s\n", cfg.ArtifactsBucket, pkey)
 			}
 
 			prefix := cfg.GetResourcePrefix()

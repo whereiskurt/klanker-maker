@@ -4,11 +4,36 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	lambdapkg "github.com/aws/aws-sdk-go-v2/service/lambda"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
+
+// waitFunctionUpdated polls GetFunction until the function's LastUpdateStatus
+// leaves "InProgress", so a following UpdateFunctionConfiguration does not race
+// an in-flight UpdateFunctionCode (Lambda returns ResourceConflictException /
+// HTTP 409 while an update is in progress). Best-effort and bounded: on timeout
+// it returns so the caller still attempts the update (which then surfaces any
+// real error). Mock GetFunction implementations that return a nil/empty
+// Configuration fall through immediately.
+func waitFunctionUpdated(ctx context.Context, client LambdaClient, functionName string) {
+	for i := 0; i < 30; i++ {
+		out, err := client.GetFunction(ctx, &lambdapkg.GetFunctionInput{
+			FunctionName: aws.String(functionName),
+		})
+		if err != nil || out.Configuration == nil ||
+			out.Configuration.LastUpdateStatus != lambdatypes.LastUpdateStatusInProgress {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
 
 // LambdaClient is the subset of the AWS Lambda API used by pkg/check.
 // Satisfied by *lambdapkg.Client; an interface for test injection.
@@ -136,6 +161,11 @@ func updateFunction(ctx context.Context, client LambdaClient, in DeployInput) (s
 		return "", fmt.Errorf("Lambda UpdateFunctionCode %q: %w", in.FunctionName, err)
 	}
 
+	// UpdateFunctionCode puts the function into LastUpdateStatus=InProgress; the
+	// immediately-following config update would 409 (ResourceConflictException).
+	// Wait for it to settle first.
+	waitFunctionUpdated(ctx, client, in.FunctionName)
+
 	// Call 2: UpdateFunctionConfiguration.
 	mem, timeout := defaultMemTimeout(in)
 	envVars := buildEnvMap(in.Env)
@@ -177,6 +207,9 @@ func UpdateTriggerEnv(ctx context.Context, client LambdaClient, functionName, tr
 		}
 	}
 	existing["KM_CHECK_TRIGGER"] = triggerJSON
+
+	// Settle any in-flight update before reconfiguring (avoid 409).
+	waitFunctionUpdated(ctx, client, functionName)
 
 	_, err = client.UpdateFunctionConfiguration(ctx, &lambdapkg.UpdateFunctionConfigurationInput{
 		FunctionName: aws.String(functionName),

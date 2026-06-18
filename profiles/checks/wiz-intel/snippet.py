@@ -30,6 +30,7 @@
 #   km check run wiz-intel
 
 import json
+import os
 import sys
 
 # ---------------------------------------------------------------------------
@@ -75,6 +76,16 @@ def build_report(advisories: list) -> dict:
 
 
 if __name__ == "__main__":
-    report = build_report(SIMULATED_ADVISORIES)
+    # WIZ_SIM_CAP (optional): clamp every advisory's affected count to this
+    # ceiling. Lets operators exercise the BELOW-threshold (no-dispatch) path
+    # without editing the snippet — e.g. `km check run wiz-intel --env WIZ_SIM_CAP=50`
+    # drives max_affected to 50 (<=100), so a `when_py: max_affected > 100`
+    # predicate does NOT fire. Unset/0 leaves the default data (max_affected=153).
+    cap = int(os.environ.get("WIZ_SIM_CAP", "0") or "0")
+    advisories = SIMULATED_ADVISORIES
+    if cap > 0:
+        advisories = [dict(a, affected=min(a["affected"], cap)) for a in advisories]
+
+    report = build_report(advisories)
     print(json.dumps(report))
     sys.exit(0)

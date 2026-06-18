@@ -75,6 +75,7 @@ func BakeTrigger(t config.CheckTrigger) ([]byte, string, error) {
 		WhenPy:          whenPy,
 		Alias:           t.Alias,
 		Prompt:          prompt,
+		Profile:         t.Profile,
 		OnAbsent:        onAbsent,
 		CooldownSeconds: t.CooldownSeconds,
 	}

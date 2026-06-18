@@ -411,6 +411,12 @@ type CheckTrigger struct {
 	// Optional — absent sends an empty prompt (the agent uses its default).
 	Prompt string `mapstructure:"prompt" yaml:"prompt,omitempty"`
 
+	// Profile is the SandboxProfile slug used for cold-create when the alias is
+	// absent and OnAbsent=="cold-create". Required for the cold path (create-handler
+	// cannot provision a box without it); ignored on the warm/resume path. Baked
+	// into KM_CHECK_TRIGGER (profile field) -> CheckDispatch profile_name.
+	Profile string `mapstructure:"profile" yaml:"profile,omitempty" json:"profile,omitempty"`
+
 	// OnAbsent controls cold-sandbox creation when the alias is not found:
 	//   "cold-create" (default) — provision a new sandbox from Profile.
 	//   "skip"                  — do nothing; log check_dispatch_skip.

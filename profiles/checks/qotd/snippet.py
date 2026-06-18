@@ -20,18 +20,18 @@ import sys
 
 import requests  # installed via requirements.txt at km check deploy time
 
-API_URL = "https://api.quotable.io/random"
+API_URL = "https://dummyjson.com/quotes/random"
 
 
 def fetch_quote() -> dict:
-    """Fetch a random quote from the Quotable public API."""
+    """Fetch a random quote from the DummyJSON public API (maintained, valid TLS)."""
     response = requests.get(API_URL, timeout=10)
     response.raise_for_status()
     data = response.json()
     return {
-        "quote": data.get("content", ""),
+        "quote": data.get("quote", ""),
         "author": data.get("author", "Unknown"),
-        "category": (data.get("tags") or ["general"])[0],
+        "category": "general",
     }
 
 
