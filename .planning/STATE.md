@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 116-02-PLAN.md (pkg/dispatch ResumeOrCreate TDD complete)
-last_updated: "2026-06-18T00:31:49.610Z"
+stopped_at: Completed 116-01-PLAN.md (all 3 tasks)
+last_updated: "2026-06-18T00:34:07.985Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 132
   completed_phases: 115
   total_plans: 583
-  completed_plans: 538
+  completed_plans: 540
   percent: 91
 ---
 
@@ -575,6 +575,8 @@ Progress: [█████████░] 91%
 | Phase 115-generic-github-webhook-event-prompt-router P05 | 829s | 2 tasks | 3 files |
 | Phase 115-generic-github-webhook-event-prompt-router P06 | 855s | 2 tasks | 4 files |
 | Phase 116-km-check-serverless-check-runner P02 | 2 | 2 tasks | 3 files |
+| Phase 116-km-check-serverless-check-runner P03 | 244s | 3 tasks | 2 files |
+| Phase 116-km-check-serverless-check-runner P01 | 231 | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -1644,6 +1646,10 @@ Recent decisions affecting current work:
 - [Phase 115-generic-github-webhook-event-prompt-router]: Targeted golden update instead of CAPTURE_PRE92_BASELINE=1 regeneration to avoid breaking SubagentStop semantic check in Phase92 byte-identity test
 - [Phase 115-generic-github-webhook-event-prompt-router]: KIND defaults to issue_comment branch when empty — backward compat for pre-Phase-115 bridge envelopes in mixed-version fleet
 - [Phase 116-02]: pkg/dispatch warm path = SSM AgentRunSink (not SQS enqueue); bridges unmodified; cooldown fail-open on nonce store errors
+- [Phase 116-03]: km-config.yaml uses snake_case keys (on_absent, cooldown_seconds) matching mapstructure tags; camelCase yaml struct tags are marshal-only (viper normalizes YAML to lowercase)
+- [Phase 116-km-check-serverless-check-runner]: No dependency blocks on dynamodb-checks or check-runner-role live units — role inputs are pure strings, not module outputs; eliminates mock_outputs boilerplate
+- [Phase 116-km-check-serverless-check-runner]: check-runner-role envReqs: [KM_ARTIFACTS_BUCKET] so km init skips gracefully on unconfigured installs, consistent with lambda-*-bridge pattern
+- [Phase 116-km-check-serverless-check-runner]: EventBridge target for check-runner role hardcoded to default event bus (km.sandbox source uses default bus per existing eventbridge.go pattern)
 
 ### Roadmap Evolution
 
@@ -1786,6 +1792,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-18T00:31:49.593Z
-Stopped at: Completed 116-02-PLAN.md (pkg/dispatch ResumeOrCreate TDD complete)
+Last session: 2026-06-18T00:34:07.975Z
+Stopped at: Completed 116-01-PLAN.md (all 3 tasks)
 Resume file: None
