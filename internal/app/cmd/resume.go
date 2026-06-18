@@ -87,10 +87,16 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 
 	ec2Client := ec2.NewFromConfig(awsCfg)
 
+	// Bug M: include "stopping" as well as "stopped". The stop handler flips the
+	// km-sandboxes DDB status to "stopped" before the EC2 instance finishes its
+	// stopped transition, so a resume issued right after a stop (or `km start` by
+	// alias landing in that window) would otherwise miss a still-stopping instance
+	// and fail with "no stopped instances found". We wait for "stopped" below before
+	// StartInstances, which rejects an instance that is still stopping.
 	descOut, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{
 			{Name: aws.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
-			{Name: aws.String("instance-state-name"), Values: []string{"stopped"}},
+			{Name: aws.String("instance-state-name"), Values: []string{"stopped", "stopping"}},
 		},
 	})
 	if err != nil {
@@ -101,6 +107,14 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 	for _, res := range descOut.Reservations {
 		for _, inst := range res.Instances {
 			instanceID := aws.ToString(inst.InstanceId)
+			if inst.State != nil && inst.State.Name == ec2types.InstanceStateNameStopping {
+				fmt.Printf("Instance "+ansiYellow+"%s"+ansiReset+" is still stopping; waiting for it to reach 'stopped'...\n", instanceID)
+				if werr := ec2.NewInstanceStoppedWaiter(ec2Client).Wait(ctx, &ec2.DescribeInstancesInput{
+					InstanceIds: []string{instanceID},
+				}, 3*time.Minute); werr != nil {
+					return fmt.Errorf("waiting for instance %s to finish stopping before resume: %w", instanceID, werr)
+				}
+			}
 			fmt.Printf("Resuming instance "+ansiYellow+"%s"+ansiReset+"...\n", instanceID)
 			if _, err := ec2Client.StartInstances(ctx, &ec2.StartInstancesInput{
 				InstanceIds: []string{instanceID},
@@ -112,7 +126,7 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 	}
 
 	if resumed == 0 {
-		return fmt.Errorf("no stopped instances found for sandbox %s", sandboxID)
+		return fmt.Errorf("no stopped instances found for sandbox %s (it may be running, terminated, or the DDB status is stale — check 'km status %s')", sandboxID, sandboxID)
 	}
 
 	// Close the open pause interval in the budget table so paused time stops accruing.
