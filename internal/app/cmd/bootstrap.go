@@ -801,6 +801,11 @@ func BuildSCPPolicyFromPrefix(resourcePrefix, applicationAccountID, allowedRegio
 		"arn:aws:iam::*:role/*-ec2spot-ssm-*",
 		"arn:aws:iam::*:role/*-github-token-refresher-*",
 		"arn:aws:iam::*:role/*-ttl-handler",
+		// Phase 116: create-handler runs `km create --prompt` for cold-create check
+		// dispatch (the on-box prompt-queue push uses ssm:SendCommand). Trusted
+		// control-plane Lambda, same as *-ttl-handler (the warm path). Keep in lockstep
+		// with infra/modules/scp/v2.0.0 trusted_arns_ssm. See 116-UAT.md Bug G2.
+		"arn:aws:iam::*:role/*-create-handler",
 		"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
 	}
 
