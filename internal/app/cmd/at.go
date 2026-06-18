@@ -38,15 +38,18 @@ type schedulableCommand struct {
 
 // schedulableCommands maps km command names to their scheduler routing metadata.
 var schedulableCommands = map[string]schedulableCommand{
-	"create":    {targetARNField: "create"},
-	"destroy":   {targetARNField: "ttl", eventType: "destroy"},
-	"kill":      {targetARNField: "ttl", eventType: "destroy"},
-	"stop":      {targetARNField: "ttl", eventType: "stop"},
-	"pause":     {targetARNField: "ttl", eventType: "stop"},
-	"resume":    {targetARNField: "ttl", eventType: "resume"},
-	"extend":    {targetARNField: "ttl", eventType: "extend"},
+	"create":     {targetARNField: "create"},
+	"destroy":    {targetARNField: "ttl", eventType: "destroy"},
+	"kill":       {targetARNField: "ttl", eventType: "destroy"},
+	"stop":       {targetARNField: "ttl", eventType: "stop"},
+	"pause":      {targetARNField: "ttl", eventType: "stop"},
+	"resume":     {targetARNField: "ttl", eventType: "resume"},
+	"extend":     {targetARNField: "ttl", eventType: "extend"},
 	"budget-add": {targetARNField: "ttl", eventType: "budget-add"},
-	"agent-run": {targetARNField: "ttl", eventType: "agent-run"},
+	"agent-run":  {targetARNField: "ttl", eventType: "agent-run"},
+	// Phase 116: km at '...' check run <name> fires the check Lambda synchronously
+	// via ttl-handler handleCheckRun (one-shot EventBridge Scheduler → ttl-handler).
+	"check-run": {targetARNField: "ttl", eventType: "check-run"},
 }
 
 // atDeps holds injectable dependencies for the at command family (for testing).
@@ -139,9 +142,13 @@ Examples:
 				}
 			}
 
-			// Merge two-word commands: "agent run" → "agent-run"
+			// Merge two-word commands: "agent run" → "agent-run", "check run" → "check-run"
 			if cmdArg == "agent" && len(extraArgs) > 0 && extraArgs[0] == "run" {
 				cmdArg = "agent-run"
+				extraArgs = extraArgs[1:]
+			}
+			if cmdArg == "check" && len(extraArgs) > 0 && extraArgs[0] == "run" {
+				cmdArg = "check-run"
 				extraArgs = extraArgs[1:]
 			}
 
@@ -192,8 +199,9 @@ Examples:
 
 			// Extract and resolve sandbox ID (first extra arg for lifecycle commands).
 			// Supports aliases, numbers from km list, and raw sandbox IDs.
+			// check-run uses extraArgs[0] as a check name, not a sandbox ID — skip resolution.
 			sandboxID := ""
-			if cmdInfo.targetARNField == "ttl" && len(extraArgs) > 0 {
+			if cmdInfo.targetARNField == "ttl" && cmdArg != "check-run" && len(extraArgs) > 0 {
 				resolved, resolveErr := ResolveSandboxID(ctx, cfg, extraArgs[0])
 				if resolveErr != nil {
 					return fmt.Errorf("resolve sandbox %q: %w", extraArgs[0], resolveErr)
@@ -501,6 +509,16 @@ func buildTargetInput(cmdArg string, cmdInfo schedulableCommand, sandboxID, arti
 		if _, ok := detail["prompt"]; !ok {
 			return "", fmt.Errorf("agent-run requires --prompt flag")
 		}
+	}
+	// For "check-run", extraArgs[0] is the check name (after two-word merge stripped "run").
+	// The ttl-handler handleCheckRun reads event.CheckName to build {prefix}-check-{name}.
+	if cmdArg == "check-run" {
+		if len(extraArgs) == 0 || extraArgs[0] == "" {
+			return "", fmt.Errorf("check-run requires a check name (km at '<time>' check run <name>)")
+		}
+		detail["check_name"] = extraArgs[0]
+		// sandbox_id is not used for check-run; clear it to avoid confusion.
+		delete(detail, "sandbox_id")
 	}
 	b, err := json.Marshal(detail)
 	if err != nil {
