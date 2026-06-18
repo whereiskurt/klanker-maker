@@ -667,6 +667,26 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
+			// Phase 116: {prefix}-checks DynamoDB table (hash key name, PAY_PER_REQUEST,
+			// SSE). Tracks SDK-managed per-check Lambda metadata (arn, schedule, trigger,
+			// sourceHash, etc.). Plain table — no dependency on other modules.
+			// Ordered BEFORE ses (ses applies last per the module-order invariant).
+			name:    "dynamodb-checks",
+			dir:     filepath.Join(regionDir, "dynamodb-checks"),
+			envReqs: nil,
+		},
+		{
+			// Phase 116: shared {prefix}-check-runner Lambda execution role with
+			// baseline inline policies (CW Logs, S3 read/write, EventBridge PutEvents,
+			// SSM, DynamoDB read). Requires KM_ARTIFACTS_BUCKET for S3 IAM policy
+			// resources. No EC2/SQS perms (those live in ttl-handler).
+			// Ordered AFTER dynamodb-checks (role policy references table name),
+			// BEFORE ses.
+			name:    "check-runner-role",
+			dir:     filepath.Join(regionDir, "check-runner-role"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
 			// SES must apply LAST because it owns the consolidated S3 bucket policy.
 			// The email-handler must apply before SES so its ARN is available for
 			// the operator-inbound receipt rule.
