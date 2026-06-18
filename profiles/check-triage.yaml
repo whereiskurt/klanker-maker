@@ -39,7 +39,16 @@ spec:
     workingDir: /workspace
     useBedrock: true
     initCommands:
-      - "yum install -y git jq"
+      - "yum install -y git jq nodejs npm"
+      # Trust the MITM proxy CA so npm (install) and claude (runtime API calls) work
+      # through enforcement:proxy egress. node uses its OWN CA bundle unless
+      # NODE_EXTRA_CA_CERTS points at the system bundle that now contains the proxy CA.
+      - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt"
+      - "echo 'export NODE_EXTRA_CA_CERTS=/etc/pki/tls/certs/ca-bundle.crt' > /etc/profile.d/km-zz-node-ca.sh"
+      # Install the agent CLI the km-queue runner invokes on the queued trigger
+      # prompt. Without this the box boots fine but has no claude (Phase 116 UAT Bug K
+      # — the agent install is profile-driven via initCommands, NOT a platform default).
+      - "NODE_EXTRA_CA_CERTS=/etc/pki/tls/certs/ca-bundle.crt npm install -g @anthropic-ai/claude-code@2.1.132"
 
   sourceAccess:
     mode: allowlist
@@ -52,19 +61,17 @@ spec:
   network:
     enforcement: proxy
     egress:
-      # Must cover the agent-CLI install sources or the on-box km-queue runner
+      # Must cover the agent-CLI install + runtime, or the on-box km-queue runner
       # never finds claude and the queued prompt never executes (Phase 116 UAT Bug K).
-      # The agent CLI is installed at boot via `curl https://herdr.dev/install.sh`
-      # plus node/npm; on a narrow allowlist that install is BLOCKED (learn.v2 works
-      # only because it allows "*"). These suffixes cover the install + the agent API.
+      # The install (initCommands) is `npm install -g @anthropic-ai/claude-code`:
+      # node/npm come from yum (.amazonaws.com), the package from the npm registry
+      # (.npmjs.org), and claude's runtime API is api.anthropic.com. Validated live.
       allowedDNSSuffixes:
-        - "herdr.dev"              # agent CLI installer (curl https://herdr.dev/install.sh)
-        - ".npmjs.org"             # npm registry (node + agent deps)
-        - "nodejs.org"             # node runtime download
-        - ".github.com"
+        - ".npmjs.org"             # npm registry — the claude-code package install
+        - ".amazonaws.com"         # yum (nodejs/npm) + AWS APIs + Bedrock
+        - "api.anthropic.com"      # claude runtime API
+        - ".github.com"            # optional: plugin/source fetches
         - ".githubusercontent.com"
-        - ".amazonaws.com"
-        - "api.anthropic.com"
       allowedHosts: []
 
   iam:
