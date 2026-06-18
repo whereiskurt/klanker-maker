@@ -1,7 +1,27 @@
 # `km check` SOPS secrets — design (deploy-time unpack to SSM)
 
-**Status:** Design (ready to implement next session)
+**Status:** ✅ Implemented (branch `feature/km-check-sops-secrets`, 2026-06-18)
 **Date:** 2026-06-18
+
+## Implementation notes (as built)
+
+- `pkg/check/sops.go` — `DecryptSopsToMap` (shells `sops decrypt --output-type json`,
+  injectable via `sopsDecryptRaw` for tests), `parseFlatSecretMap` (flat-scalar
+  validation, env-var-name key check, reserved-key skip), `CheckSecretParamPath`,
+  `UnpackSopsToSSM`, `DeleteCheckSecretParams` (paginated, 10-per-batch delete).
+  New `SSMSecretsAPI` interface + `NewSSMSecretsClient`.
+- `pkg/check/lambda.go` — `UpdateSecretPathsEnv` (mirror of `UpdateTriggerEnv`)
+  so `sync --sops` refreshes `KM_CHECK_SECRET_PATHS` without re-zipping.
+- `internal/app/cmd/check.go` — `--sops` on `deploy` (merge into secret paths)
+  and `sync` (single-check re-unpack); `rm` now deletes the per-check SSM namespace.
+- Tests: `pkg/check/sops_test.go`, `pkg/check/lambda_test.go`,
+  `internal/app/cmd/check_sops_internal_test.go` (all green).
+- **Deviation from "Touch points → source_hash":** the SOPS key set is NOT folded
+  into the trigger `sourceHash`. `km check ls` recomputes that hash from
+  `km-config.yaml` only (it never decrypts), so folding SOPS keys in would make
+  every `ls` report false drift. Secret refresh is explicit
+  (`deploy --sops` / `sync --sops`) instead. `km doctor` orphan-param warning also
+  deferred (optional in the design).
 
 ## Goal
 

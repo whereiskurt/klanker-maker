@@ -107,6 +107,7 @@ func newCheckDeployCmd(cfg *config.Config) *cobra.Command {
 		nameFlag         string
 		envFlags         []string
 		secretFlags      []string
+		sopsFlag         string
 		memoryFlag       int32
 		timeoutFlag      int32
 		scheduleFlag     string
@@ -187,6 +188,21 @@ func newCheckDeployCmd(cfg *config.Config) *cobra.Command {
 			functionName := check.FunctionName(prefix, checkName)
 			roleARN := checkRunnerRoleARN(cfg)
 			tableName := check.ChecksTableName(prefix)
+
+			// SOPS secret unpack (Phase 116 follow-on): decrypt operator-side and
+			// write each value to an SSM SecureString param under
+			// /{prefix}/checks/{check}/. The returned paths are merged into the
+			// secret-path list so the bootstrap exposes each as an env var (last
+			// segment UPPERCASED) at invoke time. No Lambda-side KMS.
+			if sopsFlag != "" {
+				ssmClient := check.NewSSMSecretsClient(awsCfg)
+				sopsPaths, uerr := check.UnpackSopsToSSM(ctx, ssmClient, prefix, checkName, sopsFlag)
+				if uerr != nil {
+					return fmt.Errorf("km check deploy --sops: %w", uerr)
+				}
+				secretFlags = mergeSecretPaths(secretFlags, sopsPaths)
+				fmt.Fprintf(cmd.OutOrStdout(), "  unpacked %d SOPS secret(s) → /%s/checks/%s/*\n", len(sopsPaths), prefix, checkName)
+			}
 
 			// Build env for Lambda.
 			lambdaEnv := map[string]string{
@@ -340,6 +356,7 @@ func newCheckDeployCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().StringVar(&nameFlag, "name", "", "Override check name (default: snippet filename without .py)")
 	cmd.Flags().StringArrayVar(&envFlags, "env", nil, "Static env var K=V (repeatable)")
 	cmd.Flags().StringArrayVar(&secretFlags, "secret", nil, "SSM path under {prefix}/checks/ (repeatable)")
+	cmd.Flags().StringVar(&sopsFlag, "sops", "", "SOPS-encrypted secrets file; values are unpacked to SSM SecureString params under {prefix}/checks/{name}/ and exposed as env vars (keys UPPERCASED)")
 	cmd.Flags().Int32Var(&memoryFlag, "memory", 256, "Lambda memory in MB")
 	cmd.Flags().Int32Var(&timeoutFlag, "timeout", 30, "Lambda timeout in seconds")
 	cmd.Flags().StringVar(&scheduleFlag, "schedule", "", "EventBridge Scheduler expression (e.g. 'rate(1 hour)')")
@@ -681,15 +698,23 @@ func newCheckScheduleCmd(cfg *config.Config) *cobra.Command {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func newCheckSyncCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	var sopsFlag string
+
+	cmd := &cobra.Command{
 		Use:          "sync [<name>]",
-		Short:        "Re-resolve @file predicates/prompts + re-bake KM_CHECK_TRIGGER; update sourceHash",
+		Short:        "Re-resolve @file predicates/prompts + re-bake KM_CHECK_TRIGGER; update sourceHash (--sops re-unpacks secrets)",
 		Args:         cobra.RangeArgs(0, 1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()
+			}
+
+			// --sops re-unpacks a single check's secrets file; it is per-file, so a
+			// check name is required and the all-checks fan-out is disallowed.
+			if sopsFlag != "" && len(args) != 1 {
+				return fmt.Errorf("km check sync --sops requires exactly one check name")
 			}
 
 			awsCfg, err := checkLoadAWSConfig(ctx, cfg)
@@ -734,9 +759,46 @@ func newCheckSyncCmd(cfg *config.Config) *cobra.Command {
 					rowIn := checkRowInputFromRow(row)
 					rowIn.SourceHash = hash
 					rowIn.TriggerSummary = check.TriggerSummary(t)
+
+					// --sops: re-unpack the secrets file (rotates values; picks up
+					// added/removed keys), recompute the secret-path list, and push
+					// the new KM_CHECK_SECRET_PATHS to the Lambda env.
+					if sopsFlag != "" {
+						ssmClient := check.NewSSMSecretsClient(awsCfg)
+						sopsPaths, uerr := check.UnpackSopsToSSM(ctx, ssmClient, prefix, t.Check, sopsFlag)
+						if uerr != nil {
+							fmt.Fprintf(out, "SKIP %s: --sops unpack: %v\n", t.Check, uerr)
+							continue
+						}
+						// Rebuild paths = (existing paths outside this check's namespace)
+						// + (freshly unpacked namespace paths). Rebuilding from the fresh
+						// set drops keys removed from the SOPS file.
+						nsPrefix := fmt.Sprintf("/%s/checks/%s/", prefix, t.Check)
+						var preserved []string
+						for _, p := range rowIn.SecretPaths {
+							if !strings.HasPrefix(p, nsPrefix) {
+								preserved = append(preserved, p)
+							}
+						}
+						merged := mergeSecretPaths(preserved, sopsPaths)
+						spJSON := "[]"
+						if len(merged) > 0 {
+							b, _ := json.Marshal(merged)
+							spJSON = string(b)
+						}
+						if eerr := check.UpdateSecretPathsEnv(ctx, lambdaClient, functionName, spJSON); eerr != nil {
+							fmt.Fprintf(out, "WARN %s: --sops update env: %v\n", t.Check, eerr)
+						}
+						rowIn.SecretPaths = merged
+						fmt.Fprintf(out, "  unpacked %d SOPS secret(s) → %s*\n", len(sopsPaths), nsPrefix)
+					}
+
 					if updateErr := check.UpdateCheckRow(ctx, ddbClient, tableName, rowIn); updateErr != nil {
 						fmt.Fprintf(out, "WARN %s: update DDB sourceHash: %v\n", t.Check, updateErr)
 					}
+				} else if sopsFlag != "" {
+					fmt.Fprintf(out, "SKIP %s: --sops requires a deployed check (no DDB row found)\n", t.Check)
+					continue
 				}
 
 				fmt.Fprintf(out, "synced %s (source_hash=%s)\n", t.Check, hash[:12])
@@ -744,6 +806,9 @@ func newCheckSyncCmd(cfg *config.Config) *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&sopsFlag, "sops", "", "Re-unpack this SOPS secrets file into {prefix}/checks/{name}/ and refresh the secret-path list (single check only)")
+	return cmd
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -783,6 +848,15 @@ func newCheckRmCmd(cfg *config.Config) *cobra.Command {
 			// Delete schedule (best-effort).
 			if err := deleteCheckSchedule(ctx, cfg, awsCfg, checkName); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "WARN: delete schedule: %v\n", err)
+			}
+
+			// Delete per-check SOPS/secret SSM params under /{prefix}/checks/{name}/
+			// (best-effort) so secrets don't leak after teardown.
+			ssmClient := check.NewSSMSecretsClient(awsCfg)
+			if deleted, derr := check.DeleteCheckSecretParams(ctx, ssmClient, prefix, checkName); derr != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "WARN: delete secret params: %v\n", derr)
+			} else if len(deleted) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "  deleted %d secret param(s) under /%s/checks/%s/\n", len(deleted), prefix, checkName)
 			}
 
 			// Delete DDB row.
@@ -833,6 +907,27 @@ func parseEnvFlags(flags []string) map[string]string {
 		m[kv[:idx]] = kv[idx+1:]
 	}
 	return m
+}
+
+// mergeSecretPaths appends any paths from extra not already present in base,
+// preserving base order then extra order, deduplicating exact matches. Used to
+// fold SOPS-derived param paths into the operator's explicit --secret list.
+func mergeSecretPaths(base, extra []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(base)+len(extra))
+	for _, p := range base {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, p := range extra {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // checkRowInputFromRow converts a CheckRow back to a CheckRowInput for use in UpdateCheckRow.
