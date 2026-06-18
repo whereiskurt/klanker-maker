@@ -4501,6 +4501,11 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.LambdaCleanup = lambda.NewFromConfig(awsCfg)
 	deps.SESClient = sesv2.NewFromConfig(awsCfg)
 	deps.SESRulesClient = ses.NewFromConfig(awsCfg)
+	// Phase 116 (Bug F): full DynamoDB client (GetItem/Scan) for the check doctor
+	// group — orphan check Lambdas/schedules + trigger drift. deps.DynamoClient is
+	// DescribeTable-only, so without this those sub-checks skip with "DynamoDB
+	// client not available".
+	deps.ChecksDDBClient = dynamodb.NewFromConfig(awsCfg)
 	// Phase 89 — shared secrets KMS key health check (SOPS-18-DOCTOR-CHECK).
 	// Constructed only when awsCfg is available (this function returns early when
 	// credentials are unavailable, leaving SecretsKeyClient nil → CheckSkipped).

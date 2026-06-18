@@ -221,9 +221,35 @@ func UpdateTriggerEnv(ctx context.Context, client LambdaClient, functionName, tr
 	return nil
 }
 
+// waitFunctionActive polls GetFunction until the function leaves the "Pending"
+// state, so an Invoke immediately after CreateFunction does not race the cold
+// provisioning (Lambda returns ResourceConflictException: function is in Pending).
+// Best-effort + bounded; returns on timeout so the caller still attempts the
+// Invoke (which then surfaces any real error).
+func waitFunctionActive(ctx context.Context, client LambdaClient, functionName string) {
+	for i := 0; i < 30; i++ {
+		out, err := client.GetFunction(ctx, &lambdapkg.GetFunctionInput{
+			FunctionName: aws.String(functionName),
+		})
+		if err != nil || out.Configuration == nil ||
+			out.Configuration.State != lambdatypes.StatePending {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 // InvokeFunction invokes a check Lambda synchronously and returns the response
 // payload bytes.
 func InvokeFunction(ctx context.Context, client LambdaClient, functionName string, payload map[string]interface{}) ([]byte, error) {
+	// A check just deployed via CreateFunction may still be Pending; invoking it
+	// then 409s. Wait for it to settle first (no-op for already-active functions).
+	waitFunctionActive(ctx, client, functionName)
+
 	payloadBytes := []byte{}
 	if payload != nil {
 		var err error
