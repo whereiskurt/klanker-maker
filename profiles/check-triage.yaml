@@ -50,7 +50,13 @@ spec:
   network:
     enforcement: proxy
     egress:
+      # Must cover the agent-CLI install sources or the on-box km-queue runner
+      # waits forever "for claude to land on PATH" (Phase 116 UAT Bug K). Mirrors
+      # github-review's proven allowlist (.github*/.amazonaws/api.anthropic) which
+      # installs + runs claude successfully.
       allowedDNSSuffixes:
+        - ".github.com"
+        - ".githubusercontent.com"
         - ".amazonaws.com"
         - "api.anthropic.com"
       allowedHosts: []
