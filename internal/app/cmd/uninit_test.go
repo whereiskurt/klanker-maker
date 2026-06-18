@@ -72,11 +72,16 @@ func TestUninitDestroyOrder(t *testing.T) {
 		t.Fatal("expected Destroy to be called for modules, got 0 calls")
 	}
 
-	// Reverse of the 22-module regionalModules() apply order (init.go).
+	// Reverse of the 24-module regionalModules() apply order (init.go).
 	// Adding a module to regionalModules() in init.go requires extending this
-	// slice too — keep it the exact reverse of that list (regionalModules()==22).
+	// slice too — keep it the exact reverse of that list (regionalModules()==24).
 	wantOrder := []string{
 		"ses",
+		// Phase 116 (check-runner scaffolding); forward tail is
+		// ...lambda-h1-bridge, dynamodb-checks, check-runner-role, ses, so the
+		// reverse destroy order places these two right after ses:
+		"check-runner-role",
+		"dynamodb-checks",
 		// Phase 103 (lambda-h1-bridge + dynamodb-h1-threads):
 		"lambda-h1-bridge",
 		"dynamodb-h1-threads",
@@ -227,8 +232,8 @@ func TestUninitContinuesPastModuleErrors(t *testing.T) {
 
 	// All modules should still be attempted (one module's destroy error is
 	// non-fatal; uninit warns and continues to the next). Count matches the full
-	// regionalModules() inventory (regionalModules()==22; same as TestUninitDestroyOrder).
-	const wantCalls = 22
+	// regionalModules() inventory (regionalModules()==24; same as TestUninitDestroyOrder).
+	const wantCalls = 24
 	if len(runner.calls) != wantCalls {
 		t.Errorf("expected %d Destroy calls (all modules attempted), got %d: %v", wantCalls, len(runner.calls), runner.calls)
 	}
@@ -472,9 +477,9 @@ func TestUninitDetectsBackendDrift(t *testing.T) {
 	}
 	// All modules should still be attempted — backend drift on one module is
 	// non-fatal. Count must match the full regionalModules() inventory
-	// (regionalModules()==22; the same count as TestUninitDestroyOrder's wantOrder).
-	if len(runner.calls) != 22 {
-		t.Errorf("expected %d Destroy calls (continue past drift), got %d", 22, len(runner.calls))
+	// (regionalModules()==24; the same count as TestUninitDestroyOrder's wantOrder).
+	if len(runner.calls) != 24 {
+		t.Errorf("expected %d Destroy calls (continue past drift), got %d", 24, len(runner.calls))
 	}
 }
 
