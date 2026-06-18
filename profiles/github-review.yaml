@@ -36,7 +36,16 @@ spec:
     workingDir: /workspace
     useBedrock: false
     initCommands:
-      - "yum install -y git jq"
+      - "yum install -y git jq nodejs npm"
+      # Install the agent CLI the github-inbound poller invokes (`claude -p`). The
+      # poller swallows a claude failure with `|| true`, so a box WITHOUT claude
+      # silently posts no review — the agent install is profile-driven via
+      # initCommands, not a platform default (Phase 116 UAT Bug-K class). Trust the
+      # MITM proxy CA so npm-over-HTTPS + claude's runtime API work through the
+      # enforcement:proxy egress.
+      - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt"
+      - "echo 'export NODE_EXTRA_CA_CERTS=/etc/pki/tls/certs/ca-bundle.crt' > /etc/profile.d/km-zz-node-ca.sh"
+      - "NODE_EXTRA_CA_CERTS=/etc/pki/tls/certs/ca-bundle.crt npm install -g @anthropic-ai/claude-code@2.1.132"
 
   sourceAccess:
     mode: allowlist
@@ -56,6 +65,7 @@ spec:
         - ".githubusercontent.com"
         - ".amazonaws.com"
         - "api.anthropic.com"
+        - ".npmjs.org"            # npm registry — the claude-code agent install
       allowedHosts: []
 
   iam:
