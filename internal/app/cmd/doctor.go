@@ -44,6 +44,7 @@ import (
 	"github.com/spf13/cobra"
 	appcfg "github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/check"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	profilepkg "github.com/whereiskurt/klanker-maker/pkg/profile"
 	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
@@ -285,6 +286,12 @@ type DoctorConfigProvider interface {
 	// GetSlackChannelsTableName returns the Phase 104 durable alias→channel_id
 	// DynamoDB table name. Used by the existence-only doctor check.
 	GetSlackChannelsTableName() string
+	// GetChecksTableName returns the Phase 116 {prefix}-checks DynamoDB table name.
+	// Used by the km doctor checks group (table existence + orphan Lambda + drift checks).
+	GetChecksTableName() string
+	// GetChecksTriggers returns the Phase 116 checks.triggers list from km-config.yaml.
+	// Nil/empty when the checks: block is absent (dormant).
+	GetChecksTriggers() []appcfg.CheckTrigger
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -341,6 +348,12 @@ func (a *appConfigAdapter) GetGithubEvents() []appcfg.GithubEventRule {
 func (a *appConfigAdapter) GetConfigFilePath() string { return a.cfg.ConfigFilePath }
 func (a *appConfigAdapter) GetSlackChannelsTableName() string {
 	return a.cfg.GetSlackChannelsTableName()
+}
+func (a *appConfigAdapter) GetChecksTableName() string {
+	return a.cfg.GetChecksTableName()
+}
+func (a *appConfigAdapter) GetChecksTriggers() []appcfg.CheckTrigger {
+	return a.cfg.GetChecksTriggers()
 }
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
@@ -558,6 +571,12 @@ type DoctorDeps struct {
 	// channel still exists. Nil causes both dead-channel checks to return SKIPPED
 	// (bot token absent or Slack not configured).
 	SlackDeadChannelChecker SlackChannelChecker
+
+	// Phase 116 — km check serverless runner doctor check dependencies.
+	// ChecksDDBClient is the DynamoDB client for the {prefix}-checks table.
+	// Used by orphan-Lambda + trigger-drift checks. Nil causes those sub-checks
+	// to return SKIPPED. Production reuses the main DynamoDB config.
+	ChecksDDBClient check.ChecksDDBAPI
 }
 
 // =============================================================================
@@ -3818,6 +3837,45 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	githubEvents := cfg.GetGithubEvents()
 	checks = append(checks, func(_ context.Context) CheckResult {
 		return checkGitHubEventsValid(githubEvents, githubRepos, githubDefaultProfile, configDir)
+	})
+
+	// Phase 116: km check serverless runner doctor group.
+	// The group skips silently when the {prefix}-checks table does not exist (dormant
+	// install — no checks deployed yet). Each sub-check gracefully handles nil deps.
+	checksTableName := cfg.GetChecksTableName()
+	checksDDB := deps.ChecksDDBClient
+	checksTriggers := cfg.GetChecksTriggers()
+
+	// Sub-check 1: table exists.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkChecksTableExists(ctx, dynamoClient, checksTableName)
+		// Downgrade ERROR → WARN: a missing checks table is advisory on dormant installs.
+		// Mirrors the slack-channels table pattern.
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+			r.Remediation = "Run 'km init --dry-run=false' to create the " + checksTableName + " DynamoDB table"
+		}
+		return r
+	})
+
+	// Sub-check 2: orphan {prefix}-check-* Lambdas not in the DDB table.
+	// Skipped silently when no {prefix}-checks table exists (checksDDB will still
+	// be set, but ListCheckRows will return an empty table → no orphans reported
+	// until the table is gone entirely; the table-exists check covers absence).
+	checksLambdaClient := deps.LambdaCleanup
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkOrphanCheckLambdas(ctx, checksLambdaClient, checksDDB, checksTableName, localResourcePrefix)
+	})
+
+	// Sub-check 3: EventBridge Scheduler entries referencing a check Lambda not in DDB.
+	checksSchedulerClient := deps.SchedulerClient
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkOrphanCheckSchedules(ctx, checksSchedulerClient, checksDDB, checksTableName, localResourcePrefix)
+	})
+
+	// Sub-check 4: per-check KM_CHECK_TRIGGER drift vs. current km-config.yaml.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkChecksTriggerDrift(ctx, checksDDB, checksTableName, checksTriggers)
 	})
 
 	// Credential rotation age check.

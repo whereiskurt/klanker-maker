@@ -183,6 +183,12 @@ type GithubEventRule struct {
 	// Prompt is the template injected as the agent's initial turn.
 	// Supports: {{repo}}, {{event}}, {{action}}, {{sender}}, {{default_branch}}, {{html_url}}.
 	Prompt string `mapstructure:"prompt" yaml:"prompt" json:"prompt"`
+
+	// Check is the optional Phase 116 pre-filter check name. When non-empty,
+	// the bridge synchronously invokes {prefix}-check-{Check} BEFORE dispatching
+	// the sandbox; the sandbox is only dispatched when the check returns
+	// triggered=true. Fail-CLOSED on invoke error. Dormant by default (empty = no filter).
+	Check string `mapstructure:"check" yaml:"check,omitempty" json:"check,omitempty"`
 }
 
 // GithubConfig holds install-level GitHub defaults that flow into the bridge
@@ -1356,6 +1362,12 @@ func (c *Config) GetChecksConfig() ChecksConfig {
 // Nil/empty when the checks: block is absent (dormant — no dispatch fires).
 func (c *Config) GetChecksTriggers() []CheckTrigger {
 	return c.Checks.Triggers
+}
+
+// GetChecksTableName returns the DynamoDB table name for the Phase 116 check registry.
+// Pattern: {resource_prefix}-checks (e.g. "km-checks").
+func (c *Config) GetChecksTableName() string {
+	return c.GetResourcePrefix() + "-checks"
 }
 
 // awsProfileExists checks whether a named AWS profile is defined in
