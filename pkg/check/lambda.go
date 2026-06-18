@@ -221,6 +221,44 @@ func UpdateTriggerEnv(ctx context.Context, client LambdaClient, functionName, tr
 	return nil
 }
 
+// UpdateSecretPathsEnv fetches the current function configuration, sets
+// KM_CHECK_SECRET_PATHS to secretPathsJSON (merging into the existing env so other
+// vars are preserved), then calls UpdateFunctionConfiguration. Used by
+// km check sync --sops to refresh the secret-path list without re-zipping.
+// An empty or "[]" list removes the var (no secret paths).
+func UpdateSecretPathsEnv(ctx context.Context, client LambdaClient, functionName, secretPathsJSON string) error {
+	cfgOut, err := client.GetFunction(ctx, &lambdapkg.GetFunctionInput{
+		FunctionName: aws.String(functionName),
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateSecretPathsEnv GetFunction %q: %w", functionName, err)
+	}
+
+	existing := map[string]string{}
+	if cfgOut.Configuration != nil && cfgOut.Configuration.Environment != nil {
+		for k, v := range cfgOut.Configuration.Environment.Variables {
+			existing[k] = v
+		}
+	}
+	if secretPathsJSON == "" || secretPathsJSON == "[]" {
+		delete(existing, "KM_CHECK_SECRET_PATHS")
+	} else {
+		existing["KM_CHECK_SECRET_PATHS"] = secretPathsJSON
+	}
+
+	// Settle any in-flight update before reconfiguring (avoid 409).
+	waitFunctionUpdated(ctx, client, functionName)
+
+	_, err = client.UpdateFunctionConfiguration(ctx, &lambdapkg.UpdateFunctionConfigurationInput{
+		FunctionName: aws.String(functionName),
+		Environment:  &lambdatypes.Environment{Variables: existing},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateSecretPathsEnv UpdateFunctionConfiguration %q: %w", functionName, err)
+	}
+	return nil
+}
+
 // waitFunctionActive polls GetFunction until the function leaves the "Pending"
 // state, so an Invoke immediately after CreateFunction does not race the cold
 // provisioning (Lambda returns ResourceConflictException: function is in Pending).

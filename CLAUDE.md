@@ -170,6 +170,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | One-time platform setup, `km init`, multi-instance, Slack bootstrap | `klanker:init` skill |
 | Send / receive email from inside a sandbox | `klanker:email` skill |
 | Inject SOPS-encrypted secrets into a sandbox | `docs/sandbox-secrets.md` (Phase 89) |
+| Serverless `km check` runner (deploy/run/ls/sync/rm, KM_CHECK_TRIGGER, CheckDispatch) | `docs/check-runner.md` (Phase 116) |
+| Inject secrets into a `km check` Lambda — `--secret <ssm-path>` + `--sops <file>` (deploy-time unpack to per-check SSM SecureString params; no Lambda KMS) | `docs/check-runner.md` § Secrets |
 | Post to Slack from inside a sandbox (incl. transcript streaming, inbound, attachments) | `klanker:slack` skill |
 | Polite-bot mode, `KM_SLACK_MENTION_ONLY`, per-channel @-mention-only inbound | `docs/slack-notifications.md` § Phase 91 |
 | Federated bridge relay — one Slack App across multiple km installs | `docs/slack-notifications.md` § Phase 95 |

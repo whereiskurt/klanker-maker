@@ -214,14 +214,14 @@ A `CheckDispatch` EventBridge rule routes to `ttl-handler`, which:
 
 | Command | Action |
 |---------|--------|
-| `km check deploy <file.py> [--name] [--env K=V] [--secret <ssm-path>] [--memory MB] [--timeout s] [--schedule "expr"] [--requirements] [--image]` | Package + CreateFunction/UpdateFunctionCode; write DDB row; re-bake KM_CHECK_TRIGGER |
+| `km check deploy <file.py> [--name] [--env K=V] [--secret <ssm-path>] [--sops <file>] [--memory MB] [--timeout s] [--schedule "expr"] [--requirements] [--image]` | Package + CreateFunction/UpdateFunctionCode; write DDB row; re-bake KM_CHECK_TRIGGER; `--sops` unpacks an encrypted secrets file to per-check SSM params |
 | `km check run <name> [--env K=V] [--wait]` | Synchronous invoke; print output + trigger/dispatch result |
 | `km check ls [--json]` | List checks (name, schedule, last-run, drift flag) |
 | `km check get <name>` | Detail: ARN, env keys, secret paths, schedule, trigger summary, sourceHash |
 | `km check logs <name> [--follow]` | Tail the check Lambda's CloudWatch logs |
 | `km check schedule <name> "<expr>"` (or `--off`) | Change/pause the EventBridge Scheduler entry |
-| `km check sync [<name>]` | Re-resolve @file predicates/prompts + re-bake KM_CHECK_TRIGGER from current km-config.yaml |
-| `km check rm <name>` | Delete the Lambda + schedule + DDB row |
+| `km check sync [<name>] [--sops <file>]` | Re-resolve @file predicates/prompts + re-bake KM_CHECK_TRIGGER; `--sops <file> <name>` re-unpacks one check's secrets without re-zipping |
+| `km check rm <name>` | Delete the Lambda + schedule + DDB row + per-check SSM secret params |
 
 ### Scheduling expressions
 
@@ -232,6 +232,99 @@ cron(0 9 * * ? *)         # 09:00 UTC daily
 ```
 
 Scheduler group: `{prefix}-checks`. Entries reference the specific check Lambda.
+
+---
+
+## Secrets
+
+A check snippet reads secrets as **environment variables**. The check Lambda's
+role grants `ssm:GetParameter` on `{prefix}/checks/*`, and the bootstrap fetches
+each declared secret path `WithDecryption` at invoke time, exposing it as an env
+var keyed by the **last path segment, UPPERCASED**:
+
+```
+/km/checks/wiz-audit/wiz_token   ⇒   $WIZ_TOKEN
+```
+
+There is **no KMS-decrypt path inside the Lambda** — values are always read from
+SSM SecureString params that already exist.
+
+### Individual secrets — `--secret`
+
+Point a check at SSM params you manage yourself:
+
+```bash
+aws ssm put-parameter --name /km/checks/wiz-audit/wiz_token \
+  --type SecureString --value "$TOKEN" --overwrite
+km check deploy wiz-audit.py --secret /km/checks/wiz-audit/wiz_token
+# snippet sees $WIZ_TOKEN
+```
+
+`km check get <name>` lists the declared `secret_paths` (paths only — never values).
+
+### Bulk secrets from a SOPS file — `--sops`
+
+For many keys at once, keep them in a SOPS-encrypted **flat** YAML/JSON file and
+unpack them at deploy time:
+
+```yaml
+# secrets.enc.yaml  (flat, top-level scalars only)
+WIZ_TOKEN: super-secret-token
+SLACK_HOOK: https://hooks.slack.com/services/xxx
+RETRIES: 5
+```
+
+```bash
+km check deploy wiz-audit.py --sops secrets.enc.yaml
+#   unpacked 3 SOPS secret(s) → /km/checks/wiz-audit/*
+# snippet sees $WIZ_TOKEN, $SLACK_HOOK, $RETRIES
+```
+
+At deploy time `km` (operator-side, where `sops` + the KMS key already work):
+
+1. Decrypts the file (`sops decrypt --output-type json`).
+2. Writes each value to `/{prefix}/checks/{check}/{key}` as a **SecureString**
+   (`Overwrite=true`).
+3. Appends those paths to the check's secret-path list, merged with any explicit
+   `--secret` paths (deduplicated).
+
+Constraints (validated at deploy with a clear error):
+
+- **Flat scalars only.** Nested maps, arrays, and `null` are rejected. Numbers and
+  bools are coerced to their string form.
+- **Keys must be valid env var names** (`[A-Za-z_][A-Za-z0-9_]*`) — no dashes,
+  dots, spaces, or leading digits. The bootstrap UPPERCASES the key, so `apiKey`
+  becomes `$APIKEY`. Name your keys in `UPPER_SNAKE_CASE` to avoid surprises.
+- Requires the `sops` binary on the operator's PATH and local access to the KMS
+  key. Secrets transit the operator machine + SSM (KMS-encrypted at rest) — the
+  same trust model as `km bootstrap` secret handling. No new IAM is needed.
+
+### Rotating / refreshing SOPS secrets — `km check sync --sops`
+
+To push new values (or add/remove keys) without re-zipping the snippet:
+
+```bash
+km check sync wiz-audit --sops secrets.enc.yaml
+```
+
+This re-unpacks the file (overwriting the SSM values), rebuilds the check's
+secret-path list from the freshly decrypted key set (so keys removed from the file
+are dropped), and refreshes `KM_CHECK_SECRET_PATHS` on the Lambda. A pure value
+rotation (keys unchanged) needs no env change — the Lambda reads the new value on
+its next invoke.
+
+> **Note — `--sops` and `sourceHash`/drift.** The SOPS key set is **not** folded
+> into the trigger `sourceHash` (that hash is derived from `km-config.yaml` only,
+> which `km check ls` recomputes for drift detection; folding SOPS keys in would
+> make every `ls` report false drift). Refresh secrets explicitly with
+> `km check deploy --sops` / `km check sync --sops`.
+
+### Teardown
+
+`km check rm <name>` deletes the per-check SSM namespace `/{prefix}/checks/{name}/*`
+(paginated `GetParametersByPath` → `DeleteParameters`) alongside the Lambda,
+schedule, and DDB row, so SOPS-derived secrets don't leak after teardown.
+Externally-managed `--secret` params outside that namespace are left untouched.
 
 ---
 
@@ -374,9 +467,17 @@ Per check (no Terraform after initial setup):
 
 ```bash
 km check deploy snippet.py --name my-check  # SDK: CreateFunction + DDB row + KM_CHECK_TRIGGER
+km check deploy snippet.py --sops secrets.enc.yaml  # + unpack SOPS → per-check SSM SecureString params
 km check sync my-check                       # after editing km-config.yaml triggers
-km check rm my-check                         # SDK: DeleteFunction + schedule + DDB row
+km check sync my-check --sops secrets.enc.yaml      # rotate/refresh secrets without re-zipping
+km check rm my-check                         # SDK: DeleteFunction + schedule + DDB row + SSM secret params
 ```
+
+`--sops` is a **pure operator-side `km` change** (decrypt + `ssm:PutParameter`).
+No Lambda/Terraform/IAM change: the per-check `/{prefix}/checks/{name}/*` namespace
+already matches the `check-runner` role's `ssm:GetParameter` grant. Requires the
+`sops` binary + local KMS access on the operator's machine. Rebuild the operator
+binary with `make build` to pick up the flag.
 
 GitHub bridge pre-filter (after adding `check:` to a `github.events` rule):
 
