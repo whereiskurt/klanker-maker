@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 116-06-PLAN.md
-last_updated: "2026-06-18T01:00:09.036Z"
+stopped_at: "Completed 116-05-PLAN.md (3 tasks: pkg/check trigger bake, Lambda CRUD+packaging+ECR+DDB, km check CLI)"
+last_updated: "2026-06-18T01:04:56.585Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 132
   completed_phases: 115
   total_plans: 583
-  completed_plans: 542
+  completed_plans: 543
   percent: 91
 ---
 
@@ -579,6 +579,7 @@ Progress: [█████████░] 91%
 | Phase 116-km-check-serverless-check-runner P01 | 231 | 3 tasks | 10 files |
 | Phase 116 P04 | 3min | 2 tasks | 4 files |
 | Phase 116-km-check-serverless-check-runner P06 | 20min | 3 tasks | 6 files |
+| Phase 116 P05 | 8 | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1654,6 +1655,9 @@ Recent decisions affecting current work:
 - [Phase 116-km-check-serverless-check-runner]: EventBridge target for check-runner role hardcoded to default event bus (km.sandbox source uses default bus per existing eventbridge.go pattern)
 - [Phase 116]: KM_CHECK_TRIGGER.schema.md is the single source of truth for the trigger contract; check_name (not check) in CheckDispatch Detail; auto_start always true; when_py fail-closed on exception; boto3 stubbed via sys.modules injection in tests
 - [Phase 116-km-check-serverless-check-runner]: Stage B wired: check-dispatch/check-run routed before sandbox_id guard; AgentRunSink delegates to canonical handleAgentRun (stale-fork safe); CheckDispatch EventBridge rule with input_path=$.detail; km at check run schedulable
+- [Phase 116-05]: BakeTrigger resolves @file operator-side at deploy/sync (Lambda has no filesystem access at runtime); sourceHash covers resolved JSON
+- [Phase 116-05]: UpdateItem-never-PutItem on existing DDB rows prevents lossy round-trip overwrites (project_sandboxmetadata_lossy_roundtrip)
+- [Phase 116-05]: ECR {prefix}-checks repo lazily SDK-created on first --image deploy (not a third terragrunt module); lambda.amazonaws.com pull policy set via SetRepositoryPolicy
 
 ### Roadmap Evolution
 
@@ -1796,6 +1800,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-18T01:00:09.026Z
-Stopped at: Completed 116-06-PLAN.md
+Last session: 2026-06-18T01:04:56.573Z
+Stopped at: Completed 116-05-PLAN.md (3 tasks: pkg/check trigger bake, Lambda CRUD+packaging+ECR+DDB, km check CLI)
 Resume file: None
