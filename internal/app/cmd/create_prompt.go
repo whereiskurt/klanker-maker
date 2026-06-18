@@ -388,15 +388,22 @@ func doStep16PromptPush(ctx context.Context, cfg *config.Config, sandboxID strin
 				break
 			}
 		}
+		// rec is nil when FetchSandbox returned an error (e.g. transient DDB read or
+		// the row not yet visible) — never deref it directly (Phase 116 Bug I: nil-ptr
+		// panic in doStep16PromptPush on the EventBridge retry path).
+		lastStatus := "unknown"
+		if rec != nil {
+			lastStatus = rec.Status
+		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting %v for sandbox %s to reach running with EC2 instance (last status: %q)", provisionTimeout, sandboxID, rec.Status)
+			return fmt.Errorf("timeout waiting %v for sandbox %s to reach running with EC2 instance (last status: %q)", provisionTimeout, sandboxID, lastStatus)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(pollInterval):
 		}
-		fmt.Printf("Step 16: waiting for sandbox %s to reach running (status=%q)...\n", sandboxID, rec.Status)
+		fmt.Printf("Step 16: waiting for sandbox %s to reach running (status=%q)...\n", sandboxID, lastStatus)
 	}
 
 	fmt.Printf("Step 16: pushing %d queued prompt(s) to sandbox %s...\n", len(prompts), sandboxID)
