@@ -30,6 +30,8 @@ import (
 	lambdaruntime "github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -95,11 +97,21 @@ type RunCommandFunc func(cmd string, args []string, env []string) ([]byte, error
 // *dynamodb.Client satisfies this interface.
 type DynamoAPI = awspkg.SandboxMetadataAPI
 
+// EC2DescribeAPI is the narrow EC2 interface for the idempotency guard (Bug J):
+// looking up whether a sandbox-id already has a provisioned instance.
+// *ec2.Client satisfies this interface.
+type EC2DescribeAPI interface {
+	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+}
+
 // CreateHandler holds injected dependencies for testability.
 type CreateHandler struct {
 	S3Client          S3GetAPI
 	SESClient         SESV2API
 	DynamoClient      DynamoAPI
+	// EC2Client backs the idempotency guard. Nil in unit tests (RunCommand mode) →
+	// the guard is skipped. main() injects *ec2.Client.
+	EC2Client         EC2DescribeAPI
 	SSMClient         awspkg.IdentitySSMAPI   // for identity key generation
 	IdentityClient    awspkg.IdentityTableAPI // for publishing identity to DynamoDB
 	TableName         string                  // DynamoDB sandbox metadata table (default: "km-sandboxes")
@@ -174,6 +186,19 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 	}
 
 	log.Info().Str("sandbox_id", event.SandboxID).Str("bucket", event.ArtifactBucket).Msg("create event received")
+
+	// Idempotency guard (Bug J): EventBridge retries a failed async Lambda invoke. A
+	// create that provisioned an EC2 instance before failing at a later step (e.g. the
+	// prompt-push) would otherwise be re-provisioned as a SECOND instance for the same
+	// sandbox_id on retry (observed live in Phase 116). If a non-terminated instance
+	// already carries this sandbox-id tag, the box exists — skip the duplicate (nil).
+	if h.EC2Client != nil {
+		if instID := h.existingInstanceID(ctx, event.SandboxID); instID != "" {
+			log.Info().Str("sandbox_id", event.SandboxID).Str("instance", instID).
+				Msg("sandbox already has a provisioned instance — skipping duplicate create (idempotent retry)")
+			return nil
+		}
+	}
 
 	// Cold start: download toolchain from S3 (skip when RunCommand is injected — test mode)
 	if h.RunCommand == nil {
@@ -436,6 +461,29 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 // sends the carried envelope as a FIFO message (MessageGroupId = sandboxID,
 // MessageDeduplicationId = SHA-256 hex of the envelope body). Both fields are
 // required by FIFO queues with ContentBasedDeduplication=false.
+// existingInstanceID returns the ID of a non-terminated EC2 instance already tagged
+// with the given sandbox-id, or "" if none (the Bug J idempotency check). A transient
+// DescribeInstances error returns "" (fail-open) so a genuine first create is never
+// blocked by a read blip.
+func (h *CreateHandler) existingInstanceID(ctx context.Context, sandboxID string) string {
+	out, err := h.EC2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
+			{Name: aws.String("instance-state-name"), Values: []string{"pending", "running", "stopping", "stopped"}},
+		},
+	})
+	if err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("idempotency DescribeInstances failed; proceeding with create (fail-open)")
+		return ""
+	}
+	for _, res := range out.Reservations {
+		for _, inst := range res.Instances {
+			return aws.ToString(inst.InstanceId)
+		}
+	}
+	return ""
+}
+
 func (h *CreateHandler) drainGithubEnvelope(ctx context.Context, sandboxID, envelope string) error {
 	prefix := resourcePrefix()
 	queueName := awspkg.GitHubInboundQueueName(prefix, sandboxID)
@@ -702,6 +750,8 @@ func main() {
 		S3Client:          s3.NewFromConfig(awsCfg),
 		SESClient:         sesv2.NewFromConfig(awsCfg),
 		DynamoClient:      dynClient,
+		EC2Client:         ec2.NewFromConfig(awsCfg), // Bug J idempotency guard
+
 		SSMClient:         ssm.NewFromConfig(awsCfg),
 		IdentityClient:    dynClient,
 		TableName:         sandboxTableName(),

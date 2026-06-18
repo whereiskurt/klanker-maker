@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
-	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -222,6 +225,85 @@ func TestCreateHandler_HappyPath(t *testing.T) {
 	// km create handles the "created" notification — handler must NOT send it again
 	if mockSES.sendCalled {
 		t.Error("Handle must NOT send duplicate 'created' notification — km create already sends it")
+	}
+}
+
+// fakeEC2DescribeAPI satisfies EC2DescribeAPI for the Bug J idempotency guard tests.
+type fakeEC2DescribeAPI struct {
+	instanceID string // non-empty => returns one matching instance
+	err        error
+}
+
+func (f *fakeEC2DescribeAPI) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.instanceID == "" {
+		return &ec2.DescribeInstancesOutput{}, nil
+	}
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{
+			{Instances: []ec2types.Instance{{InstanceId: aws.String(f.instanceID)}}},
+		},
+	}, nil
+}
+
+// TestCreateHandler_IdempotentRetry_SkipsWhenInstanceExists verifies the Bug J guard:
+// an EventBridge retry for a sandbox-id that already has a provisioned instance does NOT
+// re-run the km create subprocess (no duplicate box).
+func TestCreateHandler_IdempotentRetry_SkipsWhenInstanceExists(t *testing.T) {
+	commandRan := false
+	h := &CreateHandler{
+		S3Client:     &mockS3GetAPI{getBody: minimalProfile},
+		SESClient:    &mockSESAPI{},
+		EC2Client:    &fakeEC2DescribeAPI{instanceID: "i-existing"},
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp",
+		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
+			commandRan = true
+			return []byte("sandbox created"), nil
+		},
+	}
+	event := CreateEvent{SandboxID: "sb-dup", ArtifactBucket: "km-artifacts", ArtifactPrefix: "remote-create/sb-dup"}
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle returned unexpected error: %v", err)
+	}
+	if commandRan {
+		t.Error("expected the create subprocess to be SKIPPED when an instance already exists (idempotent retry)")
+	}
+}
+
+// TestCreateHandler_FirstCreate_ProceedsWhenNoInstance verifies the guard does NOT block a
+// genuine first create (no existing instance) or a transient DescribeInstances error.
+func TestCreateHandler_FirstCreate_ProceedsWhenNoInstance(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ec2  *fakeEC2DescribeAPI
+	}{
+		{"no instance", &fakeEC2DescribeAPI{}},
+		{"describe error fails open", &fakeEC2DescribeAPI{err: errors.New("transient")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			commandRan := false
+			h := &CreateHandler{
+				S3Client:     &mockS3GetAPI{getBody: minimalProfile},
+				SESClient:    &mockSESAPI{},
+				EC2Client:    tc.ec2,
+				Domain:       "sandboxes.example.com",
+				ToolchainDir: "/tmp",
+				RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
+					commandRan = true
+					return []byte("sandbox created"), nil
+				},
+			}
+			event := CreateEvent{SandboxID: "sb-first", ArtifactBucket: "km-artifacts", ArtifactPrefix: "remote-create/sb-first"}
+			if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+				t.Fatalf("Handle returned unexpected error: %v", err)
+			}
+			if !commandRan {
+				t.Error("expected the create subprocess to run (guard must not block a first create)")
+			}
+		})
 	}
 }
 
