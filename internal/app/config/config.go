@@ -183,6 +183,12 @@ type GithubEventRule struct {
 	// Prompt is the template injected as the agent's initial turn.
 	// Supports: {{repo}}, {{event}}, {{action}}, {{sender}}, {{default_branch}}, {{html_url}}.
 	Prompt string `mapstructure:"prompt" yaml:"prompt" json:"prompt"`
+
+	// Check is the optional Phase 116 pre-filter check name. When non-empty,
+	// the bridge synchronously invokes {prefix}-check-{Check} BEFORE dispatching
+	// the sandbox; the sandbox is only dispatched when the check returns
+	// triggered=true. Fail-CLOSED on invoke error. Dormant by default (empty = no filter).
+	Check string `mapstructure:"check" yaml:"check,omitempty" json:"check,omitempty"`
 }
 
 // GithubConfig holds install-level GitHub defaults that flow into the bridge
@@ -358,6 +364,72 @@ type H1Config struct {
 	// bridge Lambda to resolve which sandbox(es) to dispatch a report event to.
 	// Uses UnmarshalKey (structured list-of-objects) — same pattern as Github.Repos.
 	Programs []H1ProgramEntry `mapstructure:"programs" yaml:"programs,omitempty" json:"programs,omitempty"`
+}
+
+// ChecksConfig holds the install-level serverless check-runner defaults (Phase 116).
+// Maps to km-config.yaml key checks. Absent key → zero value (no error, dormant).
+// Triggers is decoded atomically via UnmarshalKey("checks", &cfg.Checks) — the
+// "checks" merge-list entry is the critical precondition (project_config_key_merge_list).
+//
+// The checks.triggers list mirrors github.events in shape: a config-driven,
+// list-of-objects block where the decision logic (when_py predicate) lives in
+// CONFIG, never in the snippet. Absent config ⇒ no triggers ⇒ check Lambdas
+// still run and capture output but never dispatch sandbox prompts.
+type ChecksConfig struct {
+	// Triggers is the list of check-to-alias dispatch rules. Each rule names a
+	// deployed check Lambda, a Python predicate (when_py), and the alias-targeted
+	// sandbox to receive the prompt when the predicate is truthy.
+	// Absent list → zero-length slice (dormant, no dispatch).
+	Triggers []CheckTrigger `mapstructure:"triggers" yaml:"triggers,omitempty"`
+}
+
+// CheckTrigger defines one check→sandbox dispatch rule for the km check runner.
+// When a check Lambda run produces JSON output that satisfies the when_py predicate,
+// a sandbox prompt is dispatched to the alias-targeted box (resume-or-cold-create).
+//
+// Tag discipline mirrors GithubEventRule (the structural template):
+//   - mapstructure: snake_case (viper/mapstructure decode key)
+//   - yaml: field name used in km-config.yaml; camelCase for multi-word fields
+//     (matches CONTEXT.md config shape: cooldownSeconds, onAbsent)
+type CheckTrigger struct {
+	// Check is the name of the deployed check Lambda (matches the name used in
+	// `km check deploy`). Required — the dispatch rule is inert without it.
+	Check string `mapstructure:"check" yaml:"check"`
+
+	// WhenPy is a Python predicate block. Wrapped as `def _pred(out): <body>` at
+	// runtime; `out` is the parsed JSON output dict. Must return bool or (bool, reason).
+	// Inline or @file (resolved at km check deploy/sync time). Optional — absent
+	// means "always trigger" (useful for testing). Baked into KM_CHECK_TRIGGER.
+	WhenPy string `mapstructure:"when_py" yaml:"when_py,omitempty"`
+
+	// Alias is the sandbox alias targeted for resume-or-cold-create dispatch.
+	// Required — without an alias the rule cannot route to a box.
+	Alias string `mapstructure:"alias" yaml:"alias"`
+
+	// Prompt is the template for the sandbox agent's initial turn.
+	// Supports {{reason}} and {{out.<field>}} substitution. Inline or @file.
+	// Optional — absent sends an empty prompt (the agent uses its default).
+	Prompt string `mapstructure:"prompt" yaml:"prompt,omitempty"`
+
+	// Profile is the SandboxProfile slug used for cold-create when the alias is
+	// absent and OnAbsent=="cold-create". Required for the cold path (create-handler
+	// cannot provision a box without it); ignored on the warm/resume path. Baked
+	// into KM_CHECK_TRIGGER (profile field) -> CheckDispatch profile_name.
+	Profile string `mapstructure:"profile" yaml:"profile,omitempty" json:"profile,omitempty"`
+
+	// OnAbsent controls cold-sandbox creation when the alias is not found:
+	//   "cold-create" (default) — provision a new sandbox from Profile.
+	//   "skip"                  — do nothing; log check_dispatch_skip.
+	// NOTE: yaml tag is camelCase (onAbsent) to match the CONTEXT.md config shape;
+	// mapstructure uses snake_case (on_absent).
+	OnAbsent string `mapstructure:"on_absent" yaml:"onAbsent,omitempty"`
+
+	// CooldownSeconds, when > 0, suppresses repeated dispatch of the same check
+	// within the given window. 0 = no cooldown. Enforced in Stage B (ttl-handler)
+	// via the nonces table (key "check-trigger:{check}").
+	// NOTE: yaml tag is camelCase (cooldownSeconds) to match the CONTEXT.md config
+	// shape; mapstructure uses snake_case (cooldown_seconds). Mirrors GithubEventRule.
+	CooldownSeconds int `mapstructure:"cooldown_seconds" yaml:"cooldownSeconds,omitempty"`
 }
 
 // Config holds all configuration values for the km CLI.
@@ -566,6 +638,13 @@ type Config struct {
 	// Maps to km-config.yaml key h1. Absent key → zero value (no error, dormant).
 	H1 H1Config `mapstructure:"h1" yaml:"h1,omitempty"`
 
+	// Checks holds the install-level serverless check-runner config (Phase 116).
+	// Triggers is the list of check→alias dispatch rules. Maps to km-config.yaml
+	// key checks. Absent key → zero value (no error, dormant — no dispatch fired).
+	// CRITICAL: "checks" must be in the v2→v merge-list in Load() or this block is
+	// silently ignored (project_config_key_merge_list footgun).
+	Checks ChecksConfig `mapstructure:"checks" yaml:"checks,omitempty"`
+
 	// YAMLDefaults holds the raw km-config.yaml values for env-bound keys,
 	// snapshotted during Load() BEFORE viper's AutomaticEnv binds env vars into
 	// the cfg fields. Used by ExportTerragruntEnvVars to detect drift between
@@ -765,6 +844,13 @@ func Load() (*Config, error) {
 			// atomically by the single v.UnmarshalKey("h1", &cfg.H1) call below — do NOT
 			// add sibling "h1.*" entries (mirrors the github precedent).
 			"h1",
+			// Phase 116: checks block (triggers list-of-objects). CRITICAL: without this
+			// entry the entire checks: block is silently dropped regardless of km-config.yaml
+			// content (project_config_key_merge_list footgun). The whole checks: block is
+			// decoded atomically by v.UnmarshalKey("checks", &cfg.Checks) below — do NOT
+			// add sibling "checks.*" entries (mirrors the github and h1 precedent).
+			// Absent checks: block → zero value → dormant (no trigger dispatch).
+			"checks",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -901,6 +987,26 @@ func Load() (*Config, error) {
 	// without it this unmarshal sees an empty map (project_config_key_merge_list).
 	if err := v.UnmarshalKey("h1", &cfg.H1); err != nil {
 		return nil, fmt.Errorf("unmarshal h1: %w", err)
+	}
+
+	// Phase 116: checks is a structured block (triggers list-of-objects). Use
+	// UnmarshalKey — same pattern as github and h1 — because triggers is a
+	// list-of-objects and viper's scalar getters can't decode it. Absent key =>
+	// zero-value ChecksConfig (no error, no triggers => dormant; no dispatch fired).
+	// The merge-list entry "checks" above is the precondition; without it this
+	// unmarshal sees an empty map (project_config_key_merge_list footgun).
+	// Non-fatal: a YAML parse error in the checks block yields zero value + log;
+	// we never fatal-error on absent or malformed optional config blocks.
+	//
+	// YAMLDefaults snapshot: checks.triggers is a list-of-objects with no scalar
+	// top-level key to snapshot for drift WARN — mirrors the github.events treatment
+	// (github.events is also list-of-objects; no scalar entry in yamlDefaults).
+	// Drift detection for per-check env vars (KM_CHECK_TRIGGER) is handled at
+	// km check deploy / km check sync time (per-Lambda, not at km init).
+	if err := v.UnmarshalKey("checks", &cfg.Checks); err != nil {
+		// non-fatal: absent checks: block → zero value → dormant
+		// Mirrors h1's non-fatal treatment for future forward-compat
+		return nil, fmt.Errorf("unmarshal checks: %w", err)
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
@@ -1249,6 +1355,25 @@ func (c *Config) GetH1ProgramBotHandle(handle string) string {
 		}
 	}
 	return c.H1.BotHandle
+}
+
+// GetChecksConfig returns the install-level serverless check-runner config (Phase 116).
+// Absent checks: block => zero-value ChecksConfig (dormant). Callers consume Triggers
+// for dispatch routing; absent Triggers list => no check dispatch fires.
+func (c *Config) GetChecksConfig() ChecksConfig {
+	return c.Checks
+}
+
+// GetChecksTriggers returns the configured check→alias dispatch trigger rules.
+// Nil/empty when the checks: block is absent (dormant — no dispatch fires).
+func (c *Config) GetChecksTriggers() []CheckTrigger {
+	return c.Checks.Triggers
+}
+
+// GetChecksTableName returns the DynamoDB table name for the Phase 116 check registry.
+// Pattern: {resource_prefix}-checks (e.g. "km-checks").
+func (c *Config) GetChecksTableName() string {
+	return c.GetResourcePrefix() + "-checks"
 }
 
 // awsProfileExists checks whether a named AWS profile is defined in

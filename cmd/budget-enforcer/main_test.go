@@ -714,6 +714,10 @@ func (m *mockSchedulerAPI) GetSchedule(ctx context.Context, input *scheduler.Get
 	return &scheduler.GetScheduleOutput{}, nil
 }
 
+func (m *mockSchedulerAPI) CreateScheduleGroup(ctx context.Context, input *scheduler.CreateScheduleGroupInput, optFns ...func(*scheduler.Options)) (*scheduler.CreateScheduleGroupOutput, error) {
+	return &scheduler.CreateScheduleGroupOutput{}, nil
+}
+
 var _ awspkg.SchedulerAPI = (*mockSchedulerAPI)(nil)
 
 // --------------------------------------------------------------------------

@@ -660,6 +660,8 @@ func (c *testConfig) GetGithubEvents() []appcfg.GithubEventRule {
 }
 func (c *testConfig) GetConfigFilePath() string         { return "" }
 func (c *testConfig) GetSlackChannelsTableName() string { return "km-slack-channels" }
+func (c *testConfig) GetChecksTableName() string        { return "km-checks" }
+func (c *testConfig) GetChecksTriggers() []appcfg.CheckTrigger { return nil }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -1011,6 +1013,8 @@ func (c *testDoctorConfig) GetGithubEvents() []appcfg.GithubEventRule {
 }
 func (c *testDoctorConfig) GetConfigFilePath() string         { return "" }
 func (c *testDoctorConfig) GetSlackChannelsTableName() string { return "km-slack-channels" }
+func (c *testDoctorConfig) GetChecksTableName() string        { return "km-checks" }
+func (c *testDoctorConfig) GetChecksTriggers() []appcfg.CheckTrigger { return nil }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{

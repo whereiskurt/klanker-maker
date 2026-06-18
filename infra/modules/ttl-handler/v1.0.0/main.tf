@@ -480,6 +480,46 @@ resource "aws_lambda_permission" "eventbridge_command" {
 }
 
 # ============================================================
+# EventBridge rule: route CheckDispatch events to TTL Lambda (Phase 116 Stage B)
+# Emitted by the check Lambda bootstrap (Stage A) when when_py predicate is truthy.
+# Source: "km.sandbox", DetailType: "CheckDispatch".
+# The target input_path "$.detail" passes the inner dict as the TTLEvent payload.
+# ============================================================
+
+resource "aws_cloudwatch_event_rule" "check_dispatch" {
+  name        = "${var.resource_prefix}-check-dispatch"
+  description = "Routes CheckDispatch events from check Lambda bootstraps to TTL Lambda for alias-targeted resume-or-cold-create (Phase 116 Stage B)"
+
+  event_pattern = jsonencode({
+    source      = ["km.sandbox"]
+    detail-type = ["CheckDispatch"]
+  })
+
+  tags = {
+    "km:component" = "ttl-handler"
+    "km:managed"   = "true"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "check_dispatch_to_ttl" {
+  rule      = aws_cloudwatch_event_rule.check_dispatch.name
+  target_id = "${var.resource_prefix}-ttl-handler-check-dispatch"
+  arn       = aws_lambda_function.ttl_handler.arn
+
+  # Pass full detail through so TTLEvent fields (check_name, alias, prompt, etc.)
+  # are unmarshalled directly. Mirrors sandbox_command's input_path approach.
+  input_path = "$.detail"
+}
+
+resource "aws_lambda_permission" "eventbridge_check_dispatch" {
+  statement_id  = "AllowEventBridgeCheckDispatchInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ttl_handler.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.check_dispatch.arn
+}
+
+# ============================================================
 # IAM policies: sandbox resource teardown (PROV-05/PROV-06)
 # ============================================================
 
@@ -573,6 +613,48 @@ resource "aws_iam_role_policy" "identity_cleanup" {
           "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/sandbox/*/safe-phrase",
         ]
       }
+    ]
+  })
+}
+
+# Policy: Phase 116 Stage B — widened permissions for check dispatch
+#   events:PutEvents — cold-create path emits SandboxCreate to the km.sandbox EventBridge bus
+#   lambda:InvokeFunction on {prefix}-check-* — handleCheckRun one-shot invocation
+#   dynamodb:PutItem on nonces table — cooldown nonce store (CheckAndStore)
+#   dynamodb:Query on sandboxes/alias-index — alias resolution (ttlAliasResolver)
+#
+# EC2 Start/Describe and SSM SendCommand are already present in terraform_destroy policy
+# (EC2SandboxDestroy and SSMAgentRun stanzas) — no delta required for handleAgentRun.
+resource "aws_iam_role_policy" "check_dispatch" {
+  name = "${var.resource_prefix}-ttl-handler-check-dispatch"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CheckDispatchEventBridge"
+        Effect = "Allow"
+        Action = ["events:PutEvents"]
+        # The km.sandbox default event bus is the account default bus (no custom bus ARN).
+        # Scoped to default event bus in the current account/region.
+        Resource = "arn:aws:events:*:${data.aws_caller_identity.current.account_id}:event-bus/default"
+      },
+      {
+        Sid    = "CheckRunInvoke"
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction"]
+        # Invoke any check Lambda in this account ({prefix}-check-*).
+        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.resource_prefix}-check-*"
+      },
+      {
+        Sid    = "CheckNonceStorePut"
+        Effect = "Allow"
+        Action = ["dynamodb:PutItem"]
+        # Nonces table — shared with Slack/GitHub bridges ({prefix}-slack-bridge-nonces).
+        # The DDB table name follows the slack-bridge convention; no separate table needed.
+        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.resource_prefix}-slack-bridge-nonces"
+      },
     ]
   })
 }

@@ -50,6 +50,12 @@ locals {
     "arn:aws:iam::*:role/*-ec2spot-ssm-*",
     "arn:aws:iam::*:role/*-github-token-refresher-*",
     "arn:aws:iam::*:role/*-ttl-handler",
+    # Phase 116: create-handler runs `km create --prompt` for cold-create check
+    # dispatch, which pushes the on-box prompt queue via ssm:SendCommand. It is a
+    # trusted control-plane Lambda exactly like *-ttl-handler (the warm path). Without
+    # this carve-out the SCP explicitly denies the prompt push (the cold path provisions
+    # the box but cannot deliver the trigger prompt). See 116-UAT.md Bug G2.
+    "arn:aws:iam::*:role/*-create-handler",
     "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
   ]
 }

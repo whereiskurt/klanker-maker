@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 115-06-PLAN.md Tasks 1-2 (poller surgery + docs); Task 3 is checkpoint:human-verify pending orchestrator E2E"
-last_updated: "2026-06-16T00:37:02.464Z"
-last_activity: 2026-06-16
+stopped_at: "Completed 116-05-PLAN.md (3 tasks: pkg/check trigger bake, Lambda CRUD+packaging+ECR+DDB, km check CLI)"
+last_updated: "2026-06-18T19:16:01.407Z"
+last_activity: 2026-06-18
 progress:
-  total_phases: 131
+  total_phases: 132
   completed_phases: 115
-  total_plans: 575
-  completed_plans: 537
+  total_plans: 583
+  completed_plans: 544
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-16
+Last activity: 2026-06-18
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -574,6 +574,12 @@ Progress: [█████████░] 91%
 | Phase 115-generic-github-webhook-event-prompt-router P04 | 296s | 2 tasks | 5 files |
 | Phase 115-generic-github-webhook-event-prompt-router P05 | 829s | 2 tasks | 3 files |
 | Phase 115-generic-github-webhook-event-prompt-router P06 | 855s | 2 tasks | 4 files |
+| Phase 116-km-check-serverless-check-runner P02 | 2 | 2 tasks | 3 files |
+| Phase 116-km-check-serverless-check-runner P03 | 244s | 3 tasks | 2 files |
+| Phase 116-km-check-serverless-check-runner P01 | 231 | 3 tasks | 10 files |
+| Phase 116 P04 | 3min | 2 tasks | 4 files |
+| Phase 116-km-check-serverless-check-runner P06 | 20min | 3 tasks | 6 files |
+| Phase 116 P05 | 8 | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1642,6 +1648,16 @@ Recent decisions affecting current work:
 - [Phase 115-generic-github-webhook-event-prompt-router]: GetGithubEvents added to DoctorConfigProvider interface: consistent with all other github.* field access patterns in RunDoctor
 - [Phase 115-generic-github-webhook-event-prompt-router]: Targeted golden update instead of CAPTURE_PRE92_BASELINE=1 regeneration to avoid breaking SubagentStop semantic check in Phase92 byte-identity test
 - [Phase 115-generic-github-webhook-event-prompt-router]: KIND defaults to issue_comment branch when empty — backward compat for pre-Phase-115 bridge envelopes in mixed-version fleet
+- [Phase 116-02]: pkg/dispatch warm path = SSM AgentRunSink (not SQS enqueue); bridges unmodified; cooldown fail-open on nonce store errors
+- [Phase 116-03]: km-config.yaml uses snake_case keys (on_absent, cooldown_seconds) matching mapstructure tags; camelCase yaml struct tags are marshal-only (viper normalizes YAML to lowercase)
+- [Phase 116-km-check-serverless-check-runner]: No dependency blocks on dynamodb-checks or check-runner-role live units — role inputs are pure strings, not module outputs; eliminates mock_outputs boilerplate
+- [Phase 116-km-check-serverless-check-runner]: check-runner-role envReqs: [KM_ARTIFACTS_BUCKET] so km init skips gracefully on unconfigured installs, consistent with lambda-*-bridge pattern
+- [Phase 116-km-check-serverless-check-runner]: EventBridge target for check-runner role hardcoded to default event bus (km.sandbox source uses default bus per existing eventbridge.go pattern)
+- [Phase 116]: KM_CHECK_TRIGGER.schema.md is the single source of truth for the trigger contract; check_name (not check) in CheckDispatch Detail; auto_start always true; when_py fail-closed on exception; boto3 stubbed via sys.modules injection in tests
+- [Phase 116-km-check-serverless-check-runner]: Stage B wired: check-dispatch/check-run routed before sandbox_id guard; AgentRunSink delegates to canonical handleAgentRun (stale-fork safe); CheckDispatch EventBridge rule with input_path=$.detail; km at check run schedulable
+- [Phase 116-05]: BakeTrigger resolves @file operator-side at deploy/sync (Lambda has no filesystem access at runtime); sourceHash covers resolved JSON
+- [Phase 116-05]: UpdateItem-never-PutItem on existing DDB rows prevents lossy round-trip overwrites (project_sandboxmetadata_lossy_roundtrip)
+- [Phase 116-05]: ECR {prefix}-checks repo lazily SDK-created on first --image deploy (not a third terragrunt module); lambda.amazonaws.com pull policy set via SetRepositoryPolicy
 
 ### Roadmap Evolution
 
@@ -1658,6 +1674,7 @@ Recent decisions affecting current work:
 - Phase 109 backfilled (retro): GitHub bridge self-heals orphaned `stopped` alias rows (resume-or-cold-create via ErrNoResumableInstance + DeleteSandboxRow; H1 parity) — shipped as fix-commit eac8ed8b / PR #23 outside GSD, added to roadmap 2026-06-12.
 - Phase 110 added: Session-aware Slack reply + thread/channel repair — `km-slack reply` (sandbox) + `km slack reply`/cleanup commands (operator) to post to the thread bound to a `--resume` session via a new `claude_session_id` GSI + bridge `lookup-thread` action; channel-root fallback; repair stale thread/channel mappings. NOTE: numbered 110 not 108 — Phases 108/109 are completed-but-unroadmapped GitHub-bridge fix-commits (CLAUDE.md + docs/github-bridge.md); gsd-tools' integer-max scan would have collided.
 - Phase 114 added: Slack bridge auto-resume — start a paused/stopped sandbox when an inbound Slack thread/channel message would be dispatched to it (resume-only Slack analog of the GitHub/H1 Phase-109 path; no cold-create, no budget awareness). Design spec: `docs/superpowers/specs/2026-06-15-slack-resume-on-thread-message-design.md`. NOTE: numbered 114 not 111 — phase dirs run 93–113 (111/112/113 exist), and 108/109 are unroadmapped fix-commits.
+- Phase 116 added: km check serverless check runner — per-snippet SDK-provisioned Lambdas run Python snippets that print JSON to the S3 artifact bucket; a config-driven `checks.triggers` `when_py` predicate fires alias-targeted resume-or-cold-create via a CheckDispatch EventBridge event consumed by ttl-handler (reusing the bridge self-heal factored into shared `pkg/dispatch`). Scheduled/manual/github.events invocation; open egress (no VPC) v1; zip+requirements default packaging with `--image` container opt-in; two scaffolding modules ({prefix}-checks DDB + {prefix}-check-runner role); `profiles/checks/` QOTD + Wiz-threat-intel examples. Authoritative design spec: `docs/superpowers/specs/2026-06-17-km-check-serverless-runner-design.md`. NOTE: 115 is the highest prior phase (CLAUDE.md + roadmap), so 116 is the clean next integer.
 
 ### Pending Todos
 
@@ -1783,6 +1800,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-16T00:37:02.453Z
-Stopped at: Completed 115-06-PLAN.md Tasks 1-2 (poller surgery + docs); Task 3 is checkpoint:human-verify pending orchestrator E2E
+Last session: 2026-06-18T01:04:56.573Z
+Stopped at: Completed 116-05-PLAN.md (3 tasks: pkg/check trigger bake, Lambda CRUD+packaging+ECR+DDB, km check CLI)
 Resume file: None

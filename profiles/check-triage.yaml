@@ -1,0 +1,115 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: check-triage
+  labels:
+    tier: development
+    tool: check-runner
+    phase: "116"
+  prefix: chk
+
+# check-triage — Phase 116 lean cold-create target for the serverless check runner.
+#
+# Used as the `profile:` of a checks.triggers rule with on_absent: cold-create.
+# When a check fires and the target alias has no running/stopped box, ttl-handler
+# cold-creates a sandbox from THIS profile and (Phase 116 Bug E fix) seeds the
+# expanded trigger prompt into the on-box prompt queue so the agent runs it on boot.
+#
+# Lifecycle: short-lived (2h TTL / 20m idle), teardownPolicy=stop.
+# Agent: Claude on Bedrock (useBedrock: true) — NO SOPS bundle / injected creds
+# required (unlike github-review, which is no-bedrock + SOPS). This keeps the
+# cold-create path self-contained on a fresh install.
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "20m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    # On-demand (not spot): a check cold-create should not silently fail on spot
+    # capacity shortfalls. Reliability over cost for the triage box.
+    spot: false
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: true
+    initCommands:
+      - "yum install -y git jq nodejs npm"
+      # Trust the MITM proxy CA so npm (install) and claude (runtime API calls) work
+      # through enforcement:proxy egress. node uses its OWN CA bundle unless
+      # NODE_EXTRA_CA_CERTS points at the system bundle that now contains the proxy CA.
+      - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt"
+      - "echo 'export NODE_EXTRA_CA_CERTS=/etc/pki/tls/certs/ca-bundle.crt' > /etc/profile.d/km-zz-node-ca.sh"
+      # Install the agent CLI the km-queue runner invokes on the queued trigger
+      # prompt. Without this the box boots fine but has no claude (Phase 116 UAT Bug K
+      # — the agent install is profile-driven via initCommands, NOT a platform default).
+      - "NODE_EXTRA_CA_CERTS=/etc/pki/tls/certs/ca-bundle.crt npm install -g @anthropic-ai/claude-code@2.1.132"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "whereiskurt/*"
+      allowedRefs:
+        - "*"
+
+  network:
+    enforcement: proxy
+    egress:
+      # Must cover the agent-CLI install + runtime, or the on-box km-queue runner
+      # never finds claude and the queued prompt never executes (Phase 116 UAT Bug K).
+      # The install (initCommands) is `npm install -g @anthropic-ai/claude-code`:
+      # node/npm come from yum (.amazonaws.com), the package from the npm registry
+      # (.npmjs.org), and claude's runtime API is api.anthropic.com. Validated live.
+      allowedDNSSuffixes:
+        - ".npmjs.org"             # npm registry — the claude-code package install
+        - ".amazonaws.com"         # yum (nodejs/npm) + AWS APIs + Bedrock
+        - "api.anthropic.com"      # claude runtime API
+        - ".github.com"            # optional: plugin/source fetches
+        - ".githubusercontent.com"
+      allowedHosts: []
+
+  iam:
+    roleSessionDuration: "2h"
+    allowedRegions:
+      - us-east-1
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: false
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+
+  agent:
+    default: claude
+    claude:
+      trustedDirectories:
+        - /workspace
+      tools:
+        autoApprove:
+          - Bash
+          - Read
+          - Write
+          - Edit
+          - Glob
+          - Grep
+          - WebFetch

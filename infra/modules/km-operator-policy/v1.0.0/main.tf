@@ -456,7 +456,12 @@ resource "aws_iam_role_policy" "ssm" {
 #   - Phase 63 Step 11d (KM_SLACK_CHANNEL_ID injection — non-fatal)
 #   - Phase 67 Step 11e (KM_SLACK_INBOUND_QUEUE_URL injection — fatal)
 # Document scope: AWS-RunShellScript only. Target scope: km-tagged EC2
-# instances (KMSandboxID tag matches sandbox IDs, prevents lateral movement).
+# instances (the km:sandbox-id tag scopes to km sandboxes, prevents lateral
+# movement). NOTE: the condition key MUST be the real instance tag "km:sandbox-id"
+# (the km: namespace, set on every sandbox EC2). A prior "KMSandboxID" key matched
+# no instance tag, so ssm:SendCommand was always denied — latent until the Phase 116
+# cold-create --prompt path (create-handler pushing the on-box prompt queue) first
+# exercised it. See project_sandbox_id_tag_always_km_namespace.
 resource "aws_iam_role_policy" "ssm_send_command" {
   name = "${var.resource_prefix}-create-handler-ssm-send-command"
   role = var.role_id
@@ -485,7 +490,7 @@ resource "aws_iam_role_policy" "ssm_send_command" {
         ]
         Condition = {
           StringLike = {
-            "ssm:resourceTag/KMSandboxID" = "*"
+            "ssm:resourceTag/km:sandbox-id" = "*"
           }
         }
       },

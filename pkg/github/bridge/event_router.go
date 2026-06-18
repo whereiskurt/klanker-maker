@@ -54,6 +54,16 @@ type EventRule struct {
 	// the six named vars: {{repo}}, {{event}}, {{action}}, {{sender}},
 	// {{default_branch}}, {{html_url}}. Unknown vars are left verbatim.
 	Prompt string `json:"prompt"`
+
+	// Check is the optional Phase 116 pre-filter: when non-empty, the bridge
+	// synchronously invokes the named check Lambda ({prefix}-check-{Check})
+	// BEFORE dispatching the sandbox. The sandbox is only dispatched when the
+	// check returns triggered=true. An invocation error is treated as fail-CLOSED
+	// (no dispatch) — a check that errors must not silently fire a sandbox.
+	//
+	// Absent (empty string) → no pre-filter; dispatch proceeds as in Phase 115
+	// (byte-identical to the pre-116 path). Dormant by default.
+	Check string `json:"check,omitempty"`
 }
 
 // EventPayload is the minimal parsed representation of a GitHub webhook body

@@ -1578,6 +1578,13 @@ THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-slack-threads
 # KM_AGENT in /etc/km/notify.env (emitted by the compiler when spec.cli.agent is set).
 # Plan 70-06 per-message prefix parsing may override into EFFECTIVE_AGENT below.
 AGENT="${KM_AGENT:-claude}"
+# Non-silent agent-presence warning (Phase 116 follow-up). The dispatch below runs
+# the agent as "$AGENT -p ... || true" — the "|| true" silently swallows a
+# missing-agent failure, and the agent CLI is installed by the profile's
+# initCommands, NOT a platform default. Log a clear one-time warning at poller
+# startup (initCommands have already run by now) so a profile that forgot the agent
+# install is diagnosable in the poller journal instead of "the bot posted nothing".
+command -v "$AGENT" >/dev/null 2>&1 || echo "[km-inbound-poller] WARNING: agent '$AGENT' not on PATH — dispatched turns will NOT run; add the agent install to the profile initCommands (e.g. npm install -g @anthropic-ai/claude-code)" >&2
 
 # Export AWS_REGION so subprocesses (km-slack post, km-send, etc.) inherit it.
 # The systemd unit's EnvironmentFile=/etc/profile.d/km-notify-env.sh uses
@@ -2136,6 +2143,13 @@ REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 
 # Profile default agent (same env var as Slack poller — KM_AGENT).
 AGENT="${KM_AGENT:-claude}"
+# Non-silent agent-presence warning (Phase 116 follow-up). The dispatch below runs
+# the agent as "$AGENT -p ... || true" — the "|| true" silently swallows a
+# missing-agent failure, and the agent CLI is installed by the profile's
+# initCommands, NOT a platform default. Log a clear one-time warning at poller
+# startup (initCommands have already run by now) so a profile that forgot the agent
+# install is diagnosable in the poller journal instead of "the bot posted nothing".
+command -v "$AGENT" >/dev/null 2>&1 || echo "[km-inbound-poller] WARNING: agent '$AGENT' not on PATH — dispatched turns will NOT run; add the agent install to the profile initCommands (e.g. npm install -g @anthropic-ai/claude-code)" >&2
 
 # km-github-threads table for session/thread continuity (GH-X-CONTINUITY).
 # Falls back to {prefix}-github-threads matching the default in main.go.
@@ -2511,6 +2525,13 @@ REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 
 # Profile default agent (same env var as the Slack/GitHub pollers — KM_AGENT).
 AGENT="${KM_AGENT:-claude}"
+# Non-silent agent-presence warning (Phase 116 follow-up). The dispatch below runs
+# the agent as "$AGENT -p ... || true" — the "|| true" silently swallows a
+# missing-agent failure, and the agent CLI is installed by the profile's
+# initCommands, NOT a platform default. Log a clear one-time warning at poller
+# startup (initCommands have already run by now) so a profile that forgot the agent
+# install is diagnosable in the poller journal instead of "the bot posted nothing".
+command -v "$AGENT" >/dev/null 2>&1 || echo "[km-inbound-poller] WARNING: agent '$AGENT' not on PATH — dispatched turns will NOT run; add the agent install to the profile initCommands (e.g. npm install -g @anthropic-ai/claude-code)" >&2
 
 # The thread-continuity key is (report_id, target). On the box, "target" is this
 # sandbox's OWN alias — the bridge dispatched here BECAUSE this alias matched the
@@ -3210,7 +3231,8 @@ log "km-queue-runner starting (sandbox=${SANDBOX_ID:-unknown})"
 # (after queue files land), initCommands may still be installing tmux + claude.
 # Block here until all required tools are on PATH; gives clear log diagnosis
 # rather than entry-001-fails-127 mystery exits.
-for tool in tmux claude jq sudo base64; do
+# System tools live on root's PATH — check them directly.
+for tool in tmux jq sudo base64; do
     waited=0
     while ! command -v "$tool" >/dev/null 2>&1; do
         if [ "$waited" -ge 600 ]; then
@@ -3224,7 +3246,25 @@ for tool in tmux claude jq sudo base64; do
         waited=$((waited + 5))
     done
 done
-log "runtime: all required tools present (tmux=$(command -v tmux), claude=$(command -v claude), jq=$(command -v jq))"
+# The agent CLI (claude/codex) is installed under the SANDBOX user's nvm
+# (/home/sandbox/.nvm/.../bin) on nvm-based AMIs — it is NEVER on root's PATH, and
+# this runner executes as root. Detect it the SAME way the runner invokes it: as the
+# sandbox user with the login env (profile.d sources nvm). Checking with command -v
+# as root here waited forever even though claude was installed (Phase 116 Bug K).
+AGENT_TOOL="$(sudo -u sandbox bash -lc 'echo "${KM_AGENT:-claude}"' 2>/dev/null || echo claude)"
+waited=0
+while ! sudo -u sandbox bash -lc "command -v '$AGENT_TOOL'" >/dev/null 2>&1; do
+    if [ "$waited" -ge 600 ]; then
+        log "runtime: agent CLI '$AGENT_TOOL' (sandbox nvm) still missing after 600s — aborting"
+        exit 1
+    fi
+    if [ $((waited % 60)) -eq 0 ]; then
+        log "runtime: waiting for agent CLI '$AGENT_TOOL' to install under the sandbox user's nvm (waited=${waited}s)"
+    fi
+    sleep 5
+    waited=$((waited + 5))
+done
+log "runtime: all required tools present (tmux=$(command -v tmux), jq=$(command -v jq), agent='$AGENT_TOOL' via sandbox nvm)"
 
 # ---- Reconcile: any running -> pending (pause/resume/reboot recovery) ----
 for meta in "$QUEUE_DIR"/*.meta.json; do

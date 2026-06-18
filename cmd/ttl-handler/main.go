@@ -77,6 +77,19 @@ type TTLEvent struct {
 	OnDemand       bool   `json:"on_demand,omitempty"`
 	Alias          string `json:"alias,omitempty"`
 	ProfileName    string `json:"profile_name,omitempty"`
+	// Phase 116 Stage B: check runner fields.
+	// CheckName is the km check name (e.g. "wiz-intel") used as the cooldown key and
+	// to build the check Lambda function name "{prefix}-check-{name}".
+	CheckName string `json:"check_name,omitempty"`
+	// OnAbsent controls cold-create behaviour when the alias is absent:
+	//   "cold-create" (default/empty) — provision a new sandbox and enqueue the prompt.
+	//   "skip"                        — drop the dispatch silently.
+	OnAbsent string `json:"on_absent,omitempty"`
+	// Reason is the human-readable reason string from the Stage A when_py predicate.
+	Reason string `json:"reason,omitempty"`
+	// CooldownSeconds is the nonce TTL for per-check cooldown enforcement.
+	// 0 = no cooldown. Enforced in Stage B via the nonces table key "check-trigger:{name}".
+	CooldownSeconds int `json:"cooldown_seconds,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download the sandbox profile.
@@ -213,6 +226,16 @@ func resourcePrefix() string {
 
 // HandleTTLEvent is the Lambda handler method. It is called by lambdaruntime.Start in main().
 func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
+	// Phase 116 Stage B: check-dispatch and check-run do NOT carry a sandbox_id — they
+	// target an alias (check-dispatch) or a check name (check-run). Route these BEFORE
+	// the sandbox_id guard so EventBridge CheckDispatch events are not rejected.
+	switch event.EventType {
+	case "check-dispatch":
+		return h.handleCheckDispatch(ctx, event)
+	case "check-run":
+		return h.handleCheckRun(ctx, event)
+	}
+
 	if event.SandboxID == "" {
 		return fmt.Errorf("ttl-handler: sandbox_id is required in event payload")
 	}

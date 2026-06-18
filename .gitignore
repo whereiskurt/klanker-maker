@@ -56,3 +56,7 @@ dist/
 /km-config.yaml
 # Operator-local profile overrides (e.g. AMI ID pins for UAT)
 profiles/*.local.yaml
+
+# Python bytecode caches (Phase 116 check snippets/bootstrap)
+__pycache__/
+*.pyc

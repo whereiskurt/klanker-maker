@@ -62,6 +62,10 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	// Subcommands: init, status (NO manifest — HackerOne has no App-install model).
 	root.AddCommand(NewH1Cmd(cfg))
 
+	// km check — serverless check runner (Phase 116).
+	// Subcommands: deploy, run, ls, get, logs, schedule, sync, rm.
+	root.AddCommand(NewCheckCmd(cfg))
+
 	root.AddCommand(NewExtendCmd(cfg))
 	root.AddCommand(NewStopCmd(cfg))
 	root.AddCommand(NewPauseCmd(cfg))

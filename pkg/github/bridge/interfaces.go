@@ -2,6 +2,21 @@ package bridge
 
 import "context"
 
+// LambdaInvoker synchronously invokes a named check Lambda and returns whether
+// the check triggered. Used by handleEventRoute (Phase 116 pre-filter) to gate
+// sandbox dispatch on a check Lambda result.
+//
+// Fail-CLOSED contract: a check invocation error MUST return (false, err) so
+// the caller can drop the dispatch. A check that errors must never silently
+// fire a sandbox.
+type LambdaInvoker interface {
+	// InvokeCheck synchronously invokes the Lambda named {prefix}-check-{name}
+	// with the given JSON payload, parses the response, and returns whether
+	// triggered=true was returned. An invoke error or a non-JSON response
+	// returns (false, err) — fail-CLOSED.
+	InvokeCheck(ctx context.Context, name string, payload []byte) (triggered bool, err error)
+}
+
 // PeerClaimResult is one peer's verdict on a relayed webhook. Claimed=true means
 // the peer owns the repo and handled it (OR is unreachable/legacy — rollout safety
 // treats those as claimed to avoid a false orphan). Claimed=false means the peer
