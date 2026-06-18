@@ -1,0 +1,62 @@
+# profiles/checks/wiz-intel/checks.triggers.example.yaml
+#
+# EXAMPLE km-config.yaml snippet — paste into your km-config.yaml to wire
+# the wiz-intel check to a sandbox dispatch when critical advisories exceed
+# a threshold.
+#
+# Notes:
+#   - All keys are snake_case (viper lowercases config keys at load time).
+#   - operator yaml keys: on_absent, cooldown_seconds (not camelCase).
+#   - when_py accepts inline or @file (resolved at km check deploy/sync time).
+#   - prompt accepts inline or @file; supports {{reason}} and {{out.<field>}}.
+#   - alias MUST match a running or stopped sandbox with that alias, or a new
+#     sandbox will be cold-created from the profile (if on_absent: cold-create).
+#
+# Deploy steps:
+#   1. Paste this block into km-config.yaml under the top-level checks: key.
+#   2. km check deploy profiles/checks/wiz-intel/snippet.py --name wiz-intel
+#   3. km check sync wiz-intel   # re-bakes KM_CHECK_TRIGGER from config
+#   4. km check run wiz-intel    # manual test; prints output + trigger result
+#   5. km check schedule wiz-intel "rate(1 hour)"   # arm hourly check
+
+checks:
+  triggers:
+    - check: wiz-intel
+
+      # when_py: Python predicate block evaluated against the check output dict.
+      # `out` is the parsed JSON from snippet.py's stdout.
+      # Must return bool or (bool, reason_string).
+      when_py: |
+        if out.get("max_affected", 0) > 100:
+            n = out["max_affected"]
+            return (True, f"{n} systems affected by top advisory")
+        return False
+
+      # alias: the target sandbox alias (km create --alias <alias>).
+      # Warm path: resumes the stopped/paused box if one exists.
+      # Cold path: provisions a new box from `profile` when alias is absent.
+      alias: wiz-triage-box
+
+      # prompt: template for the sandbox agent's first turn.
+      # {{reason}} is replaced with the predicate's reason string.
+      # {{out.max_affected}} is replaced with the max_affected field value.
+      prompt: |
+        Wiz Threat Intel check fired: {{reason}}
+        Max affected systems: {{out.max_affected}}
+        Total advisories: {{out.total_advisories}}
+
+        Please review the advisories and triage the highest-severity findings.
+        Focus on CRITICAL and HIGH severity items first.
+
+      # profile: SandboxProfile used for cold-create (when alias has no box).
+      profile: github-review
+
+      # on_absent: what to do when the alias has no box.
+      # cold-create (default): provision a new sandbox from `profile`.
+      # skip: log and drop the event; no sandbox created.
+      on_absent: cold-create
+
+      # cooldown_seconds: suppress repeated dispatch within this window.
+      # Stage B (ttl-handler) enforces this via the nonces table.
+      # 3600 = 1 hour; 0 = no cooldown (fires every matching run).
+      cooldown_seconds: 3600
