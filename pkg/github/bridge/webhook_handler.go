@@ -173,6 +173,13 @@ type WebhookHandler struct {
 	// Populated at Lambda cold-start in cmd/km-github-bridge/main.go. Phase 115.
 	EventRules []EventRule
 
+	// CheckInvoker synchronously invokes a named check Lambda as a pre-filter
+	// gate for github.events rules that carry a non-empty Check field (Phase 116).
+	// When nil, the check pre-filter is skipped and dispatch proceeds normally —
+	// preserving byte-identity with Phase 115 for all existing EventRules that
+	// do not set Check. Dormant by default.
+	CheckInvoker LambdaInvoker
+
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
 }
@@ -782,6 +789,35 @@ func (h *WebhookHandler) handleEventRoute(ctx context.Context, req WebhookReques
 				"cooldown_seconds", rule.CooldownSeconds)
 			return WebhookResponse{StatusCode: 200, Body: "ok"}
 		}
+	}
+
+	// ── 4b. Check pre-filter (Phase 116, opt-in per rule) ────────────────────
+	// When rule.Check is non-empty AND h.CheckInvoker is wired, synchronously
+	// invoke {prefix}-check-{rule.Check} before dispatching the sandbox.
+	// FAIL-CLOSED: an invocation error OR triggered=false → drop the dispatch
+	// and log. A check that errors must NEVER silently fire a sandbox.
+	// When rule.Check is empty OR CheckInvoker is nil → byte-identical to Phase 115.
+	if rule.Check != "" {
+		if h.CheckInvoker == nil {
+			h.log().Warn("github-bridge: handleEventRoute: check pre-filter configured but CheckInvoker is nil (dropping dispatch)",
+				"check", rule.Check, "event", eventType, "repo", payload.Repo)
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+		}
+		triggered, invokeErr := h.CheckInvoker.InvokeCheck(ctx, rule.Check, req.RawBody)
+		if invokeErr != nil {
+			// Fail-CLOSED: invocation error → do NOT dispatch sandbox.
+			h.log().Error("github-bridge: handleEventRoute: check pre-filter invoke error (fail-closed; dropping dispatch)",
+				"check", rule.Check, "event", eventType, "repo", payload.Repo, "err", invokeErr)
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+		}
+		if !triggered {
+			h.log().Info("github-bridge: handleEventRoute: check pre-filter suppressed dispatch",
+				"check", rule.Check, "event", eventType, "repo", payload.Repo,
+				"log_event", "github_check_prefilter_skipped")
+			return WebhookResponse{StatusCode: 200, Body: "ok"}
+		}
+		h.log().Info("github-bridge: handleEventRoute: check pre-filter passed; proceeding with dispatch",
+			"check", rule.Check, "event", eventType, "repo", payload.Repo)
 	}
 
 	// ── 5. Expand template → build envelope ──────────────────────────────────

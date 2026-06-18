@@ -257,6 +257,27 @@ resource "aws_iam_role_policy" "eventbridge_put_events" {
   })
 }
 
+# Policy: Lambda — invoke {prefix}-check-* Lambdas for the Phase 116 github.events
+# check: pre-filter (additive, in-place edit, no v1.1.0 version bump per the
+# in-place convention). Scoped to check Lambdas only; does NOT grant invoke on any
+# other platform Lambda. Dormant when no github.events rule has check: set.
+resource "aws_iam_role_policy" "lambda_invoke_checks" {
+  name = "${local.function_name}-lambda-invoke-checks"
+  role = aws_iam_role.github_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "InvokeCheckLambdas"
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = "arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.resource_prefix}-check-*"
+      }
+    ]
+  })
+}
+
 # ============================================================
 # Lambda function
 # ============================================================
