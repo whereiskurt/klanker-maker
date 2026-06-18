@@ -53,10 +53,14 @@ spec:
     enforcement: proxy
     egress:
       # Must cover the agent-CLI install sources or the on-box km-queue runner
-      # waits forever "for claude to land on PATH" (Phase 116 UAT Bug K). Mirrors
-      # github-review's proven allowlist (.github*/.amazonaws/api.anthropic) which
-      # installs + runs claude successfully.
+      # never finds claude and the queued prompt never executes (Phase 116 UAT Bug K).
+      # The agent CLI is installed at boot via `curl https://herdr.dev/install.sh`
+      # plus node/npm; on a narrow allowlist that install is BLOCKED (learn.v2 works
+      # only because it allows "*"). These suffixes cover the install + the agent API.
       allowedDNSSuffixes:
+        - "herdr.dev"              # agent CLI installer (curl https://herdr.dev/install.sh)
+        - ".npmjs.org"             # npm registry (node + agent deps)
+        - "nodejs.org"             # node runtime download
         - ".github.com"
         - ".githubusercontent.com"
         - ".amazonaws.com"
