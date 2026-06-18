@@ -2683,7 +2683,14 @@ Plans:
 7. `km check ls|get|logs|schedule|rm|sync` operate the check fleet; `km doctor` reports orphan check Lambdas/schedules and config drift.
 8. The two `profiles/checks/` examples are deployed live and demonstrated: QOTD fetches a quote off the internet; the Wiz example emits advisories + affected-system counts and (with a trigger) fires a sandbox.
 
-**Plans:** 0 plans
+**Plans:** 8 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 116 to break down)
+- [ ] 116-01-PLAN.md — Scaffolding: dynamodb-checks + check-runner-role TF modules + live units + regionalModules() (22->24) + module-order test
+- [ ] 116-02-PLAN.md — pkg/dispatch: factored ResumeOrCreate (alias-resolve + resume/cold decision; warm=agent-run, NOT SQS) + 5 unit tests
+- [ ] 116-03-PLAN.md — config plumbing: ChecksConfig/CheckTrigger + v2->v merge-list entry + merge test
+- [ ] 116-04-PLAN.md — Python bootstrap (_km_check_bootstrap.py) + KM_CHECK_TRIGGER schema + pytest tests
+- [ ] 116-05-PLAN.md — km check CLI + pkg/check: Lambda CRUD, zip/wheels + --image/ECR, DDB row, trigger bake + sourceHash
+- [ ] 116-06-PLAN.md — ttl-handler check-dispatch + check-run cases + CheckDispatch EventBridge rule + widened IAM + km at check-run
+- [ ] 116-07-PLAN.md — km doctor check group + github.events check: pre-filter + QOTD/Wiz example checks + docs
+- [ ] 116-08-PLAN.md — Live deploy + E2E demo (QOTD S3 output; Wiz trigger -> CheckDispatch -> resume) + 116-UAT.md
