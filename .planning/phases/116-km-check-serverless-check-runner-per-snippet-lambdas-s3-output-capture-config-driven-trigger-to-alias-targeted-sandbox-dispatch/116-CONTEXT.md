@@ -79,15 +79,28 @@ below is locked from it.
   only `events:PutEvents`.
 - **Stage B (Go, in `ttl-handler`):** a new `CheckDispatch` EventBridge rule → new
   case in the `eventType` switch → `pkg/dispatch.ResumeOrCreate(alias, prompt,
-  profile, onAbsent)`: running → SQS enqueue; stopped/paused → `EC2Resumer.
-  StartSandbox` → enqueue; absent (`ErrNoResumableInstance`) → `onAbsent`
-  (cold `PutSandboxCreate` | skip). Cooldown enforced HERE via the nonces table
-  (`check-trigger:{name}`).
-- **`pkg/dispatch` is factored from the EXISTING GitHub + H1 bridge resume-or-cold-
-  create logic** and shared by both bridges (parity preserved) AND the check path —
-  one source of truth; NO Python boto3 reimplementation of the sandbox-id-tag /
-  `ErrNoResumableInstance` / ambiguous-alias footguns.
-- `ttl-handler` IAM widened with SQS-send + cold `PutSandboxCreate`.
+  profile, onAbsent)`: resolve alias → sandbox-id; **sandbox exists** → reuse
+  `ttl-handler` `handleAgentRun` mechanics (instance-by-`tag:km:sandbox-id`,
+  auto-resume a stopped/paused box, SSM SendCommand the prompt via the CANONICAL
+  command builder); **absent** → `onAbsent` (cold `PutSandboxCreate` | skip).
+  Cooldown enforced HERE via the nonces table (`check-trigger:{name}`).
+- **RESOLVED (research open question — warm-path target):** the warm/resume path
+  uses `handleAgentRun`'s **SSM-dispatch**, NOT a per-sandbox inbound FIFO queue.
+  Consequences: (a) NO new per-sandbox queue or on-box poller → **existing sandboxes
+  receive check dispatches WITHOUT recreate**; (b) the GitHub/H1/Slack bridges are
+  **NOT modified** (no SQS-enqueue sharing → no parity risk); (c) fire-and-forget is
+  the correct semantics for a triggered check (no Slack/GitHub thread to continue).
+- **`pkg/dispatch` reduces to alias-resolution + the resume/cold DECISION** — reuse
+  the existing `DynamoAliasResolver.ResolveByAliasWithStatus`
+  (`pkg/github/bridge/aws_adapters.go`) as a library + the sandbox-id-tag namespace
+  handling; the warm terminal action delegates to `handleAgentRun`, the cold to
+  `PutSandboxCreate`. NO Python boto3 reimplementation of those footguns.
+- **Planner note:** reuse the *canonical* agent-run command builder, not a stale
+  fork (see project memory `project_ttl_agent_run_stale_fork`: headless no-bedrock
+  OAuth token, plugin sync, full `/etc/profile.d` sourcing).
+- `ttl-handler` IAM widened with cold `PutSandboxCreate` (`events:PutEvents`) + any
+  SSM/EC2 perms it lacks for `handleAgentRun` (delta is small — it already does EC2
+  resume + SSM SendCommand).
 - **Dispatch host = `ttl-handler`** (no new fleet Lambda).
 
 ### Invocation (all three)

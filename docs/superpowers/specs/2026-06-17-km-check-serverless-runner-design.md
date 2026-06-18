@@ -195,33 +195,52 @@ return it emits **one** `CheckDispatch` event to the `km.sandbox` bus:
 
 The check Lambda's role therefore needs only `events:PutEvents`.
 
-### Stage B — dispatch (Go, in `ttl-handler`, reusing the bridge self-heal)
+### Stage B — dispatch (Go, in `ttl-handler`)
 
 A new `CheckDispatch` EventBridge rule targets `ttl-handler`; a new case in its
-`eventType` switch calls a shared helper:
+`eventType` switch performs:
 
 ```
 pkg/dispatch.ResumeOrCreate(alias, prompt, profile, onAbsent)
-  resolve alias (ResolveByAliasWithStatus):
-    running        -> SQS enqueue prompt to the sandbox's inbound FIFO
-    stopped/paused -> EC2Resumer.StartSandbox -> enqueue
-    absent (ErrNoResumableInstance):
+  resolve alias -> sandbox id (DynamoAliasResolver.ResolveByAliasWithStatus):
+    sandbox exists (any non-terminated state):
+      -> agent-run dispatch (ttl-handler handleAgentRun mechanics, AutoStart=true):
+         resolve instance by tag:km:sandbox-id; if stopped/paused, StartInstances
+         + wait-for-running + budget-resume-close + DDB status=running + wait-for-SSM;
+         then SSM SendCommand the prompt into the agent (canonical command builder).
+    sandbox absent (no row / ErrNoResumableInstance):
       onAbsent == cold-create -> PutSandboxCreate(profile, prompt envelope)
       onAbsent == skip         -> log + drop
 ```
 
-This is the **exact** resume-or-cold-create logic from the Phase 109/114 bridges —
-including the sandbox-id-tag namespace handling, `ErrNoResumableInstance`, and the
-ambiguous-alias trap. **The bridge logic is factored into `pkg/dispatch`** and shared
-by both the bridges and the check path (one source of truth — no Python boto3
-reimplementation of those footguns).
+**Resolution of the research open question (warm-path target):** the warm/resume
+path reuses `ttl-handler`'s **existing `handleAgentRun` SSM-dispatch mechanic** —
+NOT a per-sandbox inbound FIFO queue. `handleAgentRun` (`cmd/ttl-handler/main.go`)
+already resolves the instance by `tag:km:sandbox-id`, auto-resumes a stopped/paused
+box (`StartInstances` + wait-for-running + budget-resume-close + DDB status +
+wait-for-SSM), and SSM-dispatches the prompt. **Consequences:** (a) no new
+per-sandbox queue or on-box poller, so **existing sandboxes receive check
+dispatches without recreate**; (b) the bridges are **not modified** (no SQS-enqueue
+sharing, no parity risk) — they keep their thread-oriented SQS path; (c) checks are
+fire-and-forget prompts, which is the correct semantics for a triggered check (no
+Slack/GitHub thread to continue). The shared `pkg/dispatch` therefore reduces to
+**alias-resolution + the resume/cold decision** (reusing the existing
+`DynamoAliasResolver` and the sandbox-id-tag namespace handling), with the warm
+terminal action delegated to `handleAgentRun` and the cold to `PutSandboxCreate`.
+
+> **Planner note:** reuse the *canonical* agent-run command builder, not a stale
+> fork — see the known `handleAgentRun` divergence (project memory
+> `project_ttl_agent_run_stale_fork`: headless no-bedrock OAuth token, plugin sync,
+> full `/etc/profile.d` sourcing). If `handleAgentRun` currently uses a divergent
+> builder, the check path should route through the canonical one.
 
 Cooldown is enforced **here** via the nonces table (key `check-trigger:{name}`),
 the same mechanism as bridge event cooldowns.
 
-`ttl-handler` IAM is widened with SQS-send + cold `PutSandboxCreate` (it already
-holds EC2 resume + EventBridge consumption from `handleResume` / `handleAgentRun` /
-`handleScheduleCreate`).
+`ttl-handler` IAM is widened with cold `PutSandboxCreate` (`events:PutEvents`) and
+any SSM/EC2 perms it does not already hold for `handleAgentRun` (it already does the
+EC2 resume + SSM SendCommand + EventBridge consumption from `handleResume` /
+`handleAgentRun` / `handleScheduleCreate`, so the delta is small).
 
 ## Invocation
 
@@ -323,7 +342,8 @@ createdAt, updatedAt`.
 |------|-------|
 | Imperative workload provisioning | `km create` sandbox pattern (SDK, DDB-tracked) |
 | Cold sandbox create w/ prompt | `pkg/aws/eventbridge.go` `PutSandboxCreate` + create-handler `--prompt` |
-| Resume-or-cold-create self-heal | Phase 109/114 bridge logic → factored `pkg/dispatch` |
+| Warm/resume prompt dispatch | `cmd/ttl-handler/main.go` `handleAgentRun` (instance-by-tag, auto-resume, SSM SendCommand) |
+| Alias → sandbox-id resolution | `pkg/github/bridge/aws_adapters.go` `DynamoAliasResolver.ResolveByAliasWithStatus` (reused as a library; bridges unmodified) |
 | Scheduled serverless execution | `cmd/ttl-handler/main.go` `handleScheduleCreate` (EventBridge Scheduler) |
 | Event→prompt template expansion | `pkg/github/bridge/event_router.go` `ExpandEventTemplate` |
 | Config-driven rule block + env-baking | `github.events:` / `KM_GITHUB_EVENTS` |
