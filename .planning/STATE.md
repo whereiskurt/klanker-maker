@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 115-06-PLAN.md Tasks 1-2 (poller surgery + docs); Task 3 is checkpoint:human-verify pending orchestrator E2E"
-last_updated: "2026-06-16T00:37:02.464Z"
-last_activity: 2026-06-16
+stopped_at: Completed 116-02-PLAN.md (pkg/dispatch ResumeOrCreate TDD complete)
+last_updated: "2026-06-18T00:31:49.610Z"
+last_activity: 2026-06-18
 progress:
-  total_phases: 131
+  total_phases: 132
   completed_phases: 115
-  total_plans: 575
-  completed_plans: 537
+  total_plans: 583
+  completed_plans: 538
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-16
+Last activity: 2026-06-18
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -574,6 +574,7 @@ Progress: [█████████░] 91%
 | Phase 115-generic-github-webhook-event-prompt-router P04 | 296s | 2 tasks | 5 files |
 | Phase 115-generic-github-webhook-event-prompt-router P05 | 829s | 2 tasks | 3 files |
 | Phase 115-generic-github-webhook-event-prompt-router P06 | 855s | 2 tasks | 4 files |
+| Phase 116-km-check-serverless-check-runner P02 | 2 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1642,6 +1643,7 @@ Recent decisions affecting current work:
 - [Phase 115-generic-github-webhook-event-prompt-router]: GetGithubEvents added to DoctorConfigProvider interface: consistent with all other github.* field access patterns in RunDoctor
 - [Phase 115-generic-github-webhook-event-prompt-router]: Targeted golden update instead of CAPTURE_PRE92_BASELINE=1 regeneration to avoid breaking SubagentStop semantic check in Phase92 byte-identity test
 - [Phase 115-generic-github-webhook-event-prompt-router]: KIND defaults to issue_comment branch when empty — backward compat for pre-Phase-115 bridge envelopes in mixed-version fleet
+- [Phase 116-02]: pkg/dispatch warm path = SSM AgentRunSink (not SQS enqueue); bridges unmodified; cooldown fail-open on nonce store errors
 
 ### Roadmap Evolution
 
@@ -1784,6 +1786,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-16T00:37:02.453Z
-Stopped at: Completed 115-06-PLAN.md Tasks 1-2 (poller surgery + docs); Task 3 is checkpoint:human-verify pending orchestrator E2E
+Last session: 2026-06-18T00:31:49.593Z
+Stopped at: Completed 116-02-PLAN.md (pkg/dispatch ResumeOrCreate TDD complete)
 Resume file: None
