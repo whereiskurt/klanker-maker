@@ -183,6 +183,9 @@ func (s *ttlColdCreateSink) ColdCreate(ctx context.Context, alias, profile, prom
 		ArtifactPrefix: artifactPrefix,
 		Alias:          alias,
 		CreatedBy:      "check",
+		// Phase 116 Bug E fix: carry the expanded trigger prompt so create-handler
+		// forwards it to `km create --prompt` and the new box runs it on first boot.
+		Prompt: prompt,
 	}
 	detailBytes, err := json.Marshal(detail)
 	if err != nil {

@@ -58,6 +58,12 @@ type CreateEvent struct {
 	AIBudget       float64 `json:"ai_budget,omitempty"`
 	NoBedrock      bool    `json:"no_bedrock,omitempty"`
 
+	// Prompt carries an initial agent prompt for the new box (Phase 116 cold-create
+	// dispatch). When non-empty, it is forwarded to `km create --prompt`, which seeds
+	// the on-box prompt queue (/workspace/.km-agent/queue) drained on first boot.
+	// Empty for plain creates. Mirrors the field on SandboxCreateDetail.
+	Prompt string `json:"prompt,omitempty"`
+
 	// GithubEnvelope carries the JSON-serialized GitHub webhook envelope for
 	// cold-create correction (Phase 97, Pitfall 1 fix). Matches the same field
 	// on SandboxCreateDetail. After provisioning, this is drained into the new
@@ -236,6 +242,12 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 	}
 	if event.NoBedrock {
 		args = append(args, "--no-bedrock")
+	}
+	if event.Prompt != "" {
+		// Phase 116 cold-create: seed the on-box prompt queue so the new box runs
+		// the trigger prompt on first boot. args is exec'd directly (no shell), so a
+		// multi-line prompt is safe as a single arg element.
+		args = append(args, "--prompt", event.Prompt)
 	}
 
 	// Pass context env vars to the subprocess

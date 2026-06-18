@@ -28,6 +28,11 @@ type SandboxCreateDetail struct {
 	Alias          string `json:"alias,omitempty"`        // --alias override, forwarded to create subprocess
 	ScheduleTime   string `json:"schedule_time,omitempty"` // natural language time for deferred create via km at
 
+	// Prompt carries an initial agent prompt for the new box (Phase 116 cold-create
+	// dispatch). When non-empty, create-handler forwards it to `km create --prompt`,
+	// seeding the on-box prompt queue drained on first boot. Empty for plain creates.
+	Prompt string `json:"prompt,omitempty"`
+
 	// GithubEnvelope carries the JSON-serialized GitHub webhook envelope for
 	// cold-create correction (Phase 97, Pitfall 1 fix). When the km-github-bridge
 	// receives a comment trigger for a repo with no running sandbox, it publishes a

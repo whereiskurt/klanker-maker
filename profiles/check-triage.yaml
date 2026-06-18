@@ -1,0 +1,96 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: check-triage
+  labels:
+    tier: development
+    tool: check-runner
+    phase: "116"
+  prefix: chk
+
+# check-triage — Phase 116 lean cold-create target for the serverless check runner.
+#
+# Used as the `profile:` of a checks.triggers rule with on_absent: cold-create.
+# When a check fires and the target alias has no running/stopped box, ttl-handler
+# cold-creates a sandbox from THIS profile and (Phase 116 Bug E fix) seeds the
+# expanded trigger prompt into the on-box prompt queue so the agent runs it on boot.
+#
+# Lifecycle: short-lived (2h TTL / 20m idle), teardownPolicy=stop.
+# Agent: Claude on Bedrock (useBedrock: true) — NO SOPS bundle / injected creds
+# required (unlike github-review, which is no-bedrock + SOPS). This keeps the
+# cold-create path self-contained on a fresh install.
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "20m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: true
+    initCommands:
+      - "yum install -y git jq"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "whereiskurt/*"
+      allowedRefs:
+        - "*"
+
+  network:
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - "api.anthropic.com"
+      allowedHosts: []
+
+  iam:
+    roleSessionDuration: "2h"
+    allowedRegions:
+      - us-east-1
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: false
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+
+  agent:
+    default: claude
+    claude:
+      trustedDirectories:
+        - /workspace
+      tools:
+        autoApprove:
+          - Bash
+          - Read
+          - Write
+          - Edit
+          - Glob
+          - Grep
+          - WebFetch
