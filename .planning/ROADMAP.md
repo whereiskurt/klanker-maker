@@ -2683,7 +2683,7 @@ Plans:
 7. `km check ls|get|logs|schedule|rm|sync` operate the check fleet; `km doctor` reports orphan check Lambdas/schedules and config drift.
 8. The two `profiles/checks/` examples are deployed live and demonstrated: QOTD fetches a quote off the internet; the Wiz example emits advisories + affected-system counts and (with a trigger) fires a sandbox.
 
-**Plans:** 3/8 plans executed
+**Plans:** 4/8 plans executed
 
 Plans:
 - [ ] 116-01-PLAN.md — Scaffolding: dynamodb-checks + check-runner-role TF modules + live units + regionalModules() (22->24) + module-order test

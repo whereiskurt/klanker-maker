@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 116-01-PLAN.md (all 3 tasks)
-last_updated: "2026-06-18T00:34:07.985Z"
+stopped_at: "Completed 116-04-PLAN.md (2 tasks: bootstrap handler + pytest tests)"
+last_updated: "2026-06-18T00:41:55.001Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 132
   completed_phases: 115
   total_plans: 583
-  completed_plans: 540
+  completed_plans: 541
   percent: 91
 ---
 
@@ -577,6 +577,7 @@ Progress: [█████████░] 91%
 | Phase 116-km-check-serverless-check-runner P02 | 2 | 2 tasks | 3 files |
 | Phase 116-km-check-serverless-check-runner P03 | 244s | 3 tasks | 2 files |
 | Phase 116-km-check-serverless-check-runner P01 | 231 | 3 tasks | 10 files |
+| Phase 116 P04 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1650,6 +1651,7 @@ Recent decisions affecting current work:
 - [Phase 116-km-check-serverless-check-runner]: No dependency blocks on dynamodb-checks or check-runner-role live units — role inputs are pure strings, not module outputs; eliminates mock_outputs boilerplate
 - [Phase 116-km-check-serverless-check-runner]: check-runner-role envReqs: [KM_ARTIFACTS_BUCKET] so km init skips gracefully on unconfigured installs, consistent with lambda-*-bridge pattern
 - [Phase 116-km-check-serverless-check-runner]: EventBridge target for check-runner role hardcoded to default event bus (km.sandbox source uses default bus per existing eventbridge.go pattern)
+- [Phase 116]: KM_CHECK_TRIGGER.schema.md is the single source of truth for the trigger contract; check_name (not check) in CheckDispatch Detail; auto_start always true; when_py fail-closed on exception; boto3 stubbed via sys.modules injection in tests
 
 ### Roadmap Evolution
 
@@ -1792,6 +1794,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-18T00:34:07.975Z
-Stopped at: Completed 116-01-PLAN.md (all 3 tasks)
+Last session: 2026-06-18T00:41:54.989Z
+Stopped at: Completed 116-04-PLAN.md (2 tasks: bootstrap handler + pytest tests)
 Resume file: None
