@@ -1998,7 +1998,7 @@ while true; do
       cd /workspace 2>/dev/null || true
       claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
         --dangerously-skip-permissions $RESUME_ARG \
-        --append-system-prompt 'When replying you are posting into a Slack channel, not a terminal or a GitHub comment. Wrap all code, file paths, commands, shell output, logs, and any tabular or columnar data in triple-backtick fenced blocks so they render in monospace. Prefer short bullet lists over wide Markdown tables; when a table is unavoidable keep it to a few narrow columns. Keep replies concise and skimmable.' \
+        --append-system-prompt 'When replying you are posting into a Slack channel that renders GitHub-flavored Markdown natively, including headings, bold, italic, lists, links, and tables. Use Markdown structure to keep replies skimmable: short ## or ### headings to separate sections, bold for key terms, and bullet lists for short enumerations. Present any tabular or columnar data as a real GitHub-flavored Markdown pipe table, and do NOT wrap tables in triple-backtick fences, which forces flat monospace and loses the rendered table. Reserve triple-backtick fenced blocks only for content that must stay verbatim: code, file paths, commands, shell output, and logs. Keep tables to a few narrow columns and replies concise.' \
         > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
       echo \$? > '$RUN_DIR/exit_code'
     " || true
