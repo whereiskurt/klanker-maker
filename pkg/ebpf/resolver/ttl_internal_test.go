@@ -34,3 +34,17 @@ func TestDefaultMinIPLifetime(t *testing.T) {
 		t.Fatalf("defaultMinIPLifetime = %v, want 10m", defaultMinIPLifetime)
 	}
 }
+
+func TestNewResolverDefaultMinIPLifetime(t *testing.T) {
+	r := NewResolver(ResolverConfig{UpstreamAddr: "1.1.1.1:53"})
+	if r.minIPLifetime != defaultMinIPLifetime {
+		t.Fatalf("minIPLifetime = %v, want default %v", r.minIPLifetime, defaultMinIPLifetime)
+	}
+}
+
+func TestNewResolverExplicitMinIPLifetime(t *testing.T) {
+	r := NewResolver(ResolverConfig{UpstreamAddr: "1.1.1.1:53", MinIPLifetime: 90 * time.Second})
+	if r.minIPLifetime != 90*time.Second {
+		t.Fatalf("minIPLifetime = %v, want 90s", r.minIPLifetime)
+	}
+}
