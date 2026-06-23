@@ -21,6 +21,24 @@ type MapUpdater interface {
 	MarkForProxy(ip net.IP) error
 }
 
+// defaultMinIPLifetime is the minimum time a resolved IP is retained in the
+// BPF allowlist, independent of its DNS TTL. CDNs advertise short TTLs for
+// load-balancing but their edge IPs stay routable far longer; binding the
+// firewall lifetime to the raw TTL evicts IPs mid-download and stalls large
+// transfers (e.g. vscode-server). Used when ResolverConfig.MinIPLifetime is 0.
+const defaultMinIPLifetime = 10 * time.Minute
+
+// clampTTL converts a DNS TTL (in seconds) into the lifetime an allowed IP is
+// retained in the BPF allowlist, enforcing a minimum floor. A floor of 0 is
+// treated as "no floor" and returns the raw TTL.
+func clampTTL(ttlSeconds uint32, floor time.Duration) time.Duration {
+	ttl := time.Duration(ttlSeconds) * time.Second
+	if ttl < floor {
+		return floor
+	}
+	return ttl
+}
+
 // ResolverConfig holds all parameters for the DNS resolver daemon.
 type ResolverConfig struct {
 	// ListenAddr is the UDP/TCP address the daemon listens on.
@@ -54,6 +72,11 @@ type ResolverConfig struct {
 	// Defaults to 30 seconds if zero.
 	SweepInterval time.Duration
 
+	// MinIPLifetime is the minimum time a resolved IP is retained in the BPF
+	// allowlist, independent of the DNS TTL. Prevents mid-download eviction for
+	// short-TTL CDNs. Defaults to defaultMinIPLifetime (10m) if zero.
+	MinIPLifetime time.Duration
+
 	// DomainObserver, if non-nil, is called for every DNS query with the domain
 	// (trailing dot stripped) and whether it was allowed. Used by the allowlist
 	// generator's learning mode.
@@ -76,6 +99,8 @@ type Resolver struct {
 	upstream   string        // normalized upstream address (host:port)
 	sweepEvery time.Duration // resolved-entry sweep interval
 
+	minIPLifetime time.Duration // floor for resolved-IP allowlist lifetime
+
 	serverUDP *dns.Server
 	serverTCP *dns.Server
 }
@@ -93,11 +118,17 @@ func NewResolver(cfg ResolverConfig) *Resolver {
 		sweepEvery = 30 * time.Second
 	}
 
+	minLife := cfg.MinIPLifetime
+	if minLife <= 0 {
+		minLife = defaultMinIPLifetime
+	}
+
 	return &Resolver{
-		cfg:        cfg,
-		allowlist:  NewAllowlist(cfg.AllowedSuffixes),
-		upstream:   upstream,
-		sweepEvery: sweepEvery,
+		cfg:           cfg,
+		allowlist:     NewAllowlist(cfg.AllowedSuffixes),
+		upstream:      upstream,
+		sweepEvery:    sweepEvery,
+		minIPLifetime: minLife,
 	}
 }
 
@@ -290,11 +321,10 @@ func (r *Resolver) handleQuery(w dns.ResponseWriter, req *dns.Msg) {
 		}
 
 		if len(ips) > 0 {
-			// Use the minimum TTL from the response; floor at 5 seconds.
-			ttl := time.Duration(minTTL) * time.Second
-			if ttl < 5*time.Second {
-				ttl = 5 * time.Second
-			}
+			// Retain the IP for max(DNS TTL, r.minIPLifetime). CDNs advertise
+			// short TTLs for load-balancing but their edge IPs stay routable far
+			// longer; the floor prevents mid-download eviction (e.g. vscode-server).
+			ttl := clampTTL(minTTL, r.minIPLifetime)
 			r.allowlist.AddResolved(domain, ips, ttl)
 		}
 	}
