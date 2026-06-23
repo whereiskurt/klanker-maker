@@ -21,6 +21,24 @@ type MapUpdater interface {
 	MarkForProxy(ip net.IP) error
 }
 
+// defaultMinIPLifetime is the minimum time a resolved IP is retained in the
+// BPF allowlist, independent of its DNS TTL. CDNs advertise short TTLs for
+// load-balancing but their edge IPs stay routable far longer; binding the
+// firewall lifetime to the raw TTL evicts IPs mid-download and stalls large
+// transfers (e.g. vscode-server). Used when ResolverConfig.MinIPLifetime is 0.
+const defaultMinIPLifetime = 10 * time.Minute
+
+// clampTTL converts a DNS TTL (in seconds) into the lifetime an allowed IP is
+// retained in the BPF allowlist, enforcing a minimum floor. A floor of 0 is
+// treated as "no floor" and returns the raw TTL.
+func clampTTL(ttlSeconds uint32, floor time.Duration) time.Duration {
+	ttl := time.Duration(ttlSeconds) * time.Second
+	if ttl < floor {
+		return floor
+	}
+	return ttl
+}
+
 // ResolverConfig holds all parameters for the DNS resolver daemon.
 type ResolverConfig struct {
 	// ListenAddr is the UDP/TCP address the daemon listens on.
