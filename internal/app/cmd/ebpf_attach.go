@@ -54,6 +54,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		httpProxyPID  uint32
 		observe       bool
 		observeOutput string
+		minIPLifetime time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -64,7 +65,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
 				allowedDNS, allowedHosts, proxyHosts, cgroupPath,
-				enableTLS, allowedRepos, httpProxyPID, observe, observeOutput)
+				enableTLS, allowedRepos, httpProxyPID, observe, observeOutput,
+				minIPLifetime)
 		},
 	}
 
@@ -93,6 +95,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Enable learning mode: record observed DNS/TLS traffic and write profile JSON on shutdown")
 	cmd.Flags().StringVar(&observeOutput, "observe-output", "/tmp/km-observed.json",
 		"Local path to write observed JSON on shutdown (used with --observe)")
+	cmd.Flags().DurationVar(&minIPLifetime, "min-ip-lifetime", 10*time.Minute,
+		"Minimum lifetime a resolved IP is retained in the BPF allowlist, independent of DNS TTL (prevents mid-download eviction for short-TTL CDNs)")
 
 	return cmd
 }
@@ -179,6 +183,7 @@ func runEbpfAttach(
 	httpProxyPID uint32,
 	observe bool,
 	observeOutput string,
+	minIPLifetime time.Duration,
 ) error {
 	logger := log.With().Str("sandbox_id", sandboxID).Logger()
 
@@ -289,6 +294,7 @@ func runEbpfAttach(
 			AllowedSuffixes: dnsSuffixes,
 			MapUpdater:      enforcer,
 			ProxyHosts:      proxyHostList,
+			MinIPLifetime:   minIPLifetime,
 		}
 		// Wire the recorder as a DNS observer when in learning mode.
 		if recorder != nil {
