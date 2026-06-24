@@ -31,15 +31,14 @@ func generateLearnV2Userdata(t *testing.T) string {
 	}
 	// pkg/compiler/<thisfile> -> repo root is two dirs up.
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
-	profPath := filepath.Join(repoRoot, "profiles", "learn.v2.yaml")
+	profilesDir := filepath.Join(repoRoot, "profiles")
 
-	raw, err := os.ReadFile(profPath)
+	// Resolve the full extends DAG so that once learn.v2.yaml gains `extends:`,
+	// the merged spec (not just the partial leaf) is compiled — byte-identical to
+	// the frozen pre-Phase-92 baseline.
+	p, err := profile.Resolve("learn.v2", []string{profilesDir})
 	if err != nil {
-		t.Fatalf("read profile %s: %v", profPath, err)
-	}
-	p, err := profile.Parse(raw)
-	if err != nil {
-		t.Fatalf("parse profile %s: %v", profPath, err)
+		t.Fatalf("resolve profile learn.v2: %v", err)
 	}
 
 	// Fixed inputs mirror the existing golden-test convention

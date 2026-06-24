@@ -1,0 +1,11 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-iam-us-east-1
+  abstract: true
+
+spec:
+  iam:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1

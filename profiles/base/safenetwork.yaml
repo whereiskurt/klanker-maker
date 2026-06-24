@@ -1,0 +1,14 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-safenetwork
+  abstract: true
+
+spec:
+  network:
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        - "*"
+      allowedHosts:
+        - "*"

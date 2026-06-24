@@ -1,0 +1,11 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-artifacts-workspace
+  abstract: true
+
+spec:
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 500
