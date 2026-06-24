@@ -34,14 +34,16 @@ type fakeSlackAPI struct {
 
 	// capture calls
 	createChannelName  string
+	createPrivate      bool // Phase 118: records the private arg for Plan 02 assertion
 	findChannelCalled  bool
 	joinChannelCalled  bool
 	inviteSharedCalled bool
 	channelInfoCalled  bool
 }
 
-func (f *fakeSlackAPI) CreateChannel(_ context.Context, name string) (string, error) {
+func (f *fakeSlackAPI) CreateChannel(_ context.Context, name string, private bool) (string, error) {
 	f.createChannelName = name
+	f.createPrivate = private
 	f.createCalls++
 	return f.createChannelResult, f.createChannelErr
 }

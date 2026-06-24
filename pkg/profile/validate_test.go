@@ -1645,3 +1645,115 @@ func TestValidateSchemaExtendsStringForm(t *testing.T) {
 		}
 	}
 }
+
+// ---- Phase 118: AC6 validate warn rules (RED until Plan 02 adds them) ----
+//
+// These tests assert that ValidateSemantic emits exactly one WARNING (not a
+// hard error) when:
+//   - private:true is set but perSandbox is not true (private channel has no
+//     per-sandbox channel to make private).
+//   - inbound.allow is non-empty but perSandbox is not true (the per-sandbox
+//     DDB row is never written for shared-channel sandboxes, so allow is a no-op).
+//
+// Conversely, when perSandbox:true is set, NEITHER warning should appear.
+//
+// All four tests are RED until Plan 02 adds the warn rules to validate.go.
+
+// TestValidateSemantic_Slack_Private_WithoutPerSandbox_Warning — AC6a.
+// private:true + perSandbox absent/false → exactly one WARNING at
+// spec.notification.slack.private.
+func TestValidateSemantic_Slack_Private_WithoutPerSandbox_Warning(t *testing.T) {
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled: boolPtr(true),
+			Private: true,
+			// PerSandbox intentionally NOT set
+		},
+	})
+	errs := profile.ValidateSemantic(p)
+
+	var foundWarn bool
+	for _, e := range errs {
+		if !e.IsWarning && strings.Contains(e.Message, "private") {
+			t.Errorf("[RED until Plan 02] expected only warning (not hard error) for private without perSandbox, got hard error: %s", e.Error())
+		}
+		if e.IsWarning && (strings.Contains(e.Path, "slack.private") || strings.Contains(e.Message, "private")) {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		// RED: until Plan 02 adds the warn rule.
+		t.Errorf("[RED until Plan 02] expected WARNING about 'private' without perSandbox:true, got: %v", errs)
+	}
+}
+
+// TestValidateSemantic_Slack_Allow_WithoutPerSandbox_Warning — AC6b.
+// inbound.allow non-empty + perSandbox absent/false → exactly one WARNING.
+func TestValidateSemantic_Slack_Allow_WithoutPerSandbox_Warning(t *testing.T) {
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled: boolPtr(true),
+			Inbound: &profile.NotificationSlackInboundSpec{
+				Enabled: boolPtr(true),
+				Allow:   []string{"U0OPERATOR"},
+			},
+			// PerSandbox intentionally NOT set
+		},
+	})
+	errs := profile.ValidateSemantic(p)
+
+	var foundWarn bool
+	for _, e := range errs {
+		if !e.IsWarning && strings.Contains(e.Message, "allow") {
+			t.Errorf("[RED until Plan 02] expected only warning (not hard error) for allow without perSandbox, got hard error: %s", e.Error())
+		}
+		if e.IsWarning && (strings.Contains(e.Path, "inbound.allow") || strings.Contains(e.Message, "allow")) {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		// RED: until Plan 02 adds the warn rule.
+		t.Errorf("[RED until Plan 02] expected WARNING about 'inbound.allow' without perSandbox:true, got: %v", errs)
+	}
+}
+
+// TestValidateSemantic_Slack_Private_WithPerSandbox_NoWarning — AC6c.
+// private:true + perSandbox:true → no warning for private.
+func TestValidateSemantic_Slack_Private_WithPerSandbox_NoWarning(t *testing.T) {
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			PerSandbox: boolPtr(true),
+			Private:    true,
+		},
+	})
+	errs := profile.ValidateSemantic(p)
+
+	for _, e := range errs {
+		if strings.Contains(e.Path, "slack.private") || (strings.Contains(e.Message, "private") && strings.Contains(e.Message, "perSandbox")) {
+			t.Errorf("unexpected warning/error about private with perSandbox:true: %s", e.Error())
+		}
+	}
+}
+
+// TestValidateSemantic_Slack_Allow_WithPerSandbox_NoWarning — AC6d.
+// inbound.allow + perSandbox:true → no warning for allow.
+func TestValidateSemantic_Slack_Allow_WithPerSandbox_NoWarning(t *testing.T) {
+	p := minimalNotificationWith(&profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			PerSandbox: boolPtr(true),
+			Inbound: &profile.NotificationSlackInboundSpec{
+				Enabled: boolPtr(true),
+				Allow:   []string{"U0OPERATOR"},
+			},
+		},
+	})
+	errs := profile.ValidateSemantic(p)
+
+	for _, e := range errs {
+		if strings.Contains(e.Path, "inbound.allow") || (strings.Contains(e.Message, "allow") && strings.Contains(e.Message, "perSandbox")) {
+			t.Errorf("unexpected warning/error about allow with perSandbox:true: %s", e.Error())
+		}
+	}
+}

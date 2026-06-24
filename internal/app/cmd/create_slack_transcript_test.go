@@ -21,7 +21,7 @@ type fakeSlackAPIWithMembers struct {
 	err     error
 }
 
-func (f *fakeSlackAPIWithMembers) CreateChannel(_ context.Context, _ string) (string, error) {
+func (f *fakeSlackAPIWithMembers) CreateChannel(_ context.Context, _ string, _ bool) (string, error) {
 	return "", nil
 }
 func (f *fakeSlackAPIWithMembers) FindChannelByName(_ context.Context, _ string, _ int) (string, error) {
