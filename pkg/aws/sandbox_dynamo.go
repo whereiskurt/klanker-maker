@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -265,6 +266,13 @@ func unmarshalSlackFields(item map[string]dynamodbtypes.AttributeValue, meta *Sa
 	// BOOL. Tolerate both so the round-trip survives regardless of the writer.
 	meta.SlackMentionOnly = readTriStateBool(item, "slack_mention_only")
 	meta.SlackReactAlways = readTriStateBool(item, "slack_react_always")
+	// Phase 118: per-sandbox inbound allow-list. Stored as comma-joined S attribute.
+	// Absent or empty → meta.SlackAllow remains nil (fall-back signal: use install-level
+	// default). This path tolerates both BOOL-typed stray writes and S (the canonical
+	// writer).
+	if v, ok := item["slack_allow"].(*dynamodbtypes.AttributeValueMemberS); ok && v.Value != "" {
+		meta.SlackAllow = strings.Split(v.Value, ",")
+	}
 }
 
 // readTriStateBool reads a tri-state *bool DynamoDB attribute that may have been
@@ -412,6 +420,14 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 	}
 	if meta.SlackReactAlways != nil {
 		item["slack_react_always"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: *meta.SlackReactAlways}
+	}
+	// Phase 118: per-sandbox inbound allow-list. Stored as comma-joined S attribute
+	// (NOT StringSet/SS) so UpdateSandboxAttr (string-only) can write it and the
+	// bridge's FetchByChannel can read it uniformly. Absent (len==0) signals "use
+	// install-level default". Must be emitted here so read-modify-write paths
+	// (resume/extend/ttl-handler) do NOT strip it on the next full-row PutItem.
+	if len(meta.SlackAllow) > 0 {
+		item["slack_allow"] = &dynamodbtypes.AttributeValueMemberS{Value: strings.Join(meta.SlackAllow, ",")}
 	}
 
 	// Phase 97 — GitHub inbound metadata. Symmetric with unmarshalGitHubFields.
