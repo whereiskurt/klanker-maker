@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 117-02-PLAN.md (2 tasks: deepMerge engine + DAG resolve with memo/diamond)"
-last_updated: "2026-06-24T12:37:45.879Z"
+stopped_at: "Completed 117-03-PLAN.md (2 tasks: full DAG resolve in km validate + km create, validate-all base/ skip)"
+last_updated: "2026-06-24T12:54:35.369Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 5
-  completed_plans: 2
+  completed_plans: 3
   percent: 91
 ---
 
@@ -582,6 +582,7 @@ Progress: [█████████░] 91%
 | Phase 116 P05 | 8 | 3 tasks | 11 files |
 | Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends P01 | 7min | 3 tasks | 10 files |
 | Phase 117 P02 | 635s | 2 tasks | 23 files |
+| Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends P03 | 728 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1663,6 +1664,8 @@ Recent decisions affecting current work:
 - [Phase 117]: Fragment marker = metadata.abstract: true (locked decision B); execution.initCommandsAppend typed field (locked decision D); goccy context-aware UnmarshalYAML signature confirmed at v1.19.2
 - [Phase 117]: A (locked): union+dedup EVERYWHERE for all list fields; child cannot narrow base allowlist in v1
 - [Phase 117]: D (locked): initCommandsAppend post-merge pass appends to initCommands; general +key convention deferred
+- [Phase 117-03]: Validate merged bytes (yaml.Marshal resolved → profile.Validate) not ValidateSchema(raw): partial child bytes fail required-field schema for inherited-field leaves
+- [Phase 117-03]: Leaf-name resolve: strings.TrimSuffix(filepath.Base(path), .yaml) → profile.Resolve(leafName) walks full DAG from leaf not first parent
 
 ### Roadmap Evolution
 
@@ -1806,6 +1809,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-24T12:37:45.873Z
-Stopped at: Completed 117-02-PLAN.md (2 tasks: deepMerge engine + DAG resolve with memo/diamond)
+Last session: 2026-06-24T12:54:35.363Z
+Stopped at: Completed 117-03-PLAN.md (2 tasks: full DAG resolve in km validate + km create, validate-all base/ skip)
 Resume file: None
