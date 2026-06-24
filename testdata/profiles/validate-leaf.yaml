@@ -1,0 +1,18 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: validate-leaf
+  labels:
+    tier: test
+
+# Concrete leaf profile used by TestValidateMultiParentLeaf.
+# Extends validate-base which supplies all required fields.
+# This leaf only overrides lifecycle TTL — all other required fields come from the base.
+extends: validate-base
+
+spec:
+  lifecycle:
+    ttl: "2h"
+  execution:
+    env:
+      TEST_MODE: validate-leaf

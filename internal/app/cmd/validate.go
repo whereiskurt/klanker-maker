@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	goyaml "github.com/goccy/go-yaml"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
@@ -17,9 +18,10 @@ import (
 //
 // For each file:
 //  1. Read file contents
-//  2. Parse to check for extends field
-//  3. If extends present: resolve inheritance chain using profile.Resolve()
-//  4. Run profile.Validate() on the resolved profile bytes
+//  2. Check for abstract fragment (metadata.abstract: true) — skip with message
+//  3. If extends present: resolve FULL inheritance DAG using profile.Resolve(<leaf>)
+//     then validate the fully-merged result
+//  4. Run profile.Validate() on the (resolved or raw) profile bytes
 //  5. Print errors or success per-file
 //
 // Exit code 1 if ANY file is invalid.
@@ -28,7 +30,7 @@ func NewValidateCmd(cfg *config.Config) *cobra.Command {
 		Use:   "validate <profile.yaml> [profile2.yaml ...]",
 		Short: "Validate one or more sandbox profile YAML files",
 		Long:  helpText("validate"),
-		Args: cobra.MinimumNArgs(1),
+		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runValidate(cfg, args)
 		},
@@ -56,7 +58,7 @@ func runValidate(cfg *config.Config, files []string) error {
 }
 
 // validateFile validates a single profile YAML file.
-// Returns true if validation failed, false if it passed.
+// Returns true if validation failed, false if it passed (or skipped as abstract).
 func validateFile(cfg *config.Config, filePath string) bool {
 	log.Debug().Str("file", filePath).Msg("validating profile")
 
@@ -67,47 +69,58 @@ func validateFile(cfg *config.Config, filePath string) bool {
 		return true
 	}
 
-	// Step 2: Parse to check for extends field
+	// Step 2: Abstract-fragment guard — skip standalone validation with a clear message.
+	// Abstract fragments (metadata.abstract: true) are partial base definitions intended
+	// for inheritance only. They deliberately omit required fields that concrete children
+	// supply. Validating them standalone would produce spurious required-field errors.
+	if profile.IsAbstractFragment(raw) {
+		fmt.Printf("SKIP: %s is an abstract base fragment (metadata.abstract: true); validated only when merged into a leaf profile via extends:\n", filePath)
+		return false
+	}
+
+	// Step 3: Parse to check for extends field
 	parsed, parseErr := profile.Parse(raw)
 
-	// Step 3: Resolve inheritance chain if extends is present.
-	// Add the file's directory to search paths so sibling profiles can be resolved.
-	// Resolve() returns a fully merged profile with all inherited fields applied.
-	var validationTarget []byte
+	// Step 4: Resolve the FULL multi-parent extends DAG if extends is present.
+	// We resolve the LEAF profile by name so the full DAG is walked (not just the
+	// first parent). The leaf's own directory is prepended to searchPaths so that
+	// siblings/base fragments in the same directory are found by name.
 	if parseErr == nil && parsed.Extends.IsSet() {
 		log.Debug().
 			Str("file", filePath).
 			Str("extends", strings.Join(parsed.Extends.List(), ",")).
-			Msg("resolving inheritance chain")
+			Msg("resolving full inheritance DAG")
 
-		// Include the file's directory in search paths for relative profile resolution
+		// Derive the leaf name: strip the .yaml suffix from the base filename.
+		// e.g. "profiles/dc34.ami.yaml" → leaf name "dc34.ami"
+		leafName := strings.TrimSuffix(filepath.Base(filePath), ".yaml")
+
+		// Include the file's directory in search paths (FIRST) so that relative
+		// sibling/base profiles resolve correctly (RESEARCH Pitfall 6).
 		fileDir := filepath.Dir(filePath)
 		searchPaths := append([]string{fileDir}, cfg.ProfileSearchPaths...)
 
-		// Resolve uses the first parent name for single-parent resolution (Plan 01).
-		// Plan 03 will wire multi-parent DAG resolution here.
-		resolved, resolveErr := profile.Resolve(parsed.Extends.List()[0], searchPaths)
+		// Resolve the leaf: this walks the full DAG from the leaf through all parents.
+		resolved, resolveErr := profile.Resolve(leafName, searchPaths)
 		if resolveErr != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %s: failed to resolve extends %q: %v\n", filePath, strings.Join(parsed.Extends.List(), ","), resolveErr)
 			return true
 		}
 
-		// Marshal the resolved (parent) profile, then merge child fields on top.
-		// Since profile.Resolve returns the parent chain fully resolved, we need
-		// to apply the child's overrides. We do this by validating the raw child
-		// bytes for schema correctness, then validating the semantic constraints
-		// on the merged profile (resolved parent + child overrides).
-		//
-		// Schema validation: run on raw child bytes (catches structural issues)
-		schemaErrs := profile.ValidateSchema(raw)
-		// Semantic validation: run on the resolved profile (catches logical issues
-		// that depend on inherited values, e.g. ttl vs idleTimeout from parent)
-		semanticErrs := profile.ValidateSemantic(resolved)
+		// Validate the fully-merged profile (not the raw partial child bytes).
+		// We marshal the resolved struct to YAML and run the full Validate() pipeline
+		// (schema + semantic) on the merged result. This correctly handles partial
+		// child profiles that inherit required fields from their parents.
+		mergedBytes, marshalErr := goyaml.Marshal(resolved)
+		if marshalErr != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %s: failed to marshal resolved profile: %v\n", filePath, marshalErr)
+			return true
+		}
 
-		allErrs := append(schemaErrs, semanticErrs...)
-		if len(allErrs) > 0 {
+		errs := profile.Validate(mergedBytes)
+		if len(errs) > 0 {
 			failed := false
-			for _, e := range allErrs {
+			for _, e := range errs {
 				if e.IsWarning {
 					fmt.Fprintf(os.Stderr, "WARN: %s: %s\n", filePath, e.Error())
 				} else {
@@ -127,10 +140,7 @@ func validateFile(cfg *config.Config, filePath string) bool {
 	}
 
 	// No extends — validate raw bytes directly
-	validationTarget = raw
-
-	// Step 4: Run validation
-	errs := profile.Validate(validationTarget)
+	errs := profile.Validate(raw)
 
 	// Step 5: Report results — separate warnings from errors.
 	// Warnings (IsWarning=true) print with WARN: prefix but do not cause exit 1.

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -113,5 +114,60 @@ func TestValidateBuiltinProfile(t *testing.T) {
 				}
 				return ""
 			}())
+	}
+}
+
+// TestValidateAbstractFragment verifies that km validate on an abstract fragment
+// (metadata.abstract: true) exits 0 with a "SKIP" message (not a required-field crash).
+func TestValidateAbstractFragment(t *testing.T) {
+	km := buildKM(t)
+	profileFile := testdataPath(t, "abstract-fragment.yaml")
+
+	cmd := exec.Command(km, "validate", profileFile)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("km validate abstract fragment: expected exit 0, got error: %v\nstdout: %s\nstderr: %s",
+			err, out, func() string {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					return string(exitErr.Stderr)
+				}
+				return ""
+			}())
+	}
+
+	outStr := string(out)
+	if !strings.Contains(outStr, "SKIP") {
+		t.Errorf("expected output to contain 'SKIP' for abstract fragment, got: %q", outStr)
+	}
+	if !strings.Contains(outStr, "abstract") {
+		t.Errorf("expected output to mention 'abstract' for abstract fragment skip, got: %q", outStr)
+	}
+}
+
+// TestValidateMultiParentLeaf verifies that km validate resolves the full extends DAG
+// and validates the merged leaf profile without required-field errors that would occur
+// if extends were not resolved (the raw child bytes only have override fields).
+func TestValidateMultiParentLeaf(t *testing.T) {
+	km := buildKM(t)
+	// validate-leaf.yaml extends validate-base.yaml (abstract, has all required fields).
+	// The leaf only overrides lifecycle.ttl; all other required fields come from the base.
+	// Without full extends resolution, km validate would fail with required-field errors.
+	profileFile := testdataPath(t, "validate-leaf.yaml")
+
+	cmd := exec.Command(km, "validate", profileFile)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("km validate multi-parent leaf: expected exit 0, got error: %v\nstdout: %s\nstderr: %s",
+			err, out, func() string {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					return string(exitErr.Stderr)
+				}
+				return ""
+			}())
+	}
+
+	outStr := string(out)
+	if !strings.Contains(outStr, "valid") {
+		t.Errorf("expected 'valid' in output for multi-parent leaf, got: %q", outStr)
 	}
 }

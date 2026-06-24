@@ -1,0 +1,13 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: abstract-fragment
+  abstract: true
+
+# This is an abstract base fragment — intentionally omits required fields
+# (lifecycle.ttl, runtime.substrate, etc.) that concrete leaf profiles supply.
+spec:
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".example.com"

@@ -340,19 +340,30 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Step 3: Resolve inheritance chain if extends is present
 	var resolvedProfile *profile.SandboxProfile
 	if parsed.Extends.IsSet() {
-		log.Debug().Str("extends", strings.Join(parsed.Extends.List(), ",")).Msg("resolving inheritance chain")
+		// Abstract fragments cannot be created — they are partial bases for inheritance only.
+		if profile.IsAbstractFragment(raw) {
+			return fmt.Errorf("cannot create a sandbox from an abstract fragment (metadata.abstract: true); use a concrete leaf profile that extends it")
+		}
+
+		log.Debug().Str("extends", strings.Join(parsed.Extends.List(), ",")).Msg("resolving full inheritance DAG")
+		// Resolve the LEAF by name so the full multi-parent DAG is walked (Plan 03).
+		// Derive leaf name: strip .yaml suffix from the base filename.
+		leafName := strings.TrimSuffix(filepath.Base(profilePath), ".yaml")
 		fileDir := filepath.Dir(profilePath)
 		searchPaths := append([]string{fileDir}, cfg.ProfileSearchPaths...)
-		// Resolve uses the first parent name for single-parent resolution (Plan 01).
-		// Plan 03 will wire multi-parent DAG resolution here.
-		resolvedProfile, err = profile.Resolve(parsed.Extends.List()[0], searchPaths)
+		resolvedProfile, err = profile.Resolve(leafName, searchPaths)
 		if err != nil {
 			return fmt.Errorf("failed to resolve extends %q: %w", strings.Join(parsed.Extends.List(), ","), err)
 		}
-		// Schema-validate raw child bytes; semantic-validate merged profile
-		schemaErrs := profile.ValidateSchema(raw)
-		semanticErrs := profile.ValidateSemantic(resolvedProfile)
-		allErrs := append(schemaErrs, semanticErrs...)
+		// Validate the fully-merged profile (not the raw partial child bytes).
+		// Marshal the resolved struct to YAML and run the full Validate() pipeline
+		// (schema + semantic) on the merged result. This correctly handles partial
+		// child profiles that inherit required fields from their parents.
+		mergedBytes, marshalErr := yaml.Marshal(resolvedProfile)
+		if marshalErr != nil {
+			return fmt.Errorf("failed to marshal resolved profile %s: %w", profilePath, marshalErr)
+		}
+		allErrs := profile.Validate(mergedBytes)
 		if len(allErrs) > 0 {
 			for _, e := range allErrs {
 				fmt.Fprintf(os.Stderr, "ERROR: %s: %s\n", profilePath, e.Error())
@@ -2094,16 +2105,26 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	// Step 3: Resolve inheritance + validate
 	var resolvedProfile *profile.SandboxProfile
 	if parsed.Extends.IsSet() {
+		// Abstract fragments cannot be created — they are partial bases for inheritance only.
+		if profile.IsAbstractFragment(raw) {
+			return "", fmt.Errorf("cannot create a sandbox from an abstract fragment (metadata.abstract: true); use a concrete leaf profile that extends it")
+		}
+
+		// Resolve the LEAF by name so the full multi-parent DAG is walked (Plan 03).
+		// Derive leaf name: strip .yaml suffix from the base filename.
+		leafName := strings.TrimSuffix(filepath.Base(profilePath), ".yaml")
 		fileDir := filepath.Dir(profilePath)
 		searchPaths := append([]string{fileDir}, cfg.ProfileSearchPaths...)
-		// Resolve uses the first parent name for single-parent resolution (Plan 01).
-		resolvedProfile, err = profile.Resolve(parsed.Extends.List()[0], searchPaths)
+		resolvedProfile, err = profile.Resolve(leafName, searchPaths)
 		if err != nil {
 			return "", fmt.Errorf("failed to resolve extends %q: %w", strings.Join(parsed.Extends.List(), ","), err)
 		}
-		schemaErrs := profile.ValidateSchema(raw)
-		semanticErrs := profile.ValidateSemantic(resolvedProfile)
-		allErrs := append(schemaErrs, semanticErrs...)
+		// Validate the fully-merged profile (not the raw partial child bytes).
+		mergedBytes, marshalErr := yaml.Marshal(resolvedProfile)
+		if marshalErr != nil {
+			return "", fmt.Errorf("failed to marshal resolved profile %s: %w", profilePath, marshalErr)
+		}
+		allErrs := profile.Validate(mergedBytes)
 		if len(allErrs) > 0 {
 			for _, e := range allErrs {
 				fmt.Fprintf(os.Stderr, "ERROR: %s: %s\n", profilePath, e.Error())
