@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 117-05-PLAN.md (docs: OPERATOR-GUIDE § Composable inheritance, CLAUDE.md Phase 117 note + Where-to-look row, agent-tool-gating xref). Phase 117 complete."
-last_updated: "2026-06-24T13:55:28.203Z"
+stopped_at: "Completed 118-01-PLAN.md (Wave-0 TDD scaffold: Allow/Private stubs + RED tests)"
+last_updated: "2026-06-24T22:56:48.166Z"
 last_activity: 2026-06-24
 progress:
-  total_phases: 1
+  total_phases: 2
   completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 11
+  completed_plans: 6
   percent: 91
 ---
 
@@ -585,6 +585,7 @@ Progress: [█████████░] 91%
 | Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends P03 | 728 | 2 tasks | 7 files |
 | Phase 117 P04 | 2859 | 2 tasks | 16 files |
 | Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends P05 | 3min | 2 tasks | 3 files |
+| Phase 118-slack-trigger-allowlist-private-per-sandbox-channels P01 | 306s | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1671,6 +1672,7 @@ Recent decisions affecting current work:
 - [Phase 117]: metadata.abstract must be cleared from the resolved leaf — deepMerge otherwise propagates base fragment's abstract:true to concrete result
 - [Phase 117]: All test helpers loading refactored profiles must use profile.Resolve() not profile.Parse() — once a leaf has extends:, raw bytes are partial
 - [Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends]: Document shipped dc34/learn.v2 reality (not aspirations); dc34 email-in-leaf rationale explains v1 narrowing limitation concretely
+- [Phase 118-01]: Wave-0 TDD scaffold: stub fields added to 5 structs + 11 RED/GREEN tests before implementation; internal/app/cmd test-compile intentionally broken until Plan 02 changes real CreateChannel signature
 
 ### Roadmap Evolution
 
@@ -1815,6 +1817,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-24T13:48:53.706Z
-Stopped at: Completed 117-05-PLAN.md (docs: OPERATOR-GUIDE § Composable inheritance, CLAUDE.md Phase 117 note + Where-to-look row, agent-tool-gating xref). Phase 117 complete.
+Last session: 2026-06-24T22:56:48.160Z
+Stopped at: Completed 118-01-PLAN.md (Wave-0 TDD scaffold: Allow/Private stubs + RED tests)
 Resume file: None
