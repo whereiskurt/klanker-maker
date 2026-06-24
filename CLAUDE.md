@@ -203,6 +203,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Structured Claude/Codex tool gating via `spec.agent:`, synthesizers, asymmetry note | `docs/agent-tool-gating.md` (Phase 92) |
 | Cut a release (goreleaser + GH Actions, tag-driven) | `docs/release.md` |
 | SOPS / SSM allowlist via `iam.allowedSecretPaths` | `docs/sandbox-secrets.md` (Phase 89, renamed `identity:`→`iam:` in Phase 92) |
+| Composable multi-parent profile inheritance — `extends:` list, deep-merge, `profiles/base/` fragments, `initCommandsAppend`, v1 narrowing limitation | `OPERATOR-GUIDE.md` § Composable inheritance |
 
 ## CLI
 
@@ -292,6 +293,20 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - **`spec.cli.notify*` → `spec.notification:` (Wave 3, 2026-05-31).** The 15 notify/Slack fields moved out of `spec.cli` into a structured `spec.notification:` block: `notification.events.{onPermission,onIdle,cooldownSeconds}`, `notification.email.{enabled,address}`, `notification.slack.{enabled,perSandbox,channelOverride,archiveOnDestroy}` plus `slack.inbound.{enabled,mentionOnly,reactAlways}`, `slack.transcript.enabled`, and `slack.invites.{emails,useConnect}`. Surviving `spec.cli` fields: `noBedrock`, `agent`, `claudeArgs`, `codexArgs`. **Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`) are UNCHANGED** — only the YAML surface changed; userdata output is byte-identical.
 - **`spec.cli.vscodeEnabled` → `spec.runtime.vscode.enabled` (Wave 3).** `IsVSCodeEnabled` now takes a `*RuntimeVSCodeSpec`.
 - `scripts/validate-all-profiles.sh` is the single-source-of-truth gate that runs `km validate` over the 20-file profile inventory (local-only; exits non-zero on any failure).
+
+**Phase 117 (2026-06-24) — Composable multi-parent profile inheritance (complete):**
+- `extends:` now accepts a **string** (back-compat) OR an **ordered `[]string` list** of parent names. Bases resolve left→right; child applies last.
+- **deepMerge semantics (uniform):** maps recurse at every depth (key-union), scalars child/right-parent wins, lists concat+dedup (order-preserving, first occurrence kept). Union applies to every list field: `initCommands`, `allowedDNSSuffixes`/`allowedHosts`, `allowedRepos`/`allowedRefs`, `email.allowedSenders`, `agent.claude.tools.autoApprove`, `rsyncPaths`, `artifacts.paths`. Object lists (`additionalSnapshots`) de-dup by deep equality.
+- The old hand-written typed merger zoo (`mergeNotificationSpec` / `mergeAgentSpec` / etc.) was replaced by a generic `deepMerge(map[string]any)` over a YAML round-trip. Thin wrappers kept for backward-compat test paths.
+- **Abstract fragments** (`metadata.abstract: true`) live in `profiles/base/`. `km validate` skips them (exit 0 + SKIP message); `km create` rejects them. `validate-all-profiles.sh` excludes `profiles/base/` automatically.
+- **`execution.initCommandsAppend`** appends leaf-specific install steps after the merged `initCommands`; `initCommands` itself always replaces (union of all bases + child).
+- **Diamond inheritance** is memoized (each node resolved once). Max depth: 10; cycles rejected.
+- **v1 narrowing limitation:** a child CANNOT shrink a base's list (lists union). To use a narrower allowlist, compose from a narrower base or keep the field in-leaf. A `!replace` directive is a deferred v2 follow-up.
+- **Bool zero-value trap:** fragments that write full blocks with non-pointer bools push their zero-values (`false`) onto children — keep mixed-bool blocks like `spec.runtime` in the leaf.
+- Shipped fragment library: `profiles/base/{safenetwork,sidecars-all,observability-learn,budget-standard,artifacts-workspace,iam-us-east-1,agent-claude-all-tools,email-strict}.yaml`. `learn.v2.*` and `dc34.yaml` compose 6 of these (email-strict kept in-leaf per narrowing limitation).
+- `km validate` and `km create` both resolve the full DAG and validate the **merged bytes** (not raw child bytes — child alone fails required-field checks for partial profiles).
+- **Deploy = `make build` only** (operator binary). No Lambda rebuild, no schema-on-write DDB change, no `km init`. Existing sandboxes unaffected (inheritance is resolved at `km create` time, not baked into infra).
+- See `OPERATOR-GUIDE.md` § Composable inheritance for the full authoring guide, worked dc34 example, and v1 limitation details.
 
 ## Releases
 

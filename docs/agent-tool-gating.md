@@ -162,9 +162,26 @@ Well-known passthrough keys:
 Anything else flows through; Claude Code either honors or ignores it per its own
 release.
 
+## Composable inheritance and `tools.autoApprove` (Phase 117)
+
+`agent.claude.tools.autoApprove` is a **list field** — Phase 117 list-union semantics apply.
+When a profile extends one or more bases, each base's `autoApprove` list is concatenated and
+de-duped (order-preserving, first occurrence kept) before the child's list is appended.
+
+The shipped `profiles/base/agent-claude-all-tools.yaml` fragment declares the full set:
+`[Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch, NotebookEdit]`. Any profile that
+extends it inherits all approved tools. A leaf can add more tools in its own
+`agent.claude.tools.autoApprove`; it cannot remove tools from the inherited set (v1 narrowing
+limitation — see `OPERATOR-GUIDE.md` § Composable inheritance for details and the `!replace`
+deferred roadmap item).
+
+`trustedDirectories` follows the same union rule: extending `base/agent-claude-all-tools` adds
+`[/home/sandbox, /workspace]` to the child's trusted set.
+
 ## Future work
 
 - **Codex tool gating** once OpenAI ships native per-tool allow/deny in
   `config.toml`. The `agent.codex.tools.*` fields are already defined and preserved
   for that day.
 - **Per-tool quota / rate limiting** — out of scope for Phase 92.
+- **`!replace` directive** for opting specific list fields out of union semantics — deferred to Phase 117 v2 (see `OPERATOR-GUIDE.md` § Composable inheritance § v1 limitations).
