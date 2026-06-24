@@ -99,8 +99,8 @@ func TestGenerate_WithBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}
-	if p.Extends != "restricted-dev" {
-		t.Errorf("expected Extends=restricted-dev, got %q", p.Extends)
+	if got := p.Extends.List(); len(got) != 1 || got[0] != "restricted-dev" {
+		t.Errorf("expected Extends=[restricted-dev], got %v", got)
 	}
 }
 
