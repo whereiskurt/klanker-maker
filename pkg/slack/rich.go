@@ -19,8 +19,23 @@ package slack
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
+
+// reBoldWrappedURL matches a bare URL wrapped in markdown bold: **https://…**
+// (optionally angle-bracketed). Slack's markdown block autolinks a bare URL
+// BEFORE it parses surrounding emphasis, so the ** never binds and renders as
+// literal asterisks around the link. We demote it to the bare URL (still
+// autolinked, just not bold) so no stray ** leaks into the output.
+var reBoldWrappedURL = regexp.MustCompile(`\*\*<?(https?://[^\s*<>]+)>?\*\*`)
+
+// fixBoldWrappedURL strips the bold markers around a bare URL on a prose line.
+// Applied only to ordinary prose lines (never code fences/spans), so it cannot
+// touch a URL that legitimately lives inside a code block.
+func fixBoldWrappedURL(line string) string {
+	return reBoldWrappedURL.ReplaceAllString(line, "$1")
+}
 
 // maxMarkdownCumulative is the cumulative character budget for all markdown
 // blocks in a single chat.postMessage call (Slack API constraint).
@@ -247,6 +262,9 @@ func emitProseBlocks(lines []string, cumUsed *int) (blocks []any, fallbackLines 
 
 		// Ordinary prose line: accumulate verbatim (no Mrkdwnify — markdown block
 		// takes raw GFM; running Mrkdwnify would double-convert [l](u) links).
+		// The one exception is **<bareURL>**, which Slack's markdown block can't
+		// render — demote it so no literal ** leaks around the link.
+		line = fixBoldWrappedURL(line)
 		if accum.Len() > 0 {
 			accum.WriteByte('\n')
 		}

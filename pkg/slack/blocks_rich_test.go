@@ -492,6 +492,142 @@ func TestRichTable_RowsGuard(t *testing.T) {
 	}
 }
 
+// firstTextEl returns the leaf elements of a rich_text body/header cell.
+func cellElements(t *testing.T, c tableCell) []richTextElement {
+	t.Helper()
+	if c.Type != "rich_text" {
+		t.Fatalf("cell type = %q; want rich_text", c.Type)
+	}
+	if len(c.Elements) == 0 || c.Elements[0].Type != "rich_text_section" {
+		t.Fatalf("cell missing rich_text_section wrapper")
+	}
+	return c.Elements[0].Elements
+}
+
+// TestRichTable_CodeCell: a body cell containing `code` becomes a rich_text cell
+// with a style.code=true element — NOT a raw_text cell with literal backticks.
+func TestRichTable_CodeCell(t *testing.T) {
+	lines := []string{
+		"| Field | Value |",
+		"|-------|-------|",
+		"| token | `ghs_abc` len 40 |",
+	}
+	tb, ok := buildTableBlock(lines)
+	if !ok {
+		t.Fatal("buildTableBlock returned ok=false")
+	}
+	cell := tb.Rows[1][1]
+	els := cellElements(t, cell)
+	// Expect: code element "ghs_abc" (style.code) + plain " len 40".
+	if len(els) != 2 {
+		t.Fatalf("expected 2 elements; got %d (%+v)", len(els), els)
+	}
+	if els[0].Text != "ghs_abc" || els[0].Style == nil || !els[0].Style.Code {
+		t.Errorf("element[0] = %+v; want text=ghs_abc style.code=true", els[0])
+	}
+	if els[0].Style.Bold {
+		t.Errorf("body code element should not be bold; got %+v", els[0].Style)
+	}
+	if els[1].Text != " len 40" || els[1].Style != nil {
+		t.Errorf("element[1] = %+v; want plain ' len 40'", els[1])
+	}
+}
+
+// TestRichTable_BoldCodeCell: **`x`** in a body cell → a single element carrying
+// BOTH bold and code styles.
+func TestRichTable_BoldCodeCell(t *testing.T) {
+	lines := []string{
+		"| Field            | Value          |",
+		"|------------------|----------------|",
+		"| **forked** label | **`dbd9ab72`** |",
+	}
+	tb, ok := buildTableBlock(lines)
+	if !ok {
+		t.Fatal("buildTableBlock returned ok=false")
+	}
+	// Field cell: bold "forked" + plain " label".
+	field := cellElements(t, tb.Rows[1][0])
+	if field[0].Text != "forked" || field[0].Style == nil || !field[0].Style.Bold {
+		t.Errorf("field element[0] = %+v; want bold 'forked'", field[0])
+	}
+	// Value cell: bold+code "dbd9ab72".
+	value := cellElements(t, tb.Rows[1][1])
+	if len(value) != 1 {
+		t.Fatalf("value cell: expected 1 element; got %d (%+v)", len(value), value)
+	}
+	if value[0].Text != "dbd9ab72" || value[0].Style == nil || !value[0].Style.Bold || !value[0].Style.Code {
+		t.Errorf("value element[0] = %+v; want bold+code 'dbd9ab72'", value[0])
+	}
+}
+
+// TestRichTable_LinkCell: [label](url) in a body cell → a rich_text link element.
+func TestRichTable_LinkCell(t *testing.T) {
+	lines := []string{
+		"| Name | Ref                       |",
+		"|------|---------------------------|",
+		"| repo | [mycelium](https://x.com) |",
+	}
+	tb, ok := buildTableBlock(lines)
+	if !ok {
+		t.Fatal("buildTableBlock returned ok=false")
+	}
+	els := cellElements(t, tb.Rows[1][1])
+	if len(els) != 1 {
+		t.Fatalf("expected 1 element; got %d (%+v)", len(els), els)
+	}
+	if els[0].Type != "link" || els[0].URL != "https://x.com" || els[0].Text != "mycelium" {
+		t.Errorf("element[0] = %+v; want link mycelium → https://x.com", els[0])
+	}
+}
+
+// TestRichTable_PlainCellStaysRawText: a markup-free body cell keeps the simpler
+// raw_text encoding (no byte churn for plain tables).
+func TestRichTable_PlainCellStaysRawText(t *testing.T) {
+	tb, ok := buildTableBlock(minimalTableLines())
+	if !ok {
+		t.Fatal("buildTableBlock returned ok=false")
+	}
+	for r := 1; r < len(tb.Rows); r++ {
+		for c, cell := range tb.Rows[r] {
+			if cell.Type != "raw_text" {
+				t.Errorf("plain body cell [%d][%d] type = %q; want raw_text", r, c, cell.Type)
+			}
+		}
+	}
+}
+
+// TestRichProse_BoldWrappedURL: **https://…** in prose is demoted to the bare URL
+// so no literal ** leaks into the markdown block (Slack can't bold an autolink).
+func TestRichProse_BoldWrappedURL(t *testing.T) {
+	input := "Open this URL on any device:\n\n**https://greenhouse-sso.awsapps.com/start/#/device**\n"
+	bj, _, ok := RenderRich(input, false)
+	if !ok {
+		t.Fatal("RenderRich returned ok=false")
+	}
+	if strings.Contains(bj, "**https://") || strings.Contains(bj, "/device**") {
+		t.Errorf("markdown block still contains bold-wrapped URL: %s", bj)
+	}
+	if !strings.Contains(bj, "https://greenhouse-sso.awsapps.com/start/#/device") {
+		t.Errorf("bare URL missing from output: %s", bj)
+	}
+}
+
+// TestRichProse_NormalBoldUntouched: ordinary **bold** prose (not a URL) is left
+// verbatim for the markdown block to render natively.
+func TestRichProse_NormalBoldUntouched(t *testing.T) {
+	input := "It's **not** per-repo, and here is a [link](https://example.com).\n"
+	bj, _, ok := RenderRich(input, false)
+	if !ok {
+		t.Fatal("RenderRich returned ok=false")
+	}
+	if !strings.Contains(bj, "**not**") {
+		t.Errorf("normal bold should survive verbatim; got: %s", bj)
+	}
+	if !strings.Contains(bj, "[link](https://example.com)") {
+		t.Errorf("normal link should survive verbatim; got: %s", bj)
+	}
+}
+
 // TestRichTable_GuardFallback: a >20-col table through RenderRich emits a
 // monospace fenced markdown block (the fencePipeTables fallback), NOT a
 // {"type":"table"} block.
