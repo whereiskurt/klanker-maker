@@ -1705,3 +1705,203 @@ The desktop schema + Ubuntu OS-aware bootstrap are compiled by the **create-hand
 | Desktop not enabled in profile | `km desktop start` pre-flight | "desktop not enabled — set `spec.runtime.desktop.enabled: true` and recreate" |
 | Credential file missing | `km desktop start` | Error with recovery hint (use `km shell` to read `~/.kasmpasswd`) |
 | Slow first boot (no AMI) | boot time | Expected; nudge toward `km ami bake` |
+
+## 11. Composable inheritance (multi-parent profiles)
+
+**Phase 117.** Profiles can declare `extends:` as either a single parent name (back-compat) or
+an **ordered list** of parent names. km resolves the full directed-acyclic-graph (DAG), merges
+the bases left-to-right, then applies the child last. The result is validated and compiled as
+though it were a single flat profile.
+
+```yaml
+# Back-compat scalar form (any profile that already uses extends: keeps working)
+extends: learn.v2
+
+# Multi-parent list form (Phase 117)
+extends:
+  - base/safenetwork
+  - base/sidecars-all
+  - base/budget-standard
+```
+
+Base references in `profiles/base/` are written without the `.yaml` extension:
+`base/safenetwork` resolves to `profiles/base/safenetwork.yaml`.
+
+### Deep-merge rules
+
+| Input type | Rule |
+|---|---|
+| **Scalar** (string, int, bool) | Child/right-parent wins on collision |
+| **Map** (any depth) | Key-union: every key from every base is present; child wins on key collision |
+| **List** | Concat then de-dup (order-preserving, first occurrence kept) |
+
+The list rule applies **uniformly** across all list-typed profile fields:
+`initCommands`, `allowedDNSSuffixes`, `allowedHosts`, `allowedRepos`, `allowedRefs`,
+`email.allowedSenders`, `agent.claude.tools.autoApprove`, `agent.claude.trustedDirectories`,
+`rsyncPaths`, `artifacts.paths`. Object lists (e.g. `additionalSnapshots`) are de-duped
+by deep equality.
+
+**Map fields that recurse at every depth:** `spec.execution.env`, `spec.execution.configFiles`,
+`metadata.labels`, all nested spec blocks (`spec.network`, `spec.agent.claude`, …).
+
+### Multi-parent fold: order matters
+
+Bases are applied left-to-right; the child applies last. On a scalar collision, the **rightmost
+parent's value persists** until the child optionally overrides it.
+
+```
+resolved = fold(deepMerge, [base-A, base-B, base-C]) then deepMerge(result, child)
+```
+
+For `initCommands` (a list) this means base-A commands come first, then base-B, then base-C,
+then the child's own `initCommands`. Use `execution.initCommandsAppend` (see below) to add
+leaf-specific commands after the merged list without cluttering the list field.
+
+### `execution.initCommandsAppend`
+
+Leaf-specific install steps that would be awkward in a shared base can be declared as
+`execution.initCommandsAppend`. These are **appended** to the merged `initCommands` as a
+post-merge pass — they always run last, regardless of base ordering.
+
+```yaml
+spec:
+  execution:
+    initCommandsAppend:
+      - "su - sandbox -c 'curl -fsSL https://example.com/install.sh | sh'"
+```
+
+Use `initCommandsAppend` for version-pinned installs that belong to one profile and are not
+shared with any base.
+
+### Authoring base fragments
+
+Reusable fragments live in `profiles/base/`. Mark each with `metadata.abstract: true` and
+declare **only the fields the fragment owns**. Abstract fragments are automatically skipped by
+`km validate` (exit 0 with a "SKIP" message) and cannot be passed to `km create`.
+
+```yaml
+# profiles/base/budget-standard.yaml
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-budget-standard
+  abstract: true
+
+spec:
+  budget:
+    compute:
+      maxSpendUSD: 0.50
+    ai:
+      maxSpendUSD: 2.00
+    warningThreshold: 0.80
+```
+
+The `profiles/base/` directory is excluded from `scripts/validate-all-profiles.sh` automatically.
+
+### Shipped fragment library (`profiles/base/`)
+
+| Fragment | What it declares |
+|---|---|
+| `base/safenetwork` | `spec.network` (enforcement: both, wildcard egress) |
+| `base/sidecars-all` | `spec.sidecars` (all sidecars enabled) |
+| `base/observability-learn` | `spec.observability` (learnMode enabled) |
+| `base/budget-standard` | `spec.budget` (compute $0.50 / AI $2.00 / warn 80%) |
+| `base/artifacts-workspace` | `spec.artifacts` (workspace S3 path) |
+| `base/iam-us-east-1` | `spec.iam` (region allowlist) |
+| `base/agent-claude-all-tools` | `spec.agent.claude` (all tools auto-approved, `--dangerously-skip-permissions`) |
+| `base/email-strict` | `spec.email` (signing/verify/encryption required, wildcard senders) |
+
+`learn.v2.yaml`, `learn.v2.{chatty,polite,codex}`, and `dc34.yaml` each compose six of these fragments.
+
+### Worked example — dc34.yaml
+
+```yaml
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: dc34
+  labels:
+    tier: development
+    tool: alltools
+
+extends:
+  - base/safenetwork           # network enforcement + egress allowlist
+  - base/sidecars-all          # all sidecars enabled
+  - base/observability-learn   # learnMode + observability
+  - base/budget-standard       # compute + AI budget caps
+  - base/artifacts-workspace   # workspace artifact paths
+  - base/iam-us-east-1         # IAM region restriction
+  - base/agent-claude-all-tools  # all Claude tools auto-approved
+  # base/email-strict NOT extended — see narrowing limitation below
+
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.large
+    region: us-east-1
+    rootVolumeSize: 15
+    spot: false
+    hibernation: true
+
+  execution:
+    useBedrock: true
+    privileged: true
+    env:
+      SANDBOX_MODE: goose-ebpf-gatekeeper
+      GOOSE_PROVIDER: aws_bedrock
+
+  # dc34 email: specific allowedSenders (narrower than "*").
+  # Kept in-leaf per locked decision A: no list narrowing in v1.
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "self"
+      - "whereiskurt@gmail.com"
+      - "kurt.hundeck@*"
+```
+
+When `km validate profiles/dc34.yaml` runs, km resolves the six bases into a single merged
+map, then deep-merges the child's fields on top. The final merged spec is validated against the
+JSON schema and compiled to userdata. The compiled output is byte-identical to the pre-Phase-117
+monolithic profile (proven by `pkg/compiler/userdata_phase92_byte_identity_test`).
+
+### Diamond inheritance
+
+A child can inherit from two parents that share a common grandparent:
+
+```
+Core ← A ← Child
+Core ← B ← Child
+```
+
+km resolves each node at most once (memoized by profile path). The Core node's fields are merged
+once; A and B each add their deltas; the child applies last. No false-positive cycle errors.
+Maximum inheritance depth is **10**; chains longer than 10 are rejected with a clear error.
+
+### v1 limitations
+
+**No narrowing.** Because lists always union, a child CANNOT remove or shrink entries from a
+base's `allowedHosts`, `allowedDNSSuffixes`, or any other list field. If a profile needs a
+smaller allowlist than its base provides, compose from a narrower base instead of extending
+the broad one. A `!replace` / `__replace:` directive for opting specific fields out of the
+union semantic is a deferred v2 follow-up.
+
+This is why `dc34.yaml` does NOT extend `base/email-strict` (whose `allowedSenders: ["*"]`
+would union with dc34's specific sender list, producing a broader-than-intended result).
+
+**Bool zero-value trap.** A fragment that writes a complete map block containing non-pointer
+bools (e.g. a full `spec.runtime` block that sets `spot: false` or `hibernation: false`)
+pushes those false values onto any child that inherits the block. Keep mixed-bool blocks like
+`spec.runtime` in the leaf rather than a shared fragment; fragments should declare only the
+fields they intend to set.
+
+**No narrowing + bool trap together:** A fragment that declares `spot: false` (desired in the
+fragment) may silently override a leaf that wants `spot: true` because scalars apply the
+rightmost-wins rule. Keep `spot` and `hibernation` in the leaf and out of bases.
