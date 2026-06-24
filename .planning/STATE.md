@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 117-01-PLAN.md (3 tasks: ExtendsField type, call site fixes, schema + IsAbstractFragment)"
-last_updated: "2026-06-24T12:23:04.102Z"
+stopped_at: "Completed 117-02-PLAN.md (2 tasks: deepMerge engine + DAG resolve with memo/diamond)"
+last_updated: "2026-06-24T12:37:45.879Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 5
-  completed_plans: 1
+  completed_plans: 2
   percent: 91
 ---
 
@@ -581,6 +581,7 @@ Progress: [█████████░] 91%
 | Phase 116-km-check-serverless-check-runner P06 | 20min | 3 tasks | 6 files |
 | Phase 116 P05 | 8 | 3 tasks | 11 files |
 | Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends P01 | 7min | 3 tasks | 10 files |
+| Phase 117 P02 | 635s | 2 tasks | 23 files |
 
 ## Accumulated Context
 
@@ -1660,6 +1661,8 @@ Recent decisions affecting current work:
 - [Phase 116-05]: UpdateItem-never-PutItem on existing DDB rows prevents lossy round-trip overwrites (project_sandboxmetadata_lossy_roundtrip)
 - [Phase 116-05]: ECR {prefix}-checks repo lazily SDK-created on first --image deploy (not a third terragrunt module); lambda.amazonaws.com pull policy set via SetRepositoryPolicy
 - [Phase 117]: Fragment marker = metadata.abstract: true (locked decision B); execution.initCommandsAppend typed field (locked decision D); goccy context-aware UnmarshalYAML signature confirmed at v1.19.2
+- [Phase 117]: A (locked): union+dedup EVERYWHERE for all list fields; child cannot narrow base allowlist in v1
+- [Phase 117]: D (locked): initCommandsAppend post-merge pass appends to initCommands; general +key convention deferred
 
 ### Roadmap Evolution
 
@@ -1803,6 +1806,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-24T12:23:04.096Z
-Stopped at: Completed 117-01-PLAN.md (3 tasks: ExtendsField type, call site fixes, schema + IsAbstractFragment)
+Last session: 2026-06-24T12:37:45.873Z
+Stopped at: Completed 117-02-PLAN.md (2 tasks: deepMerge engine + DAG resolve with memo/diamond)
 Resume file: None
