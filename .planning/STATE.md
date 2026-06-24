@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 116-05-PLAN.md (3 tasks: pkg/check trigger bake, Lambda CRUD+packaging+ECR+DDB, km check CLI)"
-last_updated: "2026-06-18T19:16:01.407Z"
-last_activity: 2026-06-18
+stopped_at: "Completed 117-01-PLAN.md (3 tasks: ExtendsField type, call site fixes, schema + IsAbstractFragment)"
+last_updated: "2026-06-24T12:23:04.102Z"
+last_activity: 2026-06-24
 progress:
-  total_phases: 132
-  completed_phases: 115
-  total_plans: 583
-  completed_plans: 544
+  total_phases: 1
+  completed_phases: 0
+  total_plans: 5
+  completed_plans: 1
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-18
+Last activity: 2026-06-24
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -580,6 +580,7 @@ Progress: [█████████░] 91%
 | Phase 116 P04 | 3min | 2 tasks | 4 files |
 | Phase 116-km-check-serverless-check-runner P06 | 20min | 3 tasks | 6 files |
 | Phase 116 P05 | 8 | 3 tasks | 11 files |
+| Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends P01 | 7min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -1658,6 +1659,7 @@ Recent decisions affecting current work:
 - [Phase 116-05]: BakeTrigger resolves @file operator-side at deploy/sync (Lambda has no filesystem access at runtime); sourceHash covers resolved JSON
 - [Phase 116-05]: UpdateItem-never-PutItem on existing DDB rows prevents lossy round-trip overwrites (project_sandboxmetadata_lossy_roundtrip)
 - [Phase 116-05]: ECR {prefix}-checks repo lazily SDK-created on first --image deploy (not a third terragrunt module); lambda.amazonaws.com pull policy set via SetRepositoryPolicy
+- [Phase 117]: Fragment marker = metadata.abstract: true (locked decision B); execution.initCommandsAppend typed field (locked decision D); goccy context-aware UnmarshalYAML signature confirmed at v1.19.2
 
 ### Roadmap Evolution
 
@@ -1671,6 +1673,7 @@ Recent decisions affecting current work:
 - Phase 21 added: Bug fixes and mini-features — budget precision (4 decimal places), polish, small enhancements
 - Phase 99.1 inserted after Phase 99: Harden github/slack inbound pollers against FIFO poison-message wedge via shared per-install DLQ + RedrivePolicy (URGENT — production-risk gap found live in Phase 99 UAT 2026-06-08; poison message head-of-line-blocks FIFO group, wedges poller, only purge recovers)
 - Phase 108 backfilled (retro): GitHub bridge per-turn idempotency guard (`<!-- km-turn:$KM_GITHUB_TURN_ID -->` marker, no duplicate PR comments) — shipped as fix-commit b5a0cbf9 outside GSD, added to roadmap 2026-06-12 for complete record.
+- Phase 117 added: Composable multi-parent profile inheritance (deep-merge + list-union extends) — `extends` accepts string|list of base/*.yaml fragments; generic recursive deep-merge over map[string]any (maps recurse, scalars child-wins, lists concat+dedup) replaces the typed per-section merger zoo; partial fragments skip standalone validation; refactor dc34 + learn.v2.* onto bases (byte-identity gate). Design captured in phase CONTEXT.md. Requested 2026-06-24.
 - Phase 109 backfilled (retro): GitHub bridge self-heals orphaned `stopped` alias rows (resume-or-cold-create via ErrNoResumableInstance + DeleteSandboxRow; H1 parity) — shipped as fix-commit eac8ed8b / PR #23 outside GSD, added to roadmap 2026-06-12.
 - Phase 110 added: Session-aware Slack reply + thread/channel repair — `km-slack reply` (sandbox) + `km slack reply`/cleanup commands (operator) to post to the thread bound to a `--resume` session via a new `claude_session_id` GSI + bridge `lookup-thread` action; channel-root fallback; repair stale thread/channel mappings. NOTE: numbered 110 not 108 — Phases 108/109 are completed-but-unroadmapped GitHub-bridge fix-commits (CLAUDE.md + docs/github-bridge.md); gsd-tools' integer-max scan would have collided.
 - Phase 114 added: Slack bridge auto-resume — start a paused/stopped sandbox when an inbound Slack thread/channel message would be dispatched to it (resume-only Slack analog of the GitHub/H1 Phase-109 path; no cold-create, no budget awareness). Design spec: `docs/superpowers/specs/2026-06-15-slack-resume-on-thread-message-design.md`. NOTE: numbered 114 not 111 — phase dirs run 93–113 (111/112/113 exist), and 108/109 are unroadmapped fix-commits.
@@ -1800,6 +1803,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-18T01:04:56.573Z
-Stopped at: Completed 116-05-PLAN.md (3 tasks: pkg/check trigger bake, Lambda CRUD+packaging+ECR+DDB, km check CLI)
+Last session: 2026-06-24T12:23:04.096Z
+Stopped at: Completed 117-01-PLAN.md (3 tasks: ExtendsField type, call site fixes, schema + IsAbstractFragment)
 Resume file: None
