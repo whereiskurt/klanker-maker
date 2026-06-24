@@ -600,10 +600,14 @@ func (c *Client) UploadFile(ctx context.Context, channel, threadTS, filename, co
 }
 
 // CreateChannel calls conversations.create. Slack returns the new channel ID.
-func (c *Client) CreateChannel(ctx context.Context, name string) (string, error) {
+// When private is true the channel is created as a Slack private channel
+// (is_private:true); when false (default) a public channel is created.
+// km slack init / rotate always pass false (the shared workspace channel is public);
+// km create per-sandbox path passes the profile's notification.slack.private value.
+func (c *Client) CreateChannel(ctx context.Context, name string, private bool) (string, error) {
 	resp, err := c.callJSON(ctx, "conversations.create", map[string]any{
 		"name":       name,
-		"is_private": false,
+		"is_private": private,
 	})
 	if err != nil {
 		return "", err

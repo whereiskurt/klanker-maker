@@ -51,7 +51,10 @@ type SlackInitAPI interface {
 	// {prefix}slack/bot-user-id so the bridge Lambda can prime its mention-scan
 	// bot ID without a live auth.test round-trip on cold-start.
 	AuthTestWithUserID(ctx context.Context) (string, error)
-	CreateChannel(ctx context.Context, name string) (string, error)
+	// CreateChannel creates a Slack channel. km slack init / rotate always pass
+	// false (the shared workspace channel is always public). The private param
+	// is part of the interface to satisfy pkg/slack.Client's signature (Phase 118).
+	CreateChannel(ctx context.Context, name string, private bool) (string, error)
 	FindChannelByName(ctx context.Context, name string, maxPages int) (string, error)
 	JoinChannel(ctx context.Context, channelID string) error
 	InviteShared(ctx context.Context, channelID, email string) error
@@ -286,7 +289,10 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	}
 	chID, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/shared-channel-id", false)
 	if chID == "" || opts.Force {
-		newID, err := api.CreateChannel(ctx, chName)
+		// km slack init creates the shared workspace channel, not a per-sandbox one —
+		// always create as public (private=false). Phase 118: private flag is for
+		// per-sandbox channels only (notification.slack.private in the profile).
+		newID, err := api.CreateChannel(ctx, chName, false)
 		var apierr *kmslack.SlackAPIError
 		nameTaken := errors.As(err, &apierr) && apierr.Code == "name_taken"
 

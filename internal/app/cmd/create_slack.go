@@ -84,7 +84,7 @@ func (s *productionSSMParamStore) Put(ctx context.Context, name, value string, s
 // auto-recovery, every operator who hit this had to either manually delete
 // the channel, archive it, or invent a new --alias.
 type SlackAPI interface {
-	CreateChannel(ctx context.Context, name string) (string, error)
+	CreateChannel(ctx context.Context, name string, private bool) (string, error)
 	FindChannelByName(ctx context.Context, name string, maxPages int) (string, error)
 	JoinChannel(ctx context.Context, channelID string) error
 	InviteShared(ctx context.Context, channelID, email string) error
@@ -461,7 +461,7 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 		}
 
 		// ── Step 2: create ───────────────────────────────────────────────────────
-		chID, createErr := api.CreateChannel(ctx, channelName)
+		chID, createErr := api.CreateChannel(ctx, channelName, sl.Private)
 		var apierr *slack.SlackAPIError
 		nameTaken := errors.As(createErr, &apierr) && apierr.Code == "name_taken"
 
