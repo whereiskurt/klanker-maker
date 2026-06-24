@@ -71,6 +71,14 @@ type EventsHandler struct {
 	// var at cold-start (defaults to true when env is unset or "true").
 	ReactAlways bool
 
+	// Phase 118: install-level trigger allowlist (Slack user IDs, e.g. "Uxxxx"),
+	// populated from KM_SLACK_ALLOW (comma-joined). Empty = everyone allowed
+	// (backward-compatible with all pre-Phase-118 behavior). When non-empty, only
+	// messages from listed users are dispatched; all others are silently dropped
+	// (200 OK, no reaction, no SQS enqueue). Per-sandbox SandboxRoutingInfo.Allow
+	// (non-empty) REPLACES this list for that sandbox — it is not additive.
+	Allow []string
+
 	// Phase 95: federated relay. When non-nil and FetchByChannel returns empty
 	// (unknown channel), Broadcast is called with the verbatim request body and
 	// Slack headers so a sibling km-install can process the event locally.

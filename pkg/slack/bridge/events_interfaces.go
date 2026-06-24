@@ -121,6 +121,13 @@ type SandboxRoutingInfo struct {
 	//   &true  → this sandbox requires an @-mention (with thread-bypass)
 	//   &false → this sandbox dispatches every message (chatty), ignoring mentions
 	MentionOnly *bool
+	// Phase 118: per-sandbox trigger allowlist override (Slack user IDs). When
+	// non-empty, REPLACES EventsHandler.Allow entirely for this sandbox — it is
+	// not additive. nil/empty = fall back to install-level EventsHandler.Allow
+	// (or everyone-allowed when that is also empty). Written by create_slack_inbound.go
+	// from the profile's notification.slack.inbound.allow field; must round-trip
+	// through SandboxMetadata marshal/unmarshal (SandboxMetadata lossy round-trip footgun).
+	Allow []string
 }
 
 // SigningSecretFetcher returns the Slack signing secret used for HMAC
