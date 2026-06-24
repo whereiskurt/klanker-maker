@@ -9,6 +9,80 @@ import (
 
 const maxInheritanceDepth = 3
 
+// ─── Generic map-level merge engine (Plan 02, Task 1) ────────────────────────
+//
+// deepMerge produces a new map that is the recursive union of dst and src.
+// Rules (applied per key):
+//   - If only in dst  → keep dst value.
+//   - If only in src  → add src value.
+//   - Both are map[string]any → recurse.
+//   - Both are slices ([]any) → concatDedup(dst, src).
+//   - Otherwise (scalar collision) → src wins.
+//
+// deepMerge never mutates dst or src.
+func deepMerge(dst, src map[string]any) map[string]any {
+	out := make(map[string]any, len(dst)+len(src))
+	// Copy dst first.
+	for k, v := range dst {
+		out[k] = v
+	}
+	for k, sv := range src {
+		dv, exists := out[k]
+		if !exists {
+			out[k] = sv
+			continue
+		}
+		dm, dIsMap := dv.(map[string]any)
+		sm, sIsMap := sv.(map[string]any)
+		if dIsMap && sIsMap {
+			out[k] = deepMerge(dm, sm)
+			continue
+		}
+		da, dIsSlice := toSlice(dv)
+		sa, sIsSlice := toSlice(sv)
+		if dIsSlice && sIsSlice {
+			out[k] = concatDedup(da, sa)
+			continue
+		}
+		// Scalar: src wins.
+		out[k] = sv
+	}
+	return out
+}
+
+// toSlice coerces v to []any if it is a []any or []interface{} (goccy/go-yaml
+// always decodes YAML sequences into []interface{}, which is identical to []any
+// in Go 1.18+).
+func toSlice(v any) ([]any, bool) {
+	s, ok := v.([]any)
+	return s, ok
+}
+
+// concatDedup concatenates b after a, dropping any element in b that is
+// already present in the result (order-preserving, first-occurrence kept).
+// Scalars are compared by ==; maps/objects are compared by reflect.DeepEqual
+// (handles additionalSnapshots object-list de-dup).
+func concatDedup(a, b []any) []any {
+	out := make([]any, 0, len(a)+len(b))
+	contains := func(slice []any, v any) bool {
+		for _, x := range slice {
+			if reflect.DeepEqual(x, v) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, v := range a {
+		out = append(out, v)
+	}
+	for _, v := range b {
+		if !contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // Resolve loads a profile by name and resolves its extends chain.
 // It searches built-in profiles first, then the provided searchPaths directories.
 // Cycle detection and max depth (3) are enforced.

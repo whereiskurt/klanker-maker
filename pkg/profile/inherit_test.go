@@ -1,11 +1,120 @@
 package profile
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/goccy/go-yaml"
 )
+
+// ─── deepMerge unit tests (Task 1, Plan 02) ──────────────────────────────────
+
+// TestDeepMerge_ScalarWins: child scalar overrides parent scalar; missing keys are
+// added from src; keys only in dst are preserved.
+func TestDeepMerge_ScalarWins(t *testing.T) {
+	dst := map[string]any{"a": 1, "b": "x"}
+	src := map[string]any{"b": "y", "c": 3}
+	got := deepMerge(dst, src)
+	if got["a"] != 1 {
+		t.Errorf("key only in dst: want 1, got %v", got["a"])
+	}
+	if got["b"] != "y" {
+		t.Errorf("scalar src-wins: want 'y', got %v", got["b"])
+	}
+	if got["c"] != 3 {
+		t.Errorf("key only in src added: want 3, got %v", got["c"])
+	}
+}
+
+// TestDeepMerge_MapUnion: nested maps are recursively merged (key-union, src-wins on collision).
+func TestDeepMerge_MapUnion(t *testing.T) {
+	dst := map[string]any{
+		"m": map[string]any{
+			"x": 1,
+			"deep": map[string]any{
+				"dd": map[string]any{"leaf": "from-dst"},
+			},
+		},
+	}
+	src := map[string]any{
+		"m": map[string]any{
+			"y": 2,
+			"deep": map[string]any{
+				"dd": map[string]any{"extra": "from-src"},
+			},
+		},
+	}
+	got := deepMerge(dst, src)
+	m, ok := got["m"].(map[string]any)
+	if !ok {
+		t.Fatalf("want map, got %T", got["m"])
+	}
+	if m["x"] != 1 {
+		t.Errorf("dst key preserved: want 1, got %v", m["x"])
+	}
+	if m["y"] != 2 {
+		t.Errorf("src key added: want 2, got %v", m["y"])
+	}
+	deep, _ := m["deep"].(map[string]any)
+	dd, _ := deep["dd"].(map[string]any)
+	if dd["leaf"] != "from-dst" {
+		t.Errorf("3-deep dst preserved: want 'from-dst', got %v", dd["leaf"])
+	}
+	if dd["extra"] != "from-src" {
+		t.Errorf("3-deep src added: want 'from-src', got %v", dd["extra"])
+	}
+}
+
+// TestDeepMerge_ListDedup: string-list concat+dedup, order-preserving, first-occurrence kept.
+func TestDeepMerge_ListDedup(t *testing.T) {
+	dst := map[string]any{"l": []any{"a", "b"}}
+	src := map[string]any{"l": []any{"b", "c"}}
+	got := deepMerge(dst, src)
+	l, ok := got["l"].([]any)
+	if !ok {
+		t.Fatalf("want []any, got %T", got["l"])
+	}
+	want := []any{"a", "b", "c"}
+	if !reflect.DeepEqual(l, want) {
+		t.Errorf("concat+dedup: want %v, got %v", want, l)
+	}
+
+	// Identical lists: diamond idempotence
+	dst2 := map[string]any{"l": []any{"x", "y"}}
+	src2 := map[string]any{"l": []any{"x", "y"}}
+	got2 := deepMerge(dst2, src2)
+	l2 := got2["l"].([]any)
+	if !reflect.DeepEqual(l2, []any{"x", "y"}) {
+		t.Errorf("identical lists: no dup; want [x y], got %v", l2)
+	}
+}
+
+// TestDeepMerge_ObjectListDedup: slices of maps de-dup by deep-equality; distinct entries kept.
+func TestDeepMerge_ObjectListDedup(t *testing.T) {
+	snap1 := map[string]any{"snapshotId": "snap-aaa", "mountPoint": "/mnt/data"}
+	snap2 := map[string]any{"snapshotId": "snap-bbb", "mountPoint": "/mnt/other"}
+	dst := map[string]any{"snaps": []any{snap1}}
+	src := map[string]any{"snaps": []any{snap1, snap2}} // snap1 is duplicate
+	got := deepMerge(dst, src)
+	snaps := got["snaps"].([]any)
+	if len(snaps) != 2 {
+		t.Fatalf("want 2 distinct snapshots, got %d: %v", len(snaps), snaps)
+	}
+}
+
+// TestDeepMerge_MissingKey: key only in src is added; key only in dst is preserved.
+func TestDeepMerge_MissingKey(t *testing.T) {
+	dst := map[string]any{"onlyDst": "d"}
+	src := map[string]any{"onlySrc": "s"}
+	got := deepMerge(dst, src)
+	if got["onlyDst"] != "d" {
+		t.Errorf("dst-only key lost, want 'd', got %v", got["onlyDst"])
+	}
+	if got["onlySrc"] != "s" {
+		t.Errorf("src-only key not added, want 's', got %v", got["onlySrc"])
+	}
+}
 
 // TestExtendsUnmarshal verifies the ExtendsField union type correctly parses
 // scalar string, array, and absent extends fields.
