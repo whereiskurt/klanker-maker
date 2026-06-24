@@ -17,7 +17,12 @@ Plans:
 **Goal:** Two composable Slack additions. (A) `notification.slack.private` (bool, default false) creates the per-sandbox channel as `is_private:true` (instead of hardcoded public at `pkg/slack/client.go:606`); invites unchanged; no new scopes. (B) A Uxxxx trigger allowlist named `allow`: install-level `slack.allow` (km-config.yaml → `KM_SLACK_ALLOW`) and per-sandbox `notification.slack.inbound.allow` (profile → `km-sandboxes` row → bridge `FetchByChannel`). Resolution: non-empty per-sandbox replaces install-level; else install-level; else empty=everyone (backward-compatible). Enforced in `events_handler.go` on `event.User`, silent ignore on reject (like the GitHub bridge), always enforced independent of mention-only mode and the Phase 91.3 thread-bypass. Design spec: `docs/superpowers/specs/2026-06-24-slack-trigger-allowlist-private-channels-design.md`.
 **Requirements**: none mapped (additive feature — must_haves derived from the approved design spec)
 **Depends on:** Phase 117
-**Plans:** 0 plans (run /gsd:plan-phase 118)
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 118 to break down)
+- [ ] 118-01-PLAN.md — Wave 0 RED test stubs (allowlist enforcement, slack_allow round-trip, CreateChannel mocks, validate warns) + struct stub fields
+- [ ] 118-02-PLAN.md — Feature A: thread private bool through CreateChannel + validate warns + JSON schema
+- [ ] 118-03-PLAN.md — Feature B per-sandbox plumbing: slack_allow DDB round-trip + FetchByChannel + km create write
+- [ ] 118-04-PLAN.md — Feature B install-level: slack.allow config (merge-list) → KM_SLACK_ALLOW → bridge EventsHandler.Allow
+- [ ] 118-05-PLAN.md — Feature B enforcement: allowlist gate in events_handler.go Handle() (silent-drop, resolution order)
+- [ ] 118-06-PLAN.md — docs: slack-notifications.md § Phase 118 + CLAUDE.md summary
