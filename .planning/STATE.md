@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 113-01 (starting)
+current_plan: 117-04 (complete)
 status: in-progress
-stopped_at: "Completed 117-03-PLAN.md (2 tasks: full DAG resolve in km validate + km create, validate-all base/ skip)"
+stopped_at: "Completed 117-04-PLAN.md (base/ fragment library + learn.v2.*/dc34 refactor onto multi-parent extends; byte-identity preserved). Wave-4 executor died mid-Task-2; orchestrator finished+verified. Next: 117-05 (docs)."
 last_updated: "2026-06-24T12:54:35.369Z"
 last_activity: 2026-06-24
 progress:
