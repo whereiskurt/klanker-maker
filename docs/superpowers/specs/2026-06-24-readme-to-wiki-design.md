@@ -27,6 +27,8 @@ Deleting it would break the release build.
 
 Target ~80–120 lines. Keep:
 
+- **Security-focused lead blurb** (new — see below). This opens the README and
+  the Wiki `Home` page.
 - One-paragraph pitch ("What Klanker Maker Is")
 - "How It Compares" table (the hook)
 - Quick Start (install + first sandbox) — a short version
@@ -35,6 +37,28 @@ Target ~80–120 lines. Keep:
 - License & Project Status
 
 Everything else moves to the Wiki.
+
+### Security-focused lead blurb (draft copy)
+
+> **Built for security teams.** You're on a security team responsible for
+> hundreds of repos, and you need to move fast — triage, patch, review, and
+> reason about vulnerabilities — without the investigation itself becoming the
+> next breach. Klanker Maker gives you isolated, policy-governed sandboxes where
+> untrusted code, dependencies, and AI agents run inside a contained blast
+> radius.
+>
+> Isolation is the product. Every sandbox is **default-deny on the network**:
+> an explicit allowlist controls which hosts it can reach, which secrets it can
+> read, and how much it can spend. These are intentional design choices to make
+> **data exfiltration** and **supply-chain compromise** hard by construction —
+> a malicious dependency, a poisoned build step, or a compromised agent has
+> nowhere to phone home and nothing ambient to steal. Patch fast, review at
+> scale, and rationalize about vulns without trusting the thing you're
+> investigating.
+
+This is the positioning paragraph, not a feature list — the existing "Security
+Model", "Network Enforcement", and "Budget Enforcement" sections (moving to the
+Wiki `Security-and-Network` page) remain the detailed reference.
 
 ## Part 2 — Wiki pages (`klanker-maker.wiki.git`)
 
