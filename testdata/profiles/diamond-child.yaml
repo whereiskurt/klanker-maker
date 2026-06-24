@@ -1,0 +1,16 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: diamond-child
+  labels:
+    source: diamond-child
+extends:
+  - diamond-a
+  - diamond-b
+
+spec:
+  lifecycle:
+    ttl: "1h"
+  execution:
+    initCommands:
+      - echo from-diamond-child

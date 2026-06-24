@@ -1,0 +1,23 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: multi-parent-base-b
+  abstract: true
+  labels:
+    origin: base-b
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "2h"
+  runtime:
+    instanceType: t3.medium
+  execution:
+    initCommands:
+      - echo from-base-b
+      - shared-cmd
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".base-b.example.com"
+        - ".shared.example.com"

@@ -1,0 +1,26 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: depth-1
+spec:
+  lifecycle:
+    ttl: "1h"
+    idleTimeout: "10m"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.micro
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: []
+      allowedHosts: []
+  iam:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1

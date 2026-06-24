@@ -1,0 +1,21 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: diamond-a
+  abstract: true
+  labels:
+    source: diamond-a
+extends: diamond-base
+
+spec:
+  lifecycle:
+    ttl: "12h"
+  runtime:
+    instanceType: t3.medium
+  execution:
+    initCommands:
+      - echo from-diamond-a
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".s3.amazonaws.com"

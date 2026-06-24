@@ -1,0 +1,26 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: diamond-base
+  abstract: true
+  labels:
+    source: diamond-base
+
+spec:
+  lifecycle:
+    ttl: "24h"
+    idleTimeout: "4h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.small
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    initCommands:
+      - echo from-diamond-base
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"

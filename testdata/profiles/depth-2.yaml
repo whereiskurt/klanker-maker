@@ -1,0 +1,8 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: depth-2
+extends: depth-1
+spec:
+  lifecycle:
+    ttl: "1h"

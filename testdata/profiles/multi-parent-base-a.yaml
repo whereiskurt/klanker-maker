@@ -1,0 +1,29 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: multi-parent-base-a
+  abstract: true
+  labels:
+    origin: base-a
+
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.small
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    initCommands:
+      - echo from-base-a
+      - shared-cmd
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".base-a.example.com"
+        - ".shared.example.com"
+      allowedHosts: []

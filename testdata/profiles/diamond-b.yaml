@@ -1,0 +1,16 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: diamond-b
+  abstract: true
+  labels:
+    source: diamond-b
+extends: diamond-base
+
+spec:
+  lifecycle:
+    ttl: "6h"
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".github.com"

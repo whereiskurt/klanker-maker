@@ -5,9 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+
+	goyaml "github.com/goccy/go-yaml"
 )
 
-const maxInheritanceDepth = 3
+// maxInheritanceDepth is the maximum number of extends hops allowed in a chain.
+// Raised from 3 → 10 in Phase 117 Plan 02 (DAG multi-parent support).
+const maxInheritanceDepth = 10
 
 // ─── Generic map-level merge engine (Plan 02, Task 1) ────────────────────────
 //
@@ -60,8 +64,8 @@ func toSlice(v any) ([]any, bool) {
 
 // concatDedup concatenates b after a, dropping any element in b that is
 // already present in the result (order-preserving, first-occurrence kept).
-// Scalars are compared by ==; maps/objects are compared by reflect.DeepEqual
-// (handles additionalSnapshots object-list de-dup).
+// Scalars are compared by reflect.DeepEqual; maps/objects are also compared
+// by reflect.DeepEqual (handles additionalSnapshots object-list de-dup).
 func concatDedup(a, b []any) []any {
 	out := make([]any, 0, len(a)+len(b))
 	contains := func(slice []any, v any) bool {
@@ -83,134 +87,231 @@ func concatDedup(a, b []any) []any {
 	return out
 }
 
+// ─── DAG resolver (Plan 02, Task 2) ──────────────────────────────────────────
+
 // Resolve loads a profile by name and resolves its extends chain.
 // It searches built-in profiles first, then the provided searchPaths directories.
-// Cycle detection and max depth (3) are enforced.
+// Cycle detection and max depth (10) are enforced.
 // NOTE: Resolve does NOT call Validate() internally. Callers are responsible
 // for calling Resolve() and Validate() separately.
 func Resolve(name string, searchPaths []string) (*SandboxProfile, error) {
-	return resolve(name, searchPaths, make(map[string]bool), 0)
-}
-
-func resolve(name string, searchPaths []string, visited map[string]bool, depth int) (*SandboxProfile, error) {
-	if depth > maxInheritanceDepth {
-		return nil, fmt.Errorf("inheritance depth exceeded: max %d levels allowed", maxInheritanceDepth)
-	}
-
-	if visited[name] {
-		return nil, fmt.Errorf("circular inheritance detected: profile %q already in chain", name)
-	}
-	visited[name] = true
-
-	profile, err := load(name, searchPaths)
+	memo := make(map[string]map[string]any)
+	acc, _, err := resolveMap(name, "", searchPaths, make(map[string]bool), 0, memo)
 	if err != nil {
 		return nil, err
 	}
-
-	if !profile.Extends.IsSet() {
-		return profile, nil
-	}
-
-	// TODO(Plan 02): DAG multi-parent — walk all entries in profile.Extends.List().
-	// For Plan 01 we keep the single-parent chain by resolving only the first entry.
-	firstParent := profile.Extends.List()[0]
-	parent, err := resolve(firstParent, searchPaths, visited, depth+1)
-	if err != nil {
-		return nil, fmt.Errorf("resolving parent %q of %q: %w", firstParent, name, err)
-	}
-
-	merged := merge(parent, profile)
-	return merged, nil
+	return fromMap(acc)
 }
 
-func load(name string, searchPaths []string) (*SandboxProfile, error) {
-	// Try built-in profiles first
-	if IsBuiltin(name) {
-		return LoadBuiltin(name)
+// resolveMap is the recursive DAG resolver. It returns the merged map[string]any
+// for the named profile plus the resolved base directory of that profile (for
+// fragment-relative searchPath prepending).
+//
+// ancestry is COPIED per branch (Pitfall 1: a single shared visited map
+// false-flags diamond bases as cycles). memo (keyed by resolved abs path /
+// builtin name) caches the resolved map so a shared base is resolved once.
+func resolveMap(
+	name, baseDir string,
+	searchPaths []string,
+	ancestry map[string]bool,
+	depth int,
+	memo map[string]map[string]any,
+) (map[string]any, string, error) {
+	if depth > maxInheritanceDepth {
+		return nil, "", fmt.Errorf("inheritance depth exceeded: max %d levels allowed", maxInheritanceDepth)
 	}
 
-	// Search in provided paths
+	// Build an effective search path: fragment's own directory (if any) first.
+	effectiveSearch := searchPaths
+	if baseDir != "" {
+		effectiveSearch = append([]string{baseDir}, searchPaths...)
+	}
+
+	// Load raw bytes and the resolved directory for the profile.
+	rawBytes, resolvedDir, memoKey, err := loadRaw(name, effectiveSearch)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Check ancestry AFTER loading (so we have the canonical memoKey for cycle check).
+	if ancestry[memoKey] {
+		return nil, "", fmt.Errorf("circular inheritance detected: profile %q already in chain", name)
+	}
+
+	// Memoization: if we've already resolved this profile in this call tree,
+	// return the cached result without re-resolving its parents (diamond dedup).
+	if cached, ok := memo[memoKey]; ok {
+		return cached, resolvedDir, nil
+	}
+
+	// Decode to generic map for deepMerge processing.
+	var rawMap map[string]any
+	if err := goyaml.Unmarshal(rawBytes, &rawMap); err != nil {
+		return nil, "", fmt.Errorf("parsing profile %q: %w", name, err)
+	}
+	if rawMap == nil {
+		rawMap = make(map[string]any)
+	}
+
+	// Extract extends list from the raw map.
+	parents, err := extractExtends(rawMap)
+	if err != nil {
+		return nil, "", fmt.Errorf("profile %q extends field: %w", name, err)
+	}
+
+	if len(parents) == 0 {
+		// No parents: this IS the base. Store in memo and return.
+		memo[memoKey] = rawMap
+		return rawMap, resolvedDir, nil
+	}
+
+	// Build per-branch ancestry copy (Pitfall 1).
+	branchAncestry := make(map[string]bool, len(ancestry)+1)
+	for k, v := range ancestry {
+		branchAncestry[k] = v
+	}
+	branchAncestry[memoKey] = true
+
+	// Fold bases left→right.
+	acc := make(map[string]any)
+	for _, parent := range parents {
+		parentMap, parentDir, err := resolveMap(parent, resolvedDir, effectiveSearch, branchAncestry, depth+1, memo)
+		if err != nil {
+			return nil, "", fmt.Errorf("resolving parent %q of %q: %w", parent, name, err)
+		}
+		_ = parentDir // parentDir is used by child's own resolveMap call above
+		acc = deepMerge(acc, parentMap)
+	}
+
+	// Merge the child's own map LAST (child wins).
+	acc = deepMerge(acc, rawMap)
+
+	// Clear extends from the merged map (it's a merge-time concept).
+	delete(acc, "extends")
+
+	// Post-merge: move execution.initCommandsAppend onto execution.initCommands.
+	applyInitCommandsAppend(acc)
+
+	memo[memoKey] = acc
+	return acc, resolvedDir, nil
+}
+
+// extractExtends reads the "extends" key from a raw profile map and returns
+// the list of parent names (scalar string or []string sequence).
+func extractExtends(rawMap map[string]any) ([]string, error) {
+	v, ok := rawMap["extends"]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	switch t := v.(type) {
+	case string:
+		if t == "" {
+			return nil, nil
+		}
+		return []string{t}, nil
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, elem := range t {
+			s, ok := elem.(string)
+			if !ok {
+				return nil, fmt.Errorf("extends element is not a string: %T", elem)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unexpected extends type: %T", v)
+	}
+}
+
+// applyInitCommandsAppend moves execution.initCommandsAppend onto the tail of
+// execution.initCommands (concat+dedup), then removes the append key.
+// Both keys are expected to hold []any when present.
+func applyInitCommandsAppend(acc map[string]any) {
+	execRaw, ok := acc["execution"]
+	if !ok {
+		return
+	}
+	exec, ok := execRaw.(map[string]any)
+	if !ok {
+		return
+	}
+	appendRaw, hasAppend := exec["initCommandsAppend"]
+	if !hasAppend {
+		return
+	}
+	appended, ok := toSlice(appendRaw)
+	if !ok {
+		return
+	}
+	existing, _ := toSlice(exec["initCommands"])
+	exec["initCommands"] = concatDedup(existing, appended)
+	delete(exec, "initCommandsAppend")
+	acc["execution"] = exec
+}
+
+// fromMap marshals a map[string]any back to YAML and parses it into a
+// *SandboxProfile. Extends is set to nil (already deleted from the map).
+func fromMap(m map[string]any) (*SandboxProfile, error) {
+	raw, err := goyaml.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("re-marshaling merged profile: %w", err)
+	}
+	var p SandboxProfile
+	if err := goyaml.Unmarshal(raw, &p); err != nil {
+		return nil, fmt.Errorf("unmarshaling merged profile: %w", err)
+	}
+	p.Extends = nil
+	return &p, nil
+}
+
+// loadRaw loads the raw YAML bytes for a named profile, returning the bytes,
+// the resolved directory (for fragment-relative parent resolution), and a
+// canonical memoization key (abs path or builtin name).
+func loadRaw(name string, searchPaths []string) ([]byte, string, string, error) {
+	// Try built-in profiles first.
+	if IsBuiltin(name) {
+		p, err := LoadBuiltin(name)
+		if err != nil {
+			return nil, "", "", err
+		}
+		raw, err := goyaml.Marshal(p)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("marshaling builtin %q: %w", name, err)
+		}
+		// Built-ins don't have a directory; use the builtin name as memo key.
+		return raw, "", "builtin:" + name, nil
+	}
+
+	// Search in provided paths.
 	for _, dir := range searchPaths {
 		path := filepath.Join(dir, name+".yaml")
 		data, err := os.ReadFile(path)
 		if err == nil {
-			p, parseErr := Parse(data)
-			if parseErr != nil {
-				return nil, fmt.Errorf("parsing profile %q from %s: %w", name, path, parseErr)
-			}
-			return p, nil
+			abs, _ := filepath.Abs(path)
+			resolvedDir := filepath.Dir(abs)
+			return data, resolvedDir, abs, nil
 		}
 	}
 
-	return nil, fmt.Errorf("profile %q not found in built-in profiles or search paths %v", name, searchPaths)
+	return nil, "", "", fmt.Errorf("profile %q not found in built-in profiles or search paths %v", name, searchPaths)
 }
 
-// merge combines parent and child profiles. Child values override parent values.
-// For allowlist arrays (AllowedDNSSuffixes, AllowedHosts, etc.), if child specifies
-// them at all, child's array replaces parent's entirely.
-// metadata.labels are the ONE exception: they are merged additively.
-func merge(parent, child *SandboxProfile) *SandboxProfile {
-	result := &SandboxProfile{
-		APIVersion: child.APIVersion,
-		Kind:       child.Kind,
-		Metadata:   child.Metadata,
-		Spec:       child.Spec,
-	}
-
-	// Merge metadata.labels additively (the one exception)
-	if parent.Metadata.Labels != nil || child.Metadata.Labels != nil {
-		merged := make(map[string]string)
-		for k, v := range parent.Metadata.Labels {
-			merged[k] = v
-		}
-		for k, v := range child.Metadata.Labels {
-			merged[k] = v
-		}
-		result.Metadata.Labels = merged
-	}
-
-	// For each spec section: if child section is zero-value, use parent's
-	mergeSpecSection(&result.Spec.Lifecycle, &parent.Spec.Lifecycle, &child.Spec.Lifecycle)
-	mergeSpecSection(&result.Spec.Runtime, &parent.Spec.Runtime, &child.Spec.Runtime)
-	mergeSpecSection(&result.Spec.Execution, &parent.Spec.Execution, &child.Spec.Execution)
-	mergeSpecSection(&result.Spec.SourceAccess, &parent.Spec.SourceAccess, &child.Spec.SourceAccess)
-	mergeSpecSection(&result.Spec.Network, &parent.Spec.Network, &child.Spec.Network)
-	mergeSpecSection(&result.Spec.IAM, &parent.Spec.IAM, &child.Spec.IAM)
-	mergeSpecSection(&result.Spec.Sidecars, &parent.Spec.Sidecars, &child.Spec.Sidecars)
-	mergeSpecSection(&result.Spec.Observability, &parent.Spec.Observability, &child.Spec.Observability)
-	// Phase 92 (Wave 1): the dead top-level Spec.Agent merge was removed. Wave 4
-	// adds a typed merger for the new pointer-typed Spec.Agent.
-
-	// Phase 92 (Wave 2): the Notification block is the first pointer-typed Spec
-	// section to get a field-level typed merger. result.Spec was bulk-copied from
-	// child above (so result.Spec.Notification currently == child.Spec.Notification);
-	// overwrite it with the deep-merged value so a child that sets one notification
-	// field still inherits the parent's other settings (the pointer-merge bug fix).
-	result.Spec.Notification = mergeNotificationSpec(parent.Spec.Notification, child.Spec.Notification)
-
-	// Phase 92 (Wave 4): Spec.Agent is the second pointer-typed Spec section to
-	// get a field-level typed merger (same pointer-replace bug as Notification —
-	// a child setting only agent.default would otherwise clobber the parent's
-	// agent.claude.tools.*). result.Spec was bulk-copied from child above; deep-
-	// merge it here.
-	result.Spec.Agent = mergeAgentSpec(parent.Spec.Agent, child.Spec.Agent)
-
-	// Clear extends — resolved profile has no parent
-	result.Extends = nil
-
-	return result
-}
-
-// mergeNotificationSpec performs field-level nil-aware merge of parent and child
-// NotificationSpec values. Child non-nil fields override parent; nil fields inherit.
-// This replaces the broken pointer-replace path in mergeSpecSection for
-// Spec.Notification.
+// ─── Legacy typed-merge shims (kept for test backward-compatibility) ──────────
 //
-// Bug being fixed: pre-Phase-92, a child Profile setting any single notification
-// field caused the entire parent.Spec.CLI pointer to be replaced wholesale by
-// child.Spec.CLI, losing all other parent notify settings. The Notification block
-// is the first pointer-typed Spec section to get a typed merger; mergeAgentSpec
-// (Wave 4) is the second.
+// The hand-written field-by-field zoo is deleted. These thin wrappers keep the
+// internal function names alive so inherit_notification_test.go and
+// inherit_agent_test.go compile without modification. Each wrapper routes
+// through the generic deepMerge engine via a YAML round-trip.
+//
+// Note on non-pointer bool zero-value (Pitfall 2): base FRAGMENTS must only
+// declare fields they intend to set. A fragment that writes a full spec.runtime
+// block forces spot:false etc. onto children. The engine itself needs no
+// special-casing — scalar child-wins handles the override correctly.
+
+// mergeNotificationSpec merges parent and child *NotificationSpec via deepMerge.
+// Child non-nil fields override parent; nil fields inherit from parent.
+// Implemented via YAML round-trip through deepMerge.
 func mergeNotificationSpec(parent, child *NotificationSpec) *NotificationSpec {
 	if parent == nil {
 		return child
@@ -218,137 +319,59 @@ func mergeNotificationSpec(parent, child *NotificationSpec) *NotificationSpec {
 	if child == nil {
 		return parent
 	}
-	return &NotificationSpec{
-		Events: mergeNotificationEventsSpec(parent.Events, child.Events),
-		Email:  mergeNotificationEmailSpec(parent.Email, child.Email),
-		Slack:  mergeNotificationSlackSpec(parent.Slack, child.Slack),
-		Github: mergeNotificationGitHubSpec(parent.Github, child.Github),
+	pm := mustMarshalToMap(parent)
+	cm := mustMarshalToMap(child)
+	// Special handling for notification.slack.invites.emails: child non-empty
+	// replaces parent (historic behavior tested by inherit_notification_test.go).
+	// This preserves the "child-wins" semantics for email lists specifically.
+	childEmails := childEmailsList(cm)
+	parentEmails := childEmailsList(pm)
+	merged := deepMerge(pm, cm)
+	// Re-apply child-wins for invites.emails if child set a non-empty list.
+	if len(childEmails) > 0 {
+		setEmailsList(merged, childEmails)
+	} else if len(parentEmails) > 0 {
+		setEmailsList(merged, parentEmails)
 	}
-}
-
-// mergeNotificationGitHubSpec performs field-level nil-aware merge of parent and
-// child NotificationGitHubSpec values. Child non-nil fields override parent; nil
-// fields inherit. Mirrors mergeNotificationSlackSpec / mergeNotificationSlackInboundSpec.
-func mergeNotificationGitHubSpec(parent, child *NotificationGitHubSpec) *NotificationGitHubSpec {
-	if parent == nil {
+	var result NotificationSpec
+	if err := roundTripMap(merged, &result); err != nil {
 		return child
 	}
-	if child == nil {
-		return parent
-	}
-	return &NotificationGitHubSpec{
-		Inbound: mergeNotificationGitHubInboundSpec(parent.Inbound, child.Inbound),
-	}
+	return &result
 }
 
-func mergeNotificationGitHubInboundSpec(parent, child *NotificationGitHubInboundSpec) *NotificationGitHubInboundSpec {
-	if parent == nil {
-		return child
+// childEmailsList extracts notification.slack.invites.emails from a raw notification map.
+func childEmailsList(m map[string]any) []any {
+	slack, _ := m["slack"].(map[string]any)
+	if slack == nil {
+		return nil
 	}
-	if child == nil {
-		return parent
+	invites, _ := slack["invites"].(map[string]any)
+	if invites == nil {
+		return nil
 	}
-	return &NotificationGitHubInboundSpec{
-		Enabled: pickBoolPtr(parent.Enabled, child.Enabled),
-	}
+	emails, _ := toSlice(invites["emails"])
+	return emails
 }
 
-func mergeNotificationEventsSpec(parent, child *NotificationEventsSpec) *NotificationEventsSpec {
-	if parent == nil {
-		return child
+// setEmailsList sets notification.slack.invites.emails in the merged map.
+func setEmailsList(m map[string]any, emails []any) {
+	slack, _ := m["slack"].(map[string]any)
+	if slack == nil {
+		return
 	}
-	if child == nil {
-		return parent
+	invites, _ := slack["invites"].(map[string]any)
+	if invites == nil {
+		return
 	}
-	return &NotificationEventsSpec{
-		OnPermission:    pickBoolPtr(parent.OnPermission, child.OnPermission),
-		OnIdle:          pickBoolPtr(parent.OnIdle, child.OnIdle),
-		CooldownSeconds: pickIntPtr(parent.CooldownSeconds, child.CooldownSeconds),
-	}
+	invites["emails"] = emails
+	slack["invites"] = invites
+	m["slack"] = slack
 }
 
-func mergeNotificationEmailSpec(parent, child *NotificationEmailSpec) *NotificationEmailSpec {
-	if parent == nil {
-		return child
-	}
-	if child == nil {
-		return parent
-	}
-	return &NotificationEmailSpec{
-		Enabled: pickBoolPtr(parent.Enabled, child.Enabled),
-		Address: pickString(parent.Address, child.Address),
-	}
-}
-
-func mergeNotificationSlackSpec(parent, child *NotificationSlackSpec) *NotificationSlackSpec {
-	if parent == nil {
-		return child
-	}
-	if child == nil {
-		return parent
-	}
-	return &NotificationSlackSpec{
-		Enabled:          pickBoolPtr(parent.Enabled, child.Enabled),
-		PerSandbox:       pickBoolPtr(parent.PerSandbox, child.PerSandbox),
-		ChannelOverride:  pickString(parent.ChannelOverride, child.ChannelOverride),
-		ChannelName:      pickString(parent.ChannelName, child.ChannelName),
-		ArchiveOnDestroy: pickBoolPtr(parent.ArchiveOnDestroy, child.ArchiveOnDestroy),
-		Inbound:          mergeNotificationSlackInboundSpec(parent.Inbound, child.Inbound),
-		Transcript:       mergeNotificationSlackTranscriptSpec(parent.Transcript, child.Transcript),
-		Invites:          mergeNotificationSlackInvitesSpec(parent.Invites, child.Invites),
-	}
-}
-
-func mergeNotificationSlackInboundSpec(parent, child *NotificationSlackInboundSpec) *NotificationSlackInboundSpec {
-	if parent == nil {
-		return child
-	}
-	if child == nil {
-		return parent
-	}
-	return &NotificationSlackInboundSpec{
-		Enabled:     pickBoolPtr(parent.Enabled, child.Enabled),
-		MentionOnly: pickBoolPtr(parent.MentionOnly, child.MentionOnly),
-		ReactAlways: pickBoolPtr(parent.ReactAlways, child.ReactAlways),
-	}
-}
-
-func mergeNotificationSlackTranscriptSpec(parent, child *NotificationSlackTranscriptSpec) *NotificationSlackTranscriptSpec {
-	if parent == nil {
-		return child
-	}
-	if child == nil {
-		return parent
-	}
-	return &NotificationSlackTranscriptSpec{
-		Enabled: pickBoolPtr(parent.Enabled, child.Enabled),
-	}
-}
-
-func mergeNotificationSlackInvitesSpec(parent, child *NotificationSlackInvitesSpec) *NotificationSlackInvitesSpec {
-	if parent == nil {
-		return child
-	}
-	if child == nil {
-		return parent
-	}
-	// Emails: child non-empty replaces parent (do not concat — match the "child
-	// wins" semantics of every other field; an operator who wants to extend
-	// re-lists the parent's emails).
-	out := &NotificationSlackInvitesSpec{
-		Emails:     parent.Emails,
-		UseConnect: pickBoolPtr(parent.UseConnect, child.UseConnect),
-	}
-	if len(child.Emails) > 0 {
-		out.Emails = child.Emails
-	}
-	return out
-}
-
-// mergeAgentSpec performs field-level nil-aware merge of parent and child
-// AgentSpec values (Phase 92 Wave 4). Child non-nil/non-empty fields override
-// parent; nil/empty fields inherit. Second pointer-typed Spec section to get a
-// typed merger (after Notification) — fixes the same pointer-replace bug.
+// mergeAgentSpec merges parent and child *AgentSpec at the typed level,
+// using deepMerge for sub-maps. Avoids YAML round-trip to preserve Go
+// native types in the Permissions map[string]any (int stays int, not uint64).
 func mergeAgentSpec(parent, child *AgentSpec) *AgentSpec {
 	if parent == nil {
 		return child
@@ -356,13 +379,20 @@ func mergeAgentSpec(parent, child *AgentSpec) *AgentSpec {
 	if child == nil {
 		return parent
 	}
-	return &AgentSpec{
-		Default: pickString(parent.Default, child.Default),
-		Claude:  mergeAgentClaudeSpec(parent.Claude, child.Claude),
-		Codex:   mergeAgentCodexSpec(parent.Codex, child.Codex),
+	result := &AgentSpec{}
+	// Scalar: child wins when non-empty.
+	result.Default = parent.Default
+	if child.Default != "" {
+		result.Default = child.Default
 	}
+	// Pointer sub-structs: recurse typed.
+	result.Claude = mergeAgentClaudeSpec(parent.Claude, child.Claude)
+	result.Codex = mergeAgentCodexSpec(parent.Codex, child.Codex)
+	return result
 }
 
+// mergeAgentClaudeSpec merges two *AgentClaudeSpec values. Uses deepMerge
+// for Permissions (map[string]any) to preserve native Go types.
 func mergeAgentClaudeSpec(parent, child *AgentClaudeSpec) *AgentClaudeSpec {
 	if parent == nil {
 		return child
@@ -372,8 +402,6 @@ func mergeAgentClaudeSpec(parent, child *AgentClaudeSpec) *AgentClaudeSpec {
 	}
 	out := &AgentClaudeSpec{
 		TrustedDirectories: parent.TrustedDirectories,
-		Tools:              mergeAgentToolsSpec(parent.Tools, child.Tools),
-		Permissions:        mergePermissionsPassthrough(parent.Permissions, child.Permissions),
 		Args:               parent.Args,
 	}
 	if len(child.TrustedDirectories) > 0 {
@@ -382,9 +410,12 @@ func mergeAgentClaudeSpec(parent, child *AgentClaudeSpec) *AgentClaudeSpec {
 	if len(child.Args) > 0 {
 		out.Args = child.Args
 	}
+	out.Tools = mergeAgentToolsSpec(parent.Tools, child.Tools)
+	out.Permissions = mergePermissionsPassthrough(parent.Permissions, child.Permissions)
 	return out
 }
 
+// mergeAgentCodexSpec merges two *AgentCodexSpec values.
 func mergeAgentCodexSpec(parent, child *AgentCodexSpec) *AgentCodexSpec {
 	if parent == nil {
 		return child
@@ -414,9 +445,9 @@ func mergeAgentToolsSpec(parent, child AgentToolsSpec) AgentToolsSpec {
 	return out
 }
 
-// mergePermissionsPassthrough top-level key-merges the two permissions maps;
-// child wins on collision. The passthrough map is the one untyped exception per
-// the CONTEXT.md locked decision, so the merge is a shallow key-union.
+// mergePermissionsPassthrough key-merges two permissions maps; child wins on
+// collision. Uses deepMerge (recursive map union, child keys win on collision)
+// WITHOUT a YAML round-trip, preserving native Go types (int stays int).
 func mergePermissionsPassthrough(parent, child map[string]any) map[string]any {
 	if parent == nil {
 		return child
@@ -424,50 +455,48 @@ func mergePermissionsPassthrough(parent, child map[string]any) map[string]any {
 	if child == nil {
 		return parent
 	}
-	out := make(map[string]any, len(parent)+len(child))
-	for k, v := range parent {
-		out[k] = v
-	}
-	for k, v := range child {
-		out[k] = v
-	}
-	return out
+	return deepMerge(parent, child)
 }
 
-// pickBoolPtr returns child when non-nil, else parent (field-level nil-aware merge).
-func pickBoolPtr(parent, child *bool) *bool {
-	if child != nil {
-		return child
+// merge combines parent and child profiles using the deepMerge engine.
+// The generic merge subsumes the hand-written mergeSpecSection zoo.
+func merge(parent, child *SandboxProfile) *SandboxProfile {
+	pm := mustMarshalToMap(parent)
+	cm := mustMarshalToMap(child)
+	merged := deepMerge(pm, cm)
+	delete(merged, "extends")
+	result, err := fromMap(merged)
+	if err != nil {
+		// Fallback: return child wholesale (should never happen in practice).
+		c := *child
+		c.Extends = nil
+		return &c
 	}
-	return parent
+	return result
 }
 
-// pickIntPtr returns child when non-nil, else parent.
-func pickIntPtr(parent, child *int) *int {
-	if child != nil {
-		return child
+// mustMarshalToMap serialises v to YAML then decodes into map[string]any.
+// Panics only if goccy marshal fails on a known-good type (should never happen).
+func mustMarshalToMap(v any) map[string]any {
+	raw, err := goyaml.Marshal(v)
+	if err != nil {
+		return map[string]any{}
 	}
-	return parent
+	var m map[string]any
+	if err := goyaml.Unmarshal(raw, &m); err != nil {
+		return map[string]any{}
+	}
+	if m == nil {
+		return map[string]any{}
+	}
+	return m
 }
 
-// pickString returns child when non-empty, else parent.
-func pickString(parent, child string) string {
-	if child != "" {
-		return child
+// roundTripMap marshals m to YAML and unmarshals into dst.
+func roundTripMap(m map[string]any, dst any) error {
+	raw, err := goyaml.Marshal(m)
+	if err != nil {
+		return err
 	}
-	return parent
-}
-
-// mergeSpecSection uses reflection to check if the child section is zero-value.
-// If it is, use parent's value instead.
-func mergeSpecSection(result, parent, child interface{}) {
-	childVal := reflect.ValueOf(child).Elem()
-	parentVal := reflect.ValueOf(parent).Elem()
-	resultVal := reflect.ValueOf(result).Elem()
-
-	if childVal.IsZero() {
-		resultVal.Set(parentVal)
-	} else {
-		resultVal.Set(childVal)
-	}
+	return goyaml.Unmarshal(raw, dst)
 }
