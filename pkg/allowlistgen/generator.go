@@ -41,13 +41,17 @@ func (r *Recorder) Generate(base string) (*profile.SandboxProfile, error) {
 		remainingHosts = []string{}
 	}
 
+	var extendsField profile.ExtendsField
+	if base != "" {
+		extendsField = profile.ExtendsField{base}
+	}
 	p := &profile.SandboxProfile{
 		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Metadata: profile.Metadata{
 			Name: "observed-" + time.Now().Format("20060102-150405"),
 		},
-		Extends: base,
+		Extends: extendsField,
 		Spec: profile.Spec{
 			Lifecycle: profile.LifecycleSpec{
 				TTL:            "8h",

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -73,19 +74,21 @@ func validateFile(cfg *config.Config, filePath string) bool {
 	// Add the file's directory to search paths so sibling profiles can be resolved.
 	// Resolve() returns a fully merged profile with all inherited fields applied.
 	var validationTarget []byte
-	if parseErr == nil && parsed.Extends != "" {
+	if parseErr == nil && parsed.Extends.IsSet() {
 		log.Debug().
 			Str("file", filePath).
-			Str("extends", parsed.Extends).
+			Str("extends", strings.Join(parsed.Extends.List(), ",")).
 			Msg("resolving inheritance chain")
 
 		// Include the file's directory in search paths for relative profile resolution
 		fileDir := filepath.Dir(filePath)
 		searchPaths := append([]string{fileDir}, cfg.ProfileSearchPaths...)
 
-		resolved, resolveErr := profile.Resolve(parsed.Extends, searchPaths)
+		// Resolve uses the first parent name for single-parent resolution (Plan 01).
+		// Plan 03 will wire multi-parent DAG resolution here.
+		resolved, resolveErr := profile.Resolve(parsed.Extends.List()[0], searchPaths)
 		if resolveErr != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: %s: failed to resolve extends %q: %v\n", filePath, parsed.Extends, resolveErr)
+			fmt.Fprintf(os.Stderr, "ERROR: %s: failed to resolve extends %q: %v\n", filePath, strings.Join(parsed.Extends.List(), ","), resolveErr)
 			return true
 		}
 

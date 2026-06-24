@@ -339,13 +339,15 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 
 	// Step 3: Resolve inheritance chain if extends is present
 	var resolvedProfile *profile.SandboxProfile
-	if parsed.Extends != "" {
-		log.Debug().Str("extends", parsed.Extends).Msg("resolving inheritance chain")
+	if parsed.Extends.IsSet() {
+		log.Debug().Str("extends", strings.Join(parsed.Extends.List(), ",")).Msg("resolving inheritance chain")
 		fileDir := filepath.Dir(profilePath)
 		searchPaths := append([]string{fileDir}, cfg.ProfileSearchPaths...)
-		resolvedProfile, err = profile.Resolve(parsed.Extends, searchPaths)
+		// Resolve uses the first parent name for single-parent resolution (Plan 01).
+		// Plan 03 will wire multi-parent DAG resolution here.
+		resolvedProfile, err = profile.Resolve(parsed.Extends.List()[0], searchPaths)
 		if err != nil {
-			return fmt.Errorf("failed to resolve extends %q: %w", parsed.Extends, err)
+			return fmt.Errorf("failed to resolve extends %q: %w", strings.Join(parsed.Extends.List(), ","), err)
 		}
 		// Schema-validate raw child bytes; semantic-validate merged profile
 		schemaErrs := profile.ValidateSchema(raw)
@@ -2091,12 +2093,13 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 
 	// Step 3: Resolve inheritance + validate
 	var resolvedProfile *profile.SandboxProfile
-	if parsed.Extends != "" {
+	if parsed.Extends.IsSet() {
 		fileDir := filepath.Dir(profilePath)
 		searchPaths := append([]string{fileDir}, cfg.ProfileSearchPaths...)
-		resolvedProfile, err = profile.Resolve(parsed.Extends, searchPaths)
+		// Resolve uses the first parent name for single-parent resolution (Plan 01).
+		resolvedProfile, err = profile.Resolve(parsed.Extends.List()[0], searchPaths)
 		if err != nil {
-			return "", fmt.Errorf("failed to resolve extends %q: %w", parsed.Extends, err)
+			return "", fmt.Errorf("failed to resolve extends %q: %w", strings.Join(parsed.Extends.List(), ","), err)
 		}
 		schemaErrs := profile.ValidateSchema(raw)
 		semanticErrs := profile.ValidateSemantic(resolvedProfile)

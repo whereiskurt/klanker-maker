@@ -355,9 +355,9 @@ func reprovisionECSSandbox(ctx context.Context, cfg *config.Config, sandboxID, a
 		return fmt.Errorf("parse stored profile: %w", err)
 	}
 	resolvedProfile := parsed
-	if parsed.Extends != "" {
+	if parsed.Extends.IsSet() {
 		searchPaths := cfg.ProfileSearchPaths
-		resolvedProfile, err = profile.Resolve(parsed.Extends, searchPaths)
+		resolvedProfile, err = profile.Resolve(parsed.Extends.List()[0], searchPaths)
 		if err != nil {
 			return fmt.Errorf("resolve profile extends: %w", err)
 		}
