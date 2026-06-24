@@ -5,7 +5,7 @@ milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
 stopped_at: "Completed 117-05-PLAN.md (docs: OPERATOR-GUIDE § Composable inheritance, CLAUDE.md Phase 117 note + Where-to-look row, agent-tool-gating xref). Phase 117 complete."
-last_updated: "2026-06-24T13:48:53.712Z"
+last_updated: "2026-06-24T13:55:28.203Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 1
