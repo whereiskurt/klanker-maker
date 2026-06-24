@@ -216,7 +216,14 @@ func alignFromSep(cell string) string {
 // keeps the simpler raw_text encoding — numeric right-align still comes from
 // column_settings, and the byte-output is unchanged for markup-free tables.
 func classifyCell(text string) tableCell {
-	els := parseInlineSpans(strings.TrimSpace(text))
+	trimmed := strings.TrimSpace(text)
+	// Blank cell: Slack rejects an empty raw_text/rich_text `text` element with
+	// invalid_blocks, dropping the whole message (2026-06-24 incident). Render a
+	// visually-empty but schema-valid cell.
+	if trimmed == "" {
+		return tableCell{Type: "raw_text", Text: " "}
+	}
+	els := parseInlineSpans(trimmed)
 	// Plain cell (single unstyled text element) → keep raw_text.
 	if len(els) == 1 && els[0].Type == "text" && els[0].Style == nil {
 		return tableCell{Type: "raw_text", Text: els[0].Text}
@@ -229,7 +236,14 @@ func classifyCell(text string) tableCell {
 // every element. Wrapped in the mandatory rich_text_section (a flat element list
 // is rejected by Slack — see richTextSection).
 func makeBoldCell(text string) tableCell {
-	els := parseInlineSpans(strings.TrimSpace(text))
+	trimmed := strings.TrimSpace(text)
+	// Blank header cell (the common "row-label" leading column): keep it a valid
+	// bold rich_text cell that renders blank. An empty `text` element trips
+	// invalid_blocks and drops the whole message (2026-06-24 incident).
+	if trimmed == "" {
+		return richTextCell([]richTextElement{{Type: "text", Text: " ", Style: &rtStyle{Bold: true}}})
+	}
+	els := parseInlineSpans(trimmed)
 	for i := range els {
 		if els[i].Style == nil {
 			els[i].Style = &rtStyle{}

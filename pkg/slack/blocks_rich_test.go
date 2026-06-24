@@ -418,7 +418,9 @@ func TestRichTable_RawNumber(t *testing.T) {
 }
 
 // TestRichTable_RaggedPad (RICH-07): a body row with fewer cells than the header
-// is padded to numCols with empty raw_text cells.
+// is padded to numCols with blank raw_text cells. The padding cells carry a single
+// space (NOT an empty string) — an empty raw_text `text` element trips Slack's
+// invalid_blocks rejection and drops the whole message (2026-06-24 incident).
 func TestRichTable_RaggedPad(t *testing.T) {
 	lines := []string{
 		"| A | B | C |",
@@ -438,7 +440,8 @@ func TestRichTable_RaggedPad(t *testing.T) {
 	if len(raggedRow) != 3 {
 		t.Fatalf("ragged row should be padded to 3 cells; got %d", len(raggedRow))
 	}
-	// Cell[0] should have 'x'; cells[1] and [2] should be empty raw_text.
+	// Cell[0] should have 'x'; cells[1] and [2] are blank raw_text padding cells
+	// carrying a single space (invalid_blocks guard — empty text is rejected).
 	if raggedRow[0].Text != "x" {
 		t.Errorf("ragged row cell[0] text = %q; want %q", raggedRow[0].Text, "x")
 	}
@@ -446,8 +449,8 @@ func TestRichTable_RaggedPad(t *testing.T) {
 		if raggedRow[i].Type != "raw_text" {
 			t.Errorf("ragged row cell[%d] type = %q; want raw_text", i, raggedRow[i].Type)
 		}
-		if raggedRow[i].Text != "" {
-			t.Errorf("ragged row cell[%d] text = %q; want empty", i, raggedRow[i].Text)
+		if raggedRow[i].Text != " " {
+			t.Errorf("ragged row cell[%d] text = %q; want %q (blank placeholder)", i, raggedRow[i].Text, " ")
 		}
 	}
 }

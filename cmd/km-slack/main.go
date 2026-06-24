@@ -32,6 +32,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -426,6 +427,33 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 
 	resp, err := slack.PostToBridge(ctx, bridgeURL, env, sig)
 	if err != nil {
+		// Defense in depth (2026-06-24 invalid_blocks incident): a block payload
+		// that passes the local size/overflow caps but is schematically rejected
+		// by Slack (invalid_blocks) would otherwise drop the reply entirely. When
+		// we actually sent blocks, re-post ONCE without them using the mrkdwn/plain
+		// fallback already computed in `rendered`. Build a FRESH envelope (new
+		// nonce) — the bridge reserved the first nonce, so reuse returns
+		// replayed_nonce 401. A single attempt, no loop.
+		if blocksJSON != "" && strings.Contains(err.Error(), "invalid_blocks") {
+			fmt.Fprintf(os.Stderr, "km-slack: blocks rejected (invalid_blocks); re-posting as mrkdwn\n")
+			fbEnv, fbErr := slack.BuildEnvelope(slack.ActionPost, sandboxID, channel, subject, rendered, thread)
+			if fbErr != nil {
+				return "", err // original error
+			}
+			_, fbSig, fbErr := slack.SignEnvelope(fbEnv, priv)
+			if fbErr != nil {
+				return "", err // original error
+			}
+			fbResp, fbErr := slack.PostToBridge(ctx, bridgeURL, fbEnv, fbSig)
+			if fbErr != nil {
+				return "", err // original error — fallback also failed
+			}
+			if !fbResp.OK {
+				return "", fmt.Errorf("bridge returned not-ok on mrkdwn fallback: %s", fbResp.Error)
+			}
+			fmt.Fprintf(os.Stderr, "km-slack: posted ts=%s (mrkdwn fallback)\n", fbResp.TS)
+			return fbResp.TS, nil
+		}
 		return "", err
 	}
 	if !resp.OK {
