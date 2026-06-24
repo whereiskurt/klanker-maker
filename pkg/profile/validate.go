@@ -749,3 +749,33 @@ var emailRegex = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 func emailLooksValid(s string) bool {
 	return emailRegex.MatchString(s)
 }
+
+// IsAbstractFragment reports whether the raw YAML bytes represent a profile
+// fragment marked as abstract via `metadata.abstract: true`.
+//
+// Abstract profiles are partial base definitions intended for inheritance only.
+// km validate skips standalone validation checks for abstract fragments;
+// they are expected to omit required fields that concrete children will supply.
+//
+// Phase 117 (Plan 01). Any error (YAML parse, missing key, wrong type) returns
+// false — no panic, fail-open.
+func IsAbstractFragment(raw []byte) bool {
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return false
+	}
+	meta, ok := doc["metadata"]
+	if !ok {
+		return false
+	}
+	metaMap, ok := meta.(map[string]any)
+	if !ok {
+		return false
+	}
+	abstract, ok := metaMap["abstract"]
+	if !ok {
+		return false
+	}
+	v, ok := abstract.(bool)
+	return ok && v
+}

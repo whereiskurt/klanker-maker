@@ -59,6 +59,11 @@ type Metadata struct {
 	Name   string            `yaml:"name"`
 	Labels map[string]string `yaml:"labels,omitempty"`
 	Prefix string            `yaml:"prefix,omitempty"`
+	// Abstract marks the profile as a partial base fragment intended for inheritance
+	// only, not standalone deployment. When true, km validate skips the full set of
+	// required-field checks so the fragment can omit required spec sections.
+	// Phase 117 (Plan 01).
+	Abstract bool `yaml:"abstract,omitempty"`
 }
 
 // Spec contains all required sections of a SandboxProfile.
@@ -444,6 +449,12 @@ type ExecutionSpec struct {
 	// Runs sequentially as root before the user session begins.
 	// Example: ["apt-get update", "npm install -g @anthropic/claude-code"]
 	InitCommands []string `yaml:"initCommands,omitempty"`
+	// InitCommandsAppend is a list of commands to append AFTER the merged initCommands
+	// during multi-parent inheritance resolution (Phase 117). Unlike InitCommands (child
+	// replaces parent), InitCommandsAppend entries from each parent are unioned and
+	// appended to the resolved InitCommands list in declaration order. Plan 02 wires
+	// the append merge; Plan 01 only declares the field.
+	InitCommandsAppend []string `yaml:"initCommandsAppend,omitempty"`
 	// InitScripts is a list of local script file paths to upload and run on startup.
 	// Paths are relative to the profile file or repo root.
 	// Scripts are uploaded to S3 alongside the profile and executed in order.

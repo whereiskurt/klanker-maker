@@ -38,12 +38,19 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9]{0,11}$",
           "description": "Optional sandbox ID prefix. Defaults to 'sb' when omitted."
+        },
+        "abstract": {
+          "type": "boolean",
+          "description": "When true this is a partial base fragment intended for inheritance only; not validated standalone."
         }
       }
     },
     "extends": {
-      "type": "string",
-      "description": "Name of the parent profile to inherit from"
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}}
+      ],
+      "description": "Name of the parent profile to inherit from. Accepts a bare string (single parent) or a YAML sequence (multi-parent). Phase 117."
     },
     "spec": {
       "type": "object",
@@ -342,6 +349,11 @@
               "type": "array",
               "items": { "type": "string" },
               "description": "Shell commands to run after sandbox starts, before user session"
+            },
+            "initCommandsAppend": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Commands appended after the merged initCommands during inheritance resolution (Phase 117). Unlike initCommands (child replaces parent), these are unioned across all parents in declaration order."
             },
             "initScripts": {
               "type": "array",

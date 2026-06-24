@@ -1584,3 +1584,64 @@ func TestDesktopValidateUbuntuGuard(t *testing.T) {
 		}
 	})
 }
+
+// TestIsAbstractFragment verifies the YAML metadata.abstract detector.
+func TestIsAbstractFragment(t *testing.T) {
+	t.Run("abstract true", func(t *testing.T) {
+		raw := []byte("metadata:\n  name: base\n  abstract: true\n")
+		if !profile.IsAbstractFragment(raw) {
+			t.Error("expected IsAbstractFragment to return true for metadata.abstract: true")
+		}
+	})
+
+	t.Run("abstract false", func(t *testing.T) {
+		raw := []byte("metadata:\n  name: base\n  abstract: false\n")
+		if profile.IsAbstractFragment(raw) {
+			t.Error("expected IsAbstractFragment to return false for metadata.abstract: false")
+		}
+	})
+
+	t.Run("no abstract key", func(t *testing.T) {
+		raw := []byte("metadata:\n  name: base\n")
+		if profile.IsAbstractFragment(raw) {
+			t.Error("expected IsAbstractFragment to return false when no abstract key")
+		}
+	})
+
+	t.Run("malformed YAML no panic", func(t *testing.T) {
+		raw := []byte(": : invalid yaml :")
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("IsAbstractFragment panicked on malformed YAML: %v", r)
+			}
+		}()
+		result := profile.IsAbstractFragment(raw)
+		if result {
+			t.Error("expected IsAbstractFragment to return false for malformed YAML")
+		}
+	})
+}
+
+// TestValidateSchemaExtendsArrayForm verifies the schema accepts extends as an array.
+func TestValidateSchemaExtendsArrayForm(t *testing.T) {
+	// A profile with extends as an array (two parents)
+	raw := []byte(minimalCLIBase + "extends:\n  - base/a\n  - base/b\n")
+	schemaErrs := profile.ValidateSchema(raw)
+	for _, e := range schemaErrs {
+		// Only flag errors about extends; other schema issues may exist in the base
+		if strings.Contains(e.Message, "extends") || strings.Contains(e.Path, "extends") {
+			t.Errorf("schema rejected extends as array: %v", e)
+		}
+	}
+}
+
+// TestValidateSchemaExtendsStringForm verifies the schema still accepts extends as a string.
+func TestValidateSchemaExtendsStringForm(t *testing.T) {
+	raw := []byte(minimalCLIBase + "extends: base/a\n")
+	schemaErrs := profile.ValidateSchema(raw)
+	for _, e := range schemaErrs {
+		if strings.Contains(e.Message, "extends") || strings.Contains(e.Path, "extends") {
+			t.Errorf("schema rejected extends as string: %v", e)
+		}
+	}
+}
