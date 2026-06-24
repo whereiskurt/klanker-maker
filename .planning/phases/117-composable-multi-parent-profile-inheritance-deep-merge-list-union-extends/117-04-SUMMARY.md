@@ -15,11 +15,12 @@ requires:
 
 provides:
   - profiles/base/ fragment library — 8 abstract (metadata.abstract:true) partial fragments for the quantified overlap
-  - learn.v2.yaml + chatty/polite/codex refactored onto 6 base fragments (~80 lines dedup each)
-  - dc34.yaml refactored onto the same 6 base fragments, keeping only its true deltas
+  - learn.v2.yaml + chatty/polite/codex: extends 8 base fragments (~80 lines dedup each); all 5 leaves have ZERO userdata diff
+  - dc34.yaml: extends 7 base fragments (not email-strict — locked decision A: allowedSenders ["*"] union would be wrong superset)
   - resolveMap clears metadata.abstract from the merged leaf (clearAbstractFromMetadata) — abstract never propagates to a concrete profile
   - byte-identity gate (userdata_phase92_byte_identity_test) compiles the MERGED resolved spec via profile.Resolve()
   - agent_claude_golden_test resolves the extends DAG (Parse->Resolve) so refactored leaves synthesize settings correctly
+  - All 22 profiles validate (validate-all-profiles.sh); 8 base fragments correctly skipped as abstract
 
 affects:
   - Any future profile can compose from profiles/base/*.yaml via multi-parent extends
@@ -55,9 +56,10 @@ key-files:
     - pkg/compiler/userdata_phase92_byte_identity_test.go — helper compiles MERGED spec via profile.Resolve("learn.v2", ...)
 
 key-decisions:
-  - "metadata.abstract must be cleared from the resolved leaf: deepMerge would otherwise propagate a base fragment's abstract:true onto the concrete result, breaking km create"
+  - "metadata.abstract must be cleared from the resolved leaf: deepMerge would otherwise propagate a base fragment's abstract:true onto the concrete result, breaking km create and serialization in .km-profile.yaml heredoc"
   - "Golden + byte-identity tests resolve the DAG, not Parse(raw): once a leaf gains extends:, the raw bytes are a partial profile; only the merged spec is the real compile input"
-  - "6 of 8 fragments consumed by these leaves; agent-claude-all-tools + email-strict ship as library fragments for future/other profiles"
+  - "A (locked, reaffirmed): dc34 email block stays in-leaf — NOT extending base/email-strict. List union would produce [\"*\", \"self\", \"whereiskurt@gmail.com\", \"kurt.hundeck@*\"] — semantically open (\"*\" subsumes all specific senders). No narrowing in v1."
+  - "All 8 fragments consumed: learn.v2.* extends all 8 (including agent-claude-all-tools and email-strict); dc34 extends 7 (skips email-strict per decision A)"
 
 patterns-established:
   - "Author a base fragment as metadata.abstract:true + one narrow spec block; leaves compose several via extends: list"

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 117-04 (complete)
+current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 117-04-PLAN.md (base/ fragment library + learn.v2.*/dc34 refactor onto multi-parent extends; byte-identity preserved). Wave-4 executor died mid-Task-2; orchestrator finished+verified. Next: 117-05 (docs)."
-last_updated: "2026-06-24T12:54:35.369Z"
+stopped_at: "Completed 117-04-PLAN.md (2 tasks: base/* fragments + learn.v2.*/dc34 refactor; byte-identity gate green; zero userdata diff)"
+last_updated: "2026-06-24T13:46:30.184Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
   percent: 91
 ---
 
@@ -583,6 +583,7 @@ Progress: [█████████░] 91%
 | Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends P01 | 7min | 3 tasks | 10 files |
 | Phase 117 P02 | 635s | 2 tasks | 23 files |
 | Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends P03 | 728 | 2 tasks | 7 files |
+| Phase 117 P04 | 2859 | 2 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -1666,6 +1667,8 @@ Recent decisions affecting current work:
 - [Phase 117]: D (locked): initCommandsAppend post-merge pass appends to initCommands; general +key convention deferred
 - [Phase 117-03]: Validate merged bytes (yaml.Marshal resolved → profile.Validate) not ValidateSchema(raw): partial child bytes fail required-field schema for inherited-field leaves
 - [Phase 117-03]: Leaf-name resolve: strings.TrimSuffix(filepath.Base(path), .yaml) → profile.Resolve(leafName) walks full DAG from leaf not first parent
+- [Phase 117]: metadata.abstract must be cleared from the resolved leaf — deepMerge otherwise propagates base fragment's abstract:true to concrete result
+- [Phase 117]: All test helpers loading refactored profiles must use profile.Resolve() not profile.Parse() — once a leaf has extends:, raw bytes are partial
 
 ### Roadmap Evolution
 
@@ -1809,6 +1812,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-24T12:54:35.363Z
-Stopped at: Completed 117-03-PLAN.md (2 tasks: full DAG resolve in km validate + km create, validate-all base/ skip)
+Last session: 2026-06-24T13:46:30.177Z
+Stopped at: Completed 117-04-PLAN.md (2 tasks: base/* fragments + learn.v2.*/dc34 refactor; byte-identity gate green; zero userdata diff)
 Resume file: None
