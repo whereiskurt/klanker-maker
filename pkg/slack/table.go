@@ -10,13 +10,18 @@
 //   - splitTableRow  — parse pipe-separated cells, honour \| escaping
 //   - isSeparatorRow — detect the |:---|---:| delimiter row
 //
-// v1 cell schema (refined after live Slack UAT, Phase 111):
-//   - Header row → rich_text with bold style, wrapped in the mandatory
-//     rich_text_section (a flat element list is rejected with invalid_blocks)
-//   - Body cells → raw_text (always); numeric right-alignment comes from
-//     column_settings, and raw_number is deferred (its value-field schema is
-//     undocumented and rejected our guesses in UAT)
-//   - No rich_text encoder for body cells (code spans/lists degrade to raw_text)
+// Cell schema (refined after live Slack UAT, Phase 111; inline-markdown
+// follow-up):
+//   - Header row → rich_text bold cells, wrapped in the mandatory
+//     rich_text_section (a flat element list is rejected with invalid_blocks).
+//   - Body cells → rich_text when the cell contains inline markdown
+//     (`code`, **bold**, [label](url)) so those render as Slack style objects
+//     (style.code / style.bold) and link elements instead of LITERAL markup
+//     characters; a plain cell (no markup) keeps the simpler raw_text encoding.
+//     Numeric right-alignment still comes from column_settings; raw_number is
+//     deferred (its value-field schema is undocumented and rejected our guesses
+//     in UAT).
+//   - parseInlineSpans is the shared inline tokenizer used by both rows.
 package slack
 
 import (
@@ -64,17 +69,21 @@ type richTextSection struct {
 	Elements []richTextElement `json:"elements"`
 }
 
-// richTextElement is a leaf text element inside a rich_text_section.
-// In v1 only the header row uses this (bold style).
+// richTextElement is a leaf element inside a rich_text_section.
+//   - Type "text": a styled run of text (Text + optional Style).
+//   - Type "link": a hyperlink (URL + Text label + optional Style).
 type richTextElement struct {
-	Type  string   `json:"type"`            // always "text"
+	Type  string   `json:"type"`            // "text" or "link"
 	Text  string   `json:"text"`
+	URL   string   `json:"url,omitempty"`   // set for type "link"
 	Style *rtStyle `json:"style,omitempty"` // nil omits the key
 }
 
 // rtStyle holds rich_text element styling flags.
 type rtStyle struct {
-	Bold bool `json:"bold,omitempty"`
+	Bold   bool `json:"bold,omitempty"`
+	Italic bool `json:"italic,omitempty"`
+	Code   bool `json:"code,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +151,7 @@ func buildTableBlock(lines []string) (blockTable, bool) {
 
 	// Build the rows slice.
 	// Row 0 (header) → bold rich_text cells.
-	// Rows 1..N (body) → raw_number or raw_text cells.
+	// Rows 1..N (body) → rich_text (cells with inline markdown) or raw_text (plain).
 	tableRows := make([][]tableCell, 0, 1+dataRows)
 
 	// Header row.
@@ -199,32 +208,122 @@ func alignFromSep(cell string) string {
 	}
 }
 
-// classifyCell assigns the raw cell type for a body cell.
-// v1: ALL body cells are raw_text. Numeric right-alignment is already provided by
-// column_settings (derived from the GFM `--:` delimiter), and Slack's raw_number
-// cell schema is undocumented — both the `number` and `text` value-field guesses
-// were rejected with invalid_blocks in live UAT — so raw_number is deferred.
+// classifyCell builds a body cell from its text.
+//
+// A cell containing inline markdown (`code`, **bold**, [label](url)) is encoded
+// as a rich_text cell so Slack renders style objects / link elements instead of
+// the LITERAL markup characters that raw_text would dump verbatim. A plain cell
+// keeps the simpler raw_text encoding — numeric right-align still comes from
+// column_settings, and the byte-output is unchanged for markup-free tables.
 func classifyCell(text string) tableCell {
-	return tableCell{Type: "raw_text", Text: strings.TrimSpace(text)}
+	els := parseInlineSpans(strings.TrimSpace(text))
+	// Plain cell (single unstyled text element) → keep raw_text.
+	if len(els) == 1 && els[0].Type == "text" && els[0].Style == nil {
+		return tableCell{Type: "raw_text", Text: els[0].Text}
+	}
+	return richTextCell(els)
 }
 
-// makeBoldCell creates a rich_text cell with a single bold text element, wrapped
-// in the mandatory rich_text_section (a flat element list is rejected by Slack —
-// see richTextSection). Used for the header row only.
+// makeBoldCell creates a rich_text header cell: the cell's inline markdown is
+// parsed (so a header may carry a code span or link) and bold is OR-ed onto
+// every element. Wrapped in the mandatory rich_text_section (a flat element list
+// is rejected by Slack — see richTextSection).
 func makeBoldCell(text string) tableCell {
+	els := parseInlineSpans(strings.TrimSpace(text))
+	for i := range els {
+		if els[i].Style == nil {
+			els[i].Style = &rtStyle{}
+		}
+		els[i].Style.Bold = true
+	}
+	return richTextCell(els)
+}
+
+// richTextCell wraps leaf elements in the mandatory rich_text_section nesting.
+func richTextCell(els []richTextElement) tableCell {
 	return tableCell{
 		Type: "rich_text",
 		Elements: []richTextSection{
-			{
-				Type: "rich_text_section",
-				Elements: []richTextElement{
-					{
-						Type:  "text",
-						Text:  strings.TrimSpace(text),
-						Style: &rtStyle{Bold: true},
-					},
-				},
-			},
+			{Type: "rich_text_section", Elements: els},
 		},
 	}
+}
+
+// parseInlineSpans tokenizes a table cell's text into Slack rich_text leaf
+// elements, converting inline markdown into style objects / link elements
+// instead of leaving the literal markup characters that the raw_text path would
+// render verbatim (a `code` span shown as "`code`", **bold** as "**bold**").
+//
+// Recognised spans, scanned left-to-right (first match wins):
+//   - `code`        → text element with style.code = true (content verbatim — no
+//     nested markdown, matching code-span semantics)
+//   - **bold**      → inner content re-parsed recursively, style.bold OR-ed onto
+//     each resulting element (so **`x`** → bold+code)
+//   - [label](url)  → link element (URL + label)
+//
+// Everything else accumulates into a plain (unstyled) text element. The result
+// always has at least one element ("" → a single empty text element) so callers
+// can rely on els[0].
+func parseInlineSpans(text string) []richTextElement {
+	var out []richTextElement
+	var buf strings.Builder
+	flush := func() {
+		if buf.Len() > 0 {
+			out = append(out, richTextElement{Type: "text", Text: buf.String()})
+			buf.Reset()
+		}
+	}
+
+	i, n := 0, len(text)
+	for i < n {
+		// **bold** — find the closing ** after the opening pair.
+		if strings.HasPrefix(text[i:], "**") {
+			if rel := strings.Index(text[i+2:], "**"); rel >= 0 {
+				flush()
+				inner := text[i+2 : i+2+rel]
+				for _, el := range parseInlineSpans(inner) {
+					if el.Style == nil {
+						el.Style = &rtStyle{}
+					}
+					el.Style.Bold = true
+					out = append(out, el)
+				}
+				i += 2 + rel + 2
+				continue
+			}
+		}
+		// `code` — single-backtick span, content taken verbatim.
+		if text[i] == '`' {
+			if rel := strings.IndexByte(text[i+1:], '`'); rel >= 0 {
+				flush()
+				out = append(out, richTextElement{
+					Type:  "text",
+					Text:  text[i+1 : i+1+rel],
+					Style: &rtStyle{Code: true},
+				})
+				i += 1 + rel + 1
+				continue
+			}
+		}
+		// [label](url) — only when it matches at the current position.
+		if text[i] == '[' {
+			if m := reLink.FindStringSubmatchIndex(text[i:]); m != nil && m[0] == 0 {
+				flush()
+				out = append(out, richTextElement{
+					Type: "link",
+					URL:  text[i+m[4] : i+m[5]],
+					Text: text[i+m[2] : i+m[3]],
+				})
+				i += m[1]
+				continue
+			}
+		}
+		buf.WriteByte(text[i])
+		i++
+	}
+	flush()
+	if len(out) == 0 {
+		out = append(out, richTextElement{Type: "text", Text: ""})
+	}
+	return out
 }
