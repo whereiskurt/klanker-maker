@@ -33,13 +33,16 @@ func resolve(name string, searchPaths []string, visited map[string]bool, depth i
 		return nil, err
 	}
 
-	if profile.Extends == "" {
+	if !profile.Extends.IsSet() {
 		return profile, nil
 	}
 
-	parent, err := resolve(profile.Extends, searchPaths, visited, depth+1)
+	// TODO(Plan 02): DAG multi-parent — walk all entries in profile.Extends.List().
+	// For Plan 01 we keep the single-parent chain by resolving only the first entry.
+	firstParent := profile.Extends.List()[0]
+	parent, err := resolve(firstParent, searchPaths, visited, depth+1)
 	if err != nil {
-		return nil, fmt.Errorf("resolving parent %q of %q: %w", profile.Extends, name, err)
+		return nil, fmt.Errorf("resolving parent %q of %q: %w", firstParent, name, err)
 	}
 
 	merged := merge(parent, profile)
@@ -119,7 +122,7 @@ func merge(parent, child *SandboxProfile) *SandboxProfile {
 	result.Spec.Agent = mergeAgentSpec(parent.Spec.Agent, child.Spec.Agent)
 
 	// Clear extends — resolved profile has no parent
-	result.Extends = ""
+	result.Extends = nil
 
 	return result
 }

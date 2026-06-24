@@ -3,7 +3,78 @@ package profile
 import (
 	"strings"
 	"testing"
+
+	"github.com/goccy/go-yaml"
 )
+
+// TestExtendsUnmarshal verifies the ExtendsField union type correctly parses
+// scalar string, array, and absent extends fields.
+func TestExtendsUnmarshal(t *testing.T) {
+	t.Run("scalar string", func(t *testing.T) {
+		input := `extends: base/foo`
+		var s struct {
+			Extends ExtendsField `yaml:"extends,omitempty"`
+		}
+		if err := yaml.Unmarshal([]byte(input), &s); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+		if !s.Extends.IsSet() {
+			t.Error("expected IsSet() true for scalar extends")
+		}
+		list := s.Extends.List()
+		if len(list) != 1 || list[0] != "base/foo" {
+			t.Errorf("expected [base/foo], got %v", list)
+		}
+	})
+
+	t.Run("sequence", func(t *testing.T) {
+		input := "extends:\n  - base/a\n  - base/b"
+		var s struct {
+			Extends ExtendsField `yaml:"extends,omitempty"`
+		}
+		if err := yaml.Unmarshal([]byte(input), &s); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+		if !s.Extends.IsSet() {
+			t.Error("expected IsSet() true for sequence extends")
+		}
+		list := s.Extends.List()
+		if len(list) != 2 || list[0] != "base/a" || list[1] != "base/b" {
+			t.Errorf("expected [base/a, base/b], got %v", list)
+		}
+	})
+
+	t.Run("absent", func(t *testing.T) {
+		input := `metadata: {name: test}`
+		var s struct {
+			Extends ExtendsField `yaml:"extends,omitempty"`
+		}
+		if err := yaml.Unmarshal([]byte(input), &s); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+		if s.Extends.IsSet() {
+			t.Errorf("expected IsSet() false for absent extends, got true: %v", s.Extends)
+		}
+		if len(s.Extends.List()) != 0 {
+			t.Errorf("expected empty list for absent extends, got %v", s.Extends.List())
+		}
+	})
+
+	t.Run("IsSet and List accessors", func(t *testing.T) {
+		var e ExtendsField
+		if e.IsSet() {
+			t.Error("empty ExtendsField should not be set")
+		}
+		e = ExtendsField{"foo", "bar"}
+		if !e.IsSet() {
+			t.Error("non-empty ExtendsField should be set")
+		}
+		list := e.List()
+		if len(list) != 2 || list[0] != "foo" || list[1] != "bar" {
+			t.Errorf("List() returned unexpected value: %v", list)
+		}
+	})
+}
 
 func TestResolveInheritsParentValues(t *testing.T) {
 	// Child extends open-dev with TTL override but omits some parent values
@@ -109,7 +180,7 @@ func TestResolveExtendsCleared(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve failed: %v", err)
 	}
-	if p.Extends != "" {
-		t.Errorf("expected extends to be cleared after resolution, got %q", p.Extends)
+	if p.Extends.IsSet() {
+		t.Errorf("expected extends to be cleared after resolution, got %v", p.Extends)
 	}
 }

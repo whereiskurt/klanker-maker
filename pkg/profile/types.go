@@ -4,17 +4,54 @@
 package profile
 
 import (
+	"context"
+
 	"github.com/goccy/go-yaml"
 )
+
+// ExtendsField is a union type that accepts either a bare YAML string or a
+// YAML sequence for the top-level "extends:" field on a SandboxProfile.
+// This enables both single-parent ("extends: base/foo") and multi-parent
+// ("extends: [base/a, base/b]") syntax without a breaking schema change.
+//
+// Phase 117 (Plan 01): foundation type. The single-parent resolution path in
+// inherit.go still uses only the first element; Plan 02 introduces the full
+// DAG walk for multi-parent merging.
+type ExtendsField []string
+
+// IsSet returns true when at least one parent name has been declared.
+func (e ExtendsField) IsSet() bool { return len(e) > 0 }
+
+// List returns the slice of parent profile names.
+func (e ExtendsField) List() []string { return []string(e) }
+
+// UnmarshalYAML implements the goccy/go-yaml context-aware custom unmarshaler.
+// It accepts both a scalar string ("base/foo") and a sequence (["base/a","base/b"]).
+// Absent field: goccy skips calling UnmarshalYAML entirely → e stays nil → IsSet()==false.
+func (e *ExtendsField) UnmarshalYAML(ctx context.Context, unmarshal func(interface{}) error) error {
+	// Try scalar string first
+	var s string
+	if err := unmarshal(&s); err == nil {
+		*e = ExtendsField{s}
+		return nil
+	}
+	// Fall back to []string sequence
+	var list []string
+	if err := unmarshal(&list); err != nil {
+		return err
+	}
+	*e = ExtendsField(list)
+	return nil
+}
 
 // SandboxProfile is the root type for a sandbox profile YAML document.
 // It follows the Kubernetes resource model: apiVersion, kind, metadata, spec.
 type SandboxProfile struct {
-	APIVersion string   `yaml:"apiVersion"`
-	Kind       string   `yaml:"kind"`
-	Metadata   Metadata `yaml:"metadata"`
-	Extends    string   `yaml:"extends,omitempty"`
-	Spec       Spec     `yaml:"spec"`
+	APIVersion string       `yaml:"apiVersion"`
+	Kind       string       `yaml:"kind"`
+	Metadata   Metadata     `yaml:"metadata"`
+	Extends    ExtendsField `yaml:"extends,omitempty"`
+	Spec       Spec         `yaml:"spec"`
 }
 
 // Metadata holds profile identity information.
