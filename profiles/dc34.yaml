@@ -7,6 +7,20 @@ metadata:
     tool: alltools
   prefix: dc34
 
+extends:
+  - base/safenetwork
+  - base/sidecars-all
+  - base/observability-learn
+  - base/budget-standard
+  - base/artifacts-workspace
+  - base/iam-us-east-1
+  - base/agent-claude-all-tools
+  # NOTE: base/email-strict is NOT extended here (LOCKED decision A: no narrowing in v1).
+  # dc34 has specific allowedSenders ("self", "whereiskurt@gmail.com", "kurt.hundeck@*")
+  # which is a subset of base/email-strict's allowedSenders ("*"). Since lists union
+  # in deepMerge, extending base/email-strict would produce a superset ("*" + specifics),
+  # which is semantically broader than dc34 wants. Keep dc34's email block in-leaf.
+
 spec:
   lifecycle:
     ttl: "8h"
@@ -91,7 +105,7 @@ spec:
       - "su - sandbox -c 'git clone --depth 1 https://github.com/whereiskurt/defcon.run.34 /workspace/defcon.run.34'"
       - "su - sandbox -c 'git clone --depth 1 https://github.com/whereiskurt/meshtk /workspace/meshtk'"
       - "su - sandbox -c 'git clone --depth 1 https://github.com/whereiskurt/klanker-maker /workspace/klanker-maker'"
-      
+
   sourceAccess:
     mode: allowlist
     github:
@@ -103,63 +117,8 @@ spec:
       allowedRefs:
       - "*"
 
-  network:
-    enforcement: both
-    egress:
-      allowedDNSSuffixes:
-        - "*"
-      allowedHosts:
-        - "*"
-
-  budget:
-    compute:
-      maxSpendUSD: 0.50
-    ai:
-      maxSpendUSD: 2.00
-    warningThreshold: 0.80
-
-  artifacts:
-    paths:
-      - /workspace
-    maxSizeMB: 500
-
-  iam:
-    roleSessionDuration: "1h"
-    allowedRegions:
-      - us-east-1
-
-  sidecars:
-    dnsProxy:
-      enabled: true
-      image: km-dns-proxy:latest
-    httpProxy:
-      enabled: true
-      image: km-http-proxy:latest
-    auditLog:
-      enabled: true
-      image: km-audit-log:latest
-    tracing:
-      enabled: true
-      image: km-tracing:latest
-
-  observability:
-    learnMode: true
-    commandLog:
-      destination: cloudwatch
-      logGroup: /klanker-maker/sandboxes
-    networkLog:
-      destination: cloudwatch
-      logGroup: /klanker-maker/network
-    claudeTelemetry:
-      enabled: true
-      logPrompts: true
-      logToolDetails: true
-    tlsCapture:
-      enabled: true
-      libraries:
-        - openssl
-      capturePayloads: false
-
+  # dc34 email: specific allowedSenders (narrower than "*"). Kept in-leaf per locked
+  # decision A: no composition that requires narrowing a base's allowlist in v1.
   email:
     signing: required
     verifyInbound: required
@@ -175,24 +134,8 @@ spec:
   # Phase 92 (Wave 5) — claudeArgs moved out of spec.cli; inlined Claude
   # settings.json removed. settings.json is synthesized from agent.claude.tools.*
   # + trustedDirectories (permissions.allow canonical). See docs/agent-tool-gating.md.
-  agent:
-    claude:
-      trustedDirectories:
-        - /home/sandbox
-        - /workspace
-      tools:
-        autoApprove:
-          - Bash
-          - Read
-          - Write
-          - Edit
-          - Glob
-          - Grep
-          - WebFetch
-          - WebSearch
-          - NotebookEdit
-      args:
-        - "--dangerously-skip-permissions"
+  # agent.claude.* inherits from base/agent-claude-all-tools; no agent.default set
+  # (defaults to claude per schema).
 
   # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
   notification:

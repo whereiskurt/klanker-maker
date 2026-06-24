@@ -7,6 +7,16 @@ metadata:
     tool: learning-sandbox-unsafe
   prefix: learn
 
+extends:
+  - base/safenetwork
+  - base/sidecars-all
+  - base/observability-learn
+  - base/budget-standard
+  - base/artifacts-workspace
+  - base/iam-us-east-1
+  - base/agent-claude-all-tools
+  - base/email-strict
+
 spec:
   lifecycle:
     ttl: "8h"
@@ -18,17 +28,17 @@ spec:
     substrate: ec2
     instanceType: t3.2xlarge
     region: us-east-1
-    
+
     ##spot:true means hibernate must be false
     spot: false
-    ## hibernation true means on stop memory is written to the root disk. 
+    ## hibernation true means on stop memory is written to the root disk.
     hibernation: false
     rootVolumeSize: 80
-    
+
     ## Unlimited filesystem locked to the region
     mountEFS: true
     efsMountPoint: /shared
-    
+
     ## Separate attached EBS
     additionalVolume:
       size: 30
@@ -37,10 +47,10 @@ spec:
   execution:
     shell: /bin/bash
     workingDir: /workspace
-    
+
     ## This determines if instance profile can access bedrock
     useBedrock: false
-    
+
     privileged: true
     env:
       SANDBOX_MODE: learn-v2-direct-api
@@ -96,70 +106,6 @@ spec:
       allowedRefs:
         - "*"
 
-  network:
-    enforcement: both
-    egress:
-      allowedDNSSuffixes:
-        - "*"
-      allowedHosts:
-        - "*"
-
-  budget:
-    compute:
-      maxSpendUSD: 0.50
-    ai:
-      maxSpendUSD: 2.00
-    warningThreshold: 0.80
-
-  artifacts:
-    paths:
-      - /workspace
-    maxSizeMB: 500
-
-  iam:
-    roleSessionDuration: "1h"
-    allowedRegions:
-      - us-east-1
-
-  sidecars:
-    dnsProxy:
-      enabled: true
-      image: km-dns-proxy:latest
-    httpProxy:
-      enabled: true
-      image: km-http-proxy:latest
-    auditLog:
-      enabled: true
-      image: km-audit-log:latest
-    tracing:
-      enabled: true
-      image: km-tracing:latest
-
-  observability:
-    learnMode: true
-    commandLog:
-      destination: cloudwatch
-      logGroup: /klanker-maker/sandboxes
-    networkLog:
-      destination: cloudwatch
-      logGroup: /klanker-maker/network
-    claudeTelemetry:
-      enabled: true
-      logPrompts: true
-      logToolDetails: true
-    tlsCapture:
-      enabled: true
-      libraries:
-        - openssl
-      capturePayloads: false
-
-  email:
-    signing: required
-    verifyInbound: required
-    encryption: required
-    allowedSenders:
-      - "*"
-
   cli:
     ##Setting noBedrock calls the noBedrock() bash function call on loading and prevents accidentally Bedrock
     noBedrock: true
@@ -170,23 +116,6 @@ spec:
   # trustedDirectories (permissions.allow canonical form). See docs/agent-tool-gating.md.
   agent:
     default: claude
-    claude:
-      trustedDirectories:
-        - /home/sandbox
-        - /workspace
-      tools:
-        autoApprove:
-          - Bash
-          - Read
-          - Write
-          - Edit
-          - Glob
-          - Grep
-          - WebFetch
-          - WebSearch
-          - NotebookEdit
-      args:
-        - "--dangerously-skip-permissions"
 
   # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
   notification:

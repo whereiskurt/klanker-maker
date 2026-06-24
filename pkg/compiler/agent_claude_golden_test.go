@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
@@ -41,16 +43,23 @@ func TestSynthesizeClaudeSettingsGolden(t *testing.T) {
 		{"locked", "../../profiles/locked.yaml", "testdata/claude_settings_locked.golden.json"},
 		{"codex", "../../profiles/codex.yaml", "testdata/claude_settings_codex.golden.json"},
 	}
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller unavailable")
+	}
+	// pkg/compiler/<thisfile> -> repo root is two dirs up.
+	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
+
 	for _, f := range fixtures {
 		f := f
 		t.Run(f.name, func(t *testing.T) {
-			raw, err := os.ReadFile(f.profilePath)
+			// Determine the search paths from the profile path so extends: DAG
+			// is resolved (e.g. learn.v2 and dc34 now extend base/* fragments).
+			profilesDir := filepath.Join(repoRoot, filepath.Dir(f.profilePath[len("../../"):]))
+			leafName := strings.TrimSuffix(filepath.Base(f.profilePath), ".yaml")
+			p, err := profile.Resolve(leafName, []string{profilesDir})
 			if err != nil {
-				t.Fatalf("read profile %s: %v", f.profilePath, err)
-			}
-			p, err := profile.Parse(raw)
-			if err != nil {
-				t.Fatalf("parse profile %s: %v", f.profilePath, err)
+				t.Fatalf("resolve profile %s: %v", f.profilePath, err)
 			}
 			got, err := synthesizeClaudeSettings(p.Spec.Agent)
 			if err != nil {

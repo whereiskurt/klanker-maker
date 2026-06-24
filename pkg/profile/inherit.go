@@ -189,6 +189,12 @@ func resolveMap(
 	// Clear extends from the merged map (it's a merge-time concept).
 	delete(acc, "extends")
 
+	// Clear metadata.abstract from the merged result. Abstract is a property of
+	// individual base fragments, not of the concrete resolved leaf. When a base
+	// fragment declares abstract:true and the leaf does not override it, the
+	// deepMerge would propagate it — but the resolved result is always concrete.
+	clearAbstractFromMetadata(acc)
+
 	// Post-merge: move execution.initCommandsAppend onto execution.initCommands.
 	applyInitCommandsAppend(acc)
 
@@ -248,6 +254,19 @@ func applyInitCommandsAppend(acc map[string]any) {
 	exec["initCommands"] = concatDedup(existing, appended)
 	delete(exec, "initCommandsAppend")
 	acc["execution"] = exec
+}
+
+// clearAbstractFromMetadata removes the "abstract" flag from the top-level
+// "metadata" map of the merged profile. A resolved leaf profile is always
+// concrete — the "abstract" property of individual base fragments must not
+// propagate to the merged result.
+func clearAbstractFromMetadata(acc map[string]any) {
+	meta, ok := acc["metadata"].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(meta, "abstract")
+	acc["metadata"] = meta
 }
 
 // fromMap marshals a map[string]any back to YAML and parses it into a
