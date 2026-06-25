@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 119-05 (complete)
-status: phase-complete
-stopped_at: Phase 119 complete — 119-05 demo profile + live synthetic-HMAC E2E (six assertions PASS) + docs + plugin bump
-last_updated: "2026-06-25T15:39:31.185Z"
+current_plan: 113-01 (starting)
+status: in-progress
+stopped_at: Phase 119 complete — 119-05 docs + E2E done
+last_updated: "2026-06-25T16:32:16.576Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 3
