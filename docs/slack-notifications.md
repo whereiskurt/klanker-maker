@@ -2803,3 +2803,96 @@ HMAC-signed `event_callback` impersonating a human user exercises the full path)
 Note: the synthetic-webhook method fabricates a Slack `ts`, so threaded replies and the
 👀 reaction (which need a real message) don't render — harmless test-harness artifacts,
 not bridge behavior.
+
+## Phase 118 — Slack trigger allowlist + private per-sandbox channels
+
+Two independent, composable additions. Both are **dormant by default** — an install
+with neither configured is byte-identical to pre-Phase-118.
+
+### Feature A — private per-sandbox channel
+
+`notification.slack.private` (bool, default `false`) creates the per-sandbox channel as
+**private** (`is_private:true`) instead of public. Channel membership then gates both
+reading and triggering.
+
+```yaml
+spec:
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
+      private: true          # Phase 118 — create #sb-{id} as a private channel
+      invites:
+        emails: [operator@example.com]
+```
+
+- Effective only with `perSandbox: true`. `private: true` + `perSandbox: false` → **`km validate` WARNS** (no-op — no per-sandbox channel is created).
+- **Invites are unchanged** — `conversations.invite` works identically on private channels, so the primary operator + `invites.emails` are still added.
+- **No new OAuth scopes** — the App already requests `groups:read` / `groups:history` / `groups:write`.
+- Takes effect **at channel creation only**. A reused channel (Phase 104 `archiveOnDestroy:false` + alias reuse) is **not** converted public→private (Slack's conversion is admin-gated). First-create wins; to flip, `km destroy && km create`.
+
+### Feature B — Uxxxx trigger allowlist (`allow`)
+
+Gate **who can trigger the bot** by Slack user ID. In a public channel this lets everyone
+read while only listed users drive an agent turn.
+
+Two scopes, same token name `allow`:
+
+```yaml
+# km-config.yaml — install-level (applies to every sandbox unless overridden)
+slack:
+  allow:
+    - U0OPERATOR
+    - U0XUSER
+```
+
+```yaml
+# profile — per-sandbox override (REPLACES install-level for this sandbox)
+spec:
+  notification:
+    slack:
+      perSandbox: true
+      inbound:
+        enabled: true
+        allow:
+          - U0OPERATOR
+```
+
+**Resolution (in order):**
+1. Non-empty per-sandbox `notification.slack.inbound.allow` → that list is effective (it **replaces** install-level, not additive).
+2. Else non-empty install-level `slack.allow`.
+3. Else (both empty/absent) → **everyone may trigger** (backward-compatible). Empty/absent and explicitly-empty are treated identically.
+
+> ⚠️ **Inverted semantics vs the GitHub/H1 bridges.** Those are deny-by-default (empty `allow` = nobody). The Slack allowlist is **allow-by-default on empty** (empty = everyone) so existing installs keep working unchanged. The `isInSlackAllowlist` helper is only consulted after a `len(allow) > 0` guard.
+
+**Enforcement** (`pkg/slack/bridge/events_handler.go`):
+- Gates on the message event's `event.User` (the `Uxxxx` already in the payload — no `users.info` call, no `users:read.email` dependency).
+- Reject = **silent ignore**: no 👀 reaction, no reply, no dispatch, returns `200 ok` (mirrors the GitHub bridge's silent-200).
+- **Always enforced**, independent of:
+  - mention-only mode (Phase 91) — the allowlist is the strict outer gate; mention-only is the inner content filter. Both must pass when both are active.
+  - the Phase 91.3 thread-bypass — a non-listed user **cannot** hijack an already-engaged thread.
+- Handler order: channel-ownership (`FetchByChannel`) → **allowlist (new)** → mention/thread → dedup → dispatch.
+
+### Plumbing
+
+| Path | Wiring |
+|------|--------|
+| Install-level | `slack.allow` → config merge-list → `KM_SLACK_ALLOW` (km init) → `lambda-slack-bridge` env → `EventsHandler.Allow` |
+| Per-sandbox | `notification.slack.inbound.allow` → `km-sandboxes` row attr `slack_allow` (comma-joined S, written at `km create`) → bridge `FetchByChannel` → `SandboxRoutingInfo.Allow` |
+
+The per-sandbox value is stored as a **comma-joined `S` attribute** (`UpdateSandboxAttr` is
+string-only — not a DDB string-set), round-tripped through `SandboxMetadata` so it survives
+`km pause`/`resume`/`extend`.
+
+### Deploy surface
+
+- **Install-level `allow`** → `KM_SLACK_ALLOW` is a bridge env-block change → **`km init --dry-run=false`** (NOT `--sidecars`, which doesn't update the env block; `km init --slack` scoped apply also covers env+IAM). Takes effect on the **next webhook** — no sandbox recreate.
+- **Per-sandbox `allow` + `private`** → profile schema field + create-handler (sets `is_private` / writes the row) + bridge (reads + enforces) → **`make build-lambdas` + `km init --dry-run=false`**. Existing sandboxes need `km destroy && km create` to gain the per-sandbox attributes.
+- **No SandboxProfile apiVersion bump** (additive fields).
+
+### Troubleshooting
+
+- **`slack.allow` silently ignored:** the v2→v merge-list in `config.Load()` must list `slack.allow` (the `project_config_key_merge_list` footgun — fixed in Phase 118 with a regression-guard test). A struct field + getter alone is not enough.
+- **Per-sandbox `allow` not honored:** verify the `slack_allow` attribute name matches across the write (`create_slack_inbound.go`), the row read (`FetchByChannel`), and a real DDB row — not just the test mock.
+- **Everyone can still trigger:** expected when both levels are empty/absent. Set `slack.allow` (install) or `notification.slack.inbound.allow` (per-sandbox) to restrict.
+- **`km validate` warning on `private`/`allow`:** you set the field with `perSandbox: false` — it has no effect there; either enable `perSandbox` or drop the field.
