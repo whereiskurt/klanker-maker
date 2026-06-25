@@ -124,8 +124,8 @@ func TestCreateGitHubInboundQueue_FIFO(t *testing.T) {
 	if got := fs.createAttrs["ContentBasedDeduplication"]; got != "false" {
 		t.Errorf("ContentBasedDeduplication attr: got %q, want %q", got, "false")
 	}
-	if got := fs.createAttrs["VisibilityTimeout"]; got != "30" {
-		t.Errorf("VisibilityTimeout attr: got %q, want %q", got, "30")
+	if got := fs.createAttrs["VisibilityTimeout"]; got != "1800" {
+		t.Errorf("VisibilityTimeout attr: got %q, want %q", got, "1800") // Phase 119: raised from 30s
 	}
 	if got := fs.createAttrs["MessageRetentionPeriod"]; got != "1209600" {
 		t.Errorf("MessageRetentionPeriod attr: got %q, want %q", got, "1209600")

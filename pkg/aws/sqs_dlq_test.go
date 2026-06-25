@@ -244,7 +244,7 @@ func assertByteIdenticalInboundAttrs(t *testing.T, attrs map[string]string) {
 	want := map[string]string{
 		string(sqstypes.QueueAttributeNameFifoQueue):                 "true",
 		string(sqstypes.QueueAttributeNameContentBasedDeduplication): "false",
-		string(sqstypes.QueueAttributeNameVisibilityTimeout):         "30",
+		string(sqstypes.QueueAttributeNameVisibilityTimeout):         "1800", // Phase 119: raised from 30s
 		string(sqstypes.QueueAttributeNameMessageRetentionPeriod):    "1209600",
 	}
 	if len(attrs) != len(want) {
