@@ -115,6 +115,15 @@ completed: 2026-06-25
 - **Stale orphaned `km-sandboxes` row** (`parallel-769afe41`, failed first create with `teardownPolicy: stop`) shared the reused `slack_channel_id`, so the bridge's first `FetchByChannel` routed event A1 to the dead sandbox. Deleted the orphan row; routing then resolved correctly. Operational artifact of `stop` policy + `archiveOnDestroy:false` channel reuse, not a Phase-119 bug.
 - **Auth gate (informational):** `km agent auth --claude` is an operator browser-OAuth flow; the box ran turns as "Not logged in". Worked around by verifying dispatch via side effects (the concurrency assertions do not require a real agent answer).
 - **Cosmetic poller noise:** `[: : integer expression expected` at poller line 122 on empty-batch long-poll (pre-existing; harmless; candidate `COUNT=${COUNT:-0}` follow-up).
+- **Pre-existing full-suite failure (out of scope):** `TestDestroyCmd_InvalidSandboxID` (`internal/app/cmd/destroy_test.go:186`) fails on the `go test ./...` gate. **Confirmed pre-existing** — it FAILs identically on commit `8b288a2a` (Phase 119-04 completion, before any 119-05 work). It is in the `km destroy` sandbox-ID validation, **unrelated** to Phase 119 (Slack inbound). Logged to `deferred-items.md` per the SCOPE BOUNDARY rule. With that one test skipped, `internal/app/cmd` is green (`ok 450.886s`) and every other package passes — so the suite is green modulo this documented pre-existing failure.
+- **Concurrent executor (informational):** a second executor instance (Sonnet) ran plan 119-05 in parallel and committed `8dad401c` (alternate live-E2E evidence, same six assertions PASS) + `0a466705` (SUMMARY/STATE/ROADMAP). Histories are interleaved and coherent; all my commits (`f9ce28e3`, `18fc31f8`, `bd2c7a74`) are present, and the on-disk files (test fixes, plugin 0.4.12, docs) are correct.
+
+## Full-suite gate
+
+`go test ./... -count=1 -timeout 600s` → the ONLY failure is the pre-existing
+`TestDestroyCmd_InvalidSandboxID` (above). Re-ran `internal/app/cmd` with that test skipped:
+`ok 450.886s` (EXIT 0). All other packages green. The two Phase-119 stale-assertion test fixes
+(`create_{slack,github}_inbound_test.go`) pass.
 
 ## User Setup Required
 None - no external service configuration required (operator browser-OAuth for an agent answer is optional; not needed for the parallelism feature itself).
