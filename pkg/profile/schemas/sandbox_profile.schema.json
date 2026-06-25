@@ -769,6 +769,11 @@
                         "pattern": "^[UW][A-Z0-9]+$"
                       },
                       "description": "Per-sandbox trigger allowlist (Slack user IDs, Uxxxx). Phase 118. When non-empty, only these users can trigger an agent turn in this sandbox's channel — it REPLACES the install-level slack.allow for this sandbox. Empty/absent = fall back to install-level slack.allow (and if that is also empty, everyone may trigger). Enforced regardless of mentionOnly mode and the thread-bypass."
+                    },
+                    "maxConcurrentThreads": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Max distinct Slack threads dispatched in parallel by this sandbox's inbound poller (Phase 119). Default 1 (serial). Threads run concurrently up to this cap; messages within a thread stay serial+ordered. Only meaningful with perSandbox=true and inbound.enabled=true. Drives KM_SLACK_MAX_CONCURRENCY (sandbox-side)."
                     }
                   }
                 },

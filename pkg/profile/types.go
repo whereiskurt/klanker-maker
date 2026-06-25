@@ -256,6 +256,14 @@ type NotificationSlackInboundSpec struct {
 	// A WARNING is emitted when Allow is non-empty and perSandbox is not true
 	// (the per-sandbox DDB row is not written for shared-channel sandboxes).
 	Allow []string `json:"allow,omitempty" yaml:"allow,omitempty"`
+	// MaxConcurrentThreads bounds how many distinct Slack threads this sandbox's
+	// inbound poller dispatches in PARALLEL (Phase 119). nil/absent = 1 (serial,
+	// byte-identical to Phase 118). Different threads run concurrently up to this
+	// cap; messages WITHIN a thread stay strictly serial+ordered (FIFO group =
+	// thread). Only meaningful with perSandbox=true + inbound.enabled=true; km
+	// validate WARNS otherwise. Drives KM_SLACK_MAX_CONCURRENCY (sandbox-side only;
+	// the bridge does not read it — contrast Phase 91.5/118 which need a DDB attr).
+	MaxConcurrentThreads *int `json:"maxConcurrentThreads,omitempty" yaml:"maxConcurrentThreads,omitempty"`
 }
 
 // NotificationSlackTranscriptSpec configures per-turn transcript streaming.
