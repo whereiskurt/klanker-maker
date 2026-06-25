@@ -32,11 +32,11 @@ Plans:
 **Goal:** Different Slack threads to the same sandbox run in PARALLEL while messages within a thread stay serial+ordered, bounded by an operator concurrency cap. Dormant by default (cap=1 == today's serial behaviour). Two layers + a knob: (1) Bridge — change `MessageGroupId` from `info.SandboxID` → `threadTS` (fallback `msg.TS`) at both `h.SQS.Send` sites in `events_handler.go` (unconditional; FIFO then gives parallel-across-threads / serial-within-thread for free). (2) Poller (`userdata.go`) — new `notification.slack.inbound.maxConcurrentThreads` (*int, default 1) → `KM_SLACK_MAX_CONCURRENCY` via `.NotifyEnv`; loop receives N, dispatches each turn in a backgrounded subshell behind a counting semaphore, ACKs AFTER the turn (required for per-thread ordering — reverses today's ack-first at `userdata.go:2069`), with a visibility heartbeat (`ChangeMessageVisibility`) since `VisibilityTimeout` is only 30s at `sqs.go:127`. Open decision: ack-after-completion reintroduces a crash-redelivery dup window → add a Slack per-turn idempotency guard (mirror Phase 108 GitHub `<!-- km-turn -->`) or accept. Out of scope: per-thread git-worktree isolation (shared /workspace mutation hazard — cap is for conversational fan-out), GitHub/H1 parity, separate queues per thread. No apiVersion bump. Design spec: `docs/superpowers/specs/2026-06-24-slack-inbound-per-thread-parallelism-design.md`.
 **Requirements**: none mapped (additive feature — must_haves derived from the approved design spec)
 **Depends on:** Phase 118
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
-- [ ] 119-01-PLAN.md — Wave 0 RED test stubs (bridge group==threadTS, validate WARN, KM_SLACK_MAX_CONCURRENCY env, queue VisibilityTimeout) + MaxConcurrentThreads struct/schema field
-- [ ] 119-02-PLAN.md — Layer 1 bridge: MessageGroupId→threadTS at both Send sites + doc-comment fix; raise Slack inbound queue base VisibilityTimeout to 1800s
-- [ ] 119-03-PLAN.md — schema/validate/NotifyEnv plumbing: km validate WARN cap>1 w/o perSandbox+inbound; emit KM_SLACK_MAX_CONCURRENCY only when cap>1 (dormancy)
-- [ ] 119-04-PLAN.md — Layer 2 poller rewrite: wait -n counting semaphore + ack-after-completion + visibility heartbeat + RUN_ID uniqueness + last_processed_event_ts idempotency guard; hand-patch frozen golden
-- [ ] 119-05-PLAN.md — demo profile + live synthetic-HMAC E2E (parallelism/ordering/cap/heartbeat/dormant/dedup) + docs (slack-notifications § Phase 119, klanker:slack SKILL, CLAUDE.md)
+- [x] 119-01-PLAN.md — Wave 0 RED test stubs (bridge group==threadTS, validate WARN, KM_SLACK_MAX_CONCURRENCY env, queue VisibilityTimeout) + MaxConcurrentThreads struct/schema field
+- [x] 119-02-PLAN.md — Layer 1 bridge: MessageGroupId→threadTS at both Send sites + doc-comment fix; raise Slack inbound queue base VisibilityTimeout to 1800s
+- [x] 119-03-PLAN.md — schema/validate/NotifyEnv plumbing: km validate WARN cap>1 w/o perSandbox+inbound; emit KM_SLACK_MAX_CONCURRENCY only when cap>1 (dormancy)
+- [x] 119-04-PLAN.md — Layer 2 poller rewrite: wait -n counting semaphore + ack-after-completion + visibility heartbeat + RUN_ID uniqueness + last_processed_event_ts idempotency guard; hand-patch frozen golden
+- [x] 119-05-PLAN.md — demo profile + live synthetic-HMAC E2E (parallelism/ordering/cap/heartbeat/dormant/dedup) + docs (slack-notifications § Phase 119, klanker:slack SKILL, CLAUDE.md)

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 113-01 (starting)
-status: in-progress
-stopped_at: "119-05 paused at Task 2 live-E2E checkpoint — demo profile committed (f18944df), awaiting operator-driven deploy + six-assertion E2E"
-last_updated: "2026-06-25T13:17:30Z"
+current_plan: 119-05 (complete)
+status: phase-complete
+stopped_at: Phase 119 complete — 119-05 demo profile + live synthetic-HMAC E2E (six assertions PASS) + docs + plugin bump
+last_updated: "2026-06-25T15:39:31.185Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 16
-  completed_plans: 15
+  completed_plans: 16
   percent: 91
 ---
 
@@ -590,6 +590,8 @@ Progress: [█████████░] 91%
 | Phase 119-slack-inbound-per-thread-parallelism P03 | 62 | 2 tasks | 2 files |
 | Phase 119-slack-inbound-per-thread-parallelism P02 | 219s | 2 tasks | 6 files |
 | Phase 119-slack-inbound-per-thread-parallelism P04 | 661 | 2 tasks | 3 files |
+| Phase 119 P05 | 60 | 3 tasks | 9 files |
+| Phase 119-slack-inbound-per-thread-parallelism P05 | 60min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1685,6 +1687,10 @@ Recent decisions affecting current work:
 - [Phase 119-slack-inbound-per-thread-parallelism]: slackInboundVisibilityTimeout=1800s const shared by Slack+GitHub via inboundQueueAttrs; H1 path unaffected
 - [Phase 119]: Idempotency guard (P119-F) uses DDB last_processed_event_ts keyed on InboundQueueBody.EventTS (msg.TS); no extra Slack API call (Option C)
 - [Phase 119]: delete-message moved AFTER km-slack post (ack-after-completion P119-D); old ack-first policy reversed for per-thread FIFO ordering
+- [Phase 119]: Phase 119 per-thread parallelism shipped: bridge groups Slack FIFO by threadTS, poller bounded-concurrent via KM_SLACK_MAX_CONCURRENCY (maxConcurrentThreads, default 1=dormant); ack-after + 1800s visibility heartbeat + last_processed_event_ts dedup; live E2E proved all six assertions
+- [Phase 119-slack-inbound-per-thread-parallelism]: Verified bash concurrency via live deploy + synthetic-HMAC E2E (the only gate that catches poller-script bugs invisible to Go goldens)
+- [Phase 119-slack-inbound-per-thread-parallelism]: Emit-only-when->1: KM_SLACK_MAX_CONCURRENCY omitted at default value to maintain dormancy byte-identity with Phase 118
+- [Phase 119-slack-inbound-per-thread-parallelism]: Bumped klanker plugin 0.4.11 -> 0.4.12 because SKILL.md gained user-facing Phase-119 content
 
 ### Roadmap Evolution
 
@@ -1830,6 +1836,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-25T13:15:06.541Z
-Stopped at: Completed 119-04-PLAN.md (Layer 2 Poller: bounded-concurrent ack-after dispatcher with heartbeat + idempotency guard)
+Last session: 2026-06-25T15:38:45.891Z
+Stopped at: Phase 119 complete — 119-05 docs + E2E done
 Resume file: None
