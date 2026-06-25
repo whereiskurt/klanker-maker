@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 119-03-PLAN.md (validate WARN + KM_SLACK_MAX_CONCURRENCY env emission)
-last_updated: "2026-06-25T12:58:27.844Z"
+stopped_at: "Completed 119-02-PLAN.md (Layer 1 Bridge: threadTS grouping + 1800s queue base timeout)"
+last_updated: "2026-06-25T13:00:45.135Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 13
+  completed_plans: 14
   percent: 91
 ---
 
@@ -588,6 +588,7 @@ Progress: [█████████░] 91%
 | Phase 118-slack-trigger-allowlist-private-per-sandbox-channels P01 | 306s | 3 tasks | 11 files |
 | Phase 119-slack-inbound-per-thread-parallelism P01 | 250 | 3 tasks | 6 files |
 | Phase 119-slack-inbound-per-thread-parallelism P03 | 62 | 2 tasks | 2 files |
+| Phase 119-slack-inbound-per-thread-parallelism P02 | 219s | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1679,6 +1680,8 @@ Recent decisions affecting current work:
 - [Phase 119-slack-inbound-per-thread-parallelism]: intPtr renamed to intPtrInbound to avoid collision with validate_test.go in shared package profile_test
 - [Phase 119-slack-inbound-per-thread-parallelism]: KM_SLACK_MAX_CONCURRENCY emitted only when cap>1 (emit-only-when-non-default dormancy pattern)
 - [Phase 119-slack-inbound-per-thread-parallelism]: Cap is poller-only knob — no DDB attr/SandboxMetadata round-trip needed (contrast Phase 91.5/118)
+- [Phase 119-slack-inbound-per-thread-parallelism]: Unconditional rollout of threadTS grouping — no env flag; safe for cap=1 sandboxes
+- [Phase 119-slack-inbound-per-thread-parallelism]: slackInboundVisibilityTimeout=1800s const shared by Slack+GitHub via inboundQueueAttrs; H1 path unaffected
 
 ### Roadmap Evolution
 
@@ -1824,6 +1827,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-25T12:58:27.838Z
-Stopped at: Completed 119-03-PLAN.md (validate WARN + KM_SLACK_MAX_CONCURRENCY env emission)
+Last session: 2026-06-25T13:00:45.129Z
+Stopped at: Completed 119-02-PLAN.md (Layer 1 Bridge: threadTS grouping + 1800s queue base timeout)
 Resume file: None
