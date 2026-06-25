@@ -22,6 +22,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	kmslack "github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
 // DoctorDDBScanAPI is the minimal DynamoDB surface needed by the dead-channel
@@ -80,10 +81,17 @@ func checkSlackThreadDeadChannels(
 
 	// Probe each unique channel_id.
 	var dead []string
+	unprobed := 0 // channels we could NOT inspect due to missing_scope (private channels w/o groups:read)
 	for channelID := range seen {
 		isDead, checkErr := checker.IsChannelDead(ctx, channelID)
 		if checkErr != nil {
-			// Transient error: skip (never delete on ambiguity).
+			// missing_scope is NOT transient: the channel could not be inspected
+			// (e.g. a private channel without groups:read). Surface it so the
+			// check is not silently blind to private channels (Phase 118).
+			if kmslack.IsMissingScope(checkErr) {
+				unprobed++
+			}
+			// Any error (transient OR missing_scope): skip (never mark dead on ambiguity).
 			continue
 		}
 		if isDead {
@@ -91,22 +99,36 @@ func checkSlackThreadDeadChannels(
 		}
 	}
 
-	if len(dead) == 0 {
+	if len(dead) > 0 {
 		return CheckResult{
-			Name:    name,
-			Status:  CheckOK,
-			Message: fmt.Sprintf("no dead channels in km-slack-threads (%d unique channel(s) probed)", len(seen)),
+			Name:   name,
+			Status: CheckWarn,
+			Message: fmt.Sprintf(
+				"%d dead channel(s) referenced in km-slack-threads: %s",
+				len(dead), strings.Join(dead, ", "),
+			),
+			Remediation: "Run 'km slack prune-threads' to remove thread rows pointing at non-existent channels.",
+		}
+	}
+
+	// No dead channels found — but if some channels were unprobed (missing_scope),
+	// the check did NOT actually cover them. Say so rather than report a clean bill.
+	if unprobed > 0 {
+		return CheckResult{
+			Name:   name,
+			Status: CheckWarn,
+			Message: fmt.Sprintf(
+				"no dead channels among %d probed, but %d channel(s) could NOT be inspected (missing_scope) — likely private channels; the bot lacks groups:read so this check is blind to them",
+				len(seen)-unprobed, unprobed,
+			),
+			Remediation: "Add groups:read to the Slack App (see the 'Slack groups:read scope' check) and reinstall, then re-run km doctor to inspect private channels.",
 		}
 	}
 
 	return CheckResult{
-		Name:   name,
-		Status: CheckWarn,
-		Message: fmt.Sprintf(
-			"%d dead channel(s) referenced in km-slack-threads: %s",
-			len(dead), strings.Join(dead, ", "),
-		),
-		Remediation: "Run 'km slack prune-threads' to remove thread rows pointing at non-existent channels.",
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("no dead channels in km-slack-threads (%d unique channel(s) probed)", len(seen)),
 	}
 }
 
@@ -152,6 +174,7 @@ func checkSlackChannelDeadAlias(
 
 	// Probe each alias's channel_id.  Collect dead aliases.
 	var deadAliases []string
+	unprobed := 0 // alias channels we could NOT inspect (missing_scope — private channels w/o groups:read)
 	for _, item := range items {
 		aliasSV, hasAlias := item["alias"].(*dynamodbtypes.AttributeValueMemberS)
 		channelSV, hasChannel := item["channel_id"].(*dynamodbtypes.AttributeValueMemberS)
@@ -160,7 +183,12 @@ func checkSlackChannelDeadAlias(
 		}
 		isDead, checkErr := checker.IsChannelDead(ctx, channelSV.Value)
 		if checkErr != nil {
-			// Transient error: skip (never report dead on ambiguity).
+			// missing_scope is NOT transient — the (likely private) channel could
+			// not be inspected. Count it so the check is not blind (Phase 118).
+			if kmslack.IsMissingScope(checkErr) {
+				unprobed++
+			}
+			// Any error: skip (never report dead on ambiguity).
 			continue
 		}
 		if isDead {
@@ -168,22 +196,35 @@ func checkSlackChannelDeadAlias(
 		}
 	}
 
-	if len(deadAliases) == 0 {
+	if len(deadAliases) > 0 {
 		return CheckResult{
-			Name:    name,
-			Status:  CheckOK,
-			Message: fmt.Sprintf("no dead channels in km-slack-channels (%d alias row(s) probed)", len(items)),
+			Name:   name,
+			Status: CheckWarn,
+			Message: fmt.Sprintf(
+				"%d alias row(s) point at a non-existent Slack channel: %s",
+				len(deadAliases), strings.Join(deadAliases, ", "),
+			),
+			Remediation: "Run 'km slack forget-channel <alias>' to remove the stale mapping, then 'km slack adopt <alias> <channelID>' to re-seed it.",
+		}
+	}
+
+	// No dead aliases — but flag any private channels the bot couldn't inspect.
+	if unprobed > 0 {
+		return CheckResult{
+			Name:   name,
+			Status: CheckWarn,
+			Message: fmt.Sprintf(
+				"no dead channels among %d probed, but %d alias channel(s) could NOT be inspected (missing_scope) — likely private channels; the bot lacks groups:read so this check is blind to them",
+				len(items)-unprobed, unprobed,
+			),
+			Remediation: "Add groups:read to the Slack App (see the 'Slack groups:read scope' check) and reinstall, then re-run km doctor to inspect private channels.",
 		}
 	}
 
 	return CheckResult{
-		Name:   name,
-		Status: CheckWarn,
-		Message: fmt.Sprintf(
-			"%d alias row(s) point at a non-existent Slack channel: %s",
-			len(deadAliases), strings.Join(deadAliases, ", "),
-		),
-		Remediation: "Run 'km slack forget-channel <alias>' to remove the stale mapping, then 'km slack adopt <alias> <channelID>' to re-seed it.",
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("no dead channels in km-slack-channels (%d alias row(s) probed)", len(items)),
 	}
 }
 

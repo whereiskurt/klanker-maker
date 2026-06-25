@@ -210,7 +210,7 @@ func TestClient_CreateChannel_ReturnsID(t *testing.T) {
 	defer ts.Close()
 
 	c := newClientAgainstServer(ts)
-	id, err := c.CreateChannel(context.Background(), "km-notifications")
+	id, err := c.CreateChannel(context.Background(), "km-notifications", false)
 	if err != nil {
 		t.Fatalf("CreateChannel: %v", err)
 	}
@@ -619,7 +619,7 @@ func TestCallJSON_RateLimitBodyOn200(t *testing.T) {
 	defer ts.Close()
 
 	c := newClientAgainstServer(ts)
-	id, err := c.CreateChannel(context.Background(), "sb-demo")
+	id, err := c.CreateChannel(context.Background(), "sb-demo", false)
 	if err != nil {
 		t.Fatalf("CreateChannel should retry a 200/ratelimited body: %v", err)
 	}

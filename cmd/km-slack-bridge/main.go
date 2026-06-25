@@ -291,6 +291,25 @@ func wireEventsHandler() {
 		}
 	}
 
+	// Phase 118: install-level trigger allowlist. Read KM_SLACK_ALLOW (set by the
+	// lambda-slack-bridge Terraform module var.slack_allow from km-config.yaml
+	// slack.allow) into EventsHandler.Allow at cold-start, constant for the Lambda
+	// lifetime. Empty/unset => h.Allow nil => everyone may trigger (byte-identical to
+	// pre-118). A non-empty per-sandbox allow (info.Allow) replaces this at dispatch.
+	// Deploy constraint: env-block change requires km init --dry-run=false (NOT --sidecars).
+	if raw := os.Getenv("KM_SLACK_ALLOW"); raw != "" {
+		var allow []string
+		for _, u := range strings.Split(raw, ",") {
+			if u = strings.TrimSpace(u); u != "" {
+				allow = append(allow, u)
+			}
+		}
+		if len(allow) > 0 {
+			eventsHandler.Allow = allow
+			slog.Info("km-slack-bridge: install-level trigger allowlist configured", "count", len(allow))
+		}
+	}
+
 	// Phase 96: default router. Off by default (zero value of bool); only meaningful
 	// on the designated front-door install. When KM_SLACK_DEFAULT_ROUTER=true, wire:
 	//   eventsHandler.DefaultRouter  = true

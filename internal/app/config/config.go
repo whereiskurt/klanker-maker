@@ -64,6 +64,22 @@ type SlackConfig struct {
 	// Maps to km-config.yaml key slack.default_router. Exported as
 	// KM_SLACK_DEFAULT_ROUTER by ExportTerragruntEnvVars (Phase 96).
 	DefaultRouter *bool `mapstructure:"default_router" yaml:"default_router,omitempty"`
+
+	// Allow is the Phase 118 install-level Slack trigger allowlist. When non-empty,
+	// only messages from Slack user IDs in this list trigger sandbox dispatch; messages
+	// from all other users are silently ignored (deny-by-default). Format: Slack user
+	// IDs (Uxxxxxxxxx). Empty/absent => everyone allowed (Phase 91/95/96 byte-identical).
+	//
+	// This field feeds EventsHandler.Allow at bridge cold-start via KM_SLACK_ALLOW
+	// (comma-joined). Enforcement is implemented in Plan 05; Plan 04 (this plan) wires
+	// the deploy surface: config -> km init -> KM_SLACK_ALLOW -> TF module -> bridge.
+	//
+	// Maps to km-config.yaml key slack.allow ([]string).
+	// Exported as KM_SLACK_ALLOW (comma-joined) by ExportTerragruntEnvVars (Phase 118).
+	// CRITICAL: "slack.allow" must be present in the v2->v merge-list or this field
+	// silently stays nil regardless of km-config.yaml content
+	// (project_config_key_merge_list footgun).
+	Allow []string `mapstructure:"allow" yaml:"allow,omitempty"`
 }
 
 type ClusterConfig struct {
@@ -833,6 +849,10 @@ func Load() (*Config, error) {
 			// Phase 96: front-door router toggle. CRITICAL: without this entry,
 			// slack.default_router: true is silently ignored (project_config_key_merge_list).
 			"slack.default_router",
+			// Phase 118: install-level Slack trigger allowlist. CRITICAL: without this
+			// entry, slack.allow is silently dropped regardless of km-config.yaml content
+			// (project_config_key_merge_list footgun). Loaded via GetStringSlice below.
+			"slack.allow",
 			// Phase 97: github block (repos list-of-objects + default_profile). CRITICAL:
 			// without this entry, the entire github: block is silently dropped regardless
 			// of km-config.yaml content (project_config_key_merge_list footgun).
@@ -961,6 +981,16 @@ func Load() (*Config, error) {
 	if v.IsSet("slack.default_router") {
 		val := v.GetBool("slack.default_router")
 		cfg.Slack.DefaultRouter = &val
+	}
+
+	// Phase 118: slack.allow is a []string install-level trigger allowlist.
+	// Only populated when explicitly set in km-config.yaml — absent key => nil slice
+	// => everyone allowed (EventsHandler.Allow stays nil = dormant, no enforcement).
+	// Uses GetStringSlice (same as slack.peer_bridges); NOT the *bool tri-state.
+	// The merge-list entry "slack.allow" above is the precondition; without it
+	// this IsSet check always returns false (project_config_key_merge_list footgun).
+	if v.IsSet("slack.allow") {
+		cfg.Slack.Allow = v.GetStringSlice("slack.allow")
 	}
 
 	// Clusters is a structured slice — viper's UnmarshalKey handles the

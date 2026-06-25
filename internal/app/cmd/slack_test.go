@@ -58,7 +58,7 @@ func (f *fakeSlackInitAPI) AuthTestWithUserID(_ context.Context) (string, error)
 	return f.userID, f.authErr
 }
 
-func (f *fakeSlackInitAPI) CreateChannel(_ context.Context, _ string) (string, error) {
+func (f *fakeSlackInitAPI) CreateChannel(_ context.Context, _ string, _ bool) (string, error) {
 	f.createCalls++
 	return f.createID, f.createErr
 }
@@ -795,7 +795,7 @@ func (f *fakeRotateAPI) AuthTestWithUserID(_ context.Context) (string, error) {
 	return f.userID, f.authErr
 }
 
-func (f *fakeRotateAPI) CreateChannel(_ context.Context, _ string) (string, error) {
+func (f *fakeRotateAPI) CreateChannel(_ context.Context, _ string, _ bool) (string, error) {
 	return "", nil
 }
 

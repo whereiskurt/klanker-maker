@@ -600,10 +600,14 @@ func (c *Client) UploadFile(ctx context.Context, channel, threadTS, filename, co
 }
 
 // CreateChannel calls conversations.create. Slack returns the new channel ID.
-func (c *Client) CreateChannel(ctx context.Context, name string) (string, error) {
+// When private is true the channel is created as a Slack private channel
+// (is_private:true); when false (default) a public channel is created.
+// km slack init / rotate always pass false (the shared workspace channel is public);
+// km create per-sandbox path passes the profile's notification.slack.private value.
+func (c *Client) CreateChannel(ctx context.Context, name string, private bool) (string, error) {
 	resp, err := c.callJSON(ctx, "conversations.create", map[string]any{
 		"name":       name,
-		"is_private": false,
+		"is_private": private,
 	})
 	if err != nil {
 		return "", err
@@ -829,6 +833,17 @@ func (c *Client) ChannelInfo(ctx context.Context, channelID string) (int, bool, 
 func IsChannelNotFound(err error) bool {
 	var apierr *SlackAPIError
 	return errors.As(err, &apierr) && apierr.Code == "channel_not_found"
+}
+
+// IsMissingScope reports whether err is a Slack "missing_scope" response — the
+// bot token lacks the OAuth scope required by the call (install drift; the App
+// must be reinstalled from `km slack manifest`). Distinct from IsChannelNotFound:
+// a missing_scope on conversations.info means the channel could NOT be inspected
+// (e.g. a private channel without groups:read), NOT that it is dead. Callers that
+// probe channel liveness must treat this as "unprobed", never as "alive" or "dead".
+func IsMissingScope(err error) bool {
+	var apierr *SlackAPIError
+	return errors.As(err, &apierr) && apierr.Code == "missing_scope"
 }
 
 // ArchiveChannel calls conversations.archive.

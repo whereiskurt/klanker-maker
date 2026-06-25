@@ -34,14 +34,16 @@ type fakeSlackAPI struct {
 
 	// capture calls
 	createChannelName  string
+	createPrivate      bool // Phase 118: records the private arg for Plan 02 assertion
 	findChannelCalled  bool
 	joinChannelCalled  bool
 	inviteSharedCalled bool
 	channelInfoCalled  bool
 }
 
-func (f *fakeSlackAPI) CreateChannel(_ context.Context, name string) (string, error) {
+func (f *fakeSlackAPI) CreateChannel(_ context.Context, name string, private bool) (string, error) {
 	f.createChannelName = name
+	f.createPrivate = private
 	f.createCalls++
 	return f.createChannelResult, f.createChannelErr
 }
@@ -360,6 +362,63 @@ func TestResolveSlack_PerSandbox_HappyPath_WithAlias(t *testing.T) {
 	if !api.inviteSharedCalled {
 		t.Error("InviteShared was not called")
 	}
+}
+
+// TestResolveSlack_PerSandbox_PrivateChannel — AC1 assertion (Phase 118).
+// Verifies that notification.slack.private:true causes CreateChannel to be
+// called with private=true (is_private:true in the Slack API payload), and
+// that the default (private:false) results in private=false.
+func TestResolveSlack_PerSandbox_PrivateChannel(t *testing.T) {
+	t.Run("private:true → createPrivate=true", func(t *testing.T) {
+		// Build a per-sandbox profile with Private=true.
+		p := &profile.SandboxProfile{}
+		p.Spec.Notification = &profile.NotificationSpec{
+			Slack: &profile.NotificationSlackSpec{
+				Enabled:    boolPtrCreate(true),
+				PerSandbox: boolPtrCreate(true),
+				Private:    true,
+			},
+		}
+		api := &fakeSlackAPI{
+			createChannelResult: "CPRIVATE",
+		}
+		ssmStore := &fakeSSMParamStore{
+			params: map[string]string{
+				"/km/slack/invite-email": "invite@example.com",
+			},
+		}
+
+		_, _, err := resolveSlackChannel(context.Background(), p, "sb-private01", "priv-demo", api, nil, ssmStore, "/km/")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// AC1: the private flag must be threaded through to the Slack API call.
+		if !api.createPrivate {
+			t.Errorf("createPrivate = false; want true when notification.slack.private:true")
+		}
+	})
+
+	t.Run("private:false (default) → createPrivate=false", func(t *testing.T) {
+		// Build a per-sandbox profile with Private omitted (default false).
+		p := profileWithSlack(boolPtrCreate(true), true, "")
+		api := &fakeSlackAPI{
+			createChannelResult: "CPUBLIC",
+		}
+		ssmStore := &fakeSSMParamStore{
+			params: map[string]string{
+				"/km/slack/invite-email": "invite@example.com",
+			},
+		}
+
+		_, _, err := resolveSlackChannel(context.Background(), p, "sb-public01", "pub-demo", api, nil, ssmStore, "/km/")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// AC1: default (private:false) must NOT set is_private in the Slack API call.
+		if api.createPrivate {
+			t.Errorf("createPrivate = true; want false when notification.slack.private is not set (default)")
+		}
+	})
 }
 
 func TestResolveSlack_PerSandbox_HappyPath_NoAlias(t *testing.T) {

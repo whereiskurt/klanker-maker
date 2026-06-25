@@ -144,3 +144,13 @@ variable "slack_default_router" {
   type        = string
   default     = "false"
 }
+
+# Phase 118: install-level Slack trigger allowlist (comma-joined Uxxxx). When non-empty,
+# only listed users may trigger an agent turn; the bridge reads this into EventsHandler.Allow
+# at cold-start. Empty = everyone allowed (byte-identical to pre-118). A non-empty per-sandbox
+# allow (slack_allow attr on the km-sandboxes row) replaces this for that sandbox.
+variable "slack_allow" {
+  description = "Phase 118: install-level Slack trigger allowlist (comma-joined Uxxxx). Empty = everyone allowed."
+  type        = string
+  default     = ""
+}

@@ -905,6 +905,82 @@ func TestDDBSandboxByChannel_ReactAlways_Override(t *testing.T) {
 	}
 }
 
+// TestDDBSandboxByChannel_Allow_SlackAllow — Phase 118. The slack_allow
+// attribute on the km-sandboxes row populates SandboxRoutingInfo.Allow as a
+// []string split on comma. Absent or empty attribute → Allow is nil/empty,
+// signalling the enforcement gate to use the install-level default.
+func TestDDBSandboxByChannel_Allow_SlackAllow(t *testing.T) {
+	tests := []struct {
+		name      string
+		item      map[string]dynamodbtypes.AttributeValue
+		wantAllow []string // nil means "expect no Allow set"
+	}{
+		{
+			name: "attribute absent → Allow nil (install-level default applies)",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-A"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs"},
+			},
+			wantAllow: nil,
+		},
+		{
+			name: "single user-id → Allow has one element",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-B"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs"},
+				"slack_allow":             &dynamodbtypes.AttributeValueMemberS{Value: "U0OPERATOR"},
+			},
+			wantAllow: []string{"U0OPERATOR"},
+		},
+		{
+			name: "comma-joined two user-ids → Allow has two elements",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-C"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs"},
+				"slack_allow":             &dynamodbtypes.AttributeValueMemberS{Value: "U0OPERATOR,U0XUSER"},
+			},
+			wantAllow: []string{"U0OPERATOR", "U0XUSER"},
+		},
+		{
+			name: "empty S value → Allow nil (fall-back signal)",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-D"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs"},
+				"slack_allow":             &dynamodbtypes.AttributeValueMemberS{Value: ""},
+			},
+			wantAllow: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockDDBQueryGetPut{
+				query: func(ctx context.Context, in *dynamodb.QueryInput, opts ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+					return &dynamodb.QueryOutput{Items: []map[string]dynamodbtypes.AttributeValue{tc.item}}, nil
+				},
+			}
+			f := &bridge.DDBSandboxByChannel{Client: mock, TableName: "km-sandboxes", IndexName: "slack_channel_id-index"}
+			info, err := f.FetchByChannel(context.Background(), "C1")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantAllow == nil {
+				if len(info.Allow) != 0 {
+					t.Fatalf("expected nil/empty Allow, got %v", info.Allow)
+				}
+			} else {
+				if len(info.Allow) != len(tc.wantAllow) {
+					t.Fatalf("Allow len: got %d (%v), want %d (%v)", len(info.Allow), info.Allow, len(tc.wantAllow), tc.wantAllow)
+				}
+				for i, want := range tc.wantAllow {
+					if info.Allow[i] != want {
+						t.Errorf("Allow[%d]: got %q, want %q", i, info.Allow[i], want)
+					}
+				}
+			}
+		})
+	}
+}
+
 // ============================================================
 // SSMSigningSecretFetcher tests
 // ============================================================

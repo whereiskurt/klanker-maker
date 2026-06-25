@@ -23,6 +23,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
@@ -169,6 +170,23 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 		} else {
 			log.Info().Str("sandbox_id", deps.SandboxID).Str("value", v).
 				Msg("Slack: persisted per-sandbox mention_only override")
+		}
+	}
+
+	// Phase 118: per-sandbox inbound allow-list. Only written when the profile
+	// explicitly sets notification.slack.inbound.allow to a non-empty list.
+	// Stored as comma-joined S attribute "slack_allow" (UpdateSandboxAttr is
+	// string-only). Absent attribute signals "use install-level default" to the
+	// bridge. Non-fatal: failure falls back to install-level default; sandbox
+	// still works normally.
+	if len(inbound.Allow) > 0 {
+		v := strings.Join(inbound.Allow, ",")
+		if updateErr := deps.UpdateSandboxAttr(ctx, deps.SandboxID, "slack_allow", v); updateErr != nil {
+			log.Warn().Err(updateErr).Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("persist slack_allow per-sandbox override failed; sandbox will use install-level default")
+		} else {
+			log.Info().Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("Slack: persisted per-sandbox allow-list override")
 		}
 	}
 

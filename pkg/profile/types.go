@@ -218,6 +218,12 @@ type NotificationSlackSpec struct {
 	// ArchiveOnDestroy archives the per-sandbox channel at km destroy. nil =
 	// default true. Only meaningful when PerSandbox=true.
 	ArchiveOnDestroy *bool `json:"archiveOnDestroy,omitempty" yaml:"archiveOnDestroy,omitempty"`
+	// Phase 118: Private, when true, creates the per-sandbox channel as a
+	// Slack private channel instead of a public one. Only meaningful when
+	// PerSandbox=true; a WARNING is emitted during km validate when Private=true
+	// and PerSandbox is not explicitly true (the channel-create path would be
+	// a no-op or target a shared channel). Default false.
+	Private bool `json:"private,omitempty" yaml:"private,omitempty"`
 	// Inbound configures bidirectional Slack chat (Phase 67).
 	Inbound *NotificationSlackInboundSpec `json:"inbound,omitempty" yaml:"inbound,omitempty"`
 	// Transcript configures per-turn transcript streaming (Phase 68).
@@ -241,6 +247,15 @@ type NotificationSlackInboundSpec struct {
 	// messages (false). Phase 91.4/91.5 (re-homed from cli.notifySlackInboundReactAlways
 	// in Phase 92, Wave 3). nil = default true (chatty-reactor back-compat).
 	ReactAlways *bool `json:"reactAlways,omitempty" yaml:"reactAlways,omitempty"`
+	// Phase 118: Allow is the per-sandbox trigger allowlist (Slack user IDs,
+	// e.g. ["U012ABCDE"]). When non-empty, only messages from listed users are
+	// dispatched; all others are silently dropped (200 OK, no reaction, no SQS).
+	// Stored in DDB as comma-joined S attribute "slack_allow". Non-empty list
+	// REPLACES the install-level KM_SLACK_ALLOW entirely for this sandbox.
+	// Empty/nil = fall back to install-level (or everyone when that is also empty).
+	// A WARNING is emitted when Allow is non-empty and perSandbox is not true
+	// (the per-sandbox DDB row is not written for shared-channel sandboxes).
+	Allow []string `json:"allow,omitempty" yaml:"allow,omitempty"`
 }
 
 // NotificationSlackTranscriptSpec configures per-turn transcript streaming.

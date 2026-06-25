@@ -71,6 +71,14 @@ type EventsHandler struct {
 	// var at cold-start (defaults to true when env is unset or "true").
 	ReactAlways bool
 
+	// Phase 118: install-level trigger allowlist (Slack user IDs, e.g. "Uxxxx"),
+	// populated from KM_SLACK_ALLOW (comma-joined). Empty = everyone allowed
+	// (backward-compatible with all pre-Phase-118 behavior). When non-empty, only
+	// messages from listed users are dispatched; all others are silently dropped
+	// (200 OK, no reaction, no SQS enqueue). Per-sandbox SandboxRoutingInfo.Allow
+	// (non-empty) REPLACES this list for that sandbox — it is not additive.
+	Allow []string
+
 	// Phase 95: federated relay. When non-nil and FetchByChannel returns empty
 	// (unknown channel), Broadcast is called with the verbatim request body and
 	// Slack headers so a sibling km-install can process the event locally.
@@ -315,6 +323,28 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		return EventsResponse{StatusCode: 200, Body: "ok"}
 	}
 	// present+yes: process locally (fall through — today's path unchanged).
+
+	// 5a. Trigger allowlist (Phase 118). The OUTER gate: runs AFTER channel-ownership
+	// (so per-sandbox info.Allow is known) and BEFORE the mention-only / thread-bypass
+	// filter, dedup, and dispatch. A non-listed user is silently dropped (no reaction,
+	// no reply, no enqueue; 200 OK) — mirroring the GitHub bridge's silent-200 reject.
+	//
+	// Resolution: a non-empty per-sandbox info.Allow REPLACES the install-level
+	// h.Allow entirely for this sandbox; otherwise h.Allow applies; if both are
+	// empty the gate is dormant (everyone may trigger — backward-compatible).
+	//
+	// Placing this before the thread-bypass is deliberate (AC5): a non-listed user
+	// must NOT be able to hijack an already-engaged thread via the Phase 91.3 bypass.
+	effectiveAllow := h.Allow
+	if len(info.Allow) > 0 {
+		effectiveAllow = info.Allow
+	}
+	if len(effectiveAllow) > 0 && !isInSlackAllowlist(msg.User, effectiveAllow) {
+		h.log().Debug("events: allowlist: silent drop (user not in trigger allowlist)",
+			"user", msg.User, "channel", msg.Channel, "ts", msg.TS,
+			"per_sandbox_override", len(info.Allow) > 0)
+		return EventsResponse{StatusCode: 200, Body: "ok"}
+	}
 
 	// 5b. Mention-only filter (Phase 91; per-sandbox override). When mention-only
 	// is in effect, skip messages that do not @-mention the bot. Runs AFTER
@@ -625,6 +655,19 @@ func (h *EventsHandler) isBotLoop(ctx context.Context, m slackMessageEvent) bool
 		return false // fail open — let dedup catch loops
 	}
 	return botUID != "" && m.User == botUID
+}
+
+// isInSlackAllowlist reports whether userID is present in allow (case-insensitive,
+// matching Slack ID casing leniently). Callers MUST gate on len(allow) > 0 first:
+// an EMPTY allow means "everyone allowed" (Phase 118, backward-compatible). This
+// INVERTS the GitHub bridge's isInAllowlist, where an empty list is deny-by-default.
+func isInSlackAllowlist(userID string, allow []string) bool {
+	for _, u := range allow {
+		if strings.EqualFold(strings.TrimSpace(u), userID) {
+			return true
+		}
+	}
+	return false
 }
 
 // maybePostOrphanReply posts exactly one threaded reply in an orphan channel

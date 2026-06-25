@@ -76,7 +76,7 @@ func (f *fakeSlackAPIForInvite) JoinChannel(_ context.Context, channelID string)
 }
 
 // Stub remaining SlackAPI methods — not exercised by invite tests.
-func (f *fakeSlackAPIForInvite) CreateChannel(_ context.Context, _ string) (string, error) {
+func (f *fakeSlackAPIForInvite) CreateChannel(_ context.Context, _ string, _ bool) (string, error) {
 	return "", nil
 }
 

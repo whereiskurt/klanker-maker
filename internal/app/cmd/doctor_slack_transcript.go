@@ -432,6 +432,64 @@ func checkSlackUsersReadScope(
 	}
 }
 
+// checkSlackGroupsReadScope verifies the bot has groups:read — the scope that
+// gates reading PRIVATE channel metadata (conversations.info/.list/.members on a
+// private channel). Phase 118 made private per-sandbox channels first-class
+// (notification.slack.private), so without groups:read the bridge can create and
+// post to a private channel but km can no longer INSPECT it: the dead-channel
+// doctor checks, `km slack repair`, `km slack adopt`, and Phase 104 alias-reuse
+// validation all blind-spot or fail-soft on private channels. It is in the
+// rendered `km slack manifest`, so an install that predates it just needs a
+// reinstall (the bot token is unchanged — no `km slack rotate-token` needed).
+//
+// Mirrors checkSlackUsersReadScope verbatim — same closure-injection pattern,
+// same dep shape (getScopes func), same status semantics.
+//
+// Returns:
+//   - SKIPPED: getScopes is nil (bot token not configured / Slack not set up).
+//   - OK: groups:read present in scopes.
+//   - WARN: groups:read missing (private-channel inspection blind; reinstall needed).
+//   - WARN: getScopes returned an error (do not fail doctor on auth.test outage).
+func checkSlackGroupsReadScope(
+	ctx context.Context,
+	getScopes func(context.Context) ([]string, error),
+) CheckResult {
+	name := "Slack groups:read scope"
+	if getScopes == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "Slack auth-test scopes func not configured",
+		}
+	}
+	scopes, err := getScopes(ctx)
+	if err != nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("could not check Slack scopes: %v", err),
+		}
+	}
+	for _, s := range scopes {
+		if s == "groups:read" {
+			return CheckResult{
+				Name:    name,
+				Status:  CheckOK,
+				Message: "Slack bot has groups:read scope (private-channel inspection supported)",
+			}
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckWarn,
+		Message: "Slack bot is missing groups:read scope — private channels (notification.slack.private, Phase 118) cannot be inspected: dead-channel checks, km slack repair/adopt, and alias-reuse validation are blind to them",
+		Remediation: "Run `km slack manifest > app.json`, update the Slack App's bot scopes from app.json " +
+			"(Slack Admin → Apps → your app → OAuth & Permissions → Bot Token Scopes → add groups:read), " +
+			"then reinstall the app to your workspace (the bot token is unchanged — no `km slack rotate-token` needed). " +
+			"Run `km doctor` again to verify.",
+	}
+}
+
 // checkSlackBotUserIDCached verifies the {prefix}slack/bot-user-id SSM cache
 // is populated when mention-only mode is effective for at least one local
 // profile (Phase 91). Without the cached value, the bridge's mention-scan

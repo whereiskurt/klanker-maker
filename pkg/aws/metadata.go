@@ -69,6 +69,17 @@ type SandboxMetadata struct {
 	// `mentionOnly: true` (and gaining 👀-on-everything) after a pause/resume.
 	SlackMentionOnly *bool `json:"slack_mention_only,omitempty"`
 	SlackReactAlways *bool `json:"slack_react_always,omitempty"`
+	// Phase 118: per-sandbox trigger allowlist. When non-nil/non-empty, only
+	// messages from listed Slack user IDs are dispatched; overrides the install-level
+	// EventsHandler.Allow. Stored in DDB as a comma-joined S attribute "slack_allow"
+	// (NOT SS — the same pattern as other string fields). nil/empty = fall back to the
+	// install-level KM_SLACK_ALLOW (or everyone when that is also empty).
+	//
+	// MUST round-trip through marshal/unmarshal: every read-modify-write path (resume.go
+	// TTL recreation, extend.go, the ttl-handler Lambda) PutItems the whole row — dropping
+	// this field reverts the sandbox to install defaults (SandboxMetadata lossy round-trip
+	// footgun documented in project_sandboxmetadata_lossy_roundtrip).
+	SlackAllow []string `json:"slack_allow,omitempty"`
 
 	// Phase 77 — failure discoverability. Set by the create-handler on failure
 	// (see UpdateSandboxStatusAndReasonDynamo). Reads as zero-value on records

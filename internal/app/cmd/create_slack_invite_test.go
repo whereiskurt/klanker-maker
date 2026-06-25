@@ -53,7 +53,7 @@ func newFakeSlackAPIForInvite() *fakeSlackAPIForInvite {
 	}
 }
 
-func (f *fakeSlackAPIForInvite) CreateChannel(_ context.Context, _ string) (string, error) {
+func (f *fakeSlackAPIForInvite) CreateChannel(_ context.Context, _ string, _ bool) (string, error) {
 	return f.createChannelResult, f.createChannelErr
 }
 

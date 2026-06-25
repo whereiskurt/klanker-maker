@@ -39,6 +39,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -1100,6 +1101,14 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 			f := false
 			info.MentionOnly = &f
 		}
+	}
+	// Phase 118: per-sandbox inbound allow-list. Stored as comma-joined S attribute
+	// ("slack_allow"). Absent or empty → info.Allow remains nil, signalling the
+	// enforcement gate to use the install-level default (all Slack users allowed).
+	// Attribute name MUST match create_slack_inbound.go (write) and
+	// sandbox_dynamo.go marshal/unmarshal (both "slack_allow").
+	if v, ok := item["slack_allow"].(*dynamodbtypes.AttributeValueMemberS); ok && v.Value != "" {
+		info.Allow = strings.Split(v.Value, ",")
 	}
 	return info, nil
 }
