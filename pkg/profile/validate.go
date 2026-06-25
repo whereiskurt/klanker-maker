@@ -361,6 +361,20 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 			})
 		}
 
+		// Rule S-maxconcurrency (warning, Phase 119): maxConcurrentThreads > 1 has no
+		// effect without perSandbox:true AND inbound.enabled:true — the cap drives the
+		// per-sandbox inbound poller, which only exists for a per-sandbox inbound queue.
+		if slack.Inbound != nil && slack.Inbound.MaxConcurrentThreads != nil &&
+			*slack.Inbound.MaxConcurrentThreads > 1 {
+			if !perSandbox || slack.Inbound.Enabled == nil || !*slack.Inbound.Enabled {
+				errs = append(errs, ValidationError{
+					Path:      "spec.notification.slack.inbound.maxConcurrentThreads",
+					Message:   "notification.slack.inbound.maxConcurrentThreads > 1 has no effect without notification.slack.perSandbox: true and notification.slack.inbound.enabled: true",
+					IsWarning: true,
+				})
+			}
+		}
+
 		// Rule S3b: channelName is only meaningful for an auto-created per-sandbox
 		// channel, and conflicts with a pinned override channel.
 		if slack.ChannelName != "" {
