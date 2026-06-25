@@ -67,6 +67,14 @@ func H1InboundDLQName(resourcePrefix string) string {
 	return fmt.Sprintf("%s-h1-inbound-dlq.fifo", resourcePrefix)
 }
 
+// slackInboundVisibilityTimeout is the in-flight visibility timeout (seconds) for the
+// Slack (and GitHub) inbound FIFO queues. Raised from 30s in Phase 119 so an agent
+// turn running minutes is not redelivered mid-turn under the ack-after-completion
+// poller. The sandbox-side poller ALSO heartbeats ChangeMessageVisibility (Plan 04)
+// — required because this base only applies to NEWLY created queues; pre-Phase-119
+// sandboxes keep 30s until recreate.
+const slackInboundVisibilityTimeout = "1800"
+
 // h1InboundVisibilityTimeout is the in-flight visibility timeout (seconds) for the
 // per-sandbox HackerOne inbound FIFO queues. Deliberately 1800s (30 min), NOT the
 // 30s used by the Slack/GitHub inbound queues: a HackerOne triage turn (read the
@@ -124,7 +132,7 @@ func inboundQueueAttrs(dlqARN string) (map[string]string, error) {
 	attrs := map[string]string{
 		string(sqstypes.QueueAttributeNameFifoQueue):                 "true",
 		string(sqstypes.QueueAttributeNameContentBasedDeduplication): "false",
-		string(sqstypes.QueueAttributeNameVisibilityTimeout):         "30",
+		string(sqstypes.QueueAttributeNameVisibilityTimeout):         slackInboundVisibilityTimeout,
 		string(sqstypes.QueueAttributeNameMessageRetentionPeriod):    "1209600",
 	}
 	if dlqARN != "" {
@@ -184,7 +192,8 @@ func SlackInboundQueueName(resourcePrefix, sandboxID string) string {
 // attributes from CONTEXT.md:
 //   - FifoQueue=true (strict ordering per conversation turn)
 //   - ContentBasedDeduplication=false (explicit dedup via Slack event_id)
-//   - VisibilityTimeout=30s (failed turns re-queue after 30s for natural retry)
+//   - VisibilityTimeout=1800s (Phase 119: raised from 30s so a long-running agent
+//     turn is not redelivered mid-turn; poller heartbeats on pre-119 queues)
 //   - MessageRetentionPeriod=1209600 (14 days — survives km pause/resume cycles)
 //
 // Returns the queue URL on success. Idempotent: if a queue with the same name
