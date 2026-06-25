@@ -483,6 +483,59 @@ func TestUserdata_StopHookSkipsAllNotifyWhenPollerDriving(t *testing.T) {
 	}
 }
 
+// ---- Phase 119: RED tests — KM_SLACK_MAX_CONCURRENCY env var emission (P119-C) ----
+
+// minimalSlackInboundProfileWithCap is like minimalSlackInboundProfile but also
+// sets MaxConcurrentThreads on the inbound spec. cap==1 is treated as "absent"
+// (dormancy) per the Phase 119 spec; cap>1 emits KM_SLACK_MAX_CONCURRENCY.
+func minimalSlackInboundProfileWithCap(t *testing.T, cap int) *profile.SandboxProfile {
+	t.Helper()
+	p := minimalSlackInboundProfile(t, true)
+	capVal := cap
+	p.Spec.Notification.Slack.Inbound.MaxConcurrentThreads = &capVal
+	return p
+}
+
+// TestUserdata_SlackInbound_MaxConcurrency_EmittedWhenCap3 verifies that when
+// MaxConcurrentThreads=3, the compiled userdata notify.env block contains
+// KM_SLACK_MAX_CONCURRENCY=3.
+// RED: emission not yet added to the compiler; Wave 1 adds it.
+func TestUserdata_SlackInbound_MaxConcurrency_EmittedWhenCap3(t *testing.T) {
+	p := minimalSlackInboundProfileWithCap(t, 3)
+	out := compileInboundUserData(t, p)
+
+	const want = "KM_SLACK_MAX_CONCURRENCY=3"
+	if !strings.Contains(out, want) {
+		t.Fatalf("expected userdata to contain %q when MaxConcurrentThreads=3 (Phase 119 P119-C)\n--- excerpt ---\n%s", want, abbreviateUD(out))
+	}
+}
+
+// TestUserdata_SlackInbound_MaxConcurrency_AbsentWhenCap1 verifies that when
+// MaxConcurrentThreads=1 (or absent), the compiled userdata does NOT contain
+// KM_SLACK_MAX_CONCURRENCY (dormancy: byte-identical to Phase 118).
+// This test ensures the dormancy invariant holds and should turn GREEN in Wave 1
+// alongside the emission test above.
+func TestUserdata_SlackInbound_MaxConcurrency_AbsentWhenCap1(t *testing.T) {
+	p := minimalSlackInboundProfileWithCap(t, 1)
+	out := compileInboundUserData(t, p)
+
+	if strings.Contains(out, "KM_SLACK_MAX_CONCURRENCY") {
+		t.Fatalf("userdata must NOT contain KM_SLACK_MAX_CONCURRENCY when MaxConcurrentThreads=1 (dormancy, byte-identical to Phase 118)\n--- excerpt ---\n%s", abbreviateUD(out))
+	}
+}
+
+// TestUserdata_SlackInbound_MaxConcurrency_AbsentWhenNil verifies that when
+// MaxConcurrentThreads is nil (absent from profile), the compiled userdata does
+// NOT contain KM_SLACK_MAX_CONCURRENCY.
+func TestUserdata_SlackInbound_MaxConcurrency_AbsentWhenNil(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true) // no MaxConcurrentThreads set
+	out := compileInboundUserData(t, p)
+
+	if strings.Contains(out, "KM_SLACK_MAX_CONCURRENCY") {
+		t.Fatalf("userdata must NOT contain KM_SLACK_MAX_CONCURRENCY when MaxConcurrentThreads is nil\n--- excerpt ---\n%s", abbreviateUD(out))
+	}
+}
+
 // TestUserdata_SystemdEnvFileNoExport — Phase 67-11 follow-up.
 // systemd's EnvironmentFile= directive does NOT accept the 'export VAR=val'
 // shell-keyword prefix used by /etc/profile.d/km-notify-env.sh. The compiler
