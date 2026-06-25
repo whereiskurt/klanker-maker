@@ -4261,6 +4261,18 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// Phase 118 — groups:read gates reading private-channel metadata. Without it,
+	// km can create + post to private channels (notification.slack.private) but
+	// cannot inspect them, so the dead-channel checks below are blind to private
+	// channels. WARN nudges the operator to reinstall from `km slack manifest`.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackGroupsReadScope(ctx, slackScopes)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	// Phase 91 — bot-user-id SSM cache check. Build the getUID closure only
 	// when at least one local profile resolves to mention-only mode. If no
 	// such profile exists the check returns SKIPPED (nil closure path).

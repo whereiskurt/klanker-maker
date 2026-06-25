@@ -835,6 +835,17 @@ func IsChannelNotFound(err error) bool {
 	return errors.As(err, &apierr) && apierr.Code == "channel_not_found"
 }
 
+// IsMissingScope reports whether err is a Slack "missing_scope" response — the
+// bot token lacks the OAuth scope required by the call (install drift; the App
+// must be reinstalled from `km slack manifest`). Distinct from IsChannelNotFound:
+// a missing_scope on conversations.info means the channel could NOT be inspected
+// (e.g. a private channel without groups:read), NOT that it is dead. Callers that
+// probe channel liveness must treat this as "unprobed", never as "alive" or "dead".
+func IsMissingScope(err error) bool {
+	var apierr *SlackAPIError
+	return errors.As(err, &apierr) && apierr.Code == "missing_scope"
+}
+
 // ArchiveChannel calls conversations.archive.
 func (c *Client) ArchiveChannel(ctx context.Context, channelID string) error {
 	_, err := c.callJSON(ctx, "conversations.archive", map[string]any{
