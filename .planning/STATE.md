@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 119-04-PLAN.md (Layer 2 Poller: bounded-concurrent ack-after dispatcher with heartbeat + idempotency guard)"
-last_updated: "2026-06-25T13:15:06.547Z"
+stopped_at: "119-05 paused at Task 2 live-E2E checkpoint — demo profile committed (f18944df), awaiting operator-driven deploy + six-assertion E2E"
+last_updated: "2026-06-25T13:17:30Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 3
