@@ -2,7 +2,8 @@
 
 **An agent runtime on your own AWS account - declarative, eBPF-enforced, Slack+Github-native, with hard budgets that actually stop runaway loops.**
  
-**Built for security/engineer teams.** You're team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, doing code reviews, and reasoning about vulnerabilities - without the investigation itself becoming the next breach. Klanker Maker gives you an isolated AWS EC2 instance, YAML policy-governed sandbox where untrusted code, dependencies, and AI agents run inside a contained blast radius.
+**Built for security/engineer teams.** You're team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, doing code reviews, and reasoning about vulnerabilities - without the investigation itself becoming the next breach. 
+> Klanker Maker gives you an isolated AWS EC2 instance, YAML policy-governed sandbox where untrusted code, dependencies, and AI agents run inside a contained blast radius.
 
 Klanker Maker compiles a YAML profile into a real AWS sandbox: a scoped IAM role, a kernel-level network policy, a MITM proxy that meters every Bedrock/Anthropic/OpenAI token, a Slack channel that talks back to the agent, and a dollar ceiling that suspends compute when the money runs out. 
 
