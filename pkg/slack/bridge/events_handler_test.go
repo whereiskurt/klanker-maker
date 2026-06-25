@@ -510,8 +510,9 @@ func TestEventsHandler_ValidMessage_HappyPath(t *testing.T) {
 	if len(sqs.sends) != 1 {
 		t.Fatalf("expected 1 SQS send, got %d", len(sqs.sends))
 	}
-	if sqs.sends[0].group != "sb-abc123" {
-		t.Fatalf("group=%s, want sb-abc123", sqs.sends[0].group)
+	// Phase 119: group is now threadTS (msg.TS for top-level posts), not sandboxID.
+	if sqs.sends[0].group != "1714280400.001" {
+		t.Fatalf("group=%s, want 1714280400.001 (threadTS/msg.TS per Phase 119)", sqs.sends[0].group)
 	}
 	if sqs.sends[0].dedup != "E3" {
 		t.Fatalf("dedup=%s, want E3", sqs.sends[0].dedup)
