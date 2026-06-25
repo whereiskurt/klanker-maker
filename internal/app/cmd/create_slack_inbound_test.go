@@ -452,6 +452,47 @@ func TestCreate_SlackInboundMentionOnlyOverride(t *testing.T) {
 	}
 }
 
+// TestCreate_SlackInboundAllowOverride — Phase 118. When the profile sets a
+// non-empty notification.slack.inbound.allow, provisionSlackInboundQueue MUST
+// write the per-sandbox allow list as a comma-joined "slack_allow" S attribute
+// on the km-sandboxes row. When the list is nil/empty the attribute MUST NOT be
+// written so the bridge falls back to the install-level KM_SLACK_ALLOW default.
+func TestCreate_SlackInboundAllowOverride(t *testing.T) {
+	tests := []struct {
+		name      string
+		allow     []string
+		wantAttr  bool
+		wantValue string
+	}{
+		{"nil → no write (install default applies)", nil, false, ""},
+		{"empty → no write (install default applies)", []string{}, false, ""},
+		{"single → writes slack_allow=U1", []string{"U1AAA"}, true, "U1AAA"},
+		{"multi → writes comma-joined", []string{"U1AAA", "U2BBB"}, true, "U1AAA,U2BBB"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &fakeSQS{}
+			deps, state := makeDeps(t, true, fs, nil, nil)
+			deps.Profile.Spec.Notification.Slack.Inbound.Allow = tc.allow
+
+			if _, err := provisionSlackInboundQueue(context.Background(), deps); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			got, present := state.ddbAttrs["slack_allow"]
+			if tc.wantAttr && !present {
+				t.Fatalf("expected slack_allow write; attrs=%v", state.ddbAttrs)
+			}
+			if !tc.wantAttr && present {
+				t.Fatalf("expected NO slack_allow write (install default); got %q", got)
+			}
+			if tc.wantAttr && got != tc.wantValue {
+				t.Errorf("slack_allow: got %q want %q", got, tc.wantValue)
+			}
+		})
+	}
+}
+
 // ============================================================
 // Phase 99.1 Plan 02 — DLQ-ARN threading + teardown guard
 // ============================================================
