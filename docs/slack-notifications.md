@@ -2896,3 +2896,101 @@ string-only — not a DDB string-set), round-tripped through `SandboxMetadata` s
 - **Per-sandbox `allow` not honored:** verify the `slack_allow` attribute name matches across the write (`create_slack_inbound.go`), the row read (`FetchByChannel`), and a real DDB row — not just the test mock.
 - **Everyone can still trigger:** expected when both levels are empty/absent. Set `slack.allow` (install) or `notification.slack.inbound.allow` (per-sandbox) to restrict.
 - **`km validate` warning on `private`/`allow`:** you set the field with `perSandbox: false` — it has no effect there; either enable `perSandbox` or drop the field.
+
+## Phase 119 — Slack inbound per-thread parallelism
+
+By default the per-sandbox inbound poller processes one Slack turn at a time
+(serial — byte-identical to Phase 118). Phase 119 lets a sandbox dispatch **multiple
+distinct Slack threads concurrently** while keeping turns **within a single thread strictly
+serial**. **Dormant by default** — a sandbox with `maxConcurrentThreads` unset (or `1`) is
+unchanged from Phase 118.
+
+### The two layers
+
+1. **Bridge — FIFO grouping by `threadTS`.** The Slack bridge enqueues each inbound
+   message to the per-sandbox FIFO using the **thread timestamp** as the SQS
+   `MessageGroupId` (previously the sandbox id). FIFO guarantees ordering *within* a
+   MessageGroupId and allows parallel delivery *across* groups — so distinct threads can
+   be in-flight simultaneously, but two messages in the same thread are strictly ordered
+   (the second is invisible until the first's receipt is deleted). This layer is always on
+   and behavior-neutral when the poller cap is 1.
+2. **Poller — bounded-concurrent dispatch.** The on-box `km-slack-inbound-poller`
+   reads `KM_SLACK_MAX_CONCURRENCY` (default `1`). When >1 it long-polls up to that many
+   messages per `receive-message` (`--max-number-of-messages`), dispatches each as a
+   backgrounded `claude -p` turn, and enforces a **counting semaphore**
+   (`while [ "$inflight" -ge "$MAX" ]; do wait -n; done`) so no more than the cap run at
+   once. Each turn gets its own RUN_DIR (`…Z-$$-$RANDOM` suffix) so parallel turns never
+   collide on output paths.
+
+### The profile field
+
+```yaml
+spec:
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
+      inbound:
+        enabled: true
+        maxConcurrentThreads: 3   # Phase 119 — up to 3 threads dispatched concurrently
+```
+
+- `notification.slack.inbound.maxConcurrentThreads` — `*int`, **default `1`** (serial =
+  dormant). Values >1 enable parallelism; the cap is also clamped to 10 batch-receive.
+- **Emit-only-when->1.** The compiler writes `KM_SLACK_MAX_CONCURRENCY` into
+  `/etc/km/notify.env` **only when the cap is >1**. A cap=1 sandbox has no such line —
+  byte-identical to Phase 118 (verified live: a cap=1 box shows `NO-CONCURRENCY-LINE`).
+- **Poller-only, no DDB attr.** Unlike the Phase-118 `allow`/`reactAlways` fields, the cap is
+  baked into the sandbox's notify.env at create time and read only by the on-box poller. It
+  is **not** written to the `km-sandboxes` row and the bridge does not consult it (the bridge
+  groups by threadTS unconditionally).
+- **`km validate` WARNS** when `maxConcurrentThreads > 1` is set without **both**
+  `perSandbox: true` and `inbound.enabled: true` — the cap has no effect without a
+  per-sandbox inbound poller.
+
+### Ack-after-completion, visibility heartbeat, and the dup window
+
+- **Ack-after-completion.** The poller deletes a message from the queue **only after** its
+  turn completes (success or terminal failure). A crash mid-turn leaves the message
+  in-flight; after the visibility timeout it is redelivered (then capped by the DLQ
+  `maxReceiveCount=3`).
+- **Base VisibilityTimeout raised to 1800s** (was 30s) for **new** inbound queues, so a
+  long-running concurrent turn is not redelivered while it is still working. Existing
+  Phase-118 queues keep their 30s timeout — for those the poller runs a
+  **ChangeMessageVisibility heartbeat** (extend every 120s during the turn, torn down
+  when the turn ends) so they are covered too.
+- **Crash-redelivery dup window + idempotency guard.** If a box crashes after the turn
+  finished but before the delete, the message is redelivered. To avoid re-posting the same
+  reply, the poller writes **`last_processed_event_ts`** to the thread's DDB row when a turn
+  completes, and **skips re-dispatch** when it sees a message whose event_ts is `<=` the
+  stored value. (Bridge nonce-dedup is the first layer; this guard is the second.)
+
+### The /workspace shared-mutation caveat
+
+**Parallel turns share `/workspace`.** This is well suited to **conversational / read-mostly
+fan-out** — e.g. three people each asking "summarise this for me" at once. It is **not**
+safe for **concurrent repo-mutating turns** (parallel writes to the same files race). If your
+workload writes shared files, keep `maxConcurrentThreads: 1` (the default). Per-thread
+worktree isolation is a **deferred follow-up**; concurrent mutation is the operator's
+responsibility today. The shipped demo profile `profiles/learn.v2.parallel.yaml` carries this
+caveat in its header comment.
+
+### Deploy surface
+
+- **Bridge (threadTS grouping)** → `make build-lambdas` + `km init --slack` (or full
+  `km init --dry-run=false`). Takes effect on the next webhook; no sandbox recreate.
+- **Profile field + poller (KM_SLACK_MAX_CONCURRENCY + bounded dispatch)** →
+  `make build-lambdas` + `km init --dry-run=false` (the create-handler renders the new
+  poller userdata — **NOT** `--sidecars`, which does not rebuild the create-handler zip).
+  Existing sandboxes need `km destroy && km create` to gain the new poller + env var.
+- **Queue base raise (30s → 1800s)** applies to **new** inbound queues only; existing
+  queues are covered by the heartbeat.
+- **No SandboxProfile apiVersion bump** (additive field).
+
+### Demo + UAT
+
+`profiles/learn.v2.parallel.yaml` (`maxConcurrentThreads: 3`) is the reference profile.
+The live synthetic-HMAC E2E (`.planning/phases/119-*/119-UAT.md`) proved all six
+assertions: parallel-across-threads (3 overlapping RUN_DIRs in a 4s window from one poller
+PID), serial-within-thread, cap enforcement, heartbeat/no-dup, dormancy regression
+(cap=1 → no env line), and event_id dedup.

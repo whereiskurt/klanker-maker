@@ -170,10 +170,20 @@ aws s3 ls s3://${KM_ARTIFACTS_BUCKET}/transcripts/<sandbox-id>/
 When the profile sets `notification.slack.inbound.enabled: true`, operator messages in `#sb-{id}` channels become Claude turns inside the sandbox. The pipeline:
 
 1. Slack `message` event → bridge Lambda (HMAC-verified)
-2. Bridge ACKs with 👀 reaction, enqueues to per-sandbox SQS FIFO
+2. Bridge ACKs with 👀 reaction, enqueues to per-sandbox SQS FIFO (grouped by thread)
 3. Sandbox-side `km-slack-inbound-poller.service` dequeues and starts `claude -p`
 4. The poller sets `KM_SLACK_THREAD_TS` in Claude's env so the reply threads correctly
 5. Claude's Stop hook posts the answer back to Slack via `km-slack post --thread "$KM_SLACK_THREAD_TS"`
+
+### Per-thread parallelism (Phase 119)
+
+By default the poller runs **one turn at a time** (serial). Setting
+`notification.slack.inbound.maxConcurrentThreads: N` (`*int`, default `1`) lets the poller
+dispatch up to **N distinct Slack threads concurrently** while keeping turns **within a single
+thread strictly serial** (FIFO delivery order is preserved per thread). The guarantee:
+**parallel-across-threads, serial-within-thread.** Concurrent turns share `/workspace`, so a
+cap >1 suits conversational / read-mostly fan-out — keep it at `1` for repo-mutating work.
+See `docs/slack-notifications.md` § Phase 119.
 
 ### File attachments in inbound messages
 
