@@ -973,6 +973,110 @@ func TestEventsHandler_WithFiles_Synchronous(t *testing.T) {
 	}
 }
 
+// ---- Phase 119: RED tests — MessageGroupId == threadTS (P119-A) ----
+// These tests assert that h.SQS.Send() is called with group == threadTS (for
+// in-thread replies) or group == msg.TS (for top-level posts), NOT group ==
+// info.SandboxID (the current behaviour). They MUST be RED until Wave 1 flips
+// the Send calls in events_handler.go.
+
+// TestEventsHandler_GroupID_IsThreadTS_NoFiles asserts that for an in-thread
+// reply (thread_ts set, no files), the SQS MessageGroupId == thread_ts.
+// RED: current code sends info.SandboxID ("sb-abc123") as the group.
+func TestEventsHandler_GroupID_IsThreadTS_NoFiles(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, _, _, _ := newHandler(now)
+	const threadTS = "1714280400.001"
+	body := `{"type":"event_callback","event_id":"E-g1","event":{"type":"message","channel":"C1","user":"U1","text":"reply","ts":"1714280400.999","thread_ts":"` + threadTS + `"}}`
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{"x-slack-request-timestamp": tsHdr, "x-slack-signature": sigHdr},
+		Body:    body,
+	})
+	if resp.StatusCode != 200 || len(sqs.sends) != 1 {
+		t.Fatalf("status=%d sends=%d", resp.StatusCode, len(sqs.sends))
+	}
+	if sqs.sends[0].group != threadTS {
+		t.Fatalf("group=%q, want threadTS=%q (Phase 119: bridge must group by thread, not sandbox ID)", sqs.sends[0].group, threadTS)
+	}
+}
+
+// TestEventsHandler_GroupID_IsMsgTS_TopLevel asserts that for a top-level
+// message (no thread_ts), the SQS MessageGroupId == msg.TS.
+// RED: current code sends info.SandboxID ("sb-abc123") as the group.
+func TestEventsHandler_GroupID_IsMsgTS_TopLevel(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, _, _, _ := newHandler(now)
+	const msgTS = "1714280400.001"
+	body := `{"type":"event_callback","event_id":"E-g2","event":{"type":"message","channel":"C1","user":"U1","text":"top-level","ts":"` + msgTS + `"}}`
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{"x-slack-request-timestamp": tsHdr, "x-slack-signature": sigHdr},
+		Body:    body,
+	})
+	if resp.StatusCode != 200 || len(sqs.sends) != 1 {
+		t.Fatalf("status=%d sends=%d", resp.StatusCode, len(sqs.sends))
+	}
+	// For a top-level message, threadTS is set to msg.TS inside the handler.
+	// The group must == msg.TS, not info.SandboxID.
+	if sqs.sends[0].group != msgTS {
+		t.Fatalf("group=%q, want msg.TS=%q (Phase 119: bridge must group by thread, not sandbox ID)", sqs.sends[0].group, msgTS)
+	}
+}
+
+// TestEventsHandler_GroupID_IsThreadTS_Files asserts that for a file_share
+// event with thread_ts set, the SQS MessageGroupId == thread_ts (files path).
+// RED: current code sends info.SandboxID as the group on the files path too.
+func TestEventsHandler_GroupID_IsThreadTS_Files(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, _, _, _ := newHandler(now)
+
+	dl := newSlowDownloader(0)
+	h.FileDownloader = dl
+	h.Slack = &fakeSlackPoster{}
+
+	const threadTS = "1714280400.001"
+	event := map[string]any{
+		"type":      "message",
+		"channel":   "C1",
+		"user":      "U1",
+		"text":      "",
+		"ts":        "1714280400.010",
+		"thread_ts": threadTS,
+		"subtype":   "file_share",
+		"files": []map[string]any{
+			{
+				"id":                   "F002",
+				"name":                 "photo.png",
+				"mimetype":             "image/png",
+				"url_private_download": "https://files.slack.com/photo.png",
+				"size":                 1024,
+			},
+		},
+	}
+	eventBytes, _ := json.Marshal(event)
+	outer := map[string]any{
+		"type":     "event_callback",
+		"event_id": "E-g3",
+		"event":    json.RawMessage(eventBytes),
+	}
+	bodyBytes, _ := json.Marshal(outer)
+	bodyStr := string(bodyBytes)
+	tsHdr, sigHdr := signSlackPayload(t, bodyStr, now)
+	resp := h.Handle(context.Background(), EventsRequest{
+		Body: bodyStr,
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+	})
+	if resp.StatusCode != 200 || len(sqs.sends) != 1 {
+		t.Fatalf("status=%d sends=%d", resp.StatusCode, len(sqs.sends))
+	}
+	if sqs.sends[0].group != threadTS {
+		t.Fatalf("group=%q, want threadTS=%q (Phase 119: files path must also group by thread)", sqs.sends[0].group, threadTS)
+	}
+}
+
 // fakeNoncesCounter wraps fakeNonces and counts CheckAndStore invocations.
 // Used by TestEventsHandler_MentionOnly to verify skipped messages do NOT
 // consume a nonce slot (must be placed before dedup, per PLAN 91-03 MUST-HAVE).
