@@ -5506,6 +5506,14 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 			// Reserve the slot here so the env file always has the key; km create
 			// overwrites the empty value after creating the SQS queue.
 			notifyEnv["KM_SLACK_INBOUND_QUEUE_URL"] = ""
+			// Phase 119: KM_SLACK_MAX_CONCURRENCY caps how many distinct Slack threads the
+			// inbound poller dispatches in parallel. EMIT ONLY WHEN >1 so a default-1
+			// (== every pre-Phase-119) profile renders byte-identical userdata — the poller
+			// defaults ${KM_SLACK_MAX_CONCURRENCY:-1}. Poller-only knob; the bridge never
+			// reads it (no DDB attr — contrast Phase 91.5/118).
+			if sl := notifySlackInbound(p); sl != nil && sl.MaxConcurrentThreads != nil && *sl.MaxConcurrentThreads > 1 {
+				notifyEnv["KM_SLACK_MAX_CONCURRENCY"] = strconv.Itoa(*sl.MaxConcurrentThreads)
+			}
 		}
 		// Phase 70 (SC-1/SC-4/SC-5/SC-6): KM_AGENT carries the agent default into the
 		// sandbox env. Absence / "" defaults to "claude" per CONTEXT.md locked decision.
