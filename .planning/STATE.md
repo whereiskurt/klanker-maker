@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 119-01-PLAN.md (Wave-0 TDD scaffold: MaxConcurrentThreads compile floor + RED tests for P119-A/C/E/G)"
-last_updated: "2026-06-25T12:54:36.277Z"
+stopped_at: Completed 119-03-PLAN.md (validate WARN + KM_SLACK_MAX_CONCURRENCY env emission)
+last_updated: "2026-06-25T12:58:27.844Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 12
+  completed_plans: 13
   percent: 91
 ---
 
@@ -587,6 +587,7 @@ Progress: [█████████░] 91%
 | Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends P05 | 3min | 2 tasks | 3 files |
 | Phase 118-slack-trigger-allowlist-private-per-sandbox-channels P01 | 306s | 3 tasks | 11 files |
 | Phase 119-slack-inbound-per-thread-parallelism P01 | 250 | 3 tasks | 6 files |
+| Phase 119-slack-inbound-per-thread-parallelism P03 | 62 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1676,6 +1677,8 @@ Recent decisions affecting current work:
 - [Phase 118-01]: Wave-0 TDD scaffold: stub fields added to 5 structs + 11 RED/GREEN tests before implementation; internal/app/cmd test-compile intentionally broken until Plan 02 changes real CreateChannel signature
 - [Phase 119-slack-inbound-per-thread-parallelism]: maxConcurrentThreads schema minimum:1 rejects cap=0 immediately after Task 1 — schema-reject test passes by design as regression guard
 - [Phase 119-slack-inbound-per-thread-parallelism]: intPtr renamed to intPtrInbound to avoid collision with validate_test.go in shared package profile_test
+- [Phase 119-slack-inbound-per-thread-parallelism]: KM_SLACK_MAX_CONCURRENCY emitted only when cap>1 (emit-only-when-non-default dormancy pattern)
+- [Phase 119-slack-inbound-per-thread-parallelism]: Cap is poller-only knob — no DDB attr/SandboxMetadata round-trip needed (contrast Phase 91.5/118)
 
 ### Roadmap Evolution
 
@@ -1821,6 +1824,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-25T12:54:36.271Z
-Stopped at: Completed 119-01-PLAN.md (Wave-0 TDD scaffold: MaxConcurrentThreads compile floor + RED tests for P119-A/C/E/G)
+Last session: 2026-06-25T12:58:27.838Z
+Stopped at: Completed 119-03-PLAN.md (validate WARN + KM_SLACK_MAX_CONCURRENCY env emission)
 Resume file: None
