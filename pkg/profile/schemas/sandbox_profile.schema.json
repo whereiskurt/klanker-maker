@@ -741,6 +741,10 @@
                   "type": "boolean",
                   "description": "Archive the per-sandbox channel at km destroy. Default true. Only meaningful with perSandbox=true."
                 },
+                "private": {
+                  "type": "boolean",
+                  "description": "Create the per-sandbox channel as private (is_private:true) instead of public. Default false. Phase 118. Only meaningful with perSandbox=true (km validate warns otherwise). Invites are unchanged; channel membership becomes the read+trigger boundary. Takes effect at channel creation only — a reused channel is not converted public→private."
+                },
                 "inbound": {
                   "type": "object",
                   "additionalProperties": false,
@@ -757,6 +761,14 @@
                     "reactAlways": {
                       "type": "boolean",
                       "description": "When true (default), the bridge posts a 👀 reaction on every dispatched message. When false, the reaction is posted ONLY on top-level engagement messages — thread replies dispatch silently. Phase 91.4/91.5. Install-level default via km-config.yaml slack.react_always."
+                    },
+                    "allow": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[UW][A-Z0-9]+$"
+                      },
+                      "description": "Per-sandbox trigger allowlist (Slack user IDs, Uxxxx). Phase 118. When non-empty, only these users can trigger an agent turn in this sandbox's channel — it REPLACES the install-level slack.allow for this sandbox. Empty/absent = fall back to install-level slack.allow (and if that is also empty, everyone may trigger). Enforced regardless of mentionOnly mode and the thread-bypass."
                     }
                   }
                 },

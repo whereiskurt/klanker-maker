@@ -340,6 +340,27 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 			})
 		}
 
+		// Rule S-private (warning, Phase 118): private:true without perSandbox is a
+		// no-op — no per-sandbox channel is created to make private.
+		if slack.Private && !perSandbox {
+			errs = append(errs, ValidationError{
+				Path:      "spec.notification.slack.private",
+				Message:   "notification.slack.private: true has no effect when notification.slack.perSandbox is not true (no per-sandbox channel is created)",
+				IsWarning: true,
+			})
+		}
+
+		// Rule S-allow (warning, Phase 118): inbound.allow non-empty without
+		// perSandbox is a no-op — the per-sandbox DDB row is not written for
+		// shared-channel sandboxes, so the per-sandbox allow list is never consulted.
+		if slack.Inbound != nil && len(slack.Inbound.Allow) > 0 && !perSandbox {
+			errs = append(errs, ValidationError{
+				Path:      "spec.notification.slack.inbound.allow",
+				Message:   "notification.slack.inbound.allow has no effect when notification.slack.perSandbox is not true (per-sandbox allow requires an inbound queue)",
+				IsWarning: true,
+			})
+		}
+
 		// Rule S3b: channelName is only meaningful for an auto-created per-sandbox
 		// channel, and conflicts with a pinned override channel.
 		if slack.ChannelName != "" {
