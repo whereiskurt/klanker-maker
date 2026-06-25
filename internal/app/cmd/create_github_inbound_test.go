@@ -95,8 +95,10 @@ func TestCreate_GitHubInboundQueueProvisioned(t *testing.T) {
 	if got := fs.createAttrs["ContentBasedDeduplication"]; got != "false" {
 		t.Errorf("ContentBasedDeduplication attr: got %q, want %q", got, "false")
 	}
-	if got := fs.createAttrs["VisibilityTimeout"]; got != "30" {
-		t.Errorf("VisibilityTimeout attr: got %q, want %q", got, "30")
+	// Phase 119: base VisibilityTimeout raised from 30s to 1800s (shared
+	// inboundQueueAttrs helper — applies to GitHub inbound queues too).
+	if got := fs.createAttrs["VisibilityTimeout"]; got != "1800" {
+		t.Errorf("VisibilityTimeout attr: got %q, want %q", got, "1800")
 	}
 	if got := fs.createAttrs["MessageRetentionPeriod"]; got != "1209600" {
 		t.Errorf("MessageRetentionPeriod attr: got %q, want %q", got, "1209600")
