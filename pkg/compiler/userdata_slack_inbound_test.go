@@ -394,11 +394,13 @@ func TestUserdata_PollerResolvesChannelAndBridgeFromSSM(t *testing.T) {
 	}
 }
 
-// TestUserdata_PollerPostsAfterDeleteMessage — Phase 67-11 Gap A.
-// Ack-ordering structural test: the new km-slack post call must come AFTER the
-// success-branch sqs delete-message so a host crash between them can't cause
-// the message to redeliver after the user already saw a reply.
-func TestUserdata_PollerPostsAfterDeleteMessage(t *testing.T) {
+// TestUserdata_PollerDeleteAfterPost — Phase 119 (P119-D) ack-after-completion.
+// Structural test: the success-branch sqs delete-message must come AFTER km-slack post.
+// This is the Phase 119 reversal of the Phase 67-11 "Ack first" policy: the message
+// must remain in-flight until the Slack reply is posted so SQS FIFO does not release
+// the thread's next message mid-turn. The idempotency guard (P119-F) covers the
+// crash-redelivery dup window this reversal opens.
+func TestUserdata_PollerDeleteAfterPost(t *testing.T) {
 	p := minimalSlackInboundProfile(t, true)
 	out := compileInboundUserData(t, p)
 	poller := extractSlackInboundPoller(t, out)
@@ -418,8 +420,9 @@ func TestUserdata_PollerPostsAfterDeleteMessage(t *testing.T) {
 	if postIdx < 0 {
 		t.Fatalf("km-slack post not found in success branch")
 	}
-	if postIdx <= deleteIdx {
-		t.Fatalf("km-slack post (idx=%d) must come AFTER aws sqs delete-message (idx=%d) — host-crash between post and ack would cause SQS redelivery and duplicate replies", postIdx, deleteIdx)
+	// Phase 119 (P119-D): delete must come AFTER the Slack post (reversed from Phase 67).
+	if deleteIdx <= postIdx {
+		t.Fatalf("aws sqs delete-message (idx=%d) must come AFTER km-slack post (idx=%d) — Phase 119 ack-after-completion; the message must stay in-flight until the reply is posted for per-thread FIFO ordering", deleteIdx, postIdx)
 	}
 }
 
@@ -511,28 +514,35 @@ func TestUserdata_SlackInbound_MaxConcurrency_EmittedWhenCap3(t *testing.T) {
 }
 
 // TestUserdata_SlackInbound_MaxConcurrency_AbsentWhenCap1 verifies that when
-// MaxConcurrentThreads=1 (or absent), the compiled userdata does NOT contain
-// KM_SLACK_MAX_CONCURRENCY (dormancy: byte-identical to Phase 118).
-// This test ensures the dormancy invariant holds and should turn GREEN in Wave 1
-// alongside the emission test above.
+// MaxConcurrentThreads=1 (or absent), the compiled notify.env does NOT contain
+// a KM_SLACK_MAX_CONCURRENCY=N assignment (dormancy invariant: no env override
+// emitted, poller defaults to serial via ${KM_SLACK_MAX_CONCURRENCY:-1}).
+// Phase 119 Plan 04: the poller bash itself always contains the var reference
+// ("${KM_SLACK_MAX_CONCURRENCY:-1}") to support the runtime default; dormancy
+// is expressed by the ABSENCE of an explicit env assignment in notify.env.
 func TestUserdata_SlackInbound_MaxConcurrency_AbsentWhenCap1(t *testing.T) {
 	p := minimalSlackInboundProfileWithCap(t, 1)
 	out := compileInboundUserData(t, p)
 
-	if strings.Contains(out, "KM_SLACK_MAX_CONCURRENCY") {
-		t.Fatalf("userdata must NOT contain KM_SLACK_MAX_CONCURRENCY when MaxConcurrentThreads=1 (dormancy, byte-identical to Phase 118)\n--- excerpt ---\n%s", abbreviateUD(out))
+	// The poller bash itself references KM_SLACK_MAX_CONCURRENCY as a runtime
+	// default ("${KM_SLACK_MAX_CONCURRENCY:-1}") — that substring is expected.
+	// What must be ABSENT is an explicit env-file assignment like KM_SLACK_MAX_CONCURRENCY=N.
+	if strings.Contains(out, "KM_SLACK_MAX_CONCURRENCY=") {
+		t.Fatalf("notify.env must NOT contain KM_SLACK_MAX_CONCURRENCY= assignment when MaxConcurrentThreads=1 (dormancy, serial behaviour)\n--- excerpt ---\n%s", abbreviateUD(out))
 	}
 }
 
 // TestUserdata_SlackInbound_MaxConcurrency_AbsentWhenNil verifies that when
-// MaxConcurrentThreads is nil (absent from profile), the compiled userdata does
-// NOT contain KM_SLACK_MAX_CONCURRENCY.
+// MaxConcurrentThreads is nil (absent from profile), the compiled notify.env
+// does NOT contain a KM_SLACK_MAX_CONCURRENCY=N assignment.
 func TestUserdata_SlackInbound_MaxConcurrency_AbsentWhenNil(t *testing.T) {
 	p := minimalSlackInboundProfile(t, true) // no MaxConcurrentThreads set
 	out := compileInboundUserData(t, p)
 
-	if strings.Contains(out, "KM_SLACK_MAX_CONCURRENCY") {
-		t.Fatalf("userdata must NOT contain KM_SLACK_MAX_CONCURRENCY when MaxConcurrentThreads is nil\n--- excerpt ---\n%s", abbreviateUD(out))
+	// KM_SLACK_MAX_CONCURRENCY= (with equals sign) must not appear — the poller
+	// bash reference ("${KM_SLACK_MAX_CONCURRENCY:-1}") is expected and harmless.
+	if strings.Contains(out, "KM_SLACK_MAX_CONCURRENCY=") {
+		t.Fatalf("notify.env must NOT contain KM_SLACK_MAX_CONCURRENCY= when MaxConcurrentThreads is nil\n--- excerpt ---\n%s", abbreviateUD(out))
 	}
 }
 

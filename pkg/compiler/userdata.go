@@ -1667,459 +1667,547 @@ export KM_SLACK_CHANNEL_ID KM_SLACK_BRIDGE_URL
 
 echo "[km-slack-inbound-poller] Starting — queue=$QUEUE_URL table=$THREADS_TABLE region=$REGION"
 
+# Phase 119 (P119-B): bounded-concurrent dispatch semaphore.
+# Default cap is 1 (serial, byte-compatible with Phase 118). Set KM_SLACK_MAX_CONCURRENCY
+# to a higher value via the profile's maxConcurrentThreads field to enable parallelism.
+MAX="${KM_SLACK_MAX_CONCURRENCY:-1}"
+[ "$MAX" -lt 1 ] && MAX=1
+BATCH=$MAX; [ "$BATCH" -gt 10 ] && BATCH=10
+inflight=0
+
 while true; do
-  MSG=$(aws sqs receive-message \
+  MSGS=$(aws sqs receive-message \
     --queue-url "$QUEUE_URL" \
     --wait-time-seconds 20 \
-    --max-number-of-messages 1 \
+    --max-number-of-messages "$BATCH" \
     --region "$REGION" \
     --output json 2>/dev/null || true)
 
-  BODY=$(echo "$MSG" | jq -r '.Messages[0].Body // empty' 2>/dev/null || true)
-  RECEIPT=$(echo "$MSG" | jq -r '.Messages[0].ReceiptHandle // empty' 2>/dev/null || true)
+  COUNT=$(echo "$MSGS" | jq -r '.Messages | length' 2>/dev/null || echo 0)
+  [ "$COUNT" -eq 0 ] && continue
 
-  [ -z "$BODY" ] && continue
+  for _MSG_IDX in $(seq 0 $((COUNT-1))); do
+    BODY=$(echo "$MSGS" | jq -r ".Messages[$_MSG_IDX].Body // empty" 2>/dev/null || true)
+    RECEIPT=$(echo "$MSGS" | jq -r ".Messages[$_MSG_IDX].ReceiptHandle // empty" 2>/dev/null || true)
 
-  CHANNEL=$(echo "$BODY" | jq -r '.channel // empty')
-  THREAD_TS=$(echo "$BODY" | jq -r '.thread_ts // empty')
-  TEXT=$(echo "$BODY" | jq -r '.text // empty')
+    [ -z "$BODY" ] && continue
 
-  # Phase 75: compute ATTACH_COUNT before the guard so file-only uploads are admitted.
-  ATTACH_COUNT=$(echo "$BODY" | jq -r '.attachments // [] | length')
-
-  # Phase 75: admit file-only uploads (empty text + non-empty attachments).
-  # See .planning/phases/75-.../75-RESEARCH.md § Pitfall 4.
-  if [ -z "$CHANNEL" ] || [ -z "$THREAD_TS" ] || { [ -z "$TEXT" ] && [ "$ATTACH_COUNT" -eq 0 ]; }; then
-    echo "[km-slack-inbound-poller] WARN: malformed message body, acking to avoid retry: $BODY"
-    aws sqs delete-message \
-      --queue-url "$QUEUE_URL" \
-      --receipt-handle "$RECEIPT" \
-      --region "$REGION" 2>/dev/null || true
-    continue
-  fi
-
-  # Extend visibility BEFORE agent run to prevent re-delivery during long turns (Pitfall 1).
-  aws sqs change-message-visibility \
-    --queue-url "$QUEUE_URL" \
-    --receipt-handle "$RECEIPT" \
-    --visibility-timeout 300 \
-    --region "$REGION" 2>/dev/null || true
-
-  # DDB lookup for existing Claude session in this thread.
-  DDB_ITEM=$(aws dynamodb get-item \
-    --table-name "$THREADS_TABLE" \
-    --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
-    --region "$REGION" \
-    --output json 2>/dev/null || true)
-  CLAUDE_SESSION=$(echo "$DDB_ITEM" | jq -r '.Item.claude_session_id.S // empty' 2>/dev/null || true)
-  # Phase 70 (Plan 70-05): read agent_type + last_assistant_msg alongside session ID.
-  # agent_type defaults to AGENT (profile default) when absent — backward compat with
-  # pre-Phase-70 rows that predate this attribute. last_assistant_msg is consumed by
-  # Plan 70-06's cross-agent switch; loaded here so DDB lookup stays single-pass.
-  CURRENT_AGENT=$(echo "$DDB_ITEM" | jq -r '.Item.agent_type.S // empty' 2>/dev/null || true)
-  LAST_ASSISTANT_MSG=$(echo "$DDB_ITEM" | jq -r '.Item.last_assistant_msg.S // empty' 2>/dev/null || true)
-  [ -z "$CURRENT_AGENT" ] && CURRENT_AGENT="$AGENT"
-  # EFFECTIVE_AGENT = agent for this turn. Plan 70-06 prefix parser may override below.
-  EFFECTIVE_AGENT="$CURRENT_AGENT"
-
-  # Phase 70 Plan 70-06: prefix parser
-  # Strict grammar (CONTEXT.md): ^([Cc]laude|[Cc]odex|CLAUDE|CODEX):[[:space:]]?
-  # Case-insensitive on the agent name; exactly one optional space after the colon;
-  # anchored at message start (^ guards Pitfall 4 — mid-sentence claude: not routed).
-  REQUESTED_AGENT=""
-  STRIPPED_TEXT="$TEXT"
-  if [[ "$TEXT" =~ ^([Cc][Ll][Aa][Uu][Dd][Ee]|[Cc][Oo][Dd][Ee][Xx]):[[:space:]]? ]]; then
-    PREFIX="${BASH_REMATCH[1],,}"  # lowercase via bash ${var,,} parameter expansion
-    REQUESTED_AGENT="$PREFIX"
-    # Strip the matched prefix + one optional space from the beginning of TEXT.
-    STRIPPED_TEXT="${TEXT#*:}"
-    STRIPPED_TEXT="${STRIPPED_TEXT# }"
-  fi
-
-  # Phase 70 Plan 70-06: routing decision
-  # DO_SWITCH=1 only when a prefix matched, the requested agent differs from the
-  # thread-pinned agent, AND an existing DDB row confirms this is a mid-thread switch
-  # (CLAUDE_SESSION non-empty). Fresh-thread (no session) prefix selects the agent
-  # for that thread without triggering the full switch sequence.
-  DO_SWITCH=0
-  if [ -n "$REQUESTED_AGENT" ]; then
-    if [ "$REQUESTED_AGENT" != "$CURRENT_AGENT" ] && [ -n "$CLAUDE_SESSION" ]; then
-      # Cross-agent mid-thread switch — existing DDB row pins the thread to a
-      # different agent. Plan 70-06 Task 3 switch sequence handles this.
-      DO_SWITCH=1
-    else
-      # Top-level prefix on fresh thread (no CLAUDE_SESSION yet) OR same-agent
-      # prefix in existing thread → strip prefix, optionally override agent,
-      # continue in same thread with same DDB row.
-      EFFECTIVE_AGENT="$REQUESTED_AGENT"
-      TEXT="$STRIPPED_TEXT"
-    fi
-  fi
-
-  RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
-  RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
-  mkdir -p "$RUN_DIR"
-  # The poller runs as root; chown so the sandbox-user claude can write output.
-  chown sandbox:sandbox "$RUN_DIR"
-
-  RESUME_ARG=""
-  [ -n "$CLAUDE_SESSION" ] && RESUME_ARG="--resume $CLAUDE_SESSION"
-
-  PROMPT_FILE=$(mktemp)
-  echo "$TEXT" > "$PROMPT_FILE"
-  # mktemp defaults to 0600 owned by root — sandbox user can't read it without this.
-  chmod 644 "$PROMPT_FILE"
-
-  # Phase 75 — mirror Slack attachments from S3 staging to per-thread dir.
-  # Each attachment is {s3_key, original_name, mimetype}. We use the basename
-  # of s3_key (which already contains <file_id>-<sanitized_name>) as the local name.
-  ATTACH_DIR="/workspace/.km-slack/attachments/$THREAD_TS"
-  ATTACH_LIST=""  # for wrapper text — built below
-  if [ "$ATTACH_COUNT" -gt 0 ]; then
-    mkdir -p "$ATTACH_DIR"
-    chown sandbox:sandbox "$ATTACH_DIR" || true
-    # Iterate compact JSON lines so spaces in original_name don't break the loop.
-    while IFS= read -r ATTACH_JSON; do
-      [ -z "$ATTACH_JSON" ] && continue
-      S3_KEY=$(echo "$ATTACH_JSON" | jq -r '.s3_key')
-      ORIG_NAME=$(echo "$ATTACH_JSON" | jq -r '.original_name')
-      MIMETYPE=$(echo "$ATTACH_JSON" | jq -r '.mimetype')
-      LOCAL_NAME=$(basename "$S3_KEY")
-      LOCAL_PATH="$ATTACH_DIR/$LOCAL_NAME"
-      if aws s3 cp "s3://$KM_ARTIFACTS_BUCKET/$S3_KEY" "$LOCAL_PATH" 2>&1 | logger -t km-slack-inbound; then
-        chown sandbox:sandbox "$LOCAL_PATH" || true
-        ATTACH_LIST="${ATTACH_LIST}  - ${LOCAL_PATH} (${MIMETYPE})\n"
-      else
-        logger -t km-slack-inbound "attachment mirror failed: $S3_KEY"
-      fi
-    done < <(echo "$BODY" | jq -c '.attachments[]?')
-  fi
-
-  # Phase 75 — prepend master-prompt wrapper when attachments are present.
-  if [ "$ATTACH_COUNT" -gt 0 ]; then
-    DISPLAY_TEXT="$TEXT"
-    if [ -z "$DISPLAY_TEXT" ]; then
-      DISPLAY_TEXT="[no text — file-only]"
-    fi
-    WRAPPER_FILE="$(mktemp)"
-    {
-      echo "The user attached the following file(s) to this Slack message."
-      echo "Read them with your Read tool when relevant to the question:"
-      echo -e "$ATTACH_LIST"
-      echo ""
-      echo "User's message: $DISPLAY_TEXT"
-    } > "$WRAPPER_FILE"
-    # PROMPT_FILE is the existing file claude -p reads. Prepend by writing
-    # wrapper + existing content to a temp, then move into place.
-    if [ -f "$PROMPT_FILE" ]; then
-      cat "$PROMPT_FILE" >> "$WRAPPER_FILE"
-    fi
-    mv "$WRAPPER_FILE" "$PROMPT_FILE"
-    chown sandbox:sandbox "$PROMPT_FILE" || true
-  fi
-
-  # Phase 70 Plan 70-06: cross-agent switch sequence (executed when DO_SWITCH=1).
-  # Locked ordering per CONTEXT.md: fetch OLD permalink FIRST (THREAD_TS already known
-  # from the inbound SQS event — no dep on the new top-level) → post new top-level
-  # with the OLD permalink already embedded in the body → fetch NEW permalink →
-  # handoff in old thread → seeded prompt → fall through to Plan 70-05 dispatch.
-  # No chat.update in the critical path: avoids Slack 10-min edit window AND avoids
-  # ever posting a <permalink-placeholder> string to Slack (v1 pattern).
-  if [ "$DO_SWITCH" -eq 1 ]; then
-    NEW_AGENT="$REQUESTED_AGENT"
-    OLD_AGENT="$CURRENT_AGENT"
-    PROMPT_TEXT="$STRIPPED_TEXT"
-
-    # Step 1: fetch OLD-thread permalink FIRST. THREAD_TS is already known from
-    # the inbound SQS event — this call has no dependency on the new top-level.
-    OLD_PERMALINK=$(/opt/km/bin/km-slack permalink \
-      --channel "$KM_SLACK_CHANNEL_ID" --ts "$THREAD_TS" 2>>"$RUN_DIR/stderr.log" || echo "(unavailable)")
-    [ -z "$OLD_PERMALINK" ] && OLD_PERMALINK="(unavailable)"
-
-    # Step 2: build the new top-level body WITH OLD_PERMALINK already embedded.
-    # No placeholder string is ever posted to Slack. Lead with the NEW agent's
-    # name (${NEW_AGENT^} capitalises the first letter -> "Claude"/"Codex") so the
-    # top-level message makes the handoff target obvious on its own — once it
-    # posts out of the old thread there's no other context for who is replying.
-    NEW_MSG_BODY=$(mktemp /tmp/km-new-thread.XXXXXX)
-    {
-      echo "${NEW_AGENT^} will continue from $OLD_PERMALINK"
-      echo ""
-      if [ -n "$LAST_ASSISTANT_MSG" ]; then
-        echo "Previous assistant ($OLD_AGENT) said:"
-        echo "> $(echo "$LAST_ASSISTANT_MSG" | head -c 500)"
-      fi
-    } > "$NEW_MSG_BODY"
-
-    # Step 3: post NEW top-level message; capture its ts from km-slack stdout.
-    NEW_TOP_TS=$(/opt/km/bin/km-slack post \
-      --channel "$KM_SLACK_CHANNEL_ID" \
-      --new-message \
-      --body "$NEW_MSG_BODY" 2>>"$RUN_DIR/stderr.log" \
-      | grep '^ts=' | head -n1 | sed 's/^ts=//')
-    rm -f "$NEW_MSG_BODY"
-
-    # Step 4: abort gracefully if new top-level post failed.
-    if [ -z "$NEW_TOP_TS" ]; then
-      echo "[km-slack-inbound-poller] cross-agent switch: failed to create new top-level; aborting" >&2
-      ERR_BODY=$(mktemp /tmp/km-switch-err.XXXXXX)
-      printf 'Failed to spawn new %s thread (see journald). Try again.\n' "$NEW_AGENT" > "$ERR_BODY"
-      /opt/km/bin/km-slack post \
-        --channel "$KM_SLACK_CHANNEL_ID" \
-        --thread "$THREAD_TS" \
-        --body "$ERR_BODY" 2>>"$RUN_DIR/stderr.log" || true
-      rm -f "$ERR_BODY"
-      # Delete the SQS message so it isn't redelivered indefinitely.
-      aws sqs delete-message --queue-url "$QUEUE_URL" --receipt-handle "$RECEIPT" --region "$REGION" 2>/dev/null || true
+    # Quick malformed-body check BEFORE backgrounding — delete+continue avoids the
+    # retry storm without holding a semaphore slot.
+    CHANNEL=$(echo "$BODY" | jq -r '.channel // empty')
+    THREAD_TS=$(echo "$BODY" | jq -r '.thread_ts // empty')
+    TEXT=$(echo "$BODY" | jq -r '.text // empty')
+    ATTACH_COUNT=$(echo "$BODY" | jq -r '.attachments // [] | length')
+    if [ -z "$CHANNEL" ] || [ -z "$THREAD_TS" ] || { [ -z "$TEXT" ] && [ "$ATTACH_COUNT" -eq 0 ]; }; then
+      echo "[km-slack-inbound-poller] WARN: malformed message body, acking to avoid retry: $BODY"
+      aws sqs delete-message \
+        --queue-url "$QUEUE_URL" \
+        --receipt-handle "$RECEIPT" \
+        --region "$REGION" 2>/dev/null || true
       continue
     fi
 
-    # Step 5: fetch NEW-thread permalink (for the handoff post in OLD thread).
-    NEW_PERMALINK=$(/opt/km/bin/km-slack permalink \
-      --channel "$KM_SLACK_CHANNEL_ID" --ts "$NEW_TOP_TS" 2>>"$RUN_DIR/stderr.log" || echo "(unavailable)")
-    [ -z "$NEW_PERMALINK" ] && NEW_PERMALINK="(unavailable)"
+    # Phase 119 (P119-B): counting semaphore — block when at capacity.
+    while [ "$inflight" -ge "$MAX" ]; do
+      wait -n 2>/dev/null || true
+      inflight=$((inflight-1))
+    done
 
-    # Step 6: post handoff in OLD thread with NEW_PERMALINK embedded.
-    HANDOFF_BODY=$(mktemp /tmp/km-handoff.XXXXXX)
-    printf 'Switching to %s → continuing in this thread.\n%s\n' "$NEW_AGENT" "$NEW_PERMALINK" > "$HANDOFF_BODY"
-    /opt/km/bin/km-slack post \
-      --channel "$KM_SLACK_CHANNEL_ID" \
-      --thread "$THREAD_TS" \
-      --body "$HANDOFF_BODY" 2>>"$RUN_DIR/stderr.log" || true
-    rm -f "$HANDOFF_BODY"
+    # Each message is dispatched in a BACKGROUNDED subshell that owns its RECEIPT
+    # and RUN_ID. Because ( ... ) & forks a copy, BODY and RECEIPT are frozen at
+    # fork time — no shared-variable hazard between concurrent jobs.
+    (
+      # ---- start of per-message subshell ----
 
-    # Step 7: compose seeded prompt (full LAST_ASSISTANT_MSG up to 2000 chars for context).
-    SEED_PROMPT_FILE=$(mktemp /tmp/km-seed-prompt.XXXXXX)
-    if [ -n "$LAST_ASSISTANT_MSG" ]; then
-      {
-        echo "$PROMPT_TEXT"
-        echo ""
-        echo "--- Context from prior thread (agent: $OLD_AGENT) ---"
-        echo "$LAST_ASSISTANT_MSG" | head -c 2000
-      } > "$SEED_PROMPT_FILE"
-    else
-      echo "$PROMPT_TEXT" > "$SEED_PROMPT_FILE"
-    fi
+      # Phase 119 (P119-E): visibility heartbeat — extend by 360s every 120s so
+      # a long agent turn never re-delivers mid-turn regardless of the queue's
+      # static base timeout. Killed unconditionally when the turn ends.
+      # ChangeMessageVisibility fails harmlessly with ReceiptHandleIsInvalid after
+      # delete; the || true swallows it.
+      (
+        while true; do
+          sleep 120
+          aws sqs change-message-visibility \
+            --queue-url "$QUEUE_URL" \
+            --receipt-handle "$RECEIPT" \
+            --visibility-timeout 360 \
+            --region "$REGION" 2>/dev/null || true
+        done
+      ) &
+      HB_PID=$!
 
-    # Step 8: rewrite poller state so Plan 70-05's dispatch fork handles the new
-    # agent as a FIRST turn (no session resume) into the NEW thread.
-    # OLD DDB row is INTACT — we never issued update-item or delete-item on it.
-    # Plan 70-05's put-item below will write a NEW row keyed on (CHANNEL, NEW_TOP_TS)
-    # with agent_type=NEW_AGENT because we've rewritten both THREAD_TS and EFFECTIVE_AGENT.
-    # RESUME_ARG is reset alongside CLAUDE_SESSION: the codex dispatch re-reads
-    # CLAUDE_SESSION at fork time (so empty -> first-turn branch), but the claude
-    # dispatch consumes RESUME_ARG which was computed earlier from the pre-switch
-    # CLAUDE_SESSION -- without this reset, claude would --resume the prior agent's UUID.
-    CLAUDE_SESSION=""
-    RESUME_ARG=""
-    THREAD_TS="$NEW_TOP_TS"
-    EFFECTIVE_AGENT="$NEW_AGENT"
-    PROMPT_FILE="$SEED_PROMPT_FILE"
-    chmod 644 "$PROMPT_FILE"
-    # Fall through to Plan 70-05's dispatch fork ...
-  fi
+      # Phase 119 (Pitfall 1): RUN_ID is computed INSIDE the subshell so that
+      # concurrent jobs dispatched in the same second get distinct run dirs.
+      # The -$$-$RANDOM suffix makes the ID unique even at sub-second granularity.
+      RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
+      RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
+      mkdir -p "$RUN_DIR"
+      # The poller runs as root; chown so the sandbox-user claude can write output.
+      chown sandbox:sandbox "$RUN_DIR"
 
-  # Phase 70 bugfix: hand $RUN_DIR/stderr.log to the sandbox user before dispatch.
-  # The cross-agent handoff block above runs as ROOT and appends km-slack post
-  # diagnostics to $RUN_DIR/stderr.log (steps 1/3/5/6), leaving the file root-owned
-  # 0644. The agent dispatch below runs as the *sandbox* user with a
-  # 2-greater-than $RUN_DIR/stderr.log redirect, which O_TRUNCs the file -- a
-  # write the sandbox user cannot perform on a root-owned file. bash fails the
-  # redirect (Permission denied) BEFORE exec of codex/claude: agent never runs (empty
-  # output.json), so the $NEW_SESSION-gated Slack reply + DDB write are silently
-  # skipped. Symptom: handoff posts the new top-level but no agent reply ever
-  # lands, and no row with the new agent_type is written so follow-up replies in
-  # the new thread also fail. Guarded on -e so it is a no-op on the non-switch
-  # path (where the sandbox user creates stderr.log fresh). The poller runs as
-  # root, so the chown always succeeds when the file exists.
-  if [ -e "$RUN_DIR/stderr.log" ]; then
-    chown sandbox:sandbox "$RUN_DIR/stderr.log" 2>/dev/null || true
-  fi
+      CHANNEL=$(echo "$BODY" | jq -r '.channel // empty')
+      THREAD_TS=$(echo "$BODY" | jq -r '.thread_ts // empty')
+      TEXT=$(echo "$BODY" | jq -r '.text // empty')
 
-  # Export KM_SLACK_THREAD_TS so km-notify-hook passes --thread to km-slack post (Phase 67).
-  export KM_SLACK_THREAD_TS="$THREAD_TS"
+      # Phase 75: compute ATTACH_COUNT before the guard so file-only uploads are admitted.
+      ATTACH_COUNT=$(echo "$BODY" | jq -r '.attachments // [] | length')
 
-  # Phase 70 (Plan 70-05): dispatch fork — codex path (new) or claude path (existing, unchanged).
-  # EFFECTIVE_AGENT was set above from DDB agent_type (defaulting to AGENT if absent).
-  # Plan 70-06 prefix parser may have overridden EFFECTIVE_AGENT before this block.
-  if [ "$EFFECTIVE_AGENT" = "codex" ]; then
-    # Codex dispatch. KM_CODEX_RUN_ID is exported INLINE in the sudo -u sandbox
-    # command string (NOT as a separate export before sudo) per 70-RESEARCH.md
-    # Pitfall 3: sudo -u sandbox bash -lc drops root-side shell variables; the
-    # VAR=val prefix in the string is the only reliable cross-sudo env mechanism.
-    # The hook running as sandbox user reads KM_CODEX_RUN_ID to write the per-run
-    # session-ID file to /tmp, which the poller reads below.
-    if [ -n "$CLAUDE_SESSION" ]; then
-      # Codex resume — subcommand form (per Plan 70-00 spike). NOT --resume flag.
-      # codex exec resume SESSION PROMPT --flags is the canonical 2026 syntax.
-      sudo -u sandbox bash -lc "
-        export HOME=/home/sandbox
-        set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
-        export KM_CODEX_RUN_ID='$RUN_ID'
-        export KM_SLACK_THREAD_TS='$THREAD_TS'
-        cd /workspace 2>/dev/null || true
-        codex exec resume '$CLAUDE_SESSION' \"\$(cat '$PROMPT_FILE')\" \
-          --json --dangerously-bypass-approvals-and-sandbox \
-          > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
-        echo \$? > '$RUN_DIR/exit_code'
-      " || true
-    else
-      # Codex first turn — no prior session.
-      sudo -u sandbox bash -lc "
-        export HOME=/home/sandbox
-        set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
-        export KM_CODEX_RUN_ID='$RUN_ID'
-        export KM_SLACK_THREAD_TS='$THREAD_TS'
-        cd /workspace 2>/dev/null || true
-        codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
-          > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
-        echo \$? > '$RUN_DIR/exit_code'
-      " || true
-    fi
-  else
-    # Claude path — UNCHANGED (Phase 67). Kept verbatim; guarded by regression tests.
-    # || true keeps a claude failure from killing the poller (set -euo pipefail).
-    # The output.json / exit_code files are inspected below to decide whether to
-    # ack-and-continue or leave the message for redelivery.
-    # bash -lc gives claude a login shell so ~/.bash_profile chains into ~/.bashrc,
-    # which loads nvm — claude is installed under /home/sandbox/.nvm/.../bin/ on
-    # nvm-based AMIs and is otherwise not on PATH. The explicit profile.d source
-    # loop below is defense-in-depth for OTEL endpoints + KM_SLACK_* env that the
-    # notify-hook needs (KM_SLACK_BRIDGE_URL/CHANNEL_ID/SANDBOX_ID,
-    # OTEL_EXPORTER_OTLP_*) in case .bash_profile does not chain.
-    sudo -u sandbox bash -lc "
-      export HOME=/home/sandbox
-      set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-      # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
-      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
-      export KM_SLACK_THREAD_TS='$THREAD_TS'
-      cd /workspace 2>/dev/null || true
-      claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
-        --dangerously-skip-permissions $RESUME_ARG \
-        --append-system-prompt 'When replying you are posting into a Slack channel that renders GitHub-flavored Markdown natively, including headings, bold, italic, lists, links, and tables. Use Markdown structure to keep replies skimmable: short ## or ### headings to separate sections, bold for key terms, and bullet lists for short enumerations. Present any tabular or columnar data as a real GitHub-flavored Markdown pipe table, and do NOT wrap tables in triple-backtick fences, which forces flat monospace and loses the rendered table. Reserve triple-backtick fenced blocks only for content that must stay verbatim: code, file paths, commands, shell output, and logs. Keep tables to a few narrow columns and replies concise.' \
-        > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
-      echo \$? > '$RUN_DIR/exit_code'
-    " || true
-  fi
-  rm -f "$PROMPT_FILE"
+      # Phase 119 (P119-F): read the inbound event_ts that uniquely identifies THIS
+      # Slack message. InboundQueueBody.EventTS = msg.TS (the Slack message ts, set at
+      # events_handler.go:466). This field is guaranteed non-empty for well-formed bodies
+      # (the bridge populates it on both the files and no-files paths).
+      EVENT_TS=$(echo "$BODY" | jq -r '.event_ts // empty' 2>/dev/null || true)
 
-  RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
-  # Phase 70 Path B (Plan 70-10, supersedes 70-05): session-ID + result extraction.
-  # Codex 0.121/0.133 spike confirmed hooks do NOT fire from ~/.codex/config.toml,
-  # so the original hook-file approach (/tmp/km-codex-session.$RUN_ID) is dead.
-  # Instead, parse the JSONL stream that codex exec --json writes to
-  # $RUN_DIR/output.json. Canonical events from Codex 0.133:
-  #   {"type":"thread.started","thread_id":"<uuid>"}             - session ID
-  #   {"type":"item.completed","item":{"type":"agent_message","text":"<reply>"}}
-  #   {"type":"turn.completed","usage":{...}}
-  # Multiple agent_message items may appear per turn (reasoning + final answer);
-  # we take the LAST one as the user-facing reply.
-  # Claude path (Phase 67) unchanged: single-document output.json with .session_id + .result.
-  NEW_SESSION=""
-  if [ "$RUN_EXIT" -eq 0 ] && [ -s "$RUN_DIR/output.json" ]; then
-    if [ "$EFFECTIVE_AGENT" = "codex" ]; then
-      # Parse JSONL stream: first thread.started → thread_id.
-      NEW_SESSION=$(jq -r 'select(.type=="thread.started") | .thread_id // empty' "$RUN_DIR/output.json" 2>/dev/null | head -1 || true)
-    else
-      # Claude path — session_id is in output.json (single JSON document).
-      NEW_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
-    fi
-  fi
+      # DDB lookup for existing Claude session in this thread.
+      DDB_ITEM=$(aws dynamodb get-item \
+        --table-name "$THREADS_TABLE" \
+        --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
+        --region "$REGION" \
+        --output json 2>/dev/null || true)
+      CLAUDE_SESSION=$(echo "$DDB_ITEM" | jq -r '.Item.claude_session_id.S // empty' 2>/dev/null || true)
+      # Phase 70 (Plan 70-05): read agent_type + last_assistant_msg alongside session ID.
+      # agent_type defaults to AGENT (profile default) when absent — backward compat with
+      # pre-Phase-70 rows that predate this attribute. last_assistant_msg is consumed by
+      # Plan 70-06's cross-agent switch; loaded here so DDB lookup stays single-pass.
+      CURRENT_AGENT=$(echo "$DDB_ITEM" | jq -r '.Item.agent_type.S // empty' 2>/dev/null || true)
+      LAST_ASSISTANT_MSG=$(echo "$DDB_ITEM" | jq -r '.Item.last_assistant_msg.S // empty' 2>/dev/null || true)
+      # Phase 119 (P119-F): idempotency guard — read last_processed_event_ts from same DDB row.
+      # A crash-redelivered SQS message carries the same event_ts; skip it if already processed+posted.
+      # Fail-OPEN: if the DDB read errored (empty DDB_ITEM), LAST_EVENT is empty and we proceed.
+      LAST_EVENT=$(echo "$DDB_ITEM" | jq -r '.Item.last_processed_event_ts.S // empty' 2>/dev/null || true)
+      [ -z "$CURRENT_AGENT" ] && CURRENT_AGENT="$AGENT"
+      # EFFECTIVE_AGENT = agent for this turn. Plan 70-06 prefix parser may override below.
+      EFFECTIVE_AGENT="$CURRENT_AGENT"
 
-  if [ -n "$NEW_SESSION" ]; then
-    NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    TTL_EXPIRY=$(( $(date +%s) + 30*24*3600 ))
-
-    # Phase 70 Path B (Plan 70-10): extract per-agent result text.
-    # Codex: LAST agent_message.text from the JSONL stream.
-    # Claude: .result // .response from output.json (single JSON document).
-    if [ "$EFFECTIVE_AGENT" = "codex" ]; then
-      RESULT_TEXT=$(jq -rs 'map(select(.type=="item.completed" and .item.type=="agent_message")) | last | .item.text // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
-    else
-      RESULT_TEXT=$(jq -r '.result // .response // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
-    fi
-
-    # Phase 70 (Plan 70-05): JSON-encode RESULT_TEXT for the DDB put-item.
-    # CRITICAL (70-RESEARCH.md Pitfall 2): RESULT_TEXT may contain embedded
-    # double-quotes, backslashes, and newlines from agent replies. Direct shell
-    # interpolation into the DDB JSON literal would produce malformed JSON.
-    # jq -Rs . (raw input, string output) produces a properly-escaped JSON string
-    # *including* the surrounding double-quotes. Do NOT add extra quotes around
-    # $LAST_MSG_JSON in the item below — jq has already wrapped it.
-    LAST_MSG_JSON=$(echo "$RESULT_TEXT" | head -c 2000 | jq -Rs .)
-    # Defensive fallback in case jq is absent or RESULT_TEXT is empty.
-    [ -z "$LAST_MSG_JSON" ] && LAST_MSG_JSON='""'
-
-    aws dynamodb put-item \
-      --table-name "$THREADS_TABLE" \
-      --region "$REGION" \
-      --item "{
-        \"channel_id\":{\"S\":\"$CHANNEL\"},
-        \"thread_ts\":{\"S\":\"$THREAD_TS\"},
-        \"claude_session_id\":{\"S\":\"$NEW_SESSION\"},
-        \"agent_type\":{\"S\":\"$EFFECTIVE_AGENT\"},
-        \"last_assistant_msg\":{\"S\":$LAST_MSG_JSON},
-        \"sandbox_id\":{\"S\":\"$SANDBOX_ID\"},
-        \"last_turn_ts\":{\"S\":\"$NOW\"},
-        \"ttl_expiry\":{\"N\":\"$TTL_EXPIRY\"}
-      }" 2>/dev/null || true
-
-    # Ack first — posting to Slack BEFORE delete would open a host-crash
-    # window where the user sees a reply but the message gets redelivered
-    # → duplicate Claude run + duplicate post on visibility-timeout expiry.
-    aws sqs delete-message \
-      --queue-url "$QUEUE_URL" \
-      --receipt-handle "$RECEIPT" \
-      --region "$REGION" 2>/dev/null || true
-
-    # Phase 67-11 Gap A fix: post the canonical .result text to Slack from
-    # the poller. The Stop hook's transcript-JSONL scraping is unreliable in
-    # 'claude -p' (--print) mode (transcript may be un-flushed or differently
-    # shaped). The Stop hook's Slack branch is now gated on KM_SLACK_THREAD_TS
-    # being unset — since the poller exports KM_SLACK_THREAD_TS into Claude's
-    # env BEFORE launch, the Stop hook sees it and skips its post.
-    #
-    # Trade-off: this block is gated on $NEW_SESSION (a successful run with
-    # a non-empty .session_id). On agent failure the else-branch's WARN log
-    # fires and SQS redelivers — the user sees no fallback message in Slack.
-    # Operator diagnoses via 'journalctl -u km-slack-inbound-poller' and
-    # 'km agent list'. Documented trade-off: silence-on-failure is safer
-    # than a misleading "(no recent assistant text)" fallback that operators
-    # cannot distinguish from genuine empty replies.
-    if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
-      POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
-      printf '%s' "$RESULT_TEXT" > "$POST_FILE"
-      # Phase 112 (HOOK-01 inbound coverage): --render=blocks-rich (Tier 3: native
-      # markdown + table blocks) by default for the poller reply path so
-      # Slack-initiated chat sees structured messages, not literal markdown. Operator
-      # override: KM_SLACK_RENDER=blocks|mrkdwn|plain via /etc/km/notify.env or
-      # /etc/profile.d/km-notify-env.sh. km-slack demotes Tier 3 → Tier 2 → Tier 1
-      # automatically when a rich render overflows.
-      if /opt/km/bin/km-slack post \
-           --channel "$KM_SLACK_CHANNEL_ID" \
-           --subject "" \
-           --thread "$THREAD_TS" \
-           --render "${KM_SLACK_RENDER:-blocks-rich}" \
-           --body "$POST_FILE" 2>>"$RUN_DIR/stderr.log"; then
-        echo "[km-slack-inbound-poller] Posted reply to Slack (thread=$THREAD_TS, len=${#RESULT_TEXT})"
-      else
-        echo "[km-slack-inbound-poller] WARN: km-slack post failed for thread=$THREAD_TS" >&2
+      # Phase 119 (P119-F): idempotency guard — skip if this event was already processed.
+      # This covers the crash-redelivery dup window opened by ack-after-completion (P119-D).
+      # Fail-OPEN: if EVENT_TS is empty (should not happen for well-formed bodies) we process.
+      if [ -n "$EVENT_TS" ] && [ -n "$LAST_EVENT" ] && [ "$EVENT_TS" = "$LAST_EVENT" ]; then
+        echo "[km-slack-inbound-poller] duplicate event $EVENT_TS already processed, skipping (idempotency guard)"
+        # ACK and exit the subshell — no dispatch, no post.
+        aws sqs delete-message \
+          --queue-url "$QUEUE_URL" \
+          --receipt-handle "$RECEIPT" \
+          --region "$REGION" 2>/dev/null || true
+        kill "$HB_PID" 2>/dev/null || true
+        wait "$HB_PID" 2>/dev/null || true
+        exit 0
       fi
-      rm -f "$POST_FILE"
-    elif [ -z "$KM_SLACK_CHANNEL_ID" ] || [ -z "$KM_SLACK_BRIDGE_URL" ]; then
-      echo "[km-slack-inbound-poller] WARN: KM_SLACK_CHANNEL_ID/KM_SLACK_BRIDGE_URL unset, skipping Slack post for thread=$THREAD_TS"
-    else
-      echo "[km-slack-inbound-poller] WARN: empty .result in output.json, skipping Slack post for thread=$THREAD_TS"
-    fi
 
-    echo "[km-slack-inbound-poller] Turn complete — session=$NEW_SESSION thread=$THREAD_TS"
-    touch /run/km/last-slack-inbound
-  else
-    echo "[km-slack-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
-  fi
-done
+      # Phase 70 Plan 70-06: prefix parser
+      # Strict grammar (CONTEXT.md): ^([Cc]laude|[Cc]odex|CLAUDE|CODEX):[[:space:]]?
+      # Case-insensitive on the agent name; exactly one optional space after the colon;
+      # anchored at message start (^ guards Pitfall 4 — mid-sentence claude: not routed).
+      REQUESTED_AGENT=""
+      STRIPPED_TEXT="$TEXT"
+      if [[ "$TEXT" =~ ^([Cc][Ll][Aa][Uu][Dd][Ee]|[Cc][Oo][Dd][Ee][Xx]):[[:space:]]? ]]; then
+        PREFIX="${BASH_REMATCH[1],,}"  # lowercase via bash ${var,,} parameter expansion
+        REQUESTED_AGENT="$PREFIX"
+        # Strip the matched prefix + one optional space from the beginning of TEXT.
+        STRIPPED_TEXT="${TEXT#*:}"
+        STRIPPED_TEXT="${STRIPPED_TEXT# }"
+      fi
+
+      # Phase 70 Plan 70-06: routing decision
+      # DO_SWITCH=1 only when a prefix matched, the requested agent differs from the
+      # thread-pinned agent, AND an existing DDB row confirms this is a mid-thread switch
+      # (CLAUDE_SESSION non-empty). Fresh-thread (no session) prefix selects the agent
+      # for that thread without triggering the full switch sequence.
+      DO_SWITCH=0
+      if [ -n "$REQUESTED_AGENT" ]; then
+        if [ "$REQUESTED_AGENT" != "$CURRENT_AGENT" ] && [ -n "$CLAUDE_SESSION" ]; then
+          # Cross-agent mid-thread switch — existing DDB row pins the thread to a
+          # different agent. Plan 70-06 Task 3 switch sequence handles this.
+          DO_SWITCH=1
+        else
+          # Top-level prefix on fresh thread (no CLAUDE_SESSION yet) OR same-agent
+          # prefix in existing thread → strip prefix, optionally override agent,
+          # continue in same thread with same DDB row.
+          EFFECTIVE_AGENT="$REQUESTED_AGENT"
+          TEXT="$STRIPPED_TEXT"
+        fi
+      fi
+
+      RESUME_ARG=""
+  [ -n "$CLAUDE_SESSION" ] && RESUME_ARG="--resume $CLAUDE_SESSION"
+
+      PROMPT_FILE=$(mktemp)
+      echo "$TEXT" > "$PROMPT_FILE"
+      # mktemp defaults to 0600 owned by root — sandbox user can't read it without this.
+      chmod 644 "$PROMPT_FILE"
+
+      # Phase 75 — mirror Slack attachments from S3 staging to per-thread dir.
+      # Each attachment is {s3_key, original_name, mimetype}. We use the basename
+      # of s3_key (which already contains <file_id>-<sanitized_name>) as the local name.
+      ATTACH_DIR="/workspace/.km-slack/attachments/$THREAD_TS"
+      ATTACH_LIST=""  # for wrapper text — built below
+      if [ "$ATTACH_COUNT" -gt 0 ]; then
+        mkdir -p "$ATTACH_DIR"
+        chown sandbox:sandbox "$ATTACH_DIR" || true
+        # Iterate compact JSON lines so spaces in original_name don't break the loop.
+        while IFS= read -r ATTACH_JSON; do
+          [ -z "$ATTACH_JSON" ] && continue
+          S3_KEY=$(echo "$ATTACH_JSON" | jq -r '.s3_key')
+          ORIG_NAME=$(echo "$ATTACH_JSON" | jq -r '.original_name')
+          MIMETYPE=$(echo "$ATTACH_JSON" | jq -r '.mimetype')
+          LOCAL_NAME=$(basename "$S3_KEY")
+          LOCAL_PATH="$ATTACH_DIR/$LOCAL_NAME"
+          if aws s3 cp "s3://$KM_ARTIFACTS_BUCKET/$S3_KEY" "$LOCAL_PATH" 2>&1 | logger -t km-slack-inbound; then
+            chown sandbox:sandbox "$LOCAL_PATH" || true
+            ATTACH_LIST="${ATTACH_LIST}  - ${LOCAL_PATH} (${MIMETYPE})\n"
+          else
+            logger -t km-slack-inbound "attachment mirror failed: $S3_KEY"
+          fi
+        done < <(echo "$BODY" | jq -c '.attachments[]?')
+      fi
+
+      # Phase 75 — prepend master-prompt wrapper when attachments are present.
+      if [ "$ATTACH_COUNT" -gt 0 ]; then
+        DISPLAY_TEXT="$TEXT"
+        if [ -z "$DISPLAY_TEXT" ]; then
+          DISPLAY_TEXT="[no text — file-only]"
+        fi
+        WRAPPER_FILE="$(mktemp)"
+        {
+          echo "The user attached the following file(s) to this Slack message."
+          echo "Read them with your Read tool when relevant to the question:"
+          echo -e "$ATTACH_LIST"
+          echo ""
+          echo "User's message: $DISPLAY_TEXT"
+        } > "$WRAPPER_FILE"
+        # PROMPT_FILE is the existing file claude -p reads. Prepend by writing
+        # wrapper + existing content to a temp, then move into place.
+        if [ -f "$PROMPT_FILE" ]; then
+          cat "$PROMPT_FILE" >> "$WRAPPER_FILE"
+        fi
+        mv "$WRAPPER_FILE" "$PROMPT_FILE"
+        chown sandbox:sandbox "$PROMPT_FILE" || true
+      fi
+
+      # Phase 70 Plan 70-06: cross-agent switch sequence (executed when DO_SWITCH=1).
+      # Locked ordering per CONTEXT.md: fetch OLD permalink FIRST (THREAD_TS already known
+      # from the inbound SQS event — no dep on the new top-level) → post new top-level
+      # with the OLD permalink already embedded in the body → fetch NEW permalink →
+      # handoff in old thread → seeded prompt → fall through to Plan 70-05 dispatch.
+      # No chat.update in the critical path: avoids Slack 10-min edit window AND avoids
+      # ever posting a <permalink-placeholder> string to Slack (v1 pattern).
+      if [ "$DO_SWITCH" -eq 1 ]; then
+        NEW_AGENT="$REQUESTED_AGENT"
+        OLD_AGENT="$CURRENT_AGENT"
+        PROMPT_TEXT="$STRIPPED_TEXT"
+
+        # Step 1: fetch OLD-thread permalink FIRST. THREAD_TS is already known from
+        # the inbound SQS event — this call has no dependency on the new top-level.
+        OLD_PERMALINK=$(/opt/km/bin/km-slack permalink \
+          --channel "$KM_SLACK_CHANNEL_ID" --ts "$THREAD_TS" 2>>"$RUN_DIR/stderr.log" || echo "(unavailable)")
+        [ -z "$OLD_PERMALINK" ] && OLD_PERMALINK="(unavailable)"
+
+        # Step 2: build the new top-level body WITH OLD_PERMALINK already embedded.
+        # No placeholder string is ever posted to Slack. Lead with the NEW agent's
+        # name (${NEW_AGENT^} capitalises the first letter -> "Claude"/"Codex") so the
+        # top-level message makes the handoff target obvious on its own — once it
+        # posts out of the old thread there's no other context for who is replying.
+        NEW_MSG_BODY=$(mktemp /tmp/km-new-thread.XXXXXX)
+        {
+          echo "${NEW_AGENT^} will continue from $OLD_PERMALINK"
+          echo ""
+          if [ -n "$LAST_ASSISTANT_MSG" ]; then
+            echo "Previous assistant ($OLD_AGENT) said:"
+            echo "> $(echo "$LAST_ASSISTANT_MSG" | head -c 500)"
+          fi
+        } > "$NEW_MSG_BODY"
+
+        # Step 3: post NEW top-level message; capture its ts from km-slack stdout.
+        NEW_TOP_TS=$(/opt/km/bin/km-slack post \
+          --channel "$KM_SLACK_CHANNEL_ID" \
+          --new-message \
+          --body "$NEW_MSG_BODY" 2>>"$RUN_DIR/stderr.log" \
+          | grep '^ts=' | head -n1 | sed 's/^ts=//')
+        rm -f "$NEW_MSG_BODY"
+
+        # Step 4: abort gracefully if new top-level post failed.
+        if [ -z "$NEW_TOP_TS" ]; then
+          echo "[km-slack-inbound-poller] cross-agent switch: failed to create new top-level; aborting" >&2
+          ERR_BODY=$(mktemp /tmp/km-switch-err.XXXXXX)
+          printf 'Failed to spawn new %s thread (see journald). Try again.\n' "$NEW_AGENT" > "$ERR_BODY"
+          /opt/km/bin/km-slack post \
+            --channel "$KM_SLACK_CHANNEL_ID" \
+            --thread "$THREAD_TS" \
+            --body "$ERR_BODY" 2>>"$RUN_DIR/stderr.log" || true
+          rm -f "$ERR_BODY"
+          # Delete the SQS message so it isn't redelivered indefinitely.
+          aws sqs delete-message --queue-url "$QUEUE_URL" --receipt-handle "$RECEIPT" --region "$REGION" 2>/dev/null || true
+          kill "$HB_PID" 2>/dev/null || true
+          wait "$HB_PID" 2>/dev/null || true
+          exit 0
+        fi
+
+        # Step 5: fetch NEW-thread permalink (for the handoff post in OLD thread).
+        NEW_PERMALINK=$(/opt/km/bin/km-slack permalink \
+          --channel "$KM_SLACK_CHANNEL_ID" --ts "$NEW_TOP_TS" 2>>"$RUN_DIR/stderr.log" || echo "(unavailable)")
+        [ -z "$NEW_PERMALINK" ] && NEW_PERMALINK="(unavailable)"
+
+        # Step 6: post handoff in OLD thread with NEW_PERMALINK embedded.
+        HANDOFF_BODY=$(mktemp /tmp/km-handoff.XXXXXX)
+        printf 'Switching to %s → continuing in this thread.\n%s\n' "$NEW_AGENT" "$NEW_PERMALINK" > "$HANDOFF_BODY"
+        /opt/km/bin/km-slack post \
+          --channel "$KM_SLACK_CHANNEL_ID" \
+          --thread "$THREAD_TS" \
+          --body "$HANDOFF_BODY" 2>>"$RUN_DIR/stderr.log" || true
+        rm -f "$HANDOFF_BODY"
+
+        # Step 7: compose seeded prompt (full LAST_ASSISTANT_MSG up to 2000 chars for context).
+        SEED_PROMPT_FILE=$(mktemp /tmp/km-seed-prompt.XXXXXX)
+        if [ -n "$LAST_ASSISTANT_MSG" ]; then
+          {
+            echo "$PROMPT_TEXT"
+            echo ""
+            echo "--- Context from prior thread (agent: $OLD_AGENT) ---"
+            echo "$LAST_ASSISTANT_MSG" | head -c 2000
+          } > "$SEED_PROMPT_FILE"
+        else
+          echo "$PROMPT_TEXT" > "$SEED_PROMPT_FILE"
+        fi
+
+        # Step 8: rewrite poller state so Plan 70-05's dispatch fork handles the new
+        # agent as a FIRST turn (no session resume) into the NEW thread.
+        # OLD DDB row is INTACT — we never issued update-item or delete-item on it.
+        # Plan 70-05's put-item below will write a NEW row keyed on (CHANNEL, NEW_TOP_TS)
+        # with agent_type=NEW_AGENT because we've rewritten both THREAD_TS and EFFECTIVE_AGENT.
+        # RESUME_ARG is reset alongside CLAUDE_SESSION: the codex dispatch re-reads
+        # CLAUDE_SESSION at fork time (so empty -> first-turn branch), but the claude
+        # dispatch consumes RESUME_ARG which was computed earlier from the pre-switch
+        # CLAUDE_SESSION -- without this reset, claude would --resume the prior agent's UUID.
+        CLAUDE_SESSION=""
+        RESUME_ARG=""
+        THREAD_TS="$NEW_TOP_TS"
+        EFFECTIVE_AGENT="$NEW_AGENT"
+        PROMPT_FILE="$SEED_PROMPT_FILE"
+        chmod 644 "$PROMPT_FILE"
+        # Fall through to Plan 70-05's dispatch fork ...
+      fi
+
+      # Phase 70 bugfix: hand $RUN_DIR/stderr.log to the sandbox user before dispatch.
+      # The cross-agent handoff block above runs as ROOT and appends km-slack post
+      # diagnostics to $RUN_DIR/stderr.log (steps 1/3/5/6), leaving the file root-owned
+      # 0644. The agent dispatch below runs as the *sandbox* user with a
+      # 2-greater-than $RUN_DIR/stderr.log redirect, which O_TRUNCs the file -- a
+      # write the sandbox user cannot perform on a root-owned file. bash fails the
+      # redirect (Permission denied) BEFORE exec of codex/claude: agent never runs (empty
+      # output.json), so the $NEW_SESSION-gated Slack reply + DDB write are silently
+      # skipped. Symptom: handoff posts the new top-level but no agent reply ever
+      # lands, and no row with the new agent_type is written so follow-up replies in
+      # the new thread also fail. Guarded on -e so it is a no-op on the non-switch
+      # path (where the sandbox user creates stderr.log fresh). The poller runs as
+      # root, so the chown always succeeds when the file exists.
+      if [ -e "$RUN_DIR/stderr.log" ]; then
+        chown sandbox:sandbox "$RUN_DIR/stderr.log" 2>/dev/null || true
+      fi
+
+      # Export KM_SLACK_THREAD_TS so km-notify-hook passes --thread to km-slack post (Phase 67).
+      export KM_SLACK_THREAD_TS="$THREAD_TS"
+
+      # Phase 70 (Plan 70-05): dispatch fork — codex path (new) or claude path (existing, unchanged).
+      # EFFECTIVE_AGENT was set above from DDB agent_type (defaulting to AGENT if absent).
+      # Plan 70-06 prefix parser may have overridden EFFECTIVE_AGENT before this block.
+      if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+        # Codex dispatch. KM_CODEX_RUN_ID is exported INLINE in the sudo -u sandbox
+        # command string (NOT as a separate export before sudo) per 70-RESEARCH.md
+        # Pitfall 3: sudo -u sandbox bash -lc drops root-side shell variables; the
+        # VAR=val prefix in the string is the only reliable cross-sudo env mechanism.
+        # The hook running as sandbox user reads KM_CODEX_RUN_ID to write the per-run
+        # session-ID file to /tmp, which the poller reads below.
+        if [ -n "$CLAUDE_SESSION" ]; then
+          # Codex resume — subcommand form (per Plan 70-00 spike). NOT --resume flag.
+          # codex exec resume SESSION PROMPT --flags is the canonical 2026 syntax.
+          sudo -u sandbox bash -lc "
+            export HOME=/home/sandbox
+            set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+            export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+            export KM_CODEX_RUN_ID='$RUN_ID'
+            export KM_SLACK_THREAD_TS='$THREAD_TS'
+            cd /workspace 2>/dev/null || true
+            codex exec resume '$CLAUDE_SESSION' \"\$(cat '$PROMPT_FILE')\" \
+              --json --dangerously-bypass-approvals-and-sandbox \
+              > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+            echo \$? > '$RUN_DIR/exit_code'
+          " || true
+        else
+          # Codex first turn — no prior session.
+          sudo -u sandbox bash -lc "
+            export HOME=/home/sandbox
+            set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+            export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+            export KM_CODEX_RUN_ID='$RUN_ID'
+            export KM_SLACK_THREAD_TS='$THREAD_TS'
+            cd /workspace 2>/dev/null || true
+            codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
+              > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+            echo \$? > '$RUN_DIR/exit_code'
+          " || true
+        fi
+      else
+        # Claude path — UNCHANGED (Phase 67). Kept verbatim; guarded by regression tests.
+        # || true keeps a claude failure from killing the poller (set -euo pipefail).
+        # The output.json / exit_code files are inspected below to decide whether to
+        # ack-and-continue or leave the message for redelivery.
+        # bash -lc gives claude a login shell so ~/.bash_profile chains into ~/.bashrc,
+        # which loads nvm — claude is installed under /home/sandbox/.nvm/.../bin/ on
+        # nvm-based AMIs and is otherwise not on PATH. The explicit profile.d source
+        # loop below is defense-in-depth for OTEL endpoints + KM_SLACK_* env that the
+        # notify-hook needs (KM_SLACK_BRIDGE_URL/CHANNEL_ID/SANDBOX_ID,
+        # OTEL_EXPORTER_OTLP_*) in case .bash_profile does not chain.
+        sudo -u sandbox bash -lc "
+          export HOME=/home/sandbox
+          set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+          # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
+          export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+          export KM_SLACK_THREAD_TS='$THREAD_TS'
+          cd /workspace 2>/dev/null || true
+          claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
+            --dangerously-skip-permissions $RESUME_ARG \
+            --append-system-prompt 'When replying you are posting into a Slack channel that renders GitHub-flavored Markdown natively, including headings, bold, italic, lists, links, and tables. Use Markdown structure to keep replies skimmable: short ## or ### headings to separate sections, bold for key terms, and bullet lists for short enumerations. Present any tabular or columnar data as a real GitHub-flavored Markdown pipe table, and do NOT wrap tables in triple-backtick fences, which forces flat monospace and loses the rendered table. Reserve triple-backtick fenced blocks only for content that must stay verbatim: code, file paths, commands, shell output, and logs. Keep tables to a few narrow columns and replies concise.' \
+            > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+          echo \$? > '$RUN_DIR/exit_code'
+        " || true
+      fi
+      rm -f "$PROMPT_FILE"
+
+      RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
+      # Phase 70 Path B (Plan 70-10, supersedes 70-05): session-ID + result extraction.
+      # Codex 0.121/0.133 spike confirmed hooks do NOT fire from ~/.codex/config.toml,
+      # so the original hook-file approach (/tmp/km-codex-session.$RUN_ID) is dead.
+      # Instead, parse the JSONL stream that codex exec --json writes to
+      # $RUN_DIR/output.json. Canonical events from Codex 0.133:
+      #   {"type":"thread.started","thread_id":"<uuid>"}             - session ID
+      #   {"type":"item.completed","item":{"type":"agent_message","text":"<reply>"}}
+      #   {"type":"turn.completed","usage":{...}}
+      # Multiple agent_message items may appear per turn (reasoning + final answer);
+      # we take the LAST one as the user-facing reply.
+      # Claude path (Phase 67) unchanged: single-document output.json with .session_id + .result.
+      NEW_SESSION=""
+      if [ "$RUN_EXIT" -eq 0 ] && [ -s "$RUN_DIR/output.json" ]; then
+        if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+          # Parse JSONL stream: first thread.started → thread_id.
+          NEW_SESSION=$(jq -r 'select(.type=="thread.started") | .thread_id // empty' "$RUN_DIR/output.json" 2>/dev/null | head -1 || true)
+        else
+          # Claude path — session_id is in output.json (single JSON document).
+          NEW_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
+        fi
+      fi
+
+      if [ -n "$NEW_SESSION" ]; then
+        NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        TTL_EXPIRY=$(( $(date +%s) + 30*24*3600 ))
+
+        # Phase 70 Path B (Plan 70-10): extract per-agent result text.
+        # Codex: LAST agent_message.text from the JSONL stream.
+        # Claude: .result // .response from output.json (single JSON document).
+        if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+          RESULT_TEXT=$(jq -rs 'map(select(.type=="item.completed" and .item.type=="agent_message")) | last | .item.text // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
+        else
+          RESULT_TEXT=$(jq -r '.result // .response // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
+        fi
+
+        # Phase 70 (Plan 70-05): JSON-encode RESULT_TEXT for the DDB put-item.
+        # CRITICAL (70-RESEARCH.md Pitfall 2): RESULT_TEXT may contain embedded
+        # double-quotes, backslashes, and newlines from agent replies. Direct shell
+        # interpolation into the DDB JSON literal would produce malformed JSON.
+        # jq -Rs . (raw input, string output) produces a properly-escaped JSON string
+        # *including* the surrounding double-quotes. Do NOT add extra quotes around
+        # $LAST_MSG_JSON in the item below — jq has already wrapped it.
+        LAST_MSG_JSON=$(echo "$RESULT_TEXT" | head -c 2000 | jq -Rs .)
+        # Defensive fallback in case jq is absent or RESULT_TEXT is empty.
+        [ -z "$LAST_MSG_JSON" ] && LAST_MSG_JSON='""'
+
+        # Phase 119 (P119-F): write last_processed_event_ts so crash-redelivery of
+        # this same SQS message (same event_ts) is caught by the idempotency guard
+        # above and skipped without a second dispatch or Slack post.
+        aws dynamodb put-item \
+          --table-name "$THREADS_TABLE" \
+          --region "$REGION" \
+          --item "{
+            \"channel_id\":{\"S\":\"$CHANNEL\"},
+            \"thread_ts\":{\"S\":\"$THREAD_TS\"},
+            \"claude_session_id\":{\"S\":\"$NEW_SESSION\"},
+            \"agent_type\":{\"S\":\"$EFFECTIVE_AGENT\"},
+            \"last_assistant_msg\":{\"S\":$LAST_MSG_JSON},
+            \"sandbox_id\":{\"S\":\"$SANDBOX_ID\"},
+            \"last_turn_ts\":{\"S\":\"$NOW\"},
+            \"last_processed_event_ts\":{\"S\":\"$EVENT_TS\"},
+            \"ttl_expiry\":{\"N\":\"$TTL_EXPIRY\"}
+          }" 2>/dev/null || true
+
+        # Phase 67-11 Gap A fix: post the canonical .result text to Slack from
+        # the poller. The Stop hook's transcript-JSONL scraping is unreliable in
+        # 'claude -p' (--print) mode (transcript may be un-flushed or differently
+        # shaped). The Stop hook's Slack branch is now gated on KM_SLACK_THREAD_TS
+        # being unset — since the poller exports KM_SLACK_THREAD_TS into Claude's
+        # env BEFORE launch, the Stop hook sees it and skips its post.
+        #
+        # Trade-off: this block is gated on $NEW_SESSION (a successful run with
+        # a non-empty .session_id). On agent failure the else-branch's WARN log
+        # fires and SQS redelivers — the user sees no fallback message in Slack.
+        # Operator diagnoses via 'journalctl -u km-slack-inbound-poller' and
+        # 'km agent list'. Documented trade-off: silence-on-failure is safer
+        # than a misleading "(no recent assistant text)" fallback that operators
+        # cannot distinguish from genuine empty replies.
+        if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
+          POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
+          printf '%s' "$RESULT_TEXT" > "$POST_FILE"
+          # Phase 112 (HOOK-01 inbound coverage): --render=blocks-rich (Tier 3: native
+          # markdown + table blocks) by default for the poller reply path so
+          # Slack-initiated chat sees structured messages, not literal markdown. Operator
+          # override: KM_SLACK_RENDER=blocks|mrkdwn|plain via /etc/km/notify.env or
+          # /etc/profile.d/km-notify-env.sh. km-slack demotes Tier 3 → Tier 2 → Tier 1
+          # automatically when a rich render overflows.
+          if /opt/km/bin/km-slack post \
+               --channel "$KM_SLACK_CHANNEL_ID" \
+               --subject "" \
+               --thread "$THREAD_TS" \
+               --render "${KM_SLACK_RENDER:-blocks-rich}" \
+               --body "$POST_FILE" 2>>"$RUN_DIR/stderr.log"; then
+            echo "[km-slack-inbound-poller] Posted reply to Slack (thread=$THREAD_TS, len=${#RESULT_TEXT})"
+          else
+            echo "[km-slack-inbound-poller] WARN: km-slack post failed for thread=$THREAD_TS" >&2
+          fi
+          rm -f "$POST_FILE"
+        elif [ -z "$KM_SLACK_CHANNEL_ID" ] || [ -z "$KM_SLACK_BRIDGE_URL" ]; then
+          echo "[km-slack-inbound-poller] WARN: KM_SLACK_CHANNEL_ID/KM_SLACK_BRIDGE_URL unset, skipping Slack post for thread=$THREAD_TS"
+        else
+          echo "[km-slack-inbound-poller] WARN: empty .result in output.json, skipping Slack post for thread=$THREAD_TS"
+        fi
+
+        # Phase 119 (P119-D): ack-after-completion — delete the message AFTER the Slack
+        # post completes (reversed from the old "Ack first" policy). The message stays
+        # in-flight for the whole turn so SQS FIFO does not deliver the thread's next
+        # message mid-turn (per-thread ordering guarantee). The idempotency guard above
+        # covers the crash-redelivery dup window this reversal opens: if the host crashes
+        # after the Slack post but before this delete, the message is redelivered, but
+        # last_processed_event_ts causes the guard to skip re-dispatch and re-post.
+        aws sqs delete-message \
+          --queue-url "$QUEUE_URL" \
+          --receipt-handle "$RECEIPT" \
+          --region "$REGION" 2>/dev/null || true
+
+        echo "[km-slack-inbound-poller] Turn complete — session=$NEW_SESSION thread=$THREAD_TS"
+        touch /run/km/last-slack-inbound
+      else
+        echo "[km-slack-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
+      fi
+
+      # Phase 119 (P119-E): kill the heartbeat ticker now that the turn is done.
+      # || true swallows ReceiptHandleIsInvalid if the delete already landed.
+      kill "$HB_PID" 2>/dev/null || true
+      wait "$HB_PID" 2>/dev/null || true
+
+      # ---- end of per-message subshell ----
+    ) &
+    inflight=$((inflight+1))
+
+  done  # end for _MSG_IDX
+
+done  # end while true
 SLACKINBOUND
 chmod +x /opt/km/bin/km-slack-inbound-poller
 echo "[km-bootstrap] km-slack-inbound-poller installed at /opt/km/bin/km-slack-inbound-poller"
