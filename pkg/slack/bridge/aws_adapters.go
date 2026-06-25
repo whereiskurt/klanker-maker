@@ -824,8 +824,11 @@ type SQSSendMessageAPI interface {
 }
 
 // SQSAdapter implements SQSSender by forwarding to a FIFO SQS queue.
-// MessageGroupId is the sandboxID; MessageDeduplicationId is the Slack event_id
-// (or msg.TS when event_id is absent). Both are required for FIFO queues.
+// MessageGroupId is the Slack thread timestamp (threadTS) so turns in the same
+// thread are serialized within that thread while turns across different threads
+// in the same sandbox can proceed in parallel (Phase 119 per-thread FIFO grouping).
+// MessageDeduplicationId is the Slack event_id (or msg.TS when event_id is absent).
+// Both are required for FIFO queues.
 type SQSAdapter struct {
 	Client SQSSendMessageAPI
 }

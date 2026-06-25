@@ -467,7 +467,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			Attachments: atts,
 		}
 		sqsBodyBytes, _ := json.Marshal(sqsBody)
-		if err := h.SQS.Send(bgCtx, info.QueueURL, string(sqsBodyBytes), info.SandboxID, dedupID); err != nil {
+		if err := h.SQS.Send(bgCtx, info.QueueURL, string(sqsBodyBytes), threadTS, dedupID); err != nil {
 			h.log().Error("events: sqs send (files-sync) failed",
 				"err", err, "queue", info.QueueURL, "sandbox", info.SandboxID)
 		} else {
@@ -487,7 +487,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			EventTS:  msg.TS,
 		}
 		bodyBytes, _ := json.Marshal(body)
-		if err := h.SQS.Send(ctx, info.QueueURL, string(bodyBytes), info.SandboxID, dedupID); err != nil {
+		if err := h.SQS.Send(ctx, info.QueueURL, string(bodyBytes), threadTS, dedupID); err != nil {
 			// Internal error — log and 200 (NOT 500) per RESEARCH.md Pitfall 2.
 			// CONTEXT.md flow step 9 mandates 200 on transport failure: 5xx triggers
 			// a Slack retry storm with new event_ids that bypass nonce dedup.
