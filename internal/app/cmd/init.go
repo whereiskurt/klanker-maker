@@ -1641,6 +1641,24 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 		}
 	}
 
+	// Phase 118: KM_SLACK_ALLOW — comma-joined install-level Slack trigger allowlist
+	// (Uxxxx). Consumed by infra/live/use1/lambda-slack-bridge/terragrunt.hcl
+	// get_env("KM_SLACK_ALLOW", ""). Only export when the operator has explicitly set
+	// slack.allow in km-config.yaml. Empty list => omit => terragrunt default ""
+	// applies => allowlist dormant (everyone may trigger, byte-identical to pre-118).
+	// env-wins semantics: when the env var is already set to a DIFFERENT value, emit a
+	// drift WARN and do NOT overwrite it. strings.Join used (value is a []string, not a
+	// *bool). Mirrors the KM_SLACK_PEER_BRIDGES block (Phase 95) verbatim — only the
+	// env-var name and config source differ. The bridge reads this into EventsHandler.Allow.
+	if len(cfg.Slack.Allow) > 0 {
+		yamlSlackAllow := strings.Join(cfg.Slack.Allow, ",")
+		if envVal := os.Getenv("KM_SLACK_ALLOW"); envVal != "" && envVal != yamlSlackAllow {
+			fmt.Fprintf(os.Stderr, "WARN: KM_SLACK_ALLOW=%s (env) overrides km-config.yaml slack.allow=%s\n", envVal, yamlSlackAllow)
+		} else if envVal == "" {
+			os.Setenv("KM_SLACK_ALLOW", yamlSlackAllow) //nolint:errcheck
+		}
+	}
+
 	// Phase 97: KM_GITHUB_REPOS — JSON-encoded repository-to-sandbox mapping.
 	// Consumed by the GitHub bridge Lambda to resolve which sandbox to dispatch
 	// a PR comment to. Gate: only export when at least one repo entry is configured

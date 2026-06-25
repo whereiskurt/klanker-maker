@@ -380,6 +380,8 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SLACK_PEER_BRIDGES = var.slack_peer_bridges
       # Phase 96 — front-door orphan-channel router toggle
       KM_SLACK_DEFAULT_ROUTER = var.slack_default_router
+      # Phase 118 — install-level trigger allowlist (comma-joined Uxxxx)
+      KM_SLACK_ALLOW = var.slack_allow
     }
   }
 

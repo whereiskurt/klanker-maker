@@ -120,6 +120,11 @@ inputs = {
   # Requires km init --dry-run=false (NOT --sidecars) — same constraint as mention_only.
   slack_default_router = get_env("KM_SLACK_DEFAULT_ROUTER", "false")
 
+  # Phase 118 — install-level trigger allowlist (comma-joined Uxxxx). Operator sets
+  # slack.allow in km-config.yaml; km init exports KM_SLACK_ALLOW. Empty = everyone
+  # allowed (dormant). Requires km init --dry-run=false (NOT --sidecars) — env-block change.
+  slack_allow = get_env("KM_SLACK_ALLOW", "")
+
   tags = {
     "km:component" = "slack-bridge"
     "km:managed"   = "true"
