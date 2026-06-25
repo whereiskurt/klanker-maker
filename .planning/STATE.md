@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 118-01-PLAN.md (Wave-0 TDD scaffold: Allow/Private stubs + RED tests)"
-last_updated: "2026-06-25T03:52:42.367Z"
-last_activity: 2026-06-24
+stopped_at: "Completed 119-01-PLAN.md (Wave-0 TDD scaffold: MaxConcurrentThreads compile floor + RED tests for P119-A/C/E/G)"
+last_updated: "2026-06-25T12:54:36.277Z"
+last_activity: 2026-06-25
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 16
+  completed_plans: 12
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-24
+Last activity: 2026-06-25
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -586,6 +586,7 @@ Progress: [█████████░] 91%
 | Phase 117 P04 | 2859 | 2 tasks | 16 files |
 | Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends P05 | 3min | 2 tasks | 3 files |
 | Phase 118-slack-trigger-allowlist-private-per-sandbox-channels P01 | 306s | 3 tasks | 11 files |
+| Phase 119-slack-inbound-per-thread-parallelism P01 | 250 | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1673,6 +1674,8 @@ Recent decisions affecting current work:
 - [Phase 117]: All test helpers loading refactored profiles must use profile.Resolve() not profile.Parse() — once a leaf has extends:, raw bytes are partial
 - [Phase 117-composable-multi-parent-profile-inheritance-deep-merge-list-union-extends]: Document shipped dc34/learn.v2 reality (not aspirations); dc34 email-in-leaf rationale explains v1 narrowing limitation concretely
 - [Phase 118-01]: Wave-0 TDD scaffold: stub fields added to 5 structs + 11 RED/GREEN tests before implementation; internal/app/cmd test-compile intentionally broken until Plan 02 changes real CreateChannel signature
+- [Phase 119-slack-inbound-per-thread-parallelism]: maxConcurrentThreads schema minimum:1 rejects cap=0 immediately after Task 1 — schema-reject test passes by design as regression guard
+- [Phase 119-slack-inbound-per-thread-parallelism]: intPtr renamed to intPtrInbound to avoid collision with validate_test.go in shared package profile_test
 
 ### Roadmap Evolution
 
@@ -1818,6 +1821,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-24T22:56:48.160Z
-Stopped at: Completed 118-01-PLAN.md (Wave-0 TDD scaffold: Allow/Private stubs + RED tests)
+Last session: 2026-06-25T12:54:36.271Z
+Stopped at: Completed 119-01-PLAN.md (Wave-0 TDD scaffold: MaxConcurrentThreads compile floor + RED tests for P119-A/C/E/G)
 Resume file: None
