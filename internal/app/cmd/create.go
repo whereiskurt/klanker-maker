@@ -2309,19 +2309,11 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		content string
 		mime    string
 	}
-	// When --ttl or --idle overrides were applied, serialize the mutated profile
-	// so the create-handler Lambda sees the overridden lifecycle values.
-	var remoteProfileYAML string
-	if ttlOverride != "" || idleOverride != "" {
-		mutatedYAML, marshalErr := yaml.Marshal(resolvedProfile)
-		if marshalErr != nil {
-			log.Warn().Err(marshalErr).Msg("failed to marshal mutated profile for remote upload — using raw")
-			remoteProfileYAML = profileYAMLForUpload(resolvedProfile, raw, noBedrock)
-		} else {
-			remoteProfileYAML = string(mutatedYAML)
-		}
-	} else {
-		remoteProfileYAML = profileYAMLForUpload(resolvedProfile, raw, noBedrock)
+	// Choose the profile YAML uploaded to S3 as .km-profile.yaml — the bytes the
+	// create-handler Lambda runs `km create` on. See selectRemoteProfileYAML.
+	remoteProfileYAML, err := selectRemoteProfileYAML(parsed.Extends.IsSet(), resolvedProfile, raw, noBedrock, ttlOverride, idleOverride)
+	if err != nil {
+		return "", err
 	}
 	toUpload := []artifact{
 		{key: artifactPrefix + "/service.hcl", content: artifacts.ServiceHCL, mime: "text/plain"},
@@ -2731,6 +2723,37 @@ func checkSandboxLimit(ctx context.Context, s3Client awspkg.S3ListAPI, bucket st
 // If the profile was modified (e.g. --no-bedrock), applies targeted text
 // replacements to the original YAML rather than re-marshaling (which would
 // emit zero-value fields that the schema rejects).
+// selectRemoteProfileYAML chooses the profile YAML uploaded to S3 as .km-profile.yaml —
+// the bytes the create-handler Lambda runs `km create` on.
+//
+// The MERGED (flattened) profile is uploaded whenever:
+//   1. extendsSet — the Lambda has NO profiles/base/** fragments in its search paths,
+//      so it cannot resolve `extends:`. Uploading the raw child would fail the subprocess
+//      with `profile "base/os/redhat" not found` (the Phase 120 remote-create bug). The
+//      resolved profile has extends cleared (profile.Resolve / TestResolveExtendsCleared)
+//      and every base merged in, so it is self-contained.
+//   2. ttl/idle overrides — the Lambda must observe the overridden lifecycle values.
+//
+// resolvedProfile already carries all mutations (extends merge, ttl/idle, --no-bedrock
+// strip applied upstream), so marshaling it is the complete, correct picture. A monolithic,
+// override-free, bedrock-default profile keeps the raw-bytes path to preserve
+// comments/formatting (profileYAMLForUpload also applies the --no-bedrock string edits).
+func selectRemoteProfileYAML(extendsSet bool, resolvedProfile *profile.SandboxProfile, raw []byte, noBedrock bool, ttlOverride, idleOverride string) (string, error) {
+	if extendsSet || ttlOverride != "" || idleOverride != "" {
+		mergedYAML, err := yaml.Marshal(resolvedProfile)
+		if err != nil {
+			if extendsSet {
+				// No safe fallback for extends — raw bytes would fail in the Lambda.
+				return "", fmt.Errorf("failed to marshal resolved (flattened) profile for remote upload: %w", err)
+			}
+			log.Warn().Err(err).Msg("failed to marshal mutated profile for remote upload — using raw")
+			return profileYAMLForUpload(resolvedProfile, raw, noBedrock), nil
+		}
+		return string(mergedYAML), nil
+	}
+	return profileYAMLForUpload(resolvedProfile, raw, noBedrock), nil
+}
+
 func profileYAMLForUpload(_ *profile.SandboxProfile, raw []byte, noBedrock bool) string {
 	if !noBedrock {
 		return string(raw)
