@@ -1,0 +1,29 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-plugin-klanker
+  abstract: true
+
+# klanker plugin install + enable fragment (Phase 120).
+# Owns: known_marketplaces.json configFile, installed_plugins.json seed one-liner,
+# and the Phase 120 intentional delta — enabledPlugins settings.json.
+#
+# Phase 120 intentional delta: this fragment ENABLES the klanker plugin via an inlined
+# settings.json with {"enabledPlugins":{"klanker@klanker-maker":true}}. The frozen
+# learn.v2.yaml left it disabled only to protect the byte-identity fixture; that fixture
+# is now archived in testdata/profiles/ and decoupled from the live profiles. The
+# compiler deep-merges synthesized typed Claude settings ON TOP of this inlined file
+# (Phase 92 mergeSynthesizedClaudeSettings), preserving enabledPlugins alongside any
+# agent.claude.tools.* synthesis — this is the supported mixed-mode path.
+spec:
+  execution:
+    configFiles:
+      "/home/sandbox/.claude/plugins/known_marketplaces.json": |
+        {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
+      # Phase 120 intentional delta: enable the plugin (learn.v2.yaml left it disabled
+      # to protect the frozen byte-identity fixture, which is now in testdata/profiles/).
+      "/home/sandbox/.claude/settings.json": |
+        {"enabledPlugins":{"klanker@klanker-maker":true}}
+
+    initCommands:
+      - "git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && mkdir -p /home/sandbox/.claude/plugins/marketplaces && ln -sfn /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 /home/sandbox/.claude/plugins/marketplaces/klanker-maker && KM_SHA=$(git -C /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 rev-parse HEAD) && KM_NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z) && printf '{\"version\":2,\"plugins\":{\"klanker@klanker-maker\":[{\"scope\":\"user\",\"installPath\":\"/home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0\",\"version\":\"0.1.0\",\"installedAt\":\"%s\",\"lastUpdated\":\"%s\",\"gitCommitSha\":\"%s\"}]}}' \"$KM_NOW\" \"$KM_NOW\" \"$KM_SHA\" > /home/sandbox/.claude/plugins/installed_plugins.json && chown -R sandbox:sandbox /home/sandbox/.claude/plugins || true"
