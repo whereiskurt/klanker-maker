@@ -9,7 +9,7 @@ metadata:
   prefix: learnpolite
 
 extends:
-  - base/safenetwork
+  - base/network/safenetwork
   - base/sidecars-all
   - base/observability-learn
   - base/budget-standard

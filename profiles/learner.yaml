@@ -27,7 +27,7 @@ extends:
   - base/os/redhat
   - base/toolchain-agents
   - base/plugin-klanker
-  - base/safenetwork
+  - base/network/safenetwork
   - base/sidecars-all
   - base/observability-learn
   - base/budget-standard
