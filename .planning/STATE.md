@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Phase 119 complete — 119-05 docs + E2E done
-last_updated: "2026-06-25T16:32:16.576Z"
-last_activity: 2026-06-25
+stopped_at: Completed 120-01-PLAN.md
+last_updated: "2026-06-26T04:44:54.303Z"
+last_activity: 2026-06-26
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
-  total_plans: 16
-  completed_plans: 16
+  total_plans: 20
+  completed_plans: 17
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-25
+Last activity: 2026-06-26
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -592,6 +592,7 @@ Progress: [█████████░] 91%
 | Phase 119-slack-inbound-per-thread-parallelism P04 | 661 | 2 tasks | 3 files |
 | Phase 119 P05 | 60 | 3 tasks | 9 files |
 | Phase 119-slack-inbound-per-thread-parallelism P05 | 60min | 3 tasks | 9 files |
+| Phase 120-profiles-reset-and-os-layered-fragment-library P01 | 274 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1691,6 +1692,9 @@ Recent decisions affecting current work:
 - [Phase 119-slack-inbound-per-thread-parallelism]: Verified bash concurrency via live deploy + synthetic-HMAC E2E (the only gate that catches poller-script bugs invisible to Go goldens)
 - [Phase 119-slack-inbound-per-thread-parallelism]: Emit-only-when->1: KM_SLACK_MAX_CONCURRENCY omitted at default value to maintain dormancy byte-identity with Phase 118
 - [Phase 119-slack-inbound-per-thread-parallelism]: Bumped klanker plugin 0.4.11 -> 0.4.12 because SKILL.md gained user-facing Phase-119 content
+- [Phase 120-01]: OS fragments declare ONLY string spec.runtime.ami — no bool fields (spot/hibernation/mountEFS) to avoid zero-value trap
+- [Phase 120-01]: toolchain-agents.yaml is the single version-pin site for claude-code@2.1.132 and codex rust-v0.133.0 across profiles/base/
+- [Phase 120-01]: plugin-klanker fragment enables klanker plugin (enabledPlugins settings.json) — intentional Phase 120 delta from frozen learn.v2.yaml which left it disabled to protect byte-identity fixture (now archived in testdata/)
 
 ### Roadmap Evolution
 
@@ -1837,6 +1841,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-25T15:38:45.891Z
-Stopped at: Phase 119 complete — 119-05 docs + E2E done
+Last session: 2026-06-26T04:44:54.297Z
+Stopped at: Completed 120-01-PLAN.md
 Resume file: None
