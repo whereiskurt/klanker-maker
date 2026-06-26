@@ -29,7 +29,7 @@ import (
 // VC-5
 func TestSynthesizeCodexConfigGolden(t *testing.T) {
 	const (
-		profilePath = "../../profiles/codex.yaml"
+		profilePath = "../../testdata/profiles/codex.yaml"
 		goldenPath  = "testdata/codex_config_codex.golden.toml"
 	)
 

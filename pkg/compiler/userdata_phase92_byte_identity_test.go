@@ -31,7 +31,7 @@ func generateLearnV2Userdata(t *testing.T) string {
 	}
 	// pkg/compiler/<thisfile> -> repo root is two dirs up.
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
-	profilesDir := filepath.Join(repoRoot, "profiles")
+	profilesDir := filepath.Join(repoRoot, "testdata", "profiles")
 
 	// Resolve the full extends DAG so that once learn.v2.yaml gains `extends:`,
 	// the merged spec (not just the partial leaf) is compiled — byte-identical to

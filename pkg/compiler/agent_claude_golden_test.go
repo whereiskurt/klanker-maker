@@ -38,10 +38,10 @@ func TestSynthesizeClaudeSettingsGolden(t *testing.T) {
 		profilePath string
 		goldenPath  string
 	}{
-		{"learn.v2", "../../profiles/learn.v2.yaml", "testdata/claude_settings_learn_v2.golden.json"},
-		{"dc34", "../../profiles/dc34.yaml", "testdata/claude_settings_dc34.golden.json"},
-		{"locked", "../../profiles/locked.yaml", "testdata/claude_settings_locked.golden.json"},
-		{"codex", "../../profiles/codex.yaml", "testdata/claude_settings_codex.golden.json"},
+		{"learn.v2", "../../testdata/profiles/learn.v2.yaml", "testdata/claude_settings_learn_v2.golden.json"},
+		{"dc34", "../../testdata/profiles/dc34.yaml", "testdata/claude_settings_dc34.golden.json"},
+		{"locked", "../../testdata/profiles/locked.yaml", "testdata/claude_settings_locked.golden.json"},
+		{"codex", "../../testdata/profiles/codex.yaml", "testdata/claude_settings_codex.golden.json"},
 	}
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

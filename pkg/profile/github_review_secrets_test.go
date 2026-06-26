@@ -29,7 +29,7 @@ func TestGitHubReviewProfileSecrets(t *testing.T) {
 	// repo root is two directories up.
 	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
 
-	profilePath := filepath.Join(repoRoot, "profiles", "github-review.yaml")
+	profilePath := filepath.Join(repoRoot, "testdata", "profiles", "github-review.yaml")
 	data, err := os.ReadFile(profilePath)
 	if err != nil {
 		t.Fatalf("read profiles/github-review.yaml: %v", err)
