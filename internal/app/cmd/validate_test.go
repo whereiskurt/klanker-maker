@@ -100,9 +100,10 @@ func TestValidateMultipleFilesOneInvalid(t *testing.T) {
 }
 
 // TestValidateBuiltinProfile verifies that a built-in profile file passes validation.
+// goose.yaml was archived to testdata/profiles/ in Phase 120 (plan 03).
 func TestValidateBuiltinProfile(t *testing.T) {
 	km := buildKM(t)
-	profileFile := profilesPath(t, "goose.yaml")
+	profileFile := testdataPath(t, "goose.yaml")
 
 	cmd := exec.Command(km, "validate", profileFile)
 	out, err := cmd.Output()

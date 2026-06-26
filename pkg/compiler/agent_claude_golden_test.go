@@ -55,9 +55,13 @@ func TestSynthesizeClaudeSettingsGolden(t *testing.T) {
 		t.Run(f.name, func(t *testing.T) {
 			// Determine the search paths from the profile path so extends: DAG
 			// is resolved (e.g. learn.v2 and dc34 now extend base/* fragments).
+			// Archived fixtures live in testdata/profiles/; base/** fragments
+			// remain in profiles/. Pass both so extends can find base/safenetwork
+			// etc. without moving the fragments alongside every archived leaf.
 			profilesDir := filepath.Join(repoRoot, filepath.Dir(f.profilePath[len("../../"):]))
+			profilesBaseDir := filepath.Join(repoRoot, "profiles")
 			leafName := strings.TrimSuffix(filepath.Base(f.profilePath), ".yaml")
-			p, err := profile.Resolve(leafName, []string{profilesDir})
+			p, err := profile.Resolve(leafName, []string{profilesDir, profilesBaseDir})
 			if err != nil {
 				t.Fatalf("resolve profile %s: %v", f.profilePath, err)
 			}
