@@ -1,0 +1,109 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: h1
+  labels:
+    tier: development
+    tool: h1-triage-agent
+  prefix: h1
+
+# h1 — Phase 120 composed leaf. Replaces profiles/h1-triage.yaml.
+#
+# HackerOne comment-trigger report triage sandbox. When the km-h1-bridge receives a
+# webhook, it dispatches an agent turn to this sandbox. The agent reads the report and
+# replies INTERNAL by default via `km-h1 comment` (never visible to the external
+# HackerOne researcher unless --reply-to-researcher is passed explicitly).
+#
+# Lifecycle: short-lived (2h TTL / 20m idle), teardownPolicy=stop preserves the DDB
+# record for status queries after the EC2 instance stops.
+#
+# extends ordering: base/os/redhat FIRST so OS yum+cert initCommands precede toolchain.
+# Full toolchain (goose/codex/nvm/gsd/herdr) via base/toolchain-agents — heavier than
+# the legacy h1-triage.yaml (which installed only yum+claude-code), but the
+# single version-pin site is the design point: update one file to roll all agents.
+#
+# Network / sidecars / sourceAccess: H1 has a NARROW allowlist and reads/replies over
+# the HackerOne customer API (no repo clone). These do NOT fit the wide knob fragments
+# (base/safenetwork would broaden to "*"; base/sidecars-all enables tracing which h1
+# keeps off). All three are kept IN-LEAF to match the original h1-triage.yaml posture.
+#
+# Notification: notification.h1.inbound.enabled:true (provisions the per-sandbox
+# h1-inbound FIFO queue + renders the km-h1-inbound-poller). email.enabled:true so
+# Rule S5 (both channels off) does NOT fire.
+#
+# Bool runtime fields (spot) STAY IN THIS LEAF — not inherited —
+# to avoid the bool zero-value trap (Phase 117 § bool zero-value trap).
+#
+# Secrets: SOPS-encrypted bundle for cold-box self-auth + HackerOne Basic-Auth creds.
+# See docs/sandbox-secrets.md (Phase 89) for the full SOPS injection runbook:
+#   km bootstrap --shared-secrets-key   # one-time
+#   sops --encrypt --kms <arn> h1-triage-secrets.enc.yaml
+#   km init --dry-run=false
+
+extends:
+  - base/os/redhat
+  - base/toolchain-agents
+  - base/plugin-klanker
+  - base/observability-learn
+  - base/iam-us-east-1
+  - base/agent-claude-all-tools
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "20m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+    # Bool fields IN-LEAF (bool zero-value trap — do not move to a fragment).
+    spot: true
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+
+  # No git source access — the triage agent reads the report and replies entirely
+  # over the HackerOne customer API (km-h1 helper), so no repo clone is needed.
+  sourceAccess:
+    mode: none
+
+  network:
+    # Narrow in-leaf allowlist (NOT base/safenetwork — list union would widen to "*").
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - "api.hackerone.com"
+        - ".amazonaws.com"
+        - "api.anthropic.com"
+        - ".npmjs.org"
+      allowedHosts: []
+
+  sidecars:
+    # H1 keeps tracing disabled — do NOT extend base/sidecars-all (it enables tracing).
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: false
+      image: km-tracing:latest
+
+  notification:
+    h1:
+      inbound:
+        enabled: true
+    # email on so Rule S5 (both channels off) cannot fire.
+    email:
+      enabled: true
+
+  secrets:
+    sopsFile: h1-triage-secrets.enc.yaml
