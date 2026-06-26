@@ -1,0 +1,89 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: spot
+  labels:
+    tier: development
+    tool: spot-demo
+  prefix: spot
+
+# spot — Phase 120 composed leaf. The ONE profile that demonstrates EC2 Spot.
+#
+# All other canonical leaves (learner/desktop/github/h1) run on-demand
+# (spot:false) for predictable availability. This profile is the single,
+# explicit place where spot is exercised: a cheap, interruptible general-purpose
+# dev sandbox for cost-sensitive batch/exploratory work that tolerates the ~2-min
+# spot interruption notice.
+#
+# extends ordering: base/os/redhat FIRST so OS yum+cert initCommands precede the
+# toolchain. Same fragment stack as the other RH leaves — the only thing special
+# here is the runtime spot block.
+#
+# SPOT CONSTRAINT (CLAUDE.md): spot:true REQUIRES hibernation:false — a spot
+# instance cannot hibernate (its capacity can be reclaimed). Both are set IN-LEAF
+# (bool zero-value trap — never inherit mixed-bool runtime fields from a fragment).
+# teardownPolicy:stop preserves the DDB record after an interruption/stop.
+
+extends:
+  - base/os/redhat
+  - base/toolchain-agents
+  - base/plugin-klanker
+  - base/sidecars-all
+  - base/observability-learn
+  - base/budget-standard
+  - base/artifacts-workspace
+  - base/iam-us-east-1
+  - base/agent-claude-all-tools
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.large
+    region: us-east-1
+    rootVolumeSize: 30
+    # Bool fields IN-LEAF (bool zero-value trap — do not move to a fragment).
+    # spot:true is the entire point of this profile; hibernation MUST be false
+    # (spot capacity is reclaimable and cannot be hibernated).
+    spot: true
+    hibernation: false
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "whereiskurt/*"
+      allowedRefs:
+        - "*"
+
+  network:
+    # Narrow in-leaf allowlist (NOT base/safenetwork — list union would widen to "*").
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - ".github.com"
+        - ".githubusercontent.com"
+        - ".amazonaws.com"
+        - "api.anthropic.com"
+        - ".npmjs.org"
+      allowedHosts: []
+
+  cli:
+    noBedrock: true
+
+  agent:
+    default: claude
+
+  notification:
+    # email on so Rule S5 (both notification channels off) cannot fire.
+    email:
+      enabled: true

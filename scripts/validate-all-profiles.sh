@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/validate-all-profiles.sh — Phase 92 hard gate (updated Phase 120 Plan 04).
 #
-# Validates every concrete leaf profile in the 12-entry Profile Inventory using
+# Validates every concrete leaf profile in the 13-entry Profile Inventory using
 # `km validate`. Exits non-zero on any failure. Single source of truth for the
 # inventory (4 composed leaves + 8 pkg/profile/builtins entries).
 #
@@ -40,6 +40,7 @@ PROFILES=(
   profiles/desktop.yaml
   profiles/github.yaml
   profiles/h1.yaml
+  profiles/spot.yaml
   pkg/profile/builtins/ao.yaml
   pkg/profile/builtins/codex.yaml
   pkg/profile/builtins/goose.yaml

@@ -59,7 +59,9 @@ spec:
     instanceType: t3.medium
     region: us-east-1
     # Bool fields IN-LEAF (bool zero-value trap — do not move to a fragment).
-    spot: true
+    # On-demand (spot:false) for predictable bridge availability — no interruption
+    # mid-triage. The dedicated spot demo lives in profiles/spot.yaml.
+    spot: false
 
   execution:
     shell: /bin/bash
