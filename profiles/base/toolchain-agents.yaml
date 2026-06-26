@@ -1,0 +1,45 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-toolchain-agents
+  abstract: true
+
+# OS-agnostic agent toolchain fragment (Phase 120).
+# Single version-pin site: claude-code@2.1.132 and codex rust-v0.133.0 each appear
+# exactly once across profiles/base/ — in this file only.
+#
+# Does NOT include:
+#   - OS-specific lines (yum/crond/cert-bundle) → base/os/redhat.yaml
+#   - Plugin git-clone/installed_plugins one-liner → base/plugin-klanker.yaml
+#   - Manual codex config write → compiler's synthesizeCodexConfig handles it (Phase 92)
+#   - SANDBOX_MODE env var → leaf-specific
+spec:
+  execution:
+    initCommands:
+      - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
+      - "cp -r /root/.local/bin/goose /usr/local/bin/goose-bin || true"
+      - "printf 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\\nexport OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318\\n' > /etc/profile.d/km-zz-goose-otel.sh"
+      - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose-bin /usr/local/bin/goose && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
+      - "npm install -g @anthropic-ai/claude-code@2.1.132"
+      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.133.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
+      - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex && chown -R sandbox:sandbox /home/sandbox/.codex"
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
+      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Learner Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+      - "su - sandbox -c 'cd /workspace && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash'"
+      - "su - sandbox -c 'nvm install 22'"
+      - "su - sandbox -c 'npx -y get-shit-done-cc --claude --codex --global'"
+      - "su - sandbox -c 'curl -fsSL https://herdr.dev/install.sh | sh'"
+
+    rsyncPaths:
+      - ".gitconfig"
+      - ".config/goose"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
+
+    env:
+      GOOSE_MODE: auto
+      GOOSE_TELEMETRY_ENABLED: "false"
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      OPENAI_API_KEY: ""
