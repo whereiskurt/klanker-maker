@@ -104,6 +104,10 @@ release:
     ```
 
     You still need: `aws` CLI + `session-manager-plugin` (operator-provided).
+    {{ with index .Env "KM_RELEASE_HIGHLIGHTS" }}
+
+    {{ . }}
+    {{ end }}
   footer: |
     ---
     `terraform` is distributed under HashiCorp's Business Source License 1.1.

@@ -341,7 +341,7 @@ Tag-driven via goreleaser + GH Actions. The `VERSION` file is the dev-build coun
 
 **Cut-a-release workflow:**
 
-1. **Pre-flight:** verify `main` is green, GSD milestone is at a clean checkpoint, `CHANGELOG`-worthy commits use conventional-commit prefixes (`feat:`, `fix:`, `docs:` — goreleaser groups by these).
+1. **Pre-flight:** verify `main` is green, GSD milestone is at a clean checkpoint, `CHANGELOG`-worthy commits use conventional-commit prefixes (`feat:`, `fix:`, `docs:` — goreleaser groups by these). **Update `docs/RELEASE-HIGHLIGHTS.md`** with this release's curated "✨ Major additions highlighted" items — it's injected verbatim into the release notes above the auto-changelog (workflow loads it → `$KM_RELEASE_HIGHLIGHTS` → `.goreleaser.yaml` `release.header`). The mechanism is always-on; a stale file = stale highlights. See `docs/release.md` § Release highlights.
 2. **Local sanity check (no tag):**
    ```bash
    goreleaser check

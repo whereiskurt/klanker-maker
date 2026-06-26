@@ -38,6 +38,20 @@ jobs:
           restore-keys: |
             km-bundle-
 
+      # Inject the human-curated "Major additions highlighted" section into the
+      # release notes. Loaded from docs/RELEASE-HIGHLIGHTS.md → env var →
+      # .goreleaser.yaml `release.header` ({{ with index .Env "KM_RELEASE_HIGHLIGHTS" }}).
+      # Update docs/RELEASE-HIGHLIGHTS.md before each tag; missing/empty file = section omitted.
+      - name: Load release highlights
+        run: |
+          if [ -s docs/RELEASE-HIGHLIGHTS.md ]; then
+            {
+              echo 'KM_RELEASE_HIGHLIGHTS<<KM_HL_EOF'
+              cat docs/RELEASE-HIGHLIGHTS.md
+              echo 'KM_HL_EOF'
+            } >> "$GITHUB_ENV"
+          fi
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

@@ -48,6 +48,7 @@ Operators still need to install themselves: `aws` CLI, `session-manager-plugin`,
 - Decide the version. Rules of thumb:
   - First time we ship publicly: `v1.0.0` (when the v1.0 milestone fully completes) or `v1.0.0-rc1` if it's an RC.
   - Subsequent: bump per semver — breaking CLI/profile change → major, new feature → minor, bugfix → patch.
+- **Update `docs/RELEASE-HIGHLIGHTS.md`** with the handful of major, human-curated additions for THIS release (see [Release highlights](#release-highlights) below). This is **required** every release — the file is injected verbatim into the release notes, and a stale file means stale highlights.
 
 ### 2. Local sanity check (no tag required)
 
@@ -105,6 +106,31 @@ Click **Publish release**.
 - If any `skills/` content changed in this release, bump `skills/plugin.json` `version` AND `skills/marketplace.json` plugin entry, then commit. Clients cache the old plugin version otherwise. See memory `project_plugin_version_gates_cache`.
 - Update `CHANGELOG.md` if you maintain one (not currently committed).
 - Announce in the team Slack `#km-notifications` (or wherever).
+
+## Release highlights
+
+Every release's notes lead with a curated **"✨ Major additions highlighted"** section (above goreleaser's auto-generated per-commit changelog). This is editorial — pick the few changes that matter, not every commit.
+
+**How it's wired (always-on, no manual step at publish time):**
+
+1. `docs/RELEASE-HIGHLIGHTS.md` — the maintained source. Edit it before tagging. Empty/absent ⇒ the section is omitted gracefully (no error).
+2. `.github/workflows/release.yml` "Load release highlights" step loads the file into `$KM_RELEASE_HIGHLIGHTS`.
+3. `.goreleaser.yaml` `release.header` renders it via `{{ with index .Env "KM_RELEASE_HIGHLIGHTS" }}…{{ end }}`, between the install block and the changelog.
+
+So the **mechanism** always runs; your only per-release job is keeping `docs/RELEASE-HIGHLIGHTS.md` current. HTML comments in that file are hidden in GitHub's rendered view.
+
+**Preview locally** (snapshot mode skips note generation, so verify the file renders as intended):
+
+```bash
+export KM_RELEASE_HIGHLIGHTS="$(cat docs/RELEASE-HIGHLIGHTS.md)"
+goreleaser check
+```
+
+To draft highlights, mine the per-phase summary blocks at the top of `CLAUDE.md` (and any notable non-phase merges) added since the last tag:
+
+```bash
+git log $(git describe --tags --abbrev=0)..HEAD --pretty='%s' | grep -E '^feat|^fix'
+```
 
 ## Bumping bundled tool versions
 
