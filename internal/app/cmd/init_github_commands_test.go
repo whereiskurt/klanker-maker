@@ -194,17 +194,27 @@ func TestResolveCommandPrompts(t *testing.T) {
 		}
 	})
 
-	t.Run("explicit @profiles/ prefix still resolves (back-compat)", func(t *testing.T) {
-		// Same file, referenced WITH the explicit profiles/ prefix.
+	t.Run("explicit @profiles/prompts/ prefix resolves (live km-config path)", func(t *testing.T) {
+		// Prompt files now live in profiles/prompts/ (Phase 120-04 lean-root move).
+		// km-config.yaml references @profiles/prompts/default.github.prompt.txt — verify
+		// the resolver handles an explicit nested subdir prefix correctly.
+		promptsDir := filepath.Join(configDir, "profiles", "prompts")
+		if err := os.MkdirAll(promptsDir, 0o750); err != nil {
+			t.Fatalf("setup: mkdir profiles/prompts: %v", err)
+		}
+		defContent2 := "Default review/triage prompt for {{args}}."
+		if err := os.WriteFile(filepath.Join(promptsDir, "default.github.prompt.txt"), []byte(defContent2), 0o600); err != nil {
+			t.Fatalf("setup: write profiles/prompts prompt: %v", err)
+		}
 		cmds := map[string]config.GithubCommandEntry{
-			"review": {Prompt: "@profiles/default.github.prompt.txt"},
+			"review": {Prompt: "@profiles/prompts/default.github.prompt.txt"},
 		}
 		got, err := cmd.ResolveCommandPrompts(cmds, configDir)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if !strings.Contains(got["review"].Prompt, "Default review/triage prompt") {
-			t.Errorf("explicit @profiles/ form should resolve; got %q", got["review"].Prompt)
+			t.Errorf("explicit @profiles/prompts/ form should resolve; got %q", got["review"].Prompt)
 		}
 	})
 
