@@ -26,9 +26,9 @@ metadata:
 # widen to "*" and defeat the tightened github posture).
 #
 # Notification: notification.github.inbound.enabled:true (provisions the per-sandbox
-# github-inbound FIFO queue). NO slack-persandbox fragment — avoids the per-sandbox
-# Slack validate WARN. email.enabled:true so Rule S5 does NOT fire and the operator
-# gets email notifications for this lean bridge bot.
+# github-inbound FIFO queue) AND base/slack-persandbox (per-sandbox #sb-github-{alias}
+# channel + transcript streaming + whereiskurt@gmail.com invite). email.enabled:true
+# is kept too, so the operator gets both Slack and email notifications.
 #
 # Bool runtime fields (spot) STAY IN THIS LEAF — not inherited —
 # to avoid the bool zero-value trap (Phase 117 § bool zero-value trap).
@@ -49,6 +49,7 @@ extends:
   - base/artifacts-workspace
   - base/iam-us-east-1
   - base/agent-claude-all-tools
+  - base/slack-persandbox
 
 spec:
   lifecycle:

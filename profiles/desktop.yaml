@@ -40,9 +40,10 @@ metadata:
 # Network: narrow allowlist in-leaf (NOT base/safenetwork — list union would broaden
 # to "*" and defeat the tightened desktop posture).
 #
-# Notification: email-on / slack-off in-leaf (does NOT extend base/slack-persandbox).
-# This matches the legacy desktop.yaml and avoids the per-sandbox-Slack validate WARN.
-# Rule S5 (both channels off) does NOT fire — email is on.
+# Notification: base/slack-persandbox (per-sandbox #sb-desktop-{alias} channel +
+# transcript + whereiskurt@gmail.com invite) AND email-on. The in-leaf
+# notification.slack block is intentionally NOT set — the fragment owns it; setting
+# slack.enabled:false here would override the fragment (child-wins) and re-trigger S2.
 
 extends:
   - base/os/debian
@@ -54,6 +55,7 @@ extends:
   - base/artifacts-workspace
   - base/iam-us-east-1
   - base/agent-claude-all-tools
+  - base/slack-persandbox
 
 spec:
   lifecycle:
@@ -118,8 +120,8 @@ spec:
     events:
       onIdle: false
       onPermission: false
-    # At least one delivery channel must be enabled (Rule S5). Email goes to operator.
+    # email to operator + Slack via base/slack-persandbox (do NOT set slack here —
+    # the fragment owns notification.slack; an in-leaf slack.enabled would win and
+    # override it).
     email:
       enabled: true
-    slack:
-      enabled: false

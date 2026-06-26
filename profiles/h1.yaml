@@ -47,6 +47,7 @@ extends:
   - base/observability-learn
   - base/iam-us-east-1
   - base/agent-claude-all-tools
+  - base/slack-persandbox
 
 spec:
   lifecycle:
