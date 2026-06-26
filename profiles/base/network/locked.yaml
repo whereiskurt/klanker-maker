@@ -4,19 +4,6 @@ metadata:
   name: base-network-locked
   abstract: true
 
-# Comprehensive locked-down egress allowlist (Phase 120).
-#
-# The opposite end of the spectrum from base/network/safenetwork (which is
-# wide-open "*"). This fragment ships a curated allowlist that covers the agent
-# toolchain (Claude/Codex/Goose, npm, PyPI, GitHub, VS Code) and nothing else —
-# a sane default for a hardened sandbox that still needs to install + run agents.
-#
-# enforcement:both = eBPF primary + L7 proxy for provider metering.
-#
-# NARROWING CAVEAT (Phase 117 list-union): a leaf that extends this fragment AND
-# declares its own allowedDNSSuffixes/allowedHosts will UNION the two lists (cannot
-# shrink). To run a STRICTER list than this, keep the network block in-leaf instead
-# of extending this fragment. To run a WIDER list, add the extra suffixes in-leaf.
 spec:
   network:
     enforcement: both
@@ -24,38 +11,28 @@ spec:
       allowedDNSSuffixes:
         - ".amazonaws.com"
         - "time.aws.com"
-
-        # Anthropic / Claude Code
         - ".anthropic.com"
         - ".claude.ai"
         - ".claude.com"
         - ".sentry.io"
         - ".cloudfront.net"
-        # GitHub (needed for git clone + API)
         - ".github.com"
         - ".githubusercontent.com"
-        # npm / Node.js (for claude-code install)
         - ".npmjs.org"
         - ".npmjs.com"
         - ".nodejs.org"
         - ".npmmirror.com"
-        # OpenAI (codex)
         - ".openai.com"
         - ".chatgpt.com"
-        # Python (goose extensions via uvx)
         - ".pypi.org"
         - ".pythonhosted.org"
-        # Goose extensions / MCP
         - ".pulsemcp.com"
-        # Google (goose telemetry, search)
         - ".google.com"
         - ".google-analytics.com"
         - ".googletagmanager.com"
         - ".statsig.com"
         - ".featuregates.org"
-        # vscode
         - ".visualstudio.com"
       allowedHosts:
-        # vscode
         - "vscode.download.prss.microsoft.com"
         - "nodejs.org"

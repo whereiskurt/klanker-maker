@@ -4,20 +4,11 @@ metadata:
   name: base-slack-persandbox
   abstract: true
 
-# Per-sandbox Slack notification fragment (Phase 120).
-# Owns the spec.notification.slack per-sandbox block.
-# CRITICAL: both perSandbox:true AND enabled:true are set together to avoid Rule S2/S3/
-# S-channelname km validate WARNs. Leaves that extend this fragment must NOT set
-# notification.slack.enabled:false (that would re-trigger S2).
-# Does NOT set notification.email (leaf owns the email on/off choice).
 spec:
   notification:
     slack:
       enabled: true
       perSandbox: true
-      # Channel named after the profile + alias, unique per sandbox (keeps inbound 1:1
-      # routing + archive-on-destroy). {profile}=metadata.name, {alias}=--alias flag
-      # (falls back to sandbox id).
       channelName: "sb-{profile}-{alias}"
       archiveOnDestroy: false
       inbound:

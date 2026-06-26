@@ -7,12 +7,6 @@ metadata:
     tool: github-review-agent
   prefix: gh
 
-# Secrets: SOPS-encrypted bundle for cold-box self-authentication (Phase 98-04).
-# See docs/sandbox-secrets.md (Phase 89) for the full SOPS injection runbook:
-#   km bootstrap --shared-secrets-key   # one-time
-#   sops --encrypt --kms <arn> github-review-secrets.enc.yaml
-#   km init --dry-run=false
-
 extends:
   - base/os/redhat
   - base/userinit
@@ -29,9 +23,6 @@ spec:
     substrate: ec2
     instanceType: t3.medium
     region: us-east-1
-    # Bool fields IN-LEAF (bool zero-value trap — do not move to a fragment).
-    # On-demand (spot:false) for predictable bridge availability — no interruption
-    # mid-review. The dedicated spot demo lives in profiles/spot.yaml.
     spot: false
 
   execution:
@@ -50,7 +41,6 @@ spec:
         - "*"
 
   network:
-    # Narrow in-leaf allowlist (NOT base/safenetwork — list union would widen to "*").
     enforcement: proxy
     egress:
       allowedDNSSuffixes:
@@ -65,7 +55,6 @@ spec:
     github:
       inbound:
         enabled: true
-    # email on so Rule S5 (both channels off) cannot fire.
     email:
       enabled: true
 

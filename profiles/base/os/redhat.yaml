@@ -4,11 +4,6 @@ metadata:
   name: base-os-redhat
   abstract: true
 
-# RedHat-family OS layer fragment (Phase 120).
-# Sets ONLY spec.runtime.ami (string — safe; no spot/hibernation/mountEFS to avoid the
-# bool zero-value trap). Owns the RH-specific bootstrap steps: yum packages, crond unit
-# name, RH cert-bundle path (/etc/pki/tls/certs/ca-bundle.crt), and SSL_CERT_FILE export.
-# List this fragment FIRST in a leaf's extends: so OS steps precede toolchain steps.
 spec:
   runtime:
     ami: amazon-linux-2023

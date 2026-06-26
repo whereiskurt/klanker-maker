@@ -4,20 +4,6 @@ metadata:
   name: base-platform
   abstract: true
 
-# Platform defaults (Phase 120 consolidation).
-#
-# The uniform, non-varying boilerplate every canonical leaf shares, merged into ONE
-# include (was 7 granular fragments: sidecars-all, observability, budget-standard,
-# artifacts-workspace, iam-us-east-1, agent-claude-all-tools, email-strict).
-#
-# NOTE: observability.learnMode is deliberately NOT here — it is a learner-only
-# feature (eBPF traffic recording) set in-leaf on profiles/learner.yaml. Everything
-# else in observability (command/network logs, Claude telemetry, TLS capture) is
-# generally useful and stays.
-#
-# The frozen testdata fixtures (learn.v2*, dc34) still use the original granular
-# fragments, now relocated to testdata/profiles/base/ — they are decoupled from this
-# live consolidation.
 spec:
   sidecars:
     dnsProxy:

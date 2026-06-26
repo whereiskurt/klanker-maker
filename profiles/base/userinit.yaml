@@ -4,18 +4,9 @@ metadata:
   name: base-userinit
   abstract: true
 
-# User-init / agent toolchain (Phase 120 consolidation).
-#
-# Merges the former base/toolchain-agents + base/plugin-klanker into one "userInit"
-# include — the agent CLI install (goose / claude-code / codex / nvm / gsd / herdr,
-# single version-pin site) plus the klanker plugin install+enable.
-#
-# Listed AFTER base/os/* in every leaf so the OS package-manager + cert-trust init
-# steps precede these (initCommands union is concat left→right, first-occurrence kept).
 spec:
   execution:
     initCommands:
-      # --- toolchain (agents) ---
       - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
       - "cp -r /root/.local/bin/goose /usr/local/bin/goose-bin || true"
       - "printf 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\\nexport OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318\\n' > /etc/profile.d/km-zz-goose-otel.sh"
@@ -30,7 +21,6 @@ spec:
       - "su - sandbox -c 'nvm install 22'"
       - "su - sandbox -c 'npx -y get-shit-done-cc --claude --codex --global'"
       - "su - sandbox -c 'curl -fsSL https://herdr.dev/install.sh | sh'"
-      # --- klanker plugin install + enable ---
       - "git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && mkdir -p /home/sandbox/.claude/plugins/marketplaces && ln -sfn /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 /home/sandbox/.claude/plugins/marketplaces/klanker-maker && KM_SHA=$(git -C /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 rev-parse HEAD) && KM_NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z) && printf '{\"version\":2,\"plugins\":{\"klanker@klanker-maker\":[{\"scope\":\"user\",\"installPath\":\"/home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0\",\"version\":\"0.1.0\",\"installedAt\":\"%s\",\"lastUpdated\":\"%s\",\"gitCommitSha\":\"%s\"}]}}' \"$KM_NOW\" \"$KM_NOW\" \"$KM_SHA\" > /home/sandbox/.claude/plugins/installed_plugins.json && chown -R sandbox:sandbox /home/sandbox/.claude/plugins || true"
 
     rsyncPaths:

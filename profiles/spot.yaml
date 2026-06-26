@@ -7,23 +7,6 @@ metadata:
     tool: spot-demo
   prefix: spot
 
-# spot — Phase 120 composed leaf. The ONE profile that demonstrates EC2 Spot.
-#
-# All other canonical leaves (learner/desktop/github/h1) run on-demand
-# (spot:false) for predictable availability. This profile is the single,
-# explicit place where spot is exercised: a cheap, interruptible general-purpose
-# dev sandbox for cost-sensitive batch/exploratory work that tolerates the ~2-min
-# spot interruption notice.
-#
-# extends ordering: base/os/redhat FIRST so OS yum+cert initCommands precede the
-# toolchain. Same fragment stack as the other RH leaves — the only thing special
-# here is the runtime spot block.
-#
-# SPOT CONSTRAINT (CLAUDE.md): spot:true REQUIRES hibernation:false — a spot
-# instance cannot hibernate (its capacity can be reclaimed). Both are set IN-LEAF
-# (bool zero-value trap — never inherit mixed-bool runtime fields from a fragment).
-# teardownPolicy:stop preserves the DDB record after an interruption/stop.
-
 extends:
   - base/os/redhat
   - base/userinit
@@ -41,9 +24,6 @@ spec:
     instanceType: t3.large
     region: us-east-1
     rootVolumeSize: 30
-    # Bool fields IN-LEAF (bool zero-value trap — do not move to a fragment).
-    # spot:true is the entire point of this profile; hibernation MUST be false
-    # (spot capacity is reclaimable and cannot be hibernated).
     spot: true
     hibernation: false
 
@@ -61,7 +41,6 @@ spec:
         - "*"
 
   network:
-    # Narrow in-leaf allowlist (NOT base/safenetwork — list union would widen to "*").
     enforcement: proxy
     egress:
       allowedDNSSuffixes:
@@ -79,6 +58,5 @@ spec:
     default: claude
 
   notification:
-    # email on so Rule S5 (both notification channels off) cannot fire.
     email:
       enabled: true
