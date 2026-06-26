@@ -126,11 +126,15 @@ export KM_RELEASE_HIGHLIGHTS="$(cat docs/RELEASE-HIGHLIGHTS.md)"
 goreleaser check
 ```
 
-To draft highlights, mine the per-phase summary blocks at the top of `CLAUDE.md` (and any notable non-phase merges) added since the last tag:
+**Auto-draft from CLAUDE.md.** `scripts/draft-release-highlights.sh` generates a starting draft from the per-phase summary blocks added to `CLAUDE.md` since the last tag (newest phase first, one line each from the block's first sentence). It also lists non-phase `feat:`/`fix:` commits (those with no phase block) in a trailing hidden comment so you can fold them in.
 
 ```bash
-git log $(git describe --tags --abbrev=0)..HEAD --pretty='%s' | grep -E '^feat|^fix'
+scripts/draft-release-highlights.sh            # diff since last tag → stdout (review)
+scripts/draft-release-highlights.sh --write    # overwrite docs/RELEASE-HIGHLIGHTS.md
+scripts/draft-release-highlights.sh v0.5.6     # diff since an explicit tag
 ```
+
+It's a **draft, not final**: trim each line, add emoji to match prior releases' style, drop minor/pure-fix phases, and fold in the non-phase candidates. Then commit `docs/RELEASE-HIGHLIGHTS.md`.
 
 ## Bumping bundled tool versions
 
@@ -192,6 +196,8 @@ Only safe while the release is still a Draft. Once published, cut a new patch ve
 
 - `.goreleaser.yaml` — release pipeline config
 - `scripts/fetch-bundled-tools.sh` — per-platform tool downloader (cache: `~/.cache/km-bundle/`)
+- `scripts/draft-release-highlights.sh` — auto-draft the highlights section from CLAUDE.md phase blocks
+- `docs/RELEASE-HIGHLIGHTS.md` — maintained highlights source, injected into release notes
 - `.github/workflows/release.yml` — tag-triggered CI workflow
 - `CLAUDE.md` § Releases — concise summary for Claude
 

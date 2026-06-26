@@ -341,7 +341,7 @@ Tag-driven via goreleaser + GH Actions. The `VERSION` file is the dev-build coun
 
 **Cut-a-release workflow:**
 
-1. **Pre-flight:** verify `main` is green, GSD milestone is at a clean checkpoint, `CHANGELOG`-worthy commits use conventional-commit prefixes (`feat:`, `fix:`, `docs:` — goreleaser groups by these). **Update `docs/RELEASE-HIGHLIGHTS.md`** with this release's curated "✨ Major additions highlighted" items — it's injected verbatim into the release notes above the auto-changelog (workflow loads it → `$KM_RELEASE_HIGHLIGHTS` → `.goreleaser.yaml` `release.header`). The mechanism is always-on; a stale file = stale highlights. See `docs/release.md` § Release highlights.
+1. **Pre-flight:** verify `main` is green, GSD milestone is at a clean checkpoint, `CHANGELOG`-worthy commits use conventional-commit prefixes (`feat:`, `fix:`, `docs:` — goreleaser groups by these). **Update `docs/RELEASE-HIGHLIGHTS.md`** with this release's curated "✨ Major additions highlighted" items — auto-draft a starting point with `scripts/draft-release-highlights.sh` (pulls new phase blocks from CLAUDE.md since the last tag + lists non-phase feat/fix candidates), then trim/add emoji. It's injected verbatim into the release notes above the auto-changelog (workflow loads it → `$KM_RELEASE_HIGHLIGHTS` → `.goreleaser.yaml` `release.header`). The mechanism is always-on; a stale file = stale highlights. See `docs/release.md` § Release highlights.
 2. **Local sanity check (no tag):**
    ```bash
    goreleaser check
@@ -358,7 +358,7 @@ Tag-driven via goreleaser + GH Actions. The `VERSION` file is the dev-build coun
 
 **Pinned bundled-tool versions:** `terraform` 1.9.8, `terragrunt` 0.99.1. Bumping these is a one-line edit to `.goreleaser.yaml` `before.hooks` args + the cache-key in the workflow.
 
-**Files:** `.goreleaser.yaml` (release config), `scripts/fetch-bundled-tools.sh` (per-platform tool fetcher, cached at `~/.cache/km-bundle/`), `.github/workflows/release.yml` (tag-triggered).
+**Files:** `.goreleaser.yaml` (release config), `scripts/fetch-bundled-tools.sh` (per-platform tool fetcher, cached at `~/.cache/km-bundle/`), `scripts/draft-release-highlights.sh` (auto-draft highlights from CLAUDE.md phase blocks since last tag), `docs/RELEASE-HIGHLIGHTS.md` (injected into release notes), `.github/workflows/release.yml` (tag-triggered).
 
 Full runbook + troubleshooting: `docs/release.md`.
 
