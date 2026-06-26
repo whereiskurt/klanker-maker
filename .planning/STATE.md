@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 120-01-PLAN.md
-last_updated: "2026-06-26T04:44:54.303Z"
+stopped_at: "Completed 120-03: archive retired profiles + green test suite"
+last_updated: "2026-06-26T05:11:04.554Z"
 last_activity: 2026-06-26
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 20
-  completed_plans: 17
+  completed_plans: 18
   percent: 91
 ---
 
@@ -593,6 +593,7 @@ Progress: [█████████░] 91%
 | Phase 119 P05 | 60 | 3 tasks | 9 files |
 | Phase 119-slack-inbound-per-thread-parallelism P05 | 60min | 3 tasks | 9 files |
 | Phase 120-profiles-reset-and-os-layered-fragment-library P01 | 274 | 3 tasks | 5 files |
+| Phase 120-profiles-reset-and-os-layered-fragment-library P03 | 1761 | 3 tasks | 24 files |
 
 ## Accumulated Context
 
@@ -1695,6 +1696,7 @@ Recent decisions affecting current work:
 - [Phase 120-01]: OS fragments declare ONLY string spec.runtime.ami — no bool fields (spot/hibernation/mountEFS) to avoid zero-value trap
 - [Phase 120-01]: toolchain-agents.yaml is the single version-pin site for claude-code@2.1.132 and codex rust-v0.133.0 across profiles/base/
 - [Phase 120-01]: plugin-klanker fragment enables klanker plugin (enabledPlugins settings.json) — intentional Phase 120 delta from frozen learn.v2.yaml which left it disabled to protect byte-identity fixture (now archived in testdata/)
+- [Phase 120-profiles-reset-and-os-layered-fragment-library]: Dual searchPath pattern: pass both testdata/profiles/ and profiles/ to profile.Resolve so archived profiles extending base/* fragments can still find them without duplicating fragments
 
 ### Roadmap Evolution
 
@@ -1841,6 +1843,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-26T04:44:54.297Z
-Stopped at: Completed 120-01-PLAN.md
+Last session: 2026-06-26T05:11:04.548Z
+Stopped at: Completed 120-03: archive retired profiles + green test suite
 Resume file: None
