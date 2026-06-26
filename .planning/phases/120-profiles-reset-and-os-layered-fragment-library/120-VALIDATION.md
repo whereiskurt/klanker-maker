@@ -2,8 +2,8 @@
 phase: 120
 slug: profiles-reset-and-os-layered-fragment-library
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-06-26
 ---
 
@@ -49,7 +49,7 @@ created: 2026-06-26
 | 120-03-* | 03 | 2 | Update 6 test-path constants in lockstep | unit/golden | `go test ./pkg/compiler/... ./pkg/profile/... -count=1 -timeout 600s` | ✅ existing | ⬜ pending |
 | 120-04-* | 04 | 3 | Rewrite validate-all-profiles.sh inventory + base/os skip | integration | `bash scripts/validate-all-profiles.sh; echo $?` (exit 0) | ✅ existing | ⬜ pending |
 | 120-04-* | 04 | 3 | km-config.yaml path swaps (4 refs) | grep-assert | `grep -n 'profiles/learn.v2\|profiles/github-review\|profiles/h1-triage' km-config.yaml` (no hits) | ✅ existing | ⬜ pending |
-| 120-05-* | 05 | 3 | learner functionally matches learn.v2 (REVIEW gate) | manual-diff | compiled-userdata diff (see Manual-Only) | n/a | ⬜ pending |
+| 120-04-* | 04 | 3 | learner functionally matches learn.v2 (REVIEW gate, Plan 04 Task 4 checkpoint) | manual-diff | compiled-userdata diff (see Manual-Only) | n/a | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -79,6 +79,6 @@ this phase only relocates their inputs and updates path constants.
 - [ ] Wave 0 covers all MISSING references (none — existing infra)
 - [ ] No watch-mode flags
 - [ ] Feedback latency < 180s
-- [ ] `nyquist_compliant: true` set in frontmatter (planner/checker to flip when plans align)
+- [x] `nyquist_compliant: true` set in frontmatter (flipped after plan-checker pass + blocker resolution)
 
-**Approval:** pending
+**Approval:** approved 2026-06-26

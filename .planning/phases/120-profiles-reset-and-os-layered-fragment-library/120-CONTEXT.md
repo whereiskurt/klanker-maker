@@ -92,7 +92,12 @@ no sandbox recreate (Phase 117 `extends:` resolves at `km validate`/`km create` 
   point) + plugin + the knob fragments; lean runtime; `notification.github.inbound.enabled:
   true` ONLY (NO slack-persandbox fragment, to avoid the validate WARN). Replaces
   `github-review.yaml`.
-- `desktop.yaml`: `base/os/debian` + toolchain + plugin + slack + leaf `runtime.desktop`.
+- `desktop.yaml`: `base/os/debian` + `toolchain-agents` + `plugin-klanker` + the knob
+  fragments + leaf `runtime.desktop`. **Does NOT extend `base/slack-persandbox`** — desktop
+  is a remote-browser/XFCE demo, not a Slack-driven sandbox. Notification is **email-on /
+  slack-off in-leaf**, matching the old `profiles/desktop.yaml` (research Task 6) and
+  avoiding the per-sandbox-Slack validate WARN. (Earlier shorthand "+ slack" was loose; this
+  is the authoritative resolution.)
 - `h1.yaml` (NEW canonical leaf): `base/os/redhat` + `toolchain-agents` + plugin + knob
   fragments; `notification` wired for the H1 bridge inbound (compose from old
   `h1-triage.yaml` — read it for the exact notification/inbound shape; functionally match).
