@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 120-03: archive retired profiles + green test suite"
-last_updated: "2026-06-26T05:11:04.554Z"
+stopped_at: "Completed 120-02: authored 4 leaf profiles (learner, desktop, github, h1)"
+last_updated: "2026-06-26T05:16:51.843Z"
 last_activity: 2026-06-26
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 20
-  completed_plans: 18
+  completed_plans: 19
   percent: 91
 ---
 
@@ -594,6 +594,7 @@ Progress: [█████████░] 91%
 | Phase 119-slack-inbound-per-thread-parallelism P05 | 60min | 3 tasks | 9 files |
 | Phase 120-profiles-reset-and-os-layered-fragment-library P01 | 274 | 3 tasks | 5 files |
 | Phase 120-profiles-reset-and-os-layered-fragment-library P03 | 1761 | 3 tasks | 24 files |
+| Phase 120-profiles-reset-and-os-layered-fragment-library P02 | 146 | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1697,6 +1698,9 @@ Recent decisions affecting current work:
 - [Phase 120-01]: toolchain-agents.yaml is the single version-pin site for claude-code@2.1.132 and codex rust-v0.133.0 across profiles/base/
 - [Phase 120-01]: plugin-klanker fragment enables klanker plugin (enabledPlugins settings.json) — intentional Phase 120 delta from frozen learn.v2.yaml which left it disabled to protect byte-identity fixture (now archived in testdata/)
 - [Phase 120-profiles-reset-and-os-layered-fragment-library]: Dual searchPath pattern: pass both testdata/profiles/ and profiles/ to profile.Resolve so archived profiles extending base/* fragments can still find them without duplicating fragments
+- [Phase 120-02]: learner enables klanker plugin via base/plugin-klanker (intentional delta from learn.v2.yaml; frozen fixture now in testdata/profiles/)
+- [Phase 120-02]: github/h1 use full toolchain-agents (single version-pin site tradeoff; heavier than legacy lean profiles)
+- [Phase 120-02]: h1/github/desktop keep narrow network in-leaf (NOT base/safenetwork) to avoid list-union broadening to wildcard
 
 ### Roadmap Evolution
 
@@ -1843,6 +1847,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-26T05:11:04.548Z
-Stopped at: Completed 120-03: archive retired profiles + green test suite
+Last session: 2026-06-26T05:16:51.837Z
+Stopped at: Completed 120-02: authored 4 leaf profiles (learner, desktop, github, h1)
 Resume file: None

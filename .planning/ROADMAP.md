@@ -47,7 +47,7 @@ Plans:
 **Requirements**: Design spec at `docs/superpowers/specs/2026-06-25-profiles-reset-fragment-library-design.md`
 **Depends on:** Phase 119 (Phase 117 `extends:` multi-parent inheritance is the enabling mechanism)
 **Deploy class:** `make build` only — no Lambda rebuild, no schema/DDB change, no `km init`, no sandbox recreate (inheritance resolves at `km validate`/`km create` time).
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 - [ ] 120-01-PLAN.md — Author 5 new base fragments (os/redhat, os/debian, toolchain-agents single-pin, plugin-klanker, slack-persandbox)
