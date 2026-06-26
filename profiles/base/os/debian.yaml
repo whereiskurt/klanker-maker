@@ -1,0 +1,20 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-os-debian
+  abstract: true
+
+# Debian-family OS layer fragment (Phase 120).
+# Sets ONLY spec.runtime.ami (string — safe; no spot/hibernation/mountEFS to avoid the
+# bool zero-value trap). The compiler's userdata stub is OS-aware since Phase 93 and
+# handles the Ubuntu-specific bootstrap at the userdata level (apt-over-443/ForceIPv4/
+# python3-awscli/ssh.service/systemd-resolved-stop). The PROFILE-level initCommands
+# here supply only the Debian cert-trust step — idempotent and harmless.
+# List this fragment FIRST in a leaf's extends: so OS steps precede toolchain steps.
+spec:
+  runtime:
+    ami: ubuntu-24.04
+
+  execution:
+    initCommands:
+      - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/ssl/certs/ca-certificates.crt || update-ca-certificates"
