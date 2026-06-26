@@ -1,0 +1,125 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: desktop
+  labels:
+    tier: development
+    tool: browser-desktop
+  prefix: desk
+
+# First-boot network caveat
+# --------------------------
+# A fresh non-AMI boot must reach the following endpoints to install the desktop stack:
+#   - Ubuntu package mirrors (archive.ubuntu.com, security.ubuntu.com)
+#   - KasmVNC release tarball (github.com, objects.githubusercontent.com)
+#   - Firefox PPA (ppa.launchpad.net, keyserver.ubuntu.com)
+#
+# Under a locked-down spec.network, either allowlist those domains for first boot
+# OR bake the AMI on a permissive profile (km create + km ami bake) and then launch
+# under a restricted profile using spec.runtime.ami: <baked-ami-id>.
+#
+# Browser *runtime* egress (what Firefox fetches once running) is governed by the
+# profile's spec.network as usual — tighten it to match your use case.
+#
+# AMI-bake recommended for routine use:
+#   km create profiles/desktop.yaml && km ami bake <sandbox-id>
+#   # then in your profile: spec.runtime.ami: ami-xxxxxxxxxxxxxxxxx
+#   km validate profiles/desktop.yaml && km create profiles/desktop.yaml
+#
+# Phase 120 composed leaf. Replaces profiles/desktop.yaml (archived as
+# testdata/profiles/desktop.legacy.yaml).
+#
+# extends ordering: base/os/debian FIRST (Ubuntu cert-trust initCommand precedes
+# agent toolchain steps). Full toolchain (goose/codex/nvm/gsd/herdr) inherited from
+# base/toolchain-agents — single version-pin site is the point; heavier than the
+# legacy desktop.yaml but operationally correct.
+#
+# Bool runtime fields (spot/hibernation) STAY IN THIS LEAF — not inherited —
+# to avoid the bool zero-value trap (Phase 117 § bool zero-value trap).
+#
+# Network: narrow allowlist in-leaf (NOT base/safenetwork — list union would broaden
+# to "*" and defeat the tightened desktop posture).
+#
+# Notification: email-on / slack-off in-leaf (does NOT extend base/slack-persandbox).
+# This matches the legacy desktop.yaml and avoids the per-sandbox-Slack validate WARN.
+# Rule S5 (both channels off) does NOT fire — email is on.
+
+extends:
+  - base/os/debian
+  - base/toolchain-agents
+  - base/plugin-klanker
+  - base/sidecars-all
+  - base/observability-learn
+  - base/budget-standard
+  - base/artifacts-workspace
+  - base/iam-us-east-1
+  - base/agent-claude-all-tools
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: stop
+
+  runtime:
+    # Ubuntu 24.04 required — KasmVNC only supports Ubuntu in v1.
+    # ami ubuntu-24.04 comes from base/os/debian.
+    substrate: ec2
+    instanceType: t3.large
+    region: us-east-1
+    rootVolumeSize: 30
+    # Bool fields IN-LEAF (bool zero-value trap — do not move to a fragment).
+    spot: false
+    hibernation: false
+
+    desktop:
+      enabled: true
+      # mode: kiosk — browsers[0] (firefox) is launched maximized; matchbox-wm
+      # provides the window manager. No desktop environment overhead.
+      # Set mode: full for a complete XFCE4 desktop session.
+      mode: kiosk
+      # browsers: first entry is the kiosk browser in mode=kiosk.
+      # Supported values: firefox, chromium, chrome, brave
+      browsers:
+        - firefox
+      geometry: 1920x1080
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+    privileged: false
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos: []
+      allowedRefs: []
+
+  network:
+    # Narrow in-leaf allowlist (NOT base/safenetwork — list union would widen to "*").
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - "time.aws.com"
+        # Anthropic / Claude Code
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
+        # Firefox update + telemetry domains (adjust for stricter postures)
+        - ".mozilla.org"
+        - ".mozilla.com"
+        - ".mozilla.net"
+        - ".firefox.com"
+      allowedHosts: []
+
+  notification:
+    events:
+      onIdle: false
+      onPermission: false
+    # At least one delivery channel must be enabled (Rule S5). Email goes to operator.
+    email:
+      enabled: true
+    slack:
+      enabled: false
