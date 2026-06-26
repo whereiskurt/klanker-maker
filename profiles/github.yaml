@@ -98,5 +98,3 @@ spec:
     email:
       enabled: true
 
-  secrets:
-    sopsFile: github-review-secrets.enc.yaml

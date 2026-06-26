@@ -105,5 +105,8 @@ spec:
     email:
       enabled: true
 
-  secrets:
-    sopsFile: h1-triage-secrets.enc.yaml
+  # Secrets: removed for the canonical demo leaf so `km create` works out-of-the-box.
+  # To inject a cold-box auth bundle, uncomment and provide the encrypted file
+  # (see the SOPS runbook comment at the top of this profile + docs/sandbox-secrets.md):
+  #   secrets:
+  #     sopsFile: h1-secrets.enc.yaml
