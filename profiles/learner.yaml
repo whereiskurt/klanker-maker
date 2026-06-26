@@ -1,0 +1,93 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: learner
+  labels:
+    tier: development
+    tool: learning-sandbox-unsafe
+  prefix: learn
+
+# Learner sandbox — Phase 120 composed leaf. Replaces profiles/learn.v2.yaml.
+#
+# Functional match to testdata/profiles/learn.v2.yaml with ONE intentional delta
+# (see CONTEXT.md § Resolved):
+#   - klanker plugin is ENABLED via base/plugin-klanker (enabledPlugins:true in
+#     configFiles[settings.json]). learn.v2.yaml left it disabled only to protect the
+#     frozen byte-identity fixture, which is now archived in testdata/profiles/ and
+#     decoupled from this live leaf. The compiler deep-merges the plugin-enable ON TOP
+#     of any synthesized agent.claude.tools.* settings (Phase 92 mixed-mode path).
+#
+# extends ordering: base/os/redhat FIRST so OS yum+cert initCommands run before the
+# toolchain install steps in base/toolchain-agents.
+#
+# Bool runtime fields (spot/hibernation/mountEFS) STAY IN THIS LEAF — not inherited —
+# to avoid the bool zero-value trap (Phase 117 § bool zero-value trap).
+
+extends:
+  - base/os/redhat
+  - base/toolchain-agents
+  - base/plugin-klanker
+  - base/safenetwork
+  - base/sidecars-all
+  - base/observability-learn
+  - base/budget-standard
+  - base/artifacts-workspace
+  - base/iam-us-east-1
+  - base/agent-claude-all-tools
+  - base/email-strict
+  - base/slack-persandbox
+
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.2xlarge
+    region: us-east-1
+    rootVolumeSize: 80
+    # Bool fields IN-LEAF (bool zero-value trap — do not move to a fragment).
+    spot: false
+    hibernation: false
+    mountEFS: true
+    efsMountPoint: /shared
+    additionalVolume:
+      size: 30
+      mountPoint: /data
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+    privileged: true
+    env:
+      # Leaf-specific env var (not in toolchain-agents fragment).
+      SANDBOX_MODE: learn-v2-direct-api
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  cli:
+    noBedrock: true
+
+  agent:
+    default: claude
+
+  notification:
+    github:
+      inbound:
+        enabled: true
+    events:
+      onIdle: false
+      onPermission: false
+    email:
+      enabled: false
+    # slack block comes from base/slack-persandbox (enabled:true + perSandbox:true).
+    # Rule S5 (both channels off) does NOT fire — slack is on.
