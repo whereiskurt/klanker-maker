@@ -18,13 +18,13 @@ metadata:
 # record for status queries after the EC2 instance stops.
 #
 # extends ordering: base/os/redhat FIRST so OS yum+cert initCommands precede toolchain.
-# Full toolchain (goose/codex/nvm/gsd/herdr) via base/toolchain-agents — heavier than
+# Full toolchain (goose/codex/nvm/gsd/herdr) via base/userinit — heavier than
 # the legacy h1-triage.yaml (which installed only yum+claude-code), but the
 # single version-pin site is the design point: update one file to roll all agents.
 #
 # Network / sidecars / sourceAccess: H1 has a NARROW allowlist and reads/replies over
 # the HackerOne customer API (no repo clone). These do NOT fit the wide knob fragments
-# (base/safenetwork would broaden to "*"; base/sidecars-all enables tracing which h1
+# (network in-leaf; base/platform enables tracing which h1
 # keeps off). All three are kept IN-LEAF to match the original h1-triage.yaml posture.
 #
 # Notification: notification.h1.inbound.enabled:true (provisions the per-sandbox
@@ -42,11 +42,8 @@ metadata:
 
 extends:
   - base/os/redhat
-  - base/toolchain-agents
-  - base/plugin-klanker
-  - base/observability-learn
-  - base/iam-us-east-1
-  - base/agent-claude-all-tools
+  - base/userinit
+  - base/platform
   - base/slack-persandbox
 
 spec:
@@ -86,16 +83,9 @@ spec:
       allowedHosts: []
 
   sidecars:
-    # H1 keeps tracing disabled — do NOT extend base/sidecars-all (it enables tracing).
-    dnsProxy:
-      enabled: true
-      image: km-dns-proxy:latest
-    httpProxy:
-      enabled: true
-      image: km-http-proxy:latest
-    auditLog:
-      enabled: true
-      image: km-audit-log:latest
+    # base/platform enables all four sidecars; H1 flips tracing OFF in-leaf
+    # (child-wins override) to match the original h1-triage.yaml posture. dns/http/
+    # audit come from base/platform.
     tracing:
       enabled: false
       image: km-tracing:latest

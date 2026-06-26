@@ -22,7 +22,6 @@ spec:
       archiveOnDestroy: false
       inbound:
         enabled: true
-      # Phase 72 — invite into the per-sandbox channel after creation.
       invites:
         emails:
           - whereiskurt@gmail.com

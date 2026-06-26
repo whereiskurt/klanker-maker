@@ -31,7 +31,7 @@ metadata:
 #
 # extends ordering: base/os/debian FIRST (Ubuntu cert-trust initCommand precedes
 # agent toolchain steps). Full toolchain (goose/codex/nvm/gsd/herdr) inherited from
-# base/toolchain-agents — single version-pin site is the point; heavier than the
+# base/userinit — single version-pin site is the point; heavier than the
 # legacy desktop.yaml but operationally correct.
 #
 # Bool runtime fields (spot/hibernation) STAY IN THIS LEAF — not inherited —
@@ -47,14 +47,8 @@ metadata:
 
 extends:
   - base/os/debian
-  - base/toolchain-agents
-  - base/plugin-klanker
-  - base/sidecars-all
-  - base/observability-learn
-  - base/budget-standard
-  - base/artifacts-workspace
-  - base/iam-us-east-1
-  - base/agent-claude-all-tools
+  - base/userinit
+  - base/platform
   - base/slack-persandbox
 
 spec:

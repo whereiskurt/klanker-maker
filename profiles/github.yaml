@@ -7,32 +7,6 @@ metadata:
     tool: github-review-agent
   prefix: gh
 
-# github — Phase 120 composed leaf. Replaces profiles/github-review.yaml.
-#
-# GitHub comment-trigger code review sandbox. When an allowlisted GitHub login
-# @-mentions the bot in a PR comment, the km-github-bridge Lambda dispatches an
-# agent turn to this sandbox (warm: FIFO enqueue; cold: EventBridge SandboxCreate).
-# The agent reads the PR diff and posts a review via `km-github review`.
-#
-# Lifecycle: short-lived (2h TTL / 20m idle), teardownPolicy=stop preserves the DDB
-# record for status queries after the EC2 instance stops.
-#
-# extends ordering: base/os/redhat FIRST so OS yum+cert initCommands precede toolchain.
-# Full toolchain (goose/codex/nvm/gsd/herdr) via base/toolchain-agents — heavier than
-# the legacy github-review.yaml (which installed only yum+claude-code), but the
-# single version-pin site is the design point: update one file to roll all agents.
-#
-# Network: narrow allowlist kept in-leaf (NOT base/safenetwork — list union would
-# widen to "*" and defeat the tightened github posture).
-#
-# Notification: notification.github.inbound.enabled:true (provisions the per-sandbox
-# github-inbound FIFO queue) AND base/slack-persandbox (per-sandbox #sb-github-{alias}
-# channel + transcript streaming + whereiskurt@gmail.com invite). email.enabled:true
-# is kept too, so the operator gets both Slack and email notifications.
-#
-# Bool runtime fields (spot) STAY IN THIS LEAF — not inherited —
-# to avoid the bool zero-value trap (Phase 117 § bool zero-value trap).
-#
 # Secrets: SOPS-encrypted bundle for cold-box self-authentication (Phase 98-04).
 # See docs/sandbox-secrets.md (Phase 89) for the full SOPS injection runbook:
 #   km bootstrap --shared-secrets-key   # one-time
@@ -41,14 +15,8 @@ metadata:
 
 extends:
   - base/os/redhat
-  - base/toolchain-agents
-  - base/plugin-klanker
-  - base/sidecars-all
-  - base/observability-learn
-  - base/budget-standard
-  - base/artifacts-workspace
-  - base/iam-us-east-1
-  - base/agent-claude-all-tools
+  - base/userinit
+  - base/platform
   - base/slack-persandbox
 
 spec:

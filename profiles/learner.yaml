@@ -11,33 +11,31 @@ metadata:
 #
 # Functional match to testdata/profiles/learn.v2.yaml with ONE intentional delta
 # (see CONTEXT.md § Resolved):
-#   - klanker plugin is ENABLED via base/plugin-klanker (enabledPlugins:true in
+#   - klanker plugin is ENABLED via base/userinit (enabledPlugins:true in
 #     configFiles[settings.json]). learn.v2.yaml left it disabled only to protect the
 #     frozen byte-identity fixture, which is now archived in testdata/profiles/ and
 #     decoupled from this live leaf. The compiler deep-merges the plugin-enable ON TOP
 #     of any synthesized agent.claude.tools.* settings (Phase 92 mixed-mode path).
 #
 # extends ordering: base/os/redhat FIRST so OS yum+cert initCommands run before the
-# toolchain install steps in base/toolchain-agents.
+# toolchain install steps in base/userinit.
 #
 # Bool runtime fields (spot/hibernation/mountEFS) STAY IN THIS LEAF — not inherited —
 # to avoid the bool zero-value trap (Phase 117 § bool zero-value trap).
 
 extends:
   - base/os/redhat
-  - base/toolchain-agents
-  - base/plugin-klanker
   - base/network/safenetwork
-  - base/sidecars-all
-  - base/observability-learn
-  - base/budget-standard
-  - base/artifacts-workspace
-  - base/iam-us-east-1
-  - base/agent-claude-all-tools
-  - base/email-strict
+  - base/userinit
+  - base/platform
   - base/slack-persandbox
 
 spec:
+  # learnMode is the one learner-specific observability bit — kept in-leaf, NOT in
+  # base/platform (which carries the shared logs/telemetry for every profile).
+  observability:
+    learnMode: true
+
   lifecycle:
     ttl: "8h"
     idleTimeout: "1h"

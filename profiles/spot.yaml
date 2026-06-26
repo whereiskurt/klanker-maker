@@ -26,14 +26,8 @@ metadata:
 
 extends:
   - base/os/redhat
-  - base/toolchain-agents
-  - base/plugin-klanker
-  - base/sidecars-all
-  - base/observability-learn
-  - base/budget-standard
-  - base/artifacts-workspace
-  - base/iam-us-east-1
-  - base/agent-claude-all-tools
+  - base/userinit
+  - base/platform
   - base/slack-persandbox
 
 spec:
