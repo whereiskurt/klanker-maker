@@ -881,3 +881,47 @@ func (f *DynamoFreezer) FreezeSandbox(ctx context.Context, sandboxID, reason, by
 
 // compile-time interface check.
 var _ Freezer = (*DynamoFreezer)(nil)
+
+// ============================================================
+// DDBActionLimitsFetcher — per-sandbox action_limits resolver (Phase 121)
+// ============================================================
+
+// h1GetItemAPI is the minimal GetItem surface DDBActionLimitsFetcher needs.
+// *dynamodb.Client satisfies it.
+type h1GetItemAPI interface {
+	GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
+}
+
+// DDBActionLimitsFetcher implements H1ActionLimitsFetcher by reading the
+// action_limits JSON string from the km-sandboxes row (GetItem keyed by
+// sandbox_id). Wired into WebhookHandler.Limits in main.go. An absent row or
+// absent action_limits attr returns "" (dormant — quota.Record then no-ops).
+type DDBActionLimitsFetcher struct {
+	Client    h1GetItemAPI // *dynamodb.Client satisfies this
+	TableName string       // e.g. "km-sandboxes"
+}
+
+// FetchLimits returns the action_limits JSON for sandboxID, or "" when the row
+// or attr is absent. Only a GetItem transport error is surfaced.
+func (f *DDBActionLimitsFetcher) FetchLimits(ctx context.Context, sandboxID string) (string, error) {
+	out, err := f.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: awssdk.String(f.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		ProjectionExpression: awssdk.String("action_limits"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("h1-bridge: action_limits lookup for %s: %w", sandboxID, err)
+	}
+	if out == nil || out.Item == nil {
+		return "", nil
+	}
+	if v, ok := out.Item["action_limits"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		return v.Value, nil
+	}
+	return "", nil
+}
+
+// compile-time interface check.
+var _ H1ActionLimitsFetcher = (*DDBActionLimitsFetcher)(nil)
