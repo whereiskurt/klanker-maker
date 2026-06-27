@@ -676,6 +676,15 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			// Phase 121: {prefix}-action-quota DynamoDB table with Streams enabled
+			// (NEW_AND_OLD_IMAGES). PK={sandbox}#{action}, SK=window (lifetime|hour#N|day#N).
+			// Streams drive the km-quota-alerter Lambda (plan 09 event-source mapping).
+			// Plain table — no upstream deps. Ordered BEFORE ses.
+			name:    "dynamodb-action-quota",
+			dir:     filepath.Join(regionDir, "dynamodb-action-quota"),
+			envReqs: nil,
+		},
+		{
 			// Phase 116: shared {prefix}-check-runner Lambda execution role with
 			// baseline inline policies (CW Logs, S3 read/write, EventBridge PutEvents,
 			// SSM, DynamoDB read). Requires KM_ARTIFACTS_BUCKET for S3 IAM policy
