@@ -38,10 +38,10 @@ func TestSynthesizeClaudeSettingsGolden(t *testing.T) {
 		profilePath string
 		goldenPath  string
 	}{
-		{"learn.v2", "../../profiles/learn.v2.yaml", "testdata/claude_settings_learn_v2.golden.json"},
-		{"dc34", "../../profiles/dc34.yaml", "testdata/claude_settings_dc34.golden.json"},
-		{"locked", "../../profiles/locked.yaml", "testdata/claude_settings_locked.golden.json"},
-		{"codex", "../../profiles/codex.yaml", "testdata/claude_settings_codex.golden.json"},
+		{"learn.v2", "../../testdata/profiles/learn.v2.yaml", "testdata/claude_settings_learn_v2.golden.json"},
+		{"dc34", "../../testdata/profiles/dc34.yaml", "testdata/claude_settings_dc34.golden.json"},
+		{"locked", "../../testdata/profiles/locked.yaml", "testdata/claude_settings_locked.golden.json"},
+		{"codex", "../../testdata/profiles/codex.yaml", "testdata/claude_settings_codex.golden.json"},
 	}
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -55,9 +55,13 @@ func TestSynthesizeClaudeSettingsGolden(t *testing.T) {
 		t.Run(f.name, func(t *testing.T) {
 			// Determine the search paths from the profile path so extends: DAG
 			// is resolved (e.g. learn.v2 and dc34 now extend base/* fragments).
+			// Archived fixtures live in testdata/profiles/; base/** fragments
+			// remain in profiles/. Pass both so extends can find base/safenetwork
+			// etc. without moving the fragments alongside every archived leaf.
 			profilesDir := filepath.Join(repoRoot, filepath.Dir(f.profilePath[len("../../"):]))
+			profilesBaseDir := filepath.Join(repoRoot, "profiles")
 			leafName := strings.TrimSuffix(filepath.Base(f.profilePath), ".yaml")
-			p, err := profile.Resolve(leafName, []string{profilesDir})
+			p, err := profile.Resolve(leafName, []string{profilesDir, profilesBaseDir})
 			if err != nil {
 				t.Fatalf("resolve profile %s: %v", f.profilePath, err)
 			}

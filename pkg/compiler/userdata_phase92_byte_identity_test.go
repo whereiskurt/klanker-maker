@@ -31,12 +31,15 @@ func generateLearnV2Userdata(t *testing.T) string {
 	}
 	// pkg/compiler/<thisfile> -> repo root is two dirs up.
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
-	profilesDir := filepath.Join(repoRoot, "profiles")
+	profilesDir := filepath.Join(repoRoot, "testdata", "profiles")
+	// base/** fragments (base/safenetwork, base/sidecars-all, etc.) live in
+	// profiles/, not testdata/profiles/. Pass both so the extends DAG resolves.
+	profilesBaseDir := filepath.Join(repoRoot, "profiles")
 
 	// Resolve the full extends DAG so that once learn.v2.yaml gains `extends:`,
 	// the merged spec (not just the partial leaf) is compiled — byte-identical to
 	// the frozen pre-Phase-92 baseline.
-	p, err := profile.Resolve("learn.v2", []string{profilesDir})
+	p, err := profile.Resolve("learn.v2", []string{profilesDir, profilesBaseDir})
 	if err != nil {
 		t.Fatalf("resolve profile learn.v2: %v", err)
 	}

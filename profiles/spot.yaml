@@ -1,14 +1,14 @@
 apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
-  name: desktop
+  name: spot
   labels:
     tier: development
-    tool: browser-desktop
-  prefix: desk
+    tool: spot-demo
+  prefix: spot
 
 extends:
-  - base/os/debian
+  - base/os/redhat
   - base/network/safenetwork
   - base/userinit
   - base/platform
@@ -25,21 +25,13 @@ spec:
     instanceType: t3.large
     region: us-east-1
     rootVolumeSize: 30
-    spot: false
+    spot: true
     hibernation: false
-
-    desktop:
-      enabled: true
-      mode: kiosk
-      browsers:
-        - firefox
-      geometry: 1920x1080
 
   execution:
     shell: /bin/bash
     workingDir: /workspace
     useBedrock: false
-    privileged: false
 
   sourceAccess:
     mode: allowlist
@@ -49,9 +41,12 @@ spec:
       allowedRefs:
         - "*"
 
+  cli:
+    noBedrock: true
+
+  agent:
+    default: claude
+
   notification:
-    events:
-      onIdle: false
-      onPermission: false
     email:
       enabled: true

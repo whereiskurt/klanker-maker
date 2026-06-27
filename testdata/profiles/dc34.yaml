@@ -8,7 +8,7 @@ metadata:
   prefix: dc34
 
 extends:
-  - base/safenetwork
+  - base/network/safenetwork
   - base/sidecars-all
   - base/observability-learn
   - base/budget-standard

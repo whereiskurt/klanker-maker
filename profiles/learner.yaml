@@ -1,45 +1,48 @@
 apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
-  name: desktop
+  name: learner
   labels:
     tier: development
-    tool: browser-desktop
-  prefix: desk
+    tool: learning-sandbox-unsafe
+  prefix: learn
 
 extends:
-  - base/os/debian
+  - base/os/redhat
   - base/network/safenetwork
   - base/userinit
   - base/platform
   - base/slack-persandbox
 
 spec:
+  observability:
+    learnMode: true
+
   lifecycle:
-    ttl: "4h"
-    idleTimeout: "30m"
+    ttl: "8h"
+    idleTimeout: "1h"
     teardownPolicy: stop
 
   runtime:
     substrate: ec2
-    instanceType: t3.large
+    instanceType: t3.2xlarge
     region: us-east-1
-    rootVolumeSize: 30
+    rootVolumeSize: 80
     spot: false
     hibernation: false
-
-    desktop:
-      enabled: true
-      mode: kiosk
-      browsers:
-        - firefox
-      geometry: 1920x1080
+    mountEFS: true
+    efsMountPoint: /shared
+    additionalVolume:
+      size: 30
+      mountPoint: /data
 
   execution:
     shell: /bin/bash
     workingDir: /workspace
     useBedrock: false
-    privileged: false
+    privileged: true
+    env:
+      SANDBOX_MODE: learn-v2-direct-api
 
   sourceAccess:
     mode: allowlist
@@ -49,9 +52,18 @@ spec:
       allowedRefs:
         - "*"
 
+  cli:
+    noBedrock: true
+
+  agent:
+    default: claude
+
   notification:
+    github:
+      inbound:
+        enabled: true
     events:
       onIdle: false
       onPermission: false
     email:
-      enabled: true
+      enabled: false

@@ -40,3 +40,17 @@ Plans:
 - [x] 119-03-PLAN.md — schema/validate/NotifyEnv plumbing: km validate WARN cap>1 w/o perSandbox+inbound; emit KM_SLACK_MAX_CONCURRENCY only when cap>1 (dormancy)
 - [x] 119-04-PLAN.md — Layer 2 poller rewrite: wait -n counting semaphore + ack-after-completion + visibility heartbeat + RUN_ID uniqueness + last_processed_event_ts idempotency guard; hand-patch frozen golden
 - [x] 119-05-PLAN.md — demo profile + live synthetic-HMAC E2E (parallelism/ordering/cap/heartbeat/dormant/dedup) + docs (slack-notifications § Phase 119, klanker:slack SKILL, CLAUDE.md)
+
+### Phase 120: Profiles reset and OS-layered fragment library
+
+**Goal:** Collapse `profiles/` to 3 composed demo profiles (`learner`/`desktop`/`github`) built from an expanded `profiles/base/` fragment library (`os/redhat`, `os/debian`, `toolchain-agents`, `plugin-klanker`, `slack-persandbox`). The high-churn toolchain install block (claude-code/codex version pins, copy-pasted across ~6 files today) is layered out into a single fragment. All retired demos + frozen byte-identity fixtures are archived into `testdata/profiles/` with test path constants updated in lockstep so byte-identity + golden contracts stay green. `learner` must functionally match today's `learn.v2.yaml`. Contributes to the larger "lean top-level" milestone goal (within-folder cleanup; top-level folder reduction is a separate follow-on phase).
+**Requirements**: Design spec at `docs/superpowers/specs/2026-06-25-profiles-reset-fragment-library-design.md`
+**Depends on:** Phase 119 (Phase 117 `extends:` multi-parent inheritance is the enabling mechanism)
+**Deploy class:** `make build` only — no Lambda rebuild, no schema/DDB change, no `km init`, no sandbox recreate (inheritance resolves at `km validate`/`km create` time).
+**Plans:** 4/4 plans complete
+
+Plans:
+- [ ] 120-01-PLAN.md — Author 5 new base fragments (os/redhat, os/debian, toolchain-agents single-pin, plugin-klanker, slack-persandbox)
+- [ ] 120-02-PLAN.md — Author 4 composed leaves (learner, desktop, github, h1); km validate clean no-WARN
+- [ ] 120-03-PLAN.md — git mv retired demos + frozen fixtures to testdata/profiles/ + update 6 test-path constants (atomic, no red commit)
+- [ ] 120-04-PLAN.md — Rewrite validate-all-profiles.sh + km-config.yaml swaps + final gates + learner functional-match review

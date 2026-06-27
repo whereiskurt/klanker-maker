@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# scripts/validate-all-profiles.sh — Phase 92 hard gate (updated Phase 117 Plan 03).
+# scripts/validate-all-profiles.sh — Phase 92 hard gate (updated Phase 120 Plan 04).
 #
-# Validates every concrete leaf profile in the 21-file Profile Inventory using
+# Validates every concrete leaf profile in the 13-entry Profile Inventory using
 # `km validate`. Exits non-zero on any failure. Single source of truth for the
-# inventory.
+# inventory (4 composed leaves + 8 pkg/profile/builtins entries).
 #
-# profiles/base/ is intentionally EXCLUDED: abstract base fragments live there
-# and deliberately omit required fields that concrete leaves supply via extends.
-# km validate already prints a "SKIP" message for metadata.abstract:true files;
-# this script skips them entirely to keep output clean and avoid false failures.
-# (The base/ directory is created by Phase 117 Plan 04 and may not exist yet;
-# the guard below is a no-op when the directory is absent.)
+# profiles/base/** is intentionally EXCLUDED (recursive): abstract base fragments
+# live there (including the new profiles/base/os/ subdir) and deliberately omit
+# required fields that concrete leaves supply via extends. km validate already prints
+# a "SKIP" message for metadata.abstract:true files; this script skips them entirely
+# to keep output clean and avoid false failures.
+# (The base/ directory is created by Phase 117 Plan 04; base/os/ by Phase 120 Plan 01.)
 #
 # Usage: bash scripts/validate-all-profiles.sh
 # Requires: km binary built (./km) — call `make build` first if needed.
@@ -23,33 +23,24 @@ if [[ ! -x "$KM_BIN" ]]; then
   exit 2
 fi
 
-# Print skip lines for any profiles/base/*.yaml fragments.
+# Print skip lines for all profiles/base/**/*.yaml fragments (recursive).
+# This covers both profiles/base/*.yaml (existing knob fragments) AND the new
+# profiles/base/os/*.yaml subdir introduced in Phase 120 Plan 01.
 # These are abstract base definitions (metadata.abstract: true) that must NOT
 # be validated standalone — they are only valid when merged into a leaf profile.
-# Guard: the profiles/base/ directory may not exist yet (created by Phase 117 Plan 04).
+# Guard: the profiles/base/ directory may not exist yet on fresh checkouts.
 if [ -d profiles/base ]; then
-  for frag in profiles/base/*.yaml; do
-    # nullglob-style guard: skip if the glob matched nothing
-    [ -e "$frag" ] || continue
+  while IFS= read -r frag; do
     printf '  skip  %s (base fragment — validated only when merged into a leaf)\n' "$frag"
-  done
+  done < <(find profiles/base -name '*.yaml' | sort)
 fi
 
 PROFILES=(
-  profiles/ao.yaml
-  profiles/codex.yaml
-  profiles/dc34.yaml
+  profiles/learner.yaml
   profiles/desktop.yaml
-  profiles/dc34.ami.yaml
-  profiles/example-additional-snapshots.yaml
-  profiles/github-review.yaml
-  profiles/goose.yaml
-  profiles/learn.v2.yaml
-  profiles/learn.v2.chatty.yaml
-  profiles/learn.v2.codex.yaml
-  profiles/learn.v2.polite.yaml
-  profiles/locked.yaml
-  profiles/locked.ami.yaml
+  profiles/github.yaml
+  profiles/h1.yaml
+  profiles/spot.yaml
   pkg/profile/builtins/ao.yaml
   pkg/profile/builtins/codex.yaml
   pkg/profile/builtins/goose.yaml

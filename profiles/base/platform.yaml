@@ -1,0 +1,83 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-platform
+  abstract: true
+
+spec:
+  cli:
+    noBedrock: true
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+    tlsCapture:
+      enabled: true
+      libraries:
+        - openssl
+      capturePayloads: false
+
+  budget:
+    compute:
+      maxSpendUSD: 0.50
+    ai:
+      maxSpendUSD: 2.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 500
+
+  iam:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+
+  agent:
+    claude:
+      trustedDirectories:
+        - /home/sandbox
+        - /workspace
+      tools:
+        autoApprove:
+          - Bash
+          - Read
+          - Write
+          - Edit
+          - Glob
+          - Grep
+          - WebFetch
+          - WebSearch
+          - NotebookEdit
+      args:
+        - "--dangerously-skip-permissions"
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "*"

@@ -17,13 +17,14 @@ import (
 func TestResolveH1EventPrompts(t *testing.T) {
 	configDir := t.TempDir()
 
-	// Default-home file (bare "@x.txt" → configDir/profiles/x.txt).
-	profilesDir := filepath.Join(configDir, "profiles")
-	if err := os.MkdirAll(profilesDir, 0o750); err != nil {
-		t.Fatalf("setup: mkdir profiles: %v", err)
+	// Prompt files now live in profiles/prompts/ (Phase 120-04 lean-root move).
+	// Write to configDir/profiles/prompts/ to match the live km-config path (@profiles/prompts/h1.triage.prompt.txt).
+	promptsDir := filepath.Join(configDir, "profiles", "prompts")
+	if err := os.MkdirAll(promptsDir, 0o750); err != nil {
+		t.Fatalf("setup: mkdir profiles/prompts: %v", err)
 	}
 	fileContent := "Triage report #{{report_id}} \"{{title}}\". Internal only."
-	if err := os.WriteFile(filepath.Join(profilesDir, "h1.triage.prompt.txt"), []byte(fileContent), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(promptsDir, "h1.triage.prompt.txt"), []byte(fileContent), 0o600); err != nil {
 		t.Fatalf("setup: write prompt file: %v", err)
 	}
 
@@ -32,7 +33,7 @@ func TestResolveH1EventPrompts(t *testing.T) {
 			{
 				Handle: "test-prog",
 				Events: map[string]config.H1EventEntry{
-					"report_created": {Prompt: "@profiles/h1.triage.prompt.txt"},
+					"report_created": {Prompt: "@profiles/prompts/h1.triage.prompt.txt"},
 					"report_reopened": {Prompt: "Re-look at this report inline."},
 					"report_needs_more_info": {Prompt: "@@literal-at-prefix"},
 				},
@@ -52,7 +53,7 @@ func TestResolveH1EventPrompts(t *testing.T) {
 			t.Errorf("report_needs_more_info: @@ escape should yield single @, got %q", got[0].Events["report_needs_more_info"].Prompt)
 		}
 		// The input slice's map must NOT have been mutated (copy semantics).
-		if programs[0].Events["report_created"].Prompt != "@profiles/h1.triage.prompt.txt" {
+		if programs[0].Events["report_created"].Prompt != "@profiles/prompts/h1.triage.prompt.txt" {
 			t.Errorf("input mutated: want original @ref, got %q", programs[0].Events["report_created"].Prompt)
 		}
 	})
@@ -67,13 +68,13 @@ func TestResolveH1EventPrompts(t *testing.T) {
 	})
 
 	t.Run("no events is a no-op", func(t *testing.T) {
-		programs := []config.H1ProgramEntry{{Handle: "p", Commands: map[string]config.H1CommandEntry{"x": {Prompt: "@profiles/h1.triage.prompt.txt"}}}}
+		programs := []config.H1ProgramEntry{{Handle: "p", Commands: map[string]config.H1CommandEntry{"x": {Prompt: "@profiles/prompts/h1.triage.prompt.txt"}}}}
 		got, err := cmd.ResolveH1EventPrompts(programs, configDir)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		// Commands are resolved elsewhere (PublishH1CommandsToSSM); this helper leaves them alone.
-		if got[0].Commands["x"].Prompt != "@profiles/h1.triage.prompt.txt" {
+		if got[0].Commands["x"].Prompt != "@profiles/prompts/h1.triage.prompt.txt" {
 			t.Errorf("command prompt should be untouched by the event resolver, got %q", got[0].Commands["x"].Prompt)
 		}
 	})
@@ -89,7 +90,7 @@ func TestResolveH1EventPrompts(t *testing.T) {
 				BotHandle: "@km",
 				Programs: []config.H1ProgramEntry{{
 					Handle: "test-prog",
-					Events: map[string]config.H1EventEntry{"report_created": {Prompt: "@profiles/h1.triage.prompt.txt"}},
+					Events: map[string]config.H1EventEntry{"report_created": {Prompt: "@profiles/prompts/h1.triage.prompt.txt"}},
 				}},
 			},
 		}

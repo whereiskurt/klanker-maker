@@ -1,14 +1,14 @@
 apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
-  name: desktop
+  name: h1
   labels:
     tier: development
-    tool: browser-desktop
-  prefix: desk
+    tool: h1-triage-agent
+  prefix: h1
 
 extends:
-  - base/os/debian
+  - base/os/redhat
   - base/network/safenetwork
   - base/userinit
   - base/platform
@@ -16,30 +16,20 @@ extends:
 
 spec:
   lifecycle:
-    ttl: "4h"
-    idleTimeout: "30m"
+    ttl: "2h"
+    idleTimeout: "20m"
     teardownPolicy: stop
 
   runtime:
     substrate: ec2
-    instanceType: t3.large
+    instanceType: t3.medium
     region: us-east-1
-    rootVolumeSize: 30
     spot: false
-    hibernation: false
-
-    desktop:
-      enabled: true
-      mode: kiosk
-      browsers:
-        - firefox
-      geometry: 1920x1080
 
   execution:
     shell: /bin/bash
     workingDir: /workspace
     useBedrock: false
-    privileged: false
 
   sourceAccess:
     mode: allowlist
@@ -49,9 +39,15 @@ spec:
       allowedRefs:
         - "*"
 
+  sidecars:
+    tracing:
+      enabled: false
+      image: km-tracing:latest
+
   notification:
-    events:
-      onIdle: false
-      onPermission: false
+    h1:
+      inbound:
+        enabled: true
     email:
       enabled: true
+

@@ -1,0 +1,18 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-slack-persandbox
+  abstract: true
+
+spec:
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
+      channelName: "sb-{alias}"
+      archiveOnDestroy: false
+      inbound:
+        enabled: true
+      invites:
+        emails:
+          - whereiskurt@gmail.com

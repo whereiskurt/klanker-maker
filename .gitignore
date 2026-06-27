@@ -60,3 +60,8 @@ profiles/*.local.yaml
 # Python bytecode caches (Phase 116 check snippets/bootstrap)
 __pycache__/
 *.pyc
+
+.pytest_cache/
+.superpowers/
+.claude/
+scratchpad/

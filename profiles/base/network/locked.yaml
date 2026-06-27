@@ -1,0 +1,38 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-network-locked
+  abstract: true
+
+spec:
+  network:
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - "time.aws.com"
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
+        - ".github.com"
+        - ".githubusercontent.com"
+        - ".npmjs.org"
+        - ".npmjs.com"
+        - ".nodejs.org"
+        - ".npmmirror.com"
+        - ".openai.com"
+        - ".chatgpt.com"
+        - ".pypi.org"
+        - ".pythonhosted.org"
+        - ".pulsemcp.com"
+        - ".google.com"
+        - ".google-analytics.com"
+        - ".googletagmanager.com"
+        - ".statsig.com"
+        - ".featuregates.org"
+        - ".visualstudio.com"
+      allowedHosts:
+        - "vscode.download.prss.microsoft.com"
+        - "nodejs.org"

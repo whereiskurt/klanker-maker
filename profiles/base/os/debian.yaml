@@ -1,0 +1,13 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-os-debian
+  abstract: true
+
+spec:
+  runtime:
+    ami: ubuntu-24.04
+
+  execution:
+    initCommands:
+      - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/ssl/certs/ca-certificates.crt || update-ca-certificates"

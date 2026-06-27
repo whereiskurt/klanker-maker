@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Phase 119 complete — 119-05 docs + E2E done
-last_updated: "2026-06-25T16:32:16.576Z"
-last_activity: 2026-06-25
+stopped_at: "Completed 120-02: authored 4 leaf profiles (learner, desktop, github, h1)"
+last_updated: "2026-06-27T04:15:05.754Z"
+last_activity: 2026-06-26
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 16
-  completed_plans: 16
+  total_phases: 4
+  completed_phases: 4
+  total_plans: 20
+  completed_plans: 20
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-25
+Last activity: 2026-06-26
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -592,6 +592,9 @@ Progress: [█████████░] 91%
 | Phase 119-slack-inbound-per-thread-parallelism P04 | 661 | 2 tasks | 3 files |
 | Phase 119 P05 | 60 | 3 tasks | 9 files |
 | Phase 119-slack-inbound-per-thread-parallelism P05 | 60min | 3 tasks | 9 files |
+| Phase 120-profiles-reset-and-os-layered-fragment-library P01 | 274 | 3 tasks | 5 files |
+| Phase 120-profiles-reset-and-os-layered-fragment-library P03 | 1761 | 3 tasks | 24 files |
+| Phase 120-profiles-reset-and-os-layered-fragment-library P02 | 146 | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1691,6 +1694,13 @@ Recent decisions affecting current work:
 - [Phase 119-slack-inbound-per-thread-parallelism]: Verified bash concurrency via live deploy + synthetic-HMAC E2E (the only gate that catches poller-script bugs invisible to Go goldens)
 - [Phase 119-slack-inbound-per-thread-parallelism]: Emit-only-when->1: KM_SLACK_MAX_CONCURRENCY omitted at default value to maintain dormancy byte-identity with Phase 118
 - [Phase 119-slack-inbound-per-thread-parallelism]: Bumped klanker plugin 0.4.11 -> 0.4.12 because SKILL.md gained user-facing Phase-119 content
+- [Phase 120-01]: OS fragments declare ONLY string spec.runtime.ami — no bool fields (spot/hibernation/mountEFS) to avoid zero-value trap
+- [Phase 120-01]: toolchain-agents.yaml is the single version-pin site for claude-code@2.1.132 and codex rust-v0.133.0 across profiles/base/
+- [Phase 120-01]: plugin-klanker fragment enables klanker plugin (enabledPlugins settings.json) — intentional Phase 120 delta from frozen learn.v2.yaml which left it disabled to protect byte-identity fixture (now archived in testdata/)
+- [Phase 120-profiles-reset-and-os-layered-fragment-library]: Dual searchPath pattern: pass both testdata/profiles/ and profiles/ to profile.Resolve so archived profiles extending base/* fragments can still find them without duplicating fragments
+- [Phase 120-02]: learner enables klanker plugin via base/plugin-klanker (intentional delta from learn.v2.yaml; frozen fixture now in testdata/profiles/)
+- [Phase 120-02]: github/h1 use full toolchain-agents (single version-pin site tradeoff; heavier than legacy lean profiles)
+- [Phase 120-02]: h1/github/desktop keep narrow network in-leaf (NOT base/safenetwork) to avoid list-union broadening to wildcard
 
 ### Roadmap Evolution
 
@@ -1833,9 +1843,10 @@ Recent decisions affecting current work:
 - Phase 112 added: Flip Slack render default to blocks-rich after soak. Make `blocks-rich` the default `KM_SLACK_RENDER` once Phase 111 has soaked on a real workspace (desktop + mobile + email-notification fallback verified); demote Tier-2 mrkdwn-section renderer to fallback; reconcile default-path golden fixtures in ONE reviewed commit. Keep `blocks|mrkdwn|plain` as explicit operator escape hatches. GATE: Phase 111 UAT must pass before this runs. Same deploy surface as 111 (`km init --sidecars`, no TF/DDB/schema change). Likely a single plan. Depends on Phase 111 (built + soaked).
 - Phase 118 added: Slack trigger allowlist + private per-sandbox channels. (A) `notification.slack.private` (default false) creates the per-sandbox channel `is_private:true`; (B) Uxxxx trigger allowlist `allow` (install `slack.allow`→`KM_SLACK_ALLOW`; per-sandbox `notification.slack.inbound.allow`→DDB row→bridge), non-empty per-sandbox replaces install, empty=everyone; enforced in events_handler.go on event.User, silent ignore, always-on (independent of mention-only + Phase 91.3 thread-bypass). Approved design spec at docs/superpowers/specs/2026-06-24-slack-trigger-allowlist-private-channels-design.md. Depends on Phase 117.
 - Phase 119 added: Slack inbound per-thread parallelism. Different Slack threads to one sandbox run in PARALLEL while messages within a thread stay serial+ordered, bounded by an operator concurrency cap; dormant by default (cap=1==today's serial). (1) Bridge: `MessageGroupId` `info.SandboxID`→`threadTS` (fallback `msg.TS`) at both `h.SQS.Send` sites in events_handler.go (unconditional). (2) Poller (userdata.go): new `notification.slack.inbound.maxConcurrentThreads` (*int, default 1)→`KM_SLACK_MAX_CONCURRENCY`; receive N, dispatch each turn backgrounded behind a counting semaphore, ACK AFTER turn (reverses ack-first at userdata.go:2069, required for ordering) + visibility heartbeat (VisibilityTimeout is 30s at sqs.go:127). Open decision: ack-after-completion crash-redelivery dup window → add Slack per-turn idempotency guard (Phase-108-style marker) or accept. OOS: per-thread git-worktree isolation, GitHub/H1 parity, separate queues. No apiVersion bump. Approved design spec at docs/superpowers/specs/2026-06-24-slack-inbound-per-thread-parallelism-design.md. Depends on Phase 118.
+- Phase 120 added: Profiles reset + OS-layered fragment library. Collapse `profiles/` to 3 composed demos (`learner`/`desktop`/`github`) on an expanded `profiles/base/` (NEW `os/redhat`, `os/debian`, `toolchain-agents`, `plugin-klanker`, `slack-persandbox` + the 8 existing Phase-117 knob fragments). Layer the high-churn toolchain install block (claude-code@2.1.132 / codex v0.133.0 pins, copy-pasted across ~6 files) into ONE fragment. OS fragment carries `runtime.ami` (string, safe) + apt-vs-yum/cert-path init steps; bool-trap blocks (`spec.runtime` spot/hibernation/mountEFS) stay in leaf. Archive retired demos + frozen byte-identity fixtures (learn.v2*, dc34*, codex, locked*, github-review*, ao, goose, example-additional-snapshots, h1-triage, check-triage) into `testdata/profiles/`; update the 4–6 hard-coded test path constants in lockstep so byte-identity + claude/codex/h1 goldens stay green. Rewrite `scripts/validate-all-profiles.sh` inventory. `learner` functionally matches `learn.v2.yaml` (open item: plugin enable vs installed-but-disabled). STAY untouched: `profiles/checks/**`, `profiles/secrets/**`, `*.prompt.txt`, `pkg/profile/builtins/**`. Deploy = `make build` only (Phase-117 inheritance resolves at km validate/create time). Contributes to larger "lean top-level" goal (within-folder cleanup; top-level folder reduction tracked as separate follow-on). Approved design spec at docs/superpowers/specs/2026-06-25-profiles-reset-fragment-library-design.md. Depends on Phase 119 (Phase 117 `extends:` is the enabling mechanism).
 
 ## Session Continuity
 
-Last session: 2026-06-25T15:38:45.891Z
-Stopped at: Phase 119 complete — 119-05 docs + E2E done
+Last session: 2026-06-26T05:16:51.837Z
+Stopped at: Completed 120-02: authored 4 leaf profiles (learner, desktop, github, h1)
 Resume file: None
