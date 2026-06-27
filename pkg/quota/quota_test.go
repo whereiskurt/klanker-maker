@@ -356,15 +356,23 @@ func ptr64(v int64) *int64 { return &v }
 // i64 is a test helper that returns a pointer to an int64 (alias for ptr64).
 func i64(v int64) *int64 { return &v }
 
-// findBreachWrite searches updateItemCalls for an UpdateItem whose UpdateExpression
-// mentions both "breached_at" and "on_breach". Returns the call and true if found.
+// findBreachWrite searches updateItemCalls for an UpdateItem that writes breached_at
+// and on_breach. Because the implementation uses ExpressionAttributeNames placeholders
+// (#ba → "breached_at", #ob → "on_breach"), this function checks the attribute name
+// MAP values rather than the UpdateExpression string (which only contains the placeholders).
 func findBreachWrite(calls []*dynamodb.UpdateItemInput) (*dynamodb.UpdateItemInput, bool) {
 	for _, c := range calls {
-		if c.UpdateExpression == nil {
-			continue
+		hasBreachedAt := false
+		hasOnBreach := false
+		for _, attrName := range c.ExpressionAttributeNames {
+			if attrName == "breached_at" {
+				hasBreachedAt = true
+			}
+			if attrName == "on_breach" {
+				hasOnBreach = true
+			}
 		}
-		expr := *c.UpdateExpression
-		if strings.Contains(expr, "breached_at") && strings.Contains(expr, "on_breach") {
+		if hasBreachedAt && hasOnBreach {
 			return c, true
 		}
 	}

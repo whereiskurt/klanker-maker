@@ -178,6 +178,22 @@ func Record(ctx context.Context, client QuotaAPI, tableName, sandboxID string, a
 			tripped = true
 			worstWindow = w.name
 		}
+
+		// On first breach: write breached_at + on_breach so the DDB Stream carries them
+		// to the km-quota-alerter Lambda (ALR-01). if_not_exists ensures first-breach-only
+		// idempotency under a hard loop (concurrent writers collapse to one set).
+		if exceeded {
+			if bErr := setBreached(ctx, client, tableName, sandboxID, action, w, now, onBreach); bErr != nil {
+				// Fail-soft: the ADD already committed; don't suppress the count result.
+				// Return the error so the fail-open at the callsite handles it.
+				return Decision{
+					Tripped:     tripped,
+					Windows:     results,
+					WorstWindow: worstWindow,
+					OnBreach:    onBreach,
+				}, fmt.Errorf("record breach-write window %s for sandbox %s action %s: %w", w.sk, sandboxID, action, bErr)
+			}
+		}
 	}
 
 	d := Decision{
@@ -189,6 +205,39 @@ func Record(ctx context.Context, client QuotaAPI, tableName, sandboxID string, a
 		d.OnBreach = onBreach
 	}
 	return d, nil
+}
+
+// setBreached issues a conditional UpdateItem on the same row key to mark the first breach.
+// Both breached_at and on_breach use if_not_exists so this is first-breach-only and
+// idempotent under concurrent/repeated calls (the one that wins sets it; subsequent calls
+// are no-ops because if_not_exists returns the existing value). The MODIFY event emitted
+// by this write carries both attrs in NewImage (absent in OldImage) — exactly what the
+// km-quota-alerter Lambda's first-breach guard checks.
+//
+// This is a second UpdateItem on the same row key (post-increment). DynamoDB cannot
+// reference the post-increment count inside the same expression that produces it via ADD,
+// so a count-conditioned SET in the increment is not expressible — hence the separate write.
+//
+// Fail-soft: errors are returned to the caller, which decides whether to suppress or
+// propagate. The increment already committed before setBreached is called.
+func setBreached(ctx context.Context, client QuotaAPI, tableName, sandboxID string, action Action, w windowSpec, now time.Time, onBreach OnBreach) error {
+	key := rowKey(sandboxID, action, w.sk)
+	_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key:       key,
+		UpdateExpression: awssdk.String(
+			"SET #ba = if_not_exists(#ba, :now), #ob = if_not_exists(#ob, :policy)",
+		),
+		ExpressionAttributeNames: map[string]string{
+			"#ba": "breached_at",
+			"#ob": "on_breach",
+		},
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":now":    &dynamodbtypes.AttributeValueMemberN{Value: fmt.Sprintf("%d", now.Unix())},
+			":policy": &dynamodbtypes.AttributeValueMemberS{Value: string(onBreach)},
+		},
+	})
+	return err
 }
 
 // atomicIncrement issues UpdateItem ADD count :one for the given window and returns the
