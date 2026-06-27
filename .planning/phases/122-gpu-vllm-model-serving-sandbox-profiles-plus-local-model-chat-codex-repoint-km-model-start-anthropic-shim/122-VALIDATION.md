@@ -43,7 +43,7 @@ created: 2026-06-27
 | Gate | Behavior | Test Type | Automated Command | Automated? |
 |------|----------|-----------|-------------------|-----------|
 | G1 | `km validate` green on all 7 profiles (merged-bytes) | unit | `go test ./pkg/profile/ -run TestValidate -count=1` + `scripts/validate-all-profiles.sh` | ✅ existing |
-| G2 | `synthesizeCodexConfig` emits `[model_providers.local]` (wire_api responses, :8001) | unit | `go test ./pkg/compiler/ -run TestSynthesizeCodexConfig -count=1` | ❌ W0: new case |
+| G2 | `synthesizeCodexConfig` emits `[model_providers.local]` (wire_api responses, base_url :8001 = Bifrost) | unit | `go test ./pkg/compiler/ -run TestSynthesizeCodexConfig -count=1` | ❌ W0: new case |
 | G2b | codex knob round-trips JSON schema + raw DLAMI AMI passes as AMIID | unit | `go test ./pkg/profile/ -run 'TestSchema\|TestValidate' -count=1` | ❌ W0: new cases |
 | G2c | representative GPU leaf full-output golden | unit | `go test ./pkg/compiler/ -run TestUserdata -count=1` (CAPTURE flag to regen) | ❌ W0: golden |
 | G2d | `km model start` command wiring (mock execFn/fetcher) | unit | `go test ./internal/app/cmd/ -run TestModel -count=1 -timeout 600s` | ❌ W0: new file |
@@ -51,7 +51,9 @@ created: 2026-06-27
 | G4 | VS Code Remote-SSH + Continue chat | **live UAT only** | N/A (GUI/browser) | NO |
 | G5 | Slack codex round-trip + resume; `/claude` = cloud | live UAT (Slack delivery synthetic-HMAC drivable) | synthetic `event_callback` POST to bridge `/events` (project memory: slack_bridge_inbound_e2e) | PARTIAL |
 | G6 | `km model start` passthrough → local codex/curl completion | live UAT (curl scriptable; forward operator-driven) | `curl http://localhost:8001/v1/responses …` through the forward | PARTIAL |
-| G7 | `km model start --anthropic` → local Claude Code chat | **live UAT only** | N/A (GUI) | NO |
+| G7 | `km model start --anthropic` → local Claude Code chat (ANTHROPIC_BASE_URL → Bifrost `/anthropic`) | **live UAT only** | N/A (GUI) | NO |
+| G8 | Bifrost multi-provider routing: `local`/`claude-bedrock`(role)/`gpt-oss-bedrock`(role)/`claude-anthropic`(key) each answer; `gpt-frontier` dormant; cloud routes metered | live UAT | per-route `curl localhost:8001` on-box; `km otel`/`km status` for metering | PARTIAL (curl scriptable; needs running model + IAM role + operator key) |
+| G9 | Bifrost OTLP export → tracing sidecar `:4318`; per-model spans surface in `km otel` | live UAT | inspect `km otel gpu1` for route/model-tagged spans | PARTIAL (operator-driven inspection) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -73,10 +75,12 @@ created: 2026-06-27
 | Behavior | Gate | Why Manual | Test Instructions |
 |----------|------|------------|-------------------|
 | GPU boot + vLLM serving | G3 | Needs real g6e GPU hardware | `km create profiles/gpu-qwen-12x.yaml --alias gpu1`; SSM: `nvidia-smi`, `systemctl status vllm`, `curl localhost:8000/v1/models` |
-| Codex↔LiteLLM↔vLLM (R6/O7) | G3,G5,G6 | Needs running model + LiteLLM | on-box `codex exec "..."` → expect a completion; verify LiteLLM `/responses` translates |
+| Codex↔Bifrost↔vLLM (R6/O7) | G3,G5,G6 | Needs running model + Bifrost | on-box `codex exec "..."` → expect a completion; verify Bifrost `/v1/responses` → vLLM translates (vLLM `:8000/v1/responses` is the documented fallback) |
 | Slack codex round-trip + resume | G5 | Poller bash invisible to Go goldens (project memory: skill_bash_needs_live_uat) | synthetic-HMAC `event_callback` POST; verify reply + a follow-up resumes the thread; `/claude` hits cloud |
 | VS Code + Continue (GUI) | G4 | GUI client | operator: `km vscode start gpu1` → Remote-SSH → install Continue → chat |
-| Local Claude Code via shim (GUI) | G7 | GUI client + Claude-Code-on-70B (R7) | operator: `km model start gpu1 --anthropic`; `ANTHROPIC_BASE_URL=localhost:8001` Claude Code chat (scope: chat + light edits) |
+| Local Claude Code via Bifrost (GUI) | G7 | GUI client + Claude-Code-on-70B (R7) | operator: `km model start gpu1 --anthropic`; `ANTHROPIC_BASE_URL=http://localhost:8001/anthropic` Claude Code chat (scope: chat + light edits) |
+| Bifrost multi-provider routing | G8 | Needs running model + instance role + operator Anthropic key | on-box per-route curl `local`/`claude-bedrock`/`gpt-oss-bedrock`/`claude-anthropic`; assert each answers; `gpt-frontier` dormant; confirm cloud routes metered into BUDGET#ai |
+| Bifrost OTEL spans | G9 | Telemetry pipeline (sidecar + collector) | confirm OTLP export → `:4318`; `km otel gpu1` shows per-model latency/token/cost spans |
 
 ---
 
@@ -87,7 +91,7 @@ created: 2026-06-27
 - [ ] Wave 0 covers all MISSING test references
 - [ ] No watch-mode flags
 - [ ] Feedback latency < 300s
-- [ ] Live-UAT gates (G3–G7) explicitly tracked in the UAT plan (not silently skipped)
+- [ ] Live-UAT gates (G3–G9) explicitly tracked in the UAT plan (not silently skipped)
 - [ ] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** pending
