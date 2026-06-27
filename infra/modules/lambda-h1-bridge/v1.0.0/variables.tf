@@ -122,3 +122,11 @@ variable "h1_threads_table_arn" {
   type        = string
   default     = ""
 }
+
+# Phase 121: action-quota table ARN for quota enforcement on h1_comment.
+# Empty default = table not yet provisioned (quota IAM policy is omitted, bridge dormant).
+variable "quota_table_arn" {
+  description = "Phase 121: ARN of the {prefix}-action-quota DynamoDB table. Empty = quota IAM policy omitted."
+  type        = string
+  default     = ""
+}

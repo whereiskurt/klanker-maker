@@ -208,6 +208,29 @@ resource "aws_iam_role_policy" "dynamodb_h1_threads" {
   })
 }
 
+# Phase 121 (H1-01): quota table read/write for h1_comment metering.
+# Gated on var.quota_table_arn — empty = table not yet provisioned → policy omitted.
+resource "aws_iam_role_policy" "dynamodb_action_quota" {
+  count = var.quota_table_arn != "" ? 1 : 0
+  name  = "${local.function_name}-dynamodb-action-quota"
+  role  = aws_iam_role.h1_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DDBActionQuotaReadWrite"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:UpdateItem",
+          "dynamodb:GetItem",
+        ]
+        Resource = var.quota_table_arn
+      }
+    ]
+  })
+}
+
 # Policy: SQS — send inbound messages to per-sandbox h1-inbound FIFO queues (warm path)
 # Per-sandbox queues follow the naming convention {resource_prefix}-h1-inbound-{sandbox_id}.fifo
 resource "aws_iam_role_policy" "sqs_send_h1_inbound" {
@@ -323,6 +346,8 @@ resource "aws_lambda_function" "h1_bridge" {
       KM_COMMANDS_PATH        = var.commands_path
       KM_ARTIFACTS_BUCKET     = var.artifacts_bucket
       KM_ARTIFACTS_PREFIX     = var.artifacts_prefix
+      # Phase 121 — action-quota table name for bridge-side quota enforcement
+      KM_QUOTA_TABLE = var.quota_table_arn != "" ? "${var.resource_prefix}-action-quota" : ""
     }
   }
 

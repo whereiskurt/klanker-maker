@@ -300,6 +300,30 @@ resource "aws_iam_role_policy" "slack_bridge_files_s3_write" {
   })
 }
 
+# Phase 121 (BRG-01): quota table read/write for slack_post / ActionUpload metering.
+# Gated on var.quota_table_arn — empty = table not yet provisioned → policy omitted.
+# Bridge needs UpdateItem (quota.Record atomic ADD) + GetItem (limits read, future).
+resource "aws_iam_role_policy" "dynamodb_action_quota" {
+  count = var.quota_table_arn != "" ? 1 : 0
+  name  = "${local.function_name}-dynamodb-action-quota"
+  role  = aws_iam_role.slack_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DDBActionQuotaReadWrite"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:UpdateItem",
+          "dynamodb:GetItem",
+        ]
+        Resource = var.quota_table_arn
+      }
+    ]
+  })
+}
+
 # Policy: SSM — read signing secret (SecureString, decrypted via kms_decrypt above)
 resource "aws_iam_role_policy" "ssm_signing_secret" {
   name = "${local.function_name}-ssm-signing-secret"
@@ -382,6 +406,8 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SLACK_DEFAULT_ROUTER = var.slack_default_router
       # Phase 118 — install-level trigger allowlist (comma-joined Uxxxx)
       KM_SLACK_ALLOW = var.slack_allow
+      # Phase 121 — action-quota table name for bridge-side quota enforcement
+      KM_QUOTA_TABLE = var.quota_table_arn != "" ? "${var.resource_prefix}-action-quota" : ""
     }
   }
 
