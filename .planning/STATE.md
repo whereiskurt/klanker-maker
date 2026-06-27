@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 121-10-PLAN.md — km freeze verb + latch-aware unlock + FROZEN visibility in list/status/doctor
-last_updated: "2026-06-27T13:40:21.741Z"
+stopped_at: Completed 121-11-PLAN.md — breached_at + on_breach write on first breach (GAP 1 closure, ALR-01)
+last_updated: "2026-06-27T14:55:33.209Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 5
-  completed_phases: 5
-  total_plans: 30
-  completed_plans: 30
+  completed_phases: 4
+  total_plans: 32
+  completed_plans: 31
   percent: 91
 ---
 
@@ -605,6 +605,7 @@ Progress: [█████████░] 91%
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P07 | 884 | 2 tasks | 4 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P09 | 384 | 3 tasks | 8 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P10 | 806s | 2 tasks | 12 files |
+| Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P11 | 158s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1730,6 +1731,8 @@ Recent decisions affecting current work:
 - [Phase 121-10]: km freeze is CLI-only panic button; km unlock is the only release path for both safety-lock and freeze latch; box keeps running
 - [Phase 121-10]: FROZEN marker appended to lock-suffix string in list.go (no new column); SandboxRecord extended with FrozenReason/FrozenAt/FrozenBy for status detail
 - [Phase 121-10]: Doctor frozen-sandbox scan reuses deps.Lister (no new DoctorDeps field); action-quota table check is WARN not ERROR (mirrors slack-channels pattern)
+- [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: Two-phase DDB write: setBreached issues a second UpdateItem (not folded into ADD) because DynamoDB cannot reference post-increment count in the same expression that produces it
+- [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: if_not_exists on breached_at + on_breach: first-breach-only idempotency; concurrent writers collapse to one set under a hard loop
 
 ### Roadmap Evolution
 
@@ -1877,6 +1880,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T13:40:21.734Z
-Stopped at: Completed 121-10-PLAN.md — km freeze verb + latch-aware unlock + FROZEN visibility in list/status/doctor
+Last session: 2026-06-27T14:55:33.203Z
+Stopped at: Completed 121-11-PLAN.md — breached_at + on_breach write on first breach (GAP 1 closure, ALR-01)
 Resume file: None
