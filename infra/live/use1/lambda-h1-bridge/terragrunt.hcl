@@ -67,11 +67,24 @@ dependency "h1_threads" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
 }
 
+# km-action-quota: provides the action-quota counter table (Phase 121). Populates
+# quota_table_arn → KM_QUOTA_TABLE env + the quota IAM grant. Without this the
+# bridge's quota/auto-freeze enforcement stays dormant (KM_QUOTA_TABLE="").
+dependency "action_quota" {
+  config_path = "../dynamodb-action-quota"
+  mock_outputs = {
+    table_name = "km-action-quota"
+    table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-action-quota"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
+}
+
 inputs = {
   # Required (no-default) inputs
   lambda_zip_path     = "${local.repo_root}/build/km-h1-bridge.zip"
   sandboxes_table_arn = dependency.sandboxes.outputs.table_arn
   nonces_table_arn    = dependency.nonces.outputs.table_arn
+  quota_table_arn     = dependency.action_quota.outputs.table_arn
 
   # km-h1-threads continuity table (gated IAM grant — non-empty ARN enables it)
   h1_threads_table_name = dependency.h1_threads.outputs.table_name
