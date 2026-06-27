@@ -45,6 +45,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // ============================================================
@@ -836,3 +837,47 @@ func (c *H1APICommenter) PostComment(ctx context.Context, reportID, body string,
 
 // Compile-time check.
 var _ H1Commenter = (*H1APICommenter)(nil)
+
+// ============================================================
+// DynamoFreezer — auto-freeze adapter (Phase 121 GAP-2)
+// ============================================================
+
+// DynamoFreezer implements Freezer by calling kmaws.FreezeSandboxDynamo on the
+// km-sandboxes table. Wired into WebhookHandler.Freezer in main.go.
+type DynamoFreezer struct {
+	Client DynamoUpdateItemClient // *dynamodb.Client satisfies this
+	Table  string                 // e.g. "km-sandboxes"
+}
+
+// h1UpdateOnlyMetaClient adapts DynamoUpdateItemClient to kmaws.SandboxMetadataAPI.
+// Only UpdateItem is exercised by FreezeSandboxDynamo; the remaining methods
+// panic to make any accidental call loud.
+type h1UpdateOnlyMetaClient struct{ c DynamoUpdateItemClient }
+
+func (a h1UpdateOnlyMetaClient) UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	return a.c.UpdateItem(ctx, in, opts...)
+}
+func (a h1UpdateOnlyMetaClient) GetItem(_ context.Context, _ *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	panic("h1UpdateOnlyMetaClient: GetItem not implemented")
+}
+func (a h1UpdateOnlyMetaClient) PutItem(_ context.Context, _ *dynamodb.PutItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
+	panic("h1UpdateOnlyMetaClient: PutItem not implemented")
+}
+func (a h1UpdateOnlyMetaClient) DeleteItem(_ context.Context, _ *dynamodb.DeleteItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error) {
+	panic("h1UpdateOnlyMetaClient: DeleteItem not implemented")
+}
+func (a h1UpdateOnlyMetaClient) Scan(_ context.Context, _ *dynamodb.ScanInput, _ ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	panic("h1UpdateOnlyMetaClient: Scan not implemented")
+}
+func (a h1UpdateOnlyMetaClient) Query(_ context.Context, _ *dynamodb.QueryInput, _ ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	panic("h1UpdateOnlyMetaClient: Query not implemented")
+}
+
+// FreezeSandbox latches action_frozen=true on the sandbox's km-sandboxes row.
+// by should be "auto:<action>:<window>" for auto-on-breach freezes.
+func (f *DynamoFreezer) FreezeSandbox(ctx context.Context, sandboxID, reason, by string) error {
+	return kmaws.FreezeSandboxDynamo(ctx, h1UpdateOnlyMetaClient{f.Client}, f.Table, sandboxID, reason, by)
+}
+
+// compile-time interface check.
+var _ Freezer = (*DynamoFreezer)(nil)

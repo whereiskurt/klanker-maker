@@ -194,3 +194,96 @@ type fakeH1FrozenCheck struct {
 func (f *fakeH1FrozenCheck) IsFrozen(ctx context.Context, sandboxID string) (bool, string, error) {
 	return f.frozen, f.reason, nil
 }
+
+// fakeH1Freezer records FreezeSandbox calls for assertion.
+type fakeH1Freezer struct {
+	calls []struct{ sandboxID, reason, by string }
+}
+
+func (f *fakeH1Freezer) FreezeSandbox(_ context.Context, sandboxID, reason, by string) error {
+	f.calls = append(f.calls, struct{ sandboxID, reason, by string }{sandboxID, reason, by})
+	return nil
+}
+
+// TestQuotaRecord_H1_FreezeTrip_AutoLatches (GAP-2) — when quota.Record returns a FREEZE
+// decision for h1_comment, the bridge must:
+//  1. NOT enqueue to SQS (action blocked).
+//  2. Call h.Freezer.FreezeSandbox exactly once with by="auto:h1_comment:hour".
+//  3. Return 200 (H1 bridge always returns 200).
+func TestQuotaRecord_H1_FreezeTrip_AutoLatches(t *testing.T) {
+	fakes := newFakes()
+	ff := &fakeH1Freezer{}
+
+	limitsJSON := `{"h1_comment":{"perHour":1,"onBreach":"freeze"}}`
+	quotaClient := bridge.NewFakeH1QuotaClient(2) // count=2 > limit=1 → FREEZE
+
+	programs := singleProgram("km-sandbox", []string{"alice"}, nil)
+	h := baseHandler(programs, fakes)
+	h.Quota = quotaClient
+	h.QuotaTable = "km-action-quota"
+	h.Limits = &fakeH1ActionLimits{limitsJSON: limitsJSON}
+	h.Freezer = ff
+
+	body := h1Body("km-sandbox", "100", "alice", "@km please triage", false)
+	req := newRequest(body, "report_comment_created", "guid-freeze-h1")
+
+	resp := h.Handle(context.Background(), req)
+
+	// Always 200 (H1 bridge never returns 5xx).
+	if resp.StatusCode != 200 {
+		t.Errorf("FREEZE trip: want 200, got %d", resp.StatusCode)
+	}
+
+	// No SQS enqueue (action blocked on FREEZE).
+	if len(fakes.sqs.sends) != 0 {
+		t.Errorf("FREEZE trip: SQS must not be called; got %d sends", len(fakes.sqs.sends))
+	}
+
+	// FreezeSandbox called exactly once.
+	if len(ff.calls) != 1 {
+		t.Errorf("FREEZE trip: want exactly 1 FreezeSandbox call, got %d", len(ff.calls))
+	} else {
+		call := ff.calls[0]
+		if call.by != "auto:h1_comment:hour" {
+			t.Errorf("FREEZE trip: FreezeSandbox by=%q, want %q", call.by, "auto:h1_comment:hour")
+		}
+		if call.reason == "" {
+			t.Error("FREEZE trip: FreezeSandbox reason must be non-empty")
+		}
+	}
+}
+
+// TestQuotaRecord_H1_BlockTrip_NoFreeze — BLOCK trip must NOT call FreezeSandbox.
+func TestQuotaRecord_H1_BlockTrip_NoFreeze(t *testing.T) {
+	fakes := newFakes()
+	ff := &fakeH1Freezer{}
+
+	limitsJSON := `{"h1_comment":{"perHour":1,"onBreach":"block"}}`
+	quotaClient := bridge.NewFakeH1QuotaClient(2) // count=2 > limit=1 → BLOCK
+
+	programs := singleProgram("km-sandbox", []string{"alice"}, nil)
+	h := baseHandler(programs, fakes)
+	h.Quota = quotaClient
+	h.QuotaTable = "km-action-quota"
+	h.Limits = &fakeH1ActionLimits{limitsJSON: limitsJSON}
+	h.Freezer = ff
+
+	body := h1Body("km-sandbox", "100", "alice", "@km please triage", false)
+	req := newRequest(body, "report_comment_created", "guid-block-nofr-h1")
+
+	resp := h.Handle(context.Background(), req)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("BLOCK trip: want 200, got %d", resp.StatusCode)
+	}
+
+	// No SQS enqueue.
+	if len(fakes.sqs.sends) != 0 {
+		t.Errorf("BLOCK trip: SQS must not be called; got %d sends", len(fakes.sqs.sends))
+	}
+
+	// FreezeSandbox must NOT be called for BLOCK.
+	if len(ff.calls) != 0 {
+		t.Errorf("BLOCK trip: FreezeSandbox must NOT be called; got %d calls", len(ff.calls))
+	}
+}

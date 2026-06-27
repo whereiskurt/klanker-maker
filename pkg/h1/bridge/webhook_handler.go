@@ -130,6 +130,19 @@ type WebhookHandler struct {
 	// sandbox is quarantine-latched (action_frozen=true), dispatch is refused and an
 	// INTERNAL control-plane notice is posted via Commenter. nil → gate dormant.
 	FrozenCheck H1FrozenChecker
+
+	// Phase 121 (GAP-2) — auto-freeze on BreachFreeze trips. When non-nil and a quota
+	// trip with onBreach:freeze occurs, Freezer.FreezeSandbox is called to latch
+	// action_frozen=true on the km-sandboxes row (by="auto:<action>:<window>"). nil ⇒
+	// dormant — BreachFreeze still blocks the action but does not auto-quarantine.
+	// Implemented by DynamoFreezer (aws_adapters.go).
+	Freezer Freezer
+}
+
+// Freezer latches action_frozen=true on the sandbox row (auto-on-breach freeze).
+// nil ⇒ dormant (no auto-freeze). Implemented by the aws_adapters DynamoFreezer.
+type Freezer interface {
+	FreezeSandbox(ctx context.Context, sandboxID, reason, by string) error
 }
 
 func (h *WebhookHandler) log() *slog.Logger {
@@ -482,9 +495,21 @@ func (h *WebhookHandler) enqueueAndUpsert(ctx context.Context, sandboxID, report
 					} else if d.Tripped {
 						h.postH1QuotaNotice(ctx, reportID, d)
 						switch d.OnBreach {
-						case quota.BreachBlock, quota.BreachFreeze:
-							h.log().Warn("h1-bridge: dispatch blocked by quota", "sandbox", sandboxID, "breach", d.OnBreach)
+						case quota.BreachFreeze:
+							// Auto-latch: write action_frozen=true so the frozen-dispatch gate fires on
+							// subsequent turns. Fail-soft: log a Warn on freeze error but still block.
+							if h.Freezer != nil {
+								by := fmt.Sprintf("auto:%s:%s", quota.ActionH1Comment, d.WorstWindow)
+								reason := fmt.Sprintf("quota exceeded: %s (%s window)", quota.ActionH1Comment, d.WorstWindow)
+								if fErr := h.Freezer.FreezeSandbox(ctx, sandboxID, reason, by); fErr != nil {
+									h.log().Warn("h1-bridge: auto-freeze failed (action still blocked)", "sandbox", sandboxID, "err", fErr)
+								}
+							}
+							h.log().Warn("h1-bridge: dispatch blocked by quota (freeze)", "sandbox", sandboxID, "breach", d.OnBreach)
 							return // block — skip SQS enqueue
+						case quota.BreachBlock:
+							h.log().Warn("h1-bridge: dispatch blocked by quota", "sandbox", sandboxID, "breach", d.OnBreach)
+							return // block — skip SQS enqueue (no quarantine)
 						}
 						// BreachWarn: continue with enqueue after posting notice
 					}
