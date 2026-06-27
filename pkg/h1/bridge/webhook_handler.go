@@ -38,6 +38,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/whereiskurt/klanker-maker/pkg/quota"
 )
 
 // WebhookRequest is the normalized inbound request to WebhookHandler.Handle.
@@ -116,6 +118,18 @@ type WebhookHandler struct {
 
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
+
+	// Phase 121 (H1-01) — quota enforcement on h1_comment dispatch.
+	// When both Quota and Limits are non-nil, quota.Record is called before each
+	// SQS enqueue. nil Quota or nil Limits → dormant (byte-identical to pre-Phase-121).
+	Quota      H1QuotaAPI            // DDB client for the action-quota table
+	QuotaTable string                // e.g. "km-action-quota" (from KM_QUOTA_TABLE env var)
+	Limits     H1ActionLimitsFetcher // resolves per-sandbox action-limits JSON
+
+	// Phase 121 (H1-01) — frozen-dispatch gate. When FrozenCheck is non-nil and the
+	// sandbox is quarantine-latched (action_frozen=true), dispatch is refused and an
+	// INTERNAL control-plane notice is posted via Commenter. nil → gate dormant.
+	FrozenCheck H1FrozenChecker
 }
 
 func (h *WebhookHandler) log() *slog.Logger {
@@ -435,6 +449,52 @@ func (h *WebhookHandler) dispatchTarget(ctx context.Context, target Target, repo
 // envelope, and (on success) upserts the (report_id, target) thread row. All errors
 // are non-fatal (logged).
 func (h *WebhookHandler) enqueueAndUpsert(ctx context.Context, sandboxID, reportID, target, envJSON, groupID, dedupID string) {
+	// Phase 121 (H1-01): frozen gate — refuse dispatch when sandbox is quarantine-latched.
+	// Notice is posted INTERNALLY (never researcher-visible). Fail-open on checker error.
+	if h.FrozenCheck != nil {
+		frozen, reason, fErr := h.FrozenCheck.IsFrozen(ctx, sandboxID)
+		if fErr != nil {
+			h.log().Warn("h1-bridge: frozen check failed (fail-open)", "sandbox", sandboxID, "err", fErr)
+		} else if frozen {
+			if reason == "" {
+				reason = "quota limit exceeded or operator action"
+			}
+			notice := "🛑 This sandbox is frozen (" + reason + "). No further actions or replies until your operator releases it."
+			h.postInternalReply(ctx, reportID, notice)
+			h.log().Warn("h1-bridge: dispatch refused (sandbox frozen)", "sandbox", sandboxID, "reason", reason)
+			return
+		}
+	}
+
+	// Phase 121 (H1-01): quota.Record for h1_comment. Fail-open on any error.
+	// BLOCK trip → skip the SQS enqueue; WARN → enqueue + post internal notice.
+	if h.Quota != nil && h.Limits != nil && h.QuotaTable != "" {
+		limitsJSON, lErr := h.Limits.FetchLimits(ctx, sandboxID)
+		if lErr != nil {
+			h.log().Warn("h1-bridge: limits fetch failed (fail-open)", "sandbox", sandboxID, "err", lErr)
+		} else if limitsJSON != "" {
+			var limits quota.Limits
+			if jsonErr := json.Unmarshal([]byte(limitsJSON), &limits); jsonErr == nil {
+				if actionLimit, ok := limits[quota.ActionH1Comment]; ok {
+					d, recErr := quota.Record(ctx, h.Quota, h.QuotaTable, sandboxID, quota.ActionH1Comment, actionLimit)
+					if recErr != nil {
+						h.log().Warn("h1-bridge: quota record failed (fail-open)", "sandbox", sandboxID, "err", recErr)
+					} else if d.Tripped {
+						h.postH1QuotaNotice(ctx, reportID, d)
+						switch d.OnBreach {
+						case quota.BreachBlock, quota.BreachFreeze:
+							h.log().Warn("h1-bridge: dispatch blocked by quota", "sandbox", sandboxID, "breach", d.OnBreach)
+							return // block — skip SQS enqueue
+						}
+						// BreachWarn: continue with enqueue after posting notice
+					}
+				}
+			} else {
+				h.log().Warn("h1-bridge: limits json parse failed (fail-open)", "sandbox", sandboxID, "err", jsonErr)
+			}
+		}
+	}
+
 	queueURL, qErr := h.Resolver.H1QueueURL(ctx, sandboxID)
 	if qErr != nil {
 		h.log().Error("h1-bridge: lookup h1 queue URL", "sandbox_id", sandboxID, "err", qErr)
@@ -449,6 +509,36 @@ func (h *WebhookHandler) enqueueAndUpsert(ctx context.Context, sandboxID, report
 			h.log().Warn("h1-bridge: thread upsert failed (non-fatal)", "err", uErr,
 				"report", reportID, "target", target)
 		}
+	}
+}
+
+// postH1QuotaNotice posts an enforce-aware INTERNAL quota notice to the H1 report.
+// Control-plane: never counted by quota.Record; always internal (never researcher-visible).
+func (h *WebhookHandler) postH1QuotaNotice(ctx context.Context, reportID string, d quota.Decision) {
+	if h.Commenter == nil {
+		return
+	}
+	win := d.WorstWindow
+	var count, limit int64
+	for _, w := range d.Windows {
+		if w.Window == win && w.Exceeded {
+			count, limit = w.Count, w.Limit
+			break
+		}
+	}
+	var notice string
+	switch d.OnBreach {
+	case quota.BreachWarn:
+		notice = fmt.Sprintf("⚠️ Quota reached: `h1_comment` hit %d/%d this %s. WARN mode — actions still flowing.", count, limit, win)
+	case quota.BreachBlock:
+		notice = fmt.Sprintf("🛑 Quota exceeded: `h1_comment` (%d/%d %s). Further comments blocked until the window resets.", count, limit, win)
+	case quota.BreachFreeze:
+		notice = fmt.Sprintf("🛑 Quota exceeded: `h1_comment` (%d/%d %s). Sandbox is now frozen — operator release required.", count, limit, win)
+	default:
+		notice = "⚠️ Quota alert: `h1_comment` limit reached."
+	}
+	if cErr := h.Commenter.PostComment(ctx, reportID, notice, true); cErr != nil {
+		h.log().Warn("h1-bridge: quota notice post failed (non-fatal)", "err", cErr)
 	}
 }
 

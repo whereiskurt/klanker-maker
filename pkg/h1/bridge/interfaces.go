@@ -1,6 +1,10 @@
 package bridge
 
-import "context"
+import (
+	"context"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+)
 
 // This file is the HackerOne fork of pkg/github/bridge/interfaces.go (Phase 103).
 //
@@ -152,4 +156,24 @@ type H1Commenter interface {
 	// comment is a HackerOne internal comment; when false it is researcher-visible.
 	// Returns nil on success; errors are logged but do not change the 200 response.
 	PostComment(ctx context.Context, reportID, body string, internal bool) error
+}
+
+// H1QuotaAPI is the minimal DynamoDB surface quota.Record needs.
+// Satisfied by *dynamodb.Client. Mirrors pkg/slack/bridge.QuotaAPI.
+type H1QuotaAPI interface {
+	UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
+}
+
+// H1ActionLimitsFetcher resolves the per-sandbox action-limits JSON map for H1 dispatch.
+// Returns the resolved limits JSON (quota.Limits serialized) or empty string = dormant.
+// Production: reads action_limits from km-sandboxes via GetItem by sandbox_id.
+type H1ActionLimitsFetcher interface {
+	FetchLimits(ctx context.Context, sandboxID string) (string, error)
+}
+
+// H1FrozenChecker checks whether a sandbox is quarantine-frozen (action_frozen=true on
+// the km-sandboxes row). When frozen, H1 dispatch is refused and an internal notice is
+// posted. Production: DDB GetItem by sandbox_id reads action_frozen + frozen_reason.
+type H1FrozenChecker interface {
+	IsFrozen(ctx context.Context, sandboxID string) (frozen bool, reason string, err error)
 }
