@@ -558,6 +558,14 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	}
 
 	// -------------------------------------------------------------------------
+	// SES MITM: intercept email.*.amazonaws.com CONNECT tunnels so the proxy
+	// can inspect POST /v2/email/outbound-emails for action quota counting.
+	// MUST be registered BEFORE the general CONNECT handler (first-match).
+	// The quota OnRequest handlers (below) run after MITM decrypts the request.
+	// -------------------------------------------------------------------------
+	registerSESMITMHandlers(proxy, sandboxID)
+
+	// -------------------------------------------------------------------------
 	// Action quota enforcement: GitHub writes + SES email send (Phase 121).
 	// Registered BEFORE the general CONNECT handler so goproxy first-match
 	// routes these hosts through quota checking.

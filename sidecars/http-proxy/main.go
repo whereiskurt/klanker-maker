@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/quota"
 	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
 
@@ -97,6 +99,14 @@ func main() {
 			Msg("")
 	}
 
+	// Action quota enforcement: read KM_QUOTA_TABLE + KM_ACTION_LIMITS from env.
+	// When KM_QUOTA_TABLE is set, the proxy counts and optionally blocks
+	// github_pr/github_comment/github_review/email_send actions.
+	// Absent KM_QUOTA_TABLE ⇒ option not applied ⇒ byte-identical to pre-Phase-121.
+	if opt := buildQuotaOption(sandboxID, budgetEnabled, budgetDynClient); opt != nil {
+		proxyOpts = append(proxyOpts, opt)
+	}
+
 	// Custom CA for MITM: read base64-encoded PEM (cert+key) from env var.
 	// The sandbox trusts this CA via update-ca-certificates at boot time.
 	if caCertB64 := os.Getenv("KM_PROXY_CA_CERT"); caCertB64 != "" {
@@ -162,4 +172,55 @@ func getEnv(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// buildQuotaOption reads KM_QUOTA_TABLE + KM_ACTION_LIMITS from the environment
+// and returns a WithActionQuota ProxyOption when both are set and valid.
+// Returns nil when KM_QUOTA_TABLE is absent (dormant — byte-identical to pre-Phase-121).
+// budgetDynClient is reused when budgetEnabled is true (avoids a second AWS config load).
+func buildQuotaOption(sandboxID string, budgetEnabled bool, budgetDynClient *dynamodb.Client) httpproxy.ProxyOption {
+	quotaTable := os.Getenv("KM_QUOTA_TABLE")
+	if quotaTable == "" {
+		return nil // dormant
+	}
+	limitsJSON := os.Getenv("KM_ACTION_LIMITS")
+	if limitsJSON == "" {
+		log.Warn().
+			Str("event_type", "quota_limits_missing").
+			Str("sandbox_id", sandboxID).
+			Msg("KM_QUOTA_TABLE set but KM_ACTION_LIMITS empty; quota enforcement disabled")
+		return nil
+	}
+	var limits quota.Limits
+	if err := json.Unmarshal([]byte(limitsJSON), &limits); err != nil {
+		log.Warn().
+			Err(err).
+			Str("event_type", "quota_limits_parse_error").
+			Str("sandbox_id", sandboxID).
+			Msg("KM_ACTION_LIMITS is not valid JSON; quota enforcement disabled")
+		return nil
+	}
+	// Reuse the budget DDB client when available to avoid an extra AWS config load.
+	var dynClient *dynamodb.Client
+	if budgetEnabled && budgetDynClient != nil {
+		dynClient = budgetDynClient
+	} else {
+		cfg, err := awsconfig.LoadDefaultConfig(context.Background())
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("event_type", "quota_aws_config_error").
+				Str("sandbox_id", sandboxID).
+				Msg("failed to load AWS config for quota enforcement; quota disabled")
+			return nil
+		}
+		dynClient = dynamodb.NewFromConfig(cfg)
+	}
+	log.Info().
+		Str("event_type", "quota_enforcement_enabled").
+		Str("sandbox_id", sandboxID).
+		Str("table", quotaTable).
+		Int("action_count", len(limits)).
+		Msg("")
+	return httpproxy.WithActionQuota(dynClient, quotaTable, sandboxID, limits)
 }
