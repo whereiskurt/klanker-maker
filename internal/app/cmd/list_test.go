@@ -659,6 +659,33 @@ func TestListCmd_WideAloneDoesNotEnableAuth(t *testing.T) {
 	}
 }
 
+func TestListCmd_QuotaMarker(t *testing.T) {
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{SandboxID: "sb-quota1", Profile: "default", Substrate: "ec2", Region: "us-east-1", Status: "running",
+				ActionLimits: `{"slack_post":{"lifetime":100,"onBreach":"block"}}`},
+			{SandboxID: "sb-noquota", Profile: "default", Substrate: "ec2", Region: "us-east-1", Status: "running"},
+		},
+	}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+
+	// The quota-configured sandbox must carry the ⚖Q marker.
+	if !strings.Contains(out, "⚖Q") {
+		t.Errorf("sandbox with action_limits should show quota marker ⚖Q:\n%s", out)
+	}
+
+	// The marker must be on the quota row, not the no-quota row. Split by line.
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.Contains(ln, "sb-noquota") && strings.Contains(ln, "⚖Q") {
+			t.Errorf("no-quota sandbox should NOT show ⚖Q marker:\n%s", ln)
+		}
+	}
+}
+
 func TestListCmd_LockedSandboxShowsLockIcon(t *testing.T) {
 	lister := &fakeLister{
 		records: []kmaws.SandboxRecord{

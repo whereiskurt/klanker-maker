@@ -450,6 +450,11 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		if r.ActionFrozen {
 			lock += " 🧊FROZEN"
 		}
+		// Phase 121 — quota marker: surface that the sandbox has action limits
+		// configured (independent of whether it is currently frozen).
+		if r.ActionLimits != "" {
+			lock += " ⚖Q"
+		}
 		bw := func(s string) string {
 			if r.Locked {
 				return ansiBoldWhite + s + ansiReset
