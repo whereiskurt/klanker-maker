@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 121-05: proxy chokepoint URL→Action classifier + SES MITM + IAM grant"
-last_updated: "2026-06-27T13:12:42.736Z"
+stopped_at: "Completed 121-06-PLAN.md: Bridge quota enforcement + frozen dispatch gate"
+last_updated: "2026-06-27T13:21:04.060Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 30
-  completed_plans: 26
+  completed_plans: 27
   percent: 91
 ---
 
@@ -601,6 +601,7 @@ Progress: [█████████░] 91%
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P03 | 296s | 2 tasks | 6 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P08 | 113s | 3 tasks | 5 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P05 | 273s | 3 tasks | 6 files |
+| Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P06 | 719s | 4 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -1716,6 +1717,9 @@ Recent decisions affecting current work:
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: ActionLimitConfig defined locally in config.go (no import cycle — config must not import pkg/profile); LimitsSpec uses pointer fields so absent actions stay nil; additive change, no apiVersion bump
 - [Phase 121-08]: dynamodb-action-quota inserted after dynamodb-checks (before check-runner-role) in regionalModules(); stream_arn exposed as output for plan-09 alerter event-source mapping
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: proxy quota classifier uses exported ClassifyAction for tests + internal classifyAction; lambda-url excluded to prevent slack_post double-count
+- [Phase 121-06]: Frozen gate in EventsHandler placed at step 5c (before dedup) so frozen sandboxes never consume a nonce
+- [Phase 121-06]: H1 quota+frozen checks added to enqueueAndUpsert where sandboxID is available (not dispatchTarget)
+- [Phase 121-06]: IAM policies for quota table gated on non-empty quota_table_arn (dormant until table deployed)
 
 ### Roadmap Evolution
 
@@ -1863,6 +1867,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T13:12:42.729Z
-Stopped at: Completed 121-05: proxy chokepoint URL→Action classifier + SES MITM + IAM grant
+Last session: 2026-06-27T13:21:04.053Z
+Stopped at: Completed 121-06-PLAN.md: Bridge quota enforcement + frozen dispatch gate
 Resume file: None
