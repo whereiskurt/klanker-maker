@@ -1,12 +1,16 @@
 // Package quota tests — quota_test.go
-// Wave 0 test stubs for QUO-01..05. Bucket-math tests (QUO-01) use real
-// assertions against the exported helpers; the remaining tests (QUO-02..05)
-// are guarded with t.Skip("Wave 1 — plan 02") because the full Record/Resolve
-// logic is implemented in plan 02.
+// Wave 0 test stubs for QUO-01..05 turned GREEN in Wave 1 plan 02.
+// QUO-01: bucket math (was already asserting, not skipped)
+// QUO-02: ResolveLimits per-(action,window) precedence
+// QUO-03: Decision breach detection (any window trips ⇒ Tripped=true)
+// QUO-04: Record uses atomic ADD (not read-modify-write)
+// QUO-05: lifetime rows carry no TTL; hour/day rows carry TTL ~2h/~2d
 package quota
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,15 +30,15 @@ func (f *fakeQuotaClient) UpdateItem(_ context.Context, input *dynamodb.UpdateIt
 	f.updateItemCalls = append(f.updateItemCalls, input)
 	return &dynamodb.UpdateItemOutput{
 		Attributes: map[string]dynamodbtypes.AttributeValue{
-			"count": &dynamodbtypes.AttributeValueMemberN{Value: "1"},
+			"count": &dynamodbtypes.AttributeValueMemberN{Value: fmt.Sprintf("%d", f.countReturn)},
 		},
 	}, nil
 }
 
 // TestRecord (QUO-01) — fixed-window bucket math.
 // Asserts hourBucket uses epoch/3600 and dayBucket uses epoch/86400 for a
-// known, deterministic Unix timestamp. This test is fully asserting (not
-// skipped) because the helpers are already implemented in the skeleton.
+// known, deterministic Unix timestamp. This test was already asserting in
+// plan 01 (skeleton); retained here for completeness.
 func TestRecord(t *testing.T) {
 	// Known timestamp: 2024-01-15 12:30:00 UTC = Unix 1705318200
 	ts := time.Unix(1705318200, 0).UTC()
@@ -66,39 +70,140 @@ func TestRecord(t *testing.T) {
 }
 
 // TestResolveLimits (QUO-02) — per-(action,window) resolution: profile →
-// install default → unlimited. Guarded pending plan 02.
+// install default → unlimited.
 func TestResolveLimits(t *testing.T) {
-	t.Skip("Wave 1 — plan 02: ResolveLimits function not yet implemented")
+	installDefaults := Limits{
+		ActionGithubPR: {
+			Lifetime: ptr64(100),
+			PerHour:  ptr64(15),
+			PerDay:   ptr64(50),
+			OnBreach: BreachFreeze,
+		},
+		ActionGithubComment: {
+			PerHour:  ptr64(60),
+			PerDay:   ptr64(300),
+			OnBreach: BreachWarn,
+		},
+	}
 
-	// When implemented, assert:
+	// Profile overrides only perHour for github_pr; lifetime+perDay should be inherited.
+	profileLimits := Limits{
+		ActionGithubPR: {
+			PerHour:  ptr64(5), // tighter than install default (15)
+			OnBreach: BreachBlock,
+		},
+		// github_comment not in profile — fully inherits from installDefaults
+	}
+
+	resolved := ResolveLimits(profileLimits, installDefaults)
+
 	// 1. Profile value wins over install default for the same action+window.
-	// 2. A profile that sets only perHour still inherits install-level lifetime.
-	// 3. When neither profile nor install sets a window, that window returns nil (unlimited).
+	pr := resolved[ActionGithubPR]
+	if pr.PerHour == nil || *pr.PerHour != 5 {
+		t.Errorf("github_pr.perHour: got %v, want 5 (profile wins)", pr.PerHour)
+	}
+	// 2. A profile that sets only perHour still inherits install-level lifetime and perDay.
+	if pr.Lifetime == nil || *pr.Lifetime != 100 {
+		t.Errorf("github_pr.lifetime: got %v, want 100 (inherited from install default)", pr.Lifetime)
+	}
+	if pr.PerDay == nil || *pr.PerDay != 50 {
+		t.Errorf("github_pr.perDay: got %v, want 50 (inherited from install default)", pr.PerDay)
+	}
+	// 3. OnBreach: profile wins.
+	if pr.OnBreach != BreachBlock {
+		t.Errorf("github_pr.onBreach: got %q, want %q (profile wins)", pr.OnBreach, BreachBlock)
+	}
+
+	// 4. When action is absent from profile, fully inherit from install defaults.
+	comment := resolved[ActionGithubComment]
+	if comment.PerHour == nil || *comment.PerHour != 60 {
+		t.Errorf("github_comment.perHour: got %v, want 60 (from install default)", comment.PerHour)
+	}
+	if comment.PerDay == nil || *comment.PerDay != 300 {
+		t.Errorf("github_comment.perDay: got %v, want 300 (from install default)", comment.PerDay)
+	}
+	// Lifetime was not set in installDefaults for github_comment ⇒ nil (unlimited).
+	if comment.Lifetime != nil {
+		t.Errorf("github_comment.lifetime: got %v, want nil (unlimited — not set in either)", comment.Lifetime)
+	}
+
+	// 5. When neither profile nor install sets a window, that window returns nil (unlimited).
+	email := resolved[ActionEmailSend]
+	if email.PerHour != nil || email.PerDay != nil || email.Lifetime != nil {
+		t.Errorf("email_send: got %+v, want all-nil (unlimited — not set in either)", email)
+	}
+
+	// 6. OnBreach default when neither profile nor install sets it.
+	if email.OnBreach != "" {
+		// ResolveLimits returns empty string (caller falls back to BreachWarn at runtime).
+		t.Errorf("email_send.onBreach: got %q, want empty string (unlimited action)", email.OnBreach)
+	}
 }
 
 // TestDecision (QUO-03) — Tripped=true when ANY window exceeds its limit.
-// Guarded pending plan 02.
 func TestDecision(t *testing.T) {
-	t.Skip("Wave 1 — plan 02: Record breach detection not yet implemented")
+	// Case 1: hour count (16) exceeds limit (15), day count (40) is under limit (50).
+	// Tripped=true, WorstWindow="hour" (hour is worst when it's the only exceeded window).
+	fake := &fakeQuotaClient{}
+	callNum := 0
+	// We need different count returns per call: hour call returns 16, day call returns 40.
+	// Wrap with a custom client that returns different counts.
+	multi := &multiCountClient{
+		counts: []int64{16, 40}, // first call (hour) returns 16; second call (day) returns 40
+	}
+	_ = fake
 
-	// When implemented, assert:
-	// 1. Decision{Tripped:true} when count > limit on any window.
-	// 2. Decision{Tripped:false} when all counts are at or below their limits.
-	// 3. WorstWindow is set to the SK of the first/worst exceeded window.
-	// 4. OnBreach reflects the resolved policy from ActionLimit.OnBreach.
+	ctx := context.Background()
+	limit := ActionLimit{
+		PerHour:  ptr64(15),
+		PerDay:   ptr64(50),
+		OnBreach: BreachBlock,
+	}
+
+	d, err := Record(ctx, multi, "test-table", "sb-abc", ActionGithubPR, limit)
+	if err != nil {
+		t.Fatalf("Record returned error: %v", err)
+	}
+	if !d.Tripped {
+		t.Error("Decision.Tripped: got false, want true (hour count 16 > limit 15)")
+	}
+	if d.WorstWindow != "hour" {
+		t.Errorf("Decision.WorstWindow: got %q, want %q", d.WorstWindow, "hour")
+	}
+	if d.OnBreach != BreachBlock {
+		t.Errorf("Decision.OnBreach: got %q, want %q", d.OnBreach, BreachBlock)
+	}
+
+	// Case 2: all counts within limits ⇒ Tripped=false.
+	_ = callNum
+	multi2 := &multiCountClient{counts: []int64{14, 49}} // hour=14≤15, day=49≤50
+	limit2 := ActionLimit{PerHour: ptr64(15), PerDay: ptr64(50)}
+	d2, err2 := Record(ctx, multi2, "test-table", "sb-abc", ActionGithubPR, limit2)
+	if err2 != nil {
+		t.Fatalf("Record returned error: %v", err2)
+	}
+	if d2.Tripped {
+		t.Error("Decision.Tripped: got true, want false (all counts within limits)")
+	}
+
+	// Case 3: no configured windows ⇒ no DDB calls, dormant Decision.
+	fakeNoDDB := &fakeQuotaClient{}
+	limitDormant := ActionLimit{} // no windows configured
+	d3, err3 := Record(ctx, fakeNoDDB, "test-table", "sb-xyz", ActionSlackPost, limitDormant)
+	if err3 != nil {
+		t.Fatalf("Record (dormant) returned error: %v", err3)
+	}
+	if d3.Tripped {
+		t.Error("Decision.Tripped: got true for dormant action, want false")
+	}
+	if len(fakeNoDDB.updateItemCalls) != 0 {
+		t.Errorf("dormant action: expected 0 UpdateItem calls, got %d", len(fakeNoDDB.updateItemCalls))
+	}
 }
 
 // TestAtomicADD (QUO-04) — Record uses atomic ADD (not read-modify-write).
 // Asserts the UpdateItem expression contains "ADD" (not GetItem+PutItem).
-// Guarded pending plan 02.
 func TestAtomicADD(t *testing.T) {
-	t.Skip("Wave 1 — plan 02: Record atomic-ADD not yet implemented")
-
-	// When implemented, assert:
-	// 1. The fakeQuotaClient.UpdateItem is called (not GetItem + PutItem).
-	// 2. The UpdateExpression contains "ADD count" (atomic increment).
-	// 3. The ExpressionAttributeValues contains ":one" = 1.
-
 	fake := &fakeQuotaClient{countReturn: 1}
 	ctx := context.Background()
 	limit := ActionLimit{PerHour: ptr64(15)}
@@ -117,17 +222,132 @@ func TestAtomicADD(t *testing.T) {
 	if !strings.Contains(expr, "ADD") {
 		t.Errorf("UpdateExpression should contain ADD, got: %q", expr)
 	}
+	// Verify ReturnValues is ALL_NEW.
+	if call.ReturnValues != dynamodbtypes.ReturnValueAllNew {
+		t.Errorf("ReturnValues: got %v, want ALL_NEW", call.ReturnValues)
+	}
+	// Verify :one = 1 in ExpressionAttributeValues.
+	oneAV, ok := call.ExpressionAttributeValues[":one"]
+	if !ok {
+		t.Fatal("expected :one in ExpressionAttributeValues")
+	}
+	oneN, ok := oneAV.(*dynamodbtypes.AttributeValueMemberN)
+	if !ok {
+		t.Fatalf("expected :one to be a Number, got %T", oneAV)
+	}
+	if oneN.Value != "1" {
+		t.Errorf(":one value: got %q, want %q", oneN.Value, "1")
+	}
 }
 
 // TestTTL (QUO-05) — lifetime rows carry no TTL; hour/day rows carry TTL ~2h/~2d.
-// Guarded pending plan 02.
 func TestTTL(t *testing.T) {
-	t.Skip("Wave 1 — plan 02: TTL attributes not yet implemented")
+	ctx := context.Background()
+	now := time.Now().UTC()
 
-	// When implemented, assert:
-	// 1. The UpdateItem call for the "lifetime" SK has no "ttl" in ExpressionAttributeValues.
-	// 2. The UpdateItem call for a "hour#<bucket>" SK sets ttl ≈ now + 2h (within 5m tolerance).
-	// 3. The UpdateItem call for a "day#<bucket>" SK sets ttl ≈ now + 2d (within 5m tolerance).
+	// All three windows configured; capture all three UpdateItem calls.
+	fake := &fakeQuotaClient{countReturn: 1}
+	limit := ActionLimit{
+		Lifetime: ptr64(100),
+		PerHour:  ptr64(15),
+		PerDay:   ptr64(50),
+	}
+	_, err := Record(ctx, fake, "test-table", "sb-ttl", ActionGithubPR, limit)
+	if err != nil {
+		t.Fatalf("Record returned error: %v", err)
+	}
+	if len(fake.updateItemCalls) != 3 {
+		t.Fatalf("expected 3 UpdateItem calls (lifetime+hour+day), got %d", len(fake.updateItemCalls))
+	}
+
+	// Find each call by SK value.
+	var lifetimeCall, hourCall, dayCall *dynamodb.UpdateItemInput
+	for _, c := range fake.updateItemCalls {
+		skAV, ok := c.Key["SK"]
+		if !ok {
+			t.Fatal("UpdateItem call missing SK key")
+		}
+		sk := skAV.(*dynamodbtypes.AttributeValueMemberS).Value
+		switch {
+		case sk == "lifetime":
+			lifetimeCall = c
+		case strings.HasPrefix(sk, "hour#"):
+			hourCall = c
+		case strings.HasPrefix(sk, "day#"):
+			dayCall = c
+		}
+	}
+	if lifetimeCall == nil {
+		t.Fatal("missing UpdateItem call for lifetime SK")
+	}
+	if hourCall == nil {
+		t.Fatal("missing UpdateItem call for hour SK")
+	}
+	if dayCall == nil {
+		t.Fatal("missing UpdateItem call for day SK")
+	}
+
+	// 1. Lifetime: no "ttl" in ExpressionAttributeValues.
+	if _, hasTTL := lifetimeCall.ExpressionAttributeValues[":ttl"]; hasTTL {
+		t.Error("lifetime UpdateItem should NOT have :ttl in ExpressionAttributeValues")
+	}
+	if lifetimeCall.UpdateExpression != nil && strings.Contains(*lifetimeCall.UpdateExpression, "ttl") {
+		t.Error("lifetime UpdateExpression should NOT reference ttl")
+	}
+
+	// 2. Hour row: TTL ≈ now + 2h (within 5 minutes tolerance).
+	checkTTL(t, "hour", hourCall, now.Add(2*time.Hour), 5*time.Minute)
+
+	// 3. Day row: TTL ≈ now + 2d (within 5 minutes tolerance).
+	checkTTL(t, "day", dayCall, now.Add(48*time.Hour), 5*time.Minute)
+}
+
+// checkTTL asserts that the :ttl ExpressionAttributeValue in the given UpdateItem call
+// is within tolerance of expectedTime (as a Unix epoch seconds number).
+func checkTTL(t *testing.T, windowName string, call *dynamodb.UpdateItemInput, expectedTime time.Time, tolerance time.Duration) {
+	t.Helper()
+	ttlAV, ok := call.ExpressionAttributeValues[":ttl"]
+	if !ok {
+		t.Errorf("%s UpdateItem: expected :ttl in ExpressionAttributeValues", windowName)
+		return
+	}
+	ttlN, ok := ttlAV.(*dynamodbtypes.AttributeValueMemberN)
+	if !ok {
+		t.Errorf("%s: expected :ttl to be a Number, got %T", windowName, ttlAV)
+		return
+	}
+	ttlEpoch, err := strconv.ParseInt(ttlN.Value, 10, 64)
+	if err != nil {
+		t.Errorf("%s: failed to parse :ttl value %q: %v", windowName, ttlN.Value, err)
+		return
+	}
+	got := time.Unix(ttlEpoch, 0).UTC()
+	diff := got.Sub(expectedTime)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > tolerance {
+		t.Errorf("%s TTL: got %v (%d), want ~%v (within %v)", windowName, got, ttlEpoch, expectedTime, tolerance)
+	}
+}
+
+// multiCountClient returns sequential counts for each UpdateItem call.
+type multiCountClient struct {
+	counts  []int64
+	callIdx int
+}
+
+func (m *multiCountClient) UpdateItem(_ context.Context, _ *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	count := int64(0)
+	if m.callIdx < len(m.counts) {
+		count = m.counts[m.callIdx]
+	}
+	m.callIdx++
+	return &dynamodb.UpdateItemOutput{
+		Attributes: map[string]dynamodbtypes.AttributeValue{
+			"count": &dynamodbtypes.AttributeValueMemberN{Value: fmt.Sprintf("%d", count)},
+		},
+	}, nil
 }
 
 // ptr64 is a test helper that returns a pointer to an int64.
