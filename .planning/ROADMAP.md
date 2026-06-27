@@ -102,13 +102,13 @@ Plans:
 **Goal:** Stand up GPU EC2 sandboxes that serve 70B-class local models via vLLM (on a Deep Learning AMI base, weights on a persistent volume), and make that model reachable through every km interface — VS Code Remote-SSH, Slack chat-with-resume (on-box codex repointed at `localhost:8000`), on-box terminal/headless codex, and laptop dev via a new `km model start` SSM port-forward (with an on-box Anthropic↔OpenAI shim so local Claude Code can drive it). claude stays cloud-pointed on-box to preserve a `/claude`-vs-`/codex` cloud-vs-local A/B.
 **Requirements**: phase-local synthetic IDs (derived from CONTEXT.md + 122-RESEARCH.md + 122-VALIDATION.md): REQ-122-PROFILES (7 GPU vLLM serving leaves + base/gpu/serve fragment), REQ-122-CODEX (synthesizeCodexConfig local-provider emission), REQ-122-MODELSTART (km model start/status), REQ-122-SHIM (on-box LiteLLM dual-gateway + Anthropic shim), REQ-122-UAT (full 7-gate live UAT)
 **Depends on:** Phase 121, Phase 117 (composable inheritance), Phase 92 (agent tool-gating / codex config synthesis)
-**Plans:** 4/5 plans executed
+**Plans:** 4/5 complete; 122-05 partial (docs done; live UAT G3–G9 BLOCKED on G-instance quota — request `d7fe8a96…` PENDING in 052251888500/us-east-1). Gateway shipped as **Bifrost** (multi-provider router, not the original "shim"; LiteLLM = fallback).
 
-**Design spec:** `docs/superpowers/specs/2026-06-27-gpu-vllm-serving-profiles-design.md` (authoritative — 7-profile matrix, 3 deliverables, R1–R7, O1–O9, DoD = full live UAT). RESEARCH supersedes the spec on O7 (LiteLLM :8001 is a CORE component fronting vLLM :8000 — Codex requires the Responses API since Feb 2026).
+**Design spec:** `docs/superpowers/specs/2026-06-27-gpu-vllm-serving-profiles-design.md`. RESEARCH/CONTEXT supersede the spec: O7 → a gateway is CORE (Codex needs the Responses API since Feb 2026); the bake-off chose **Bifrost** on `:8001` as a 5-route multi-provider router (local/claude-bedrock/claude-anthropic/gpt-oss-bedrock/gpt-frontier). Resume: `.planning/phases/122-*/122-UAT.md`.
 
 Plans:
-- [ ] 122-01-PLAN.md — Wave 0: AgentCodexSpec localBaseURL/localModel fields + JSON schema + 6 Wave-0 RED test stubs (codex local-provider, schema round-trip, raw-DLAMI passthrough, validate WARN, km model start wiring)
-- [ ] 122-02-PLAN.md — abstract base/gpu/serve fragment + 7 GPU leaves (vLLM+LiteLLM units, additionalVolume, HF_HOME, Continue config, HF_TOKEN SOPS for Llama) + validate-all gate; km validate green on all 7 merged
-- [ ] 122-03-PLAN.md — synthesizeCodexConfig emits [model_providers.local] (wire_api=responses, :8001) + codex/GPU-leaf goldens (frozen baseline untouched); full suite green
-- [ ] 122-04-PLAN.md — km model start/status command + httpTunnelProbe (plain-HTTP :8001) reusing runReconnectingPortForward + root registration + wiring test
-- [ ] 122-05-PLAN.md — full live UAT (G3-G7): deploy surface (build+lambdas+km init), SOPS HF_TOKEN, g6e.12x bring-up, Slack synthetic-HMAC drive, GUI gates; docs + CLAUDE.md (autonomous:false)
+- [x] 122-01-PLAN.md — Wave 0: AgentCodexSpec localBaseURL/localModel + JSON schema + 6 Wave-0 RED test stubs ✓
+- [x] 122-02-PLAN.md — base/gpu/serve fragment (Bifrost v1.0.6 5-route router + OTEL) + 7 GPU leaves; validate-all 20/20 ✓
+- [x] 122-03-PLAN.md — synthesizeCodexConfig emits [model_providers.local] (wire_api=responses, :8001) + golden; full suite green ✓
+- [x] 122-04-PLAN.md — km model start/status + httpTunnelProbe reusing runReconnectingPortForward + root registration + 8 tests ✓
+- [~] 122-05-PLAN.md — live UAT: G1/G2 ✓ (unit), Task 4 docs ✓ (docs/gpu-model-serving.md + CLAUDE.md); G3–G9 BLOCKED on G-quota (no GPU spend incurred). Resume per 122-UAT.md once quota lands.
