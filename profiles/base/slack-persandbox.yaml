@@ -9,7 +9,7 @@ spec:
     slack:
       enabled: true
       perSandbox: true
-      channelName: "sb-{profile}-{alias}"
+      channelName: "sb-{alias}"
       archiveOnDestroy: false
       inbound:
         enabled: true
