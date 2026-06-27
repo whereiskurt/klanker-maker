@@ -224,6 +224,48 @@ POST /openai/v1/chat/completions 200                                            
 
 ---
 
+## On-hardware findings (CPU integration rehearsal, 2026-06-27)
+
+Ran the real `base/gpu/serve` on a **t3.xlarge** (`profiles/gpu-rehearsal-cpu.yaml`,
+vLLM masked, ~$0.16/hr, no G-quota) to exercise the km plumbing. Found 3 MORE bugs
+beyond the gateway-config ones (#1–#2 above), all of which would have broken the GPU box:
+
+- **Bug #3 — boot brick from `iam.allowedSecretPaths: [/sandbox/*/secrets]`.** The
+  bootstrap does `SECRET_VALUE=$(aws ssm get-parameter --name '/sandbox/*/secrets' …)`;
+  the literal `*` makes get-parameter fail, and under `set -e` the failing
+  command-substitution **aborts the entire boot** before the soft `if [ $? -eq 0 ]`
+  warning. FIXED: removed the bogus path (commit `1be017c2`). Secrets come via
+  `spec.secrets.sopsFile` (role HAS `kms:Decrypt` on `alias/km-sandbox-secrets` —
+  confirmed, so sopsFile is safe). *Latent km bug:* the injection loop should
+  soft-fail, not brick — worth a separate `|| true` hardening.
+- **Bug #4 — instance role lacks `bedrock:InvokeModel`.** `base/gpu/serve` sets
+  `useBedrock: false`, so the ec2spot module grants NO Bedrock — the keyless
+  `*-bedrock` routes 403. DECISION (operator): use **direct API keys**
+  (`claude-anthropic` + `gpt-frontier`) instead of Bedrock routes — no IAM change,
+  and `gpt-frontier` gives real GPT-5 vs Bedrock's gpt-oss. Bedrock stays an
+  optional keyless extra (needs the role grant if used).
+- **Bug #5 — service-bring-up ordering.** The units (vllm.service, bifrost.service)
+  + bifrost-config.json are in `configFiles`, which km writes AFTER
+  `initCommandsAppend` — so `systemctl enable bifrost.service` runs before the unit
+  files exist → services never start at boot. **Prescribed fix in the fragment's
+  inline comment** (move unit/config writes into initCommandsAppend; leaves write
+  vllm.env via initCommands). NOT yet applied — needs a confirming recreate.
+- **Bug #6 — `/etc/km/bifrost-data` ownership.** The Bifrost container runs as UID
+  1000 and crash-loops on `mkdir /app/data/logs: Permission denied` unless the
+  mounted dir is `chown 1000:1000`. Folded into the bug-#5 fix.
+
+**PROVEN ON REAL HARDWARE (manual bring-up on the box):** after `chown 1000:1000`
+the data dir + `docker pull maximhq/bifrost:v1.6.0` + `systemctl start bifrost`, the
+gateway served `:8001=200` and BOTH Bedrock routes returned via the **instance role
+(SigV4, no key)**: `bedrock/openai.gpt-oss-120b` → "BOXOK", `bedrock/us.anthropic.claude-sonnet-4-6`
+→ "CLAUDEOK". Also confirmed: boot completes past secrets (fix #3), Slack poller
+active, `docker pull` works through the MITM proxy. The Bifrost docker unit + the
+corrected config + instance-role Bedrock all work on a real km sandbox.
+
+**Remaining before a GPU run:** apply the bug-#5/#6 bring-up rework to base/gpu/serve
++ one confirming recreate; then only the vLLM `local` route (the actual 70B) needs
+the GPU.
+
 ## BIFROST VALIDATION COMPLETE
 
 1. **Does the config work?** Yes — the corrected schema boots clean in file-only mode on :8001 and serves real completions through all live routes (gpt-oss-120b/20b + Claude via Bedrock, on both `/openai` and `/anthropic` endpoints).

@@ -48,11 +48,26 @@ spec:
       # base/userinit (confirmed in profiles/base/userinit.yaml initCommands:
       # /etc/profile.d/km-zz-goose-otel.sh) — NOT duplicated here.
 
-    # initCommandsAppend UNIONS onto the leaf's commands (Phase 117).
-    # Leaves MUST write /etc/km/vllm.env before these run (via initCommandsAppend).
+    # ⚠️ KNOWN BUG — bring-up ordering (CPU rehearsal 2026-06-27; see
+    # 122-BIFROST-VALIDATION.md § "On-hardware findings"). km writes profile
+    # configFiles AFTER initCommandsAppend (userdata.go §7.6 "Runs AFTER
+    # initCommands"), so the `systemctl enable bifrost.service` below runs BEFORE
+    # the unit files in configFiles exist → services never start. ALSO the mounted
+    # /etc/km/bifrost-data must be `chown 1000:1000` (Bifrost container runs as UID
+    # 1000 and crash-loops on "mkdir /app/data/logs: Permission denied" otherwise).
+    # PRESCRIBED FIX (needs a confirming recreate): move the vllm.service /
+    # bifrost.service / bifrost-config.json writes OUT of configFiles and INTO this
+    # initCommandsAppend block (cat > … <<'EOF' with a QUOTED delimiter so
+    # ${VLLM_MODEL} isn't expanded), add `chown -R 1000:1000 /etc/km/bifrost-data`,
+    # and have leaves write /etc/km/vllm.env via `initCommands` (runs before all
+    # initCommandsAppend) so it exists before vllm starts. The bring-up SEQUENCE
+    # itself is PROVEN on real hardware (manual: write config → chown 1000:1000 →
+    # docker pull → systemctl start → gpt-oss-bedrock + claude-bedrock both returned
+    # via the instance role).
+    #
     # Bifrost ships as a DOCKER IMAGE (maximhq/bifrost:v1.6.0) — there is NO release
-    # binary (the old curl URL 404s). Config is read from a mounted app-dir as
-    # config.json; port via APP_PORT env. Validated live in 122-BIFROST-VALIDATION.md.
+    # binary (the old curl URL 404s). Config is a mounted app-dir config.json; port
+    # via APP_PORT. docker pull through the MITM proxy WORKS (CA is trusted).
     initCommandsAppend:
       - "docker pull maximhq/bifrost:v1.6.0"
       - "mkdir -p /etc/km/bifrost-data && cp /etc/km/bifrost-config.json /etc/km/bifrost-data/config.json"
