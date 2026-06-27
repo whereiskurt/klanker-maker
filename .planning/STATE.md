@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 121-09-PLAN.md — km-quota-alerter Lambda + DDB Stream event_source_mapping
-last_updated: "2026-06-27T13:32:50.297Z"
+stopped_at: Completed 121-10-PLAN.md — km freeze verb + latch-aware unlock + FROZEN visibility in list/status/doctor
+last_updated: "2026-06-27T13:40:21.741Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 30
-  completed_plans: 29
+  completed_plans: 30
   percent: 91
 ---
 
@@ -604,6 +604,7 @@ Progress: [█████████░] 91%
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P06 | 719s | 4 tasks | 15 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P07 | 884 | 2 tasks | 4 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P09 | 384 | 3 tasks | 8 files |
+| Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P10 | 806s | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -1726,6 +1727,9 @@ Recent decisions affecting current work:
 - [Phase 121]: Two mirrored profileLimitsToQuota helpers (compiler layer + cmd layer) avoid import cycle while maintaining identical resolution logic
 - [Phase 121-09]: attribute_not_exists(alert_sent) conditional write after SES send ensures exactly one alert per breach while tolerating concurrent Lambda invocations
 - [Phase 121-09]: starting_position=LATEST on event_source_mapping so only new breach events are processed post-deploy
+- [Phase 121-10]: km freeze is CLI-only panic button; km unlock is the only release path for both safety-lock and freeze latch; box keeps running
+- [Phase 121-10]: FROZEN marker appended to lock-suffix string in list.go (no new column); SandboxRecord extended with FrozenReason/FrozenAt/FrozenBy for status detail
+- [Phase 121-10]: Doctor frozen-sandbox scan reuses deps.Lister (no new DoctorDeps field); action-quota table check is WARN not ERROR (mirrors slack-channels pattern)
 
 ### Roadmap Evolution
 
@@ -1873,6 +1877,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T13:32:50.291Z
-Stopped at: Completed 121-09-PLAN.md — km-quota-alerter Lambda + DDB Stream event_source_mapping
+Last session: 2026-06-27T13:40:21.734Z
+Stopped at: Completed 121-10-PLAN.md — km freeze verb + latch-aware unlock + FROZEN visibility in list/status/doctor
 Resume file: None
