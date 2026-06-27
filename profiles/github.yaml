@@ -9,6 +9,7 @@ metadata:
 
 extends:
   - base/os/redhat
+  - base/network/safenetwork
   - base/userinit
   - base/platform
   - base/slack-persandbox
@@ -34,22 +35,9 @@ spec:
     mode: allowlist
     github:
       allowedRepos:
-        - "whereiskurt/*"
-      allowedRefs:
-        - "main"
-        - "develop"
         - "*"
-
-  network:
-    enforcement: proxy
-    egress:
-      allowedDNSSuffixes:
-        - ".github.com"
-        - ".githubusercontent.com"
-        - ".amazonaws.com"
-        - "api.anthropic.com"
-        - ".npmjs.org"
-      allowedHosts: []
+      allowedRefs:
+        - "*"
 
   notification:
     github:

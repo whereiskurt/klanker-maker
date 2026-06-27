@@ -9,6 +9,7 @@ metadata:
 
 extends:
   - base/os/debian
+  - base/network/safenetwork
   - base/userinit
   - base/platform
   - base/slack-persandbox
@@ -43,23 +44,10 @@ spec:
   sourceAccess:
     mode: allowlist
     github:
-      allowedRepos: []
-      allowedRefs: []
-
-  network:
-    enforcement: proxy
-    egress:
-      allowedDNSSuffixes:
-        - ".amazonaws.com"
-        - "time.aws.com"
-        - ".anthropic.com"
-        - ".claude.ai"
-        - ".claude.com"
-        - ".mozilla.org"
-        - ".mozilla.com"
-        - ".mozilla.net"
-        - ".firefox.com"
-      allowedHosts: []
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
 
   notification:
     events:
