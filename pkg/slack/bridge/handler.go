@@ -5,12 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/whereiskurt/klanker-maker/pkg/quota"
 	"github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
@@ -64,6 +66,14 @@ type Handler struct {
 	// May be nil if the bridge binary was built before Phase 110 (lookup-thread
 	// will return 500 in that case, but all other actions are unaffected).
 	Threads SlackThreadStore
+
+	// Phase 121 (BRG-01) — quota enforcement on outbound chat actions.
+	// When both Quota and Limits are non-nil, quota.Record is called before each
+	// ActionPost/ActionTest/ActionUpload dispatch. nil Quota or nil Limits → dormant
+	// (byte-identical to pre-Phase-121; no DDB write, no quota check).
+	Quota      QuotaAPI            // DDB client for the action-quota table
+	QuotaTable string              // e.g. "km-action-quota" (from KM_QUOTA_TABLE env var)
+	Limits     ActionLimitsFetcher // resolves per-sandbox action-limits JSON
 }
 
 // jsonResp builds a Response with a JSON body.
@@ -272,6 +282,13 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 	// Dispatch.
 	switch env.Action {
 	case slack.ActionPost, slack.ActionTest:
+		// Phase 121 (BRG-01): quota.Record for slack_post before the Slack API call.
+		// Fail-open: if limits fetch errors or quota client is nil, proceed as before.
+		if quotaTripped, quotaBlock := h.checkQuota(ctx, env.SenderID, quota.ActionSlackPost, env.Channel, env.ThreadTS); quotaBlock {
+			_ = quotaTripped
+			return errResp(429, "quota_exceeded")
+		}
+
 		// Phase 74 Tier 2: if env.Blocks is set and the SlackPoster also implements
 		// BlockPoster, route to PostMessageBlocks which carries both the plain-text
 		// fallback (env.Body) and the Block Kit array. If the type assertion fails or
@@ -317,6 +334,12 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		}
 		return resp
 	case slack.ActionUpload:
+		// Phase 121 (BRG-01): quota.Record for slack_post before the Slack API call.
+		if quotaTripped, quotaBlock := h.checkQuota(ctx, env.SenderID, quota.ActionSlackPost, env.Channel, env.ThreadTS); quotaBlock {
+			_ = quotaTripped
+			return errResp(429, "quota_exceeded")
+		}
+
 		// Phase 68 — stream a transcript object from S3 directly into Slack's
 		// 3-step file upload flow (no full-buffering in Lambda memory).
 		//
@@ -532,6 +555,87 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		})
 	}
 	return errResp(500, "internal") // unreachable
+}
+
+// checkQuota calls quota.Record for the given sandboxID and action when both
+// h.Quota and h.Limits are wired. Returns (decision, block):
+//   - block=true   → caller must return 429 (BLOCK or FREEZE trip).
+//   - block=false  → caller proceeds; notices are posted inline.
+//
+// The notice posted here is control-plane (from the bridge's bot token), never
+// counted by quota.Record. Fail-open: any error → (Decision{}, false).
+func (h *Handler) checkQuota(ctx context.Context, sandboxID string, action quota.Action, channel, threadTS string) (quota.Decision, bool) {
+	if h.Quota == nil || h.Limits == nil || h.QuotaTable == "" {
+		return quota.Decision{}, false // dormant
+	}
+	limitsJSON, err := h.Limits.FetchLimits(ctx, sandboxID)
+	if err != nil || limitsJSON == "" {
+		if err != nil {
+			logger.WarnContext(ctx, "bridge: quota limits fetch failed (fail-open)", "sandbox", sandboxID, "err", err)
+		}
+		return quota.Decision{}, false
+	}
+	var limits quota.Limits
+	if jsonErr := json.Unmarshal([]byte(limitsJSON), &limits); jsonErr != nil {
+		logger.WarnContext(ctx, "bridge: quota limits json parse failed (fail-open)", "sandbox", sandboxID, "err", jsonErr)
+		return quota.Decision{}, false
+	}
+	actionLimit, ok := limits[action]
+	if !ok {
+		return quota.Decision{}, false // action not configured
+	}
+	d, recErr := quota.Record(ctx, h.Quota, h.QuotaTable, sandboxID, action, actionLimit)
+	if recErr != nil {
+		logger.WarnContext(ctx, "bridge: quota record failed (fail-open)", "sandbox", sandboxID, "err", recErr)
+		return quota.Decision{}, false
+	}
+	if !d.Tripped {
+		return d, false
+	}
+	// Trip: post a control-plane in-thread notice (uncounted, from the bot token).
+	h.postQuotaNotice(ctx, channel, threadTS, action, d)
+
+	switch d.OnBreach {
+	case quota.BreachBlock, quota.BreachFreeze:
+		return d, true // caller returns 429
+	default: // BreachWarn
+		return d, false
+	}
+}
+
+// postQuotaNotice posts an enforce-aware in-thread control-plane notice.
+// Called after a quota.Record trip. MUST NOT call quota.Record itself (uncounted).
+func (h *Handler) postQuotaNotice(ctx context.Context, channel, threadTS string, action quota.Action, d quota.Decision) {
+	if h.Slack == nil {
+		return
+	}
+	var notice string
+	win := d.WorstWindow
+	// Find the count/limit for the worst window.
+	var count, limit int64
+	for _, w := range d.Windows {
+		if w.Window == win && w.Exceeded {
+			count, limit = w.Count, w.Limit
+			break
+		}
+	}
+	switch d.OnBreach {
+	case quota.BreachWarn:
+		notice = fmt.Sprintf("⚠️ Quota reached: `%s` hit %d/%d this %s. WARN mode — actions still flowing.", action, count, limit, win)
+	case quota.BreachBlock:
+		notice = fmt.Sprintf("🛑 Quota exceeded: `%s` (%d/%d %s). Further actions blocked until the window resets.", action, count, limit, win)
+	case quota.BreachFreeze:
+		notice = fmt.Sprintf("🛑 Quota exceeded: `%s` (%d/%d %s). Sandbox is now frozen — operator release required.", action, count, limit, win)
+	default:
+		notice = fmt.Sprintf("⚠️ Quota alert: `%s` limit reached.", action)
+	}
+	replyTS := threadTS
+	if replyTS == "" {
+		replyTS = ""
+	}
+	if _, postErr := h.Slack.PostMessage(ctx, channel, "", notice, replyTS); postErr != nil {
+		logger.WarnContext(ctx, "bridge: quota notice post failed (non-fatal)", "sandbox", "unknown", "err", postErr)
+	}
 }
 
 // slackResponse maps a Slack-call result to the bridge HTTP response.

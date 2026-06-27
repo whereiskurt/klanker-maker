@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"io"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
 // ErrNonceReplayed is returned by NonceStore.Reserve when the nonce already
@@ -94,4 +96,19 @@ type S3ObjectGetter interface {
 // for inclusion in the bridge response body.
 type SlackFileUploader interface {
 	UploadFile(ctx context.Context, channel, threadTS, filename, contentType string, sizeBytes int64, body io.Reader) (fileID, permalink string, err error)
+}
+
+// ActionLimitsFetcher resolves the per-sandbox action-limits JSON map (stored as
+// action_limits S attr on km-sandboxes). Returned string is the resolved JSON limits
+// map (quota.Limits serialized). Empty string = no limits configured (dormant).
+// Production: DDBActionLimitsFetcher (aws_adapters.go) — GetItem by sandbox_id.
+type ActionLimitsFetcher interface {
+	FetchLimits(ctx context.Context, sandboxID string) (string, error)
+}
+
+// QuotaAPI is the minimal DynamoDB surface quota.Record needs.
+// Satisfied by *dynamodb.Client. Identical to quota.QuotaAPI (re-declared here so
+// bridge.Handler does not import pkg/quota directly — quota stays a sibling pkg).
+type QuotaAPI interface {
+	UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
 }
