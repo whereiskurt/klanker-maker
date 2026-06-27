@@ -100,11 +100,15 @@ Plans:
 ### Phase 122: GPU vLLM model-serving sandbox profiles plus local-model chat (codex repoint, km model start, Anthropic shim)
 
 **Goal:** Stand up GPU EC2 sandboxes that serve 70B-class local models via vLLM (on a Deep Learning AMI base, weights on a persistent volume), and make that model reachable through every km interface — VS Code Remote-SSH, Slack chat-with-resume (on-box codex repointed at `localhost:8000`), on-box terminal/headless codex, and laptop dev via a new `km model start` SSM port-forward (with an on-box Anthropic↔OpenAI shim so local Claude Code can drive it). claude stays cloud-pointed on-box to preserve a `/claude`-vs-`/codex` cloud-vs-local A/B.
-**Requirements**: TBD (derive in /gsd:plan-phase)
+**Requirements**: phase-local synthetic IDs (derived from CONTEXT.md + 122-RESEARCH.md + 122-VALIDATION.md): REQ-122-PROFILES (7 GPU vLLM serving leaves + base/gpu/serve fragment), REQ-122-CODEX (synthesizeCodexConfig local-provider emission), REQ-122-MODELSTART (km model start/status), REQ-122-SHIM (on-box LiteLLM dual-gateway + Anthropic shim), REQ-122-UAT (full 7-gate live UAT)
 **Depends on:** Phase 121, Phase 117 (composable inheritance), Phase 92 (agent tool-gating / codex config synthesis)
-**Plans:** 0 plans
+**Plans:** 5 plans
 
-**Design spec:** `docs/superpowers/specs/2026-06-27-gpu-vllm-serving-profiles-design.md` (authoritative — 7-profile matrix, 3 deliverables, R1–R7, O1–O9, DoD = full live UAT). The phase is sizable; plan as waves: profiles+fragment → codex repoint+Slack → `km model start`+shim → live UAT.
+**Design spec:** `docs/superpowers/specs/2026-06-27-gpu-vllm-serving-profiles-design.md` (authoritative — 7-profile matrix, 3 deliverables, R1–R7, O1–O9, DoD = full live UAT). RESEARCH supersedes the spec on O7 (LiteLLM :8001 is a CORE component fronting vLLM :8000 — Codex requires the Responses API since Feb 2026).
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 122 to break down)
+- [ ] 122-01-PLAN.md — Wave 0: AgentCodexSpec localBaseURL/localModel fields + JSON schema + 6 Wave-0 RED test stubs (codex local-provider, schema round-trip, raw-DLAMI passthrough, validate WARN, km model start wiring)
+- [ ] 122-02-PLAN.md — abstract base/gpu/serve fragment + 7 GPU leaves (vLLM+LiteLLM units, additionalVolume, HF_HOME, Continue config, HF_TOKEN SOPS for Llama) + validate-all gate; km validate green on all 7 merged
+- [ ] 122-03-PLAN.md — synthesizeCodexConfig emits [model_providers.local] (wire_api=responses, :8001) + codex/GPU-leaf goldens (frozen baseline untouched); full suite green
+- [ ] 122-04-PLAN.md — km model start/status command + httpTunnelProbe (plain-HTTP :8001) reusing runReconnectingPortForward + root registration + wiring test
+- [ ] 122-05-PLAN.md — full live UAT (G3-G7): deploy surface (build+lambdas+km init), SOPS HF_TOKEN, g6e.12x bring-up, Slack synthetic-HMAC drive, GUI gates; docs + CLAUDE.md (autonomous:false)
