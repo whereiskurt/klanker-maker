@@ -525,6 +525,78 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		}
 	}
 
+	// Phase 121 Plan 03 (PROF-01): spec.limits semantic validation.
+	// The JSON schema enforces minimum:1 on the integer fields and the onBreach enum;
+	// this belt-and-suspenders check catches the same constraints at the typed level
+	// (mirrors the eBPF enforcement rule style above).
+	errs = append(errs, validateLimits(p)...)
+
+	return errs
+}
+
+// validateLimits enforces Phase 121 semantic rules for spec.limits.
+// All rules are no-ops when spec.limits is nil (dormant by default).
+//
+// Rules:
+//   - onBreach must be one of {"warn","block","freeze"} or empty (defaults to "warn")
+//   - lifetime/perHour/perDay must be >= 1 when set (pointer non-nil)
+func validateLimits(p *SandboxProfile) []ValidationError {
+	if p.Spec.Limits == nil {
+		return nil
+	}
+
+	var errs []ValidationError
+
+	type actionEntry struct {
+		name string
+		spec *ActionLimitSpec
+	}
+	actions := []actionEntry{
+		{"github_pr", p.Spec.Limits.GithubPR},
+		{"github_comment", p.Spec.Limits.GithubComment},
+		{"github_review", p.Spec.Limits.GithubReview},
+		{"email_send", p.Spec.Limits.EmailSend},
+		{"slack_post", p.Spec.Limits.SlackPost},
+		{"h1_comment", p.Spec.Limits.H1Comment},
+	}
+
+	validOnBreach := map[string]bool{"warn": true, "block": true, "freeze": true}
+
+	for _, a := range actions {
+		if a.spec == nil {
+			continue
+		}
+		base := "spec.limits." + a.name
+
+		// onBreach must be empty (defaults to "warn") or one of the three valid values.
+		if a.spec.OnBreach != "" && !validOnBreach[a.spec.OnBreach] {
+			errs = append(errs, ValidationError{
+				Path:    base + ".onBreach",
+				Message: fmt.Sprintf("onBreach %q is not valid; must be one of: warn, block, freeze", a.spec.OnBreach),
+			})
+		}
+
+		// lifetime, perHour, perDay must be >= 1 when set.
+		if a.spec.Lifetime != nil && *a.spec.Lifetime <= 0 {
+			errs = append(errs, ValidationError{
+				Path:    base + ".lifetime",
+				Message: fmt.Sprintf("lifetime %d must be >= 1 when set", *a.spec.Lifetime),
+			})
+		}
+		if a.spec.PerHour != nil && *a.spec.PerHour <= 0 {
+			errs = append(errs, ValidationError{
+				Path:    base + ".perHour",
+				Message: fmt.Sprintf("perHour %d must be >= 1 when set", *a.spec.PerHour),
+			})
+		}
+		if a.spec.PerDay != nil && *a.spec.PerDay <= 0 {
+			errs = append(errs, ValidationError{
+				Path:    base + ".perDay",
+				Message: fmt.Sprintf("perDay %d must be >= 1 when set", *a.spec.PerDay),
+			})
+		}
+	}
+
 	return errs
 }
 

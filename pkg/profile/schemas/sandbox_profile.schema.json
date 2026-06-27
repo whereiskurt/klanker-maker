@@ -807,6 +807,19 @@
               }
             }
           }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Phase 121 Plan 03: optional per-action outbound quota configuration. Absent block = no counting (dormant, byte-identical to pre-Phase-121). Additive — no apiVersion bump.",
+          "properties": {
+            "github_pr": { "$ref": "#/$defs/ActionLimitSpec", "description": "Quota for GitHub pull request creates (POST api.github.com /repos/*/pulls)." },
+            "github_comment": { "$ref": "#/$defs/ActionLimitSpec", "description": "Quota for GitHub issue/PR comments (POST …/issues/*/comments)." },
+            "github_review": { "$ref": "#/$defs/ActionLimitSpec", "description": "Quota for GitHub pull request review submissions (POST …/pulls/*/reviews)." },
+            "email_send": { "$ref": "#/$defs/ActionLimitSpec", "description": "Quota for outbound SES emails (SendEmail / SendRawEmail)." },
+            "slack_post": { "$ref": "#/$defs/ActionLimitSpec", "description": "Quota for Slack posts via the bridge (ActionPost / ActionUpload envelopes)." },
+            "h1_comment": { "$ref": "#/$defs/ActionLimitSpec", "description": "Quota for HackerOne report comments via the bridge." }
+          }
         }
       }
     }
@@ -841,6 +854,33 @@
         "logGroup": {
           "type": "string",
           "description": "CloudWatch log group or S3 prefix"
+        }
+      }
+    },
+    "ActionLimitSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Phase 121: quota windows and breach policy for a single outbound action. All fields are optional; absent windows are not enforced. onBreach defaults to 'warn' (alert only, action still flows).",
+      "properties": {
+        "lifetime": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum count over the entire sandbox lifetime (never resets). Must be >= 1 when set."
+        },
+        "perHour": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum count per fixed hourly UTC bucket (epoch / 3600). Must be >= 1 when set."
+        },
+        "perDay": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum count per fixed calendar day (UTC midnight bucket). Must be >= 1 when set."
+        },
+        "onBreach": {
+          "type": "string",
+          "enum": ["warn", "block", "freeze"],
+          "description": "Breach policy: warn (alert only, default), block (deny the action), or freeze (latch sandbox into quarantine)."
         }
       }
     }

@@ -114,6 +114,50 @@ type Spec struct {
 	// (unset / true / false) matters, so child profiles can override individual
 	// settings without clobbering the parent (see mergeNotificationSpec).
 	Notification *NotificationSpec `yaml:"notification,omitempty" json:"notification,omitempty"`
+	// Limits defines optional per-action outbound quotas for high-impact actions
+	// (github PRs/comments/reviews, email sends, Slack posts, HackerOne comments).
+	// When nil (absent), no counting occurs — byte-identical to pre-Phase-121.
+	// Additive change: no apiVersion bump (consistent with Phase 118/119).
+	// Phase 121 Plan 03 (PROF-01).
+	Limits *LimitsSpec `yaml:"limits,omitempty" json:"limits,omitempty"`
+}
+
+// LimitsSpec is the per-profile action quota configuration block (Phase 121 Plan 03).
+// Each action field is a pointer so absent fields do not contribute any limit
+// (the installer-default or "unlimited" then applies for that action).
+// All six actions are independently configurable.
+type LimitsSpec struct {
+	// GithubPR limits the number of GitHub pull request creates from this sandbox.
+	GithubPR *ActionLimitSpec `yaml:"github_pr,omitempty" json:"github_pr,omitempty"`
+	// GithubComment limits the number of GitHub issue/PR comments posted.
+	GithubComment *ActionLimitSpec `yaml:"github_comment,omitempty" json:"github_comment,omitempty"`
+	// GithubReview limits the number of GitHub pull request review submissions.
+	GithubReview *ActionLimitSpec `yaml:"github_review,omitempty" json:"github_review,omitempty"`
+	// EmailSend limits the number of outbound emails sent via SES.
+	EmailSend *ActionLimitSpec `yaml:"email_send,omitempty" json:"email_send,omitempty"`
+	// SlackPost limits the number of Slack messages posted via the bridge.
+	SlackPost *ActionLimitSpec `yaml:"slack_post,omitempty" json:"slack_post,omitempty"`
+	// H1Comment limits the number of HackerOne report comments posted via the bridge.
+	H1Comment *ActionLimitSpec `yaml:"h1_comment,omitempty" json:"h1_comment,omitempty"`
+}
+
+// ActionLimitSpec defines the quota windows and breach policy for a single action.
+// Each window field is optional; absent windows are not enforced.
+// OnBreach defaults to "warn" when empty (alert-only; action still flows).
+type ActionLimitSpec struct {
+	// Lifetime is the maximum count over the entire sandbox lifetime (no reset).
+	// Must be >= 1 when set.
+	Lifetime *int64 `yaml:"lifetime,omitempty" json:"lifetime,omitempty"`
+	// PerHour is the maximum count per fixed hourly bucket (UTC epoch / 3600).
+	// Must be >= 1 when set.
+	PerHour *int64 `yaml:"perHour,omitempty" json:"perHour,omitempty"`
+	// PerDay is the maximum count per fixed calendar day (UTC midnight bucket).
+	// Must be >= 1 when set.
+	PerDay *int64 `yaml:"perDay,omitempty" json:"perDay,omitempty"`
+	// OnBreach is the policy applied when any configured window is exceeded.
+	// One of: "warn" (default, alert only), "block" (deny the action), "freeze"
+	// (latch the sandbox into quarantine). Empty is equivalent to "warn".
+	OnBreach string `yaml:"onBreach,omitempty" json:"onBreach,omitempty"`
 }
 
 // NotificationSpec is the Phase 92 structured replacement for the old
