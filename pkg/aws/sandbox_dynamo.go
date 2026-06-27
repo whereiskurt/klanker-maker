@@ -813,6 +813,72 @@ func UnlockSandboxDynamo(ctx context.Context, client SandboxMetadataAPI, tableNa
 	return nil
 }
 
+// FreezeSandboxDynamo atomically latches action_frozen=true on a sandbox and records
+// the reason, timestamp, and agent that triggered the freeze. Idempotent: re-freezing
+// an already-frozen sandbox updates reason/timestamp/by without error (no frozen-state
+// guard in the ConditionExpression — mirrors the design intent where auto-freeze can
+// refresh the reason on repeated quota violations). Returns an error only when the
+// sandbox row does not exist.
+//
+// reason: human-readable description, e.g. "quota:push:daily:10"
+// by: "auto:{action}:{window}" for quota-triggered freezes; "operator:{id}" for manual.
+//
+// Mirrors LockSandboxDynamo for client type, error-handling, and ConditionExpression style.
+func FreezeSandboxDynamo(ctx context.Context, client SandboxMetadataAPI, tableName, sandboxID, reason, by string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		UpdateExpression:    awssdk.String("SET action_frozen = :t, frozen_reason = :reason, frozen_at = :now, frozen_by = :by"),
+		ConditionExpression: awssdk.String("attribute_exists(sandbox_id)"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":t":      &dynamodbtypes.AttributeValueMemberBOOL{Value: true},
+			":reason": &dynamodbtypes.AttributeValueMemberS{Value: reason},
+			":now":    &dynamodbtypes.AttributeValueMemberS{Value: now},
+			":by":     &dynamodbtypes.AttributeValueMemberS{Value: by},
+		},
+	})
+	if err != nil {
+		var condFailed *dynamodbtypes.ConditionalCheckFailedException
+		if errors.As(err, &condFailed) {
+			return fmt.Errorf("%w: no DynamoDB record for sandbox %s", ErrSandboxNotFound, sandboxID)
+		}
+		return fmt.Errorf("freeze sandbox %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
+// UnfreezeSandboxDynamo clears the action_frozen latch and removes the associated
+// frozen_reason, frozen_at, frozen_by attributes in a single atomic UpdateItem.
+// Idempotent: REMOVE of absent attributes is a DynamoDB no-op. Returns an error only
+// when the sandbox row does not exist.
+//
+// Mirrors UnlockSandboxDynamo for client type, error-handling, and ConditionExpression style.
+func UnfreezeSandboxDynamo(ctx context.Context, client SandboxMetadataAPI, tableName, sandboxID string) error {
+	_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		UpdateExpression:    awssdk.String("SET action_frozen = :f REMOVE frozen_reason, frozen_at, frozen_by"),
+		ConditionExpression: awssdk.String("attribute_exists(sandbox_id)"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":f": &dynamodbtypes.AttributeValueMemberBOOL{Value: false},
+		},
+	})
+	if err != nil {
+		var condFailed *dynamodbtypes.ConditionalCheckFailedException
+		if errors.As(err, &condFailed) {
+			return fmt.Errorf("%w: no DynamoDB record for sandbox %s", ErrSandboxNotFound, sandboxID)
+		}
+		return fmt.Errorf("unfreeze sandbox %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
 // UpdateSandboxStatusDynamo updates only the status field of a sandbox record.
 // Used by pause/resume/stop/destroy for lightweight status transitions without a full PutItem.
 func UpdateSandboxStatusDynamo(ctx context.Context, client SandboxMetadataAPI, tableName, sandboxID, status string) error {

@@ -1329,6 +1329,297 @@ func TestUpdateSandboxStatusDynamo_StillWorks(t *testing.T) {
 	}
 }
 
+// ---- Phase 121: Round-trip + marshal tests for quota/freeze attrs ----
+
+// TestSandboxMetadataRoundTrip (META-01) verifies that all five Phase 121 attrs
+// survive a full marshal → unmarshal cycle through WriteSandboxMetadataDynamo and
+// ReadSandboxMetadataDynamo. A full-row PutItem (resume/extend/ttl-handler) must NOT
+// strip these fields — the project_sandboxmetadata_lossy_roundtrip footgun.
+func TestSandboxMetadataRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	frozenAt := now.Add(-1 * time.Hour)
+
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:    "sb-freeze-rt",
+		ProfileName:  "dev",
+		Substrate:    "ec2",
+		Region:       "us-east-1",
+		Status:       "running",
+		CreatedAt:    now,
+		ActionLimits: `{"push":{"daily":10},"deploy":{"hourly":2}}`,
+		ActionFrozen: true,
+		FrozenReason: "quota:push:daily",
+		FrozenAt:     &frozenAt,
+		FrozenBy:     "auto:push:daily",
+	}
+
+	// Marshal via WriteSandboxMetadataDynamo (captures the PutItem item map).
+	writeMock := &mockSandboxMetadataAPI{putItemOutput: &dynamodb.PutItemOutput{}}
+	if err := kmaws.WriteSandboxMetadataDynamo(ctx, writeMock, "km-sandboxes", meta); err != nil {
+		t.Fatalf("WriteSandboxMetadataDynamo: %v", err)
+	}
+	item := writeMock.putItemInput.Item
+
+	// Unmarshal via ReadSandboxMetadataDynamo.
+	readMock := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{Item: item},
+	}
+	got, err := kmaws.ReadSandboxMetadataDynamo(ctx, readMock, "km-sandboxes", "sb-freeze-rt")
+	if err != nil {
+		t.Fatalf("ReadSandboxMetadataDynamo: %v", err)
+	}
+
+	if got.ActionLimits != meta.ActionLimits {
+		t.Errorf("ActionLimits round-trip: got %q, want %q", got.ActionLimits, meta.ActionLimits)
+	}
+	if got.ActionFrozen != meta.ActionFrozen {
+		t.Errorf("ActionFrozen round-trip: got %v, want %v", got.ActionFrozen, meta.ActionFrozen)
+	}
+	if got.FrozenReason != meta.FrozenReason {
+		t.Errorf("FrozenReason round-trip: got %q, want %q", got.FrozenReason, meta.FrozenReason)
+	}
+	if got.FrozenBy != meta.FrozenBy {
+		t.Errorf("FrozenBy round-trip: got %q, want %q", got.FrozenBy, meta.FrozenBy)
+	}
+	if got.FrozenAt == nil {
+		t.Fatal("FrozenAt round-trip: got nil, want non-nil")
+	}
+	if !got.FrozenAt.Equal(frozenAt) {
+		t.Errorf("FrozenAt round-trip: got %v, want %v", got.FrozenAt, frozenAt)
+	}
+}
+
+// TestMarshalFrozen (META-02) asserts that marshalSandboxItem (via WriteSandboxMetadataDynamo)
+// emits all five Phase 121 attrs when set, and OMITS them when unset (no false-zero attrs
+// polluting the DDB row — mirrors the omitempty pattern used for locked/locked_at).
+func TestMarshalFrozen(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	t.Run("emits all five attrs when set", func(t *testing.T) {
+		frozenAt := now.Add(-30 * time.Minute)
+		meta := &kmaws.SandboxMetadata{
+			SandboxID:    "sb-freeze-emit",
+			ProfileName:  "dev",
+			Substrate:    "ec2",
+			Region:       "us-east-1",
+			CreatedAt:    now,
+			ActionLimits: `{"push":{"daily":5}}`,
+			ActionFrozen: true,
+			FrozenReason: "quota:push:daily",
+			FrozenAt:     &frozenAt,
+			FrozenBy:     "auto:push:daily",
+		}
+
+		writeMock := &mockSandboxMetadataAPI{putItemOutput: &dynamodb.PutItemOutput{}}
+		if err := kmaws.WriteSandboxMetadataDynamo(ctx, writeMock, "km-sandboxes", meta); err != nil {
+			t.Fatalf("WriteSandboxMetadataDynamo: %v", err)
+		}
+		item := writeMock.putItemInput.Item
+
+		// action_limits (S)
+		alAttr, ok := item["action_limits"]
+		if !ok {
+			t.Fatal("action_limits attribute missing from PutItem input")
+		}
+		if sv, ok := alAttr.(*dynamodbtypes.AttributeValueMemberS); !ok || sv.Value != meta.ActionLimits {
+			t.Errorf("action_limits = %v, want S{%q}", alAttr, meta.ActionLimits)
+		}
+
+		// action_frozen (BOOL true)
+		afAttr, ok := item["action_frozen"]
+		if !ok {
+			t.Fatal("action_frozen attribute missing from PutItem input")
+		}
+		if bv, ok := afAttr.(*dynamodbtypes.AttributeValueMemberBOOL); !ok || !bv.Value {
+			t.Errorf("action_frozen = %v, want BOOL{true}", afAttr)
+		}
+
+		// frozen_reason (S)
+		frAttr, ok := item["frozen_reason"]
+		if !ok {
+			t.Fatal("frozen_reason attribute missing from PutItem input")
+		}
+		if sv, ok := frAttr.(*dynamodbtypes.AttributeValueMemberS); !ok || sv.Value != meta.FrozenReason {
+			t.Errorf("frozen_reason = %v, want S{%q}", frAttr, meta.FrozenReason)
+		}
+
+		// frozen_at (S, RFC3339)
+		faAttr, ok := item["frozen_at"]
+		if !ok {
+			t.Fatal("frozen_at attribute missing from PutItem input")
+		}
+		faSv, ok := faAttr.(*dynamodbtypes.AttributeValueMemberS)
+		if !ok {
+			t.Fatalf("frozen_at should be AttributeValueMemberS, got %T", faAttr)
+		}
+		parsedFA, err := time.Parse(time.RFC3339, faSv.Value)
+		if err != nil {
+			t.Fatalf("frozen_at %q is not RFC3339: %v", faSv.Value, err)
+		}
+		if !parsedFA.Equal(frozenAt) {
+			t.Errorf("frozen_at parsed = %v, want %v", parsedFA, frozenAt)
+		}
+
+		// frozen_by (S)
+		fbAttr, ok := item["frozen_by"]
+		if !ok {
+			t.Fatal("frozen_by attribute missing from PutItem input")
+		}
+		if sv, ok := fbAttr.(*dynamodbtypes.AttributeValueMemberS); !ok || sv.Value != meta.FrozenBy {
+			t.Errorf("frozen_by = %v, want S{%q}", fbAttr, meta.FrozenBy)
+		}
+	})
+
+	t.Run("omits all five attrs when unset", func(t *testing.T) {
+		meta := &kmaws.SandboxMetadata{
+			SandboxID:   "sb-freeze-omit",
+			ProfileName: "dev",
+			Substrate:   "ec2",
+			Region:      "us-east-1",
+			CreatedAt:   now,
+			// All Phase 121 fields intentionally zero-value
+		}
+
+		writeMock := &mockSandboxMetadataAPI{putItemOutput: &dynamodb.PutItemOutput{}}
+		if err := kmaws.WriteSandboxMetadataDynamo(ctx, writeMock, "km-sandboxes", meta); err != nil {
+			t.Fatalf("WriteSandboxMetadataDynamo: %v", err)
+		}
+		item := writeMock.putItemInput.Item
+
+		for _, attr := range []string{"action_limits", "action_frozen", "frozen_reason", "frozen_at", "frozen_by"} {
+			if _, present := item[attr]; present {
+				t.Errorf("%s attribute should be omitted when zero-value (no false-zero attrs)", attr)
+			}
+		}
+	})
+}
+
+// TestFreezeSandboxDynamo verifies the UpdateItem expression used by FreezeSandboxDynamo.
+func TestFreezeSandboxDynamo(t *testing.T) {
+	t.Run("sets action_frozen + frozen attrs", func(t *testing.T) {
+		mock := &mockSandboxMetadataAPI{updateItemOutput: &dynamodb.UpdateItemOutput{}}
+
+		if err := kmaws.FreezeSandboxDynamo(context.Background(), mock, "km-sandboxes", "sb-frz1", "quota:push:daily", "auto:push:daily"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mock.updateItemInput == nil {
+			t.Fatal("UpdateItem was not called")
+		}
+
+		expr := awssdk.ToString(mock.updateItemInput.UpdateExpression)
+		for _, field := range []string{"action_frozen", "frozen_reason", "frozen_at", "frozen_by"} {
+			if !contains(expr, field) {
+				t.Errorf("UpdateExpression %q does not reference %q", expr, field)
+			}
+		}
+
+		// :t must be BOOL true
+		tv, ok := mock.updateItemInput.ExpressionAttributeValues[":t"].(*dynamodbtypes.AttributeValueMemberBOOL)
+		if !ok || !tv.Value {
+			t.Errorf(":t must be BOOL{true}, got %v", mock.updateItemInput.ExpressionAttributeValues[":t"])
+		}
+		// :reason must match
+		rv, ok := mock.updateItemInput.ExpressionAttributeValues[":reason"].(*dynamodbtypes.AttributeValueMemberS)
+		if !ok || rv.Value != "quota:push:daily" {
+			t.Errorf(":reason = %v, want S{quota:push:daily}", mock.updateItemInput.ExpressionAttributeValues[":reason"])
+		}
+		// :by must match
+		bv, ok := mock.updateItemInput.ExpressionAttributeValues[":by"].(*dynamodbtypes.AttributeValueMemberS)
+		if !ok || bv.Value != "auto:push:daily" {
+			t.Errorf(":by = %v, want S{auto:push:daily}", mock.updateItemInput.ExpressionAttributeValues[":by"])
+		}
+		// :now must be non-empty RFC3339
+		nv, ok := mock.updateItemInput.ExpressionAttributeValues[":now"].(*dynamodbtypes.AttributeValueMemberS)
+		if !ok || nv.Value == "" {
+			t.Error(":now must be a non-empty RFC3339 string")
+		}
+		if _, err := time.Parse(time.RFC3339, nv.Value); err != nil {
+			t.Errorf(":now %q is not RFC3339: %v", nv.Value, err)
+		}
+
+		// ConditionExpression must check attribute_exists(sandbox_id)
+		if mock.updateItemInput.ConditionExpression == nil {
+			t.Fatal("ConditionExpression must not be nil")
+		}
+		if !contains(*mock.updateItemInput.ConditionExpression, "attribute_exists(sandbox_id)") {
+			t.Errorf("ConditionExpression %q must contain attribute_exists(sandbox_id)", *mock.updateItemInput.ConditionExpression)
+		}
+	})
+
+	t.Run("returns ErrSandboxNotFound on ConditionalCheckFailedException", func(t *testing.T) {
+		mock := &mockSandboxMetadataAPI{
+			updateItemErr: &dynamodbtypes.ConditionalCheckFailedException{
+				Message: awssdk.String("The conditional request failed"),
+			},
+		}
+		err := kmaws.FreezeSandboxDynamo(context.Background(), mock, "km-sandboxes", "sb-missing", "reason", "by")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, kmaws.ErrSandboxNotFound) {
+			t.Errorf("expected ErrSandboxNotFound, got: %v", err)
+		}
+	})
+}
+
+// TestUnfreezeSandboxDynamo verifies the UpdateItem expression used by UnfreezeSandboxDynamo.
+func TestUnfreezeSandboxDynamo(t *testing.T) {
+	t.Run("clears action_frozen and removes frozen attrs", func(t *testing.T) {
+		mock := &mockSandboxMetadataAPI{updateItemOutput: &dynamodb.UpdateItemOutput{}}
+
+		if err := kmaws.UnfreezeSandboxDynamo(context.Background(), mock, "km-sandboxes", "sb-unfrz1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mock.updateItemInput == nil {
+			t.Fatal("UpdateItem was not called")
+		}
+
+		expr := awssdk.ToString(mock.updateItemInput.UpdateExpression)
+		if !contains(expr, "REMOVE") {
+			t.Errorf("UpdateExpression %q must contain REMOVE clause", expr)
+		}
+		for _, field := range []string{"frozen_reason", "frozen_at", "frozen_by"} {
+			if !contains(expr, field) {
+				t.Errorf("UpdateExpression %q must REMOVE %q", expr, field)
+			}
+		}
+		if !contains(expr, "action_frozen") {
+			t.Errorf("UpdateExpression %q must SET action_frozen = :f", expr)
+		}
+
+		// :f must be BOOL false
+		fv, ok := mock.updateItemInput.ExpressionAttributeValues[":f"].(*dynamodbtypes.AttributeValueMemberBOOL)
+		if !ok || fv.Value {
+			t.Errorf(":f must be BOOL{false}, got %v", mock.updateItemInput.ExpressionAttributeValues[":f"])
+		}
+
+		// ConditionExpression must check attribute_exists(sandbox_id)
+		if mock.updateItemInput.ConditionExpression == nil {
+			t.Fatal("ConditionExpression must not be nil")
+		}
+		if !contains(*mock.updateItemInput.ConditionExpression, "attribute_exists(sandbox_id)") {
+			t.Errorf("ConditionExpression %q must contain attribute_exists(sandbox_id)", *mock.updateItemInput.ConditionExpression)
+		}
+	})
+
+	t.Run("returns ErrSandboxNotFound on ConditionalCheckFailedException", func(t *testing.T) {
+		mock := &mockSandboxMetadataAPI{
+			updateItemErr: &dynamodbtypes.ConditionalCheckFailedException{
+				Message: awssdk.String("The conditional request failed"),
+			},
+		}
+		err := kmaws.UnfreezeSandboxDynamo(context.Background(), mock, "km-sandboxes", "sb-missing")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, kmaws.ErrSandboxNotFound) {
+			t.Errorf("expected ErrSandboxNotFound, got: %v", err)
+		}
+	})
+}
+
 // ---- Helpers ----
 
 func contains(s, sub string) bool {
