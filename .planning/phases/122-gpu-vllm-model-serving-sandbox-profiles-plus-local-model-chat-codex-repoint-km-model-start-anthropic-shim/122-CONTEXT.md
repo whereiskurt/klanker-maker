@@ -7,6 +7,13 @@
 > The design spec is the single source of truth. This CONTEXT.md is a planning-oriented
 > digest of its locked decisions, risks (R1–R7), and open questions (O1–O9). Read the
 > spec in full before planning.
+>
+> **⚠ RESEARCH CORRECTION (O7, authoritative — see `122-RESEARCH.md`):** Codex now
+> requires the OpenAI **Responses API**; vLLM serves only Chat Completions. So a
+> single on-box **LiteLLM on `:8001` is a CORE component** (not just the `--anthropic`
+> shim) fronting vLLM `:8000` and serving Chat-Completions + Responses (codex) +
+> Messages (Claude Code). The codex local-provider knob points at **`:8001`,
+> `wire_api="responses"`** — NOT `:8000`. DLAMI = `ami-0a9d213b92dabc044`.
 
 <domain>
 ## Phase Boundary
