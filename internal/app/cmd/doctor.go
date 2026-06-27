@@ -1866,6 +1866,60 @@ func checkSandboxSummary(ctx context.Context, lister SandboxLister) CheckResult 
 	}
 }
 
+// checkFrozenSandboxes scans all sandbox records and returns WARN when any
+// sandboxes have action_frozen=true (Phase 121). The operator must run
+// 'km unlock <id>' to release each frozen sandbox. Returns OK when no frozen
+// sandboxes exist, or SKIPPED when the lister is unavailable.
+func checkFrozenSandboxes(ctx context.Context, lister SandboxLister) CheckResult {
+	if lister == nil {
+		return CheckResult{
+			Name:    "Frozen Sandboxes",
+			Status:  CheckSkipped,
+			Message: "sandbox lister not available",
+		}
+	}
+	records, err := lister.ListSandboxes(ctx, false)
+	if err != nil {
+		return CheckResult{
+			Name:    "Frozen Sandboxes",
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("could not list sandboxes: %v", err),
+		}
+	}
+	var frozen []kmaws.SandboxRecord
+	for _, r := range records {
+		if r.ActionFrozen {
+			frozen = append(frozen, r)
+		}
+	}
+	if len(frozen) == 0 {
+		return CheckResult{
+			Name:    "Frozen Sandboxes",
+			Status:  CheckOK,
+			Message: "none frozen",
+		}
+	}
+	parts := make([]string, 0, len(frozen))
+	for _, r := range frozen {
+		age := ""
+		if r.FrozenAt != nil {
+			dur := time.Since(*r.FrozenAt).Round(time.Minute)
+			age = fmt.Sprintf(" (%s ago)", dur)
+		}
+		reason := r.FrozenReason
+		if reason == "" {
+			reason = "no reason recorded"
+		}
+		parts = append(parts, fmt.Sprintf("%s: %s%s", r.SandboxID, reason, age))
+	}
+	return CheckResult{
+		Name:        "Frozen Sandboxes",
+		Status:      CheckWarn,
+		Message:     fmt.Sprintf("%d frozen sandbox(es): %s", len(frozen), strings.Join(parts, "; ")),
+		Remediation: "Run 'km unlock <sandbox-id>' to clear the action freeze",
+	}
+}
+
 // checkLambdaFunction verifies the given Lambda function exists.
 // Returns CheckSkipped when client is nil, CheckWarn when function is not found
 // (ResourceNotFoundException), and CheckOK on success.
@@ -3876,6 +3930,28 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	// Sub-check 4: per-check KM_CHECK_TRIGGER drift vs. current km-config.yaml.
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkChecksTriggerDrift(ctx, checksDDB, checksTableName, checksTriggers)
+	})
+
+	// Phase 121: {prefix}-action-quota table existence check.
+	// Mirrors the slack-channels table pattern: WARN (not ERROR) for installs
+	// that haven't run km init --dry-run=false yet.
+	actionQuotaTable := cfg.GetResourcePrefix() + "-action-quota"
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkDynamoTable(ctx, dynamoClient, actionQuotaTable, "Action Quota Table ("+actionQuotaTable+")")
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+			r.Remediation = "Run 'km init --dry-run=false' to create the DynamoDB action-quota table"
+		}
+		return r
+	})
+
+	// Phase 121: frozen sandbox scan.
+	// WARN for each sandbox with action_frozen=true so the operator can see
+	// which sandboxes need a 'km unlock'. Uses deps.Lister (same SandboxLister
+	// as the Active Sandboxes check).
+	frozenLister := deps.Lister
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkFrozenSandboxes(ctx, frozenLister)
 	})
 
 	// Credential rotation age check.

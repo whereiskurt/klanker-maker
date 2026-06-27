@@ -59,7 +59,10 @@ type SandboxRecord struct {
 	// Phase 121 — action quota + freeze quarantine.
 	// ActionFrozen is true when the sandbox has been quarantined by the auto-freeze
 	// mechanism or by an operator. Used by km list rendering to show the frozen state.
-	ActionFrozen bool `json:"action_frozen,omitempty"`
+	ActionFrozen bool       `json:"action_frozen,omitempty"`
+	FrozenReason string     `json:"frozen_reason,omitempty"`
+	FrozenAt     *time.Time `json:"frozen_at,omitempty"`
+	FrozenBy     string     `json:"frozen_by,omitempty"`
 }
 
 // S3ListAPI is the narrow interface for S3 operations needed by list functions.

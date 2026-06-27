@@ -162,6 +162,9 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		FailureReason:         meta.FailureReason,
 		FailedAt:              meta.FailedAt,
 		ActionFrozen:          meta.ActionFrozen,
+		FrozenReason:          meta.FrozenReason,
+		FrozenAt:              meta.FrozenAt,
+		FrozenBy:              meta.FrozenBy,
 	}
 }
 

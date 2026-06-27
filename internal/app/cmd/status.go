@@ -266,14 +266,24 @@ func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) 
 	}
 
 	rec := &kmaws.SandboxRecord{
-		SandboxID:   meta.SandboxID,
-		Profile:     meta.ProfileName,
-		Substrate:   meta.Substrate,
-		Region:      meta.Region,
-		Status:      status,
-		CreatedAt:   meta.CreatedAt,
-		TTLExpiry:   meta.TTLExpiry,
-		IdleTimeout: meta.IdleTimeout,
+		SandboxID:    meta.SandboxID,
+		Profile:      meta.ProfileName,
+		Substrate:    meta.Substrate,
+		Region:       meta.Region,
+		Status:       status,
+		CreatedAt:    meta.CreatedAt,
+		TTLExpiry:    meta.TTLExpiry,
+		IdleTimeout:  meta.IdleTimeout,
+		Alias:        meta.Alias,
+		Locked:       meta.Locked,
+		TeardownPolicy: meta.TeardownPolicy,
+		FailureReason: meta.FailureReason,
+		FailedAt:     meta.FailedAt,
+		// Phase 121 — freeze quarantine fields for km status display.
+		ActionFrozen: meta.ActionFrozen,
+		FrozenReason: meta.FrozenReason,
+		FrozenAt:     meta.FrozenAt,
+		FrozenBy:     meta.FrozenBy,
 	}
 	if loc != nil {
 		rec.Resources = loc.ResourceARNs
@@ -376,6 +386,23 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 		statusDisplay = colorizeListStatus(rec.Status)
 	}
 	fmt.Fprintf(out, "Status:      %s\n", statusDisplay)
+
+	// Phase 121 — freeze quarantine section.
+	// Always emit a Frozen line so the operator can see the current state clearly;
+	// matches the style of the Locked field in existing status output.
+	if rec.ActionFrozen {
+		fmt.Fprintf(out, "Frozen:      YES — outbound actions blocked\n")
+		if rec.FrozenReason != "" {
+			fmt.Fprintf(out, "  Reason:    %s\n", rec.FrozenReason)
+		}
+		if rec.FrozenAt != nil {
+			fmt.Fprintf(out, "  Since:     %s\n", rec.FrozenAt.Local().Format("2006-01-02 3:04:05 PM MST"))
+		}
+		if rec.FrozenBy != "" {
+			fmt.Fprintf(out, "  By:        %s\n", rec.FrozenBy)
+		}
+		fmt.Fprintf(out, "  Release:   km unlock %s\n", rec.SandboxID)
+	}
 
 	// Phase 77 — surface the persisted failure reason for failed/nocap sandboxes.
 	// rec.FailureReason and rec.FailedAt are populated by the create-handler at fail

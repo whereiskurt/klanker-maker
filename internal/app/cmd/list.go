@@ -447,6 +447,9 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		if r.Locked {
 			lock = " 🔒"
 		}
+		if r.ActionFrozen {
+			lock += " 🧊FROZEN"
+		}
 		bw := func(s string) string {
 			if r.Locked {
 				return ansiBoldWhite + s + ansiReset
