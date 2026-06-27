@@ -387,6 +387,32 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		}
 	}
 
+	// 5c. Frozen gate (Phase 121, BRG-02). When the sandbox has been quarantine-latched
+	// (action_frozen=true), refuse to dispatch new turns. Post the in-thread control-plane
+	// frozen notice (uncounted — from the bridge's own bot token, not the sandbox). Return
+	// 200 so Slack does not retry (same policy as all internal-error paths: 5xx triggers
+	// a retry storm with new event_ids that bypass nonce dedup).
+	if info.ActionFrozen {
+		reason := info.FrozenReason
+		if reason == "" {
+			reason = "quota limit exceeded or operator action"
+		}
+		notice := "🛑 This sandbox is frozen (" + reason + "). No further actions or replies until your operator releases it."
+		threadAnchor := msg.ThreadTS
+		if threadAnchor == "" {
+			threadAnchor = msg.TS
+		}
+		if h.Slack != nil {
+			if _, postErr := h.Slack.PostMessage(ctx, msg.Channel, "", notice, threadAnchor); postErr != nil {
+				h.log().Warn("events: frozen notice post failed (non-fatal)",
+					"err", postErr, "sandbox", info.SandboxID, "channel", msg.Channel)
+			}
+		}
+		h.log().Warn("events: dispatch refused (sandbox frozen)",
+			"sandbox", info.SandboxID, "channel", msg.Channel, "reason", reason)
+		return EventsResponse{StatusCode: 200, Body: "ok"}
+	}
+
 	// 6. Dedup event_id — after the mention filter (so filtered messages don't
 	// consume a nonce) and before the upsert/enqueue (so duplicates are dropped).
 	if env.EventID != "" {

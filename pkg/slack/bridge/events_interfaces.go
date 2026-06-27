@@ -128,6 +128,20 @@ type SandboxRoutingInfo struct {
 	// from the profile's notification.slack.inbound.allow field; must round-trip
 	// through SandboxMetadata marshal/unmarshal (SandboxMetadata lossy round-trip footgun).
 	Allow []string
+	// Phase 121: resolved action-limits JSON map (from action_limits S attr on
+	// km-sandboxes). Written by km create from the resolved limits map; read by
+	// the bridge Handler to call quota.Record per action. Empty = no limits configured
+	// (dormant). Must round-trip through SandboxMetadata or gets stripped on
+	// full-row PutItem (project_sandboxmetadata_lossy_roundtrip).
+	ActionLimits string
+	// Phase 121: quarantine latch flag (from action_frozen BOOL attr on km-sandboxes).
+	// When true, the inbound events handler refuses to dispatch new turns and posts
+	// the in-thread control-plane frozen notice. Asymmetric: set by auto-breach or
+	// km freeze; cleared ONLY by km unlock. Round-trips through SandboxMetadata.
+	ActionFrozen bool
+	// Phase 121: human-readable reason for the freeze, stored in frozen_reason S attr.
+	// Included in the in-thread control-plane frozen notice for operator context.
+	FrozenReason string
 }
 
 // SigningSecretFetcher returns the Slack signing secret used for HMAC

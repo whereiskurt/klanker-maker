@@ -1113,6 +1113,19 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 	if v, ok := item["slack_allow"].(*dynamodbtypes.AttributeValueMemberS); ok && v.Value != "" {
 		info.Allow = strings.Split(v.Value, ",")
 	}
+	// Phase 121 (BRG-03): resolved action-limits JSON map. Written by km create;
+	// read by the bridge to call quota.Record per action and enforce frozen gate.
+	if v, ok := item["action_limits"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		info.ActionLimits = v.Value
+	}
+	// Phase 121 (BRG-02/03): quarantine latch. When true the events handler refuses
+	// to dispatch new turns and posts the in-thread control-plane frozen notice.
+	if v, ok := item["action_frozen"].(*dynamodbtypes.AttributeValueMemberBOOL); ok {
+		info.ActionFrozen = v.Value
+	}
+	if v, ok := item["frozen_reason"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		info.FrozenReason = v.Value
+	}
 	return info, nil
 }
 
