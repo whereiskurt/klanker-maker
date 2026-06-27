@@ -11,3 +11,10 @@ spec:
   execution:
     initCommands:
       - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/ssl/certs/ca-certificates.crt || update-ca-certificates"
+      # Ubuntu/Debian base AMIs ship no node/npm; base/userinit's root-level
+      # `npm install -g @anthropic-ai/claude-code` (and the rest of the agent
+      # toolchain) needs them present FIRST. base/os/redhat installs the same set
+      # via yum — this is the apt analog. The bootstrap already rewrites apt
+      # sources to https + ForceIPv4 (SG is 443-only) before initCommands run, and
+      # the km-proxy CA is trusted by the line above, so apt-over-MITM validates.
+      - "DEBIAN_FRONTEND=noninteractive apt-get update -y -q || true; DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm git python3 python3-pip jq tmux cron unzip bzip2"
