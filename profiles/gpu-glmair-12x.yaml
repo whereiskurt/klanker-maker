@@ -1,0 +1,31 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: gpu-glmair-12x
+  labels:
+    tier: gpu-serving
+    model: glm4.5-air-awq
+    instance: g6e.12xlarge
+
+extends:
+  - base/os/debian
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+  - base/gpu/serve
+
+spec:
+  # Bool zero-value trap (Phase 117 Pitfall 2): mixed-bool runtime block in the LEAF.
+  runtime:
+    instanceType: g6e.12xlarge
+    region: us-east-1
+    spot: false
+    hibernation: false
+
+  execution:
+    # GLM-4.5-Air (106B MoE): AWQ 4-bit, tp=4, ~53GB weights fit 4x L40S (192GB).
+    # --trust-remote-code: required for GLM arch in vLLM (pending upstream registration).
+    # --reasoning-parser glm45: GLM models emit thinking tags; parser is additive+harmless.
+    initCommandsAppend:
+      - "mkdir -p /etc/km && printf 'VLLM_MODEL=cyankiwi/GLM-4.5-Air-AWQ-4bit\nVLLM_TP=4\nVLLM_EXTRA=--quantization awq --max-model-len 32768 --gpu-memory-utilization 0.90 --trust-remote-code --enable-auto-tool-choice --tool-call-parser glm45 --reasoning-parser glm45\n' > /etc/km/vllm.env"

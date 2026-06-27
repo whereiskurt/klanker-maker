@@ -37,6 +37,10 @@ spec:
       maxSpendUSD: 2.00
 
   execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+
     env:
       HF_HOME: /data/hf
       OPENAI_API_KEY: ""   # dummy key; Bifrost/vLLM accept keyless requests on loopback
@@ -241,6 +245,14 @@ spec:
             model: local
             apiBase: http://localhost:8000/v1
             apiKey: dummy
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
 
   iam:
     # allowedSecretPaths enables SOPS injection for ANTHROPIC_API_KEY (claude-anthropic

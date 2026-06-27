@@ -1,0 +1,32 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: gpu-qwen-48x
+  labels:
+    tier: gpu-serving
+    model: qwen2.5-72b-fp16
+    instance: g6e.48xlarge
+
+extends:
+  - base/os/debian
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+  - base/gpu/serve
+
+spec:
+  # Bool zero-value trap (Phase 117 Pitfall 2): mixed-bool runtime block in the LEAF.
+  runtime:
+    instanceType: g6e.48xlarge
+    region: us-east-1
+    spot: false
+    hibernation: false
+
+  budget:
+    compute:
+      maxSpendUSD: 300   # 48x override (g6e.48xlarge: 8x L40S, ~$32/hr)
+
+  execution:
+    initCommandsAppend:
+      - "mkdir -p /etc/km && printf 'VLLM_MODEL=Qwen/Qwen2.5-72B-Instruct\nVLLM_TP=8\nVLLM_EXTRA=--max-model-len 65536 --gpu-memory-utilization 0.90 --enable-auto-tool-choice --tool-call-parser hermes\n' > /etc/km/vllm.env"
