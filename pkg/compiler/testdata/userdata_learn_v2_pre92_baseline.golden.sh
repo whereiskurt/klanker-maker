@@ -1997,7 +1997,7 @@ while true; do
     --output json 2>/dev/null || true)
 
   COUNT=$(echo "$MSGS" | jq -r '.Messages | length' 2>/dev/null || echo 0)
-  [ "$COUNT" -eq 0 ] && continue
+  [ "${COUNT:-0}" -eq 0 ] && continue
 
   for _MSG_IDX in $(seq 0 $((COUNT-1))); do
     BODY=$(echo "$MSGS" | jq -r ".Messages[$_MSG_IDX].Body // empty" 2>/dev/null || true)

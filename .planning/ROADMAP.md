@@ -54,3 +54,43 @@ Plans:
 - [ ] 120-02-PLAN.md — Author 4 composed leaves (learner, desktop, github, h1); km validate clean no-WARN
 - [ ] 120-03-PLAN.md — git mv retired demos + frozen fixtures to testdata/profiles/ + update 6 test-path constants (atomic, no red commit)
 - [ ] 120-04-PLAN.md — Rewrite validate-all-profiles.sh + km-config.yaml swaps + final gates + learner functional-match review
+
+### Phase 121: Action quota and freeze quarantine for high-impact outbound actions
+
+**Goal:** Give the platform an external, agent-untrusted quota layer on high-impact outbound
+actions (GitHub writes, email send, Slack/H1 posts) so a sandbox manipulated into a tight loop
+(malicious chatter *or* runaway/jailbroken agent) trips a limit at a chokepoint it cannot bypass.
+Phase 1 alerts; the same counters later enforce. Adds multi-window per-(sandbox,action) counters
+at the http-proxy and bridge Lambdas, per-profile + install-default config, dual operator/user
+trip notices, a three-tier breach policy (`warn`/`block`/`freeze`), and a latched **quarantine**
+(`action_frozen`) releasable only by the operator at the CLI (`km unlock`) — never from Slack.
+
+**Requirements**: phase-local synthetic IDs (derived from CONTEXT.md + 121-VALIDATION.md): QUO-01..05, PRX-01..03, BRG-01..03, H1-01, META-01..02, ALR-01, INIT-01..02, CFG-01, PROF-01, CMP-01, CLI-01..03
+**Depends on:** Phase 120
+
+**Success criteria:**
+- [ ] `pkg/quota` records multi-window counters (`lifetime` / `hour` / `day`) per (sandbox, action) in a new `{prefix}-action-quota` DynamoDB table via atomic `ADD`, fixed calendar buckets, TTL on rolling windows.
+- [ ] http-proxy meters `github_pr` / `github_comment` / `github_review` / `email_send` by URL pattern; slack-bridge meters `slack_post`; h1-bridge meters `h1_comment`.
+- [ ] Limits resolve per (action, window) as profile (`spec.limits`) → install default (`km-config.yaml limits:`) → unlimited; resolved map reaches the proxy via userdata and the bridges via the `km-sandboxes` row (`action_limits`, round-tripped through `SandboxMetadata`).
+- [ ] Breach fires exactly one operator alert (DDB-Stream → `km-quota-alerter` Lambda → SES email + optional Slack control channel) per (sandbox, action, window).
+- [ ] Breach fires a dual user-facing notice: in-thread reply from the bridge for chat trips (`slack_post`/`h1_comment`), channel-level post from the alerter for proxy trips — both control-plane (uncounted), enforce-aware wording, idempotent, best-effort when a Slack channel exists.
+- [ ] Per-limit `onBreach: warn | block | freeze`; `block` denies that action for the window; all policies default to dormant so absent config is byte-identical to today.
+- [ ] `freeze` latches `action_frozen=true` (+ reason/at/by) on the sandbox row, survives stop/resume, denies all actions, makes inbound bridges refuse new turns + post the frozen notice; triggered auto-on-breach or by `km freeze <sandbox>`; released only by `km unlock` (latch-aware). No Slack trigger (deferred).
+- [ ] `km list` / `km status` show `FROZEN`; `km doctor` surfaces frozen sandboxes + the new table.
+- [ ] Deploy surface verified: new table in `regionalModules()` (+ module-order test bump) and `init.go`; `km-quota-alerter` has TF module + live terragrunt unit + `init.go` entry + `lambdaBuilds()` entry; IAM added to ec2spot/slack/h1 roles + alerter; config key in the v2→v merge-list.
+
+**Design context:** see this phase's `CONTEXT.md`
+
+**Plans:** 10 plans in 4 waves
+
+Plans:
+- [ ] 121-01-PLAN.md — Wave 0: pkg/quota skeleton + RED test stubs + module-count bump (24→26) + all Wave 0 stubs
+- [ ] 121-02-PLAN.md — pkg/quota core: multi-window atomic ADD counter + bucket math + TTL + ResolveLimits (TDD)
+- [ ] 121-03-PLAN.md — spec.limits profile schema + validate + km-config limits: v2→v merge-list
+- [ ] 121-04-PLAN.md — SandboxMetadata attrs (action_limits/action_frozen/frozen_*) + round-trip + Freeze/Unfreeze writers
+- [ ] 121-05-PLAN.md — proxy chokepoint: URL→action classifier + WithActionQuota + SES MITM + no-double-count + ec2spot IAM
+- [ ] 121-06-PLAN.md — bridge chokepoints: Slack+H1 quota.Record + frozen-dispatch gate + in-thread notice + FetchByChannel + bridge IAM
+- [ ] 121-07-PLAN.md — compiler emits resolved limits to proxy userdata + km create writes action_limits attr (dormant byte-identical)
+- [ ] 121-08-PLAN.md — dynamodb-action-quota TF module (+Streams) + live unit + regionalModules() (INIT-01)
+- [ ] 121-09-PLAN.md — km-quota-alerter Lambda (DDB-Stream→SES+Slack, idempotent) + 4-part registration (INIT-02, ALR-01)
+- [ ] 121-10-PLAN.md — CLI: km freeze + latch-aware km unlock + FROZEN in list/status + doctor surfacing
