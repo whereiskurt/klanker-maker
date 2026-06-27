@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 120-02: authored 4 leaf profiles (learner, desktop, github, h1)"
-last_updated: "2026-06-27T04:15:05.754Z"
-last_activity: 2026-06-26
+stopped_at: "Completed 121-01: pkg/quota skeleton + Wave 0 test stubs + module count bump 24→26"
+last_updated: "2026-06-27T12:56:59.114Z"
+last_activity: 2026-06-27
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 4
-  total_plans: 20
-  completed_plans: 20
+  total_plans: 30
+  completed_plans: 21
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-26
+Last activity: 2026-06-27
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -595,6 +595,7 @@ Progress: [█████████░] 91%
 | Phase 120-profiles-reset-and-os-layered-fragment-library P01 | 274 | 3 tasks | 5 files |
 | Phase 120-profiles-reset-and-os-layered-fragment-library P03 | 1761 | 3 tasks | 24 files |
 | Phase 120-profiles-reset-and-os-layered-fragment-library P02 | 146 | 3 tasks | 4 files |
+| Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P01 | 314s | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -1701,6 +1702,8 @@ Recent decisions affecting current work:
 - [Phase 120-02]: learner enables klanker plugin via base/plugin-klanker (intentional delta from learn.v2.yaml; frozen fixture now in testdata/profiles/)
 - [Phase 120-02]: github/h1 use full toolchain-agents (single version-pin site tradeoff; heavier than legacy lean profiles)
 - [Phase 120-02]: h1/github/desktop keep narrow network in-leaf (NOT base/safenetwork) to avoid list-union broadening to wildcard
+- [Phase 121-01]: pkg/quota uses QuotaAPI narrow-interface (UpdateItem-only), mirrors BudgetAPI; hourBucket/dayBucket package-level helpers tested in same-package test
+- [Phase 121-01]: Wave 0 stub pattern: t.Skip('plan N') — never commented code; TestRecord bucket-math goes PASS immediately while QUO-02..05 Skip for Wave 1
 
 ### Roadmap Evolution
 
@@ -1848,6 +1851,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-26T05:16:51.837Z
-Stopped at: Completed 120-02: authored 4 leaf profiles (learner, desktop, github, h1)
+Last session: 2026-06-27T12:56:59.108Z
+Stopped at: Completed 121-01: pkg/quota skeleton + Wave 0 test stubs + module count bump 24→26
 Resume file: None
