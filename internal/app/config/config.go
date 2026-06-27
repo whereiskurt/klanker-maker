@@ -448,6 +448,46 @@ type CheckTrigger struct {
 	CooldownSeconds int `mapstructure:"cooldown_seconds" yaml:"cooldownSeconds,omitempty"`
 }
 
+// LimitsConfig holds the install-level action quota defaults (Phase 121 Plan 03).
+// Maps to km-config.yaml key limits. Absent key → zero value (no error, dormant).
+// CRITICAL: "limits" must be in the v2→v merge-list in Load() or this block is
+// silently ignored (project_config_key_merge_list footgun).
+// Decoded atomically via UnmarshalKey("limits", &cfg.Limits) — no sibling "limits.*"
+// entries needed or permitted (mirrors the github and checks precedent).
+// Each action key (github_pr, github_comment, etc.) maps to an ActionLimitConfig
+// holding the same window fields as profile.ActionLimitSpec.
+// Per-profile spec.limits values take precedence per-window; absent install-level
+// value ⇒ no default ⇒ that window unlimited (resolved by pkg/quota at runtime).
+type LimitsConfig struct {
+	// GithubPR is the install-level default for the github_pr action.
+	GithubPR *ActionLimitConfig `mapstructure:"github_pr" yaml:"github_pr,omitempty"`
+	// GithubComment is the install-level default for the github_comment action.
+	GithubComment *ActionLimitConfig `mapstructure:"github_comment" yaml:"github_comment,omitempty"`
+	// GithubReview is the install-level default for the github_review action.
+	GithubReview *ActionLimitConfig `mapstructure:"github_review" yaml:"github_review,omitempty"`
+	// EmailSend is the install-level default for the email_send action.
+	EmailSend *ActionLimitConfig `mapstructure:"email_send" yaml:"email_send,omitempty"`
+	// SlackPost is the install-level default for the slack_post action.
+	SlackPost *ActionLimitConfig `mapstructure:"slack_post" yaml:"slack_post,omitempty"`
+	// H1Comment is the install-level default for the h1_comment action.
+	H1Comment *ActionLimitConfig `mapstructure:"h1_comment" yaml:"h1_comment,omitempty"`
+}
+
+// ActionLimitConfig is the install-level analog of profile.ActionLimitSpec.
+// We define a local type (not reusing the profile type) to avoid the import cycle
+// pkg/profile → internal/app/config is upstream of pkg/profile.
+// Fields mirror ActionLimitSpec exactly for 1:1 round-trip compatibility.
+type ActionLimitConfig struct {
+	// Lifetime is the maximum count over the entire sandbox lifetime.
+	Lifetime *int64 `mapstructure:"lifetime" yaml:"lifetime,omitempty"`
+	// PerHour is the maximum count per fixed hourly UTC bucket.
+	PerHour *int64 `mapstructure:"perHour" yaml:"perHour,omitempty"`
+	// PerDay is the maximum count per fixed calendar day (UTC midnight bucket).
+	PerDay *int64 `mapstructure:"perDay" yaml:"perDay,omitempty"`
+	// OnBreach is the breach policy: warn | block | freeze (empty = "warn").
+	OnBreach string `mapstructure:"onBreach" yaml:"onBreach,omitempty"`
+}
+
 // Config holds all configuration values for the km CLI.
 type Config struct {
 	// ProfileSearchPaths is the ordered list of directories to search for profiles.
@@ -661,6 +701,12 @@ type Config struct {
 	// silently ignored (project_config_key_merge_list footgun).
 	Checks ChecksConfig `mapstructure:"checks" yaml:"checks,omitempty"`
 
+	// Limits holds the install-level action quota defaults (Phase 121 Plan 03).
+	// Maps to km-config.yaml key limits. Absent key → zero value (no error, dormant).
+	// CRITICAL: "limits" must be in the v2→v merge-list in Load() or this block is
+	// silently ignored (project_config_key_merge_list footgun).
+	Limits LimitsConfig `mapstructure:"limits" yaml:"limits,omitempty"`
+
 	// YAMLDefaults holds the raw km-config.yaml values for env-bound keys,
 	// snapshotted during Load() BEFORE viper's AutomaticEnv binds env vars into
 	// the cfg fields. Used by ExportTerragruntEnvVars to detect drift between
@@ -871,6 +917,12 @@ func Load() (*Config, error) {
 			// add sibling "checks.*" entries (mirrors the github and h1 precedent).
 			// Absent checks: block → zero value → dormant (no trigger dispatch).
 			"checks",
+			// Phase 121: install-level action quota defaults. CRITICAL: without this
+			// entry the entire limits: block is silently dropped regardless of
+			// km-config.yaml content (project_config_key_merge_list footgun). Decoded
+			// atomically by v.UnmarshalKey("limits", &cfg.Limits) below — do NOT add
+			// sibling "limits.*" entries (mirrors the github, h1, and checks precedent).
+			"limits",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -1037,6 +1089,16 @@ func Load() (*Config, error) {
 		// non-fatal: absent checks: block → zero value → dormant
 		// Mirrors h1's non-fatal treatment for future forward-compat
 		return nil, fmt.Errorf("unmarshal checks: %w", err)
+	}
+
+	// Phase 121: limits is a structured block (per-action quota map). Use
+	// UnmarshalKey — same pattern as checks — because each action is a sub-object
+	// and viper's scalar getters can't decode it. Absent key => zero-value LimitsConfig
+	// (no error, all actions unlimited => dormant). The merge-list entry "limits" above
+	// is the precondition; without it this unmarshal sees an empty map (project_config_key_merge_list).
+	if err := v.UnmarshalKey("limits", &cfg.Limits); err != nil {
+		// non-fatal: absent limits: block → zero value → dormant (no counting)
+		return nil, fmt.Errorf("unmarshal limits: %w", err)
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
@@ -1404,6 +1466,14 @@ func (c *Config) GetChecksTriggers() []CheckTrigger {
 // Pattern: {resource_prefix}-checks (e.g. "km-checks").
 func (c *Config) GetChecksTableName() string {
 	return c.GetResourcePrefix() + "-checks"
+}
+
+// GetLimitsConfig returns the install-level action quota defaults (Phase 121 Plan 03).
+// Absent limits: block => zero-value LimitsConfig (all actions unlimited/dormant).
+// Callers (pkg/quota resolver) use per-action fields for per-window default lookup;
+// absent pointer fields mean "no install default for that action" (unlimited).
+func (c *Config) GetLimitsConfig() LimitsConfig {
+	return c.Limits
 }
 
 // awsProfileExists checks whether a named AWS profile is defined in
