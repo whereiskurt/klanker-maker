@@ -539,7 +539,8 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 //
 // Rules:
 //   - onBreach must be one of {"warn","block","freeze"} or empty (defaults to "warn")
-//   - lifetime/perHour/perDay must be >= 1 when set (pointer non-nil)
+//   - lifetime/perHour/perDay must be >= 0 when set (pointer non-nil); 0 is a
+//     valid hard-deny floor (trips on the first attempt). Negatives rejected.
 func validateLimits(p *SandboxProfile) []ValidationError {
 	if p.Spec.Limits == nil {
 		return nil
@@ -576,23 +577,26 @@ func validateLimits(p *SandboxProfile) []ValidationError {
 			})
 		}
 
-		// lifetime, perHour, perDay must be >= 1 when set.
-		if a.spec.Lifetime != nil && *a.spec.Lifetime <= 0 {
+		// lifetime, perHour, perDay must be >= 0 when set. Zero is a valid
+		// hard-deny floor (count > 0 trips on the first attempt — a hard deny
+		// under onBreach:block/freeze, a tripwire alert under the default warn).
+		// Negative values are nonsensical and rejected.
+		if a.spec.Lifetime != nil && *a.spec.Lifetime < 0 {
 			errs = append(errs, ValidationError{
 				Path:    base + ".lifetime",
-				Message: fmt.Sprintf("lifetime %d must be >= 1 when set", *a.spec.Lifetime),
+				Message: fmt.Sprintf("lifetime %d must be >= 0 when set", *a.spec.Lifetime),
 			})
 		}
-		if a.spec.PerHour != nil && *a.spec.PerHour <= 0 {
+		if a.spec.PerHour != nil && *a.spec.PerHour < 0 {
 			errs = append(errs, ValidationError{
 				Path:    base + ".perHour",
-				Message: fmt.Sprintf("perHour %d must be >= 1 when set", *a.spec.PerHour),
+				Message: fmt.Sprintf("perHour %d must be >= 0 when set", *a.spec.PerHour),
 			})
 		}
-		if a.spec.PerDay != nil && *a.spec.PerDay <= 0 {
+		if a.spec.PerDay != nil && *a.spec.PerDay < 0 {
 			errs = append(errs, ValidationError{
 				Path:    base + ".perDay",
-				Message: fmt.Sprintf("perDay %d must be >= 1 when set", *a.spec.PerDay),
+				Message: fmt.Sprintf("perDay %d must be >= 0 when set", *a.spec.PerDay),
 			})
 		}
 	}

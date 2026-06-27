@@ -240,6 +240,31 @@ func TestAtomicADD(t *testing.T) {
 	}
 }
 
+// TestRecord_ZeroLimit_HardDeny verifies the zero/hard-deny semantic: a window
+// limit of 0 trips on the very first attempt (post-increment count 1 > 0). This
+// is the enforcement half of the >= 0 validation floor — a true hard deny when
+// paired with onBreach:block/freeze. The breach-write fires too (count exceeds).
+func TestRecord_ZeroLimit_HardDeny(t *testing.T) {
+	fake := &fakeQuotaClient{countReturn: 1} // first attempt: ALL_NEW count = 1
+	ctx := context.Background()
+	limit := ActionLimit{Lifetime: ptr64(0), OnBreach: BreachBlock}
+
+	d, err := Record(ctx, fake, "test-table", "sb-123", ActionGithubPR, limit)
+	if err != nil {
+		t.Fatalf("Record returned error: %v", err)
+	}
+	if !d.Tripped {
+		t.Errorf("limit 0 should trip on the first attempt (count 1 > 0); got Tripped=false")
+	}
+	if d.WorstWindow != "lifetime" {
+		t.Errorf("WorstWindow: got %q, want %q", d.WorstWindow, "lifetime")
+	}
+	// Two UpdateItem calls: the atomic ADD, then the breach-write (breached_at/on_breach).
+	if len(fake.updateItemCalls) != 2 {
+		t.Errorf("expected 2 UpdateItem calls (ADD + breach-write), got %d", len(fake.updateItemCalls))
+	}
+}
+
 // TestTTL (QUO-05) — lifetime rows carry no TTL; hour/day rows carry TTL ~2h/~2d.
 func TestTTL(t *testing.T) {
 	ctx := context.Background()

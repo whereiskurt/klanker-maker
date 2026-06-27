@@ -224,43 +224,36 @@ func TestSpecLimits_BadOnBreach(t *testing.T) {
 
 // TestSpecLimits_ZeroNegativeValues verifies that zero and negative limit values
 // are rejected by semantic validation.
-func TestSpecLimits_ZeroNegativeValues(t *testing.T) {
-	type zeroCase struct {
-		name    string
-		yaml    string
-		errPath string
-	}
-
-	// Note: the JSON schema uses minimum:1 so the schema ALSO rejects these.
-	// The semantic check is belt-and-suspenders at the typed struct level.
-	// We test via the semantic layer (Parse + ValidateSemantic) directly
-	// to confirm the Go-level check triggers independently.
-	//
-	// However, goccy/go-yaml parses int64 normally so negative values round-trip;
-	// only the semantic validator enforces the >= 1 constraint at the typed level.
-
-	cases := []zeroCase{
-		{
-			name:    "zero_lifetime",
-			errPath: "spec.limits.github_pr.lifetime",
-		},
-		{
-			name:    "zero_perHour",
-			errPath: "spec.limits.slack_post.perHour",
-		},
-		{
-			name:    "zero_perDay",
-			errPath: "spec.limits.email_send.perDay",
-		},
-	}
-
-	// Build test profiles with pointer-set zero values.
-	// We use Parse on manually constructed structs to bypass schema validation
-	// (which uses minimum:1 on the integer fields) and test the semantic layer.
-	t.Run("zero_lifetime", func(t *testing.T) {
+// TestSpecLimits_ZeroAllowed_NegativeRejected verifies the hard-deny semantic:
+// a window value of 0 is a VALID limit (count > 0 trips on the very first
+// attempt — a hard deny under onBreach:block/freeze, or a tripwire alert under
+// the default warn). Negative values remain rejected (nonsensical).
+func TestSpecLimits_ZeroAllowed_NegativeRejected(t *testing.T) {
+	// Zero is now a valid limit for every window — no semantic error.
+	t.Run("zero_lifetime_ok", func(t *testing.T) {
 		p := buildProfileWithLimits()
 		var zero int64 = 0
-		p.Spec.Limits.GithubPR = &profile.ActionLimitSpec{Lifetime: &zero}
+		p.Spec.Limits.GithubPR = &profile.ActionLimitSpec{Lifetime: &zero, OnBreach: "block"}
+		assertLimitsSemanticNoError(t, p, "spec.limits.github_pr.lifetime")
+	})
+	t.Run("zero_perHour_ok", func(t *testing.T) {
+		p := buildProfileWithLimits()
+		var zero int64 = 0
+		p.Spec.Limits.SlackPost = &profile.ActionLimitSpec{PerHour: &zero, OnBreach: "block"}
+		assertLimitsSemanticNoError(t, p, "spec.limits.slack_post.perHour")
+	})
+	t.Run("zero_perDay_ok", func(t *testing.T) {
+		p := buildProfileWithLimits()
+		var zero int64 = 0
+		p.Spec.Limits.EmailSend = &profile.ActionLimitSpec{PerDay: &zero, OnBreach: "block"}
+		assertLimitsSemanticNoError(t, p, "spec.limits.email_send.perDay")
+	})
+
+	// Negative values are still rejected.
+	t.Run("negative_lifetime", func(t *testing.T) {
+		p := buildProfileWithLimits()
+		var neg int64 = -1
+		p.Spec.Limits.GithubPR = &profile.ActionLimitSpec{Lifetime: &neg}
 		assertLimitsSemanticError(t, p, "spec.limits.github_pr.lifetime")
 	})
 	t.Run("negative_perHour", func(t *testing.T) {
@@ -275,9 +268,6 @@ func TestSpecLimits_ZeroNegativeValues(t *testing.T) {
 		p.Spec.Limits.EmailSend = &profile.ActionLimitSpec{PerDay: &neg}
 		assertLimitsSemanticError(t, p, "spec.limits.email_send.perDay")
 	})
-
-	// Suppress "declared and not used" for cases slice (it's used as documentation).
-	_ = cases
 }
 
 // TestSpecLimits_SchemaOnBreachEnum verifies that the JSON schema rejects unknown
@@ -302,17 +292,32 @@ func TestSpecLimits_SchemaOnBreachEnum(t *testing.T) {
 	}
 }
 
-// TestSpecLimits_SchemaMinimum verifies that the JSON schema rejects zero values
-// for the integer window fields via the minimum:1 constraint.
+// TestSpecLimits_SchemaMinimum verifies that the JSON schema ACCEPTS zero
+// (hard-deny floor, minimum:0) but rejects negative window values.
 func TestSpecLimits_SchemaMinimum(t *testing.T) {
-	yaml := withLimits(`
+	t.Run("zero_accepted", func(t *testing.T) {
+		yaml := withLimits(`
     github_comment:
       perHour: 0
+      onBreach: block
 `)
-	errs := profile.ValidateSchema([]byte(yaml))
-	if len(errs) == 0 {
-		t.Error("ValidateSchema: expected schema error for perHour: 0 (minimum: 1), got none")
-	}
+		errs := profile.ValidateSchema([]byte(yaml))
+		for _, e := range errs {
+			if strings.Contains(e.Path, "perHour") || strings.Contains(e.Message, "minimum") {
+				t.Errorf("ValidateSchema: perHour: 0 should be accepted (minimum:0); got: %s: %s", e.Path, e.Message)
+			}
+		}
+	})
+	t.Run("negative_rejected", func(t *testing.T) {
+		yaml := withLimits(`
+    github_comment:
+      perHour: -1
+`)
+		errs := profile.ValidateSchema([]byte(yaml))
+		if len(errs) == 0 {
+			t.Error("ValidateSchema: expected schema error for perHour: -1 (minimum: 0), got none")
+		}
+	})
 }
 
 // TestSpecLimits_SchemaAdditionalProperties verifies that the JSON schema rejects
@@ -353,4 +358,15 @@ func assertLimitsSemanticError(t *testing.T, p *profile.SandboxProfile, wantPath
 		}
 	}
 	t.Errorf("expected semantic error at path %q; got: %v", wantPath, errs)
+}
+
+// assertLimitsSemanticNoError runs ValidateSemantic and fails if any non-warning
+// error is reported at the given path (used to assert a value is now accepted).
+func assertLimitsSemanticNoError(t *testing.T, p *profile.SandboxProfile, path string) {
+	t.Helper()
+	for _, e := range profile.ValidateSemantic(p) {
+		if !e.IsWarning && e.Path == path {
+			t.Errorf("unexpected semantic error at path %q: %s", path, e.Message)
+		}
+	}
 }

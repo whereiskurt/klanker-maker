@@ -864,18 +864,18 @@
       "properties": {
         "lifetime": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Maximum count over the entire sandbox lifetime (never resets). Must be >= 1 when set."
+          "minimum": 0,
+          "description": "Maximum count over the entire sandbox lifetime (never resets). Must be >= 0 when set; 0 is a hard-deny floor (trips on the first attempt — use with onBreach:block/freeze to deny the action entirely)."
         },
         "perHour": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Maximum count per fixed hourly UTC bucket (epoch / 3600). Must be >= 1 when set."
+          "minimum": 0,
+          "description": "Maximum count per fixed hourly UTC bucket (epoch / 3600). Must be >= 0 when set; 0 hard-denies within the window."
         },
         "perDay": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Maximum count per fixed calendar day (UTC midnight bucket). Must be >= 1 when set."
+          "minimum": 0,
+          "description": "Maximum count per fixed calendar day (UTC midnight bucket). Must be >= 0 when set; 0 hard-denies within the window."
         },
         "onBreach": {
           "type": "string",
