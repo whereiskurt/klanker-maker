@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 121-02: pkg/quota Record + ResolveLimits (all QUO-01..05 GREEN)"
-last_updated: "2026-06-27T13:03:44.549Z"
+stopped_at: "Completed 121-03: spec.limits typed block + limits: config + merge-list entry"
+last_updated: "2026-06-27T13:05:18.638Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 30
-  completed_plans: 22
+  completed_plans: 24
   percent: 91
 ---
 
@@ -597,6 +597,8 @@ Progress: [█████████░] 91%
 | Phase 120-profiles-reset-and-os-layered-fragment-library P02 | 146 | 3 tasks | 4 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P01 | 314s | 3 tasks | 8 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P02 | 7min | 3 tasks | 3 files |
+| Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P04 | 288s | 2 tasks | 4 files |
+| Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P03 | 296s | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1707,6 +1709,9 @@ Recent decisions affecting current work:
 - [Phase 121-01]: Wave 0 stub pattern: t.Skip('plan N') — never commented code; TestRecord bucket-math goes PASS immediately while QUO-02..05 Skip for Wave 1
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: TTL set via if_not_exists in same UpdateItem as ADD — single round-trip per window, no overwrite on repeat increments
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: WorstWindow = first exceeded window in declaration order (lifetime→hour→day); ResolveLimits returns empty OnBreach for unlimited actions (not BreachWarn)
+- [Phase 121-04]: FreezeSandboxDynamo uses no frozen-state guard in ConditionExpression (idempotent re-freeze updates reason/timestamp)
+- [Phase 121-04]: unmarshalFrozenFields is a defensive no-op pass (primary parsing in unmarshalSandboxItem+toSandboxMetadata); mirrors unmarshalSlackFields/GithubFields call-site pattern
+- [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: ActionLimitConfig defined locally in config.go (no import cycle — config must not import pkg/profile); LimitsSpec uses pointer fields so absent actions stay nil; additive change, no apiVersion bump
 
 ### Roadmap Evolution
 
@@ -1854,6 +1859,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T13:03:44.542Z
-Stopped at: Completed 121-02: pkg/quota Record + ResolveLimits (all QUO-01..05 GREEN)
+Last session: 2026-06-27T13:05:18.631Z
+Stopped at: Completed 121-03: spec.limits typed block + limits: config + merge-list entry
 Resume file: None
