@@ -685,6 +685,17 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			// Phase 121 (plan 09): km-quota-alerter Lambda triggered by DynamoDB Streams
+			// on the {prefix}-action-quota table. Ordered AFTER dynamodb-action-quota
+			// (depends on its stream ARN) and BEFORE ses. Requires KM_ARTIFACTS_BUCKET
+			// so the Lambda zip path is resolvable (mirrors other Lambda modules).
+			// All four registration points: TF module + live unit + regionalModules() +
+			// lambdaBuilds() (memory project_new_lambda_needs_live_unit_and_init_list).
+			name:    "lambda-quota-alerter",
+			dir:     filepath.Join(regionDir, "lambda-quota-alerter"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
 			// Phase 116: shared {prefix}-check-runner Lambda execution role with
 			// baseline inline policies (CW Logs, S3 read/write, EventBridge PutEvents,
 			// SSM, DynamoDB read). Requires KM_ARTIFACTS_BUCKET for S3 IAM policy
@@ -2965,6 +2976,10 @@ func lambdaBuilds() []lambdaBuild {
 		// auto-triage events + @-handle comment keywords. Missing here ⇒ zip never built
 		// (memory project_km_init_skips_existing_lambda_zips).
 		{name: "km-h1-bridge", srcDir: "cmd/km-h1-bridge"},
+		// Phase 121 (plan 09): quota-alerter Lambda — DDB-Stream triggered, sends exactly
+		// one SES operator alert per (sandbox, action, window) breach. Missing here ⇒ zip
+		// never built ⇒ filebase64sha256 fails at apply time (same footgun as Phase 97).
+		{name: "km-quota-alerter", srcDir: "cmd/km-quota-alerter"},
 	}
 }
 

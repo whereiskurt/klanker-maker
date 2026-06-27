@@ -431,6 +431,25 @@ func TestH1BridgeBuildListMembership(t *testing.T) {
 	}
 }
 
+// TestQuotaAlerterBuildListMembership (INIT-02) — the artifact-lockstep invariant
+// (memory project_km_init_skips_existing_lambda_zips): km-quota-alerter must appear
+// in lambdaBuilds() or km init will silently never build its zip, causing a
+// filebase64sha256() error at apply time (same footgun as Phase 97 km-github-bridge).
+func TestQuotaAlerterBuildListMembership(t *testing.T) {
+	sliceHas := func(haystack []string, needle string) bool {
+		for _, s := range haystack {
+			if s == needle {
+				return true
+			}
+		}
+		return false
+	}
+	lambdaNames := cmd.LambdaBuildNames()
+	if !sliceHas(lambdaNames, "km-quota-alerter") {
+		t.Errorf("lambdaBuilds() must include km-quota-alerter; got %v", lambdaNames)
+	}
+}
+
 // TestLoadEFSOutputs_Success verifies LoadEFSOutputs reads filesystem_id from efs/outputs.json.
 func TestLoadEFSOutputs_Success(t *testing.T) {
 	repoRoot := t.TempDir()
