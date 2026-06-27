@@ -352,3 +352,146 @@ func (m *multiCountClient) UpdateItem(_ context.Context, _ *dynamodb.UpdateItemI
 
 // ptr64 is a test helper that returns a pointer to an int64.
 func ptr64(v int64) *int64 { return &v }
+
+// i64 is a test helper that returns a pointer to an int64 (alias for ptr64).
+func i64(v int64) *int64 { return &v }
+
+// findBreachWrite searches updateItemCalls for an UpdateItem whose UpdateExpression
+// mentions both "breached_at" and "on_breach". Returns the call and true if found.
+func findBreachWrite(calls []*dynamodb.UpdateItemInput) (*dynamodb.UpdateItemInput, bool) {
+	for _, c := range calls {
+		if c.UpdateExpression == nil {
+			continue
+		}
+		expr := *c.UpdateExpression
+		if strings.Contains(expr, "breached_at") && strings.Contains(expr, "on_breach") {
+			return c, true
+		}
+	}
+	return nil, false
+}
+
+// TestRecord_WritesBreachedAt_OnTrip (ALR-01 production path) — when the post-increment
+// count exceeds the window limit, Record must issue an additional UpdateItem that writes
+// breached_at and on_breach (first-breach idempotency via if_not_exists).
+func TestRecord_WritesBreachedAt_OnTrip(t *testing.T) {
+	fake := &fakeQuotaClient{countReturn: 2} // count 2 > limit 1 → exceeded
+	ctx := context.Background()
+	limit := ActionLimit{
+		PerHour:  i64(1),
+		OnBreach: BreachWarn,
+	}
+	_, err := Record(ctx, fake, "test-table", "sb-breach", ActionGithubComment, limit)
+	if err != nil {
+		t.Fatalf("Record returned error: %v", err)
+	}
+
+	breachCall, found := findBreachWrite(fake.updateItemCalls)
+	if !found {
+		t.Fatalf("expected a breach-write UpdateItem containing 'breached_at' and 'on_breach' in UpdateExpression; calls: %d", len(fake.updateItemCalls))
+	}
+
+	// Verify if_not_exists is used (first-breach idempotency).
+	expr := *breachCall.UpdateExpression
+	if !strings.Contains(expr, "if_not_exists") {
+		t.Errorf("breach-write UpdateExpression must use if_not_exists; got: %q", expr)
+	}
+
+	// Verify :now is present and is a number attribute.
+	nowAV, ok := breachCall.ExpressionAttributeValues[":now"]
+	if !ok {
+		t.Fatal("breach-write UpdateItem must include :now in ExpressionAttributeValues")
+	}
+	nowN, ok := nowAV.(*dynamodbtypes.AttributeValueMemberN)
+	if !ok {
+		t.Fatalf(":now must be a Number attribute, got %T", nowAV)
+	}
+	if nowN.Value == "" {
+		t.Error(":now must be a non-empty number (Unix seconds)")
+	}
+
+	// Verify :policy is "warn" (matching BreachWarn).
+	policyAV, ok := breachCall.ExpressionAttributeValues[":policy"]
+	if !ok {
+		t.Fatal("breach-write UpdateItem must include :policy in ExpressionAttributeValues")
+	}
+	policyS, ok := policyAV.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok {
+		t.Fatalf(":policy must be a String attribute, got %T", policyAV)
+	}
+	if policyS.Value != string(BreachWarn) {
+		t.Errorf(":policy value: got %q, want %q", policyS.Value, string(BreachWarn))
+	}
+
+	// Verify the breach-write targets the same row key (PK={sandbox}#{action}, SK=hour#...).
+	pkAV, ok := breachCall.Key["PK"]
+	if !ok {
+		t.Fatal("breach-write UpdateItem must have PK key")
+	}
+	pkS := pkAV.(*dynamodbtypes.AttributeValueMemberS)
+	wantPK := "sb-breach#github_comment"
+	if pkS.Value != wantPK {
+		t.Errorf("breach-write PK: got %q, want %q", pkS.Value, wantPK)
+	}
+	skAV, ok := breachCall.Key["SK"]
+	if !ok {
+		t.Fatal("breach-write UpdateItem must have SK key")
+	}
+	sk := skAV.(*dynamodbtypes.AttributeValueMemberS).Value
+	if !strings.HasPrefix(sk, "hour#") {
+		t.Errorf("breach-write SK: got %q, want prefix 'hour#'", sk)
+	}
+}
+
+// TestRecord_NoBreachWrite_WhenUnderLimit — when the post-increment count does NOT
+// exceed the window limit, Record must NOT issue any UpdateItem that writes breached_at.
+func TestRecord_NoBreachWrite_WhenUnderLimit(t *testing.T) {
+	fake := &fakeQuotaClient{countReturn: 1} // count 1 <= limit 5 → not exceeded
+	ctx := context.Background()
+	limit := ActionLimit{
+		PerHour:  i64(5),
+		OnBreach: BreachWarn,
+	}
+	_, err := Record(ctx, fake, "test-table", "sb-under", ActionGithubComment, limit)
+	if err != nil {
+		t.Fatalf("Record returned error: %v", err)
+	}
+
+	_, found := findBreachWrite(fake.updateItemCalls)
+	if found {
+		t.Errorf("expected NO breach-write UpdateItem when count (%d) <= limit (%d); "+
+			"found one: %q", 1, 5, *fake.updateItemCalls[len(fake.updateItemCalls)-1].UpdateExpression)
+	}
+}
+
+// TestRecord_OnBreachPolicyPropagates — when OnBreach is BreachFreeze, the breach-write
+// UpdateItem must carry :policy = "freeze" (not "warn" or "block").
+func TestRecord_OnBreachPolicyPropagates(t *testing.T) {
+	fake := &fakeQuotaClient{countReturn: 2} // count 2 > limit 1 → exceeded
+	ctx := context.Background()
+	limit := ActionLimit{
+		PerHour:  i64(1),
+		OnBreach: BreachFreeze,
+	}
+	_, err := Record(ctx, fake, "test-table", "sb-freeze", ActionSlackPost, limit)
+	if err != nil {
+		t.Fatalf("Record returned error: %v", err)
+	}
+
+	breachCall, found := findBreachWrite(fake.updateItemCalls)
+	if !found {
+		t.Fatalf("expected a breach-write UpdateItem; calls=%d", len(fake.updateItemCalls))
+	}
+
+	policyAV, ok := breachCall.ExpressionAttributeValues[":policy"]
+	if !ok {
+		t.Fatal("breach-write must include :policy in ExpressionAttributeValues")
+	}
+	policyS, ok := policyAV.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok {
+		t.Fatalf(":policy must be a String, got %T", policyAV)
+	}
+	if policyS.Value != string(BreachFreeze) {
+		t.Errorf(":policy: got %q, want %q (BreachFreeze)", policyS.Value, string(BreachFreeze))
+	}
+}
