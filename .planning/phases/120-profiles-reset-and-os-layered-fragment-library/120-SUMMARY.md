@@ -56,6 +56,13 @@ live library forever).
   — `enforcement: both`, DNS/hosts `*`, `sourceAccess.allowedRepos: *`. Verified live:
   `gh-a04f85c2` boots in 154s (full toolchain), `km-session-entry` present, 0 repo blocks,
   shell + `km agent auth` working.
+- **Slack-poller gating fix (no-reply incident):** the compiler emits `/etc/km/notify.env`
+  AND `km-slack-inbound-poller` ONLY inside an `if Spec.CLI != nil` block (userdata.go:5610).
+  `learner` has `cli: noBedrock: true` so it worked; github/h1/desktop/spot had no `cli:` block
+  → no notify.env, no Slack poller → @-mentions got 👀'd but never dispatched on-box. Fix:
+  `base/platform` sets `cli: noBedrock: true` (all 5 leaves satisfy the gate). Verified live:
+  poller active, message dispatched, reply posted to Slack (after per-box `km agent auth`).
+  FOLLOW-UP: the `Spec.CLI != nil` gating is a latent footgun — should gate on `notification.*`.
 - **Comments + Phase refs stripped** from all leaves + fragments for a lean surface.
 
 ### 4. Bug fix — remote-create flatten (the important one)
