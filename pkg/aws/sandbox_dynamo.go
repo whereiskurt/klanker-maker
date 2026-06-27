@@ -64,6 +64,15 @@ type sandboxItemDynamo struct {
 	// However we override this with a manual AttributeValueMemberN in WriteSandboxMetadataDynamo
 	// to guarantee Number type (research Pitfall: zero int64 marshals as N "0", so we manage TTL manually).
 	TTLExpiryEpoch int64 `dynamodbav:"ttl_expiry,omitempty"`
+
+	// Phase 121 — action quota + freeze quarantine.
+	// Stored as flat string/bool DynamoDB attributes — mirrors the existing
+	// locked/locked_at pattern used above.
+	ActionLimits string `dynamodbav:"action_limits,omitempty"`
+	ActionFrozen bool   `dynamodbav:"action_frozen,omitempty"`
+	FrozenReason string `dynamodbav:"frozen_reason,omitempty"`
+	FrozenAt     string `dynamodbav:"frozen_at,omitempty"` // RFC3339 string; *time.Time in SandboxMetadata
+	FrozenBy     string `dynamodbav:"frozen_by,omitempty"`
 }
 
 // toSandboxMetadata converts an internal DynamoDB item to the public SandboxMetadata type.
@@ -112,6 +121,17 @@ func (d *sandboxItemDynamo) toSandboxMetadata() (*SandboxMetadata, error) {
 		}
 	}
 
+	// Phase 121 — action quota + freeze quarantine.
+	meta.ActionLimits = d.ActionLimits
+	meta.ActionFrozen = d.ActionFrozen
+	meta.FrozenReason = d.FrozenReason
+	meta.FrozenBy = d.FrozenBy
+	if d.FrozenAt != "" {
+		if ft, err := time.Parse(time.RFC3339, d.FrozenAt); err == nil {
+			meta.FrozenAt = &ft
+		}
+	}
+
 	return meta, nil
 }
 
@@ -141,6 +161,7 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		GithubInboundQueueURL: meta.GithubInboundQueueURL,
 		FailureReason:         meta.FailureReason,
 		FailedAt:              meta.FailedAt,
+		ActionFrozen:          meta.ActionFrozen,
 	}
 }
 
@@ -233,6 +254,32 @@ func unmarshalSandboxItem(item map[string]dynamodbtypes.AttributeValue) (*sandbo
 			}
 		}
 	}
+	// Phase 121 — action quota + freeze quarantine.
+	if v, ok := item["action_limits"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			d.ActionLimits = sv.Value
+		}
+	}
+	if v, ok := item["action_frozen"]; ok {
+		if bv, ok := v.(*dynamodbtypes.AttributeValueMemberBOOL); ok {
+			d.ActionFrozen = bv.Value
+		}
+	}
+	if v, ok := item["frozen_reason"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			d.FrozenReason = sv.Value
+		}
+	}
+	if v, ok := item["frozen_at"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			d.FrozenAt = sv.Value
+		}
+	}
+	if v, ok := item["frozen_by"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			d.FrozenBy = sv.Value
+		}
+	}
 
 	return d, nil
 }
@@ -304,6 +351,54 @@ func unmarshalGitHubFields(item map[string]dynamodbtypes.AttributeValue, meta *S
 	if v, ok := item["github_inbound_queue_url"]; ok {
 		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
 			meta.GithubInboundQueueURL = sv.Value
+		}
+	}
+}
+
+// unmarshalFrozenFields reads Phase 121 action-quota / freeze-quarantine fields from
+// a raw DynamoDB item into SandboxMetadata. Called by ReadSandboxMetadataDynamo and
+// ListAllSandboxesByDynamo (and ListAllSandboxMetadataDynamo) after toSandboxMetadata().
+// The core struct fields (ActionLimits, ActionFrozen, FrozenReason, FrozenAt, FrozenBy)
+// are already populated by unmarshalSandboxItem → toSandboxMetadata; this helper exists
+// as the canonical call-site annotation mirroring unmarshalSlackFields / unmarshalGitHubFields
+// so that future callers have a single, named hook to extend. It is a no-op for attrs
+// already handled by toSandboxMetadata (avoiding duplicate assignment).
+//
+// NOTE: The actual parsing happens inside unmarshalSandboxItem + toSandboxMetadata
+// because action_frozen/frozen_* are declared on sandboxItemDynamo (unlike the Phase 63/97
+// out-of-band fields that bypass the struct). This function therefore performs a
+// defensive pass for any call-site that skips sandboxItemDynamo entirely.
+func unmarshalFrozenFields(item map[string]dynamodbtypes.AttributeValue, meta *SandboxMetadata) {
+	// action_limits (S, omit when empty)
+	if meta.ActionLimits == "" {
+		if v, ok := item["action_limits"].(*dynamodbtypes.AttributeValueMemberS); ok {
+			meta.ActionLimits = v.Value
+		}
+	}
+	// action_frozen (BOOL, omit when false)
+	if !meta.ActionFrozen {
+		if bv, ok := item["action_frozen"].(*dynamodbtypes.AttributeValueMemberBOOL); ok {
+			meta.ActionFrozen = bv.Value
+		}
+	}
+	// frozen_reason (S)
+	if meta.FrozenReason == "" {
+		if v, ok := item["frozen_reason"].(*dynamodbtypes.AttributeValueMemberS); ok {
+			meta.FrozenReason = v.Value
+		}
+	}
+	// frozen_at (S, RFC3339 → *time.Time)
+	if meta.FrozenAt == nil {
+		if v, ok := item["frozen_at"].(*dynamodbtypes.AttributeValueMemberS); ok && v.Value != "" {
+			if t, err := time.Parse(time.RFC3339, v.Value); err == nil {
+				meta.FrozenAt = &t
+			}
+		}
+	}
+	// frozen_by (S)
+	if meta.FrozenBy == "" {
+		if v, ok := item["frozen_by"].(*dynamodbtypes.AttributeValueMemberS); ok {
+			meta.FrozenBy = v.Value
 		}
 	}
 }
@@ -447,6 +542,26 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 		item["failed_at"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.FailedAt.UTC().Format(time.RFC3339)}
 	}
 
+	// Phase 121 — action quota + freeze quarantine.
+	// Must be emitted here so read-modify-write paths (resume/extend/ttl-handler
+	// full-row PutItem) do NOT silently strip them on the next write
+	// (project_sandboxmetadata_lossy_roundtrip footgun).
+	if meta.ActionLimits != "" {
+		item["action_limits"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.ActionLimits}
+	}
+	if meta.ActionFrozen {
+		item["action_frozen"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: true}
+	}
+	if meta.FrozenReason != "" {
+		item["frozen_reason"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.FrozenReason}
+	}
+	if meta.FrozenAt != nil {
+		item["frozen_at"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.FrozenAt.UTC().Format(time.RFC3339)}
+	}
+	if meta.FrozenBy != "" {
+		item["frozen_by"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.FrozenBy}
+	}
+
 	return item
 }
 
@@ -483,6 +598,7 @@ func ReadSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI, t
 	unmarshalSlackFields(out.Item, meta)
 	unmarshalGitHubFields(out.Item, meta)
 	unmarshalFailureFields(out.Item, meta)
+	unmarshalFrozenFields(out.Item, meta)
 	return meta, nil
 }
 
@@ -549,6 +665,7 @@ func ListAllSandboxesByDynamo(ctx context.Context, client SandboxMetadataAPI, ta
 			unmarshalSlackFields(item, meta)
 			unmarshalGitHubFields(item, meta)
 			unmarshalFailureFields(item, meta)
+			unmarshalFrozenFields(item, meta)
 			records = append(records, metadataToRecord(meta))
 		}
 
@@ -593,6 +710,7 @@ func ListAllSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI
 			unmarshalSlackFields(item, meta)
 			unmarshalGitHubFields(item, meta)
 			unmarshalFailureFields(item, meta)
+			unmarshalFrozenFields(item, meta)
 			metas = append(metas, *meta)
 		}
 

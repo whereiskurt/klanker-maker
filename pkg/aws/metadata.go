@@ -86,4 +86,24 @@ type SandboxMetadata struct {
 	// that never failed.
 	FailureReason string     `json:"failure_reason,omitempty"`
 	FailedAt      *time.Time `json:"failed_at,omitempty"`
+
+	// Phase 121 — action quota + freeze quarantine.
+	// ActionLimits is a JSON-encoded map of action→limit config delivered by the
+	// bridge at create time (e.g. `{"push":{"daily":10}}`). Written by
+	// UpdateSandboxStringAttrDynamo("action_limits", resolvedJSON); read by the
+	// quota enforcement layer. Empty = no per-sandbox limits (use profile defaults).
+	// MUST round-trip: resume/extend/ttl-handler PutItem the whole row — dropping
+	// this field reverts the sandbox to uncapped quota on the next lifecycle write.
+	ActionLimits string `json:"action_limits,omitempty"`
+	// ActionFrozen is set to true by FreezeSandboxDynamo when the sandbox has
+	// exhausted its quota and been quarantined. Cleared by UnfreezeSandboxDynamo.
+	ActionFrozen bool `json:"action_frozen,omitempty"`
+	// FrozenReason is a human-readable summary of why the sandbox was frozen.
+	// Format: "auto:{action}:{window}" (quota exhaustion) or "operator:{id}" (manual).
+	FrozenReason string `json:"frozen_reason,omitempty"`
+	// FrozenAt records when the sandbox was frozen (UTC).
+	FrozenAt *time.Time `json:"frozen_at,omitempty"`
+	// FrozenBy identifies the agent that froze the sandbox.
+	// "auto:{action}:{window}" for quota-triggered freezes; "operator:{id}" for manual.
+	FrozenBy string `json:"frozen_by,omitempty"`
 }

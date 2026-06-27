@@ -55,6 +55,11 @@ type SandboxRecord struct {
 	// Phase 77 — failure discoverability.
 	FailureReason string     `json:"failure_reason,omitempty"`
 	FailedAt      *time.Time `json:"failed_at,omitempty"`
+
+	// Phase 121 — action quota + freeze quarantine.
+	// ActionFrozen is true when the sandbox has been quarantined by the auto-freeze
+	// mechanism or by an operator. Used by km list rendering to show the frozen state.
+	ActionFrozen bool `json:"action_frozen,omitempty"`
 }
 
 // S3ListAPI is the narrow interface for S3 operations needed by list functions.
