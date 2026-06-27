@@ -144,6 +144,147 @@ func TestQuotaRecord_WarnTrip(t *testing.T) {
 	}
 }
 
+// fakeFreezer records FreezeSandbox calls for assertion.
+type fakeFreezer struct {
+	calls []struct{ sandboxID, reason, by string }
+}
+
+func (f *fakeFreezer) FreezeSandbox(_ context.Context, sandboxID, reason, by string) error {
+	f.calls = append(f.calls, struct{ sandboxID, reason, by string }{sandboxID, reason, by})
+	return nil
+}
+
+// TestQuotaRecord_FreezeTrip_AutoLatches (GAP-2) — when quota.Record returns a FREEZE decision,
+// the handler must:
+//  1. Return 429 (block the action).
+//  2. Call h.Freezer.FreezeSandbox exactly once with by="auto:slack_post:hour".
+//  3. NOT post the user message.
+func TestQuotaRecord_FreezeTrip_AutoLatches(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	fs := &quotaTrackSlack{}
+	ff := &fakeFreezer{}
+
+	limitsJSON := `{"slack_post":{"perHour":1,"onBreach":"freeze"}}`
+	quotaClient := bridge.NewFakeQuotaClient(2) // count=2 > limit=1 → exceeded → FREEZE
+
+	h := &bridge.Handler{
+		Now:        func() time.Time { return time.Unix(1714280400, 0) },
+		Keys:       &fakeKeys{keys: map[string]ed25519.PublicKey{"sb-abc123": pub}},
+		Nonces:     &fakeNonces{},
+		Channels:   &fakeChannels{owned: map[string]string{"sb-abc123": "C0123ABC"}},
+		Token:      &fakeToken{tok: "xoxb-test"},
+		Slack:      fs,
+		Quota:      quotaClient,
+		QuotaTable: "km-action-quota",
+		Limits:     &fakeActionLimits{limitsJSON: limitsJSON},
+		Freezer:    ff,
+	}
+
+	env := makeEnv(slack.ActionPost, "sb-abc123", "C0123ABC")
+	req := signRequest(t, env, priv)
+	resp := h.Handle(context.Background(), req)
+
+	// 1. 429 response for FREEZE (block + latch).
+	if resp.StatusCode != 429 {
+		t.Errorf("FREEZE trip: want 429, got %d (body: %s)", resp.StatusCode, resp.Body)
+	}
+
+	// 2. FreezeSandbox called exactly once.
+	if len(ff.calls) != 1 {
+		t.Errorf("FREEZE trip: want exactly 1 FreezeSandbox call, got %d", len(ff.calls))
+	} else {
+		call := ff.calls[0]
+		if call.sandboxID != "sb-abc123" {
+			t.Errorf("FREEZE trip: FreezeSandbox sandboxID=%q, want %q", call.sandboxID, "sb-abc123")
+		}
+		if call.by != "auto:slack_post:hour" {
+			t.Errorf("FREEZE trip: FreezeSandbox by=%q, want %q", call.by, "auto:slack_post:hour")
+		}
+		if call.reason == "" {
+			t.Error("FREEZE trip: FreezeSandbox reason must be non-empty")
+		}
+	}
+
+	// 3. User message NOT posted.
+	if len(fs.posted) != 0 {
+		t.Errorf("FREEZE trip: user message must not be posted; got %d posts: %v", len(fs.posted), fs.posted)
+	}
+}
+
+// TestQuotaRecord_BlockTrip_NoFreeze — BLOCK trip must NOT call FreezeSandbox.
+func TestQuotaRecord_BlockTrip_NoFreeze(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	fs := &quotaTrackSlack{}
+	ff := &fakeFreezer{}
+
+	limitsJSON := `{"slack_post":{"perHour":1,"onBreach":"block"}}`
+	quotaClient := bridge.NewFakeQuotaClient(2) // count=2 > limit=1 → exceeded → BLOCK
+
+	h := &bridge.Handler{
+		Now:        func() time.Time { return time.Unix(1714280400, 0) },
+		Keys:       &fakeKeys{keys: map[string]ed25519.PublicKey{"sb-abc123": pub}},
+		Nonces:     &fakeNonces{},
+		Channels:   &fakeChannels{owned: map[string]string{"sb-abc123": "C0123ABC"}},
+		Token:      &fakeToken{tok: "xoxb-test"},
+		Slack:      fs,
+		Quota:      quotaClient,
+		QuotaTable: "km-action-quota",
+		Limits:     &fakeActionLimits{limitsJSON: limitsJSON},
+		Freezer:    ff,
+	}
+
+	env := makeEnv(slack.ActionPost, "sb-abc123", "C0123ABC")
+	req := signRequest(t, env, priv)
+	resp := h.Handle(context.Background(), req)
+
+	// 429 (block).
+	if resp.StatusCode != 429 {
+		t.Errorf("BLOCK trip: want 429, got %d", resp.StatusCode)
+	}
+
+	// FreezeSandbox must NOT be called for BLOCK.
+	if len(ff.calls) != 0 {
+		t.Errorf("BLOCK trip: FreezeSandbox must NOT be called; got %d calls", len(ff.calls))
+	}
+}
+
+// TestQuotaRecord_WarnTrip_NoFreeze — WARN trip must NOT call FreezeSandbox.
+func TestQuotaRecord_WarnTrip_NoFreeze(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	fs := &quotaTrackSlack{}
+	ff := &fakeFreezer{}
+
+	limitsJSON := `{"slack_post":{"perHour":1,"onBreach":"warn"}}`
+	quotaClient := bridge.NewFakeQuotaClient(2) // count=2 > limit=1 → exceeded → WARN
+
+	h := &bridge.Handler{
+		Now:        func() time.Time { return time.Unix(1714280400, 0) },
+		Keys:       &fakeKeys{keys: map[string]ed25519.PublicKey{"sb-abc123": pub}},
+		Nonces:     &fakeNonces{},
+		Channels:   &fakeChannels{owned: map[string]string{"sb-abc123": "C0123ABC"}},
+		Token:      &fakeToken{tok: "xoxb-test"},
+		Slack:      fs,
+		Quota:      quotaClient,
+		QuotaTable: "km-action-quota",
+		Limits:     &fakeActionLimits{limitsJSON: limitsJSON},
+		Freezer:    ff,
+	}
+
+	env := makeEnv(slack.ActionPost, "sb-abc123", "C0123ABC")
+	req := signRequest(t, env, priv)
+	resp := h.Handle(context.Background(), req)
+
+	// 200 (warn — action still flows).
+	if resp.StatusCode != 200 {
+		t.Errorf("WARN trip: want 200, got %d", resp.StatusCode)
+	}
+
+	// FreezeSandbox must NOT be called for WARN.
+	if len(ff.calls) != 0 {
+		t.Errorf("WARN trip: FreezeSandbox must NOT be called; got %d calls", len(ff.calls))
+	}
+}
+
 // TestQuotaRecord_NoLimits (BRG-01) — no configured limits → byte-identical to today (dormant).
 func TestQuotaRecord_NoLimits(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)

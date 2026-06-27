@@ -74,6 +74,19 @@ type Handler struct {
 	Quota      QuotaAPI            // DDB client for the action-quota table
 	QuotaTable string              // e.g. "km-action-quota" (from KM_QUOTA_TABLE env var)
 	Limits     ActionLimitsFetcher // resolves per-sandbox action-limits JSON
+
+	// Phase 121 (GAP-2) — auto-freeze on BreachFreeze trips. When non-nil and a quota
+	// trip with onBreach:freeze occurs, Freezer.FreezeSandbox is called to latch
+	// action_frozen=true on the km-sandboxes row (by="auto:<action>:<window>"). nil ⇒
+	// dormant — BreachFreeze still blocks the action but does not auto-quarantine.
+	// Implemented by DynamoFreezer (aws_adapters.go).
+	Freezer Freezer
+}
+
+// Freezer latches action_frozen=true on the sandbox row (auto-on-breach freeze).
+// nil ⇒ dormant (no auto-freeze). Implemented by the aws_adapters DynamoFreezer.
+type Freezer interface {
+	FreezeSandbox(ctx context.Context, sandboxID, reason, by string) error
 }
 
 // jsonResp builds a Response with a JSON body.
@@ -596,8 +609,19 @@ func (h *Handler) checkQuota(ctx context.Context, sandboxID string, action quota
 	h.postQuotaNotice(ctx, channel, threadTS, action, d)
 
 	switch d.OnBreach {
-	case quota.BreachBlock, quota.BreachFreeze:
+	case quota.BreachFreeze:
+		// Auto-latch: write action_frozen=true so the frozen-dispatch gate fires on
+		// subsequent turns. Fail-soft: log a Warn on freeze error but still block the action.
+		if h.Freezer != nil {
+			by := fmt.Sprintf("auto:%s:%s", action, d.WorstWindow)
+			reason := fmt.Sprintf("quota exceeded: %s (%s window)", action, d.WorstWindow)
+			if fErr := h.Freezer.FreezeSandbox(ctx, sandboxID, reason, by); fErr != nil {
+				logger.WarnContext(ctx, "bridge: auto-freeze failed (action still blocked)", "sandbox", sandboxID, "err", fErr)
+			}
+		}
 		return d, true // caller returns 429
+	case quota.BreachBlock:
+		return d, true // block for window — no quarantine
 	default: // BreachWarn
 		return d, false
 	}
