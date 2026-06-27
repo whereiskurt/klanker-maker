@@ -76,7 +76,13 @@ spec:
         Type=simple
         EnvironmentFile=-/etc/km/vllm.env
         ExecStartPre=/bin/sleep 5
-        ExecStart=/usr/bin/docker run --rm --gpus all --ipc=host -p 127.0.0.1:8000:8000 -v /data/hf:/root/.cache/huggingface --env-file /etc/km/vllm.env vllm/vllm-openai:latest --model ${VLLM_MODEL} --tensor-parallel-size ${VLLM_TP} --served-model-name local ${VLLM_EXTRA}
+        # systemd ${VAR} (braces) is a SINGLE argument — it does NOT word-split,
+        # so braced ${VLLM_EXTRA} passed the whole "--max-model-len N --quantization
+        # awq ..." multi-flag string as ONE argv token → vLLM argparse IndexError →
+        # crash-loop at boot (every GPU leaf sets a multi-flag VLLM_EXTRA). Unbraced
+        # $VAR word-splits on whitespace (and yields zero args when empty). Verified
+        # live on a g6.xlarge L4: braced crashes, unbraced serves. DO NOT re-brace.
+        ExecStart=/usr/bin/docker run --rm --gpus all --ipc=host -p 127.0.0.1:8000:8000 -v /data/hf:/root/.cache/huggingface --env-file /etc/km/vllm.env vllm/vllm-openai:latest --model $VLLM_MODEL --tensor-parallel-size $VLLM_TP --served-model-name local $VLLM_EXTRA
         Restart=on-failure
         RestartSec=30
         [Install]
