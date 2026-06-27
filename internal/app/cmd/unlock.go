@@ -50,7 +50,7 @@ func NewUnlockCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *
 				}
 				return publisher.PublishSandboxCommand(ctx, sandboxID, "unlock")
 			}
-			return runUnlock(ctx, cfg, sandboxID, yes)
+			return runUnlock(ctx, cmd, cfg, nil, sandboxID, yes)
 		},
 	}
 
@@ -60,16 +60,56 @@ func NewUnlockCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *
 	return cmd
 }
 
-func runUnlock(ctx context.Context, cfg *config.Config, sandboxID string, yes bool) error {
-	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
-	if err != nil {
-		return fmt.Errorf("load AWS config: %w", err)
+// NewUnlockCmdWithLatchDDB builds the unlock command with an optional injected
+// LatchAwareDDB client (covers both safety-lock + freeze-latch clear). Pass nil
+// to use the real AWS-backed client. Used in tests to inject a mock without
+// touching real DynamoDB or real AWS config.
+func NewUnlockCmdWithLatchDDB(cfg *config.Config, ddb LatchAwareDDB) *cobra.Command {
+	var yes bool
+
+	cmd := &cobra.Command{
+		Use:          "unlock <sandbox-id | #number>",
+		Short:        "Unlock a sandbox to allow destroy/stop/pause",
+		Long:         helpText("unlock"),
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+			return runUnlock(ctx, cmd, cfg, ddb, sandboxID, yes)
+		},
 	}
 
-	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip confirmation prompt")
+	return cmd
+}
+
+// runUnlock is the shared unlock implementation for both NewUnlockCmdWithPublisher
+// and NewUnlockCmdWithLatchDDB. When ddb is nil, a real DynamoDB client is loaded
+// from the AWS config. The function clears both the safety lock AND the action-freeze
+// latch atomically in sequence — both operations are idempotent.
+func runUnlock(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Config, ddb LatchAwareDDB, sandboxID string, yes bool) error {
+	var dynamoClient awspkg.SandboxMetadataAPI
+
+	if ddb != nil {
+		dynamoClient = ddb
+	} else {
+		awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		dynamoClient = dynamodb.NewFromConfig(awsCfg)
+	}
+
 	tableName := cfg.GetSandboxTableName()
 
-	// Primary path: try DynamoDB atomic unlock.
+	// Primary path: try DynamoDB atomic safety-lock unlock.
 	unlockErr := awspkg.UnlockSandboxDynamo(ctx, dynamoClient, tableName, sandboxID)
 	if unlockErr != nil {
 		// S3 fallback: if DynamoDB table doesn't exist, fall back to S3 read-modify-write.
@@ -77,11 +117,50 @@ func runUnlock(ctx context.Context, cfg *config.Config, sandboxID string, yes bo
 		if errors.As(unlockErr, &rnf) {
 			return runUnlockS3Fallback(ctx, cfg, sandboxID, yes)
 		}
-		// "not locked" error from UnlockSandboxDynamo — surface to user.
-		return unlockErr
+		// "not locked" error from UnlockSandboxDynamo — still attempt freeze clear below.
+		// We intentionally don't return here: the sandbox might be frozen but not
+		// safety-locked, in which case we should still clear the freeze latch.
+		// Surface this as a non-fatal note only when the freeze clear also has nothing to do.
+		_ = unlockErr
 	}
 
-	fmt.Printf(ansiGreen+"Sandbox %s unlocked."+ansiReset+"\n", sandboxID)
+	// Always attempt to clear the freeze latch — idempotent, harmless when not frozen.
+	unfreezeErr := awspkg.UnfreezeSandboxDynamo(ctx, dynamoClient, tableName, sandboxID)
+	if unfreezeErr != nil {
+		var rnf *dynamodbtypes.ResourceNotFoundException
+		if errors.As(unfreezeErr, &rnf) {
+			// Table doesn't exist — safety-lock also failed via S3 fallback path above,
+			// so we already returned. If we reach here something is inconsistent; surface it.
+			return fmt.Errorf("unfreeze: DynamoDB table %q not found", tableName)
+		}
+		// For other errors (sandbox row missing), surface as warning but don't fail the
+		// command — the safety lock may already have been cleared successfully.
+		if unlockErr != nil {
+			// Both operations failed — surface original unlock error.
+			return unlockErr
+		}
+		// Safety lock clear succeeded but freeze clear had an issue (e.g. row gone).
+		// Treat as success — the row is likely gone or never frozen.
+	}
+
+	out := cobraCmd.OutOrStdout()
+
+	// Report what was cleared.
+	lockCleared := unlockErr == nil
+	freezeCleared := unfreezeErr == nil
+
+	switch {
+	case lockCleared && freezeCleared:
+		fmt.Fprintf(out, ansiGreen+"Sandbox %s: cleared safety lock + action freeze."+ansiReset+"\n", sandboxID)
+	case lockCleared:
+		fmt.Fprintf(out, ansiGreen+"Sandbox %s: cleared safety lock."+ansiReset+" (no action freeze was set)\n", sandboxID)
+	case freezeCleared:
+		fmt.Fprintf(out, ansiGreen+"Sandbox %s: cleared action freeze."+ansiReset+" (no safety lock was set)\n", sandboxID)
+	default:
+		fmt.Fprintf(out, ansiGreen+"Sandbox %s: no locks to clear."+ansiReset+"\n", sandboxID)
+	}
+
+	fmt.Fprintf(out, "Actions resume immediately (no km resume needed).\n")
 	return nil
 }
 

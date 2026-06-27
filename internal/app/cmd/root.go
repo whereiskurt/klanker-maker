@@ -72,6 +72,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewResumeCmd(cfg))
 	root.AddCommand(NewLockCmd(cfg))
 	root.AddCommand(NewUnlockCmd(cfg))
+	root.AddCommand(NewFreezeCmd(cfg))
 	root.AddCommand(NewBootstrapCmd(cfg))
 	root.AddCommand(NewUnbootstrapCmd(cfg))
 	root.AddCommand(NewBudgetCmd(cfg))

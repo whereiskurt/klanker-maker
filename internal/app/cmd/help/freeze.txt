@@ -1,0 +1,17 @@
+Quarantine a sandbox by latching action_frozen=true on its DynamoDB row.
+
+Once frozen, all outbound actions (email, Slack, GitHub, push) gated by the
+quota middleware are blocked. The box keeps running — no km stop is issued.
+This is the operator panic button for a sandbox that has violated quotas or
+is behaving unexpectedly. Release is via 'km unlock' only (CLI-only, no Slack).
+
+Usage:
+  km freeze <sandbox-id | #number> [--reason <text>]
+
+Examples:
+  km freeze #1                           Freeze sandbox #1 (default reason)
+  km freeze sb-abc123 --reason "quota:push:daily exceeded"
+  km unlock #1                           Release the freeze (also clears safety lock)
+
+Flags:
+  --reason string   Human-readable reason stored in DynamoDB (default "operator freeze")
