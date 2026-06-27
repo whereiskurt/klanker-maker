@@ -207,10 +207,10 @@ output "stream_arn" { value = aws_dynamodb_table.action_quota.stream_arn }
    Position: after `dynamodb-checks` and before `check-runner-role` or before `ses` is fine;
    no upstreamOutputs dependency.
 
-2. **`init_plan_test.go:439`** — hardcoded count `24` → bump to `25` (adds 1 table).
-   If the alerter Lambda is also added in the same phase → bump to `26`.
+2. **`init_plan_test.go:439`** — hardcoded count `24` → bump to `26` (this phase adds BOTH
+   `dynamodb-action-quota` AND `lambda-quota-alerter`).
    **File:** `internal/app/cmd/init_plan_test.go` line 439:
-   `if len(mods) != 24 {` → `if len(mods) != 25 {` (or 26 with alerter)
+   `if len(mods) != 24 {` → `if len(mods) != 26 {` (table + alerter)
 
 3. **`infra/live/use1/dynamodb-action-quota/terragrunt.hcl`** — live unit.
    Pattern: copy `infra/live/use1/dynamodb-slack-channels/terragrunt.hcl`, change source,
@@ -572,7 +572,7 @@ These require a live sandbox + live Slack/GitHub integration:
 
 - [ ] `pkg/quota/` — new package, needs `quota.go` + `quota_test.go` covering QUO-01 through QUO-05
 - [ ] `pkg/quota/testutil/` — DDB mock implementing the `ADD count 1` operation (or reuse `aws.BudgetAPI` mock pattern from `pkg/aws/budget_test.go`)
-- [ ] `internal/app/cmd/init_plan_test.go:439` — bump `!= 24` to `!= 25` (or 26) — MUST update before quota module is added or the test fails on every run
+- [ ] `internal/app/cmd/init_plan_test.go:439` — bump `!= 24` to `!= 26` (table + alerter) — MUST update before the quota modules are added or the test fails on every run
 - [ ] `internal/app/cmd/freeze_test.go` — covering CLI-01 + CLI-02
 - [ ] `pkg/slack/bridge/events_handler_frozen_test.go` — covering BRG-02
 
@@ -604,7 +604,7 @@ km destroy <id> --remote --yes && km create <profile>
 | Footgun | File | Line | What to do |
 |---------|------|------|------------|
 | `regionalModules()` new entry | `internal/app/cmd/init.go` | 511 (start of `regionalModules()`) | Add `dynamodb-action-quota` + `lambda-quota-alerter` entries before `ses` |
-| Module-order test count | `internal/app/cmd/init_plan_test.go` | 439 | Bump `24` → `25` or `26` |
+| Module-order test count | `internal/app/cmd/init_plan_test.go` | 439 | Bump `24` → `26` (table + alerter) |
 | `lambdaBuilds()` new entry | `internal/app/cmd/init.go` | 2944 (start of `lambdaBuilds()`) | Add `{name: "km-quota-alerter", srcDir: "cmd/km-quota-alerter"}` |
 | Config v2→v merge-list | `internal/app/config/config.go` | ~874 (the `for _, key := range []string{...}` block) | Add `"limits"` to the slice |
 | `SandboxMetadata` struct | `pkg/aws/metadata.go` | 11 | Add 5 new fields |
