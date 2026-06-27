@@ -2,9 +2,13 @@
 
 **Date:** 2026-06-27
 **Status:** Approved (brainstorming) → ready for GSD Phase 122 planning
-**Scope note:** Phase 122 delivers BOTH the GPU serving profiles AND Slack
-chat-with-resume against the local model via a codex repoint (folded in after
-the initial brainstorm). Goose-as-first-class-agent (Path 2) is a deferred
+**Scope note:** Phase 122 grew during brainstorming and now spans three
+deliverables: (1) the 7 GPU serving profiles, (2) Slack chat-with-resume against
+the local model via an on-box codex repoint, and (3) `km model start` — a
+laptop-side SSM port-forward to the model, including an on-box Anthropic↔OpenAI
+shim so local **Claude Code** can drive the remote model. The phase is sizable;
+the GSD plan should break it into waves (profiles → codex/Slack → `km model
+start` + shim → live UAT). Goose-as-first-class-agent (Path 2) remains a deferred
 follow-on.
 **Author:** operator + Claude (brainstorming session)
 
@@ -17,9 +21,11 @@ it with a VS Code coding assistant — without leaving the km workflow.
 
 Concretely: a small family of SandboxProfiles that stand up a GPU instance,
 serve a 70B-class model over an OpenAI-compatible endpoint, let the operator
-point a VS Code plugin at it via `km vscode start`, **and chat with it through
-the existing km-slack inbound semantics (per-thread, with resume) by repointing
-the on-box codex agent at the local endpoint.**
+point a VS Code plugin at it via `km vscode start`, chat with it through the
+existing km-slack inbound semantics (per-thread, with resume) by repointing the
+on-box codex agent at the local endpoint, **and reach it from local laptop
+development via a new `km model start` SSM port-forward — including an on-box
+Anthropic↔OpenAI shim so local Claude Code can drive the remote model.**
 
 ## Decisions locked in brainstorming
 
@@ -154,6 +160,50 @@ verb, golden tests, and mandatory live UAT (poller bash is invisible to Go
 goldens). Reusable for any future local model. Out of Phase 122; documented as a
 follow-on once the codex repoint proves the vision.
 
+## Local dev against the model — `km model start`
+
+A new operator command that brings the remote model to the **laptop**, mirroring
+`km vscode start` / `km desktop start` (which both already use
+`runReconnectingPortForward` in `internal/app/cmd/shell.go` with a liveness
+probe + auto-reconnect). New file `internal/app/cmd/model.go`; a third consumer
+of the same helper with an HTTP probe (`GET /v1/models`).
+
+```
+km model start <sandbox> [--local-port 8000] [--anthropic]
+km model status <sandbox>
+```
+
+### Layer 1 — OpenAI passthrough (default)
+
+SSM port-forward `laptop 127.0.0.1:8000 → sandbox:8000` (vLLM), auto-reconnect,
+SSM-only (no SG/public change). Prints ready-to-paste config. The laptop now has
+an **OpenAI-shaped** endpoint at `http://localhost:8000/v1`, model `local`, dummy
+key — works immediately with **codex (local), Continue/Cline on the laptop,
+aider, the OpenAI SDK, curl**. "Local dev against the remote model" with codex is
+free the moment this exists.
+
+### Layer 2 — Anthropic shim (`--anthropic`) for local Claude Code
+
+Claude Code speaks the Anthropic Messages API (`/v1/messages`), not OpenAI, so a
+raw forward won't drive it. `base/gpu/serve` runs a small **Anthropic↔OpenAI
+translation shim** on the box (LiteLLM `/v1/messages`, or a `claude-code-proxy`)
+on `:8001` over vLLM `:8000`. `km model start --anthropic` forwards `:8001`
+instead; the operator sets `ANTHROPIC_BASE_URL=http://localhost:8001` + a dummy
+key and their **laptop Claude Code** drives the remote 70B.
+
+**Scope boundary — two different "claudes":**
+- The **on-box** claude (used by Slack `/claude`, `km agent run --claude`) stays
+  **cloud-pointed** — unchanged, preserves the cloud-vs-local A/B.
+- The shim serves the **laptop** Claude Code via the forwarded port only. It does
+  NOT repoint the on-box agent default (still codex→local).
+
+### Caveats (carried into UAT)
+
+- **Claude Code on an open 70B is the fussiest combination** (tuned hard for
+  Claude's tool-call/thinking format). Fine for chat + light tasks; flakier on
+  heavy agentic loops than codex-on-local. Highest-risk of the local-dev paths.
+- The shim is an extra on-box component to run/health-check (R7).
+
 ## Inheritance structure (DRY via Phase 117 composable inheritance)
 
 ### New abstract fragment: `profiles/base/gpu/serve.yaml` (`metadata.abstract: true`)
@@ -179,6 +229,10 @@ Holds the common ~90%:
 - **Slack chat agent:** `spec.agent.default: codex` + the codex local-provider
   knob (`base_url: http://localhost:8000/v1`, model `local`) so Slack inbound
   dispatches the local model. claude stays cloud-pointed.
+- **Anthropic shim sidecar:** a LiteLLM (`/v1/messages`) / `claude-code-proxy`
+  service on `:8001` over vLLM `:8000`, installed + enabled by the fragment, for
+  the `km model start --anthropic` laptop-Claude-Code path. Bound to localhost;
+  reached only over the SSM forward.
 
 ### Each leaf sets ONLY its deltas (~15 lines)
 
@@ -251,6 +305,12 @@ Qwen leaves need no secret.
 4. VS Code Remote-SSH + Continue completes a chat against the served model.
 5. **Slack codex round-trip + resume** verified in the per-sandbox channel
    (settles R6/O7), and `/claude` confirmed routing to cloud.
+6. **`km model start <sb>`** (passthrough) forwards the laptop to the model; a
+   local codex/Continue/curl call against `localhost:8000/v1` returns a
+   completion.
+7. **`km model start <sb> --anthropic`** + the on-box shim: local **Claude Code**
+   with `ANTHROPIC_BASE_URL=localhost:8001` completes a chat against the remote
+   70B (settles R7; scoped to chat + light edits).
 
 **Prerequisite status: GPU quota CLEARED** (768 G-family vCPU — step 1 of the
 bring-up runbook). No external blocker remains for the live UAT.
@@ -285,6 +345,12 @@ bring-up runbook). No external blocker remains for the live UAT.
   UAT (a real `codex exec` round-trip against the served model) before the
   profiles are trusted. Fallback if incompatible: Path 2 (goose, which is
   designed for arbitrary OpenAI-compatible providers).
+- **R7 — Anthropic shim reliability + Claude-Code-on-70B.** The LiteLLM/
+  claude-code-proxy shim is an extra on-box component (health, restart, resource
+  use). And Claude Code is the fussiest client to drive with an open 70B —
+  tool-call/thinking-format adherence may be poor on heavy agentic loops.
+  Mitigation: scope the `--anthropic` UAT to chat + light edits first; the
+  passthrough (codex/Continue) path is the dependable one. Shim is localhost-only.
 
 ## Open questions for the GSD research/plan phase
 
@@ -308,6 +374,12 @@ bring-up runbook). No external blocker remains for the live UAT.
   (`spec.agent.codex.baseURL` + `model`?) vs a generic `spec.agent.localEndpoint`.
   How `synthesizeCodexConfig` emits `[model_providers.local]`. Confirm Codex 0.133
   honors a config.toml `model_provider`/`base_url` for a non-OpenAI host.
+- **O9 — Anthropic shim choice + packaging.** LiteLLM proxy (`/v1/messages`
+  passthrough) vs a lighter `claude-code-proxy`; install path (pip in
+  `base/gpu/serve` initCommands vs a container); port (`:8001`); systemd unit;
+  whether it maps the served `local` model to the names Claude Code sends. Confirm
+  Claude Code honors `ANTHROPIC_BASE_URL` against a non-Anthropic host with a
+  dummy key.
 - **O8 — GLM/Kimi quant repos + vLLM arch support.** GLM-4.6 / GLM-4.5-Air need
   the `Glm4Moe` arch (confirm installed vLLM version supports it; `--trust-remote-code`?)
   and a concrete 4-bit community quant repo (AWQ/GPTQ/compressed-tensors) of
@@ -335,9 +407,9 @@ bring-up runbook). No external blocker remains for the live UAT.
   repoint proves the vision first. (Slack chat itself is now IN scope via codex.)
 - *pi* as a chat agent — less integrated, resume story unknown; goose preferred
   if/when a Path-2 agent is added.
-- **claude → local model** via an Anthropic↔OpenAI translation sidecar (LiteLLM
-  `/v1/messages` / `claude-code-proxy` + `ANTHROPIC_BASE_URL`) — deferred. We
-  keep claude cloud-pointed to preserve the `/claude`-vs-`/codex` A/B and avoid
-  driving Claude Code's agent loop with an open 70B. Documented as a future
-  variant; codex is the proven on-box local path.
+- **On-box claude default repointed at the local model** — out of scope. The
+  on-box claude stays cloud-pointed (preserves the `/claude`-vs-`/codex` A/B).
+  (NOTE: laptop Claude Code reaching the local model IS in scope, via the
+  `km model start --anthropic` shim — that's a different, forwarded path and does
+  not change the on-box agent default.)
 - Multi-model hot-swap / model router on one box — one model per profile.
