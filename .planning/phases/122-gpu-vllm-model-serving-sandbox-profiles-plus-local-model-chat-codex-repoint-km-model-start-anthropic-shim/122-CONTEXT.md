@@ -120,6 +120,49 @@ Kimi K2 (~1T, needs gated P-family). Multi-node serving.
 - Per-model `--max-model-len` / `--gpu-memory-utilization` tuning (O2/O8).
 </decisions>
 
+<gateway_consolidation>
+## Gateway = consolidation layer (locked 2026-06-27, supersedes the "shim" framing)
+
+Per the bake-off (`122-RESEARCH-gateway-bakeoff.md`) + web-confirmation + operator
+direction, the on-box gateway is a **multi-provider model router**, not just a
+codex/claude shim. **GATEWAY = Bifrost** (`:8001`) — Go single-binary (~40MB, fits
+km's sidecar model), Claude-Code integration officially documented (Maxim AI:
+"Integrating Claude Code with Bifrost Gateway"; `ANTHROPIC_BASE_URL` → Bifrost's
+**`/anthropic`** path; provider chosen by model-name prefix). **LiteLLM = documented
+fallback** if Bifrost hits a wall in UAT. Clients pick local-vs-cloud BY MODEL NAME
+through one endpoint ("new model = one config route" — unlocks future models):
+
+| Route name | Backend | Auth | Status |
+|---|---|---|---|
+| `local` | vLLM localhost:8000 (chat-completions) | none | active (always) |
+| `claude-bedrock` | AWS Bedrock (Claude Sonnet/Opus) | **sandbox IAM role / SigV4 — NO key** | active |
+| `claude-anthropic` | api.anthropic.com | `ANTHROPIC_API_KEY` (SOPS at UAT time) | **active/wired** (operator provides key) |
+| `gpt-oss-bedrock` | AWS Bedrock OpenAI gpt-oss-120b/20b (`openai.gpt-oss-*`) | **sandbox IAM role — NO key** | active (auto-enabled on Bedrock since Aug 2025) |
+| `gpt-frontier` (optional) | api.openai.com (GPT-5/o-series) | `OPENAI_API_KEY` (SOPS) | dormant — until key present |
+
+- **Almost everything is keyless** — `local`, `claude-bedrock`, `gpt-oss-bedrock`
+  use the instance role; only `claude-anthropic` needs a key (operator SOPS-provisions
+  at UAT). `gpt-frontier` (proprietary GPT) is the only dormant route.
+- **Cloud routes flow through km's MITM proxy → metered** into existing `BUDGET#ai`
+  rows automatically. No new metering code.
+- **Bifrost Anthropic path:** `ANTHROPIC_BASE_URL` points at Bifrost's `/anthropic`
+  (NOT `/v1/messages`) — confirm the exact value Claude Code needs in UAT.
+- **OTEL:** wire Bifrost's telemetry/observability export → `http://localhost:4318`
+  (already exported by base/userinit; tracing sidecar from base/platform) so per-model
+  latency/tokens/cost flow through km's existing OTEL pipeline + `km otel`. (Confirm
+  Bifrost OTLP export config in UAT; it logs all traffic natively.)
+- **Codex note:** current vLLM serves `/v1/responses` natively, so codex is not
+  strictly gateway-dependent — but route codex through Bifrost `:8001` anyway for
+  uniform multi-provider access. Gateway's durable value = Anthropic-Messages
+  translation (Claude Code) + multi-provider routing.
+- **UAT scope:** live-verify `local`, `claude-bedrock`, `gpt-oss-bedrock` (role),
+  and `claude-anthropic` (key provided by operator). `gpt-frontier` dormant.
+- **Install:** Bifrost binary via initCommandsAppend (pinned release), systemd unit
+  on `:8001`, config with the route map above. Go single-binary install matches km's
+  sidecar pattern (vs a Python venv).
+
+</gateway_consolidation>
+
 <specifics>
 ## Specific Ideas / constraints to honor
 

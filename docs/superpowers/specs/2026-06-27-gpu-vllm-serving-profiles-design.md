@@ -32,8 +32,15 @@ LiteLLM *also* serves the Anthropic Messages API. Net architecture change:
   `/etc/os-release`). Quant repos: `cyankiwi/GLM-4.5-Air-AWQ-4bit`,
   `QuantTrio/GLM-4.6-AWQ`, `btbtyler09/Kimi-Dev-72B-GPTQ-8bit` (no AWQ).
 
-The rest of this spec stands; treat `122-RESEARCH.md` as authoritative where they
-differ.
+**Gateway pick (post-bake-off + web-confirm):** the gateway is **Bifrost** (Go
+single-binary, fits km's sidecar model; Claude-Code integration officially documented
+via Bifrost's `/anthropic` path), **LiteLLM = fallback**. It is a multi-provider
+ROUTER (consolidation layer): `local` (vLLM) + `claude-bedrock` + `claude-anthropic`
++ `gpt-oss-bedrock` (Bedrock OpenAI gpt-oss, keyless via instance role) + optional
+`gpt-frontier`. See `122-CONTEXT.md` § Gateway consolidation (authoritative).
+
+The rest of this spec stands; treat `122-RESEARCH.md` + `122-CONTEXT.md` as
+authoritative where they differ.
 
 ## Problem / goal
 
