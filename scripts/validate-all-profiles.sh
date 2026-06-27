@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# scripts/validate-all-profiles.sh — Phase 92 hard gate (updated Phase 120 Plan 04).
+# scripts/validate-all-profiles.sh — Phase 92 hard gate (updated Phase 122 Plan 02).
 #
-# Validates every concrete leaf profile in the 13-entry Profile Inventory using
+# Validates every concrete leaf profile in the 20-entry Profile Inventory using
 # `km validate`. Exits non-zero on any failure. Single source of truth for the
-# inventory (4 composed leaves + 8 pkg/profile/builtins entries).
+# inventory (4 composed leaves + 8 pkg/profile/builtins entries + 7 GPU leaves).
 #
 # profiles/base/** is intentionally EXCLUDED (recursive): abstract base fragments
-# live there (including the new profiles/base/os/ subdir) and deliberately omit
-# required fields that concrete leaves supply via extends. km validate already prints
-# a "SKIP" message for metadata.abstract:true files; this script skips them entirely
-# to keep output clean and avoid false failures.
-# (The base/ directory is created by Phase 117 Plan 04; base/os/ by Phase 120 Plan 01.)
+# live there (including the new profiles/base/os/ and profiles/base/gpu/ subdirs)
+# and deliberately omit required fields that concrete leaves supply via extends.
+# km validate already prints a "SKIP" message for metadata.abstract:true files;
+# this script skips them entirely to keep output clean and avoid false failures.
+# (The base/ directory is created by Phase 117 Plan 04; base/os/ by Phase 120 Plan 01;
+#  base/gpu/ by Phase 122 Plan 02.)
 #
 # Usage: bash scripts/validate-all-profiles.sh
 # Requires: km binary built (./km) — call `make build` first if needed.
@@ -49,6 +50,14 @@ PROFILES=(
   pkg/profile/builtins/open-dev.yaml
   pkg/profile/builtins/restricted-dev.yaml
   pkg/profile/builtins/sealed.yaml
+  # Phase 122 Plan 02: 7 GPU serving leaves (profiles/base/gpu/serve abstract fragment excluded)
+  profiles/gpu-qwen-12x.yaml
+  profiles/gpu-llama-12x.yaml
+  profiles/gpu-qwen-48x.yaml
+  profiles/gpu-llama-48x.yaml
+  profiles/gpu-glmair-12x.yaml
+  profiles/gpu-kimidev-12x.yaml
+  profiles/gpu-glm46-48x.yaml
 )
 
 fail=0
