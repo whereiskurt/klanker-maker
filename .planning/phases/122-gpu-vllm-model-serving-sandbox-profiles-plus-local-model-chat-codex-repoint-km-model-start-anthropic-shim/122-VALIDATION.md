@@ -1,8 +1,8 @@
 ---
 phase: 122
 slug: gpu-vllm-model-serving-sandbox-profiles-plus-local-model-chat-codex-repoint-km-model-start-anthropic-shim
-status: draft
-nyquist_compliant: false
+status: ready
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-27
 ---
@@ -94,4 +94,4 @@ created: 2026-06-27
 - [ ] Live-UAT gates (G3–G9) explicitly tracked in the UAT plan (not silently skipped)
 - [ ] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-27 (plan-checker VERIFICATION PASSED; 3 warnings fixed)
