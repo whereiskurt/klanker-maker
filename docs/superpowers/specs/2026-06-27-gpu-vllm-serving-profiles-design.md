@@ -2,6 +2,10 @@
 
 **Date:** 2026-06-27
 **Status:** Approved (brainstorming) → ready for GSD Phase 122 planning
+**Scope note:** Phase 122 delivers BOTH the GPU serving profiles AND Slack
+chat-with-resume against the local model via a codex repoint (folded in after
+the initial brainstorm). Goose-as-first-class-agent (Path 2) is a deferred
+follow-on.
 **Author:** operator + Claude (brainstorming session)
 
 ## Problem / goal
@@ -12,8 +16,10 @@ The operator wants to **run a large local LLM on a GPU EC2 instance** and front
 it with a VS Code coding assistant — without leaving the km workflow.
 
 Concretely: a small family of SandboxProfiles that stand up a GPU instance,
-serve a 70B-class model over an OpenAI-compatible endpoint, and let the
-operator point a VS Code plugin at it via `km vscode start`.
+serve a 70B-class model over an OpenAI-compatible endpoint, let the operator
+point a VS Code plugin at it via `km vscode start`, **and chat with it through
+the existing km-slack inbound semantics (per-thread, with resume) by repointing
+the on-box codex agent at the local endpoint.**
 
 ## Decisions locked in brainstorming
 
@@ -26,7 +32,8 @@ operator point a VS Code plugin at it via `km vscode start`.
 | Weights cache | **`additionalVolume` 300GB + `teardownPolicy: stop`** | Pull weights once; volume survives pause/resume. Lost only on full `km destroy`. |
 | Models | **Qwen2.5-72B-Instruct (ungated)** + **Llama-3.3-70B-Instruct (gated)** | Qwen = zero-friction default; Llama = useful, needs `HF_TOKEN`. |
 | Sizes | g6e.12xlarge (4×L40S) + g6e.48xlarge (8×L40S) | 12x = quantized/cheaper; 48x = full fp16/max quality. |
-| km claude agent | **Keep** (inherited from `base/userinit` + `base/platform`) | Incidental to serving but handy for `km agent run`. |
+| Slack chat agent | **codex repointed at `localhost:8000`** (`agent.default: codex`) | Reuses the existing first-class codex `agent_type` + `codex exec resume` per-thread continuity. One small `synthesizeCodexConfig` change. Path 2 (goose) deferred. |
+| km claude agent | **Keep**, points at cloud (Bedrock/Anthropic) | "Keep claude" satisfied. Box gains a duality: `/claude` = cloud, default/`/codex` = local 70B, both with thread resume — A/B in one channel. `km agent run --claude` still works. |
 
 ## The profile matrix (4 leaves)
 
@@ -60,6 +67,58 @@ Laptop ── km vscode start ──▶ SSM port-forward (sshd:22 ONLY)
 The entire inference path is `localhost` on the box. Nothing crosses the
 network at request time; nothing is metered by the http-proxy MITM.
 
+## Slack chat with resume (folded into Phase 122)
+
+The km Slack inbound poller (rendered into userdata by `pkg/compiler/userdata.go`)
+is already a generic per-thread conversational dispatcher: per-thread session
+continuity (`agent_session_id` + `agent_type` in `km-slack-threads`), resume
+branched per agent (`claude --resume` / `codex exec resume`), 👀 ack,
+mention/thread gating, allowlist, per-thread parallelism, streaming drain,
+`blocks-rich` rendering, `/claude` `/codex` verbs. **The model behind the agent
+is orthogonal to all of these.** CLAUDE.md states the intent: "Future agents
+(Goose etc.) slot in as new `agent_type` enum values."
+
+So Slack-chat-with-resume against the local model reduces to: **point an on-box
+agent runtime with a resume concept at `localhost:8000`.** Codex is already a
+first-class `agent_type` in the poller and is installed by `base/userinit`, so
+this is the cheapest path.
+
+**Self-contained box:** the poller dispatches the agent *on the same instance*
+that serves the model. Slack @-mention → on-box `codex exec` → `localhost:8000`
+→ local 70B → threaded reply, with `codex exec resume` continuity. Nothing
+metered, fully private, identical km-slack UX.
+
+### What the codex repoint requires
+
+1. **`synthesizeCodexConfig` extension** (`pkg/compiler/agent_codex.go:67`).
+   Today it emits inert hook blocks only — no model provider. Add a
+   `[model_providers.local]` block (`base_url = "http://localhost:8000/v1"`,
+   `model_provider = "local"`, `model = "local"`, dummy env key) emitted when a
+   new profile knob is set. Knob shape TBD in the plan (O6) — likely
+   `spec.agent.codex.baseURL` + `spec.agent.codex.model`.
+2. **`spec.agent.default: codex`** in `base/gpu/serve` so Slack inbound + `km
+   shell`/`km agent run` default to the local model. `claude` stays installed and
+   cloud-pointed; `/claude` verb routes to it.
+3. **Extend `base/slack-persandbox`** in all 4 leaves (per-sandbox channel +
+   `notification.slack.inbound.enabled` → provisions the inbound FIFO + poller).
+   The poller is only emitted when `Spec.CLI != nil` — satisfied by
+   `base/platform` (`cli.noBedrock: true`). (Memory: notify/poller gated on
+   `spec.cli`.)
+
+No `km-slack-threads` schema change (the session-id column is already
+agent-agnostic). No bridge Lambda change. The compiler change + profile wiring
+is the whole delta beyond the serving profiles.
+
+### Deferred: Path 2 — goose as a first-class agent_type
+
+The codebase-anticipated clean form (goose natively supports OpenAI-compatible
+providers + session resume). Requires a real `goose` branch in the poller
+dispatch (first-turn + resume + session-id capture + reply-post), goose config
+synthesis → `localhost:8000`, `EFFECTIVE_AGENT` handling, optional `/goose`
+verb, golden tests, and mandatory live UAT (poller bash is invisible to Go
+goldens). Reusable for any future local model. Out of Phase 122; documented as a
+follow-on once the codex repoint proves the vision.
+
 ## Inheritance structure (DRY via Phase 117 composable inheritance)
 
 ### New abstract fragment: `profiles/base/gpu/serve.yaml` (`metadata.abstract: true`)
@@ -82,10 +141,13 @@ Holds the common ~90%:
 - **Lifecycle:** `ttl: 8h`, `idleTimeout: 1h`, `teardownPolicy: stop`, on-demand
   (`spot: false` — GPU spot capacity is unreliable; an interruption kills the
   session).
+- **Slack chat agent:** `spec.agent.default: codex` + the codex local-provider
+  knob (`base_url: http://localhost:8000/v1`, model `local`) so Slack inbound
+  dispatches the local model. claude stays cloud-pointed.
 
 ### Each leaf sets ONLY its deltas (~15 lines)
 
-- `extends: [base/os/debian, base/network/safenetwork, base/userinit, base/platform, base/gpu/serve]`
+- `extends: [base/os/debian, base/network/safenetwork, base/userinit, base/platform, base/slack-persandbox, base/gpu/serve]`
 - `spec.runtime.instanceType` — `g6e.12xlarge` | `g6e.48xlarge`
 - `configFiles["/etc/km/vllm.env"]` — `VLLM_MODEL=…`, `VLLM_TP=4|8`,
   `VLLM_EXTRA=--quantization awq …` (per-leaf, differs by model+precision).
@@ -128,6 +190,11 @@ Qwen leaves need no secret.
 5. `km create profiles/gpu-qwen-12x.yaml --alias gpu1`
 6. `km vscode start gpu1` → connect Remote-SSH → install the Continue extension
    (it reads the pre-seeded config) → chat hits `localhost:8000`.
+7. **Slack chat:** @-mention the bot in the per-sandbox channel → confirm the
+   on-box codex turn hits `localhost:8000` and replies in-thread; send a
+   follow-up to confirm `codex exec resume` continuity. `/claude` in the same
+   thread should route to cloud Claude (the local-vs-cloud A/B). This step
+   exercises R6/O7 — the codex↔vLLM compatibility gate.
 
 ## Risks
 
@@ -152,6 +219,13 @@ Qwen leaves need no secret.
 - **R5 — `additionalVolume` not in `instance_ram.go` hibernation table for g6e.**
   Irrelevant: we use `teardownPolicy: stop`, not hibernation. The RAM-table check
   fails open for unknown types anyway.
+- **R6 — Codex ↔ vLLM API-shape compatibility.** Codex CLI may expect OpenAI's
+  Responses API or specific tool-call/streaming formats; vLLM serves
+  `/v1/chat/completions` + partial Responses API. The codex repoint hinges on
+  this working. Highest-risk unknown of the chat dimension → must be settled by
+  UAT (a real `codex exec` round-trip against the served model) before the
+  profiles are trusted. Fallback if incompatible: Path 2 (goose, which is
+  designed for arbitrary OpenAI-compatible providers).
 
 ## Open questions for the GSD research/plan phase
 
@@ -171,6 +245,14 @@ Qwen leaves need no secret.
   first connect — likely just document).
 - **O5 — Whether to ship a 5th `*-learn` bring-up variant** (relaxed enforcement)
   or fold the bring-up into a documented `km shell --learn` step.
+- **O6 — Codex local-provider knob shape.** New typed field
+  (`spec.agent.codex.baseURL` + `model`?) vs a generic `spec.agent.localEndpoint`.
+  How `synthesizeCodexConfig` emits `[model_providers.local]`. Confirm Codex 0.133
+  honors a config.toml `model_provider`/`base_url` for a non-OpenAI host.
+- **O7 — Codex API surface against vLLM** (R6): does Codex need the Responses API,
+  and does the installed vLLM version expose enough of it? Tool-call format
+  parity. Determines whether the repoint works as-is or needs vLLM flags
+  (`--enable-auto-tool-choice`, a tool-call parser) / a Codex flag.
 
 ## Out of scope (YAGNI)
 
@@ -179,6 +261,8 @@ Qwen leaves need no secret.
 - llama.cpp / SGLang / TGI serving stacks — vLLM chosen.
 - Local-VS-Code-with-port-forward access path — Remote-SSH chosen (variant may be
   documented, not built).
-- Slack per-sandbox notifications — omitted for focus (addable via
-  `base/slack-persandbox`).
+- **Goose as a first-class `agent_type` (Path 2)** — deferred follow-on; codex
+  repoint proves the vision first. (Slack chat itself is now IN scope via codex.)
+- *pi* as a chat agent — less integrated, resume story unknown; goose preferred
+  if/when a Path-2 agent is added.
 - Multi-model hot-swap / model router on one box — one model per profile.
