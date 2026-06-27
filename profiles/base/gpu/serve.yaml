@@ -221,12 +221,14 @@ spec:
       allowedRefs:
         - "*"
 
-  iam:
-    # allowedSecretPaths enables SOPS injection for ANTHROPIC_API_KEY (claude-anthropic
-    # route) and HF_TOKEN (Llama leaves). Declared here in the fragment so all GPU leaves
-    # inherit it; list-union dedupes if leaves redeclare it.
-    allowedSecretPaths:
-      - /sandbox/*/secrets
+  # NOTE: secrets for the gateway's key-gated routes (ANTHROPIC_API_KEY / OPENAI_API_KEY)
+  # arrive via spec.secrets.sopsFile (KMS-decrypted to /etc/sandbox-secrets.env at boot;
+  # the role already has kms:Decrypt on alias/km-sandbox-secrets), then the
+  # initCommandsAppend copies them into /etc/km/bifrost-env. We deliberately do NOT use
+  # iam.allowedSecretPaths (SSM-path injection) here — a bad/non-existent path makes the
+  # boot's `aws ssm get-parameter` fail under `set -e` and BRICKS the boot (validated on
+  # the CPU rehearsal). base/platform's iam block (roleSessionDuration, allowedRegions)
+  # is inherited unchanged.
 
   # codex agent default: points at Bifrost :8001 (multi-provider gateway).
   # localBaseURL = :8001 (NOT :8000 directly) — Bifrost provides the Responses API
