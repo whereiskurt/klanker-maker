@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 122-04-PLAN.md — km model start/status + httpTunnelProbe + root registration + wiring tests GREEN
-last_updated: "2026-06-27T18:51:10.781Z"
+stopped_at: Completed 122-03-PLAN.md — synthesizeCodexConfig local-provider emission GREEN
+last_updated: "2026-06-27T19:03:35.361Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 37
-  completed_plans: 35
+  completed_plans: 36
   percent: 91
 ---
 
@@ -610,6 +610,7 @@ Progress: [█████████░] 91%
 | Phase 122 P01 | 256 | 3 tasks | 7 files |
 | Phase 122 P02 | 270 | 3 tasks | 9 files |
 | Phase 122 P04 | 10min | 3 tasks | 4 files |
+| Phase 122 P03 | 24min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1746,6 +1747,9 @@ Recent decisions affecting current work:
 - [Phase 122]: vllm.env written via initCommandsAppend in leaves (not configFiles) to avoid section-ordering race; HF_TOKEN appended in second initCommandsAppend line for Llama leaves
 - [Phase 122]: km model start forwards :8001 (Bifrost) with --anthropic as semantic alias printing ANTHROPIC_BASE_URL pointing at /anthropic path
 - [Phase 122]: httpTunnelProbe (plain-HTTP) added to shell.go mirroring httpsTunnelProbe pattern for Bifrost :8001 liveness
+- [Phase 122]: Emit [model_providers.local] only when LocalBaseURL != empty — dormant path byte-identical (Phase 122 Plan 03)
+- [Phase 122]: base_url emitted verbatim from LocalBaseURL field; profile is the authority for :8001 Bifrost URL (Phase 122 Plan 03)
+- [Phase 122]: wire_api = "responses" per Codex Responses API requirement (since Feb 2026); :8000 documented as fallback in code comment (Phase 122 Plan 03)
 
 ### Roadmap Evolution
 
@@ -1894,6 +1898,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T18:51:10.774Z
-Stopped at: Completed 122-04-PLAN.md — km model start/status + httpTunnelProbe + root registration + wiring tests GREEN
+Last session: 2026-06-27T19:03:35.354Z
+Stopped at: Completed 122-03-PLAN.md — synthesizeCodexConfig local-provider emission GREEN
 Resume file: None
