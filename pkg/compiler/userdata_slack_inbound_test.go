@@ -80,6 +80,26 @@ func TestUserdata_SlackInboundPollerSkipped(t *testing.T) {
 	}
 }
 
+// TestUserdata_SlackInboundPollerEmittedWithoutCLI is the Phase 120 regression
+// guard for the notifyConfigured() gate: a profile with
+// notification.slack.inbound.enabled but NO spec.cli block must STILL render the
+// km-slack-inbound-poller + notify.env. The old `Spec.CLI != nil` gate silently
+// dropped both for a cli-less leaf — the "Slack 👀 but no reply" footgun.
+func TestUserdata_SlackInboundPollerEmittedWithoutCLI(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	p.Spec.CLI = nil // the footgun condition: notification set, cli absent
+	out := compileInboundUserData(t, p)
+	for _, s := range []string{
+		"/opt/km/bin/km-slack-inbound-poller",
+		"cat > /etc/km/notify.env",
+		"KM_SLACK_INBOUND_QUEUE_URL",
+	} {
+		if !strings.Contains(out, s) {
+			t.Fatalf("cli-less slack-inbound profile must still emit %q (Phase 120 notifyConfigured fix)\n%s", s, abbreviateUD(out))
+		}
+	}
+}
+
 // TestUserdata_SlackInboundClaudeFormatHint verifies that the Slack-inbound
 // Claude dispatch carries a Slack-output formatting hint via
 // --append-system-prompt, so Claude fences code/tables and avoids wide tables

@@ -1684,7 +1684,7 @@ while true; do
     --output json 2>/dev/null || true)
 
   COUNT=$(echo "$MSGS" | jq -r '.Messages | length' 2>/dev/null || echo 0)
-  [ "$COUNT" -eq 0 ] && continue
+  [ "${COUNT:-0}" -eq 0 ] && continue
 
   for _MSG_IDX in $(seq 0 $((COUNT-1))); do
     BODY=$(echo "$MSGS" | jq -r ".Messages[$_MSG_IDX].Body // empty" 2>/dev/null || true)
@@ -5258,6 +5258,27 @@ func slackInboundEnabled(p *profile.SandboxProfile) bool {
 	return in != nil && in.Enabled != nil && *in.Enabled
 }
 
+// notifyConfigured reports whether the sandbox needs the notify-env file
+// (/etc/km/notify.env + /etc/profile.d/km-notify-env.sh) and the notification
+// pollers rendered. Historically gated on Spec.CLI != nil (Phase 62, when notify
+// fields lived in spec.cli); Phase 120 broadened it so a profile that declares
+// spec.notification.* but omits spec.cli STILL gets notify.env + the
+// km-slack-inbound-poller. The old Spec.CLI-only gate silently dropped them — the
+// Phase 120 "Slack 👀 but no reply" footgun (a cli-less leaf with
+// notification.slack.inbound.enabled got no poller). Profiles with spec.cli are
+// unaffected (still enter the block), so existing byte-identity fixtures are
+// byte-identical.
+func notifyConfigured(p *profile.SandboxProfile) bool {
+	if p.Spec.CLI != nil {
+		return true
+	}
+	n := p.Spec.Notification
+	if n == nil {
+		return false
+	}
+	return n.Slack != nil || n.Email != nil || n.Github != nil || n.H1 != nil || n.Events != nil
+}
+
 // slackTranscriptEnabled reports whether notification.slack.transcript.enabled is &true.
 func slackTranscriptEnabled(p *profile.SandboxProfile) bool {
 	s := notifySlack(p)
@@ -5520,7 +5541,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	// This is a tracked deviation from CONTEXT.md's "iff field is set" literal wording.
 	// See 62-02-SUMMARY.md for rationale. The KM_NOTIFY_* / KM_SLACK_* env var
 	// names are UNCHANGED (locked Phase 92 decision) — only the YAML source moved.
-	if p.Spec.CLI != nil {
+	if notifyConfigured(p) {
 		ev := notifyEvents(p)
 		onPermission := ev != nil && ev.OnPermission != nil && *ev.OnPermission
 		onIdle := ev != nil && ev.OnIdle != nil && *ev.OnIdle
