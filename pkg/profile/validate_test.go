@@ -1757,3 +1757,53 @@ func TestValidateSemantic_Slack_Allow_WithPerSandbox_NoWarning(t *testing.T) {
 		}
 	}
 }
+
+// TestGPULeafRawAMI_WarnNotError verifies that a GPU-shaped profile using the
+// Phase 122 DLAMI raw AMI ID (ami-0a9d213b92dabc044) with desktop NOT enabled
+// produces no validation errors. The validateDesktop raw-AMI guard at
+// validate.go:676 only fires when desktop is explicitly enabled; a GPU profile
+// without desktop must pass cleanly.
+//
+// Should be GREEN immediately — the existing guard is desktop-gated.
+func TestGPULeafRawAMI_WarnNotError(t *testing.T) {
+	const dlamiID = "ami-0a9d213b92dabc044"
+
+	p := &profile.SandboxProfile{
+		APIVersion: "klankermaker.ai/v1alpha2",
+		Kind:       "SandboxProfile",
+		Metadata:   profile.Metadata{Name: "gpu-qwen-12x-test"},
+		Spec: profile.Spec{
+			Runtime: profile.RuntimeSpec{
+				Substrate:    "ec2",
+				InstanceType: "g6e.12xlarge",
+				Region:       "us-east-1",
+				AMI:          dlamiID,
+				Spot:         false,
+				// Desktop is intentionally nil / not enabled
+			},
+			Agent: &profile.AgentSpec{
+				Default: "codex",
+				Codex: &profile.AgentCodexSpec{
+					LocalBaseURL: "http://localhost:8001/v1",
+					LocalModel:   "local",
+				},
+			},
+		},
+	}
+
+	errs := profile.ValidateSemantic(p)
+
+	// Collect hard errors (non-warning) — must be none.
+	var hardErrors []profile.ValidationError
+	for _, e := range errs {
+		if !e.IsWarning {
+			hardErrors = append(hardErrors, e)
+		}
+	}
+	if len(hardErrors) > 0 {
+		t.Errorf("GPU profile with raw DLAMI AMI and no desktop must not produce hard errors; got %d:", len(hardErrors))
+		for _, e := range hardErrors {
+			t.Logf("  ERROR path=%s msg=%s", e.Path, e.Message)
+		}
+	}
+}

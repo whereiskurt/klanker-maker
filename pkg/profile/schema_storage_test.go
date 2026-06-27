@@ -493,3 +493,86 @@ func TestSchemaRootVolumeValidation(t *testing.T) {
 		}
 	})
 }
+
+// TestAgentCodexLocalProvider_SchemaRoundTrip verifies that the Phase 122 new fields
+// agent.codex.localBaseURL and agent.codex.localModel pass schema validation and
+// round-trip correctly through YAML marshal/unmarshal.
+//
+// Should be GREEN after Task 1 (fields added to types.go + schema).
+func TestAgentCodexLocalProvider_SchemaRoundTrip(t *testing.T) {
+	const rawProfile = `apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: codex-local-test
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: stop
+  runtime:
+    substrate: ec2
+    instanceType: g6e.12xlarge
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: ["*"]
+      allowedHosts: []
+  iam:
+    roleSessionDuration: "1h"
+    allowedRegions: ["us-east-1"]
+  sidecars:
+    dnsProxy:
+      enabled: false
+      image: "dns:latest"
+    httpProxy:
+      enabled: false
+      image: "proxy:latest"
+    auditLog:
+      enabled: false
+      image: "audit:latest"
+    tracing:
+      enabled: false
+      image: "trace:latest"
+  observability:
+    commandLog:
+      destination: stdout
+    networkLog:
+      destination: stdout
+  agent:
+    default: codex
+    codex:
+      localBaseURL: "http://localhost:8001/v1"
+      localModel: "local"
+`
+
+	t.Run("schema accepts localBaseURL + localModel", func(t *testing.T) {
+		errs := profile.ValidateSchema([]byte(rawProfile))
+		if len(errs) != 0 {
+			t.Errorf("expected no schema errors for localBaseURL+localModel, got %d: %v", len(errs), errs)
+		}
+	})
+
+	t.Run("parse preserves localBaseURL and localModel", func(t *testing.T) {
+		p, err := profile.Parse([]byte(rawProfile))
+		if err != nil {
+			t.Fatalf("Parse returned error: %v", err)
+		}
+		if p.Spec.Agent == nil {
+			t.Fatal("expected spec.agent to be non-nil")
+		}
+		if p.Spec.Agent.Codex == nil {
+			t.Fatal("expected spec.agent.codex to be non-nil")
+		}
+		if got := p.Spec.Agent.Codex.LocalBaseURL; got != "http://localhost:8001/v1" {
+			t.Errorf("LocalBaseURL = %q, want %q", got, "http://localhost:8001/v1")
+		}
+		if got := p.Spec.Agent.Codex.LocalModel; got != "local" {
+			t.Errorf("LocalModel = %q, want %q", got, "local")
+		}
+	})
+}
