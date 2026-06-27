@@ -65,7 +65,7 @@ at the http-proxy and bridge Lambdas, per-profile + install-default config, dual
 trip notices, a three-tier breach policy (`warn`/`block`/`freeze`), and a latched **quarantine**
 (`action_frozen`) releasable only by the operator at the CLI (`km unlock`) — never from Slack.
 
-**Requirements**: TBD (derive during /gsd:plan-phase)
+**Requirements**: phase-local synthetic IDs (derived from CONTEXT.md + 121-VALIDATION.md): QUO-01..05, PRX-01..03, BRG-01..03, H1-01, META-01..02, ALR-01, INIT-01..02, CFG-01, PROF-01, CMP-01, CLI-01..03
 **Depends on:** Phase 120
 
 **Success criteria:**
@@ -81,7 +81,16 @@ trip notices, a three-tier breach policy (`warn`/`block`/`freeze`), and a latche
 
 **Design context:** see this phase's `CONTEXT.md`
 
-**Plans:** 0 plans
+**Plans:** 10 plans in 4 waves
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 121 to break down)
+- [ ] 121-01-PLAN.md — Wave 0: pkg/quota skeleton + RED test stubs + module-count bump (24→26) + all Wave 0 stubs
+- [ ] 121-02-PLAN.md — pkg/quota core: multi-window atomic ADD counter + bucket math + TTL + ResolveLimits (TDD)
+- [ ] 121-03-PLAN.md — spec.limits profile schema + validate + km-config limits: v2→v merge-list
+- [ ] 121-04-PLAN.md — SandboxMetadata attrs (action_limits/action_frozen/frozen_*) + round-trip + Freeze/Unfreeze writers
+- [ ] 121-05-PLAN.md — proxy chokepoint: URL→action classifier + WithActionQuota + SES MITM + no-double-count + ec2spot IAM
+- [ ] 121-06-PLAN.md — bridge chokepoints: Slack+H1 quota.Record + frozen-dispatch gate + in-thread notice + FetchByChannel + bridge IAM
+- [ ] 121-07-PLAN.md — compiler emits resolved limits to proxy userdata + km create writes action_limits attr (dormant byte-identical)
+- [ ] 121-08-PLAN.md — dynamodb-action-quota TF module (+Streams) + live unit + regionalModules() (INIT-01)
+- [ ] 121-09-PLAN.md — km-quota-alerter Lambda (DDB-Stream→SES+Slack, idempotent) + 4-part registration (INIT-02, ALR-01)
+- [ ] 121-10-PLAN.md — CLI: km freeze + latch-aware km unlock + FROZEN in list/status + doctor surfacing
