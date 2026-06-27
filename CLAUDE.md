@@ -188,6 +188,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 
 | You want to… | Look at |
 |---|---|
+| Action quotas + freeze quarantine — `spec.limits`/install `limits:`, windows (lifetime/perHour/perDay), `onBreach` warn/block/freeze, zero=hard-deny, `km freeze`/`km unlock`, `km status` Quotas section, the `km-quota-alerter`, deploy surface | `docs/action-quotas.md` (Phase 121) |
 | Operator CLI tour | `klanker:user` skill |
 | One-time platform setup, `km init`, multi-instance, Slack bootstrap | `klanker:init` skill |
 | Send / receive email from inside a sandbox | `klanker:email` skill |
