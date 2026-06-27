@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 121-03: spec.limits typed block + limits: config + merge-list entry"
-last_updated: "2026-06-27T13:05:18.638Z"
+stopped_at: "Completed 121-08: dynamodb-action-quota TF module + live unit + regionalModules entry"
+last_updated: "2026-06-27T13:09:46.193Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 30
-  completed_plans: 24
+  completed_plans: 25
   percent: 91
 ---
 
@@ -599,6 +599,7 @@ Progress: [█████████░] 91%
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P02 | 7min | 3 tasks | 3 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P04 | 288s | 2 tasks | 4 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P03 | 296s | 2 tasks | 6 files |
+| Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P08 | 113s | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1712,6 +1713,7 @@ Recent decisions affecting current work:
 - [Phase 121-04]: FreezeSandboxDynamo uses no frozen-state guard in ConditionExpression (idempotent re-freeze updates reason/timestamp)
 - [Phase 121-04]: unmarshalFrozenFields is a defensive no-op pass (primary parsing in unmarshalSandboxItem+toSandboxMetadata); mirrors unmarshalSlackFields/GithubFields call-site pattern
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: ActionLimitConfig defined locally in config.go (no import cycle — config must not import pkg/profile); LimitsSpec uses pointer fields so absent actions stay nil; additive change, no apiVersion bump
+- [Phase 121-08]: dynamodb-action-quota inserted after dynamodb-checks (before check-runner-role) in regionalModules(); stream_arn exposed as output for plan-09 alerter event-source mapping
 
 ### Roadmap Evolution
 
@@ -1859,6 +1861,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T13:05:18.631Z
-Stopped at: Completed 121-03: spec.limits typed block + limits: config + merge-list entry
+Last session: 2026-06-27T13:09:46.186Z
+Stopped at: Completed 121-08: dynamodb-action-quota TF module + live unit + regionalModules entry
 Resume file: None
