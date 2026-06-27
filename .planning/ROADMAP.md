@@ -96,3 +96,15 @@ Plans:
 - [ ] 121-10-PLAN.md — CLI: km freeze + latch-aware km unlock + FROZEN in list/status + doctor surfacing
 - [ ] 121-11-PLAN.md — GAP 1: pkg/quota writes breached_at + on_breach on first-breach (restores ALR-01 alerter live path) + REAL-path breach-write test
 - [ ] 121-12-PLAN.md — GAP 2: Slack+H1 bridges auto-latch action_frozen via Freezer on BreachFreeze (BRG-01/H1-01, CONTEXT §7 dec 8) + freeze-only tests
+
+### Phase 122: GPU vLLM model-serving sandbox profiles plus local-model chat (codex repoint, km model start, Anthropic shim)
+
+**Goal:** Stand up GPU EC2 sandboxes that serve 70B-class local models via vLLM (on a Deep Learning AMI base, weights on a persistent volume), and make that model reachable through every km interface — VS Code Remote-SSH, Slack chat-with-resume (on-box codex repointed at `localhost:8000`), on-box terminal/headless codex, and laptop dev via a new `km model start` SSM port-forward (with an on-box Anthropic↔OpenAI shim so local Claude Code can drive it). claude stays cloud-pointed on-box to preserve a `/claude`-vs-`/codex` cloud-vs-local A/B.
+**Requirements**: TBD (derive in /gsd:plan-phase)
+**Depends on:** Phase 121, Phase 117 (composable inheritance), Phase 92 (agent tool-gating / codex config synthesis)
+**Plans:** 0 plans
+
+**Design spec:** `docs/superpowers/specs/2026-06-27-gpu-vllm-serving-profiles-design.md` (authoritative — 7-profile matrix, 3 deliverables, R1–R7, O1–O9, DoD = full live UAT). The phase is sizable; plan as waves: profiles+fragment → codex repoint+Slack → `km model start`+shim → live UAT.
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 122 to break down)
