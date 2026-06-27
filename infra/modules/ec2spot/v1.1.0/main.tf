@@ -381,6 +381,35 @@ resource "aws_iam_role_policy" "ec2spot_budget_dynamo" {
   })
 }
 
+# Policy: DynamoDB write for http-proxy action quota enforcement (Phase 121).
+# The km-http-proxy sidecar intercepts GitHub API writes + SES email sends via MITM,
+# classifies the action, and atomically increments per-sandbox window counters in
+# the {prefix}-action-quota table. Dormant when KM_QUOTA_TABLE env var is unset.
+resource "aws_iam_role_policy" "ec2spot_action_quota_dynamo" {
+  count = local.total_ec2spot_count > 0 ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-action-quota-dynamo"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DynamoDBActionQuotaWrite"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.resource_prefix}-action-quota",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.resource_prefix}-action-quota/index/*",
+        ]
+      }
+    ]
+  })
+}
+
 # Policy: KMS decrypt + SSM read for GitHub token (GIT_ASKPASS credential helper)
 # The github-token module creates a per-sandbox KMS key and SSM parameter.
 # The sandbox role needs kms:Decrypt to read the SSM SecureString token.
