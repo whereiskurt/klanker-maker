@@ -40,6 +40,8 @@ spec:
     # 1. Write vllm.env with FP8 flags (llama3_json tool-call parser)
     # 2. Copy HF_TOKEN from SOPS-injected /etc/sandbox-secrets.env into vllm.env
     #    (SOPS decryption at userdata section 5.5 precedes initCommandsAppend; || true = no-fail if absent)
-    initCommandsAppend:
+    # vllm.env must exist BEFORE base/gpu/serve's bring-up (initCommandsAppend),
+    # so write it via initCommands (runs before all initCommandsAppend).
+    initCommands:
       - "mkdir -p /etc/km && printf 'VLLM_MODEL=meta-llama/Llama-3.3-70B-Instruct\nVLLM_TP=4\nVLLM_EXTRA=--quantization fp8 --max-model-len 16384 --gpu-memory-utilization 0.90 --enable-auto-tool-choice --tool-call-parser llama3_json\n' > /etc/km/vllm.env"
       - "grep '^HF_TOKEN=' /etc/sandbox-secrets.env >> /etc/km/vllm.env 2>/dev/null || true"

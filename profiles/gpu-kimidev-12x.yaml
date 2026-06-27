@@ -27,5 +27,7 @@ spec:
     # Kimi-Dev-72B: Qwen2 arch (no --trust-remote-code needed), GPTQ 8-bit.
     # No AWQ quant available as of research date (2026-06-27); GPTQ-8bit fits 4xL40S.
     # btbtyler09/Kimi-Dev-72B-GPTQ-8bit: ~72GB fits 192GB VRAM comfortably at tp=4.
-    initCommandsAppend:
+    # vllm.env must exist BEFORE base/gpu/serve's bring-up (initCommandsAppend),
+    # so write it via initCommands (runs before all initCommandsAppend).
+    initCommands:
       - "mkdir -p /etc/km && printf 'VLLM_MODEL=btbtyler09/Kimi-Dev-72B-GPTQ-8bit\nVLLM_TP=4\nVLLM_EXTRA=--quantization gptq --max-model-len 16384 --gpu-memory-utilization 0.90 --enable-auto-tool-choice --tool-call-parser hermes\n' > /etc/km/vllm.env"

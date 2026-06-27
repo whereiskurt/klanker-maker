@@ -27,5 +27,7 @@ spec:
     # GLM-4.5-Air (106B MoE): AWQ 4-bit, tp=4, ~53GB weights fit 4x L40S (192GB).
     # --trust-remote-code: required for GLM arch in vLLM (pending upstream registration).
     # --reasoning-parser glm45: GLM models emit thinking tags; parser is additive+harmless.
-    initCommandsAppend:
+    # vllm.env must exist BEFORE base/gpu/serve's bring-up (initCommandsAppend),
+    # so write it via initCommands (runs before all initCommandsAppend).
+    initCommands:
       - "mkdir -p /etc/km && printf 'VLLM_MODEL=cyankiwi/GLM-4.5-Air-AWQ-4bit\nVLLM_TP=4\nVLLM_EXTRA=--quantization awq --max-model-len 32768 --gpu-memory-utilization 0.90 --trust-remote-code --enable-auto-tool-choice --tool-call-parser glm45 --reasoning-parser glm45\n' > /etc/km/vllm.env"
