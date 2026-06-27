@@ -633,6 +633,14 @@
                   "type": "array",
                   "items": { "type": "string" },
                   "description": "Extra args appended to the `codex exec` command when launching via km agent run --codex (e.g. --model o4-mini). User-supplied args still take precedence."
+                },
+                "localBaseURL": {
+                  "type": "string",
+                  "description": "Phase 122: OpenAI Responses-compatible base URL for the local model provider (Bifrost gateway :8001). When set, synthesizeCodexConfig emits a [model_providers.local] block. Empty = no provider block."
+                },
+                "localModel": {
+                  "type": "string",
+                  "description": "Phase 122: model name passed to the local provider. Default 'local'."
                 }
               }
             }
