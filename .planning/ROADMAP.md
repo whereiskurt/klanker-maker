@@ -102,7 +102,7 @@ Plans:
 **Goal:** Stand up GPU EC2 sandboxes that serve 70B-class local models via vLLM (on a Deep Learning AMI base, weights on a persistent volume), and make that model reachable through every km interface — VS Code Remote-SSH, Slack chat-with-resume (on-box codex repointed at `localhost:8000`), on-box terminal/headless codex, and laptop dev via a new `km model start` SSM port-forward (with an on-box Anthropic↔OpenAI shim so local Claude Code can drive it). claude stays cloud-pointed on-box to preserve a `/claude`-vs-`/codex` cloud-vs-local A/B.
 **Requirements**: phase-local synthetic IDs (derived from CONTEXT.md + 122-RESEARCH.md + 122-VALIDATION.md): REQ-122-PROFILES (7 GPU vLLM serving leaves + base/gpu/serve fragment), REQ-122-CODEX (synthesizeCodexConfig local-provider emission), REQ-122-MODELSTART (km model start/status), REQ-122-SHIM (on-box LiteLLM dual-gateway + Anthropic shim), REQ-122-UAT (full 7-gate live UAT)
 **Depends on:** Phase 121, Phase 117 (composable inheritance), Phase 92 (agent tool-gating / codex config synthesis)
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 **Design spec:** `docs/superpowers/specs/2026-06-27-gpu-vllm-serving-profiles-design.md` (authoritative — 7-profile matrix, 3 deliverables, R1–R7, O1–O9, DoD = full live UAT). RESEARCH supersedes the spec on O7 (LiteLLM :8001 is a CORE component fronting vLLM :8000 — Codex requires the Responses API since Feb 2026).
 

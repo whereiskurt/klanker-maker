@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 121-12-PLAN.md — Freezer interface + auto-latch on BreachFreeze in Slack and H1 bridges (GAP-2)
-last_updated: "2026-06-27T15:06:48.937Z"
+stopped_at: "Completed 122-01-PLAN.md — Wave 0 foundation: AgentCodexSpec fields + JSON schema + test scaffolds"
+last_updated: "2026-06-27T18:38:14.216Z"
 last_activity: 2026-06-27
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 5
-  total_plans: 32
-  completed_plans: 32
+  total_plans: 37
+  completed_plans: 33
   percent: 91
 ---
 
@@ -607,6 +607,7 @@ Progress: [█████████░] 91%
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P10 | 806s | 2 tasks | 12 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P11 | 158s | 2 tasks | 2 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P12 | 5min | 2 tasks | 6 files |
+| Phase 122 P01 | 256 | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1736,6 +1737,8 @@ Recent decisions affecting current work:
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: if_not_exists on breached_at + on_breach: first-breach-only idempotency; concurrent writers collapse to one set under a hard loop
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: Freezer interface nil-dormant: BreachFreeze blocks without latch if Freezer not wired; fail-soft on freeze error keeps action blocked
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: Separate BreachBlock/BreachFreeze switch cases: BreachBlock deny-for-window only; BreachFreeze auto-latches action_frozen=true via Freezer.FreezeSandbox
+- [Phase 122]: LocalBaseURL/LocalModel JSON tags match schema property names exactly (localBaseURL/localModel) — the key_link constraint between types.go and the JSON schema
+- [Phase 122]: model_test.go uses t.Skip placeholder (not a compile-failing forward-ref) because model.go doesn't exist yet; file-level comment documents exact Plan 04 assertions for runModelStart
 
 ### Roadmap Evolution
 
@@ -1884,6 +1887,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T14:59:04.397Z
-Stopped at: Completed 121-12-PLAN.md — Freezer interface + auto-latch on BreachFreeze in Slack and H1 bridges (GAP-2)
+Last session: 2026-06-27T18:38:14.209Z
+Stopped at: Completed 122-01-PLAN.md — Wave 0 foundation: AgentCodexSpec fields + JSON schema + test scaffolds
 Resume file: None
