@@ -129,6 +129,10 @@ func init() {
 		Slack:    initPoster,
 	}
 
+	// Phase 121 follow-up: wire action-quota + auto-freeze enforcement (dormant
+	// unless KM_QUOTA_TABLE is set on the Lambda env by the TF module).
+	WireActionQuota(handler, initDDB, sandboxesTable)
+
 	// ==============================================================
 	// Phase 68 — ActionUpload wiring: S3 getter + Slack file uploader
 	// + cold-start files:write scope probe. KM_ARTIFACTS_BUCKET is the
@@ -424,6 +428,26 @@ func WireMentionOnly(h *bridge.EventsHandler, fetcher *bridge.CachedBotUserIDFet
 	slog.Info("km-slack-bridge: events handler mention-only mode",
 		"enabled", h.MentionOnly,
 		"react_always", h.ReactAlways)
+}
+
+// WireActionQuota wires the Phase 121 action-quota + auto-freeze fields onto the
+// signed-envelope Handler from env. Gated on KM_QUOTA_TABLE: empty ⇒ dormant
+// (Quota/Limits/Freezer stay nil ⇒ checkQuota no-ops, byte-identical to the
+// pre-follow-up bridge). When set, the per-sandbox limits come from the
+// km-sandboxes action_limits attr (DDBActionLimitsFetcher) and BreachFreeze
+// latches action_frozen via DynamoFreezer. Returns true when wired.
+func WireActionQuota(h *bridge.Handler, ddb *dynamodb.Client, sandboxesTable string) bool {
+	quotaTable := os.Getenv("KM_QUOTA_TABLE")
+	if quotaTable == "" {
+		return false
+	}
+	h.Quota = ddb
+	h.QuotaTable = quotaTable
+	h.Limits = &bridge.DDBActionLimitsFetcher{Client: ddb, TableName: sandboxesTable}
+	h.Freezer = &bridge.DynamoFreezer{Client: ddb, Table: sandboxesTable}
+	slog.Info("km-slack-bridge: action-quota enforcement wired",
+		"quota_table", quotaTable, "sandboxes_table", sandboxesTable)
+	return true
 }
 
 // handle converts a Lambda Function URL request into the appropriate handler request,
