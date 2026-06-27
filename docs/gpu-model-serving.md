@@ -56,19 +56,30 @@ km's sidecar model; LiteLLM is the documented fallback. Current vLLM also serves
 `/v1/responses` natively, so codex is not strictly gateway-dependent, but routing
 through Bifrost gives uniform multi-provider access.)
 
-### Routes (`/etc/km/bifrost-config.json`)
+### Routes — the `model` string callers send (validated live, GPU-free)
 
-| Route | Backend | Auth | Status |
+Bifrost (`maximhq/bifrost:v1.6.0`, run as a docker systemd unit; config is a
+mounted app-dir `config.json`, port via `APP_PORT=8001`) has **no named-route
+config** — routing is implicit: the caller sends `model = "<provider>/<model-id>"`.
+The `providers` block (Bedrock = region-only instance role; a `vllm-local` custom
+OpenAI provider; key-gated `anthropic`/`openai`) is in
+`configFiles["/etc/km/bifrost-config.json"]`.
+
+| Intent | `model` string callers send | Auth | Verified |
 |---|---|---|---|
-| `local` | vLLM :8000 | none | active (always) |
-| `claude-bedrock` | Bedrock Claude | **instance role / SigV4 — no key** | active |
-| `claude-anthropic` | api.anthropic.com | `ANTHROPIC_API_KEY` (SOPS) | active (operator key) |
-| `gpt-oss-bedrock` | Bedrock OpenAI gpt-oss-120b/20b | **instance role — no key** | active |
-| `gpt-frontier` | api.openai.com (GPT-5/o-series) | `OPENAI_API_KEY` | dormant (until key) |
+| local vLLM | `vllm-local/local` | none | ⚠️ schema valid; 502 until vLLM serves :8000 (box-only) |
+| Claude via Bedrock | `bedrock/us.anthropic.claude-sonnet-4-6` (or `…opus-4-8`) | **instance role / SigV4 — no key** | ✅ live |
+| Claude direct | `anthropic/claude-sonnet-4-6` | `ANTHROPIC_API_KEY` (SOPS) | ⚠️ key-gated (box-only) |
+| OpenAI gpt-oss via Bedrock | `bedrock/openai.gpt-oss-120b` **(no `-1:0` suffix — catalog 404s)** | **instance role — no key** | ✅ live (120b + 20b) |
+| OpenAI frontier | `openai/gpt-5` | `OPENAI_API_KEY` | dormant (until key) |
 
-Cloud routes egress through km's MITM proxy → metered into `BUDGET#ai` rows
-automatically (no new metering code). *(design — cloud-route metering verified in
-UAT G8.)*
+**Gotchas (found in the live rehearsal):** gpt-oss IDs must drop the Bedrock
+`-1:0` version suffix; Claude needs the `us.` inference-profile prefix (bare IDs
+error "on-demand throughput isn't supported"). Endpoints: OpenAI/codex →
+`http://localhost:8001/openai/v1` (`…/responses` and `…/chat/completions`), Claude
+Code → `ANTHROPIC_BASE_URL=http://localhost:8001/anthropic`. Cloud routes egress
+through km's MITM proxy → metered into `BUDGET#ai` rows automatically. Full
+validation: `.planning/phases/122-*/122-BIFROST-VALIDATION.md`.
 
 ## Interfaces
 
