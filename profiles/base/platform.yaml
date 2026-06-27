@@ -5,6 +5,9 @@ metadata:
   abstract: true
 
 spec:
+  cli:
+    noBedrock: true
+
   sidecars:
     dnsProxy:
       enabled: true
