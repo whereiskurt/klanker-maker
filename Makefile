@@ -38,7 +38,7 @@ OTELCOL_URL     := https://github.com/open-telemetry/opentelemetry-collector-rel
 ##             pkg/ebpf/tls/connectBpf_x86_bpfel.go, pkg/ebpf/tls/connectBpf_x86_bpfel.o
 ## The generated files are committed so make build works without clang or Docker.
 generate-ebpf:
-	docker build --quiet -f Dockerfile.ebpf-generate -t km-ebpf-generate:latest .
+	docker build --quiet -f containers/Dockerfile.ebpf-generate -t km-ebpf-generate:latest .
 	docker run --rm -v $(PWD):/src km-ebpf-generate:latest sh -c \
 	  "cd /src/pkg/ebpf && go generate && cd /src/pkg/ebpf/sni && go generate && cd /src/pkg/ebpf/tls && go generate"
 	@echo ""
