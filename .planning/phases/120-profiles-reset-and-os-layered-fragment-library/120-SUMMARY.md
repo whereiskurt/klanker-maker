@@ -84,7 +84,7 @@ extends-based, so remote create always failed. Fix: `selectRemoteProfileYAML` up
 | `km validate profiles/{learner,desktop,github,h1,spot}.yaml` | ✅ exit 0, no WARN |
 | `scripts/validate-all-profiles.sh` | ✅ 13 profiles valid |
 | learner functional-match vs learn.v2 | ✅ identical (learnMode + 19 initCommands + sidecars + email + budget); 1 documented delta (plugin enabled) |
-| Live remote create (`gh-8bd5851e`) | ✅ running, on-demand t3.medium |
+| Live remote create + shell + auth (`gh-a04f85c2`) | ✅ running, on-demand; cloud-init done (154s), km-session-entry present, shell + claude auth working |
 | `go test ./internal/app/cmd/...` (full cmd suite) | ✅ green (483s, exit 0) |
 
 ---
