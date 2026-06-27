@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Completed 122-02-PLAN.md — GPU profiles: base/gpu/serve fragment + 7 GPU leaves + validate-all gate"
-last_updated: "2026-06-27T18:48:03.713Z"
+stopped_at: Completed 122-04-PLAN.md — km model start/status + httpTunnelProbe + root registration + wiring tests GREEN
+last_updated: "2026-06-27T18:51:10.781Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 37
-  completed_plans: 34
+  completed_plans: 35
   percent: 91
 ---
 
@@ -609,6 +609,7 @@ Progress: [█████████░] 91%
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P12 | 5min | 2 tasks | 6 files |
 | Phase 122 P01 | 256 | 3 tasks | 7 files |
 | Phase 122 P02 | 270 | 3 tasks | 9 files |
+| Phase 122 P04 | 10min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1743,6 +1744,8 @@ Recent decisions affecting current work:
 - [Phase 122]: Bifrost v1.0.6 pinned as GPU gateway (not LiteLLM); 5 named routes (local/claude-bedrock/claude-anthropic/gpt-oss-bedrock/gpt-frontier-dormant); keyless Bedrock via EC2 instance role
 - [Phase 122]: base/gpu/serve fragment carries shell/workingDir/sourceAccess to satisfy merged-bytes required-field constraints (no base fragment provided these)
 - [Phase 122]: vllm.env written via initCommandsAppend in leaves (not configFiles) to avoid section-ordering race; HF_TOKEN appended in second initCommandsAppend line for Llama leaves
+- [Phase 122]: km model start forwards :8001 (Bifrost) with --anthropic as semantic alias printing ANTHROPIC_BASE_URL pointing at /anthropic path
+- [Phase 122]: httpTunnelProbe (plain-HTTP) added to shell.go mirroring httpsTunnelProbe pattern for Bifrost :8001 liveness
 
 ### Roadmap Evolution
 
@@ -1891,6 +1894,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T18:48:03.706Z
-Stopped at: Completed 122-02-PLAN.md — GPU profiles: base/gpu/serve fragment + 7 GPU leaves + validate-all gate
+Last session: 2026-06-27T18:51:10.774Z
+Stopped at: Completed 122-04-PLAN.md — km model start/status + httpTunnelProbe + root registration + wiring tests GREEN
 Resume file: None
