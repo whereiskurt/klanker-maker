@@ -50,11 +50,15 @@ spec:
 
     # initCommandsAppend UNIONS onto the leaf's commands (Phase 117).
     # Leaves MUST write /etc/km/vllm.env before these run (via initCommandsAppend).
-    # Bifrost v1.0.6 (2026-06-25): pinned release for reproducibility.
-    # URL: https://github.com/maximhq/bifrost/releases/download/v1.0.6/bifrost_linux_amd64
-    # (Document: binary ~40 MB, Go single-binary, no Python venv overhead)
+    # Bifrost ships as a DOCKER IMAGE (maximhq/bifrost:v1.6.0) — there is NO release
+    # binary (the old curl URL 404s). Config is read from a mounted app-dir as
+    # config.json; port via APP_PORT env. Validated live in 122-BIFROST-VALIDATION.md.
     initCommandsAppend:
-      - "curl -fsSL https://github.com/maximhq/bifrost/releases/download/v1.0.6/bifrost_linux_amd64 -o /usr/local/bin/bifrost && chmod +x /usr/local/bin/bifrost"
+      - "docker pull maximhq/bifrost:v1.6.0"
+      - "mkdir -p /etc/km/bifrost-data && cp /etc/km/bifrost-config.json /etc/km/bifrost-data/config.json"
+      # /etc/km/bifrost-env = container --env-file; create it (empty = keyless Bedrock
+      # only) + pull any SOPS-injected keys for the anthropic/openai-direct routes.
+      - "touch /etc/km/bifrost-env && grep -hE '^(ANTHROPIC_API_KEY|OPENAI_API_KEY)=' /etc/sandbox-secrets.env >> /etc/km/bifrost-env 2>/dev/null || true"
       - "systemctl daemon-reload"
       - "systemctl enable --now vllm.service"
       - "systemctl enable --now bifrost.service"
@@ -88,151 +92,114 @@ spec:
         [Install]
         WantedBy=multi-user.target
 
-      # Bifrost gateway systemd unit — multi-provider model router on :8001.
-      # After=vllm.service so local route is ready before bifrost starts.
-      # ExecStartPre=/bin/sleep 10 gives vLLM time to load weights.
-      # BIFROST_OTLP_ENDPOINT → km tracing sidecar (base/platform) at :4318.
-      # OTEL_EXPORTER_OTLP_ENDPOINT is already in the environment (base/userinit).
+      # Bifrost gateway systemd unit — DOCKER-RUN (maximhq/bifrost:v1.6.0) on :8001.
+      # --network host so Bifrost binds 127.0.0.1:8001, reaches vLLM at :8000, and
+      # resolves the EC2 INSTANCE ROLE via IMDS (SigV4 Bedrock — NO AWS_* env vars).
+      # config.json is the mounted app-dir; APP_PORT sets the port (default 8080).
+      # OTLP export is env-driven (telemetry plugin active by default). Validated:
+      # 122-BIFROST-VALIDATION.md.
       "/etc/systemd/system/bifrost.service": |
         [Unit]
         Description=Bifrost multi-provider model router (vLLM + Bedrock + Anthropic)
-        After=vllm.service network.target
-        Wants=vllm.service
+        After=docker.service vllm.service network-online.target
+        Wants=docker.service vllm.service network-online.target
 
         [Service]
         Type=simple
-        Environment=BIFROST_OTLP_ENDPOINT=http://localhost:4318
-        Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-        Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-        EnvironmentFile=-/etc/km/bifrost-env
         ExecStartPre=/bin/sleep 10
-        ExecStart=/usr/local/bin/bifrost \
-          --config /etc/km/bifrost-config.json \
-          --host 127.0.0.1 \
-          --port 8001
+        ExecStartPre=-/usr/bin/docker rm -f km-bifrost
+        ExecStart=/usr/bin/docker run --rm --name km-bifrost \
+          --network host \
+          -e APP_PORT=8001 \
+          -e APP_HOST=127.0.0.1 \
+          -e AWS_REGION=us-east-1 \
+          -e OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+          -e OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+          --env-file /etc/km/bifrost-env \
+          -v /etc/km/bifrost-data:/app/data \
+          maximhq/bifrost:v1.6.0
+        ExecStop=/usr/bin/docker rm -f km-bifrost
         Restart=on-failure
         RestartSec=15
 
         [Install]
         WantedBy=multi-user.target
 
-      # Bifrost multi-provider route config (JSON).
-      # Schema: maximhq/bifrost config.json format (v1.0.6).
-      # 5 named routes per CONTEXT § "Gateway = consolidation layer" (locked 2026-06-27):
-      #   local (vLLM:8000) / claude-bedrock (IAM role) / claude-anthropic (ANTHROPIC_API_KEY)
-      #   gpt-oss-bedrock (IAM role) / gpt-frontier (dormant — OPENAI_API_KEY)
-      # Cloud routes flow through km's MITM proxy → metered into BUDGET#ai rows automatically.
-      # IAM NOTE (flag for Plan 05 UAT): sandbox instance role must grant
-      #   bedrock:InvokeModel + bedrock:InvokeModelWithResponseStream for:
-      #   - anthropic.claude-3-5-sonnet-20241022-v2:0 (claude-bedrock route)
-      #   - anthropic.claude-3-opus-20240229-v1:0 (claude-bedrock route)
-      #   - openai.gpt-oss-120b-1:0 (gpt-oss-bedrock route)
-      #   - openai.gpt-oss-20b-1:0 (gpt-oss-bedrock route)
-      #   If the ec2spot/sandbox role allowlist does not yet cover gpt-oss model IDs,
-      #   this is a UAT/IAM gap (do NOT assume silently — verify in Plan 05).
+      # Bifrost provider config (JSON) — REAL maximhq/bifrost v1.6.x schema
+      # (validated live against Bedrock: 122-BIFROST-VALIDATION.md). There is NO
+      # named-route / telemetry / server / anthropic_ingress block — routing is
+      # implicit: the caller sends model="<provider>/<model-id>". Bedrock = region-
+      # only instance role (SigV4, no static key). Model-ID gotchas: gpt-oss DROPS
+      # the -1:0 suffix (bedrock/openai.gpt-oss-120b — full ID 404s in Bifrost's
+      # catalog); Claude needs the us. inference-profile prefix.
+      # Callers pick the model string: vllm-local/local · bedrock/openai.gpt-oss-120b ·
+      #   bedrock/us.anthropic.claude-sonnet-4-6 · anthropic/claude-sonnet-4-6 (key) ·
+      #   openai/gpt-5 (key, dormant).
+      # IAM NOTE (Plan 05 box-only UAT item): the sandbox instance role must grant
+      # bedrock:InvokeModel(+WithResponseStream) for openai.gpt-oss-120b-1:0,
+      # openai.gpt-oss-20b-1:0, and the us.anthropic.claude-* inference profiles.
       "/etc/km/bifrost-config.json": |
         {
+          "config_store": {
+            "enabled": false
+          },
           "providers": {
-            "openai": {
+            "bedrock": {
               "keys": [
                 {
-                  "value": "${OPENAI_API_KEY}",
-                  "models": ["gpt-4o", "gpt-4o-mini", "o1", "o3", "gpt-5"],
-                  "weight": 1
+                  "name": "bedrock-iam",
+                  "models": ["*"],
+                  "weight": 1.0,
+                  "bedrock_key_config": {
+                    "region": "us-east-1"
+                  }
                 }
               ]
             },
             "anthropic": {
               "keys": [
                 {
-                  "value": "${ANTHROPIC_API_KEY}",
-                  "models": [
-                    "claude-opus-4-5",
-                    "claude-sonnet-4-5",
-                    "claude-haiku-3-5-20241022",
-                    "claude-3-5-sonnet-20241022",
-                    "claude-3-opus-20240229"
-                  ],
-                  "weight": 1
+                  "name": "anthropic-direct",
+                  "value": "env.ANTHROPIC_API_KEY",
+                  "models": ["*"],
+                  "weight": 1.0
                 }
               ]
             },
-            "bedrock": {
+            "openai": {
               "keys": [
                 {
-                  "aws_region": "us-east-1",
-                  "models": [
-                    "anthropic.claude-3-5-sonnet-20241022-v2:0",
-                    "anthropic.claude-3-opus-20240229-v1:0",
-                    "openai.gpt-oss-120b-1:0",
-                    "openai.gpt-oss-20b-1:0"
-                  ],
-                  "weight": 1
+                  "name": "openai-frontier",
+                  "value": "env.OPENAI_API_KEY",
+                  "models": ["*"],
+                  "weight": 1.0
                 }
               ]
             },
-            "vllm": {
+            "vllm-local": {
               "keys": [
                 {
+                  "name": "vllm-key",
                   "value": "dummy",
-                  "models": ["local"],
-                  "base_url": "http://localhost:8000",
-                  "allow_private_network": true,
-                  "weight": 1
+                  "models": ["*"],
+                  "weight": 1.0
                 }
-              ]
+              ],
+              "network_config": {
+                "base_url": "http://127.0.0.1:8000",
+                "default_request_timeout_in_seconds": 120
+              },
+              "custom_provider_config": {
+                "base_provider_type": "openai",
+                "allow_private_network": true,
+                "allowed_requests": {
+                  "chat_completion": true,
+                  "chat_completion_stream": true,
+                  "responses": true,
+                  "responses_stream": true
+                }
+              }
             }
-          },
-          "routes": [
-            {
-              "name": "local",
-              "description": "Local vLLM (always active — chat-completions + responses API)",
-              "model_name": "local",
-              "provider": "vllm",
-              "enabled": true
-            },
-            {
-              "name": "claude-bedrock",
-              "description": "Claude via Bedrock (SigV4 — sandbox IAM role, no static key required)",
-              "model_name": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-              "provider": "bedrock",
-              "enabled": true
-            },
-            {
-              "name": "claude-anthropic",
-              "description": "Claude direct via api.anthropic.com (ANTHROPIC_API_KEY — active/wired; operator SOPS-provisions key)",
-              "model_name": "claude-sonnet-4-5",
-              "provider": "anthropic",
-              "enabled": true
-            },
-            {
-              "name": "gpt-oss-bedrock",
-              "description": "OpenAI gpt-oss via Bedrock (SigV4 — sandbox IAM role, no key; active since Bedrock Aug 2025)",
-              "model_name": "openai.gpt-oss-120b-1:0",
-              "provider": "bedrock",
-              "enabled": true
-            },
-            {
-              "name": "gpt-frontier",
-              "description": "OpenAI GPT-5/o-series via api.openai.com (DORMANT — only active when OPENAI_API_KEY is provisioned)",
-              "model_name": "gpt-4o",
-              "provider": "openai",
-              "enabled": false
-            }
-          ],
-          "anthropic_ingress": {
-            "enabled": true,
-            "path_prefix": "/anthropic",
-            "note": "Claude Code sets ANTHROPIC_BASE_URL=http://localhost:8001/anthropic to reach this path. Plan 04 km model start forwards :8001."
-          },
-          "telemetry": {
-            "otlp_endpoint": "http://localhost:4318",
-            "otlp_protocol": "http/protobuf",
-            "enabled": true
-          },
-          "server": {
-            "host": "127.0.0.1",
-            "port": 8001
           }
         }
 
@@ -268,5 +235,8 @@ spec:
   agent:
     default: codex
     codex:
-      localBaseURL: "http://localhost:8001/v1"
-      localModel: "local"
+      # Bifrost OpenAI-compat ingress is /openai/v1 (bare /v1 404s); model carries
+      # the provider prefix (vllm-local/<served-model-name>). Validated live
+      # (122-BIFROST-VALIDATION.md): codex 0.23.0 hits /openai/v1/responses.
+      localBaseURL: "http://localhost:8001/openai/v1"
+      localModel: "vllm-local/local"
