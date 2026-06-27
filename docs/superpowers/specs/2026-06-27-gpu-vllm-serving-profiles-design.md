@@ -43,9 +43,21 @@ the on-box codex agent at the local endpoint.**
 | `profiles/gpu-llama-12x.yaml` | g6e.12xlarge | 192GB | `meta-llama/Llama-3.3-70B-Instruct` | FP8 | 4 | ~$10.5 |
 | `profiles/gpu-qwen-48x.yaml`  | g6e.48xlarge | 384GB | `Qwen/Qwen2.5-72B-Instruct` | FP16 | 8 | ~$30 |
 | `profiles/gpu-llama-48x.yaml` | g6e.48xlarge | 384GB | `meta-llama/Llama-3.3-70B-Instruct` | FP16 | 8 | ~$30 |
+| `profiles/gpu-glmair-12x.yaml` | g6e.12xlarge | 192GB | `zai-org/GLM-4.5-Air` (106B MoE) | 4-bit/FP8 | 4 | ~$10.5 |
+| `profiles/gpu-kimidev-12x.yaml` | g6e.12xlarge | 192GB | `moonshotai/Kimi-Dev-72B` (72B dense, Qwen2 arch) | AWQ 4-bit | 4 | ~$10.5 |
+| `profiles/gpu-glm46-48x.yaml` | g6e.48xlarge | 384GB | `zai-org/GLM-4.6` (355B MoE) — 4-bit community quant | 4-bit (AWQ/GPTQ) | 8 | ~$30 |
 
-All four advertise the served model as **`local`** so a single Continue config
+All seven advertise the served model as **`local`** so a single Continue config
 works everywhere.
+
+**Feasibility note (corrects an earlier brainstorm overstatement):** "frontier
+MoE" is NOT uniformly out of reach. MoE memory scales with *total* params (all
+experts resident), so GLM-4.6 (355B) ≈ ~190GB at 4-bit → **fits g6e.48xlarge
+(384GB) on existing G-quota.** GLM-4.5-Air (106B) and Kimi-Dev-72B (dense) fit
+the 12x. The 8×L40S box is PCIe (no NVLink) so flagship-MoE throughput is
+modest-but-usable, not blazing. **Only Kimi K2 (~1T, ~500GB @ 4-bit) remains out
+of scope** — it exceeds 384GB and needs P-family (p4de/p5, 640GB+) with a gated
+quota request; see Out of scope.
 
 ## Architecture / data path
 
@@ -99,7 +111,7 @@ metered, fully private, identical km-slack UX.
 2. **`spec.agent.default: codex`** in `base/gpu/serve` so Slack inbound + `km
    shell`/`km agent run` default to the local model. `claude` stays installed and
    cloud-pointed; `/claude` verb routes to it.
-3. **Extend `base/slack-persandbox`** in all 4 leaves (per-sandbox channel +
+3. **Extend `base/slack-persandbox`** in all 7 leaves (per-sandbox channel +
    `notification.slack.inbound.enabled` → provisions the inbound FIFO + poller).
    The poller is only emitted when `Spec.CLI != nil` — satisfied by
    `base/platform` (`cli.noBedrock: true`). (Memory: notify/poller gated on
@@ -186,6 +198,9 @@ Holds the common ~90%:
 
 ## Secrets — Llama `HF_TOKEN` (gated model)
 
+Only the two **Llama** leaves are gated. Qwen, GLM-4.5-Air, GLM-4.6, and
+Kimi-Dev-72B (and their community quant repos) are ungated → no token needed.
+
 Llama-3.3 requires accepting Meta's license on HuggingFace and authenticating
 the weight pull with a HF token.
 
@@ -226,8 +241,8 @@ Qwen leaves need no secret.
 
 **Full live UAT** (operator's call). Phase 122 is done when:
 
-1. `base/gpu/serve` fragment + 4 leaf profiles authored; `km validate` green on
-   all 4 (merged-bytes validation).
+1. `base/gpu/serve` fragment + 7 leaf profiles authored; `km validate` green on
+   all 7 (merged-bytes validation).
 2. `synthesizeCodexConfig` local-provider change merged with unit tests +
    updated goldens.
 3. A real `km create` of at least one size → DLAMI boots → `nvidia-smi` sees all
@@ -293,6 +308,13 @@ bring-up runbook). No external blocker remains for the live UAT.
   (`spec.agent.codex.baseURL` + `model`?) vs a generic `spec.agent.localEndpoint`.
   How `synthesizeCodexConfig` emits `[model_providers.local]`. Confirm Codex 0.133
   honors a config.toml `model_provider`/`base_url` for a non-OpenAI host.
+- **O8 — GLM/Kimi quant repos + vLLM arch support.** GLM-4.6 / GLM-4.5-Air need
+  the `Glm4Moe` arch (confirm installed vLLM version supports it; `--trust-remote-code`?)
+  and a concrete 4-bit community quant repo (AWQ/GPTQ/compressed-tensors) of
+  adequate quality. Kimi-Dev-72B is Qwen2 arch (well-supported) — pick an AWQ
+  repo. Per-model `--max-model-len` vs KV-cache memory for the flagship MoE on
+  384GB. Confirm GLM-4.5-Air on 12x: 4-bit (~55GB) vs FP8 (~106GB) — both fit;
+  pick for quality/throughput.
 - **O7 — Codex API surface against vLLM** (R6): does Codex need the Responses API,
   and does the installed vLLM version expose enough of it? Tool-call format
   parity. Determines whether the repoint works as-is or needs vLLM flags
@@ -300,8 +322,12 @@ bring-up runbook). No external blocker remains for the live UAT.
 
 ## Out of scope (YAGNI)
 
-- Frontier MoE models (Kimi K2 ~1T, GLM-4.6 355B) — not feasible/affordable on a
-  single km sandbox; explicitly declined in brainstorming.
+- **Kimi K2 (~1T MoE)** — ~500GB at 4-bit exceeds the 384GB g6e.48xlarge; needs
+  P-family (p4de/p5, 640GB+) with a gated quota request (P = 76 vCPU today, need
+  96–192) at ~$40–100/hr. The one frontier model genuinely out of reach on a
+  single km G-tier box. (GLM-4.6 355B was reconsidered IN scope — see matrix.)
+- Frontier-MoE *multi-node* serving (pipeline/tensor parallel across instances) —
+  out of scope; one model per single-node box.
 - llama.cpp / SGLang / TGI serving stacks — vLLM chosen.
 - Local-VS-Code-with-port-forward access path — Remote-SSH chosen (variant may be
   documented, not built).
