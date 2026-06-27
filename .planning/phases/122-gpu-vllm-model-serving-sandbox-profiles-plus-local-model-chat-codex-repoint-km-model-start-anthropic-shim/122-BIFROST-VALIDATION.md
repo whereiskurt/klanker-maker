@@ -266,7 +266,38 @@ corrected config + instance-role Bedrock all work on a real km sandbox.
 + one confirming recreate; then only the vLLM `local` route (the actual 70B) needs
 the GPU.
 
-## BIFROST VALIDATION COMPLETE
+## ⛔ BLOCKER discovered during the #5/#6 confirming recreate (2026-06-27)
+
+After applying the bug-#5/#6 rework (units+config+chown moved into
+`initCommandsAppend`; leaf `vllm.env` moved to `initCommands`) and recreating, the
+services STILL did not come up. Root cause is **deeper than ordering**:
+
+- On the box, `/tmp/km-init.sh` (the init payload) contains **ONLY `base/userinit`'s
+  18 `initCommands`** (`TOTAL_KMINIT_CMDS=18`, all goose/claude-code/codex/nvm/plugin).
+- **NEITHER `base/gpu/serve`'s `initCommandsAppend` NOR the leaf's own `initCommands`
+  (the `vllm.env` write) appear** (`VLLM_UNIT_IN_INIT=0`, `LEAF_VLLM_ENV_IN_INIT=0`,
+  `BIFROST_DATA_IN_INIT=0`).
+- This explains cpurig/cpurig2 too: the `base/gpu/serve` bring-up has **never** run at
+  boot on any of these boxes — independent of the ordering theory.
+
+So the GPU serving bring-up is silently dropped by the **`km create --local`
+init-payload path**: the merged `InitCommands` it writes to `km-init.sh` is missing
+everything except `base/userinit`'s. `applyInitCommandsAppend` (inherit.go:236) looks
+correct in isolation (concat+dedup of initCommandsAppend onto initCommands), so the
+fault is upstream — either `km create --local` doesn't build `km-init.sh` from the
+fully-resolved profile, or the multi-base `initCommands` union isn't applied in that
+path. (Other merged fields DID land — slack poller, OTEL, budget — so it's specific to
+the InitCommands payload.) NEEDS dedicated investigation: trace `create.go` ~line 1023
+(`for _, cmd := range resolvedProfile.Spec.Execution.InitCommands`) — confirm
+`resolvedProfile` is `profile.Resolve()`'s output and that its `InitCommands` actually
+contains the leaf + gpu/serve entries before `km-init.sh` is written.
+
+**Until this is fixed, no GPU profile will start vLLM or Bifrost at boot** (the #5/#6
+rework is the right STRUCTURE but is moot while the payload drops it). The bring-up
+SEQUENCE itself remains PROVEN (manual on-box: chown 1000:1000 → docker pull →
+systemctl start → both Bedrock routes returned via the instance role).
+
+## BIFROST VALIDATION COMPLETE (gateway), bring-up BLOCKED on the create-path payload bug
 
 1. **Does the config work?** Yes — the corrected schema boots clean in file-only mode on :8001 and serves real completions through all live routes (gpt-oss-120b/20b + Claude via Bedrock, on both `/openai` and `/anthropic` endpoints).
 2. **What changed?** Install is `docker run maximhq/bifrost:v1.6.0` (no release binary/CLI flags); config is the real `providers`-only schema (Bedrock = region-only instance-role, separate `vllm-local` custom provider, no invented `routes`/`telemetry`/`server`/`anthropic_ingress` blocks); gpt-oss IDs drop the `-1:0` suffix (catalog 404 otherwise); Claude uses `us.` inference-profile IDs; codex `localBaseURL` fixed to `/openai/v1`.

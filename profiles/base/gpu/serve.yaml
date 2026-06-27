@@ -48,6 +48,12 @@ spec:
       # base/userinit (confirmed in profiles/base/userinit.yaml initCommands:
       # /etc/profile.d/km-zz-goose-otel.sh) — NOT duplicated here.
 
+    # ⛔ BLOCKED (2026-06-27): these commands do NOT reach the boot — `km create
+    # --local`'s km-init.sh contains only base/userinit's initCommands; the leaf's
+    # initCommands AND this initCommandsAppend are dropped from the payload. See
+    # 122-BIFROST-VALIDATION.md § BLOCKER. Fix the create-path payload first; then the
+    # bring-up below (the correct structure) will actually run.
+    #
     # Service bring-up (Phase 122 rework — CPU-rehearsal-validated 2026-06-27;
     # 122-BIFROST-VALIDATION.md § On-hardware findings). km writes profile configFiles
     # AFTER initCommandsAppend (userdata.go §7.6), so the systemd UNITS + the Bifrost
