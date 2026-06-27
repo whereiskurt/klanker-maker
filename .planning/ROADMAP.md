@@ -112,3 +112,35 @@ Plans:
 - [x] 122-03-PLAN.md — synthesizeCodexConfig emits [model_providers.local] (wire_api=responses, :8001) + golden; full suite green ✓
 - [x] 122-04-PLAN.md — km model start/status + httpTunnelProbe reusing runReconnectingPortForward + root registration + 8 tests ✓
 - [~] 122-05-PLAN.md — live UAT: G1/G2 ✓ (unit), Task 4 docs ✓ (docs/gpu-model-serving.md + CLAUDE.md); G3–G9 BLOCKED on G-quota (no GPU spend incurred). Resume per 122-UAT.md once quota lands.
+
+### Phase 123: klankermaker.ai setup wizard — interview-and-emit webapp (self-setup sub-project A)
+
+**Goal:** A public, client-side-only static wizard at `klankermaker.ai` that interviews a
+newcomer and emits a downloadable bundle — AWS access config (IAM/SSO `klanker-*` profiles) +
+a prefilled `km-config.yaml` + a **gate-segmented, readable `km` runbook** — with **no creds in
+the browser and nothing transmitted**. Architecture: a **declarative question-graph** (data) over
+**two layers** (gated foundation spine + flat capability catalog) rendered by a generic static
+site, guarded by a **CI contract test that runs emitted config through real `km`** so schema drift
+fails the build. Presets: ⚡ Quick start (no email/domain; Slack+GitHub+H1+checks) / 🏛 Full
+(email+Org+everything) / 🛠 Custom. Account-vend + quota are emitted as **forward-compatible
+placeholders** (sub-projects C/B); resume-state is the artifact contract only (sub-project D).
+**This is sub-project A of the larger self-setup-from-zero milestone (A webapp / B `km quota
+request` / C `km account` lifecycle / D resume model); only A is in scope here.**
+
+**Requirements** (phase-local synthetic IDs, derived from the design spec):
+REQ-123-GRAPH (declarative question-graph schema + capability-descriptor format + presets),
+REQ-123-EMIT (pure emitter: answers → km-config.yaml + aws-config snippet + N gate-segmented
+scripts + README; golden bundles per preset), REQ-123-RENDER (dependency-light static renderer:
+branch, validate client-side, build bundle in-browser, "looks awesome"), REQ-123-CONTRACT (CI
+test in km repo: emitted config per preset → real `km validate`/`km configure --check`; drift
+fails build), REQ-123-HOST (static hosting story for klankermaker.ai; S3+CloudFront).
+
+**Design spec:** `docs/superpowers/specs/2026-06-27-klankermaker-setup-wizard-design.md`
+**Depends on:** none (additive; new in-repo `web/wizard/` tree + one thin km-side `--check` seam).
+Independent of Phase 122 — planned as 123 with GSD focus deliberately left on 122.
+
+Plans:
+- [ ] 123-01-PLAN.md — Wave 1: question-graph schema + capability-descriptor format + pure emitter + golden bundles per preset (no UI). The testable core; the runbook/bundle format that is the contract for B/C/D.
+- [ ] 123-02-PLAN.md — Wave 2: static renderer (graph-driven branching UI, client-side validation, in-browser bundle generation) + frontend-design pass. (to be authored after Wave 1)
+- [ ] 123-03-PLAN.md — Wave 3: CI contract test in km repo (emitted km-config per preset → real `km validate`; add thin `km configure --check` if needed) wiring drift-failure into CI. (to be authored after Wave 1)
+- [ ] 123-04-PLAN.md — Wave 4: static hosting for klankermaker.ai (S3+CloudFront), pinned-km fetch+checksum in the emitted script, deploy. (to be authored after Wave 2/3)
