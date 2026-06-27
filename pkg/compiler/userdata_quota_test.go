@@ -103,6 +103,8 @@ func TestActionLimitsEmission(t *testing.T) {
 		// No profile limits — but install defaults provided via NetworkConfig.
 		perDay := int64(50)
 		network := &NetworkConfig{
+			// VSCodeSSHPubKey required when VSCodeEnabled=true (default). Phase 73.
+			VSCodeSSHPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 km-test-key",
 			InstallLimits: quota.Limits{
 				quota.ActionEmailSend: quota.ActionLimit{
 					PerDay:   &perDay,
@@ -136,6 +138,8 @@ func TestActionLimitsEmission(t *testing.T) {
 			},
 		}
 		network := &NetworkConfig{
+			// VSCodeSSHPubKey required when VSCodeEnabled=true (default). Phase 73.
+			VSCodeSSHPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 km-test-key",
 			InstallLimits: quota.Limits{
 				quota.ActionGithubComment: quota.ActionLimit{
 					PerHour: &installPerHour,

@@ -13,6 +13,7 @@ import (
 
 	yaml "github.com/goccy/go-yaml"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/quota"
 )
 
 // otpEnvName derives the env var name for an OTP secret from its SSM path.
@@ -4793,6 +4794,25 @@ chmod 755 /run/km
 echo "[km-bootstrap] Budget enforcement environment configured"
 {{- end }}
 
+{{- if .ActionLimitsJSON }}
+# ============================================================
+# 7.3b. Action quota enforcement (Phase 121 — proxy drop-in)
+# ============================================================
+# The proxy reads KM_QUOTA_TABLE + KM_ACTION_LIMITS to count and enforce
+# per-action outbound quotas (GitHub writes, email sends).  Both env vars are
+# emitted only when at least one limit is configured (dormant by default).
+mkdir -p /etc/systemd/system/km-http-proxy.service.d
+cat > /etc/systemd/system/km-http-proxy.service.d/quota.conf << 'QUOTADROPIN'
+[Service]
+Environment=KM_QUOTA_TABLE={{ .QuotaTable }}
+Environment=KM_ACTION_LIMITS={{ .ActionLimitsJSON }}
+QUOTADROPIN
+
+systemctl daemon-reload
+systemctl restart km-http-proxy
+echo "[km-bootstrap] km-http-proxy restarted with action quota config (table: {{ .QuotaTable }})"
+{{- end }}
+
 {{- if .Rsync }}
 # ============================================================
 # 7.4. Rsync restore (from S3)
@@ -4900,6 +4920,35 @@ func idleActionFromProfile(p *profile.SandboxProfile) string {
 	return ""
 }
 
+// profileLimitsToQuota converts a profile.LimitsSpec pointer to a quota.Limits map.
+// Nil input returns an empty (non-nil) map. Each action is only added when its
+// ActionLimitSpec is non-nil (dormancy: absent action → not in map → not enforced).
+func profileLimitsToQuota(p *profile.SandboxProfile) quota.Limits {
+	out := make(quota.Limits)
+	if p.Spec.Limits == nil {
+		return out
+	}
+	ls := p.Spec.Limits
+	addAction := func(a quota.Action, s *profile.ActionLimitSpec) {
+		if s == nil {
+			return
+		}
+		out[a] = quota.ActionLimit{
+			Lifetime: s.Lifetime,
+			PerHour:  s.PerHour,
+			PerDay:   s.PerDay,
+			OnBreach: quota.OnBreach(s.OnBreach),
+		}
+	}
+	addAction(quota.ActionGithubPR, ls.GithubPR)
+	addAction(quota.ActionGithubComment, ls.GithubComment)
+	addAction(quota.ActionGithubReview, ls.GithubReview)
+	addAction(quota.ActionEmailSend, ls.EmailSend)
+	addAction(quota.ActionSlackPost, ls.SlackPost)
+	addAction(quota.ActionH1Comment, ls.H1Comment)
+	return out
+}
+
 // userDataParams holds the template parameters for user-data generation.
 type userDataParams struct {
 	SandboxID string
@@ -4942,6 +4991,12 @@ type userDataParams struct {
 	// Budget enforcement fields (BUDG-03, BUDG-07)
 	BudgetEnabled bool   // true when profile.spec.budget is set
 	BudgetTable   string // DynamoDB table name from KM_BUDGET_TABLE env var
+	// Action quota enforcement fields (Phase 121 Plan 07, CMP-01).
+	// QuotaTable is the {prefix}-action-quota DynamoDB table name.
+	// ActionLimitsJSON is the JSON-encoded resolved quota.Limits map.
+	// BOTH are empty when no limits are configured (dormant — byte-identical to pre-Phase-121).
+	QuotaTable       string // "{prefix}-action-quota" when ActionLimitsJSON non-empty
+	ActionLimitsJSON string // JSON-encoded resolved quota.Limits; empty → dormant
 	// Idle timeout (minutes) — passed to audit-log sidecar for SandboxIdle event detection
 	IdleTimeoutMinutes int
 	// IdleAction: "hibernate" when TTL=0 (sandbox hibernates on idle and re-arms),
@@ -5472,6 +5527,23 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		budgetTable = resourcePrefix + "-budgets"
 	}
 
+	// Phase 121 Plan 07 (CMP-01): resolve action quota limits and prepare
+	// the proxy drop-in env vars.  Dormant when both profile and install
+	// defaults are absent (empty resolved map → empty JSON → no drop-in emitted).
+	var installLimits quota.Limits
+	if network != nil {
+		installLimits = network.InstallLimits
+	}
+	resolvedLimits := quota.ResolveLimits(profileLimitsToQuota(p), installLimits)
+	quotaTable := ""
+	actionLimitsJSON := ""
+	if len(resolvedLimits) > 0 {
+		quotaTable = resourcePrefix + "-action-quota"
+		if b, jerr := json.Marshal(resolvedLimits); jerr == nil {
+			actionLimitsJSON = string(b)
+		}
+	}
+
 	params := userDataParams{
 		SandboxID:          sandboxID,
 		ResourcePrefix:     resourcePrefix,
@@ -5497,6 +5569,10 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		// Budget enforcement fields — enable when profile.spec.budget is set.
 		BudgetEnabled: p.Spec.Budget != nil,
 		BudgetTable:   budgetTable,
+		// Action quota enforcement fields (Phase 121 Plan 07, CMP-01).
+		// Both are empty when no limits are configured (dormant).
+		QuotaTable:       quotaTable,
+		ActionLimitsJSON: actionLimitsJSON,
 		// Idle timeout — converted from duration string to minutes for the sidecar.
 		IdleTimeoutMinutes: parseIdleTimeoutMinutes(p.Spec.Lifecycle.IdleTimeout),
 		// IdleAction is "hibernate" when TTL=0 (empty string sentinel) and idle timeout is set.

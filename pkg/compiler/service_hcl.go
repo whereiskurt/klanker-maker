@@ -14,6 +14,7 @@ import (
 
 	pkggithub "github.com/whereiskurt/klanker-maker/pkg/github"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/quota"
 )
 
 // rawAMIIDPattern matches a valid EC2 AMI ID: "ami-" followed by 8-17 lowercase hex chars.
@@ -716,6 +717,11 @@ type NetworkConfig struct {
 	// Generated per-sandbox at `km create` (crypto/rand base62); never baked into AMIs.
 	// Empty when desktop is disabled. Phase 93.
 	DesktopKasmPass string
+	// InstallLimits is the install-level action quota defaults (Phase 121 Plan 07).
+	// Populated from config.GetLimitsConfig() by the caller (create.go) before calling
+	// Compile(). The compiler resolves profile limits MERGED WITH these per-window; profile
+	// wins per-window. Nil/empty map → no install defaults (dormant for install-level).
+	InstallLimits quota.Limits
 }
 
 // budgetHCLFields extracts the budget-related template fields from a SandboxProfile.
