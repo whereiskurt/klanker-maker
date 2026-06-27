@@ -52,6 +52,7 @@ type ProxyOption func(*goproxy.ProxyHttpServer, *proxyConfig)
 // proxyConfig accumulates optional proxy configuration across ProxyOption calls.
 type proxyConfig struct {
 	budget      *budgetEnforcementOptions
+	actionQuota *actionQuotaOptions
 	githubRepos []string
 	httpsOnly   bool
 }
@@ -554,6 +555,17 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				return resp
 			},
 		)
+	}
+
+	// -------------------------------------------------------------------------
+	// Action quota enforcement: GitHub writes + SES email send (Phase 121).
+	// Registered BEFORE the general CONNECT handler so goproxy first-match
+	// routes these hosts through quota checking.
+	// Lambda Function URLs (*.lambda-url.*.on.aws) are explicitly excluded here
+	// (see quota_classify.go) to prevent double-counting slack_post.
+	// -------------------------------------------------------------------------
+	if cfg.actionQuota != nil {
+		registerActionQuotaHandlers(proxy, cfg.actionQuota)
 	}
 
 	// -------------------------------------------------------------------------
