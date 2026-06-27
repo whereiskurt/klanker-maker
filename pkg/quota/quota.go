@@ -79,13 +79,11 @@ type QuotaAPI interface {
 }
 
 // hourBucket returns the fixed hourly bucket for a given time (epoch / 3600).
-// TODO(Wave 1 plan 02): wire into Record for the hour window.
 func hourBucket(t time.Time) int64 {
 	return t.Unix() / 3600
 }
 
 // dayBucket returns the fixed daily bucket for a given time (epoch / 86400).
-// TODO(Wave 1 plan 02): wire into Record for the day window.
 func dayBucket(t time.Time) int64 {
 	return t.Unix() / 86400
 }
@@ -98,31 +96,150 @@ func rowKey(sandboxID string, action Action, sk string) map[string]dynamodbtypes
 	}
 }
 
+// windowSpec describes one window to increment.
+type windowSpec struct {
+	name  string // "lifetime" | "hour" | "day" — used in Decision.WorstWindow
+	sk    string // DynamoDB sort key value
+	limit int64
+	ttl   *int64 // nil = no TTL (lifetime rows)
+}
+
 // Record increments every CONFIGURED window of the action atomically and returns
 // the Decision. Unconfigured windows are skipped. No configured limit ⇒ no DDB
 // write ⇒ Decision{Tripped:false} (dormant / byte-identical to today).
 //
-// Wave 1 (plan 02) implements the full bucket math, atomic ADD, TTL writes,
-// and breach detection. This skeleton returns an always-allow Decision so
-// downstream code compiles and imports the correct type contract.
+// For each configured window, Record issues one UpdateItem with:
+//
+//	UpdateExpression: "ADD #c :one"
+//	ReturnValues:     ALL_NEW
+//
+// and on hour/day rows also sets ttl via "SET #ttl = if_not_exists(#ttl, :ttl)".
+// Lifetime rows carry no TTL.
 func Record(ctx context.Context, client QuotaAPI, tableName, sandboxID string, action Action, limit ActionLimit) (Decision, error) {
-	// TODO(Wave 1 plan 02): implement full multi-window atomic ADD + breach detection.
-	// Sketch of the intended implementation:
-	//
-	//  now := time.Now().UTC()
-	//  windows to check:
-	//    if limit.Lifetime != nil → SK = "lifetime",    no TTL
-	//    if limit.PerHour  != nil → SK = "hour#<bucket>", TTL ~2h
-	//    if limit.PerDay   != nil → SK = "day#<bucket>",  TTL ~2d
-	//
-	//  For each window: UpdateItem ADD count :one RETURN ALL_NEW → compare count vs limit.
-	//  Build WindowResult slice; set Decision.Tripped = any(Exceeded).
-	//  Set Decision.WorstWindow = SK of first/worst tripped window.
-	//  Decision.OnBreach = limit.OnBreach (or BreachWarn if empty).
+	now := time.Now().UTC()
 
-	_ = awssdk.String("") // suppress import-not-used during skeleton phase
-	_ = rowKey(sandboxID, action, "lifetime")
-	_, _ = hourBucket(time.Now()), dayBucket(time.Now())
+	// Build the list of windows to increment (only those with a configured limit).
+	var windows []windowSpec
+	if limit.Lifetime != nil {
+		windows = append(windows, windowSpec{
+			name:  "lifetime",
+			sk:    "lifetime",
+			limit: *limit.Lifetime,
+			ttl:   nil,
+		})
+	}
+	if limit.PerHour != nil {
+		expiry := now.Add(2 * time.Hour).Unix()
+		windows = append(windows, windowSpec{
+			name:  "hour",
+			sk:    fmt.Sprintf("hour#%d", hourBucket(now)),
+			limit: *limit.PerHour,
+			ttl:   &expiry,
+		})
+	}
+	if limit.PerDay != nil {
+		expiry := now.Add(48 * time.Hour).Unix()
+		windows = append(windows, windowSpec{
+			name:  "day",
+			sk:    fmt.Sprintf("day#%d", dayBucket(now)),
+			limit: *limit.PerDay,
+			ttl:   &expiry,
+		})
+	}
 
-	return Decision{}, nil
+	// Dormant: no windows configured ⇒ no DDB writes, always-allow.
+	if len(windows) == 0 {
+		return Decision{}, nil
+	}
+
+	onBreach := limit.OnBreach
+	if onBreach == "" {
+		onBreach = BreachWarn
+	}
+
+	var results []WindowResult
+	tripped := false
+	worstWindow := ""
+
+	for _, w := range windows {
+		count, err := atomicIncrement(ctx, client, tableName, sandboxID, action, w)
+		if err != nil {
+			return Decision{}, fmt.Errorf("record quota window %s for sandbox %s action %s: %w", w.sk, sandboxID, action, err)
+		}
+
+		exceeded := count > w.limit
+		results = append(results, WindowResult{
+			Window:   w.name,
+			Count:    count,
+			Limit:    w.limit,
+			Exceeded: exceeded,
+		})
+		if exceeded && !tripped {
+			tripped = true
+			worstWindow = w.name
+		}
+	}
+
+	d := Decision{
+		Tripped:     tripped,
+		Windows:     results,
+		WorstWindow: worstWindow,
+	}
+	if tripped {
+		d.OnBreach = onBreach
+	}
+	return d, nil
+}
+
+// atomicIncrement issues UpdateItem ADD count :one for the given window and returns the
+// post-increment count. For hour/day windows, also sets the TTL via if_not_exists.
+func atomicIncrement(ctx context.Context, client QuotaAPI, tableName, sandboxID string, action Action, w windowSpec) (int64, error) {
+	key := rowKey(sandboxID, action, w.sk)
+
+	updateExpr := "ADD #c :one"
+	exprNames := map[string]string{
+		"#c": "count",
+	}
+	exprValues := map[string]dynamodbtypes.AttributeValue{
+		":one": &dynamodbtypes.AttributeValueMemberN{Value: "1"},
+	}
+
+	if w.ttl != nil {
+		// On first create set the TTL; if_not_exists prevents overwrites on subsequent
+		// increments in the same bucket window.
+		updateExpr += " SET #ttl = if_not_exists(#ttl, :ttl)"
+		exprNames["#ttl"] = "ttl"
+		exprValues[":ttl"] = &dynamodbtypes.AttributeValueMemberN{
+			Value: fmt.Sprintf("%d", *w.ttl),
+		}
+	}
+
+	out, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 awssdk.String(tableName),
+		Key:                       key,
+		UpdateExpression:          awssdk.String(updateExpr),
+		ExpressionAttributeNames:  exprNames,
+		ExpressionAttributeValues: exprValues,
+		ReturnValues:              dynamodbtypes.ReturnValueAllNew,
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	if out.Attributes == nil {
+		return 1, nil // first write; count must be 1
+	}
+	countAV, ok := out.Attributes["count"]
+	if !ok {
+		return 1, nil
+	}
+	countN, ok := countAV.(*dynamodbtypes.AttributeValueMemberN)
+	if !ok {
+		return 1, nil
+	}
+	var count int64
+	if _, err2 := fmt.Sscanf(countN.Value, "%d", &count); err2 != nil {
+		return 1, nil
+	}
+	return count, nil
 }
