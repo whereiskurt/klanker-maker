@@ -81,7 +81,7 @@ trip notices, a three-tier breach policy (`warn`/`block`/`freeze`), and a latche
 
 **Design context:** see this phase's `CONTEXT.md`
 
-**Plans:** 10/10 plans complete
+**Plans:** 10 plans complete + 2 gap-closure plans (verification 2026-06-27 found 2 confirmed gaps in the auto-freeze-on-breach path)
 
 Plans:
 - [ ] 121-01-PLAN.md — Wave 0: pkg/quota skeleton + RED test stubs + module-count bump (24→26) + all Wave 0 stubs
@@ -94,3 +94,5 @@ Plans:
 - [ ] 121-08-PLAN.md — dynamodb-action-quota TF module (+Streams) + live unit + regionalModules() (INIT-01)
 - [ ] 121-09-PLAN.md — km-quota-alerter Lambda (DDB-Stream→SES+Slack, idempotent) + 4-part registration (INIT-02, ALR-01)
 - [ ] 121-10-PLAN.md — CLI: km freeze + latch-aware km unlock + FROZEN in list/status + doctor surfacing
+- [ ] 121-11-PLAN.md — GAP 1: pkg/quota writes breached_at + on_breach on first-breach (restores ALR-01 alerter live path) + REAL-path breach-write test
+- [ ] 121-12-PLAN.md — GAP 2: Slack+H1 bridges auto-latch action_frozen via Freezer on BreachFreeze (BRG-01/H1-01, CONTEXT §7 dec 8) + freeze-only tests
