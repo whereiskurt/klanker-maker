@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 121-07-PLAN.md — compiler delivery layer for action quota
-last_updated: "2026-06-27T13:21:36.372Z"
+stopped_at: Completed 121-09-PLAN.md — km-quota-alerter Lambda + DDB Stream event_source_mapping
+last_updated: "2026-06-27T13:32:50.297Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 30
-  completed_plans: 28
+  completed_plans: 29
   percent: 91
 ---
 
@@ -603,6 +603,7 @@ Progress: [█████████░] 91%
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P05 | 273s | 3 tasks | 6 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P06 | 719s | 4 tasks | 15 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P07 | 884 | 2 tasks | 4 files |
+| Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P09 | 384 | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -1723,6 +1724,8 @@ Recent decisions affecting current work:
 - [Phase 121-06]: IAM policies for quota table gated on non-empty quota_table_arn (dormant until table deployed)
 - [Phase 121]: NetworkConfig.InstallLimits chosen over new generateUserData parameter to avoid breaking existing test call sites (nil network already handles no-install-defaults case)
 - [Phase 121]: Two mirrored profileLimitsToQuota helpers (compiler layer + cmd layer) avoid import cycle while maintaining identical resolution logic
+- [Phase 121-09]: attribute_not_exists(alert_sent) conditional write after SES send ensures exactly one alert per breach while tolerating concurrent Lambda invocations
+- [Phase 121-09]: starting_position=LATEST on event_source_mapping so only new breach events are processed post-deploy
 
 ### Roadmap Evolution
 
@@ -1870,6 +1873,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T13:21:36.366Z
-Stopped at: Completed 121-07-PLAN.md — compiler delivery layer for action quota
+Last session: 2026-06-27T13:32:50.291Z
+Stopped at: Completed 121-09-PLAN.md — km-quota-alerter Lambda + DDB Stream event_source_mapping
 Resume file: None
