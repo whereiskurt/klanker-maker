@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -47,6 +48,7 @@ import (
 	githubpkg "github.com/whereiskurt/klanker-maker/pkg/github"
 	"github.com/whereiskurt/klanker-maker/pkg/localnumber"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/quota"
 	slack "github.com/whereiskurt/klanker-maker/pkg/slack"
 	"github.com/whereiskurt/klanker-maker/pkg/sshkey"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
@@ -552,6 +554,10 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 	}
 
+	// Phase 121 Plan 07: populate install-level action quota defaults on the
+	// NetworkConfig so the compiler can resolve them with per-profile limits.
+	network.InstallLimits = installLimitsToQuota(cfg.GetLimitsConfig())
+
 	// Step 6a-efs: Load EFS outputs for shared filesystem mount (Phase 43).
 	// Only applies to non-docker substrates; docker does not support EFS mounts.
 	if substrate != "docker" {
@@ -956,6 +962,19 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				fmt.Fprintf(os.Stderr, "  ✓ Metadata stored (alias: %s)\n", sandboxAlias)
 			} else {
 				fmt.Fprintf(os.Stderr, "  ✓ Metadata stored\n")
+			}
+		}
+
+		// Phase 121 Plan 07: write the resolved action limits JSON to the sandbox row
+		// so bridges (Slack, H1) can read it via FetchByChannel. Non-fatal.
+		// Reuse the install limits already wired into network.InstallLimits so profile
+		// and install defaults are resolved identically to what the compiler emitted.
+		if resolvedAL := resolveActionLimitsJSON(resolvedProfile, network.InstallLimits); resolvedAL != "" {
+			if alErr := awspkg.UpdateSandboxStringAttrDynamo(ctx, dynamoClientCreate, sandboxTableName, sandboxID, "action_limits", resolvedAL); alErr != nil {
+				log.Warn().Err(alErr).Str("sandbox_id", sandboxID).
+					Msg("failed to write action_limits to sandbox row (non-fatal)")
+			} else {
+				log.Debug().Str("sandbox_id", sandboxID).Msg("action_limits written to sandbox row")
 			}
 		}
 	}
@@ -2992,4 +3011,78 @@ func GenerateDesktopCredential(homeDir, sandboxID string, network *compiler.Netw
 	network.DesktopKasmUser = user
 	network.DesktopKasmPass = pass
 	return nil
+}
+
+// installLimitsToQuota converts a config.LimitsConfig (install-level action quota
+// defaults from km-config.yaml) to a quota.Limits map for use in ResolveLimits.
+// Each action field is only added when its ActionLimitConfig is non-nil (dormancy:
+// absent action → not in map → not enforced). This is the install-default analog of
+// compiler.profileLimitsToQuota (Phase 121 Plan 07).
+func installLimitsToQuota(lc config.LimitsConfig) quota.Limits {
+	out := make(quota.Limits)
+	addAction := func(a quota.Action, s *config.ActionLimitConfig) {
+		if s == nil {
+			return
+		}
+		out[a] = quota.ActionLimit{
+			Lifetime: s.Lifetime,
+			PerHour:  s.PerHour,
+			PerDay:   s.PerDay,
+			OnBreach: quota.OnBreach(s.OnBreach),
+		}
+	}
+	addAction(quota.ActionGithubPR, lc.GithubPR)
+	addAction(quota.ActionGithubComment, lc.GithubComment)
+	addAction(quota.ActionGithubReview, lc.GithubReview)
+	addAction(quota.ActionEmailSend, lc.EmailSend)
+	addAction(quota.ActionSlackPost, lc.SlackPost)
+	addAction(quota.ActionH1Comment, lc.H1Comment)
+	return out
+}
+
+// resolveActionLimitsJSON returns the JSON-encoded resolved quota.Limits for the
+// given profile and install defaults, or "" when the resolved map is empty (dormant).
+// Used by km create to write the action_limits attr to the sandbox row so bridges
+// can read it via FetchByChannel. Mirrors the compiler's resolution logic exactly.
+func resolveActionLimitsJSON(p *profile.SandboxProfile, installDefaults quota.Limits) string {
+	profileLimits := profileLimitsToQuotaCreate(p)
+	resolved := quota.ResolveLimits(profileLimits, installDefaults)
+	if len(resolved) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(resolved)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// profileLimitsToQuotaCreate mirrors compiler.profileLimitsToQuota without the
+// import cycle. The compiler version lives in pkg/compiler (which cannot be
+// imported here to avoid a cycle); this copy is in the cmd layer. Both are
+// derived from the same profile.LimitsSpec → quota.Limits mapping.
+func profileLimitsToQuotaCreate(p *profile.SandboxProfile) quota.Limits {
+	out := make(quota.Limits)
+	if p.Spec.Limits == nil {
+		return out
+	}
+	ls := p.Spec.Limits
+	addAction := func(a quota.Action, s *profile.ActionLimitSpec) {
+		if s == nil {
+			return
+		}
+		out[a] = quota.ActionLimit{
+			Lifetime: s.Lifetime,
+			PerHour:  s.PerHour,
+			PerDay:   s.PerDay,
+			OnBreach: quota.OnBreach(s.OnBreach),
+		}
+	}
+	addAction(quota.ActionGithubPR, ls.GithubPR)
+	addAction(quota.ActionGithubComment, ls.GithubComment)
+	addAction(quota.ActionGithubReview, ls.GithubReview)
+	addAction(quota.ActionEmailSend, ls.EmailSend)
+	addAction(quota.ActionSlackPost, ls.SlackPost)
+	addAction(quota.ActionH1Comment, ls.H1Comment)
+	return out
 }
