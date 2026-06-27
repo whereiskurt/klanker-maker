@@ -57,6 +57,10 @@ type SandboxRecord struct {
 	FailedAt      *time.Time `json:"failed_at,omitempty"`
 
 	// Phase 121 — action quota + freeze quarantine.
+	// ActionLimits is the JSON-encoded map of action→limit config (action_limits attr).
+	// Surfaced by km status (Quotas section) and km list (quota marker). Empty when
+	// no action limits were resolved at create time.
+	ActionLimits string `json:"action_limits,omitempty"`
 	// ActionFrozen is true when the sandbox has been quarantined by the auto-freeze
 	// mechanism or by an operator. Used by km list rendering to show the frozen state.
 	ActionFrozen bool       `json:"action_frozen,omitempty"`

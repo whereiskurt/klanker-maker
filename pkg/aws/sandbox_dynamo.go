@@ -161,6 +161,7 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		GithubInboundQueueURL: meta.GithubInboundQueueURL,
 		FailureReason:         meta.FailureReason,
 		FailedAt:              meta.FailedAt,
+		ActionLimits:          meta.ActionLimits,
 		ActionFrozen:          meta.ActionFrozen,
 		FrozenReason:          meta.FrozenReason,
 		FrozenAt:              meta.FrozenAt,

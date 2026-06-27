@@ -41,6 +41,15 @@ var allActions = []Action{
 	ActionH1Comment,
 }
 
+// AllActionsOrder returns the canonical, deterministic action iteration order.
+// Callers (e.g. km status quota rendering) use it to iterate a Limits map in a
+// stable order without depending on Go's randomized map iteration.
+func AllActionsOrder() []Action {
+	out := make([]Action, len(allActions))
+	copy(out, allActions)
+	return out
+}
+
 // FetchUsage reads the current counter for each CONFIGURED window of each action in
 // limits and returns one UsageRow per (action, window). Windows are ordered lifetime,
 // hour, day; actions follow the stable const order (not map order). A missing row reads

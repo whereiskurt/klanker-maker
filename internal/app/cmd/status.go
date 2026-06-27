@@ -279,7 +279,8 @@ func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) 
 		TeardownPolicy: meta.TeardownPolicy,
 		FailureReason: meta.FailureReason,
 		FailedAt:     meta.FailedAt,
-		// Phase 121 — freeze quarantine fields for km status display.
+		// Phase 121 — action quota + freeze quarantine fields for km status display.
+		ActionLimits: meta.ActionLimits,
 		ActionFrozen: meta.ActionFrozen,
 		FrozenReason: meta.FrozenReason,
 		FrozenAt:     meta.FrozenAt,
@@ -402,6 +403,14 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 			fmt.Fprintf(out, "  By:        %s\n", rec.FrozenBy)
 		}
 		fmt.Fprintf(out, "  Release:   km unlock %s\n", rec.SandboxID)
+	}
+
+	// Phase 121 — action-quota visibility. Render the configured limits + live usage
+	// only when the sandbox has action_limits resolved. Fail-soft: if the live fetch
+	// errors, RenderQuotas still prints the limits with "?" counts.
+	if strings.TrimSpace(rec.ActionLimits) != "" {
+		usage := fetchQuotaUsage(ctx, rec.SandboxID, rec.ActionLimits, resourcePrefix)
+		RenderQuotas(out, rec.ActionLimits, usage)
 	}
 
 	// Phase 77 — surface the persisted failure reason for failed/nocap sandboxes.
