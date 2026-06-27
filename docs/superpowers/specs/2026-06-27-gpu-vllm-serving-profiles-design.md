@@ -109,6 +109,29 @@ No `km-slack-threads` schema change (the session-id column is already
 agent-agnostic). No bridge Lambda change. The compiler change + profile wiring
 is the whole delta beyond the serving profiles.
 
+### On-box interfacing is free (the repoint is box-global)
+
+`agent.default: codex` + the local-provider config is **not Slack-specific** —
+it repoints codex for the whole box. So the local 70B is reachable through
+**four interfaces with zero additional work**:
+
+1. **VS Code** — Continue plugin → `localhost:8000` (Remote-SSH).
+2. **Terminal** — `km shell gpu1` → run `codex` interactively → local model.
+3. **Headless** — `km agent run gpu1 --codex --prompt "…"`, the prompt queue,
+   `km at … agent run --codex` → local model.
+4. **Slack** — @-mention → on-box codex turn → local model, with resume.
+
+All `localhost`, all unmetered, all private. "Interface it on the sandbox" is
+comprehensively yes for codex.
+
+**claude stays cloud (deliberate).** Claude Code speaks the Anthropic Messages
+API (`/v1/messages`), not OpenAI's shape, so it cannot point straight at vLLM —
+it would need an Anthropic↔OpenAI translation sidecar (LiteLLM `/v1/messages` /
+a `claude-code-proxy` shim) + `ANTHROPIC_BASE_URL`. Out of scope (see deferred):
+we keep claude cloud-pointed so `/claude` (cloud) vs default `/codex` (local 70B)
+remains a live A/B in the same channel, and we avoid the higher reliability risk
+of driving Claude Code's agent loop with an open 70B.
+
 ### Deferred: Path 2 — goose as a first-class agent_type
 
 The codebase-anticipated clean form (goose natively supports OpenAI-compatible
@@ -178,9 +201,12 @@ Qwen leaves need no secret.
 
 ## Bring-up procedure (operator runbook, to be written in the plan)
 
-1. **File AWS quota increases today** — "Running On-Demand G instances" vCPU
-   limit defaults to **0**; a g6e.12xlarge needs 48 vCpu, 48xlarge needs 192.
-   1–2 day turnaround. Hard gate before any `km create` succeeds.
+1. **AWS GPU quota — ALREADY SATISFIED (verified 2026-06-27).** "Running
+   On-Demand G and VT instances" = **768 vCPU** in this account (klanker
+   application account, us-east-1). g6e.12xlarge needs 48, g6e.48xlarge needs
+   192 — both fit with large headroom (~4 concurrent 48xlarge). **No
+   quota-increase request needed; the live UAT is unblocked.** (P-family = 76
+   vCPU would NOT fit a p4d.24xlarge=96, but we chose G/g6e, not P.)
 2. Resolve the current DLAMI AMI ID for the region (O1).
 3. (Llama) accept the Meta license on HF, SOPS-encrypt the token.
 4. **First bring-up of each size in a relaxed-enforcement / learn variant** to
@@ -195,6 +221,24 @@ Qwen leaves need no secret.
    follow-up to confirm `codex exec resume` continuity. `/claude` in the same
    thread should route to cloud Claude (the local-vs-cloud A/B). This step
    exercises R6/O7 — the codex↔vLLM compatibility gate.
+
+## Definition of done
+
+**Full live UAT** (operator's call). Phase 122 is done when:
+
+1. `base/gpu/serve` fragment + 4 leaf profiles authored; `km validate` green on
+   all 4 (merged-bytes validation).
+2. `synthesizeCodexConfig` local-provider change merged with unit tests +
+   updated goldens.
+3. A real `km create` of at least one size → DLAMI boots → `nvidia-smi` sees all
+   GPUs → weights pull to `/data` → `vllm.service` serves `local` on
+   `localhost:8000`.
+4. VS Code Remote-SSH + Continue completes a chat against the served model.
+5. **Slack codex round-trip + resume** verified in the per-sandbox channel
+   (settles R6/O7), and `/claude` confirmed routing to cloud.
+
+**Prerequisite status: GPU quota CLEARED** (768 G-family vCPU — step 1 of the
+bring-up runbook). No external blocker remains for the live UAT.
 
 ## Risks
 
@@ -265,4 +309,9 @@ Qwen leaves need no secret.
   repoint proves the vision first. (Slack chat itself is now IN scope via codex.)
 - *pi* as a chat agent — less integrated, resume story unknown; goose preferred
   if/when a Path-2 agent is added.
+- **claude → local model** via an Anthropic↔OpenAI translation sidecar (LiteLLM
+  `/v1/messages` / `claude-code-proxy` + `ANTHROPIC_BASE_URL`) — deferred. We
+  keep claude cloud-pointed to preserve the `/claude`-vs-`/codex` A/B and avoid
+  driving Claude Code's agent loop with an open 70B. Documented as a future
+  variant; codex is the proven on-box local path.
 - Multi-model hot-swap / model router on one box — one model per profile.
