@@ -39,11 +39,27 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/rs/zerolog/log"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/capacity"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // errExecFailed is a sentinel error used by RunCommand in tests to simulate subprocess failure.
 var errExecFailed = errors.New("exec: subprocess failed")
+
+// failStatusForSubprocess maps the combined output of a failed km create subprocess to a
+// DynamoDB failStatus string using the shared pkg/capacity taxonomy.
+//
+//   - "nocap": iterate-class error (ICE / spot-limit / spot-price / waiter-timeout) — a
+//     capacity dry-spell that may clear in another AZ or time window. The nocap status
+//     triggers automatic retry logic in the Lambda orchestration layer.
+//   - "failed": quota walls (VcpuLimitExceeded), auth failures, invalid parameters,
+//     and any other non-retriable error. These require operator action, not retries.
+func failStatusForSubprocess(outStr string, runErr error) string {
+	if capacity.ClassifyError(outStr, runErr).ShouldIterate() {
+		return "nocap"
+	}
+	return "failed"
+}
 
 // CreateEvent is the EventBridge detail payload delivered to this Lambda.
 // It matches the SandboxCreateDetail published by km create --remote.
@@ -335,15 +351,10 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 		log.Error().Err(runErr).Str("sandbox_id", event.SandboxID).
 			Str("output", string(out)).Msg("km create subprocess failed")
 
-		// Determine failure status — "nocap" for capacity errors, "failed" for everything else.
-		failStatus := "failed"
+		// Determine failure status using the shared capacity taxonomy.
+		// "nocap" = retriable capacity dry-spell; "failed" = quota/auth/invalid/unknown.
 		outStr := string(out)
-		if strings.Contains(outStr, "InsufficientInstanceCapacity") ||
-			strings.Contains(outStr, "MaxSpotInstanceCountExceeded") ||
-			strings.Contains(outStr, "SpotMaxPriceTooLow") ||
-			strings.Contains(outStr, "no Spot capacity") {
-			failStatus = "nocap"
-		}
+		failStatus := failStatusForSubprocess(outStr, runErr)
 
 		// Phase 77: extract a one-line summary from subprocess output for persistence.
 		failureReason := extractFailureReason(outStr)
