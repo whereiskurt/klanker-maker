@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 122-03-PLAN.md — synthesizeCodexConfig local-provider emission GREEN
-last_updated: "2026-06-27T19:03:35.361Z"
-last_activity: 2026-06-27
+stopped_at: Completed 124-03-PLAN.md — dynamodb-capacity module + bounded spot waiter (3m)
+last_updated: "2026-06-28T22:16:03.547Z"
+last_activity: 2026-06-28
 progress:
-  total_phases: 6
+  total_phases: 8
   completed_phases: 5
-  total_plans: 37
-  completed_plans: 36
+  total_plans: 47
+  completed_plans: 37
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-27
+Last activity: 2026-06-28
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -611,6 +611,7 @@ Progress: [█████████░] 91%
 | Phase 122 P02 | 270 | 3 tasks | 9 files |
 | Phase 122 P04 | 10min | 3 tasks | 4 files |
 | Phase 122 P03 | 24min | 3 tasks | 4 files |
+| Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P03 | 12min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1750,6 +1751,8 @@ Recent decisions affecting current work:
 - [Phase 122]: Emit [model_providers.local] only when LocalBaseURL != empty — dormant path byte-identical (Phase 122 Plan 03)
 - [Phase 122]: base_url emitted verbatim from LocalBaseURL field; profile is the authority for :8001 Bifrost URL (Phase 122 Plan 03)
 - [Phase 122]: wire_api = "responses" per Codex Responses API requirement (since Feb 2026); :8000 documented as fallback in code comment (Phase 122 Plan 03)
+- [Phase 124]: spot_create_timeout hardcoded 3m (no service.hcl wiring) — preserves byte-identity, fits 4-AZ sweep in Lambda 900s budget
+- [Phase 124]: On-demand aws_instance gets no timeouts block — ICE errors fast on on-demand already; bounded waiter is spot-only
 
 ### Roadmap Evolution
 
@@ -1899,6 +1902,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T19:03:35.354Z
-Stopped at: Completed 122-03-PLAN.md — synthesizeCodexConfig local-provider emission GREEN
+Last session: 2026-06-28T22:16:03.540Z
+Stopped at: Completed 124-03-PLAN.md — dynamodb-capacity module + bounded spot waiter (3m)
 Resume file: None
