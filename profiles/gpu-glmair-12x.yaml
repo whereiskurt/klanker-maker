@@ -16,6 +16,12 @@ extends:
   - base/gpu/serve
 
 spec:
+  # Default cloud-routing mode: direct keys via SOPS (anthropic/openai Bifrost
+  # providers). For keyless Bedrock instead, remove this block and set
+  # iam.allowBedrock: true (see docs/gpu-model-serving.md).
+  secrets:
+    sopsFile: ./secrets/glm.enc.yaml
+
   # Bool zero-value trap (Phase 117 Pitfall 2): mixed-bool runtime block in the LEAF.
   runtime:
     instanceType: g6e.12xlarge
