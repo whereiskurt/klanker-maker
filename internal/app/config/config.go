@@ -1350,6 +1350,17 @@ func (c *Config) GetSlackChannelsTableName() string {
 	return c.GetResourcePrefix() + "-slack-channels"
 }
 
+// GetCapacityTableName returns the AZ capacity DynamoDB table name.
+// Derives from GetResourcePrefix() + "-capacity", defaulting to "km-capacity".
+// Phase 124: stores per-(instanceType,az) ICE/success history for capacity-aware
+// AZ ranking during EC2 launches.
+func (c *Config) GetCapacityTableName() string {
+	if c == nil {
+		return "km-capacity"
+	}
+	return c.GetResourcePrefix() + "-capacity"
+}
+
 // GetSandboxSessionDocumentName returns the per-install SSM Session Manager
 // document name, e.g. "km-Sandbox-Session", "tg-Sandbox-Session". Mirrors the
 // computation in infra/modules/ssm-session-doc/v2.0.0/main.tf (Phase 84.4.1).
