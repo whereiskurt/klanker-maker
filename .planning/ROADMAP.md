@@ -190,10 +190,12 @@ Independent of Phase 123 (setup wizard) — sequential number only, no code depe
 Lambda auto-requeue of `nocap` cold-creates; EC2 Fleet/CreateFleet rewrite; spot
 interruption handling. (See spec § Non-goals.)
 
+**Plans:** 6 plans in 5 waves
+
 Plans:
-- [ ] 124-01-PLAN.md — Wave 0: AZ override plumbing (`spec.runtime.azPreference` schema + `pkg/compiler/service_hcl.go` → `ec2spot/v1.2.0` single-instance AZ override, N>1 spread preserved) + bounded spot `timeouts.create` (forever-loop fix) + RED test stubs + module-count bump reservation.
-- [ ] 124-02-PLAN.md — Shared error taxonomy classifier (ICE/spot-price/timeout → iterate; quota/auth/invalid → fail-fast with quota-named remediation) + km create AZ-sweep loop (taint/replace between attempts) + refactor `cmd/create-handler` `nocap` onto the shared classifier (TDD).
-- [ ] 124-03-PLAN.md — `dynamodb-capacity` TF module (+TTL) + live terragrunt unit + `regionalModules()` entry (INIT-01) + capacity-store read/write seam shared by operator + Lambda. **`make build` before `km init`** gotcha called out.
-- [ ] 124-04-PLAN.md — capacity-aware `rankAZs` (DescribeInstanceTypeOfferings drop + Service-Quotas headroom gate + last-success sticky + ICE deprioritize + azPreference merge) + `km capacity <profile|--type>` feasibility report (honest verdicts).
-- [ ] 124-05-PLAN.md — `km create --wait-for-capacity[=30m]` opt-in outer backoff + `km doctor` surfacing (table existence + GPU-family quota=0 WARN) + 4-subnet verification.
-- [ ] 124-06-PLAN.md — live UAT: GPU launch fails over 1a→1c, quota-0 fail-fast message, `km capacity` report accuracy, EBS volume co-located, full `go test ./...` green + 20/20 profiles validate.
+- [ ] 124-01-PLAN.md — Wave 0: `pkg/capacity/` core (pure `ClassifyError` taxonomy + DDB capacity store w/ TTL + `RankAZs` interface surface/stub) + `servicequotas` SDK + `spec.runtime.azPreference` field/schema + `GetCapacityTableName()` + azPreference byte-identity test.
+- [ ] 124-02-PLAN.md — Wave 1: refactor `cmd/create-handler` `nocap` onto `pkg/capacity.ClassifyError` + upgrade the existing `km create` AZ-rotation loop (create.go:746-869) into classify-and-retry (ICE iterate; quota/auth/invalid fail-fast w/ L-DB2E81BA-named remediation). (TDD)
+- [ ] 124-03-PLAN.md — Wave 0: `dynamodb-capacity` TF module (+TTL) + live unit + `regionalModules()` entry + module-count test bump (26→27) + bounded spot `timeouts.create=3m` on `aws_spot_instance_request` only. **`make build` before `km init`** gotcha called out.
+- [ ] 124-04-PLAN.md — Wave 2: capacity-aware `RankAZs` impl (offerings drop + GPU-quota gate + last-success sticky + ICE deprioritize + azPreference merge) + wire RankAZs into `km create` pre-loop ordering + `km capacity <profile|--type>` honest-verdict report.
+- [ ] 124-05-PLAN.md — Wave 3: `km create --wait-for-capacity[=30m]` opt-in outer backoff (never forwarded to the Lambda subprocess) + `km doctor` capacity-table check + GPU-family quota=0 WARN.
+- [ ] 124-06-PLAN.md — Wave 4 (live UAT, G-quota gated): full `go test ./...` green + 20/20 profiles + deploy (make build BEFORE km init; make build-lambdas) + docs + G1 4-subnets / G2 km capacity accuracy / G3-G5 GPU 1a→1c failover + quota-0 fail-fast + sticky (quota-deferred like Phase 122).
