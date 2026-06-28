@@ -1092,3 +1092,41 @@ func TestCreateHandler_DesktopCredsEnv(t *testing.T) {
 		t.Errorf("desktop creds not threaded into subprocess env (user=%v pass=%v)", wantUser, wantPass)
 	}
 }
+
+// TestNocapClassifier verifies that failStatusForSubprocess maps subprocess output
+// to the correct DynamoDB failStatus using the shared pkg/capacity taxonomy.
+//
+// Iterate-class errors (ICE / spot-limit / spot-price) → "nocap".
+// Fail-fast errors (quota / auth / invalid / unknown) → "failed".
+func TestNocapClassifier(t *testing.T) {
+	someErr := errors.New("subprocess exited with status 1")
+
+	cases := []struct {
+		name       string
+		outStr     string
+		runErr     error
+		wantStatus string
+	}{
+		// ShouldIterate() == true → "nocap"
+		{"ice", "Error: InsufficientInstanceCapacity in us-east-1a", someErr, "nocap"},
+		{"spot_limit", "Error: MaxSpotInstanceCountExceeded: max spot instance count exceeded", someErr, "nocap"},
+		{"spot_price", "Error: SpotMaxPriceTooLow: Your Spot price is too low", someErr, "nocap"},
+		{"no_spot_capacity", "Error: no Spot capacity found in 'us-east-1a'", someErr, "nocap"},
+		{"capacity_not_available", "Error: capacity-not-available for g6e.12xlarge in us-east-1c", someErr, "nocap"},
+		// Fail-fast → "failed"
+		{"quota_vcpu", "Error: VcpuLimitExceeded: You have reached your maximum vCPU limit (L-DB2E81BA)", someErr, "failed"},
+		{"auth_failure", "Error: AuthFailure: AWS was not able to validate credentials", someErr, "failed"},
+		{"invalid_param", "Error: InvalidParameterValue: The parameter 'InstanceType' is invalid", someErr, "failed"},
+		{"no_capacity_signal", "Error: some other unrecognised error occurred", someErr, "failed"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := failStatusForSubprocess(tc.outStr, tc.runErr)
+			if got != tc.wantStatus {
+				t.Errorf("failStatusForSubprocess(%q, err) = %q, want %q", tc.outStr, got, tc.wantStatus)
+			}
+		})
+	}
+}
