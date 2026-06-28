@@ -1,0 +1,39 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: gpu-kimidev-12x
+  labels:
+    tier: gpu-serving
+    model: kimi-dev-72b-gptq
+    instance: g6e.12xlarge
+
+extends:
+  - base/os/debian
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+  - base/gpu/serve
+
+spec:
+  # Default cloud-routing mode: direct keys via SOPS (anthropic/openai Bifrost
+  # providers). For keyless Bedrock instead, remove this block and set
+  # iam.allowBedrock: true (see docs/gpu-model-serving.md).
+  secrets:
+    sopsFile: ./secrets/kimi.enc.yaml
+
+  # Bool zero-value trap (Phase 117 Pitfall 2): mixed-bool runtime block in the LEAF.
+  runtime:
+    instanceType: g6e.12xlarge
+    region: us-east-1
+    spot: false
+    hibernation: false
+
+  execution:
+    # Kimi-Dev-72B: Qwen2 arch (no --trust-remote-code needed), GPTQ 8-bit.
+    # No AWQ quant available as of research date (2026-06-27); GPTQ-8bit fits 4xL40S.
+    # btbtyler09/Kimi-Dev-72B-GPTQ-8bit: ~72GB fits 192GB VRAM comfortably at tp=4.
+    # vllm.env must exist BEFORE base/gpu/serve's bring-up (initCommandsAppend),
+    # so write it via initCommands (runs before all initCommandsAppend).
+    initCommands:
+      - "mkdir -p /etc/km && printf 'VLLM_MODEL=btbtyler09/Kimi-Dev-72B-GPTQ-8bit\nVLLM_TP=4\nVLLM_EXTRA=--quantization gptq --max-model-len 16384 --gpu-memory-utilization 0.90 --enable-auto-tool-choice --tool-call-parser hermes\n' > /etc/km/vllm.env"

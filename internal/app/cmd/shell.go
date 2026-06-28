@@ -746,6 +746,24 @@ func httpsTunnelProbe(localPort int) tunnelProbe {
 	}
 }
 
+// httpTunnelProbe probes a forwarded plain-HTTP service (e.g. Bifrost gateway on
+// :8001). Any HTTP response — including 4xx — means the tunnel carries data
+// end-to-end. Unlike httpsTunnelProbe, no TLS transport is used.
+func httpTunnelProbe(localPort int) tunnelProbe {
+	client := &http.Client{
+		Timeout: 6 * time.Second,
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/", localPort)
+	return func() bool {
+		resp, err := client.Get(url)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return true
+	}
+}
+
 // sshBannerTunnelProbe probes a forwarded SSH service (e.g. sshd on :22). An SSH
 // server sends its "SSH-2.0-…" banner immediately on connect, so a successful
 // read confirms the tunnel carries data; a bound-but-silent local port times out.

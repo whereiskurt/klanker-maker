@@ -66,3 +66,7 @@ __pycache__/
 .superpowers/
 .claude/
 scratchpad/
+
+# SOPS secret bundles (Phase 89): ignore plaintext, allow *.enc.yaml
+/secrets/*
+!/secrets/*.enc.yaml

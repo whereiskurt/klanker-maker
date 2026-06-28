@@ -340,6 +340,20 @@ resource "aws_iam_role_policy" "ec2spot_bedrock" {
             "aws:CalledViaLast" = "bedrock.amazonaws.com"
           }
         }
+      },
+      {
+        # GA OpenAI-OSS models on Bedrock (e.g. openai.gpt-oss-120b) are served via
+        # the newer project-based "bedrock-mantle" inference API, a DIFFERENT action
+        # namespace + ARN from classic bedrock:InvokeModel. Without this, the Bifrost
+        # gateway's bedrock/openai.gpt-oss-* route 401s with
+        # "bedrock-mantle:CreateInference on .../project/default" (verified live on a
+        # g6e.12xlarge, 2026-06-27). Classic Claude InvokeModel routes are unaffected.
+        Sid    = "AllowBedrockMantleOpenAIInference"
+        Effect = "Allow"
+        Action = [
+          "bedrock-mantle:CreateInference",
+        ]
+        Resource = ["arn:aws:bedrock-mantle:*:*:*"]
       }
     ]
   })

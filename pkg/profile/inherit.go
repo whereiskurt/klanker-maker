@@ -230,11 +230,24 @@ func extractExtends(rawMap map[string]any) ([]string, error) {
 	}
 }
 
-// applyInitCommandsAppend moves execution.initCommandsAppend onto the tail of
-// execution.initCommands (concat+dedup), then removes the append key.
+// applyInitCommandsAppend moves spec.execution.initCommandsAppend onto the tail
+// of spec.execution.initCommands (concat+dedup), then removes the append key.
 // Both keys are expected to hold []any when present.
+//
+// NOTE: execution lives under the top-level "spec" key in a SandboxProfile
+// (spec.execution.*). An earlier version read acc["execution"] (top level),
+// which is always nil for real profiles — so the append was silently never
+// applied (Phase 122 GPU bring-up bug).
 func applyInitCommandsAppend(acc map[string]any) {
-	execRaw, ok := acc["execution"]
+	specRaw, ok := acc["spec"]
+	if !ok {
+		return
+	}
+	spec, ok := specRaw.(map[string]any)
+	if !ok {
+		return
+	}
+	execRaw, ok := spec["execution"]
 	if !ok {
 		return
 	}
@@ -253,7 +266,8 @@ func applyInitCommandsAppend(acc map[string]any) {
 	existing, _ := toSlice(exec["initCommands"])
 	exec["initCommands"] = concatDedup(existing, appended)
 	delete(exec, "initCommandsAppend")
-	acc["execution"] = exec
+	spec["execution"] = exec
+	acc["spec"] = spec
 }
 
 // clearAbstractFromMetadata removes the "abstract" flag from the top-level

@@ -1,0 +1,33 @@
+# Phase 70: 'codex_hooks' was the Codex 0.121 feature flag name. In 0.133+ it
+# was renamed to 'hooks' and the old name emits a deprecation warning event
+# on every codex exec (filtered out by our JSONL parser, but noisy). The
+# flag remains harmless under Path B (JSONL parsing) — hooks may or may not
+# actually fire depending on Codex version; the platform does not depend on
+# them. See docs/codex-parity.md and the Path B section of SPEC.md.
+[features]
+hooks = true
+
+[[hooks.PermissionRequest]]
+matcher = ".*"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "/opt/km/bin/km-notify-hook PermissionRequest"
+timeout = 30
+statusMessage = "km: notifying operator"
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/opt/km/bin/km-notify-hook Stop"
+timeout = 30
+
+model_provider = "local"
+model = "local"
+
+[model_providers.local]
+name = "Local vLLM (via Bifrost)"
+base_url = "http://localhost:8001/v1"
+wire_api = "responses"
+env_key = "OPENAI_API_KEY"

@@ -425,3 +425,85 @@ func TestResolve_DiamondMemoized(t *testing.T) {
 			p1.Spec.Lifecycle.TTL, p2.Spec.Lifecycle.TTL)
 	}
 }
+
+// ─── initCommandsAppend regression (Phase 122 create-path bug) ───────────────
+//
+// applyInitCommandsAppend must fold spec.execution.initCommandsAppend onto the
+// tail of spec.execution.initCommands. The bug: it read top-level "execution"
+// instead of "spec"."execution", so the append was NEVER applied for any real
+// profile (real profiles nest execution under spec). GPU profiles whose vLLM/
+// Bifrost bring-up lives in initCommandsAppend booted but served nothing.
+
+func TestApplyInitCommandsAppend_NestedUnderSpec(t *testing.T) {
+	acc := map[string]any{
+		"spec": map[string]any{
+			"execution": map[string]any{
+				"initCommands":       []any{"a", "b"},
+				"initCommandsAppend": []any{"c", "b"}, // "b" dups → deduped
+			},
+		},
+	}
+	applyInitCommandsAppend(acc)
+	spec := acc["spec"].(map[string]any)
+	exec := spec["execution"].(map[string]any)
+	got, _ := toSlice(exec["initCommands"])
+	want := []any{"a", "b", "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("initCommands: want %v, got %v", want, got)
+	}
+	if _, present := exec["initCommandsAppend"]; present {
+		t.Errorf("initCommandsAppend should be deleted after folding")
+	}
+}
+
+// End-to-end through Resolve on the shipped gpu-rehearsal-cpu leaf: the
+// base/gpu/serve initCommandsAppend and the leaf's own append must land in the
+// final InitCommands, and InitCommandsAppend must be empty.
+func TestResolve_GpuRehearsal_AppendFolded(t *testing.T) {
+	rp, err := Resolve("gpu-rehearsal-cpu", []string{"../../profiles"})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(rp.Spec.Execution.InitCommandsAppend) != 0 {
+		t.Errorf("InitCommandsAppend should be folded+empty, got %d items",
+			len(rp.Spec.Execution.InitCommandsAppend))
+	}
+	joined := strings.Join(rp.Spec.Execution.InitCommands, "\n")
+	for _, marker := range []string{"KM_VLLM_UNIT", "bifrost", "vllm.service"} {
+		if !strings.Contains(joined, marker) {
+			t.Errorf("merged InitCommands missing %q (append not folded in)", marker)
+		}
+	}
+}
+
+// Phase 122: spec.iam.allowBedrock is an optional *bool that survives parse +
+// merge and defaults to nil (absent).
+func TestIAMAllowBedrock_ParseAndMerge(t *testing.T) {
+	raw := []byte(`apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata: {name: t}
+spec:
+  iam:
+    roleSessionDuration: 1h
+    allowedRegions: [us-east-1]
+    allowBedrock: true
+`)
+	p, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if p.Spec.IAM.AllowBedrock == nil || *p.Spec.IAM.AllowBedrock != true {
+		t.Fatalf("allowBedrock: want *true, got %v", p.Spec.IAM.AllowBedrock)
+	}
+	// Absent → nil.
+	raw2 := []byte(`apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata: {name: t}
+spec:
+  iam: {roleSessionDuration: 1h, allowedRegions: [us-east-1]}
+`)
+	p2, _ := Parse(raw2)
+	if p2.Spec.IAM.AllowBedrock != nil {
+		t.Fatalf("absent allowBedrock should be nil, got %v", *p2.Spec.IAM.AllowBedrock)
+	}
+}

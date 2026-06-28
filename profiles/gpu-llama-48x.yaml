@@ -1,0 +1,50 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: gpu-llama-48x
+  labels:
+    tier: gpu-serving
+    model: llama3.3-70b-fp16
+    instance: g6e.48xlarge
+
+extends:
+  - base/os/debian
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+  - base/gpu/serve
+
+spec:
+  # Bool zero-value trap (Phase 117 Pitfall 2): mixed-bool runtime block in the LEAF.
+  runtime:
+    instanceType: g6e.48xlarge
+    region: us-east-1
+    spot: false
+    hibernation: false
+
+  budget:
+    compute:
+      maxSpendUSD: 300   # 48x override (g6e.48xlarge: 8x L40S, ~$32/hr)
+
+  # GATED: meta-llama/Llama-3.3-70B-Instruct requires HF_TOKEN (Meta license).
+  # Operator encrypts HF_TOKEN with SOPS + shared KMS key (Phase 89):
+  #   sops --encrypt --kms arn:aws:kms:us-east-1:052251888500:alias/km-sandbox-secrets \
+  #        --input-type yaml --output-type yaml /tmp/llama-hf.yaml > secrets/llama-hf.enc.yaml
+  # The real file is created at UAT (Plan 05). km validate checks suffix only (offline).
+  secrets:
+    sopsFile: ./secrets/llama-hf.enc.yaml
+
+  iam:
+    allowedSecretPaths:
+      - /sandbox/*/secrets   # unions with fragment's entry; list-union dedupes
+
+  execution:
+    # Two initCommandsAppend lines:
+    # 1. Write vllm.env with FP16 flags (FP16 at TP=8: 144GB weights fit 384GB; llama3_json parser)
+    # 2. Copy HF_TOKEN from SOPS-injected /etc/sandbox-secrets.env into vllm.env
+    # vllm.env must exist BEFORE base/gpu/serve's bring-up (initCommandsAppend),
+    # so write it via initCommands (runs before all initCommandsAppend).
+    initCommands:
+      - "mkdir -p /etc/km && printf 'VLLM_MODEL=meta-llama/Llama-3.3-70B-Instruct\nVLLM_TP=8\nVLLM_EXTRA=--max-model-len 65536 --gpu-memory-utilization 0.90 --enable-auto-tool-choice --tool-call-parser llama3_json\n' > /etc/km/vllm.env"
+      - "grep '^HF_TOKEN=' /etc/sandbox-secrets.env >> /etc/km/vllm.env 2>/dev/null || true"

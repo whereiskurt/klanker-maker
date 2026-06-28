@@ -1,0 +1,173 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-gpu-serve
+  abstract: true
+  # Phase 122: Abstract GPU-serving fragment.
+  # Provides: vLLM docker-run systemd unit + Bifrost multi-provider gateway (:8001)
+  # + Continue config + codex local-provider knob + raised compute budget.
+  # LiteLLM = documented fallback if Bifrost hits a wall in UAT (see 122-RESEARCH.md O9).
+  # Leaves must set: spec.runtime.instanceType, /etc/km/vllm.env via initCommands (runs before the bring-up).
+
+spec:
+  # BOOL ZERO-VALUE TRAP (Phase 117 Pitfall 2):
+  # spec.runtime here carries ONLY ami, substrate, additionalVolume.
+  # spot/hibernation/mountEFS MUST stay in the leaf (pointer-bool gap).
+  runtime:
+    ami: ami-0a9d213b92dabc044   # DLAMI Ubuntu 24.04 (2026-06-26); re-resolve monthly:
+    # aws ec2 describe-images --owners amazon \
+    #   --filters "Name=name,Values=Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)*" \
+    #             "Name=state,Values=available" \
+    #   --query "sort_by(Images, &CreationDate)[-1].ImageId" \
+    #   --region us-east-1 --output text
+    substrate: ec2
+    additionalVolume:
+      size: 300
+      mountPoint: /data
+
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: stop
+
+  budget:
+    compute:
+      maxSpendUSD: 120   # 12x floor; 48x leaves override to 300
+    ai:
+      maxSpendUSD: 2.00
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+
+    env:
+      HF_HOME: /data/hf
+      OPENAI_API_KEY: ""   # dummy key; Bifrost/vLLM accept keyless requests on loopback
+      # NOTE: OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 is exported by
+      # base/userinit (confirmed in profiles/base/userinit.yaml initCommands:
+      # /etc/profile.d/km-zz-goose-otel.sh) — NOT duplicated here.
+
+    # ⛔ BLOCKED (2026-06-27): these commands do NOT reach the boot — `km create
+    # --local`'s km-init.sh contains only base/userinit's initCommands; the leaf's
+    # initCommands AND this initCommandsAppend are dropped from the payload. See
+    # 122-BIFROST-VALIDATION.md § BLOCKER. Fix the create-path payload first; then the
+    # bring-up below (the correct structure) will actually run.
+    #
+    # Service bring-up (Phase 122 rework — CPU-rehearsal-validated 2026-06-27;
+    # 122-BIFROST-VALIDATION.md § On-hardware findings). km writes profile configFiles
+    # AFTER initCommandsAppend (userdata.go §7.6), so the systemd UNITS + the Bifrost
+    # CONFIG are written HERE (root, before the enable) — NOT in configFiles. Heredocs
+    # use a QUOTED delimiter so ${VLLM_*} stay literal (systemd expands them from
+    # /etc/km/vllm.env at runtime). The mounted /etc/km/bifrost-data is chown'd to
+    # 1000:1000 (Bifrost container UID; else it crash-loops on "mkdir /app/data/logs:
+    # Permission denied"). Bifrost is a docker image (maximhq/bifrost:v1.6.0 — no
+    # release binary; config = mounted app-dir config.json; port via APP_PORT; docker
+    # pull works through the MITM proxy). Leaves write /etc/km/vllm.env via
+    # `initCommands` so it exists before vllm starts. Full sequence PROVEN on hardware.
+    initCommandsAppend:
+      - |
+        cat > /etc/systemd/system/vllm.service <<'KM_VLLM_UNIT'
+        [Unit]
+        Description=vLLM serving (GPU sandbox, local model)
+        After=docker.service network.target
+        Wants=docker.service
+        [Service]
+        Type=simple
+        EnvironmentFile=-/etc/km/vllm.env
+        ExecStartPre=/bin/sleep 5
+        # systemd ${VAR} (braces) is a SINGLE argument — it does NOT word-split,
+        # so braced ${VLLM_EXTRA} passed the whole "--max-model-len N --quantization
+        # awq ..." multi-flag string as ONE argv token → vLLM argparse IndexError →
+        # crash-loop at boot (every GPU leaf sets a multi-flag VLLM_EXTRA). Unbraced
+        # $VAR word-splits on whitespace (and yields zero args when empty). Verified
+        # live on a g6.xlarge L4: braced crashes, unbraced serves. DO NOT re-brace.
+        ExecStart=/usr/bin/docker run --rm --gpus all --ipc=host -p 127.0.0.1:8000:8000 -v /data/hf:/root/.cache/huggingface --env-file /etc/km/vllm.env vllm/vllm-openai:latest --model $VLLM_MODEL --tensor-parallel-size $VLLM_TP --served-model-name local $VLLM_EXTRA
+        Restart=on-failure
+        RestartSec=30
+        [Install]
+        WantedBy=multi-user.target
+        KM_VLLM_UNIT
+      - |
+        cat > /etc/systemd/system/bifrost.service <<'KM_BIFROST_UNIT'
+        [Unit]
+        Description=Bifrost multi-provider model router (vLLM + Bedrock + Anthropic)
+        After=docker.service vllm.service network-online.target
+        Wants=docker.service vllm.service network-online.target
+        [Service]
+        Type=simple
+        ExecStartPre=/bin/sleep 10
+        ExecStartPre=-/usr/bin/docker rm -f km-bifrost
+        ExecStart=/usr/bin/docker run --rm --name km-bifrost --network host -e APP_PORT=8001 -e APP_HOST=127.0.0.1 -e AWS_REGION=us-east-1 -e OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 -e OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf --env-file /etc/km/bifrost-env -v /etc/km/bifrost-data:/app/data maximhq/bifrost:v1.6.0
+        ExecStop=/usr/bin/docker rm -f km-bifrost
+        Restart=on-failure
+        RestartSec=15
+        [Install]
+        WantedBy=multi-user.target
+        KM_BIFROST_UNIT
+      # Populate /etc/km/bifrost-env from SOPS-injected keys FIRST so the config
+      # build below can detect which providers are usable.
+      - "mkdir -p /etc/km/bifrost-data && touch /etc/km/bifrost-env && grep -hE '^(ANTHROPIC_API_KEY|OPENAI_API_KEY)=' /etc/sandbox-secrets.env >> /etc/km/bifrost-env 2>/dev/null || true"
+      # Build Bifrost config.json with jq — include a provider ONLY when usable:
+      # vllm-local always; anthropic/openai if their key is in bifrost-env;
+      # bedrock if /etc/km/bedrock.enabled exists (spec.iam.allowBedrock:true).
+      - |
+        set -e
+        VLLM='{"keys":[{"name":"vllm-key","value":"dummy","models":["*"],"weight":1.0}],"network_config":{"base_url":"http://127.0.0.1:8000","default_request_timeout_in_seconds":120},"custom_provider_config":{"base_provider_type":"openai","allow_private_network":true,"allowed_requests":{"chat_completion":true,"chat_completion_stream":true,"responses":true,"responses_stream":true}}}'
+        PROVIDERS=$(jq -nc --argjson v "$VLLM" '{"vllm-local":$v}')
+        if grep -qE '^ANTHROPIC_API_KEY=.+' /etc/km/bifrost-env 2>/dev/null; then
+          PROVIDERS=$(echo "$PROVIDERS" | jq -c '. + {"anthropic":{"keys":[{"name":"anthropic-direct","value":"env.ANTHROPIC_API_KEY","models":["*"],"weight":1.0}]}}')
+        fi
+        if grep -qE '^OPENAI_API_KEY=.+' /etc/km/bifrost-env 2>/dev/null; then
+          PROVIDERS=$(echo "$PROVIDERS" | jq -c '. + {"openai":{"keys":[{"name":"openai-frontier","value":"env.OPENAI_API_KEY","models":["*"],"weight":1.0}]}}')
+        fi
+        if [ -f /etc/km/bedrock.enabled ]; then
+          PROVIDERS=$(echo "$PROVIDERS" | jq -c '. + {"bedrock":{"keys":[{"name":"bedrock-iam","models":["*"],"weight":1.0,"bedrock_key_config":{"region":"us-east-1"}}]}}')
+        fi
+        jq -nc --argjson p "$PROVIDERS" '{"config_store":{"enabled":false},"providers":$p}' > /etc/km/bifrost-data/config.json
+        chown -R 1000:1000 /etc/km/bifrost-data
+      - "docker pull maximhq/bifrost:v1.6.0 || true"
+      - "systemctl daemon-reload"
+      - "systemctl enable --now vllm.service || true"
+      - "systemctl enable --now bifrost.service || true"
+
+    configFiles:
+      # Continue editor config — points at local vLLM directly (chat-completions,
+      # model name "local" as set by --served-model-name).
+      "/home/sandbox/.continue/config.yaml": |
+        models:
+          - title: Local vLLM (local model)
+            provider: openai
+            model: local
+            apiBase: http://localhost:8000/v1
+            apiKey: dummy
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  # NOTE: secrets for the gateway's key-gated routes (ANTHROPIC_API_KEY / OPENAI_API_KEY)
+  # arrive via spec.secrets.sopsFile (KMS-decrypted to /etc/sandbox-secrets.env at boot;
+  # the role already has kms:Decrypt on alias/km-sandbox-secrets), then the
+  # initCommandsAppend copies them into /etc/km/bifrost-env. We deliberately do NOT use
+  # iam.allowedSecretPaths (SSM-path injection) here — a bad/non-existent path makes the
+  # boot's `aws ssm get-parameter` fail under `set -e` and BRICKS the boot (validated on
+  # the CPU rehearsal). base/platform's iam block (roleSessionDuration, allowedRegions)
+  # is inherited unchanged.
+
+  # codex agent default: points at Bifrost :8001 (multi-provider gateway).
+  # localBaseURL = :8001 (NOT :8000 directly) — Bifrost provides the Responses API
+  # translation layer. vLLM also serves /v1/responses natively (bakeoff finding), but
+  # Bifrost is preferred for uniform multi-provider access + Anthropic translation.
+  agent:
+    default: codex
+    codex:
+      # Bifrost OpenAI-compat ingress is /openai/v1 (bare /v1 404s); model carries
+      # the provider prefix (vllm-local/<served-model-name>). Validated live
+      # (122-BIFROST-VALIDATION.md): codex 0.23.0 hits /openai/v1/responses.
+      localBaseURL: "http://localhost:8001/openai/v1"
+      localModel: "vllm-local/local"

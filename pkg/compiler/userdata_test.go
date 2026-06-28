@@ -2602,3 +2602,37 @@ func TestUserdata_NoAdditionalVolume_NoResolver(t *testing.T) {
 		t.Errorf("ebsnvme-id embedded for a profile with no additional volumes")
 	}
 }
+
+// Phase 122: allowBedrock (useBedrock=false) still adds the Bedrock L7 host so
+// Bifrost->Bedrock calls are MITM-metered.
+func TestL7ProxyHostsAllowBedrock(t *testing.T) {
+	p := baseProfile() // same constructor TestL7ProxyHostsWithBedrock uses
+	p.Spec.Execution.UseBedrock = false
+	p.Spec.IAM.AllowBedrock = boolp(true)
+	got := buildL7ProxyHosts(p)
+	if !strings.Contains(got, ".amazonaws.com") {
+		t.Errorf("allowBedrock must add .amazonaws.com; got %q", got)
+	}
+}
+
+// Phase 122: userdata writes the /etc/km/bedrock.enabled marker iff bedrock is
+// enabled (so base/gpu/serve's jq config includes the bedrock provider).
+func TestUserdataBedrockMarker(t *testing.T) {
+	p := baseProfile()
+	p.Spec.IAM.AllowBedrock = boolp(true)
+	ud, err := generateUserData(p, "sb-bedrock-1", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData: %v", err)
+	}
+	if !strings.Contains(ud, "touch /etc/km/bedrock.enabled") {
+		t.Errorf("expected bedrock marker emission when allowBedrock")
+	}
+	p.Spec.IAM.AllowBedrock = boolp(false)
+	ud2, err := generateUserData(p, "sb-bedrock-2", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData: %v", err)
+	}
+	if strings.Contains(ud2, "touch /etc/km/bedrock.enabled") {
+		t.Errorf("marker must be absent when bedrock disabled")
+	}
+}

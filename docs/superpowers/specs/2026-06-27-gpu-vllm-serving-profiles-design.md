@@ -12,6 +12,36 @@ start` + shim → live UAT). Goose-as-first-class-agent (Path 2) remains a defer
 follow-on.
 **Author:** operator + Claude (brainstorming session)
 
+## ⚠ Research correction (2026-06-27, supersedes details below — see `122-RESEARCH.md` O7)
+
+The GSD research pass found that **Codex now requires the OpenAI Responses API**
+(Feb 2026), and **vLLM serves only Chat Completions** — so codex **cannot** point
+directly at vLLM `:8000` as written below. A **LiteLLM gateway is mandatory**, and
+LiteLLM *also* serves the Anthropic Messages API. Net architecture change:
+
+- **A single on-box LiteLLM on `:8001` is now a CORE component** (not just the
+  optional `--anthropic` shim). It fronts vLLM `:8000` and serves all three
+  dialects: Chat Completions (passthrough), **Responses** (for codex), and
+  **Messages** (for Claude Code).
+- The codex local-provider knob points at **`:8001`** with `wire_api = "responses"`
+  — not `:8000`.
+- `km model start` passthrough and Continue may still hit vLLM `:8000` directly
+  (chat-completions), but codex/Claude-Code go through LiteLLM `:8001`.
+- Confirmed AMI: `ami-0a9d213b92dabc044` (us-east-1 DLAMI Ubuntu 24.04, raw ID
+  passes through `isRawAMIID()`; Ubuntu userdata path is chosen at runtime from
+  `/etc/os-release`). Quant repos: `cyankiwi/GLM-4.5-Air-AWQ-4bit`,
+  `QuantTrio/GLM-4.6-AWQ`, `btbtyler09/Kimi-Dev-72B-GPTQ-8bit` (no AWQ).
+
+**Gateway pick (post-bake-off + web-confirm):** the gateway is **Bifrost** (Go
+single-binary, fits km's sidecar model; Claude-Code integration officially documented
+via Bifrost's `/anthropic` path), **LiteLLM = fallback**. It is a multi-provider
+ROUTER (consolidation layer): `local` (vLLM) + `claude-bedrock` + `claude-anthropic`
++ `gpt-oss-bedrock` (Bedrock OpenAI gpt-oss, keyless via instance role) + optional
+`gpt-frontier`. See `122-CONTEXT.md` § Gateway consolidation (authoritative).
+
+The rest of this spec stands; treat `122-RESEARCH.md` + `122-CONTEXT.md` as
+authoritative where they differ.
+
 ## Problem / goal
 
 The km platform now has a fully operational EC2 sandbox layout (composable

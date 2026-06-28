@@ -481,3 +481,33 @@ func TestHibernationRawAMIWarning(t *testing.T) {
 		t.Errorf("expected hibernation+encryption warning in log, got %q", logged)
 	}
 }
+
+// TestRawDLAMIAMIPassthrough verifies that the Phase 122 DLAMI raw AMI ID
+// (ami-0a9d213b92dabc044) is passed through as ami_id in HCL output and that
+// ami_slug is empty (not substituted with a slug). This ensures the GPU profile
+// matrix uses the exact DLAMI AMI ID without any slug lookup.
+//
+// Should be GREEN immediately — isRawAMIID already exists in service_hcl.go and
+// the raw AMI passthrough path is already wired. This test documents the specific
+// DLAMI AMI from 122-CONTEXT.md so regressions are caught.
+func TestRawDLAMIAMIPassthrough(t *testing.T) {
+	const dlamiID = "ami-0a9d213b92dabc044"
+
+	p := minimalEC2StorageProfile()
+	p.Spec.Runtime.AMI = dlamiID
+
+	hcl, err := generateEC2ServiceHCL(p, "test-gpu-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error for DLAMI raw AMI: %v", err)
+	}
+
+	wantAMIID := `ami_id                 = "` + dlamiID + `"`
+	if !strings.Contains(hcl, wantAMIID) {
+		t.Errorf("HCL output missing DLAMI ami_id passthrough %q\ngot:\n%s", wantAMIID, hcl)
+	}
+
+	wantSlugEmpty := `ami_slug               = ""`
+	if !strings.Contains(hcl, wantSlugEmpty) {
+		t.Errorf("HCL output missing empty ami_slug %q when raw AMI is set\ngot:\n%s", wantSlugEmpty, hcl)
+	}
+}

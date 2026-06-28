@@ -1,0 +1,6 @@
+# SOPS creation rules for km sandbox secret bundles.
+# The KMS key ARN is the shared alias/km-sandbox-secrets key (not sensitive).
+# Edit a bundle with: sops secrets/<name>.enc.yaml   (decrypts in your editor)
+creation_rules:
+  - path_regex: secrets/.*\.enc\.yaml$
+    kms: 'arn:aws:kms:us-east-1:052251888500:key/679755c0-196c-4633-9078-39854f42cde8'

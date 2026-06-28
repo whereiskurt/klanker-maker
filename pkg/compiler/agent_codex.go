@@ -59,6 +59,14 @@ timeout = 30
 //  3. Emits a "# NOTE:" block when agent.codex.tools.{autoApprove,deny} are
 //     non-empty, documenting the asymmetry vs Claude Code. The fields are
 //     preserved in the YAML for forward-compat but are NOT enforced today.
+//  4. Emits a [model_providers.local] block (Phase 122) when LocalBaseURL is set,
+//     routing codex at the local model via the Bifrost gateway (:8001, wire_api=
+//     "responses"). Codex requires the OpenAI Responses API (since Feb 2026); the
+//     profile sets base_url = "http://localhost:8001/v1" pointing at Bifrost, NOT
+//     vLLM :8000 directly — Bifrost provides uniform multi-provider access.
+//     NOTE: current vLLM also serves /v1/responses natively, so :8000 is a valid
+//     documented fallback if Bifrost is unavailable, but the profile routes codex
+//     through Bifrost :8001 for uniform multi-provider access.
 //
 // Nil-safe: a nil agent or nil agent.Codex returns just the base hook block (the
 // common case — most profiles do not configure agent.codex). Returns a string
@@ -93,6 +101,23 @@ func synthesizeCodexConfig(agent *profile.AgentSpec) (string, error) {
 		if len(c.Tools.Deny) > 0 {
 			b.WriteString(fmt.Sprintf("# deny:        %s\n", strings.Join(c.Tools.Deny, ", ")))
 		}
+	}
+
+	// Phase 122: emit [model_providers.local] when the local-provider knob is set.
+	// LocalBaseURL points at the Bifrost gateway (http://localhost:8001/v1) which
+	// serves the Responses API to codex and routes to the on-box vLLM instance.
+	if c.LocalBaseURL != "" {
+		model := c.LocalModel
+		if model == "" {
+			model = "local"
+		}
+		fmt.Fprintf(&b, "\nmodel_provider = %q\n", "local")
+		fmt.Fprintf(&b, "model = %q\n", model)
+		fmt.Fprintf(&b, "\n[model_providers.local]\n")
+		fmt.Fprintf(&b, "name = %q\n", "Local vLLM (via Bifrost)")
+		fmt.Fprintf(&b, "base_url = %q\n", c.LocalBaseURL)
+		fmt.Fprintf(&b, "wire_api = %q\n", "responses")
+		fmt.Fprintf(&b, "env_key = %q\n", "OPENAI_API_KEY")
 	}
 
 	return b.String(), nil

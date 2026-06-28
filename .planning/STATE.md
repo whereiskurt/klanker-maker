@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 121-12-PLAN.md — Freezer interface + auto-latch on BreachFreeze in Slack and H1 bridges (GAP-2)
-last_updated: "2026-06-27T15:06:48.937Z"
+stopped_at: Completed 122-03-PLAN.md — synthesizeCodexConfig local-provider emission GREEN
+last_updated: "2026-06-27T19:03:35.361Z"
 last_activity: 2026-06-27
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 5
-  total_plans: 32
-  completed_plans: 32
+  total_plans: 37
+  completed_plans: 36
   percent: 91
 ---
 
@@ -607,6 +607,10 @@ Progress: [█████████░] 91%
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P10 | 806s | 2 tasks | 12 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P11 | 158s | 2 tasks | 2 files |
 | Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions P12 | 5min | 2 tasks | 6 files |
+| Phase 122 P01 | 256 | 3 tasks | 7 files |
+| Phase 122 P02 | 270 | 3 tasks | 9 files |
+| Phase 122 P04 | 10min | 3 tasks | 4 files |
+| Phase 122 P03 | 24min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1736,6 +1740,16 @@ Recent decisions affecting current work:
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: if_not_exists on breached_at + on_breach: first-breach-only idempotency; concurrent writers collapse to one set under a hard loop
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: Freezer interface nil-dormant: BreachFreeze blocks without latch if Freezer not wired; fail-soft on freeze error keeps action blocked
 - [Phase 121-action-quota-and-freeze-quarantine-for-high-impact-outbound-actions]: Separate BreachBlock/BreachFreeze switch cases: BreachBlock deny-for-window only; BreachFreeze auto-latches action_frozen=true via Freezer.FreezeSandbox
+- [Phase 122]: LocalBaseURL/LocalModel JSON tags match schema property names exactly (localBaseURL/localModel) — the key_link constraint between types.go and the JSON schema
+- [Phase 122]: model_test.go uses t.Skip placeholder (not a compile-failing forward-ref) because model.go doesn't exist yet; file-level comment documents exact Plan 04 assertions for runModelStart
+- [Phase 122]: Bifrost v1.0.6 pinned as GPU gateway (not LiteLLM); 5 named routes (local/claude-bedrock/claude-anthropic/gpt-oss-bedrock/gpt-frontier-dormant); keyless Bedrock via EC2 instance role
+- [Phase 122]: base/gpu/serve fragment carries shell/workingDir/sourceAccess to satisfy merged-bytes required-field constraints (no base fragment provided these)
+- [Phase 122]: vllm.env written via initCommandsAppend in leaves (not configFiles) to avoid section-ordering race; HF_TOKEN appended in second initCommandsAppend line for Llama leaves
+- [Phase 122]: km model start forwards :8001 (Bifrost) with --anthropic as semantic alias printing ANTHROPIC_BASE_URL pointing at /anthropic path
+- [Phase 122]: httpTunnelProbe (plain-HTTP) added to shell.go mirroring httpsTunnelProbe pattern for Bifrost :8001 liveness
+- [Phase 122]: Emit [model_providers.local] only when LocalBaseURL != empty — dormant path byte-identical (Phase 122 Plan 03)
+- [Phase 122]: base_url emitted verbatim from LocalBaseURL field; profile is the authority for :8001 Bifrost URL (Phase 122 Plan 03)
+- [Phase 122]: wire_api = "responses" per Codex Responses API requirement (since Feb 2026); :8000 documented as fallback in code comment (Phase 122 Plan 03)
 
 ### Roadmap Evolution
 
@@ -1754,6 +1768,7 @@ Recent decisions affecting current work:
 - Phase 110 added: Session-aware Slack reply + thread/channel repair — `km-slack reply` (sandbox) + `km slack reply`/cleanup commands (operator) to post to the thread bound to a `--resume` session via a new `claude_session_id` GSI + bridge `lookup-thread` action; channel-root fallback; repair stale thread/channel mappings. NOTE: numbered 110 not 108 — Phases 108/109 are completed-but-unroadmapped GitHub-bridge fix-commits (CLAUDE.md + docs/github-bridge.md); gsd-tools' integer-max scan would have collided.
 - Phase 114 added: Slack bridge auto-resume — start a paused/stopped sandbox when an inbound Slack thread/channel message would be dispatched to it (resume-only Slack analog of the GitHub/H1 Phase-109 path; no cold-create, no budget awareness). Design spec: `docs/superpowers/specs/2026-06-15-slack-resume-on-thread-message-design.md`. NOTE: numbered 114 not 111 — phase dirs run 93–113 (111/112/113 exist), and 108/109 are unroadmapped fix-commits.
 - Phase 116 added: km check serverless check runner — per-snippet SDK-provisioned Lambdas run Python snippets that print JSON to the S3 artifact bucket; a config-driven `checks.triggers` `when_py` predicate fires alias-targeted resume-or-cold-create via a CheckDispatch EventBridge event consumed by ttl-handler (reusing the bridge self-heal factored into shared `pkg/dispatch`). Scheduled/manual/github.events invocation; open egress (no VPC) v1; zip+requirements default packaging with `--image` container opt-in; two scaffolding modules ({prefix}-checks DDB + {prefix}-check-runner role); `profiles/checks/` QOTD + Wiz-threat-intel examples. Authoritative design spec: `docs/superpowers/specs/2026-06-17-km-check-serverless-runner-design.md`. NOTE: 115 is the highest prior phase (CLAUDE.md + roadmap), so 116 is the clean next integer.
+- Phase 122 added: GPU vLLM model-serving sandbox profiles + local-model chat — 7 profiles serve 70B-class models (Qwen2.5-72B, Llama-3.3-70B, GLM-4.6, GLM-4.5-Air, Kimi-Dev-72B) via vLLM on a Deep Learning AMI base across g6e.12x/48xlarge, composed from a new abstract `base/gpu/serve` fragment, weights on a persistent `additionalVolume`, served as `--served-model-name local`. Three deliverables: (1) the serving profiles; (2) Slack chat-with-resume via an on-box codex repoint at `localhost:8000` (small `synthesizeCodexConfig` change emitting `[model_providers.local]`, reuses the km-slack inbound poller); (3) `km model start <sb> [--local-port] [--anthropic]` laptop SSM port-forward (mirrors `km vscode start`, reuses `runReconnectingPortForward`) + an on-box Anthropic↔OpenAI shim (LiteLLM `/v1/messages`) so local Claude Code can drive the remote model. claude stays cloud-pointed on-box (preserves `/claude`-vs-`/codex` A/B). DoD = full live UAT; GPU quota already cleared (G+VT=768 vCPU). Deferred: goose-as-agent, on-box claude repoint, Kimi K2 (gated P-family). Authoritative design spec: `docs/superpowers/specs/2026-06-27-gpu-vllm-serving-profiles-design.md`. NOTE: 121 is the highest prior phase, so 122 is the clean next integer.
 
 ### Pending Todos
 
@@ -1883,6 +1898,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-27T14:59:04.397Z
-Stopped at: Completed 121-12-PLAN.md — Freezer interface + auto-latch on BreachFreeze in Slack and H1 bridges (GAP-2)
+Last session: 2026-06-27T19:03:35.354Z
+Stopped at: Completed 122-03-PLAN.md — synthesizeCodexConfig local-provider emission GREEN
 Resume file: None

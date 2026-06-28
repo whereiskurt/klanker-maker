@@ -599,6 +599,10 @@ type IAMSpec struct {
 	// AllowedSecretPaths is the allowlist of SSM Parameter Store paths the sandbox
 	// may read at boot time. Secrets are injected as environment variables via user-data.
 	AllowedSecretPaths []string `yaml:"allowedSecretPaths,omitempty"`
+	// AllowBedrock grants the sandbox role Bedrock IAM (InvokeModel +
+	// bedrock-mantle) for the on-box Bifrost gateway WITHOUT useBedrock's agent
+	// env injection. Decoupled from spec.execution.useBedrock. Default nil/false.
+	AllowBedrock *bool `yaml:"allowBedrock,omitempty"`
 }
 
 // SidecarsSpec defines the sidecar processes that run alongside the sandbox.
@@ -778,6 +782,15 @@ type AgentCodexSpec struct {
 	// `km agent run <sb> --codex`. Replaces cli.codexArgs. User-supplied args
 	// still take precedence.
 	Args []string `json:"args,omitempty" yaml:"args,omitempty"`
+	// LocalBaseURL is the OpenAI Responses-compatible base URL for the local
+	// model provider (Phase 122). Points at the Bifrost gateway :8001, NOT
+	// vLLM :8000 directly — see 122-CONTEXT.md O7. When set,
+	// synthesizeCodexConfig emits a [model_providers.local] block routing
+	// codex to the local model. Empty = no provider block emitted (dormant).
+	LocalBaseURL string `json:"localBaseURL,omitempty" yaml:"localBaseURL,omitempty"`
+	// LocalModel is the model name passed to the local provider (Phase 122).
+	// Default is "local" (matches vLLM --served-model-name local).
+	LocalModel string `json:"localModel,omitempty" yaml:"localModel,omitempty"`
 }
 
 // AgentToolsSpec is the shared tool-gating shape for both Claude and Codex.

@@ -96,3 +96,51 @@ Plans:
 - [ ] 121-10-PLAN.md — CLI: km freeze + latch-aware km unlock + FROZEN in list/status + doctor surfacing
 - [ ] 121-11-PLAN.md — GAP 1: pkg/quota writes breached_at + on_breach on first-breach (restores ALR-01 alerter live path) + REAL-path breach-write test
 - [ ] 121-12-PLAN.md — GAP 2: Slack+H1 bridges auto-latch action_frozen via Freezer on BreachFreeze (BRG-01/H1-01, CONTEXT §7 dec 8) + freeze-only tests
+
+### Phase 122: GPU vLLM model-serving sandbox profiles plus local-model chat (codex repoint, km model start, Anthropic shim)
+
+**Goal:** Stand up GPU EC2 sandboxes that serve 70B-class local models via vLLM (on a Deep Learning AMI base, weights on a persistent volume), and make that model reachable through every km interface — VS Code Remote-SSH, Slack chat-with-resume (on-box codex repointed at `localhost:8000`), on-box terminal/headless codex, and laptop dev via a new `km model start` SSM port-forward (with an on-box Anthropic↔OpenAI shim so local Claude Code can drive it). claude stays cloud-pointed on-box to preserve a `/claude`-vs-`/codex` cloud-vs-local A/B.
+**Requirements**: phase-local synthetic IDs (derived from CONTEXT.md + 122-RESEARCH.md + 122-VALIDATION.md): REQ-122-PROFILES (7 GPU vLLM serving leaves + base/gpu/serve fragment), REQ-122-CODEX (synthesizeCodexConfig local-provider emission), REQ-122-MODELSTART (km model start/status), REQ-122-SHIM (on-box LiteLLM dual-gateway + Anthropic shim), REQ-122-UAT (full 7-gate live UAT)
+**Depends on:** Phase 121, Phase 117 (composable inheritance), Phase 92 (agent tool-gating / codex config synthesis)
+**Plans:** 4/5 complete; 122-05 partial (docs done; live UAT G3–G9 BLOCKED on G-instance quota — request `d7fe8a96…` PENDING in 052251888500/us-east-1). Gateway shipped as **Bifrost** (multi-provider router, not the original "shim"; LiteLLM = fallback).
+
+**Design spec:** `docs/superpowers/specs/2026-06-27-gpu-vllm-serving-profiles-design.md`. RESEARCH/CONTEXT supersede the spec: O7 → a gateway is CORE (Codex needs the Responses API since Feb 2026); the bake-off chose **Bifrost** on `:8001` as a 5-route multi-provider router (local/claude-bedrock/claude-anthropic/gpt-oss-bedrock/gpt-frontier). Resume: `.planning/phases/122-*/122-UAT.md`.
+
+Plans:
+- [x] 122-01-PLAN.md — Wave 0: AgentCodexSpec localBaseURL/localModel + JSON schema + 6 Wave-0 RED test stubs ✓
+- [x] 122-02-PLAN.md — base/gpu/serve fragment (Bifrost v1.0.6 5-route router + OTEL) + 7 GPU leaves; validate-all 20/20 ✓
+- [x] 122-03-PLAN.md — synthesizeCodexConfig emits [model_providers.local] (wire_api=responses, :8001) + golden; full suite green ✓
+- [x] 122-04-PLAN.md — km model start/status + httpTunnelProbe reusing runReconnectingPortForward + root registration + 8 tests ✓
+- [~] 122-05-PLAN.md — live UAT: G1/G2 ✓ (unit), Task 4 docs ✓ (docs/gpu-model-serving.md + CLAUDE.md); G3–G9 BLOCKED on G-quota (no GPU spend incurred). Resume per 122-UAT.md once quota lands.
+
+### Phase 123: klankermaker.ai setup wizard — interview-and-emit webapp (self-setup sub-project A)
+
+**Goal:** A public, client-side-only static wizard at `klankermaker.ai` that interviews a
+newcomer and emits a downloadable bundle — AWS access config (IAM/SSO `klanker-*` profiles) +
+a prefilled `km-config.yaml` + a **gate-segmented, readable `km` runbook** — with **no creds in
+the browser and nothing transmitted**. Architecture: a **declarative question-graph** (data) over
+**two layers** (gated foundation spine + flat capability catalog) rendered by a generic static
+site, guarded by a **CI contract test that runs emitted config through real `km`** so schema drift
+fails the build. Presets: ⚡ Quick start (no email/domain; Slack+GitHub+H1+checks) / 🏛 Full
+(email+Org+everything) / 🛠 Custom. Account-vend + quota are emitted as **forward-compatible
+placeholders** (sub-projects C/B); resume-state is the artifact contract only (sub-project D).
+**This is sub-project A of the larger self-setup-from-zero milestone (A webapp / B `km quota
+request` / C `km account` lifecycle / D resume model); only A is in scope here.**
+
+**Requirements** (phase-local synthetic IDs, derived from the design spec):
+REQ-123-GRAPH (declarative question-graph schema + capability-descriptor format + presets),
+REQ-123-EMIT (pure emitter: answers → km-config.yaml + aws-config snippet + N gate-segmented
+scripts + README; golden bundles per preset), REQ-123-RENDER (dependency-light static renderer:
+branch, validate client-side, build bundle in-browser, "looks awesome"), REQ-123-CONTRACT (CI
+test in km repo: emitted config per preset → real `km validate`/`km configure --check`; drift
+fails build), REQ-123-HOST (static hosting story for klankermaker.ai; S3+CloudFront).
+
+**Design spec:** `docs/superpowers/specs/2026-06-27-klankermaker-setup-wizard-design.md`
+**Depends on:** none (additive; new in-repo `web/wizard/` tree + one thin km-side `--check` seam).
+Independent of Phase 122 — planned as 123 with GSD focus deliberately left on 122.
+
+Plans:
+- [ ] 123-01-PLAN.md — Wave 1: question-graph schema + capability-descriptor format + pure emitter + golden bundles per preset (no UI). The testable core; the runbook/bundle format that is the contract for B/C/D.
+- [ ] 123-02-PLAN.md — Wave 2: static renderer (graph-driven branching UI, client-side validation, in-browser bundle generation) + frontend-design pass.
+- [ ] 123-03-PLAN.md — Wave 3: CI contract test — add thin `km configure --check`, emit km-config per preset, run real km over each; drift fails CI.
+- [ ] 123-04-PLAN.md — Wave 4: static hosting for klankermaker.ai (S3+CloudFront+ACM), pinned-km fetch+checksum in the emitted runbook, CI deploy.

@@ -1,0 +1,35 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: gpu-rehearsal-cpu
+  labels:
+    tier: gpu-rehearsal
+    instance: t3.xlarge
+  # THROWAWAY CPU rehearsal of Phase 122 — exercises the full base/gpu/serve
+  # plumbing (Bifrost docker unit, codex repoint, Slack poller, km model start,
+  # OTEL, cloud routes via the instance role) on a cheap CPU box (~$0.16/hr, no
+  # G-quota). vLLM is masked (CUDA image won't run on CPU) so the `local` route is
+  # intentionally dead; everything else is live. Not for production.
+
+extends:
+  - base/os/debian
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+  - base/gpu/serve
+
+spec:
+  runtime:
+    instanceType: t3.xlarge
+    region: us-east-1
+    spot: false
+    hibernation: false
+
+  execution:
+    # vLLM can't run on CPU — disable + mask so it doesn't restart-loop. The
+    # `vllm-local/local` Bifrost route will 502 (expected). All cloud routes +
+    # the rest of the gateway run normally. (Runs after base/gpu/serve's
+    # `enable --now vllm.service` via the Phase-117 append union.)
+    initCommandsAppend:
+      - "systemctl disable --now vllm.service 2>/dev/null; systemctl mask vllm.service 2>/dev/null; true"

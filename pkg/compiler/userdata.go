@@ -4830,6 +4830,11 @@ aws s3 cp "s3://{{ .KMArtifactsBucket }}/rsync/{{ .Rsync }}.tar.gz" /tmp/km-rsyn
   echo "[km-bootstrap] Rsync snapshot {{ .Rsync }} restored into $SHELL_HOME"
 } || echo "[km-bootstrap] WARNING: rsync snapshot {{ .Rsync }} not found in S3 (skipped)"
 {{- end }}
+{{- if .EnableBedrock }}
+# Phase 122: marker read by base/gpu/serve's jq config build to include the
+# bedrock provider. Written before km-init.sh (initCommandsAppend) runs.
+mkdir -p /etc/km && touch /etc/km/bedrock.enabled
+{{- end }}
 {{- if or .InitCommands .InitScripts }}
 # ============================================================
 # 7.5. Profile init (commands + scripts downloaded from S3)
@@ -5011,6 +5016,10 @@ type userDataParams struct {
 	InitCommands []string
 	// InitScripts is a list of S3 keys for init scripts to download and execute.
 	InitScripts []string
+	// EnableBedrock writes the /etc/km/bedrock.enabled marker so the GPU
+	// Bifrost config (base/gpu/serve initCommandsAppend) includes the bedrock
+	// provider. Set from enableBedrock(p).
+	EnableBedrock bool
 	// ConfigFiles maps absolute paths to file contents to write during bootstrap.
 	ConfigFiles map[string]string
 	// CodexConfigTOML is the synthesized ~/.codex/config.toml content (Phase 92,
@@ -5475,7 +5484,7 @@ func buildL7ProxyHosts(p *profile.SandboxProfile) string {
 	if p.Spec.SourceAccess.GitHub != nil {
 		hosts = append(hosts, "github.com", "api.github.com", "raw.githubusercontent.com", "codeload.githubusercontent.com")
 	}
-	if p.Spec.Execution.UseBedrock {
+	if enableBedrock(p) {
 		// .amazonaws.com covers Bedrock endpoints (bedrock-runtime.us-east-1.amazonaws.com etc.)
 		// This is broader than strictly necessary, but non-Bedrock traffic passes through
 		// the proxy transparently without MITM inspection.
@@ -5605,6 +5614,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	params.Rsync = p.Spec.Execution.Rsync
 	params.InitCommands = p.Spec.Execution.InitCommands
 	params.InitScripts = p.Spec.Execution.InitScripts
+	params.EnableBedrock = enableBedrock(p)
 	params.ConfigFiles = p.Spec.Execution.ConfigFiles
 	params.ProfileEnv = mergeBedrockEnv(p)
 
