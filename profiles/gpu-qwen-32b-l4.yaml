@@ -1,0 +1,37 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: gpu-qwen-32b-l4
+  labels:
+    tier: gpu-serving
+    model: qwen2.5-32b-awq
+    instance: g6.12xlarge
+  # Snappy L4 chat variant: Qwen2.5-32B-Instruct-AWQ on g6.12xlarge (4x L4 = 96GB).
+  # ~18GB AWQ weights split across 4 GPUs (~4.5GB/GPU) leaves huge KV headroom, so
+  # decode is much faster than the 72B-on-L4 (gpu-qwen-12x-l4). Same vLLM+Bifrost
+  # serving stack; served as --served-model-name local so every interface (Continue,
+  # codex, Slack, km model start) works unchanged. Full 32768 context kept since VRAM
+  # is plentiful at this model size.
+
+extends:
+  - base/os/debian
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+  - base/gpu/serve
+
+spec:
+  secrets:
+    sopsFile: ./secrets/qwen.enc.yaml
+
+  # Bool zero-value trap (Phase 117 Pitfall 2): mixed-bool runtime block in the LEAF.
+  runtime:
+    instanceType: g6.12xlarge
+    region: us-east-1
+    spot: false
+    hibernation: false
+
+  execution:
+    initCommands:
+      - "mkdir -p /etc/km && printf 'VLLM_MODEL=Qwen/Qwen2.5-32B-Instruct-AWQ\nVLLM_TP=4\nVLLM_EXTRA=--quantization awq --max-model-len 32768 --gpu-memory-utilization 0.90 --enable-auto-tool-choice --tool-call-parser hermes\n' > /etc/km/vllm.env"

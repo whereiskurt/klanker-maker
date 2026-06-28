@@ -66,6 +66,27 @@ spec:
     # pull works through the MITM proxy). Leaves write /etc/km/vllm.env via
     # `initCommands` so it exists before vllm starts. Full sequence PROVEN on hardware.
     initCommandsAppend:
+      # Phase 122 fix: relocate docker + containerd storage to /data BEFORE any image
+      # pull. The DLAMI root volume (~72G, ~50G consumed by the base image) cannot hold
+      # the ~25-30G uncompressed vllm/vllm-openai image — extraction fails with "no space
+      # left on device" and vllm.service crash-loops, never reaching the weight download.
+      # /data (300G) is already mounted (userdata section 2) by the time km-init.sh runs,
+      # and the docker/containerd dirs are nearly empty here, so relocating is cheap.
+      # Symlink (not a data-root config) because the DLAMI uses the containerd image store
+      # under /var/lib/containerd, which a Docker data-root setting would not move. Fully
+      # defensive (|| true) so a transient failure cannot brick boot under set -e.
+      - |
+        for d in docker containerd; do
+          if [ ! -L "/var/lib/$d" ]; then
+            systemctl stop docker.service docker.socket containerd 2>/dev/null || true
+            if [ -d "/var/lib/$d" ] && [ ! -e "/data/$d" ]; then mv "/var/lib/$d" "/data/$d" 2>/dev/null || true; fi
+            mkdir -p "/data/$d"
+            rm -rf "/var/lib/$d" 2>/dev/null || true
+            ln -s "/data/$d" "/var/lib/$d"
+          fi
+        done
+        systemctl start containerd 2>/dev/null || true
+        systemctl start docker.service 2>/dev/null || systemctl start docker 2>/dev/null || true
       - |
         cat > /etc/systemd/system/vllm.service <<'KM_VLLM_UNIT'
         [Unit]
