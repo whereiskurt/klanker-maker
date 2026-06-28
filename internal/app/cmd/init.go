@@ -541,6 +541,15 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			// Phase 124: {prefix}-capacity DynamoDB table (hash: instanceType, range: az,
+			// TTL enabled). Records AZ capacity observations from the spot/on-demand sweep
+			// loop so known-bad (instanceType, az) pairs are skipped on the next attempt.
+			// Plain table — no upstream deps. Ordered adjacent to dynamodb-sandboxes.
+			name:    "dynamodb-capacity",
+			dir:     filepath.Join(regionDir, "dynamodb-capacity"),
+			envReqs: nil,
+		},
+		{
 			name:    "dynamodb-schedules",
 			dir:     filepath.Join(regionDir, "dynamodb-schedules"),
 			envReqs: nil,
