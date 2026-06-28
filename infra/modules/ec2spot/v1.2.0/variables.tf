@@ -166,3 +166,13 @@ variable "additional_snapshots" {
   description = "Snapshot-backed EBS volumes attached at sandbox boot. Order matches profile spec.runtime.additionalSnapshots."
   default     = []
 }
+
+# ============================================================
+# Phase 124 — Bounded spot fulfillment waiter
+# ============================================================
+
+variable "spot_create_timeout" {
+  type        = string
+  description = "Spot fulfillment timeout. Keep <=3m so a 4-AZ sweep fits the Lambda 900s budget."
+  default     = "3m"
+}

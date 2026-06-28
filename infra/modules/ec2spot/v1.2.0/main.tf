@@ -628,6 +628,15 @@ resource "aws_spot_instance_request" "ec2spot" {
     Name                 = "km-sandbox-${each.value.sandbox_id}-root"
   }
 
+  # Phase 124: bounded fulfillment waiter. Default 3m keeps a 4-AZ sweep within
+  # the Lambda 900s budget (~4 × 3m = 12m per full sweep round). A capacity-dry AZ
+  # will timeout here instead of hanging the terraform apply indefinitely.
+  # delete timeout gives terraform enough time to cancel and clean up the request.
+  timeouts {
+    create = var.spot_create_timeout
+    delete = "10m"
+  }
+
   lifecycle {
     ignore_changes = [
       vpc_security_group_ids,
