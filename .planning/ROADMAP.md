@@ -144,3 +144,56 @@ Plans:
 - [ ] 123-02-PLAN.md — Wave 2: static renderer (graph-driven branching UI, client-side validation, in-browser bundle generation) + frontend-design pass.
 - [ ] 123-03-PLAN.md — Wave 3: CI contract test — add thin `km configure --check`, emit km-config per preset, run real km over each; drift fails CI.
 - [ ] 123-04-PLAN.md — Wave 4: static hosting for klankermaker.ai (S3+CloudFront+ACM), pinned-km fetch+checksum in the emitted runbook, CI deploy.
+
+### Phase 124: Platform-wide AZ failover and capacity feasibility for EC2 launches
+
+**Goal:** Stop EC2 launches from being pinned to a single capacity-dry AZ
+(`us-east-1a`). Wrap the existing `compile → terragrunt apply` pipeline in an
+orchestrated AZ sweep inside `km create` (inherited by the cold-create Lambda,
+which runs `km create` as a subprocess): try AZs in a capacity-aware order,
+classify failures so `InsufficientInstanceCapacity` iterates to the next AZ
+while a *regional* quota wall (`L-DB2E81BA`=0) or auth/param error fails fast,
+kill the spot `wait_for_fulfillment` forever-loop with a bounded waiter, and
+keep the GPU `additionalVolume` co-located with the chosen AZ. Add an honest
+`km capacity` feasibility report (no false "available" — AWS has no live
+on-demand capacity API) backed by a new `{prefix}-capacity` DDB table that
+remembers recent ICE failures + last-success AZ per instance type. Platform-wide
+(spot + on-demand, GPU + non-GPU); retires the `spot-multi-az` pending todo.
+
+**Requirements** (phase-local synthetic IDs, derived from the design spec):
+REQ-124-SWEEP (AZ override plumbing compiler→ec2spot single-instance + N>1 spread
+preserved; classify-and-retry loop in km create; taint/replace between attempts),
+REQ-124-CLASSIFY (shared error taxonomy: ICE/spot-price/waiter-timeout → iterate;
+quota/auth/invalid → fail-fast; create-handler `nocap` refactored onto it),
+REQ-124-WAITER (bounded `timeouts.create` on `aws_spot_instance_request`; full
+4-AZ sweep fits Lambda 900s budget),
+REQ-124-RANK (capacity-aware rankAZs: drop non-offering AZs via
+DescribeInstanceTypeOfferings, regional-quota gate up front, last-success sticky,
+ICE deprioritize, `spec.runtime.azPreference` override),
+REQ-124-STORE (new `{prefix}-capacity` DDB table + TF module + regionalModules()
+bump + live unit; (instanceType, az) key, TTL'd ICE rows, read/write from operator
++ Lambda),
+REQ-124-CAPCMD (`km capacity <profile|--type>` feasibility report;
+verdicts likely/quota-blocked/not-offered/recently-dry/unknown),
+REQ-124-SURFACE (`spec.runtime.azPreference` additive schema; `km create
+--wait-for-capacity[=30m]` opt-in outer backoff; `km doctor` table + GPU-quota=0 WARN),
+REQ-124-UAT (live: GPU launch fails over 1a→1c, quota=0 fail-fast, capacity report,
+all 4 subnets exist).
+
+**Design spec:** `docs/superpowers/specs/2026-06-28-az-failover-capacity-feasibility-design.md`
+**Depends on:** none hard (additive; touches the `ec2spot` module + `pkg/compiler`
++ a new DDB table). Motivated by Phase 122 (GPU vLLM profiles) and supersedes the
+`spot-multi-az` todo; EBS coupling interacts with Phase 87 (additionalSnapshots).
+Independent of Phase 123 (setup wizard) — sequential number only, no code dependency.
+
+**Out of scope:** multi-region failover; live on-demand capacity *prediction*;
+Lambda auto-requeue of `nocap` cold-creates; EC2 Fleet/CreateFleet rewrite; spot
+interruption handling. (See spec § Non-goals.)
+
+Plans:
+- [ ] 124-01-PLAN.md — Wave 0: AZ override plumbing (`spec.runtime.azPreference` schema + `pkg/compiler/service_hcl.go` → `ec2spot/v1.2.0` single-instance AZ override, N>1 spread preserved) + bounded spot `timeouts.create` (forever-loop fix) + RED test stubs + module-count bump reservation.
+- [ ] 124-02-PLAN.md — Shared error taxonomy classifier (ICE/spot-price/timeout → iterate; quota/auth/invalid → fail-fast with quota-named remediation) + km create AZ-sweep loop (taint/replace between attempts) + refactor `cmd/create-handler` `nocap` onto the shared classifier (TDD).
+- [ ] 124-03-PLAN.md — `dynamodb-capacity` TF module (+TTL) + live terragrunt unit + `regionalModules()` entry (INIT-01) + capacity-store read/write seam shared by operator + Lambda. **`make build` before `km init`** gotcha called out.
+- [ ] 124-04-PLAN.md — capacity-aware `rankAZs` (DescribeInstanceTypeOfferings drop + Service-Quotas headroom gate + last-success sticky + ICE deprioritize + azPreference merge) + `km capacity <profile|--type>` feasibility report (honest verdicts).
+- [ ] 124-05-PLAN.md — `km create --wait-for-capacity[=30m]` opt-in outer backoff + `km doctor` surfacing (table existence + GPU-family quota=0 WARN) + 4-subnet verification.
+- [ ] 124-06-PLAN.md — live UAT: GPU launch fails over 1a→1c, quota-0 fail-fast message, `km capacity` report accuracy, EBS volume co-located, full `go test ./...` green + 20/20 profiles validate.
