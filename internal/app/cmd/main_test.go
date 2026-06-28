@@ -17,6 +17,13 @@ import (
 func TestMain(m *testing.M) {
 	sleep = func(time.Duration) {}
 
+	// internal/app/cmd tests never need real Lambda zips; the production default
+	// downloads terraform + go-builds 9 lambdas per call (~15s), paid by every
+	// TestRunInitPlan_* via RunInitPlanWithRunner. The two tests that exercise the
+	// build-func contract override it locally (save/restore), so this global no-op
+	// is safe.
+	BuildLambdaZipsFunc = func(string) error { return nil }
+
 	// Shrink the select-loop / ticker durations that the `sleep` seam does NOT
 	// cover (these are time.After / time.NewTicker waits, not time.Sleep). The
 	// shell port-forward reconnect/liveness loops and the SSM pollers otherwise

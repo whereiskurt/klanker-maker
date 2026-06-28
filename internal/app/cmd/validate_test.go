@@ -6,27 +6,35 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
-// binPath returns the absolute path to the km binary, building it if needed.
+var (
+	kmBinOnce sync.Once
+	kmBinPath string
+	kmBinErr  error
+)
+
+// buildKM returns the absolute path to the km binary, building it once per
+// test run via sync.Once. All callers share the same binary read-only — they
+// only exec it, never mutate it. Removing the per-test t.Cleanup removal
+// eliminates ~40 redundant `go build` invocations (~6s each) across the suite.
 func buildKM(t *testing.T) string {
 	t.Helper()
-
-	// Find repo root (go up from testfile location)
-	_, thisFile, _, _ := runtime.Caller(0)
-	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..", "..")
-
-	binPath := filepath.Join(os.TempDir(), "km-test-binary")
-	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/km/")
-	cmd.Dir = repoRoot
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("failed to build km binary: %v", err)
+	kmBinOnce.Do(func() {
+		_, thisFile, _, _ := runtime.Caller(0)
+		repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..", "..")
+		kmBinPath = filepath.Join(os.TempDir(), "km-test-binary")
+		c := exec.Command("go", "build", "-o", kmBinPath, "./cmd/km/")
+		c.Dir = repoRoot
+		c.Stderr = os.Stderr
+		kmBinErr = c.Run()
+	})
+	if kmBinErr != nil {
+		t.Fatalf("failed to build km binary: %v", kmBinErr)
 	}
-	t.Cleanup(func() { os.Remove(binPath) })
-	return binPath
+	return kmBinPath
 }
 
 // testdataPath returns the absolute path to a testdata/profiles file.
