@@ -141,6 +141,6 @@ Independent of Phase 122 — planned as 123 with GSD focus deliberately left on 
 
 Plans:
 - [ ] 123-01-PLAN.md — Wave 1: question-graph schema + capability-descriptor format + pure emitter + golden bundles per preset (no UI). The testable core; the runbook/bundle format that is the contract for B/C/D.
-- [ ] 123-02-PLAN.md — Wave 2: static renderer (graph-driven branching UI, client-side validation, in-browser bundle generation) + frontend-design pass. (to be authored after Wave 1)
-- [ ] 123-03-PLAN.md — Wave 3: CI contract test in km repo (emitted km-config per preset → real `km validate`; add thin `km configure --check` if needed) wiring drift-failure into CI. (to be authored after Wave 1)
-- [ ] 123-04-PLAN.md — Wave 4: static hosting for klankermaker.ai (S3+CloudFront), pinned-km fetch+checksum in the emitted script, deploy. (to be authored after Wave 2/3)
+- [ ] 123-02-PLAN.md — Wave 2: static renderer (graph-driven branching UI, client-side validation, in-browser bundle generation) + frontend-design pass.
+- [ ] 123-03-PLAN.md — Wave 3: CI contract test — add thin `km configure --check`, emit km-config per preset, run real km over each; drift fails CI.
+- [ ] 123-04-PLAN.md — Wave 4: static hosting for klankermaker.ai (S3+CloudFront+ACM), pinned-km fetch+checksum in the emitted runbook, CI deploy.
