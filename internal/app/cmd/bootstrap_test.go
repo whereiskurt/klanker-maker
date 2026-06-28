@@ -557,7 +557,11 @@ func TestRunBootstrapSharedSES_ExportsAllSiteHCLVars(t *testing.T) {
 // Plan-checker revision 1 H6: this is the bootstrap-side mirror of Task 2's
 // init-side per-module timeout.
 func TestDefaultApplyTerragrunt_HonorsContextTimeout(t *testing.T) {
-	makeFakeTerragruntForBootstrap(t, "sleep 30")
+	// "exec sleep 30" replaces the shell with sleep so SIGINT reaches sleep
+	// directly; sleep exits immediately on SIGINT, avoiding the 5s WaitDelay
+	// kill-grace in pkg/terragrunt/runner.go that "sleep 30" (without exec)
+	// would incur while the shell ignores SIGINT waiting for its child.
+	makeFakeTerragruntForBootstrap(t, "exec sleep 30")
 	withShortBootstrapTimeout(t, 200*time.Millisecond)
 
 	// Use a tmpdir as the apply target — terragrunt is faked anyway.
@@ -582,7 +586,11 @@ func TestDefaultApplyTerragrunt_HonorsContextTimeout(t *testing.T) {
 // flow: km bootstrap --shared-ses with dryRun=false invokes
 // ApplyTerragruntFunc, which is bounded by BootstrapApplyTimeout.
 func TestRunBootstrapSharedSES_HonorsBootstrapTimeout(t *testing.T) {
-	makeFakeTerragruntForBootstrap(t, "sleep 30")
+	// "exec sleep 30" replaces the shell with sleep so SIGINT reaches sleep
+	// directly; sleep exits immediately on SIGINT, avoiding the 5s WaitDelay
+	// kill-grace in pkg/terragrunt/runner.go that "sleep 30" (without exec)
+	// would incur while the shell ignores SIGINT waiting for its child.
+	makeFakeTerragruntForBootstrap(t, "exec sleep 30")
 	withShortBootstrapTimeout(t, 200*time.Millisecond)
 	clearTerragruntEnv(t)
 

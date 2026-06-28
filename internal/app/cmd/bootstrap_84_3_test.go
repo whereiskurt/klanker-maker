@@ -19,6 +19,8 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -123,6 +125,20 @@ func TestBootstrapAll_ChainsBothSubflows(t *testing.T) {
 //
 // The test uses the RunBootstrapAllFunc test seam (Plan 03 will introduce).
 func TestBootstrapAll_PlanRespectsGate(t *testing.T) {
+	// Install a fast fake terragrunt so runBootstrapAll's internal subflows
+	// (which shell out to "terragrunt plan") complete instantly instead of
+	// invoking the real binary and paying ~8s per module. The exec.CommandContext
+	// resolver picks up the first "terragrunt" found on PATH.
+	//
+	// Note: makeFakeTerragruntForBootstrap is in package cmd_test (bootstrap_test.go)
+	// and is not accessible here (package cmd). We inline the same logic.
+	binDir := t.TempDir()
+	script := "#!/bin/sh\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "terragrunt"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake terragrunt: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
 	cfg := &config.Config{PrimaryRegion: "us-east-1"}
 	var buf bytes.Buffer
 
