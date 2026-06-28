@@ -99,25 +99,50 @@ http://localhost:8001/v1`) is **box-global**, so the local model is reachable fo
      `ANTHROPIC_AUTH_TOKEN` → local **Claude Code** drives the remote model.
    - `km model status <id>` checks the gateway/forward health (`GET /v1/models`).
 
-## Secrets
+## Cloud routing: two modes (`local` always works either way)
 
-- **`ANTHROPIC_API_KEY`** (the `claude-anthropic` route): SOPS-encrypt with the
-  `klanker-application` profile + the shared `alias/km-sandbox-secrets` KMS key into
-  `secrets/gpu.enc.yaml`, referenced via `spec.secrets.sopsFile`. The sandbox role
-  reads it at boot (never in operator context). See `docs/sandbox-secrets.md`.
-  ```bash
-  AWS_PROFILE=klanker-application aws ssm get-parameter --name /km/secrets/anthropic-api-key \
-    --with-decryption --query Parameter.Value --output text \
-    | sed 's/^/ANTHROPIC_API_KEY: /' > /tmp/a.yaml
-  sops --config /dev/null --encrypt --kms 'arn:aws:kms:us-east-1:<acct>:alias/km-sandbox-secrets' \
-    /tmp/a.yaml > secrets/gpu.enc.yaml && rm /tmp/a.yaml
-  ```
-- **`HF_TOKEN`** (Llama leaves only): same SOPS pattern after accepting the Meta
-  Llama-3.3 license on HuggingFace.
-- **Keyless routes** (`local`, `claude-bedrock`, `gpt-oss-bedrock`) need no secret —
-  they use the sandbox instance role. The role must grant `bedrock:InvokeModel`
-  (+ `…WithResponseStream`) for the Claude model IDs **and** `openai.gpt-oss-120b-1:0`
-  / `openai.gpt-oss-20b-1:0` (verify — gpt-oss may not be in the default Bedrock allowlist).
+The Bifrost gateway builds `config.json` at boot with `jq`, including a provider
+**only when it's usable**. A GPU profile picks one of two cloud-routing modes:
+
+| Mode | How to select | Bifrost providers |
+|---|---|---|
+| **Direct keys** (default) | `spec.secrets.sopsFile` referencing a bundle with `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | `vllm-local` + `anthropic` (if its key present) + `openai` (if its key present) |
+| **Keyless Bedrock** | drop `spec.secrets`, set **`spec.iam.allowBedrock: true`** | `vllm-local` + `bedrock` (instance-role SigV4, no keys) |
+
+`spec.iam.allowBedrock` (generic `*bool`, default off) grants the role Bedrock IAM
+**without** `useBedrock`'s agent-env injection (the on-box `claude` stays
+cloud-pointed). It also writes `/etc/km/bedrock.enabled`, which the jq config reads
+to add the `bedrock` provider. An empty key value (`ANTHROPIC_API_KEY=`) is treated
+as absent. The two modes can be combined (keys *and* allowBedrock) — all providers
+appear.
+
+**Bedrock IAM note:** the GA OpenAI-OSS models (`bedrock/openai.gpt-oss-120b`) use
+the newer **`bedrock-mantle:CreateInference`** action, not classic
+`bedrock:InvokeModel` — both are granted by the `ec2spot_bedrock` policy (active
+when `useBedrock || allowBedrock`).
+
+## Secrets (direct-keys mode)
+
+Each GPU leaf references its **own** SOPS bundle via `spec.secrets.sopsFile`
+(`secrets/<leaf>.enc.yaml`): qwen/glm/kimi carry `ANTHROPIC_API_KEY` +
+`OPENAI_API_KEY`; the Llama leaves add `HF_TOKEN` (gated model). The sandbox role
+decrypts them at boot to `/etc/sandbox-secrets.env` (never in operator context);
+the bring-up copies the API keys into `/etc/km/bifrost-env`. See
+`docs/sandbox-secrets.md`.
+
+Bundles are encrypted with the shared `km-sandbox-secrets` KMS key via the repo
+`.sops.yaml` creation rule (`secrets/.*\.enc\.yaml$` → the key **ARN**, not the
+alias — sops 3.11 rejects the alias as a creation rule). Re-encrypt / edit a
+bundle with `sops secrets/<leaf>.enc.yaml`. To (re)build one from the SSM-stored
+values:
+```bash
+export AWS_PROFILE=klanker-application AWS_REGION=us-east-1
+ANTH=$(aws ssm get-parameter --name /km/secrets/anthropic-api-key --with-decryption --query Parameter.Value --output text)
+OAI=$(aws ssm get-parameter --name /km/secrets/openai-api-key  --with-decryption --query Parameter.Value --output text)
+printf 'ANTHROPIC_API_KEY: %s\nOPENAI_API_KEY: %s\n' "$ANTH" "$OAI" > secrets/qwen.enc.yaml
+sops -e -i secrets/qwen.enc.yaml      # encrypt in place (matches the .sops.yaml rule)
+```
+(For Llama, prepend `HF_TOKEN: $(aws ssm get-parameter --name /km/secrets/hf-token …)`.)
 
 ## Prerequisites
 
