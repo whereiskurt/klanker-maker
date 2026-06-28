@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 124-03-PLAN.md — dynamodb-capacity module + bounded spot waiter (3m)
-last_updated: "2026-06-28T22:16:03.547Z"
+stopped_at: "Completed 124-01-PLAN.md — Wave-0 foundation: pkg/capacity (classifier+store+rankaz stub), azPreference schema, GetCapacityTableName"
+last_updated: "2026-06-28T22:18:26.892Z"
 last_activity: 2026-06-28
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 47
-  completed_plans: 37
+  completed_plans: 38
   percent: 91
 ---
 
@@ -612,6 +612,7 @@ Progress: [█████████░] 91%
 | Phase 122 P04 | 10min | 3 tasks | 4 files |
 | Phase 122 P03 | 24min | 3 tasks | 4 files |
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P03 | 12min | 2 tasks | 9 files |
+| Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P01 | 768s | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1753,6 +1754,9 @@ Recent decisions affecting current work:
 - [Phase 122]: wire_api = "responses" per Codex Responses API requirement (since Feb 2026); :8000 documented as fallback in code comment (Phase 122 Plan 03)
 - [Phase 124]: spot_create_timeout hardcoded 3m (no service.hcl wiring) — preserves byte-identity, fits 4-AZ sweep in Lambda 900s budget
 - [Phase 124]: On-demand aws_instance gets no timeouts block — ICE errors fast on on-demand already; bounded waiter is spot-only
+- [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: go mod tidy removes servicequotas if no import exists; anchored in rankaz.go import (Task 3 commit)
+- [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: CapacityDDBClient narrow interface (UpdateItem+GetItem) follows pkg/aws SlackChannelGetPutAPI pattern
+- [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: RankAZs stub returns allAZs unchanged — full implementation deferred to plan 124-04 as designed
 
 ### Roadmap Evolution
 
@@ -1902,6 +1906,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-28T22:16:03.540Z
-Stopped at: Completed 124-03-PLAN.md — dynamodb-capacity module + bounded spot waiter (3m)
+Last session: 2026-06-28T22:18:26.886Z
+Stopped at: Completed 124-01-PLAN.md — Wave-0 foundation: pkg/capacity (classifier+store+rankaz stub), azPreference schema, GetCapacityTableName
 Resume file: None
