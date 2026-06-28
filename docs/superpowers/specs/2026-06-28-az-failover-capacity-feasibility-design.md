@@ -51,11 +51,20 @@ covered by a single mechanism (the Lambda runs `km create` as a subprocess).
 
 ## Mechanism — orchestrated AZ sweep inside `km create`
 
-The AZ becomes an injectable override threaded
-profile → `pkg/compiler/service_hcl.go` → `ec2spot` module, replacing the
-hardcoded `effective_azs[idx % len]` selection for the single-instance case
-(N>1 spread preserved — see Edge cases). `km create` wraps the existing
-`compile → terragrunt apply` pipeline in a classify-and-retry loop:
+**Update (post-research):** a basic AZ-rotation loop ALREADY exists at
+`internal/app/cmd/create.go:746-869` — it rotates `network.AvailabilityZones`
+on `InsufficientInstanceCapacity`/`capacity-not-available`, calls
+`CleanupSandboxDir` between attempts (the "taint" equivalent — state is wiped, so
+no explicit `-replace` is needed), and fails fast on any non-capacity error.
+Phase 124 therefore **upgrades** this loop, it does not build one. The AZ is
+already injected via `network.AvailabilityZones[0]`, which drives BOTH the
+instance and `aws_ebs_volume` in the `ec2spot` module — so EBS co-location is
+automatic and **no new HCL injection seam is needed**; `rankAZs` simply
+pre-orders `network.AvailabilityZones` before the compile step (when
+`azPreference` is absent and ranking yields the same order, `service.hcl` output
+is byte-identical). The extracted logic lives in a new `pkg/capacity/` package.
+
+The conceptual loop (now backed by the existing one):
 
 ```
 order = rankAZs(instanceType, region)          # capacity-aware (§ Ranking)
