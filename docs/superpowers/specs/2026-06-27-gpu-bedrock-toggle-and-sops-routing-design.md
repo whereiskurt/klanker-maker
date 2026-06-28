@@ -138,14 +138,15 @@ boot (userdata, before `initCommandsAppend`).
 
 Implementation tasks:
 - Populate each leaf's SOPS file. Source the API-key *values* from SSM
-  (`/km/secrets/anthropic-api-key`, `/km/secrets/openai-api-key`) where they
-  exist; the operator supplies any missing value (OpenAI key was a handoff TODO).
-  Encrypt with the shared SOPS KMS key (`km bootstrap --shared-secrets-key`;
-  verify provisioned).
-- Create the missing `secrets/llama-hf.enc.yaml` (HF_TOKEN + API keys).
-- Repurpose/retire the orphaned `secrets/gpu.enc.yaml` (fold its Anthropic key
-  into the per-leaf files, then remove or keep as a documented template).
-- Each leaf already (or now) declares `spec.secrets.sopsFile: ./secrets/<leaf>.enc.yaml`.
+  (`/km/secrets/anthropic-api-key`, `/km/secrets/openai-api-key` — **both
+  confirmed present, SecureString**). Encrypt with the shared SOPS KMS key
+  `alias/km-sandbox-secrets` (**confirmed provisioned + Enabled**).
+- Create the missing `secrets/llama-hf.enc.yaml` (HF_TOKEN + API keys). The
+  HF_TOKEN value is operator-supplied (gated-model access).
+- **Retire `secrets/gpu.enc.yaml`** — fold its Anthropic key into the per-leaf
+  files, then `git rm` it (decision: delete, not template).
+- Each leaf declares `spec.secrets.sopsFile: ./secrets/<leaf>.enc.yaml`
+  (qwen/glm/kimi gain one; llama already references `llama-hf.enc.yaml`).
 
 **Keyless mode** for any leaf: remove its `spec.secrets.sopsFile` (or omit the
 API keys) and set `spec.iam.allowBedrock: true`. Bifrost then drops
@@ -181,8 +182,10 @@ Already committed (`912eb730`): `bedrock-mantle:CreateInference` statement in
 - Existing GPU sandboxes: `km destroy && km create` to pick up the new userdata
   marker + conditional config.
 
-## Open dependency
+## Dependencies (resolved)
 
-Populating SOPS files needs the API-key values (SSM presence to verify) and the
-shared SOPS KMS key provisioned. If a value is missing, the operator supplies it;
-the spec does not assume the keys exist.
+- `/km/secrets/anthropic-api-key` + `/km/secrets/openai-api-key` — both present
+  in SSM (SecureString), verified 2026-06-27.
+- `alias/km-sandbox-secrets` SOPS KMS key — provisioned + Enabled, verified.
+- `HF_TOKEN` for `llama-hf.enc.yaml` — operator-supplied at encrypt time (only
+  blocker for the gated Llama leaves; Qwen/GLM/Kimi need no HF token).
