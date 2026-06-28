@@ -1,3 +1,6 @@
+model_provider = "local"
+model = "local"
+
 # Phase 70: 'codex_hooks' was the Codex 0.121 feature flag name. In 0.133+ it
 # was renamed to 'hooks' and the old name emits a deprecation warning event
 # on every codex exec (filtered out by our JSONL parser, but noisy). The
@@ -22,9 +25,6 @@ statusMessage = "km: notifying operator"
 type = "command"
 command = "/opt/km/bin/km-notify-hook Stop"
 timeout = 30
-
-model_provider = "local"
-model = "local"
 
 [model_providers.local]
 name = "Local vLLM (via Bifrost)"

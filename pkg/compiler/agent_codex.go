@@ -74,6 +74,23 @@ timeout = 30
 // marshalling.
 func synthesizeCodexConfig(agent *profile.AgentSpec) (string, error) {
 	var b strings.Builder
+
+	// Phase 122 fix: bare top-level keys MUST precede any [table] section in TOML.
+	// codexConfigBaseBlock opens with [features]/[[hooks.*]] tables, so the local-model
+	// selection (model_provider/model) is emitted HERE, before the base block — otherwise
+	// these keys parse as members of the trailing [[hooks.Stop.hooks]] table, codex never
+	// sees them, and it silently falls back to its default cloud provider (openai/gpt-*).
+	// The [model_providers.local] *table* is emitted after the base block (table ordering
+	// is irrelevant); only the bare keys are order-sensitive.
+	if agent != nil && agent.Codex != nil && agent.Codex.LocalBaseURL != "" {
+		localModel := agent.Codex.LocalModel
+		if localModel == "" {
+			localModel = "local"
+		}
+		fmt.Fprintf(&b, "model_provider = %q\n", "local")
+		fmt.Fprintf(&b, "model = %q\n\n", localModel)
+	}
+
 	b.WriteString(codexConfigBaseBlock)
 
 	if agent == nil || agent.Codex == nil {
@@ -107,12 +124,8 @@ func synthesizeCodexConfig(agent *profile.AgentSpec) (string, error) {
 	// LocalBaseURL points at the Bifrost gateway (http://localhost:8001/v1) which
 	// serves the Responses API to codex and routes to the on-box vLLM instance.
 	if c.LocalBaseURL != "" {
-		model := c.LocalModel
-		if model == "" {
-			model = "local"
-		}
-		fmt.Fprintf(&b, "\nmodel_provider = %q\n", "local")
-		fmt.Fprintf(&b, "model = %q\n", model)
+		// model_provider/model are emitted at the top of the file (see the Phase 122
+		// fix above); only the provider *table* is emitted here.
 		fmt.Fprintf(&b, "\n[model_providers.local]\n")
 		fmt.Fprintf(&b, "name = %q\n", "Local vLLM (via Bifrost)")
 		fmt.Fprintf(&b, "base_url = %q\n", c.LocalBaseURL)
