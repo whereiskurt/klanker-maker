@@ -784,7 +784,7 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	hasBudget, computeLimit, aiLimit, warningThreshold := budgetHCLFields(p)
 
 	params := ec2HCLParams{
-		EnableBedrock:     p.Spec.Execution.UseBedrock,
+		EnableBedrock:     enableBedrock(p),
 		ProfileName:       p.Metadata.Name,
 		SandboxID:         sandboxID,
 		Region:            p.Spec.Runtime.Region,
