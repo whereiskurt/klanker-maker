@@ -24,6 +24,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/route53 v1.62.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.1
 	github.com/aws/aws-sdk-go-v2/service/scheduler v1.17.21
+	github.com/aws/aws-sdk-go-v2/service/servicequotas v1.35.7
 	github.com/aws/aws-sdk-go-v2/service/ses v1.34.24
 	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.60.1
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.42.27

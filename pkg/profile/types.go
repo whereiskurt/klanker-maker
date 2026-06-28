@@ -497,6 +497,11 @@ type RuntimeSpec struct {
 	// Phase 93: KasmVNC-backed browser/XFCE remote session over SSM port-forward.
 	// See IsDesktopEnabled.
 	Desktop *RuntimeDesktopSpec `yaml:"desktop,omitempty" json:"desktop,omitempty"`
+	// AZPreference is an optional ordered list of preferred AZs for EC2 launches.
+	// Phase 124: merged ahead of capacity-aware rankAZs; AZs not offered by the
+	// instance type are silently dropped. EC2 substrate only. When absent, capacity-aware
+	// ranking (last-success sticky, ICE-deprioritize, alphabetical) applies.
+	AZPreference []string `yaml:"azPreference,omitempty" json:"azPreference,omitempty"`
 }
 
 // ExecutionSpec controls the shell environment within the sandbox.
