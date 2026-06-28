@@ -443,6 +443,18 @@ const ssmRetryThreshold = 10 * time.Second
 // ssmRetryDelay is the pause between retry attempts.
 const ssmRetryDelay = 3 * time.Second
 
+// portForwardReconnectBackoff is the pause before re-establishing a dropped SSM
+// port-forward; portForwardBootGrace is the grace period before the liveness
+// probe starts; tunnelLivenessTick is the interval between liveness probes.
+// These are package vars (not literals) only so TestMain can shrink them to ~0
+// — production keeps the real values and the select/time.After/time.NewTicker
+// control flow is unchanged. See main_test.go.
+var (
+	portForwardReconnectBackoff = 2 * time.Second
+	portForwardBootGrace        = 20 * time.Second
+	tunnelLivenessTick          = 20 * time.Second
+)
+
 // execSSMSession builds and runs an SSM session.
 // When root is false, it uses the per-install sandbox session document
 // (Standard_Stream + runAsDefaultUser=sandbox), which lands as the restricted
@@ -828,7 +840,7 @@ func runReconnectingPortForward(ctx context.Context, execFn ShellExecFunc, build
 		select {
 		case <-sigCtx.Done():
 			return nil
-		case <-time.After(2 * time.Second):
+		case <-time.After(portForwardReconnectBackoff):
 		}
 	}
 }
@@ -838,13 +850,13 @@ func runReconnectingPortForward(ctx context.Context, execFn ShellExecFunc, build
 // period lets the tunnel + remote service come up before the first probe.
 func watchTunnelLiveness(ctx context.Context, cmd *exec.Cmd, probe tunnelProbe, out io.Writer, done <-chan struct{}) {
 	select {
-	case <-time.After(20 * time.Second): // grace: first boot of the remote service
+	case <-time.After(portForwardBootGrace): // grace: first boot of the remote service
 	case <-ctx.Done():
 		return
 	case <-done:
 		return
 	}
-	ticker := time.NewTicker(20 * time.Second)
+	ticker := time.NewTicker(tunnelLivenessTick)
 	defer ticker.Stop()
 	fails := 0
 	for {

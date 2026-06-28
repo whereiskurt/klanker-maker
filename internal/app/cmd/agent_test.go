@@ -317,14 +317,21 @@ func TestAgentNonInteractive_PromptEscaping(t *testing.T) {
 // TestAgentNonInteractive_IdleReset verifies that EventBridge extend events are
 // published during --wait polling (AGENT-06).
 func TestAgentNonInteractive_IdleReset(t *testing.T) {
-	// Set very short intervals for testing
+	// Set very short intervals for testing. AgentInitialPollDelay is restored to
+	// 50ms locally (TestMain shrinks it to ~1ms for the whole binary): this test
+	// needs the --wait poll loop (3 invocations) to outlast the idle-reset
+	// heartbeat ticker so at least one heartbeat fires — at 1ms the loop finishes
+	// before the 50ms ticker ever ticks.
 	origHeartbeat := cmd.AgentIdleResetInterval
 	origPoll := cmd.AgentPollInterval
+	origInitial := cmd.AgentInitialPollDelay
 	cmd.AgentIdleResetInterval = 50 * time.Millisecond
 	cmd.AgentPollInterval = 50 * time.Millisecond
+	cmd.AgentInitialPollDelay = 50 * time.Millisecond
 	defer func() {
 		cmd.AgentIdleResetInterval = origHeartbeat
 		cmd.AgentPollInterval = origPoll
+		cmd.AgentInitialPollDelay = origInitial
 	}()
 
 	fetcher := newRunningEC2Sandbox("sb-heartbeat")

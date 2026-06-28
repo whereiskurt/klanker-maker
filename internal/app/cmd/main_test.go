@@ -17,6 +17,23 @@ import (
 func TestMain(m *testing.M) {
 	sleep = func(time.Duration) {}
 
+	// Shrink the select-loop / ticker durations that the `sleep` seam does NOT
+	// cover (these are time.After / time.NewTicker waits, not time.Sleep). The
+	// shell port-forward reconnect/liveness loops and the SSM pollers otherwise
+	// block tests on real 1–20s waits (e.g. TestAgentNonInteractive_IdleReset,
+	// TestDesktop*, TestRunReconnectingPortForward). Production keeps the real
+	// defaults; only this test binary overrides them. The control flow is
+	// unchanged — the selects still fire, just ~instantly. A test that depends on
+	// a specific duration restores its own value locally (save/restore) — see
+	// TestAgentNonInteractive_IdleReset, which needs the poll loop to outlast the
+	// idle-reset heartbeat ticker.
+	AgentInitialPollDelay = time.Millisecond
+	agentUtilPollInterval = time.Millisecond
+	agentUtilInitialDelay = time.Millisecond
+	portForwardReconnectBackoff = time.Millisecond
+	portForwardBootGrace = time.Millisecond
+	tunnelLivenessTick = time.Millisecond
+
 	// Stop the AWS SDK from probing EC2 instance metadata (169.254.169.254) when
 	// a test builds a real client without mocked deps. Off-instance that probe
 	// times out after ~30s per call — the single biggest cost in this suite

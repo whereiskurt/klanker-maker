@@ -46,6 +46,19 @@ var AgentIdleResetInterval = 5 * time.Minute
 // Exported so tests can override it for faster execution.
 var AgentPollInterval = 10 * time.Second
 
+// AgentInitialPollDelay is the first poll delay in waitForAgentCompletion's
+// --wait loop (it ramps up toward AgentPollInterval). Exported (like
+// AgentPollInterval) so tests can override it. agentUtilPollInterval and
+// agentUtilInitialDelay are the steady-state and first-iteration delays of the
+// short-command poller in sendSSMAndWait. These are package vars (not literals)
+// purely so TestMain can shrink them to ~0 — production keeps the real values
+// (the select/time.After control flow is unchanged). See main_test.go.
+var (
+	AgentInitialPollDelay = 2 * time.Second
+	agentUtilPollInterval = 2 * time.Second
+	agentUtilInitialDelay = 1 * time.Second
+)
+
 // NewAgentCmd creates the "km agent" parent command with backward-compatible
 // interactive mode and the "run" subcommand for non-interactive execution.
 //
@@ -703,7 +716,7 @@ func waitForAgentCompletion(ctx context.Context, ssmClient SSMSendAPI, ebClient 
 
 	// Poll with fast start: 2s, 3s, 5s, then 10s steady state.
 	// Total timeout ~8 hours.
-	pollDelay := 2 * time.Second
+	pollDelay := AgentInitialPollDelay
 	maxDuration := 8 * time.Hour
 	deadline := time.Now().Add(maxDuration)
 	for time.Now().Before(deadline) {
@@ -1204,13 +1217,13 @@ func sendSSMAndWait(ctx context.Context, ssmClient SSMSendAPI, instanceID, shell
 	commandID := awssdk.ToString(cmdOut.Command.CommandId)
 
 	// Poll for completion — fast interval for short utility commands
-	pollInterval := 2 * time.Second
+	pollInterval := agentUtilPollInterval
 	maxAttempts := 150 // 5 minutes at 2s
 	for i := 0; i < maxAttempts; i++ {
 		// Brief initial delay to let SSM register the invocation
 		delay := pollInterval
 		if i == 0 {
-			delay = 1 * time.Second
+			delay = agentUtilInitialDelay
 		}
 		select {
 		case <-ctx.Done():
