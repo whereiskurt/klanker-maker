@@ -34,6 +34,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/pricing"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
+	sqsvc "github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
@@ -728,6 +729,70 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	}
 	if onDemand {
 		maxAttempts = 1 // on-demand doesn't need AZ rotation
+	}
+
+	// Phase 124.04: Pre-order network.AvailabilityZones by capacity preference before the
+	// sweep loop. RankAZs drops non-offering AZs, gates on GPU quota (fail-fast at 0 headroom),
+	// and orders by: azPreference hint > last-success sticky > deprioritize fresh-ICE AZs.
+	// On *QuotaError: fail fast immediately — AZ rotation cannot fix a regional quota wall.
+	// On any other error: log warn and keep original AZ order (ranking is best-effort, non-fatal).
+	// network.PublicSubnets is reordered in lockstep to preserve AZ[i] <-> subnet[i] pairing.
+	if substrate != "docker" && len(network.AvailabilityZones) > 0 {
+		rankInstanceType := resolvedProfile.Spec.Runtime.InstanceType
+		if rankInstanceType == "" {
+			rankInstanceType = "t3.medium"
+		}
+		ec2OfferingsClient := ec2svc.NewFromConfig(awsCfg, func(o *ec2svc.Options) {
+			o.Region = region
+		})
+		sqClient := sqsvc.NewFromConfig(awsCfg, func(o *sqsvc.Options) {
+			o.Region = region
+		})
+		ddbForCapacity := dynamodbpkg.NewFromConfig(awsCfg)
+		capacityStore := capacity.NewDynamoCapacityStore(ddbForCapacity, cfg.GetCapacityTableName())
+
+		ranked, rankErr := capacity.RankAZs(ctx, rankInstanceType, region,
+			resolvedProfile.Spec.Runtime.AZPreference,
+			capacityStore, ec2OfferingsClient, sqClient,
+			network.AvailabilityZones)
+		if rankErr != nil {
+			var qe *capacity.QuotaError
+			if errors.As(rankErr, &qe) {
+				fmt.Fprintf(os.Stderr, "\n  ✗ Provisioning pre-flight failed: GPU/vCPU quota is exhausted.\n")
+				fmt.Fprintf(os.Stderr, "  Quota code: %s (Running On-Demand G and VT instances)\n", capacity.GPUVCPUQuotaCode)
+				fmt.Fprintf(os.Stderr, "  Request an increase: https://console.aws.amazon.com/servicequotas/home/services/ec2/quotas/%s\n\n", capacity.GPUVCPUQuotaCode)
+				return fmt.Errorf("provisioning blocked: GPU vCPU quota %s is exhausted (headroom=0)", capacity.GPUVCPUQuotaCode)
+			}
+			log.Warn().Err(rankErr).Str("instanceType", rankInstanceType).
+				Msg("capacity: AZ ranking failed; keeping original AZ order")
+		} else if len(ranked) > 0 {
+			// Build a subnet map keyed by AZ so we can reorder subnets in lockstep.
+			subnetByAZ := make(map[string]string, len(network.AvailabilityZones))
+			for i, az := range network.AvailabilityZones {
+				if i < len(network.PublicSubnets) {
+					subnetByAZ[az] = network.PublicSubnets[i]
+				}
+			}
+			network.AvailabilityZones = ranked
+			reorderedSubnets := make([]string, 0, len(ranked))
+			for _, az := range ranked {
+				if subnet, ok := subnetByAZ[az]; ok {
+					reorderedSubnets = append(reorderedSubnets, subnet)
+				}
+			}
+			if len(reorderedSubnets) > 0 {
+				network.PublicSubnets = reorderedSubnets
+			}
+			// Recompute maxAttempts: RankAZs may drop non-offering AZs, so
+			// len(network.AvailabilityZones) could be smaller now.
+			// on-demand keeps maxAttempts=1 regardless.
+			if !onDemand {
+				maxAttempts = len(network.AvailabilityZones)
+				if maxAttempts < 1 {
+					maxAttempts = 1
+				}
+			}
+		}
 	}
 
 	// Phase 56.1: BDM collision detection for additionalVolume + raw AMI combinations.
