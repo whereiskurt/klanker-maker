@@ -389,8 +389,12 @@ git commit -m "feat(122): base/gpu/serve builds Bifrost config with jq (provider
 export AWS_PROFILE=klanker-application AWS_REGION=us-east-1
 ANTH=$(aws ssm get-parameter --name /km/secrets/anthropic-api-key --with-decryption --query Parameter.Value --output text)
 OAI=$(aws ssm get-parameter --name /km/secrets/openai-api-key --with-decryption --query Parameter.Value --output text)
+HF=$(aws ssm get-parameter --name /km/secrets/hf-token --with-decryption --query Parameter.Value --output text)
 KMS='arn:aws:kms:us-east-1:052251888500:alias/km-sandbox-secrets'
 ```
+
+All three SSM keys are confirmed present (SecureString) — no operator-supplied
+value needed; the controller runs these steps with its own AWS + sops access.
 
 - [ ] **Step 2: Build + encrypt the three API-key-only leaf bundles** (qwen/glm/kimi):
 
@@ -403,10 +407,9 @@ done
 ls -la secrets/qwen.enc.yaml secrets/glm.enc.yaml secrets/kimi.enc.yaml
 ```
 
-- [ ] **Step 3: Build + encrypt the llama bundle (HF_TOKEN + API keys).** Supply your HF token:
+- [ ] **Step 3: Build + encrypt the llama bundle (HF_TOKEN + API keys).** `HF` is already in scope from Step 1 (sourced from `/km/secrets/hf-token`):
 
 ```bash
-HF='hf_REPLACE_WITH_YOUR_TOKEN'
 printf 'HF_TOKEN: %s\nANTHROPIC_API_KEY: %s\nOPENAI_API_KEY: %s\n' "$HF" "$ANTH" "$OAI" > /tmp/llama.plain.yaml
 sops --encrypt --kms "$KMS" /tmp/llama.plain.yaml > secrets/llama-hf.enc.yaml
 find /tmp -maxdepth 1 -name llama.plain.yaml -delete
