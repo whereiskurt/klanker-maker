@@ -599,6 +599,10 @@ type IAMSpec struct {
 	// AllowedSecretPaths is the allowlist of SSM Parameter Store paths the sandbox
 	// may read at boot time. Secrets are injected as environment variables via user-data.
 	AllowedSecretPaths []string `yaml:"allowedSecretPaths,omitempty"`
+	// AllowBedrock grants the sandbox role Bedrock IAM (InvokeModel +
+	// bedrock-mantle) for the on-box Bifrost gateway WITHOUT useBedrock's agent
+	// env injection. Decoupled from spec.execution.useBedrock. Default nil/false.
+	AllowBedrock *bool `yaml:"allowBedrock,omitempty"`
 }
 
 // SidecarsSpec defines the sidecar processes that run alongside the sandbox.

@@ -467,6 +467,10 @@
               "type": "array",
               "items": { "type": "string" },
               "description": "Allowlist of SSM Parameter Store paths the sandbox may read at boot time (Phase 89; schema declared in Phase 92). Injected as environment variables via user-data."
+            },
+            "allowBedrock": {
+              "type": "boolean",
+              "description": "Grant the sandbox role Bedrock IAM (InvokeModel + bedrock-mantle) for the Bifrost gateway without useBedrock's agent-env injection. Default false."
             }
           }
         },

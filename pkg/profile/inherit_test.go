@@ -475,3 +475,35 @@ func TestResolve_GpuRehearsal_AppendFolded(t *testing.T) {
 		}
 	}
 }
+
+// Phase 122: spec.iam.allowBedrock is an optional *bool that survives parse +
+// merge and defaults to nil (absent).
+func TestIAMAllowBedrock_ParseAndMerge(t *testing.T) {
+	raw := []byte(`apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata: {name: t}
+spec:
+  iam:
+    roleSessionDuration: 1h
+    allowedRegions: [us-east-1]
+    allowBedrock: true
+`)
+	p, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if p.Spec.IAM.AllowBedrock == nil || *p.Spec.IAM.AllowBedrock != true {
+		t.Fatalf("allowBedrock: want *true, got %v", p.Spec.IAM.AllowBedrock)
+	}
+	// Absent → nil.
+	raw2 := []byte(`apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata: {name: t}
+spec:
+  iam: {roleSessionDuration: 1h, allowedRegions: [us-east-1]}
+`)
+	p2, _ := Parse(raw2)
+	if p2.Spec.IAM.AllowBedrock != nil {
+		t.Fatalf("absent allowBedrock should be nil, got %v", *p2.Spec.IAM.AllowBedrock)
+	}
+}
