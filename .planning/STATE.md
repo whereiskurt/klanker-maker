@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 124-04-PLAN.md — RankAZs full impl + km create wiring + km capacity command
-last_updated: "2026-06-28T22:50:27.374Z"
+stopped_at: "Checkpoint at 124-06 Task 2: deploy gate — awaiting operator make build + km init"
+last_updated: "2026-06-28T23:38:37.651Z"
 last_activity: 2026-06-28
 progress:
   total_phases: 8
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 47
-  completed_plans: 40
+  completed_plans: 42
   percent: 91
 ---
 
@@ -615,6 +615,7 @@ Progress: [█████████░] 91%
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P01 | 768s | 3 tasks | 11 files |
 | Phase 124 P02 | 458 | 2 tasks | 4 files |
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P04 | 853 | 3 tasks | 6 files |
+| Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P06 | 1040s | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1763,6 +1764,8 @@ Recent decisions affecting current work:
 - [Phase 124]: ClassUnknown falls through to generic error path (not fail-fast) to preserve prior fallback behaviour
 - [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: Stale ICE (expired >45min) yields VerdictLikely — AZ may have recovered; nil entry yields VerdictUnknown
 - [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: RankAZs wired in create.go pre-loop for all non-docker substrates; docker skipped; maxAttempts recomputed after AZ filtering
+- [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: Phase 124 dynamodb-capacity raised regionalModules 26->27; updated uninit test wantOrder + count checks in 3 tests
+- [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: 8 pre-existing cmd env failures (known-8: 2 bootstrap, 3 cluster, 3 configure) not caused by Phase 124; documented not fixed
 
 ### Roadmap Evolution
 
@@ -1912,6 +1915,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-28T22:50:27.368Z
-Stopped at: Completed 124-04-PLAN.md — RankAZs full impl + km create wiring + km capacity command
+Last session: 2026-06-28T23:38:37.645Z
+Stopped at: Checkpoint at 124-06 Task 2: deploy gate — awaiting operator make build + km init
 Resume file: None

@@ -190,7 +190,7 @@ Independent of Phase 123 (setup wizard) — sequential number only, no code depe
 Lambda auto-requeue of `nocap` cold-creates; EC2 Fleet/CreateFleet rewrite; spot
 interruption handling. (See spec § Non-goals.)
 
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans complete
 
 Plans:
 - [ ] 124-01-PLAN.md — Wave 0: `pkg/capacity/` core (pure `ClassifyError` taxonomy + DDB capacity store w/ TTL + `RankAZs` interface surface/stub) + `servicequotas` SDK + `spec.runtime.azPreference` field/schema + `GetCapacityTableName()` + azPreference byte-identity test.
