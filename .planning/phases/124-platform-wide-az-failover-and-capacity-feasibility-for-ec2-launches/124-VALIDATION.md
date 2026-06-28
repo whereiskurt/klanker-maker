@@ -45,13 +45,12 @@ created: 2026-06-28
 | 01 | 0 | REQ-124-STORE | unit | `go test ./pkg/capacity/... -run TestCapacityStore_RecordICE` | ❌ W0 | ⬜ pending |
 | 01 | 0 | REQ-124-STORE | unit | `go test ./pkg/capacity/... -run TestCapacityStore_RecordSuccess` | ❌ W0 | ⬜ pending |
 | 01 | 0 | REQ-124-SURFACE | golden | `go test ./pkg/compiler/... -run TestEC2ServiceHCL_AZPreferenceAbsent` | ❌ W0 | ⬜ pending |
-| 01 | 0 | REQ-124-SURFACE | unit | `go test ./internal/app/cmd/... -run TestRunInitPlan_ModuleOrder` (26→27) | ✅ update | ⬜ pending |
 | 01 | 0 | (deps) | build | `go get .../servicequotas` + `go build ./...` | ❌ W0 | ⬜ pending |
 | 02 | 1 | REQ-124-CLASSIFY | unit | `go test ./cmd/create-handler/... -run TestNocapClassifier` | ❌ W0 | ⬜ pending |
 | 02 | 1 | REQ-124-SWEEP | unit | `go test ./internal/app/cmd/... -run TestAZSweepLoop` | ❌ W0 | ⬜ pending |
-| 03 | 1 | REQ-124-STORE | unit | `go test ./pkg/capacity/... -run TestCapacityStore` | ❌ W0 | ⬜ pending |
-| 03 | 1 | REQ-124-WAITER | golden | `go test ./pkg/compiler/... -run TestEC2ServiceHCL_SpotTimeout` | ❌ W0 | ⬜ pending |
-| 03 | 1 | REQ-124-WAITER | golden | `go test ./pkg/compiler/... -run TestEC2ServiceHCL_OnDemandNoTimeout` | ❌ W0 | ⬜ pending |
+| 03 | 0 | REQ-124-SURFACE | unit | `go test ./internal/app/cmd/... -run TestRunInitPlan_ModuleOrder` (26→27) | ✅ update | ⬜ pending |
+| 03 | 0 | REQ-124-WAITER | golden | `go test ./pkg/compiler/... -run TestEC2ServiceHCL_SpotTimeout` | ❌ W0 | ⬜ pending |
+| 03 | 0 | REQ-124-WAITER | golden | `go test ./pkg/compiler/... -run TestEC2ServiceHCL_OnDemandNoTimeout` | ❌ W0 | ⬜ pending |
 | 04 | 2 | REQ-124-RANK | unit | `go test ./pkg/capacity/... -run TestRankAZs_DropsNonOffering` | ❌ W0 | ⬜ pending |
 | 04 | 2 | REQ-124-RANK | unit | `go test ./pkg/capacity/... -run TestRankAZs_GPUQuotaBlock` | ❌ W0 | ⬜ pending |
 | 04 | 2 | REQ-124-RANK | unit | `go test ./pkg/capacity/... -run TestRankAZs_AZPreference` | ❌ W0 | ⬜ pending |
@@ -71,7 +70,7 @@ created: 2026-06-28
 
 - [ ] `pkg/capacity/classifier.go` + `classifier_test.go` — `ClassifyError` + `ErrorClass` consts; 15+ real AWS error-string fixtures
 - [ ] `pkg/capacity/store.go` + `store_test.go` — `CapacityStore` interface + DynamoDB impl + `CapacityEntry`; TTL write assertions
-- [ ] `pkg/capacity/rankaz.go` + `rankaz_test.go` — `RankAZs`, `EC2OfferingsAPI`, `ServiceQuotasAPI` (mocked offerings + quota + store)
+- [ ] `pkg/capacity/rankaz.go` — `RankAZs` signature + `EC2OfferingsAPI`/`ServiceQuotasAPI` interface stubs (Plan 01). `rankaz_test.go` + full `RankAZs` impl are owned by **Plan 04** (Wave 2), written alongside the implementation — correct TDD, not a Wave 0 gap.
 - [ ] `infra/modules/dynamodb-capacity/v1.0.0/{main,variables,outputs}.tf` — new DDB module
 - [ ] `infra/live/use1/dynamodb-capacity/terragrunt.hcl` — live unit
 - [ ] `go get github.com/aws/aws-sdk-go-v2/service/servicequotas` — add to go.mod/go.sum
