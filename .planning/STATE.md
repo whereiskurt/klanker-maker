@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: Completed 124-02-PLAN.md — classify-and-retry AZ-sweep + create-handler nocap taxonomy
-last_updated: "2026-06-28T22:31:16.341Z"
+stopped_at: Completed 124-04-PLAN.md — RankAZs full impl + km create wiring + km capacity command
+last_updated: "2026-06-28T22:50:27.374Z"
 last_activity: 2026-06-28
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 47
-  completed_plans: 39
+  completed_plans: 40
   percent: 91
 ---
 
@@ -614,6 +614,7 @@ Progress: [█████████░] 91%
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P03 | 12min | 2 tasks | 9 files |
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P01 | 768s | 3 tasks | 11 files |
 | Phase 124 P02 | 458 | 2 tasks | 4 files |
+| Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P04 | 853 | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1760,6 +1761,8 @@ Recent decisions affecting current work:
 - [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: RankAZs stub returns allAZs unchanged — full implementation deferred to plan 124-04 as designed
 - [Phase 124]: sweepDecision helper factored out of runCreate to enable unit-testing without a real Terragrunt runner
 - [Phase 124]: ClassUnknown falls through to generic error path (not fail-fast) to preserve prior fallback behaviour
+- [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: Stale ICE (expired >45min) yields VerdictLikely — AZ may have recovered; nil entry yields VerdictUnknown
+- [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: RankAZs wired in create.go pre-loop for all non-docker substrates; docker skipped; maxAttempts recomputed after AZ filtering
 
 ### Roadmap Evolution
 
@@ -1909,6 +1912,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-28T22:31:16.334Z
-Stopped at: Completed 124-02-PLAN.md — classify-and-retry AZ-sweep + create-handler nocap taxonomy
+Last session: 2026-06-28T22:50:27.368Z
+Stopped at: Completed 124-04-PLAN.md — RankAZs full impl + km create wiring + km capacity command
 Resume file: None
