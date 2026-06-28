@@ -152,6 +152,8 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	// Phase 86: prompt queue flags
 	var prompts []string
 	var wait bool
+	// Phase 124: --wait-for-capacity outer backoff (operator-only; never forwarded to Lambda subprocess)
+	var waitForCapacity string
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -166,6 +168,15 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			// --docker is a shortcut for --substrate=docker
 			if dockerShortcut {
 				substrateOverride = "docker"
+			}
+
+			// Phase 124: validate --wait-for-capacity duration early (before any I/O).
+			// NoOptDefVal means bare --wait-for-capacity uses "30m"; =Nm parses the override.
+			// --wait-for-capacity is operator-only and never forwarded to the Lambda subprocess.
+			if waitForCapacity != "" {
+				if _, durErr := time.ParseDuration(waitForCapacity); durErr != nil {
+					return fmt.Errorf("--wait-for-capacity: invalid duration %q: %w", waitForCapacity, durErr)
+				}
 			}
 
 			// Phase 86 PQ-03: queue requires systemd → EC2 substrate only.
@@ -235,7 +246,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			}
 
 			// Local path: runCreate handles Steps 1–15. Step 16 runs after it returns.
-			if err := runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride); err != nil {
+			if err := runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, waitForCapacity); err != nil {
 				return err
 			}
 			// Phase 86 Step 16: operator-side prompt queue push (local path).
@@ -288,6 +299,14 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		"Queue a prompt (repeatable). @file reads from file UTF-8; @@x escapes literal @x. Requires EC2 substrate.")
 	cmd.Flags().BoolVar(&wait, "wait", false,
 		"Block km create until the queue drains. Exit code propagates from the first failing prompt (0 = all done).")
+	// Phase 124: --wait-for-capacity outer backoff.
+	// Bare --wait-for-capacity => 30m; --wait-for-capacity=15m overrides; absent => disabled.
+	// Re-sweeps all AZs every ~5 min until the deadline elapses or a non-iterate failure occurs.
+	// NEVER forwarded to the cold-create Lambda km create subprocess (operator-only).
+	cmd.Flags().StringVar(&waitForCapacity, "wait-for-capacity", "",
+		"Re-sweep all AZs on a backoff until capacity is available or the deadline elapses (e.g. --wait-for-capacity=30m). "+
+			"Bare --wait-for-capacity uses the default 30m. Iterate-class errors retry; fail-fast errors (quota/auth/invalid) exit immediately.")
+	cmd.Flag("wait-for-capacity").NoOptDefVal = "30m"
 
 	return cmd
 }
@@ -337,7 +356,7 @@ func uploadSopsBundleIfPresent(ctx context.Context, s3c S3Putter, artifactBucket
 }
 
 // runCreate executes the full create workflow.
-func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, clonedFromOverride ...string) error {
+func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, waitForCapacity string, clonedFromOverride ...string) error {
 	createStart := time.Now()
 	ctx := context.Background()
 
@@ -828,138 +847,197 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if attempt > 0 {
-			// Rotate subnets and AZs so index 0 points to the next AZ
-			network.PublicSubnets = append(network.PublicSubnets[1:], network.PublicSubnets[0])
-			network.AvailabilityZones = append(network.AvailabilityZones[1:], network.AvailabilityZones[0])
-			fmt.Fprintf(os.Stderr, "  Retrying in %s (%s)...\n", network.AvailabilityZones[0], network.PublicSubnets[0])
+	// Phase 124: --wait-for-capacity outer backoff.
+	// Duration already validated in NewCreateCmd.RunE; parse it here to set the deadline.
+	// A zero waitCapDeadline means the flag was absent (fail-fast mode, default).
+	var waitCapDeadline time.Time
+	if waitForCapacity != "" {
+		dur, _ := time.ParseDuration(waitForCapacity) // already validated above — error impossible
+		waitCapDeadline = time.Now().Add(dur)
+	}
+	// capacityRetryInterval is the sleep between outer AZ re-sweeps when
+	// --wait-for-capacity is set and all AZs returned iterate-class errors.
+	const capacityRetryInterval = 5 * time.Minute
+
+	// Save the initial AZ/subnet order established by RankAZs so each outer re-sweep
+	// starts from the same preferred order (inner loop rotates the slices in-place).
+	initialAZs := append([]string{}, network.AvailabilityZones...)
+	initialSubnets := append([]string{}, network.PublicSubnets...)
+
+	for outerSweep := 0; ; outerSweep++ {
+		if outerSweep > 0 {
+			// Restore the ranked AZ/subnet order for each fresh re-sweep.
+			network.AvailabilityZones = append([]string{}, initialAZs...)
+			network.PublicSubnets = append([]string{}, initialSubnets...)
 		}
 
-		// Step 7: Compile profile into Terragrunt artifacts
-		var compileErr error
-		artifacts, compileErr = compiler.Compile(resolvedProfile, sandboxID, onDemand, network, amiBDMDevices)
-		if compileErr != nil {
-			return fmt.Errorf("failed to compile profile: %w", compileErr)
-		}
+		// exhaustedIterateClass is set when all AZs returned iterate-class errors and no
+		// fail-fast condition was hit. The outer loop then decides whether to wait or exit.
+		exhaustedIterateClass := false
 
-		// Step 8: Create sandbox directory
-		var dirErr error
-		sandboxDir, dirErr = terragrunt.CreateSandboxDir(repoRoot, regionLabel, sandboxID)
-		if dirErr != nil {
-			return fmt.Errorf("failed to create sandbox directory: %w", dirErr)
-		}
-
-		// Step 8.5: Upload full user-data to S3 if it exceeded the 16KB limit.
-		// The bootstrap stub in artifacts.UserData downloads this at boot.
-		if artifacts.FullUserData != "" {
-			artifactBucketForUD := cfg.ArtifactsBucket
-			if artifactBucketForUD == "" {
-				artifactBucketForUD = os.Getenv("KM_ARTIFACTS_BUCKET")
+		for attempt := 0; attempt < maxAttempts; attempt++ {
+			if attempt > 0 {
+				// Rotate subnets and AZs so index 0 points to the next AZ
+				network.PublicSubnets = append(network.PublicSubnets[1:], network.PublicSubnets[0])
+				network.AvailabilityZones = append(network.AvailabilityZones[1:], network.AvailabilityZones[0])
+				fmt.Fprintf(os.Stderr, "  Retrying in %s (%s)...\n", network.AvailabilityZones[0], network.PublicSubnets[0])
 			}
-			if artifactBucketForUD != "" {
-				s3ClientUD := s3.NewFromConfig(awsCfg)
-				udKey := fmt.Sprintf("artifacts/%s/km-userdata.sh", sandboxID)
-				if _, putErr := s3ClientUD.PutObject(ctx, &s3.PutObjectInput{
-					Bucket:      aws.String(artifactBucketForUD),
-					Key:         aws.String(udKey),
-					Body:        bytes.NewReader([]byte(artifacts.FullUserData)),
-					ContentType: aws.String("application/x-shellscript"),
-				}); putErr != nil {
-					return fmt.Errorf("upload full user-data to S3: %w", putErr)
+
+			// Step 7: Compile profile into Terragrunt artifacts
+			var compileErr error
+			artifacts, compileErr = compiler.Compile(resolvedProfile, sandboxID, onDemand, network, amiBDMDevices)
+			if compileErr != nil {
+				return fmt.Errorf("failed to compile profile: %w", compileErr)
+			}
+
+			// Step 8: Create sandbox directory
+			var dirErr error
+			sandboxDir, dirErr = terragrunt.CreateSandboxDir(repoRoot, regionLabel, sandboxID)
+			if dirErr != nil {
+				return fmt.Errorf("failed to create sandbox directory: %w", dirErr)
+			}
+
+			// Step 8.5: Upload full user-data to S3 if it exceeded the 16KB limit.
+			// The bootstrap stub in artifacts.UserData downloads this at boot.
+			if artifacts.FullUserData != "" {
+				artifactBucketForUD := cfg.ArtifactsBucket
+				if artifactBucketForUD == "" {
+					artifactBucketForUD = os.Getenv("KM_ARTIFACTS_BUCKET")
 				}
-				fmt.Fprintf(os.Stderr, "  ✓ Bootstrap script uploaded to S3 (%d bytes)\n", len(artifacts.FullUserData))
+				if artifactBucketForUD != "" {
+					s3ClientUD := s3.NewFromConfig(awsCfg)
+					udKey := fmt.Sprintf("artifacts/%s/km-userdata.sh", sandboxID)
+					if _, putErr := s3ClientUD.PutObject(ctx, &s3.PutObjectInput{
+						Bucket:      aws.String(artifactBucketForUD),
+						Key:         aws.String(udKey),
+						Body:        bytes.NewReader([]byte(artifacts.FullUserData)),
+						ContentType: aws.String("application/x-shellscript"),
+					}); putErr != nil {
+						return fmt.Errorf("upload full user-data to S3: %w", putErr)
+					}
+					fmt.Fprintf(os.Stderr, "  ✓ Bootstrap script uploaded to S3 (%d bytes)\n", len(artifacts.FullUserData))
+				}
 			}
-		}
 
-		// Step 8.6: Upload SOPS-encrypted bundle to S3 (Phase 89 SOPS-11).
-		// Pre-flight validates the bundle before any AWS call; non-empty
-		// artifactsBucket is required for the upload to proceed.
-		if artifactsBucket != "" {
-			s3ClientSops := s3.NewFromConfig(awsCfg)
-			if sopsErr := uploadSopsBundleIfPresent(ctx, s3ClientSops, artifactsBucket, sandboxID, profilePath, resolvedProfile); sopsErr != nil {
+			// Step 8.6: Upload SOPS-encrypted bundle to S3 (Phase 89 SOPS-11).
+			// Pre-flight validates the bundle before any AWS call; non-empty
+			// artifactsBucket is required for the upload to proceed.
+			if artifactsBucket != "" {
+				s3ClientSops := s3.NewFromConfig(awsCfg)
+				if sopsErr := uploadSopsBundleIfPresent(ctx, s3ClientSops, artifactsBucket, sandboxID, profilePath, resolvedProfile); sopsErr != nil {
+					_ = terragrunt.CleanupSandboxDir(sandboxDir)
+					return sopsErr
+				}
+			}
+
+			// Step 9: Populate sandbox directory with compiled artifacts
+			if err := terragrunt.PopulateSandboxDir(sandboxDir, artifacts.ServiceHCL, artifacts.UserData); err != nil {
 				_ = terragrunt.CleanupSandboxDir(sandboxDir)
-				return sopsErr
+				return fmt.Errorf("failed to populate sandbox directory: %w", err)
 			}
-		}
 
-		// Step 9: Populate sandbox directory with compiled artifacts
-		if err := terragrunt.PopulateSandboxDir(sandboxDir, artifacts.ServiceHCL, artifacts.UserData); err != nil {
-			_ = terragrunt.CleanupSandboxDir(sandboxDir)
-			return fmt.Errorf("failed to populate sandbox directory: %w", err)
-		}
+			// Step 10: Run terragrunt apply
+			if attempt == 0 {
+				fmt.Printf("\nProvisioning infrastructure...")
+			}
 
-		// Step 10: Run terragrunt apply
-		if attempt == 0 {
-			fmt.Printf("\nProvisioning infrastructure...")
-		}
+			// Spinner: print dots while apply runs in background
+			spinDone := make(chan struct{})
+			if !verbose {
+				go func() {
+					ticker := time.NewTicker(2 * time.Second)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-spinDone:
+							return
+						case <-ticker.C:
+							fmt.Print(".")
+						}
+					}
+				}()
+			}
 
-		// Spinner: print dots while apply runs in background
-		spinDone := make(chan struct{})
-		if !verbose {
-			go func() {
-				ticker := time.NewTicker(2 * time.Second)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-spinDone:
-						return
-					case <-ticker.C:
-						fmt.Print(".")
+			var applyStderr strings.Builder
+			applyErr := runner.ApplyWithStderr(ctx, sandboxDir, &applyStderr)
+			close(spinDone)
+
+			if applyErr == nil {
+				// Success
+				fmt.Println(" done")
+				fmt.Fprintf(os.Stderr, "  ✓ Infrastructure provisioned")
+				if attempt > 0 || outerSweep > 0 {
+					fmt.Fprintf(os.Stderr, " (AZ: %s, attempt %d/%d)", network.AvailabilityZones[0], attempt+1, maxAttempts)
+					if outerSweep > 0 {
+						fmt.Fprintf(os.Stderr, " after %d re-sweep(s)", outerSweep)
 					}
 				}
-			}()
+				fmt.Println()
+				break
+			}
+
+			// Apply failed — classify to decide: iterate to next AZ, fail-fast, or exhaust.
+			stderrStr := applyStderr.String()
+			class := capacity.ClassifyError(stderrStr, applyErr)
+
+			// Clean up the failed sandbox dir before retry or exit.
+			// CleanupSandboxDir is the between-attempt "taint": it wipes state so
+			// the next attempt starts fresh (no explicit -replace/-taint needed).
+			if cleanErr := terragrunt.CleanupSandboxDir(sandboxDir); cleanErr != nil {
+				log.Warn().Err(cleanErr).Msg("failed to clean up sandbox directory after apply failure")
+			}
+
+			retry, failFast := sweepDecision(class, attempt, maxAttempts)
+			if retry {
+				fmt.Fprintf(os.Stderr, "\n  ✗ Capacity unavailable in %s\n", network.AvailabilityZones[0])
+				continue
+			}
+
+			// Final failure — no more inner retries.
+			fmt.Println() // newline after spinner dots
+			if failFast {
+				// Fail-fast class (Quota/Auth/Invalid): never benefits from waiting.
+				// Short-circuit the outer loop too — return immediately.
+				if class == capacity.ClassQuota {
+					fmt.Fprintf(os.Stderr, "\n  ✗ Provisioning failed: GPU/vCPU quota limit reached.\n")
+					fmt.Fprintf(os.Stderr, "  Quota code: %s (Running On-Demand G and VT instances)\n", capacity.GPUVCPUQuotaCode)
+					fmt.Fprintf(os.Stderr, "  Request an increase: https://console.aws.amazon.com/servicequotas/home/services/ec2/quotas/%s\n\n", capacity.GPUVCPUQuotaCode)
+				} else {
+					fmt.Fprintf(os.Stderr, "ERROR: provisioning failed: %v\n", applyErr)
+				}
+				return fmt.Errorf("provisioning failed for sandbox %s", sandboxID)
+			} else if class.ShouldIterate() {
+				// Iterate-class exhausted — signal outer loop to decide whether to wait.
+				exhaustedIterateClass = true
+			} else {
+				// ClassUnknown or other non-iterate, non-failfast — no benefit in waiting.
+				fmt.Fprintf(os.Stderr, "ERROR: provisioning failed: %v\n", applyErr)
+				return fmt.Errorf("provisioning failed for sandbox %s", sandboxID)
+			}
+			break // exit inner for-loop; outer loop handles exhaustedIterateClass
 		}
 
-		var applyStderr strings.Builder
-		applyErr := runner.ApplyWithStderr(ctx, sandboxDir, &applyStderr)
-		close(spinDone)
-
-		if applyErr == nil {
-			// Success
-			fmt.Println(" done")
-			fmt.Fprintf(os.Stderr, "  ✓ Infrastructure provisioned")
-			if attempt > 0 {
-				fmt.Printf(" (AZ: %s, attempt %d/%d)", network.AvailabilityZones[0], attempt+1, maxAttempts)
-			}
-			fmt.Println()
+		if !exhaustedIterateClass {
+			// Either succeeded (inner loop broke on applyErr == nil) or a fatal error
+			// already returned above. Either way, exit the outer loop.
 			break
 		}
 
-		// Apply failed — classify to decide: iterate to next AZ, fail-fast, or exhaust.
-		stderrStr := applyStderr.String()
-		class := capacity.ClassifyError(stderrStr, applyErr)
-
-		// Clean up the failed sandbox dir before retry or exit.
-		// CleanupSandboxDir is the between-attempt "taint": it wipes state so
-		// the next attempt starts fresh (no explicit -replace/-taint needed).
-		if cleanErr := terragrunt.CleanupSandboxDir(sandboxDir); cleanErr != nil {
-			log.Warn().Err(cleanErr).Msg("failed to clean up sandbox directory after apply failure")
-		}
-
-		retry, failFast := sweepDecision(class, attempt, maxAttempts)
-		if retry {
-			fmt.Fprintf(os.Stderr, "\n  ✗ Capacity unavailable in %s\n", network.AvailabilityZones[0])
-			continue
-		}
-
-		// Final failure — no more retries.
-		fmt.Println() // newline after spinner dots
-		if failFast {
-			if class == capacity.ClassQuota {
-				fmt.Fprintf(os.Stderr, "\n  ✗ Provisioning failed: GPU/vCPU quota limit reached.\n")
-				fmt.Fprintf(os.Stderr, "  Quota code: %s (Running On-Demand G and VT instances)\n", capacity.GPUVCPUQuotaCode)
-				fmt.Fprintf(os.Stderr, "  Request an increase: https://console.aws.amazon.com/servicequotas/home/services/ec2/quotas/%s\n\n", capacity.GPUVCPUQuotaCode)
-			} else {
-				fmt.Fprintf(os.Stderr, "ERROR: provisioning failed: %v\n", applyErr)
+		// All AZs exhausted with iterate-class errors (ICE/SpotPrice/SpotLimit/WaiterTimeout).
+		fmt.Fprintf(os.Stderr, "\n  ✗ Capacity unavailable in all %d AZs.\n", maxAttempts)
+		if !waitCapDeadline.IsZero() && time.Now().Before(waitCapDeadline) {
+			// --wait-for-capacity: sleep, then re-sweep the full AZ list.
+			fmt.Fprintf(os.Stderr, "  Waiting %v before re-sweeping (deadline: %s, --wait-for-capacity)...\n",
+				capacityRetryInterval, waitCapDeadline.Format("15:04:05 MST"))
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("provisioning cancelled while waiting for capacity: %w", ctx.Err())
+			case <-time.After(capacityRetryInterval):
 			}
-		} else if class.ShouldIterate() {
-			// Iterate-class but all AZ attempts exhausted.
-			fmt.Fprintf(os.Stderr, "\n  ✗ Capacity unavailable in all %d AZs.\n", maxAttempts)
-			fmt.Fprintf(os.Stderr, "  Use on-demand: km create --on-demand %s\n\n", profilePath)
-		} else {
-			fmt.Fprintf(os.Stderr, "ERROR: provisioning failed: %v\n", applyErr)
+			continue // outer loop re-sweeps all AZs
 		}
+		// Fail-fast path (no --wait-for-capacity, or deadline elapsed).
+		fmt.Fprintf(os.Stderr, "  Use on-demand: km create --on-demand %s\n\n", profilePath)
 		return fmt.Errorf("provisioning failed for sandbox %s", sandboxID)
 	}
 
