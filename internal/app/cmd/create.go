@@ -44,6 +44,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/capacity"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	githubpkg "github.com/whereiskurt/klanker-maker/pkg/github"
 	"github.com/whereiskurt/klanker-maker/pkg/localnumber"
@@ -58,6 +59,25 @@ import (
 // GitHub App SSM parameters are not found. Callers convert this to a clean
 // "skipped (not configured)" log message rather than showing a stack trace.
 var ErrGitHubNotConfigured = errors.New("GitHub App not configured in SSM — run 'km configure github' first")
+
+// sweepDecision returns (retry, failFast) for the km create AZ-sweep loop.
+//
+//   - retry=true, failFast=false: iterate-class error (ICE/SpotPrice/SpotLimit/WaiterTimeout)
+//     and more AZ attempts remain — caller should rotate AZ and continue.
+//   - retry=false, failFast=true: non-retriable error class (Quota/Auth/Invalid) — caller
+//     should abort immediately without burning further AZ attempts.
+//   - retry=false, failFast=false: iterate-class exhausted (last AZ) or ClassUnknown — caller
+//     should print a summary message and return an error.
+func sweepDecision(class capacity.ErrorClass, attempt, maxAttempts int) (retry bool, failFast bool) {
+	switch {
+	case class.ShouldIterate() && attempt < maxAttempts-1:
+		return true, false
+	case class == capacity.ClassQuota || class == capacity.ClassAuth || class == capacity.ClassInvalid:
+		return false, true
+	default:
+		return false, false
+	}
+}
 
 // ErrAmbiguousInstallation is returned by resolveInstallationID when allowedRepos
 // contains only wildcards (or bare repos) AND multiple per-owner installation
@@ -841,26 +861,36 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			break
 		}
 
-		// Apply failed — check if it's a spot capacity error we can retry
+		// Apply failed — classify to decide: iterate to next AZ, fail-fast, or exhaust.
 		stderrStr := applyStderr.String()
-		isSpotCapacity := strings.Contains(stderrStr, "capacity-not-available") ||
-			strings.Contains(stderrStr, "InsufficientInstanceCapacity")
+		class := capacity.ClassifyError(stderrStr, applyErr)
 
-		// Clean up the failed sandbox dir before retry or exit
+		// Clean up the failed sandbox dir before retry or exit.
+		// CleanupSandboxDir is the between-attempt "taint": it wipes state so
+		// the next attempt starts fresh (no explicit -replace/-taint needed).
 		if cleanErr := terragrunt.CleanupSandboxDir(sandboxDir); cleanErr != nil {
 			log.Warn().Err(cleanErr).Msg("failed to clean up sandbox directory after apply failure")
 		}
 
-		if isSpotCapacity && attempt < maxAttempts-1 {
-			// Spot capacity failure with more AZs to try
-			fmt.Fprintf(os.Stderr, "\n  ✗ Spot capacity unavailable in %s\n", network.AvailabilityZones[0])
+		retry, failFast := sweepDecision(class, attempt, maxAttempts)
+		if retry {
+			fmt.Fprintf(os.Stderr, "\n  ✗ Capacity unavailable in %s\n", network.AvailabilityZones[0])
 			continue
 		}
 
-		// Final failure — no more retries
-		fmt.Println() // newline after dots
-		if isSpotCapacity {
-			fmt.Fprintf(os.Stderr, "\n  ✗ Spot capacity unavailable in all %d AZs.\n", maxAttempts)
+		// Final failure — no more retries.
+		fmt.Println() // newline after spinner dots
+		if failFast {
+			if class == capacity.ClassQuota {
+				fmt.Fprintf(os.Stderr, "\n  ✗ Provisioning failed: GPU/vCPU quota limit reached.\n")
+				fmt.Fprintf(os.Stderr, "  Quota code: %s (Running On-Demand G and VT instances)\n", capacity.GPUVCPUQuotaCode)
+				fmt.Fprintf(os.Stderr, "  Request an increase: https://console.aws.amazon.com/servicequotas/home/services/ec2/quotas/%s\n\n", capacity.GPUVCPUQuotaCode)
+			} else {
+				fmt.Fprintf(os.Stderr, "ERROR: provisioning failed: %v\n", applyErr)
+			}
+		} else if class.ShouldIterate() {
+			// Iterate-class but all AZ attempts exhausted.
+			fmt.Fprintf(os.Stderr, "\n  ✗ Capacity unavailable in all %d AZs.\n", maxAttempts)
 			fmt.Fprintf(os.Stderr, "  Use on-demand: km create --on-demand %s\n\n", profilePath)
 		} else {
 			fmt.Fprintf(os.Stderr, "ERROR: provisioning failed: %v\n", applyErr)
