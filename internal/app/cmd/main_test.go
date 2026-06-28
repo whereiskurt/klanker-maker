@@ -1,0 +1,36 @@
+package cmd
+
+import (
+	"os"
+	"testing"
+	"time"
+)
+
+// TestMain zeroes the package's sleep seam for the entire cmd test binary.
+//
+// internal/app/cmd was ~487s of the ~600s `go test ./...` suite — almost all of
+// it in production time.Sleep calls (port-forward bind waits, SSM retry pauses,
+// boot grace) that the credential/OAuth/shell/agent tests exercise at full
+// wall-clock. Routing those through `sleep` (clock.go) and no-op'ing it here
+// removes the waits without changing control flow. Tests that genuinely need a
+// real delay can restore `sleep` locally (save/restore) — none do today.
+func TestMain(m *testing.M) {
+	sleep = func(time.Duration) {}
+
+	// Stop the AWS SDK from probing EC2 instance metadata (169.254.169.254) when
+	// a test builds a real client without mocked deps. Off-instance that probe
+	// times out after ~30s per call — the single biggest cost in this suite
+	// (e.g. TestEmailSend_* spent 30s+ here before validating their args).
+	// Disabling IMDS + supplying static dummy creds makes config.LoadDefaultConfig
+	// return instantly. No real AWS call is made (tests mock at the client seam or
+	// fail before the call); these only short-circuit credential discovery.
+	os.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	os.Setenv("AWS_ACCESS_KEY_ID", "testing")
+	os.Setenv("AWS_SECRET_ACCESS_KEY", "testing")
+	os.Setenv("AWS_SESSION_TOKEN", "testing")
+	if os.Getenv("AWS_REGION") == "" {
+		os.Setenv("AWS_REGION", "us-east-1")
+	}
+
+	os.Exit(m.Run())
+}

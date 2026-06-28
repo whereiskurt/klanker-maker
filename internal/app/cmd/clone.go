@@ -344,7 +344,7 @@ func sendSSMCommand(ctx context.Context, ssmClient SSMSendAPI, ssmClientReal *ss
 // pollSSMCommandAPI polls an SSM command using the SSMSendAPI interface (for testing).
 func pollSSMCommandAPI(ctx context.Context, client SSMSendAPI, commandID, instanceID, successMarker, name string) error {
 	for i := 0; i < 30; i++ {
-		time.Sleep(2 * time.Second)
+		sleep(2 * time.Second)
 		fmt.Print(".")
 
 		inv, err := client.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
@@ -481,7 +481,7 @@ func waitForCloneRunning(ctx context.Context, cfg *config.Config, cloneAlias str
 		}
 
 		fmt.Print(".")
-		time.Sleep(pollInterval)
+		sleep(pollInterval)
 	}
 }
 

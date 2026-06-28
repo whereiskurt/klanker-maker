@@ -498,7 +498,7 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 			if i%3 == 0 {
 				_ = runResume(ctx, cfg, sandboxID)
 			}
-			time.Sleep(5 * time.Second)
+			sleep(5 * time.Second)
 			fmt.Fprint(os.Stdout, ".")
 		}
 		if rec == nil || rec.Status != "running" {
@@ -520,7 +520,7 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 		fmt.Fprintf(os.Stdout, "Waiting for SSM agent...")
 		ready := false
 		for attempt := 0; attempt < 24; attempt++ { // up to ~2 minutes
-			time.Sleep(5 * time.Second)
+			sleep(5 * time.Second)
 			testOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 				InstanceIds:  []string{instanceID},
 				DocumentName: awssdk.String("AWS-RunShellScript"),
@@ -528,7 +528,7 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 			})
 			if err == nil {
 				// Command accepted — wait briefly for it to complete
-				time.Sleep(3 * time.Second)
+				sleep(3 * time.Second)
 				inv, invErr := ssmClient.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
 					CommandId:  awssdk.String(awssdk.ToString(testOut.Command.CommandId)),
 					InstanceId: awssdk.String(instanceID),
@@ -614,7 +614,7 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 		}
 
 		// Wait briefly for script to land on disk
-		time.Sleep(2 * time.Second)
+		sleep(2 * time.Second)
 
 		// Build SSM start-session with tmux new-session (attached, no -d)
 		// The sandbox session document runs as sandbox user via runAsDefaultUser. No sudo wrapper.

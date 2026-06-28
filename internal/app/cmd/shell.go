@@ -478,7 +478,7 @@ func execSSMSession(ctx context.Context, cfg *config.Config, instanceID, region 
 					},
 				},
 			})
-			time.Sleep(2 * time.Second)
+			sleep(2 * time.Second)
 
 			// Clean up after session exits
 			defer func() {
@@ -503,7 +503,7 @@ func execSSMSession(ctx context.Context, cfg *config.Config, instanceID, region 
 				DocumentName: awssdk.String("AWS-RunShellScript"),
 				Parameters:   map[string][]string{"commands": writeCmds},
 			})
-			time.Sleep(2 * time.Second)
+			sleep(2 * time.Second)
 			defer func() {
 				_, _ = ssmClient.SendCommand(context.Background(), &ssm.SendCommandInput{
 					InstanceIds:  []string{instanceID},
@@ -587,7 +587,7 @@ func execSSMWithRetry(ctx context.Context, buildCmd func() *exec.Cmd, execFn She
 		if attempt < ssmRetryMaxAttempts {
 			fmt.Fprintf(os.Stderr, "\n⚡ SSM session exited after %s — retrying (%d/%d)...\n\n",
 				elapsed.Round(time.Millisecond), attempt, ssmRetryMaxAttempts)
-			time.Sleep(ssmRetryDelay)
+			sleep(ssmRetryDelay)
 		}
 	}
 	if lastErr != nil {
