@@ -583,7 +583,7 @@ func formatSize(bytes int64) string {
 // pollSSMCommand waits for an SSM command to complete and reports the result.
 func pollSSMCommand(ctx context.Context, client *ssm.Client, commandID, instanceID, successMarker, name string) error {
 	for i := 0; i < 30; i++ {
-		time.Sleep(2 * time.Second)
+		sleep(2 * time.Second)
 		fmt.Print(".")
 
 		inv, err := client.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{

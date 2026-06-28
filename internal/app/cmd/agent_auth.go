@@ -388,7 +388,7 @@ func runAgentAuthCodex(ctx context.Context, cfg *config.Config, fetcher SandboxF
 	}()
 
 	// Allow session-manager-plugin time to bind the local port before codex starts.
-	time.Sleep(1 * time.Second)
+	sleep(1 * time.Second)
 
 	// Open foreground codex login session.
 	// codex prints the OAuth URL to stdout (xdg-open fails on headless EC2).

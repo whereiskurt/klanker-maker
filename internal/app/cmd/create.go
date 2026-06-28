@@ -1825,7 +1825,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 			if pollErr == nil {
 				break
 			}
-			time.Sleep(2 * time.Second)
+			sleep(2 * time.Second)
 		}
 	}
 	if sidecarRoleErr == nil && sidecarRoleOut.Role != nil {
@@ -1836,7 +1836,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 			if pollErr == nil {
 				break
 			}
-			time.Sleep(2 * time.Second)
+			sleep(2 * time.Second)
 		}
 	}
 	// Step D6: Inject role ARNs into compose YAML.
