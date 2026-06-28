@@ -589,3 +589,122 @@ A running sandbox provisioned before the deploy has no profile file on disk; the
 degrades gracefully (pre-Phase-113 fallback path).
 
 **No schema change, no new TF resource, no new DDB column, no bridge Lambda change, no IAM change.**
+
+---
+
+## AZ failover + capacity feasibility (Phase 124)
+
+### The AZ sweep: `RankAZs` + classify-and-retry
+
+Before the first `terragrunt apply`, `km create` calls `capacity.RankAZs` to order the
+region's AZs by historical success signal from the `{prefix}-capacity` DynamoDB table
+(see below). AZs not offering the instance type (`DescribeInstanceTypeOfferings`) are dropped
+entirely — they will never appear in the sweep.
+
+The inner loop then tries each remaining AZ in ranked order and calls `sweepDecision` on
+every `apply` error to classify the outcome:
+
+| Error class | Examples | Loop action |
+|---|---|---|
+| `ClassICE` | `InsufficientInstanceCapacity`, `no Spot capacity found`, `capacity-not-available` | Rotate to next AZ; retry |
+| `ClassSpotPrice` / `ClassSpotLimit` / `ClassWaiterTimeout` | Spot bid below market, spot limit, bounded waiter hit | Rotate to next AZ; retry |
+| `ClassQuota` | `VcpuLimitExceeded`, `InstanceLimitExceeded`, `You have requested more vCPU capacity` | **Fail-fast** — stop the sweep immediately |
+| `ClassAuth` / `ClassInvalid` | Credentials error, invalid spec | **Fail-fast** |
+| All AZs exhausted (iterate class) | No AZs left after rotating through all | Return a non-fatal "exhausted" error |
+
+**Key invariant:** ICE (capacity not available in this AZ right now) triggers a rotation to
+the next AZ — never a fail-fast. Quota exhaustion is structurally different and always
+fails fast, naming `L-DB2E81BA`, because retrying other AZs does nothing (quota is regional).
+
+### GPU quota wall: `L-DB2E81BA` vs ICE — never confuse them
+
+For GPU instance families (`g4dn`, `g5`, `g6`, `g6e`, `p3`, `p4`, `p5`), `RankAZs` checks
+the regional "Running On-Demand G and VT instances" quota (`L-DB2E81BA`) **before** the
+sweep loop. If headroom is 0, `km create` returns immediately with:
+
+```
+Quota code: L-DB2E81BA (Running On-Demand G and VT instances)
+Request an increase: https://console.aws.amazon.com/servicequotas/home/...
+provisioning blocked: GPU vCPU quota L-DB2E81BA is exhausted (headroom=0)
+```
+
+This is NOT an ICE error. The distinction matters:
+
+- **ICE** → sweep to another AZ (may succeed immediately in another AZ).
+- **Quota=0** → no AZ in the region will work; request a quota increase first.
+
+The quota defaults to **0 per-account** (the "Running On-Demand G and VT instances" quota
+`L-DB2E81BA`). Verify the quota in the **target application account and region** — not the
+org management account, which may have a higher quota from prior usage.
+
+### Bounded spot waiter
+
+When using spot instances, Terraform's `aws_spot_instance_request` waits up to
+`wait_for_fulfillment_timeout` for the spot request to be fulfilled. If the wait times
+out, the error is classified `ClassWaiterTimeout` (iterate class, not fail-fast) so the
+sweep moves to the next AZ rather than aborting.
+
+### `km capacity` verdicts
+
+`km capacity [profile.yaml | --type <type>]` prints a per-AZ feasibility table.
+Verdicts never include "available" (capacity is probabilistic, not guaranteed):
+
+| Verdict | Meaning |
+|---|---|
+| `likely` | Offered + quota OK + last-success recorded OR no fresh ICE signal |
+| `recently-dry` | Fresh ICE signal within the last 45 minutes |
+| `not-offered` | AZ does not list this instance type in `DescribeInstanceTypeOfferings` |
+| `quota-blocked` | GPU family + regional headroom == 0 |
+| `unknown` | Offered + quota OK but no capacity store signal (store unavailable or no prior launches) |
+
+**"not-offered" is not the same as "recently-dry".** A `not-offered` AZ is permanently
+absent from the sweep; a `recently-dry` AZ may recover and will be retried on the next
+outer re-sweep (if `--wait-for-capacity` is set).
+
+### `km create --wait-for-capacity`
+
+When all AZs return iterate-class errors (swept through all AZs with no success), the
+outer loop by default exits with an error. With `--wait-for-capacity` (or
+`--wait-for-capacity=30m`), the outer loop sleeps 5 minutes between full re-sweeps until
+capacity is available or the deadline elapses. Fail-fast errors (quota/auth/invalid) exit
+the outer loop immediately — the backoff is specifically for transient ICE waves.
+
+```bash
+km create profiles/gpu-qwen-12x-l4.yaml --wait-for-capacity       # default 30m deadline
+km create profiles/gpu-qwen-12x-l4.yaml --wait-for-capacity=2h    # custom deadline
+```
+
+### `{prefix}-capacity` DynamoDB table
+
+The table (hash key: `instance_type`, range key: `az`) records:
+- `last_ice_at` — timestamp of the most recent ICE failure for this (type, AZ) pair.
+  TTL-expired automatically (45-minute window via DynamoDB TTL column `expires_at`).
+- `last_success_at` — timestamp of the most recent successful launch.
+
+`RankAZs` reads the table to sort AZs — AZs with a recent `last_success_at` sort first,
+AZs with a fresh `last_ice_at` (within the 45-minute window) sort last. The intent is
+sticky routing: a successful `1c` launch makes `1c` preferred on the next create.
+
+### Deploy-surface order (Phase 124) — `make build` MUST precede `km init`
+
+This is the **single most critical ordering constraint** for Phase 124. The
+`{prefix}-capacity` table and its IAM grants are registered as a new entry in
+`regionalModules()` inside the `km` operator binary (`internal/app/cmd/init.go`). If you
+run `km init --dry-run=false` with a **stale binary** that predates Phase 124, the
+`dynamodb-capacity` module is silently absent from the apply list — the table and IAM are
+never created, and `km capacity` + the `RankAZs` store writes silently fail at runtime.
+
+Correct order:
+
+```bash
+make build              # operator binary FIRST — includes dynamodb-capacity in regionalModules()
+make build-lambdas      # refactored create-handler classifier (nocap error taxonomy)
+km init --dry-run=false # full terragrunt apply: creates {prefix}-capacity table + IAM
+km doctor               # Capacity Table row should appear; GPU vCPU quota shown if checked
+```
+
+**NOT `--sidecars`** — the capacity table and IAM are managed by the `dynamodb-capacity`
+terragrunt module, which only runs on a full `km init --dry-run=false`. `--sidecars` does
+not apply terragrunt modules.
+
+**No SandboxProfile schema change, no bridge Lambda change, no sandbox recreate required.**
