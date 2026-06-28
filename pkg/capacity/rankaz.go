@@ -65,10 +65,10 @@ func (e *QuotaError) Error() string {
 	)
 }
 
-// isGPUFamily returns true for instance type prefixes "g" and "vt" (case-insensitive).
+// IsGPUFamily returns true for instance type prefixes "g" and "vt" (case-insensitive).
 // These families are subject to the regional GPU vCPU quota (L-DB2E81BA).
 // 124-RESEARCH Open Question 2: "g" covers g3/g4/g5/g6/g6e; "vt" covers vt1.
-func isGPUFamily(instanceType string) bool {
+func IsGPUFamily(instanceType string) bool {
 	lower := strings.ToLower(instanceType)
 	return strings.HasPrefix(lower, "g") || strings.HasPrefix(lower, "vt")
 }
@@ -176,7 +176,7 @@ func RankAZs(
 	}
 
 	// Step 2: Regional quota gate for GPU families (fail-fast; regional, not per-AZ).
-	if isGPUFamily(instanceType) {
+	if IsGPUFamily(instanceType) {
 		headroom, quotaErr := GetGPUVCPUQuota(ctx, sqc)
 		if quotaErr != nil {
 			log.Warn().Err(quotaErr).Str("instanceType", instanceType).
