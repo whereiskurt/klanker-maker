@@ -21,7 +21,11 @@ var managedIdentityWarn sync.Once
 // LoadAWSConfig loads AWS configuration using a named shared config profile.
 // Region is hardcoded to us-east-1 (the single-region deployment model).
 // Thin wrapper around LoadAWSConfigInRegion.
-func LoadAWSConfig(ctx context.Context, profile string) (aws.Config, error) {
+//
+// This is a package-level variable (not a function declaration) so that test
+// binaries can override it without touching production code. The default value
+// is the real implementation; production callers are unaffected.
+var LoadAWSConfig = func(ctx context.Context, profile string) (aws.Config, error) {
 	return LoadAWSConfigInRegion(ctx, profile, awsRegion)
 }
 
@@ -37,7 +41,11 @@ func LoadAWSConfig(ctx context.Context, profile string) (aws.Config, error) {
 // chain picks up the runtime-injected web-identity token automatically and
 // no ~/.aws/config file is needed. CLI callers that hard-code
 // "klanker-terraform" therefore work unchanged in-pod via the SA annotation.
-func LoadAWSConfigInRegion(ctx context.Context, profile, region string) (aws.Config, error) {
+//
+// This is a package-level variable (not a function declaration) so that test
+// binaries can override it without touching production code. The default value
+// is the real implementation; production callers are unaffected.
+var LoadAWSConfigInRegion = func(ctx context.Context, profile, region string) (aws.Config, error) {
 	if region == "" {
 		region = awsRegion
 	}

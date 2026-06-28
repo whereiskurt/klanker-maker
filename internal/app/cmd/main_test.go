@@ -1,10 +1,34 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
+
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
+
+// testFailFastAWSConfig returns a minimal aws.Config whose credential provider
+// errors immediately (no network, no SSO token refresh). Any AWS API call that
+// tries to retrieve credentials will fail in microseconds rather than hitting
+// real AWS endpoints or blocking on SSO refresh.
+//
+// We return (config, nil) — not (config, error) — because call sites such as
+// ResolveSandboxID branch on the LoadAWSConfig error vs. proceeding. Returning
+// a valid config that fails only at *API-call* time mirrors exactly what happens
+// in production when credentials are unavailable, and lets the fast-path
+// pattern-match in ResolveSandboxID still trigger correctly.
+func testFailFastAWSConfig() awssdk.Config {
+	return awssdk.Config{
+		Region: "us-east-1",
+		Credentials: awssdk.CredentialsProviderFunc(func(ctx context.Context) (awssdk.Credentials, error) {
+			return awssdk.Credentials{}, errors.New("test: no real AWS credentials (fast-fail seam)")
+		}),
+	}
+}
 
 // TestMain zeroes the package's sleep seam for the entire cmd test binary.
 //
@@ -15,6 +39,20 @@ import (
 // removes the waits without changing control flow. Tests that genuinely need a
 // real delay can restore `sleep` locally (save/restore) — none do today.
 func TestMain(m *testing.M) {
+	// Override the LoadAWSConfig seam so that every cobra command test that
+	// reaches ResolveSandboxID (or any other call site) gets a credential
+	// provider that errors instantly — no real SSO token refresh, no network
+	// round-trip to ~/.aws/config.  Tests that need the real loader can restore
+	// it locally (save/restore the var).  The known-8 configure/cluster/
+	// bootstrap tests that depend on real AWS remain environmentally gated as
+	// before; this seam only removes incidental overhead from the passing tests.
+	kmaws.LoadAWSConfig = func(ctx context.Context, profile string) (awssdk.Config, error) {
+		return testFailFastAWSConfig(), nil
+	}
+	kmaws.LoadAWSConfigInRegion = func(ctx context.Context, profile, region string) (awssdk.Config, error) {
+		return testFailFastAWSConfig(), nil
+	}
+
 	sleep = func(time.Duration) {}
 
 	// internal/app/cmd tests never need real Lambda zips; the production default
