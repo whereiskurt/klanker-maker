@@ -105,23 +105,27 @@ spec:
         [Install]
         WantedBy=multi-user.target
         KM_BIFROST_UNIT
+      # Populate /etc/km/bifrost-env from SOPS-injected keys FIRST so the config
+      # build below can detect which providers are usable.
+      - "mkdir -p /etc/km/bifrost-data && touch /etc/km/bifrost-env && grep -hE '^(ANTHROPIC_API_KEY|OPENAI_API_KEY)=' /etc/sandbox-secrets.env >> /etc/km/bifrost-env 2>/dev/null || true"
+      # Build Bifrost config.json with jq — include a provider ONLY when usable:
+      # vllm-local always; anthropic/openai if their key is in bifrost-env;
+      # bedrock if /etc/km/bedrock.enabled exists (spec.iam.allowBedrock:true).
       - |
-        mkdir -p /etc/km/bifrost-data
-        cat > /etc/km/bifrost-data/config.json <<'KM_BIFROST_CFG'
-        {
-          "config_store": { "enabled": false },
-          "providers": {
-            "bedrock": { "keys": [ { "name": "bedrock-iam", "models": ["*"], "weight": 1.0, "bedrock_key_config": { "region": "us-east-1" } } ] },
-            "anthropic": { "keys": [ { "name": "anthropic-direct", "value": "env.ANTHROPIC_API_KEY", "models": ["*"], "weight": 1.0 } ] },
-            "openai": { "keys": [ { "name": "openai-frontier", "value": "env.OPENAI_API_KEY", "models": ["*"], "weight": 1.0 } ] },
-            "vllm-local": { "keys": [ { "name": "vllm-key", "value": "dummy", "models": ["*"], "weight": 1.0 } ], "network_config": { "base_url": "http://127.0.0.1:8000", "default_request_timeout_in_seconds": 120 }, "custom_provider_config": { "base_provider_type": "openai", "allow_private_network": true, "allowed_requests": { "chat_completion": true, "chat_completion_stream": true, "responses": true, "responses_stream": true } } }
-          }
-        }
-        KM_BIFROST_CFG
+        set -e
+        VLLM='{"keys":[{"name":"vllm-key","value":"dummy","models":["*"],"weight":1.0}],"network_config":{"base_url":"http://127.0.0.1:8000","default_request_timeout_in_seconds":120},"custom_provider_config":{"base_provider_type":"openai","allow_private_network":true,"allowed_requests":{"chat_completion":true,"chat_completion_stream":true,"responses":true,"responses_stream":true}}}'
+        PROVIDERS=$(jq -nc --argjson v "$VLLM" '{"vllm-local":$v}')
+        if grep -qE '^ANTHROPIC_API_KEY=.+' /etc/km/bifrost-env 2>/dev/null; then
+          PROVIDERS=$(echo "$PROVIDERS" | jq -c '. + {"anthropic":{"keys":[{"name":"anthropic-direct","value":"env.ANTHROPIC_API_KEY","models":["*"],"weight":1.0}]}}')
+        fi
+        if grep -qE '^OPENAI_API_KEY=.+' /etc/km/bifrost-env 2>/dev/null; then
+          PROVIDERS=$(echo "$PROVIDERS" | jq -c '. + {"openai":{"keys":[{"name":"openai-frontier","value":"env.OPENAI_API_KEY","models":["*"],"weight":1.0}]}}')
+        fi
+        if [ -f /etc/km/bedrock.enabled ]; then
+          PROVIDERS=$(echo "$PROVIDERS" | jq -c '. + {"bedrock":{"keys":[{"name":"bedrock-iam","models":["*"],"weight":1.0,"bedrock_key_config":{"region":"us-east-1"}}]}}')
+        fi
+        jq -nc --argjson p "$PROVIDERS" '{"config_store":{"enabled":false},"providers":$p}' > /etc/km/bifrost-data/config.json
         chown -R 1000:1000 /etc/km/bifrost-data
-      # /etc/km/bifrost-env = container --env-file; empty = keyless Bedrock/local only;
-      # SOPS-injected ANTHROPIC_API_KEY / OPENAI_API_KEY enable the direct routes.
-      - "touch /etc/km/bifrost-env && grep -hE '^(ANTHROPIC_API_KEY|OPENAI_API_KEY)=' /etc/sandbox-secrets.env >> /etc/km/bifrost-env 2>/dev/null || true"
       - "docker pull maximhq/bifrost:v1.6.0 || true"
       - "systemctl daemon-reload"
       - "systemctl enable --now vllm.service || true"
