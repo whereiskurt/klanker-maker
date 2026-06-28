@@ -37,6 +37,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ses"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
+	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
@@ -44,6 +45,7 @@ import (
 	"github.com/spf13/cobra"
 	appcfg "github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/capacity"
 	"github.com/whereiskurt/klanker-maker/pkg/check"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	profilepkg "github.com/whereiskurt/klanker-maker/pkg/profile"
@@ -292,6 +294,9 @@ type DoctorConfigProvider interface {
 	// GetChecksTriggers returns the Phase 116 checks.triggers list from km-config.yaml.
 	// Nil/empty when the checks: block is absent (dormant).
 	GetChecksTriggers() []appcfg.CheckTrigger
+	// GetCapacityTableName returns the Phase 124 {prefix}-capacity DynamoDB table name.
+	// Stores per-(instanceType,az) ICE/success history for capacity-aware AZ ranking.
+	GetCapacityTableName() string
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -354,6 +359,9 @@ func (a *appConfigAdapter) GetChecksTableName() string {
 }
 func (a *appConfigAdapter) GetChecksTriggers() []appcfg.CheckTrigger {
 	return a.cfg.GetChecksTriggers()
+}
+func (a *appConfigAdapter) GetCapacityTableName() string {
+	return a.cfg.GetCapacityTableName()
 }
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
@@ -577,6 +585,12 @@ type DoctorDeps struct {
 	// Used by orphan-Lambda + trigger-drift checks. Nil causes those sub-checks
 	// to return SKIPPED. Production reuses the main DynamoDB config.
 	ChecksDDBClient check.ChecksDDBAPI
+
+	// Phase 124 — capacity table + GPU quota doctor check dependencies.
+	// ServiceQuotasClient is used by checkGPUQuotaHeadroom to probe the
+	// "Running On-Demand G and VT instances" quota (L-DB2E81BA).
+	// Nil causes the GPU quota check to return CheckSkipped.
+	ServiceQuotasClient capacity.ServiceQuotasAPI
 }
 
 // =============================================================================
@@ -778,6 +792,48 @@ func checkDynamoTable(ctx context.Context, client DynamoDescribeAPI, tableName, 
 		Name:    checkName,
 		Status:  CheckOK,
 		Message: fmt.Sprintf("table %q exists", tableName),
+	}
+}
+
+// checkGPUQuotaHeadroom probes the "Running On-Demand G and VT instances" Service
+// Quota (L-DB2E81BA). A value of 0 vCPUs means GPU EC2 launches will fail immediately
+// without any attempt. The URL below links directly to the quota request page.
+//
+// Results:
+//   - quota == 0   → CheckWarn (with L-DB2E81BA remediation link)
+//   - quota  > 0   → CheckOK  ("%.0f vCPUs available")
+//   - probe error  → CheckSkipped (Service Quotas API unavailable or credentials absent)
+func checkGPUQuotaHeadroom(ctx context.Context, client capacity.ServiceQuotasAPI) CheckResult {
+	const checkName = "GPU vCPU quota (L-DB2E81BA)"
+	if client == nil {
+		return CheckResult{
+			Name:    checkName,
+			Status:  CheckSkipped,
+			Message: "Service Quotas client not available",
+		}
+	}
+	quota, err := capacity.GetGPUVCPUQuota(ctx, client)
+	if err != nil {
+		return CheckResult{
+			Name:    checkName,
+			Status:  CheckSkipped,
+			Message: fmt.Sprintf("quota check unavailable: %v", err),
+		}
+	}
+	if quota == 0 {
+		return CheckResult{
+			Name:    checkName,
+			Status:  CheckWarn,
+			Message: "Running On-Demand G and VT instances quota is 0 vCPUs — GPU launches will fail-fast",
+			Remediation: fmt.Sprintf(
+				"Request increase at https://console.aws.amazon.com/servicequotas/home/services/ec2/quotas/%s (service ec2, quota %s)",
+				capacity.GPUVCPUQuotaCode, capacity.GPUVCPUQuotaCode),
+		}
+	}
+	return CheckResult{
+		Name:    checkName,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("%.0f vCPUs available", quota),
 	}
 }
 
@@ -3718,6 +3774,27 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// Phase 124 — DynamoDB: capacity table (per-(instanceType,az) ICE/success history).
+	// WARN-level demote mirrors the slack-channels pattern: installs on pre-Phase-124
+	// builds may not have this table yet, so a missing table is advisory.
+	capacityTable := cfg.GetCapacityTableName()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkDynamoTable(ctx, dynamoClient, capacityTable, "Capacity Table ("+capacityTable+")")
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+			r.Remediation = "Run 'km init --dry-run=false' to create the DynamoDB capacity table"
+		}
+		return r
+	})
+
+	// Phase 124 — GPU vCPU quota (L-DB2E81BA).
+	// WARN when quota == 0: GPU EC2 launches fail-fast without any AZ attempt.
+	// SKIP when the Service Quotas client is unavailable (no credentials or region issue).
+	sqClientForDoctor := deps.ServiceQuotasClient
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkGPUQuotaHeadroom(ctx, sqClientForDoctor)
+	})
+
 	// KMS key check.
 	kmsClient := deps.KMSClient
 	platformKMSAlias := "km-platform-" + cfg.GetResourcePrefix() + "-" + compiler.RegionLabel(cfg.GetPrimaryRegion())
@@ -4589,6 +4666,8 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.LambdaCleanup = lambda.NewFromConfig(awsCfg)
 	deps.SESClient = sesv2.NewFromConfig(awsCfg)
 	deps.SESRulesClient = ses.NewFromConfig(awsCfg)
+	// Phase 124: Service Quotas client for GPU vCPU quota check (L-DB2E81BA).
+	deps.ServiceQuotasClient = servicequotas.NewFromConfig(awsCfg)
 	// Phase 116 (Bug F): full DynamoDB client (GetItem/Scan) for the check doctor
 	// group — orphan check Lambdas/schedules + trigger drift. deps.DynamoClient is
 	// DescribeTable-only, so without this those sub-checks skip with "DynamoDB
