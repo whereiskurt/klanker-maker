@@ -18,10 +18,10 @@ The `VERSION` file is intentionally a build counter — it ticks every time you 
 
 Each release produces:
 
-- `km_vX.Y.Z_darwin_amd64.tar.gz`
-- `km_vX.Y.Z_darwin_arm64.tar.gz`
-- `km_vX.Y.Z_linux_amd64.tar.gz`
-- `km_vX.Y.Z_linux_arm64.tar.gz`
+- `km_vX.Y.Z_darwin_amd64.tar.xz`
+- `km_vX.Y.Z_darwin_arm64.tar.xz`
+- `km_vX.Y.Z_linux_amd64.tar.xz`
+- `km_vX.Y.Z_linux_arm64.tar.xz`
 - `km_vX.Y.Z_checksums.txt` (SHA256)
 
 Each tarball contains:
@@ -62,11 +62,11 @@ This runs the full pipeline against `HEAD` without tagging. Inspect:
 
 ```bash
 ls dist/
-tar -tzf dist/km_v*_darwin_arm64.tar.gz
+tar -tJf dist/km_v*_darwin_arm64.tar.xz
 sha256sum dist/km_v*_checksums.txt
 ```
 
-You should see four tarballs + the checksums file, and `tar -tzf` should list `km`, `bin/terraform`, `bin/terragrunt`, plus the doc files.
+You should see four tarballs + the checksums file, and `tar -tJf` should list `km`, `bin/terraform`, `bin/terragrunt`, plus the doc files.
 
 ### 3. Tag and push
 

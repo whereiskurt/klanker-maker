@@ -356,7 +356,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 
 Tag-driven via goreleaser + GH Actions. The `VERSION` file is the dev-build counter (auto-bumped by every `make build`); git tags (`vX.Y.Z`) are the release identity.
 
-**Artifacts produced per release:** four tarballs (`km_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.gz`), each bundling `km` + `terraform` v1.9.8 + `terragrunt` v0.99.1 + `LICENSE` + `README.md` + `OPERATOR-GUIDE.md` + `THIRD-PARTY-LICENSES.txt`. Plus a SHA256 checksums file. Operators still provide `aws` CLI + `session-manager-plugin` themselves.
+**Artifacts produced per release:** four tarballs (`km_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.xz`), each bundling `km` + `terraform` v1.9.8 + `terragrunt` v0.99.1 + `LICENSE` + `README.md` + `OPERATOR-GUIDE.md` + `THIRD-PARTY-LICENSES.txt`. Plus a SHA256 checksums file. Operators still provide `aws` CLI + `session-manager-plugin` themselves.
 
 **Cut-a-release workflow:**
 
@@ -365,7 +365,7 @@ Tag-driven via goreleaser + GH Actions. The `VERSION` file is the dev-build coun
    ```bash
    goreleaser check
    goreleaser release --snapshot --clean
-   ls dist/ && tar -tzf dist/km_v*_darwin_arm64.tar.gz
+   ls dist/ && tar -tJf dist/km_v*_darwin_arm64.tar.xz
    ```
 3. **Tag and push:**
    ```bash
