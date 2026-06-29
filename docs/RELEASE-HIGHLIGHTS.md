@@ -44,6 +44,25 @@ interface:
 - ⚠️ **Prereq:** the On-Demand **G/VT instances** vCPU quota (`L-DB2E81BA`) defaults to **0** per
   account — request it in your target account/region first. Full runbook: `docs/gpu-model-serving.md`.
 
+### 🛰️ Platform-wide AZ failover + capacity feasibility (Phase 124)
+
+`km create` now hunts for capacity instead of failing on the first Availability Zone — directly
+taming the GPU-launch pain above (and every spot/on-demand EC2 launch):
+
+- **AZ sweep with classify-and-retry** — `km create` pre-orders the region's AZs, then on a launch
+  failure classifies the cause: transient capacity errors (ICE / spot price / spot limit / waiter
+  timeout) **rotate to the next AZ**, while quota / auth / invalid errors **fail fast** (no AZ
+  rotation can clear a quota wall).
+- **`km capacity [profile | --type t]`** — a per-AZ feasibility table with honest verdicts
+  (`likely`, `recently-dry`, `not-offered`, `quota-blocked`, `unknown`). Capacity is probabilistic,
+  so it never claims "available."
+- **`km create --wait-for-capacity[=30m]`** — an outer backoff loop that re-sweeps every 5 minutes
+  until capacity frees up or the deadline hits. Dormant by default (single-sweep without the flag).
+- **GPU quota fail-fast gate** — for GPU families, `km create` checks the `L-DB2E81BA` G/VT quota
+  *before* sweeping and fails immediately (with the increase URL) when headroom is 0.
+- **New `{prefix}-capacity` table** records recent ICE / success per (instance-type, AZ) so the
+  sweep develops sticky AZ preference; `km doctor` checks the table + GPU quota.
+
 ### 🛡️ Action quotas + freeze quarantine (Phase 121)
 
 A circuit-breaker for high-impact outbound actions — like budgets, but for *actions* (PRs opened,
