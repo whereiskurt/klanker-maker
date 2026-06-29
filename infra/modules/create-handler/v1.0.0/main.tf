@@ -66,6 +66,7 @@ module "km_operator_policy" {
   identities_table_name     = var.identities_table_name
   slack_threads_table_name  = var.slack_threads_table_name
   slack_channels_table_name = var.slack_channels_table_name
+  capacity_table_name       = var.capacity_table_name
 }
 
 # ============================================================

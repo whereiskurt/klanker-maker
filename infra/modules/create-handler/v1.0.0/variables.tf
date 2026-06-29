@@ -103,3 +103,11 @@ variable "kms_key_arn" {
   type        = string
   default     = ""
 }
+
+# Phase 124.07 — Capacity table write-back grant.
+# Wired through km_operator_policy. Empty default preserves back-compat for pre-Phase-124 installs.
+variable "capacity_table_name" {
+  description = "Name of the {prefix}-capacity DynamoDB table (Phase 124). Grants GetItem/UpdateItem to the create-handler subprocess for RecordSuccess/RecordICE write-back. Empty disables the grant."
+  type        = string
+  default     = ""
+}

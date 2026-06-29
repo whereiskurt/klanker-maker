@@ -68,4 +68,10 @@ inputs = {
   # not an ARN output, so a dependency on the slack-channels unit is not required
   # and would break km init --plan on fresh installs. Mirrors the slack_threads pattern.
   slack_channels_table_name = "${local.site_vars.locals.site.label}-slack-channels"
+
+  # Phase 124.07 — Capacity store write-back grant for the create-handler Lambda subprocess.
+  # Derives {label}-capacity (same formula as GetCapacityTableName() in internal/app/config/config.go
+  # and the dynamodb-capacity live unit's table_name). Static string — no dependency block
+  # needed; the IAM grant requires only the table name, not an ARN output.
+  capacity_table_name = "${local.site_vars.locals.site.label}-capacity"
 }

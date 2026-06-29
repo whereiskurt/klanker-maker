@@ -58,3 +58,14 @@ variable "slack_channels_table_name" {
   type        = string
   default     = ""
 }
+
+# Phase 124.07 — Capacity store write-back grant for the create-handler Lambda subprocess.
+# The km create sweep loop calls RecordSuccess/RecordICE (UpdateItem) after each apply
+# attempt so RankAZs reads a store that the sweep actually populates. Grant always present
+# (capacity table always provisioned by Phase 124.02 for Phase 124 installs). Set to the
+# same {label}-capacity derivation used by the live terragrunt unit.
+variable "capacity_table_name" {
+  description = "Name of the {prefix}-capacity DynamoDB table (Phase 124 AZ capacity store). Grants GetItem/UpdateItem so the km create subprocess can write RecordSuccess/RecordICE."
+  type        = string
+  default     = ""
+}

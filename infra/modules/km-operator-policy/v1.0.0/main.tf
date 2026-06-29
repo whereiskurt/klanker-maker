@@ -688,6 +688,38 @@ resource "aws_iam_role_policy" "sqs_github_inbound" {
   })
 }
 
+# Phase 124.07 — Policy: DynamoDB {prefix}-capacity read/write for the km create subprocess.
+# The AZ sweep loop calls RecordSuccess/RecordICE (UpdateItem) after each apply attempt so
+# the capacity store is populated and RankAZs can produce a non-empty ranking on the next
+# create. GetItem is included so the subprocess can also read back its own entries for
+# consistency. DescribeTable lets the SDK verify the table exists at cold-start.
+#
+# Conditionally created when capacity_table_name is non-empty; the default is ""
+# (back-compat for pre-Phase-124 installs that have no capacity table).
+resource "aws_iam_role_policy" "dynamodb_capacity" {
+  count = var.capacity_table_name != "" ? 1 : 0
+
+  name = "${var.resource_prefix}-create-handler-dynamodb-capacity"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CapacityTableReadWrite"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DescribeTable",
+        ]
+        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.capacity_table_name}"
+      }
+    ]
+  })
+}
+
 # Policy: IAM OIDC provider management for cluster-irsa module.
 # register=true branch: Terraform creates/deletes/tags aws_iam_openid_connect_provider.this[0].
 # register=false branch: Terraform reads data.aws_iam_openid_connect_provider.existing[0]
