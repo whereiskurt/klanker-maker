@@ -80,6 +80,38 @@ func sweepDecision(class capacity.ErrorClass, attempt, maxAttempts int) (retry b
 	}
 }
 
+// bestEffortRecordCapacity writes a capacity outcome to the store after a
+// terragrunt apply attempt. It is invoked from the AZ sweep loop on both the
+// success and ICE-class failure branches. The write is best-effort: on error
+// the function logs a warning and returns without propagating the error, so a
+// DDB outage or permission gap never blocks a create.
+//
+// If store is nil (docker substrate or ranking skipped), it is a no-op.
+// Only ClassSuccess triggers RecordSuccess; only ClassICE triggers RecordICE;
+// all other classes (SpotPrice, Quota, Auth, Unknown …) are ignored.
+func bestEffortRecordCapacity(ctx context.Context, store capacity.CapacityStore, instanceType, az string, class capacity.ErrorClass, success bool) {
+	if store == nil {
+		return
+	}
+	// Use a short deadline so a slow DDB call never delays the create result.
+	bCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if success {
+		if err := store.RecordSuccess(bCtx, instanceType, az); err != nil {
+			log.Warn().Err(err).Str("instanceType", instanceType).Str("az", az).
+				Msg("capacity: RecordSuccess failed (best-effort, ignored)")
+		}
+		return
+	}
+	if class == capacity.ClassICE {
+		if err := store.RecordICE(bCtx, instanceType, az); err != nil {
+			log.Warn().Err(err).Str("instanceType", instanceType).Str("az", az).
+				Msg("capacity: RecordICE failed (best-effort, ignored)")
+		}
+	}
+}
+
 // ErrAmbiguousInstallation is returned by resolveInstallationID when allowedRepos
 // contains only wildcards (or bare repos) AND multiple per-owner installation
 // parameters exist under /km/config/github/installations/. Without a concrete
@@ -756,8 +788,14 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// On *QuotaError: fail fast immediately — AZ rotation cannot fix a regional quota wall.
 	// On any other error: log warn and keep original AZ order (ranking is best-effort, non-fatal).
 	// network.PublicSubnets is reordered in lockstep to preserve AZ[i] <-> subnet[i] pairing.
+	//
+	// Phase 124.07: capacityStore and rankInstanceType are hoisted so the sweep loop can
+	// write RecordSuccess/RecordICE after each apply attempt. A nil capacityStore (docker
+	// substrate) is a no-op inside bestEffortRecordCapacity.
+	var capacityStore capacity.CapacityStore
+	var rankInstanceType string
 	if substrate != "docker" && len(network.AvailabilityZones) > 0 {
-		rankInstanceType := resolvedProfile.Spec.Runtime.InstanceType
+		rankInstanceType = resolvedProfile.Spec.Runtime.InstanceType
 		if rankInstanceType == "" {
 			rankInstanceType = "t3.medium"
 		}
@@ -768,7 +806,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			o.Region = region
 		})
 		ddbForCapacity := dynamodbpkg.NewFromConfig(awsCfg)
-		capacityStore := capacity.NewDynamoCapacityStore(ddbForCapacity, cfg.GetCapacityTableName())
+		capacityStore = capacity.NewDynamoCapacityStore(ddbForCapacity, cfg.GetCapacityTableName())
 
 		ranked, rankErr := capacity.RankAZs(ctx, rankInstanceType, region,
 			resolvedProfile.Spec.Runtime.AZPreference,
@@ -963,7 +1001,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			close(spinDone)
 
 			if applyErr == nil {
-				// Success
+				// Success — record sticky last-success so RankAZs can prefer this AZ next time.
+				bestEffortRecordCapacity(ctx, capacityStore, rankInstanceType, network.AvailabilityZones[0], capacity.ClassSuccess, true)
 				fmt.Println(" done")
 				fmt.Fprintf(os.Stderr, "  ✓ Infrastructure provisioned")
 				if attempt > 0 || outerSweep > 0 {
@@ -979,6 +1018,10 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			// Apply failed — classify to decide: iterate to next AZ, fail-fast, or exhaust.
 			stderrStr := applyStderr.String()
 			class := capacity.ClassifyError(stderrStr, applyErr)
+
+			// Phase 124.07: Record ICE so RankAZs can deprioritize this AZ on the next create.
+			// Best-effort: a store error is logged and dropped — never blocks the create path.
+			bestEffortRecordCapacity(ctx, capacityStore, rankInstanceType, network.AvailabilityZones[0], class, false)
 
 			// Clean up the failed sandbox dir before retry or exit.
 			// CleanupSandboxDir is the between-attempt "taint": it wipes state so

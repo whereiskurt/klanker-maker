@@ -1,10 +1,35 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/pkg/capacity"
 )
+
+// fakeCapacityStore is a test-only CapacityStore that records which methods
+// were called and with which arguments. It can be configured to return an
+// error to verify best-effort behaviour (error never propagates to the caller).
+type fakeCapacityStore struct {
+	recordSuccessCalls []struct{ InstanceType, AZ string }
+	recordICECalls     []struct{ InstanceType, AZ string }
+	returnErr          error // when set, RecordSuccess and RecordICE return this
+}
+
+func (f *fakeCapacityStore) RecordSuccess(_ context.Context, instanceType, az string) error {
+	f.recordSuccessCalls = append(f.recordSuccessCalls, struct{ InstanceType, AZ string }{instanceType, az})
+	return f.returnErr
+}
+
+func (f *fakeCapacityStore) RecordICE(_ context.Context, instanceType, az string) error {
+	f.recordICECalls = append(f.recordICECalls, struct{ InstanceType, AZ string }{instanceType, az})
+	return f.returnErr
+}
+
+func (f *fakeCapacityStore) Get(_ context.Context, instanceType, az string) (*capacity.CapacityEntry, error) {
+	return &capacity.CapacityEntry{InstanceType: instanceType, AZ: az}, nil
+}
 
 // TestAZSweepLoop verifies sweepDecision — the classify-and-retry decision function
 // used by the km create AZ-sweep loop (runCreate, internal/app/cmd/create.go).
@@ -92,6 +117,84 @@ func TestAZSweepLoop(t *testing.T) {
 		retry, failFast := sweepDecision(capacity.ClassQuota, 0, 1)
 		if retry || !failFast {
 			t.Errorf("sweepDecision(ClassQuota, 0, 1) = (retry=%v, failFast=%v), want (false, true)", retry, failFast)
+		}
+	})
+}
+
+// TestCapacityWriteBack verifies bestEffortRecordCapacity — the helper wired
+// into the km create AZ sweep loop that records launch outcomes to the
+// capacity store (pkg/capacity). All calls are best-effort: a store error
+// must never propagate to the caller, and a nil store must be a no-op.
+func TestCapacityWriteBack(t *testing.T) {
+	ctx := context.Background()
+	const instanceType = "g6e.12xlarge"
+	const az = "us-east-1a"
+
+	t.Run("success_calls_RecordSuccess", func(t *testing.T) {
+		store := &fakeCapacityStore{}
+		bestEffortRecordCapacity(ctx, store, instanceType, az, capacity.ClassSuccess, true)
+		if len(store.recordSuccessCalls) != 1 {
+			t.Fatalf("want 1 RecordSuccess call, got %d", len(store.recordSuccessCalls))
+		}
+		if got := store.recordSuccessCalls[0]; got.InstanceType != instanceType || got.AZ != az {
+			t.Errorf("RecordSuccess called with (%s, %s), want (%s, %s)", got.InstanceType, got.AZ, instanceType, az)
+		}
+		if len(store.recordICECalls) != 0 {
+			t.Errorf("RecordICE must not be called on success, got %d calls", len(store.recordICECalls))
+		}
+	})
+
+	t.Run("ICE_class_calls_RecordICE", func(t *testing.T) {
+		store := &fakeCapacityStore{}
+		bestEffortRecordCapacity(ctx, store, instanceType, az, capacity.ClassICE, false)
+		if len(store.recordICECalls) != 1 {
+			t.Fatalf("want 1 RecordICE call, got %d", len(store.recordICECalls))
+		}
+		if got := store.recordICECalls[0]; got.InstanceType != instanceType || got.AZ != az {
+			t.Errorf("RecordICE called with (%s, %s), want (%s, %s)", got.InstanceType, got.AZ, instanceType, az)
+		}
+		if len(store.recordSuccessCalls) != 0 {
+			t.Errorf("RecordSuccess must not be called on ICE, got %d calls", len(store.recordSuccessCalls))
+		}
+	})
+
+	t.Run("non_ICE_failure_calls_neither", func(t *testing.T) {
+		// SpotPrice/Quota/Auth/Unknown failures should not write to the store.
+		for _, class := range []capacity.ErrorClass{
+			capacity.ClassSpotPrice,
+			capacity.ClassSpotLimit,
+			capacity.ClassWaiterTimeout,
+			capacity.ClassQuota,
+			capacity.ClassAuth,
+			capacity.ClassInvalid,
+			capacity.ClassUnknown,
+		} {
+			store := &fakeCapacityStore{}
+			bestEffortRecordCapacity(ctx, store, instanceType, az, class, false)
+			if len(store.recordSuccessCalls)+len(store.recordICECalls) != 0 {
+				t.Errorf("class %v: expected no store calls, got success=%d ice=%d",
+					class, len(store.recordSuccessCalls), len(store.recordICECalls))
+			}
+		}
+	})
+
+	t.Run("nil_store_is_noop", func(t *testing.T) {
+		// Docker substrate path: capacityStore is nil — must not panic.
+		bestEffortRecordCapacity(ctx, nil, instanceType, az, capacity.ClassSuccess, true)
+		bestEffortRecordCapacity(ctx, nil, instanceType, az, capacity.ClassICE, false)
+	})
+
+	t.Run("store_error_is_best_effort", func(t *testing.T) {
+		// A store returning an error must not cause bestEffortRecordCapacity to panic
+		// or return an error — the write failure is logged and silently dropped.
+		store := &fakeCapacityStore{returnErr: errors.New("DDB unavailable")}
+		// Neither of these must panic or fail the test.
+		bestEffortRecordCapacity(ctx, store, instanceType, az, capacity.ClassSuccess, true)
+		bestEffortRecordCapacity(ctx, store, instanceType, az, capacity.ClassICE, false)
+		// Both were still called (best-effort = try, then drop the error).
+		if len(store.recordSuccessCalls) != 1 || len(store.recordICECalls) != 1 {
+			t.Errorf("want 1 call each, got success=%d ice=%d",
+				len(store.recordSuccessCalls), len(store.recordICECalls))
 		}
 	})
 }
