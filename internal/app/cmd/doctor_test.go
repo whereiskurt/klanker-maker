@@ -2130,6 +2130,56 @@ func TestCheckOrphanedEC2_WarnsUntagged(t *testing.T) {
 	}
 }
 
+// TestCheckOrphanedEC2_FlagsTerminalRow verifies that a live instance whose
+// DynamoDB row EXISTS but is in a terminal non-running state (failed/nocap) is
+// flagged as an orphan. This is the terraform-retry orphan: km create reported
+// failure (row=failed) but terraform's RunInstances retry launched the instance
+// anyway — leaving a running instance nobody manages (active spend + vCPU-quota
+// blocker). Phase 124 follow-up.
+func TestCheckOrphanedEC2_FlagsTerminalRow(t *testing.T) {
+	for _, status := range []string{"failed", "nocap"} {
+		inst := makeEC2Instance("i-orphan-"+status, map[string]string{
+			"km:sandbox-id":      "km-" + status + "row",
+			"km:resource-prefix": "km",
+		})
+		ec2mock := &mockEC2DescribeInstances{instances: []ec2types.Instance{inst}}
+		// Row EXISTS but is terminal — the running instance should NOT exist.
+		lister := &mockSandboxLister{records: []kmaws.SandboxRecord{
+			{SandboxID: "km-" + status + "row", Status: status},
+		}}
+
+		result := checkOrphanedEC2(context.Background(), ec2mock, lister, "km")
+
+		if result.Status != CheckWarn {
+			t.Errorf("status=%s: expected CheckWarn for live instance with %s row, got %s: %s", status, status, result.Status, result.Message)
+		}
+		if !strings.Contains(result.Message, "i-orphan-"+status) {
+			t.Errorf("status=%s: expected orphan instance id in message: %s", status, result.Message)
+		}
+	}
+}
+
+// TestCheckOrphanedEC2_RunningRowOK is a regression guard: a live instance whose
+// row is in a healthy state (running/stopped/starting/paused) must NOT be flagged.
+func TestCheckOrphanedEC2_RunningRowOK(t *testing.T) {
+	for _, status := range []string{"running", "stopped", "paused", "starting"} {
+		inst := makeEC2Instance("i-healthy-"+status, map[string]string{
+			"km:sandbox-id":      "km-" + status,
+			"km:resource-prefix": "km",
+		})
+		ec2mock := &mockEC2DescribeInstances{instances: []ec2types.Instance{inst}}
+		lister := &mockSandboxLister{records: []kmaws.SandboxRecord{
+			{SandboxID: "km-" + status, Status: status},
+		}}
+
+		result := checkOrphanedEC2(context.Background(), ec2mock, lister, "km")
+
+		if result.Status != CheckOK {
+			t.Errorf("status=%s: expected CheckOK for live instance with %s row, got %s: %s", status, status, result.Status, result.Message)
+		}
+	}
+}
+
 // =============================================================================
 // Phase 84 — W0-06, W0-07
 // These tests exercise checkSESRules using the mockSESReceiptRuleAPI defined in

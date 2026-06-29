@@ -2900,16 +2900,24 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 	if err != nil {
 		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list sandboxes: %v", err)}
 	}
-	activeSandboxes := make(map[string]bool)
+	// Map sandbox-id → row status. A row in a terminal non-running state
+	// (failed/nocap) means the create concluded "not running", so a LIVE instance
+	// for it is an orphan — the terraform-retry case where RunInstances launched
+	// an instance after km create already reported failure (Phase 124 follow-up).
+	sandboxStatus := make(map[string]string)
+	sandboxKnown := make(map[string]bool)
 	for _, r := range records {
-		activeSandboxes[r.SandboxID] = true
+		sandboxStatus[r.SandboxID] = r.Status
+		sandboxKnown[r.SandboxID] = true
 	}
+	// terminalRowStatus reports whether a row status means the instance should not exist.
+	terminalRowStatus := func(s string) bool { return s == "failed" || s == "nocap" }
 
-	// Find orphaned instances: tagged with km:sandbox-id but no DynamoDB record.
-	// Skip instances launched within the last 10 minutes — they are likely in
-	// the gap between EC2 RunInstances and the DDB sandbox row write inside
-	// km create. Cleaning those would race the operator and orphan a real
-	// in-flight sandbox.
+	// Find orphaned instances: tagged with km:sandbox-id but EITHER no DynamoDB
+	// record OR a record in a terminal (failed/nocap) state. Skip instances
+	// launched within the last 10 minutes — they are likely in the gap between
+	// EC2 RunInstances and the DDB sandbox row write inside km create. Cleaning
+	// those would race the operator and orphan a real in-flight sandbox.
 	provisioningCutoff := time.Now().Add(-10 * time.Minute)
 	type orphan struct {
 		instanceID string
@@ -2917,6 +2925,7 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 		state      string
 		hibernated bool
 		launchTime string
+		reason     string // "no DynamoDB record" or "row status=<terminal>"
 	}
 	var orphans []orphan
 	// untaggedCount tracks instances that have km:sandbox-id but no km:resource-prefix
@@ -2956,8 +2965,16 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 			untaggedCount++
 		}
 
-		if activeSandboxes[sandboxID] {
-			continue
+		// Healthy row (present and non-terminal) → not an orphan.
+		status, known := sandboxStatus[sandboxID], sandboxKnown[sandboxID]
+		reason := ""
+		switch {
+		case !known:
+			reason = "no DynamoDB record"
+		case terminalRowStatus(status):
+			reason = "row status=" + status
+		default:
+			continue // running/starting/stopped/paused row — healthy
 		}
 		if inst.LaunchTime != nil && inst.LaunchTime.After(provisioningCutoff) {
 			continue
@@ -2973,6 +2990,7 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 			state:      string(inst.State.Name),
 			hibernated: hib,
 			launchTime: launch,
+			reason:     reason,
 		})
 	}
 
@@ -2996,9 +3014,11 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 		}
 	}
 
-	// Build a detail message with each orphan on its own indented line.
+	// Build a detail message with each orphan on its own indented line. An orphan
+	// is an instance with no DDB record OR a record in a terminal (failed/nocap)
+	// state — the latter is a terraform-retry orphan (running instance, dead row).
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "found %d orphaned EC2 instances (no DynamoDB record):", len(orphans))
+	fmt.Fprintf(&sb, "found %d orphaned EC2 instance(s) (no/terminal sandbox row):", len(orphans))
 	for _, o := range orphans {
 		stateLabel := "run"
 		if o.hibernated {
@@ -3006,7 +3026,7 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 		} else if o.state == "stopped" || o.state == "stopping" {
 			stateLabel = "stop"
 		}
-		fmt.Fprintf(&sb, "\n  %s (%s) %-20s %s", o.instanceID, stateLabel, o.sandboxID, o.launchTime)
+		fmt.Fprintf(&sb, "\n  %s (%s) %-20s %-12s %s", o.instanceID, stateLabel, o.sandboxID, o.reason, o.launchTime)
 	}
 
 	msg := sb.String()
