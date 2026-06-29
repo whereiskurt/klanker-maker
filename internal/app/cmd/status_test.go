@@ -143,6 +143,57 @@ func TestStatusCmd_Found(t *testing.T) {
 	}
 }
 
+func TestStatusCmd_InstanceDetailsDisplayed(t *testing.T) {
+	createdAt := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID:        "sb-cfac803a",
+			Profile:          "gpu-qwen-12x-l4",
+			Substrate:        "ec2",
+			Region:           "us-east-1",
+			Status:           "running",
+			CreatedAt:        createdAt,
+			InstanceID:       "i-0gpu123abc",
+			InstanceType:     "g6.12xlarge",
+			AvailabilityZone: "us-east-1c",
+			PrivateIP:        "10.0.3.42",
+			PublicIP:         "54.1.2.3",
+		},
+	}
+
+	out, err := runStatusCmd(t, fetcher, "sb-cfac803a")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	for _, want := range []string{"Instance:", "g6.12xlarge", "i-0gpu123abc", "us-east-1c", "10.0.3.42", "54.1.2.3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing instance detail %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestStatusCmd_InstanceBlockOmittedWhenNoDetails(t *testing.T) {
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-noec2",
+			Profile:   "docker-dev",
+			Substrate: "docker",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC),
+		},
+	}
+
+	out, err := runStatusCmd(t, fetcher, "sb-noec2")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+	if strings.Contains(out, "Instance:") {
+		t.Errorf("Instance block should be omitted when no EC2 details:\n%s", out)
+	}
+}
+
 func TestStatusCmd_NotFound(t *testing.T) {
 	fetcher := &fakeFetcher{
 		err: fmt.Errorf("%w: no metadata.json for sandbox sb-999: not found", kmaws.ErrSandboxNotFound),

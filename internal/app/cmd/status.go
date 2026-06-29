@@ -290,16 +290,61 @@ func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) 
 		rec.Resources = loc.ResourceARNs
 	}
 
-	// Live EC2 instance check: detect killed/stopped/terminated
-	if strings.HasPrefix(rec.Substrate, "ec2") && rec.Status == "running" {
+	// Live EC2 instance check: detect killed/stopped/terminated, and surface
+	// instance details (type/AZ/IPs) for the status display. Best-effort: any
+	// AWS error leaves the live fields empty and never fails the command.
+	if strings.HasPrefix(rec.Substrate, "ec2") {
 		awsCfg, cfgErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 		if cfgErr == nil {
 			ec2Client := ec2.NewFromConfig(awsCfg)
-			rec.Status = checkEC2InstanceStatus(ctx, ec2Client, sandboxID)
+			if rec.Status == "running" {
+				rec.Status = checkEC2InstanceStatus(ctx, ec2Client, sandboxID)
+			}
+			fetchEC2InstanceDetails(ctx, ec2Client, rec)
 		}
 	}
 
 	return rec, nil
+}
+
+// fetchEC2InstanceDetails populates the live EC2 fields on rec (instance ID,
+// type, AZ, private/public IP) by looking up the instance via the km:sandbox-id
+// tag. Best-effort and fail-soft: on any error or no match, rec is left unchanged.
+// It selects the most-recently-launched non-terminated instance so a fresh
+// instance wins over a lingering terminated one after a replace.
+func fetchEC2InstanceDetails(ctx context.Context, client *ec2.Client, rec *kmaws.SandboxRecord) {
+	out, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{rec.SandboxID}},
+		},
+	})
+	if err != nil {
+		return
+	}
+	var best *ec2types.Instance
+	for _, res := range out.Reservations {
+		for i := range res.Instances {
+			inst := &res.Instances[i]
+			if inst.State != nil && (inst.State.Name == ec2types.InstanceStateNameTerminated ||
+				inst.State.Name == ec2types.InstanceStateNameShuttingDown) {
+				continue
+			}
+			if best == nil || (inst.LaunchTime != nil && best.LaunchTime != nil &&
+				inst.LaunchTime.After(*best.LaunchTime)) {
+				best = inst
+			}
+		}
+	}
+	if best == nil {
+		return
+	}
+	rec.InstanceID = awssdk.ToString(best.InstanceId)
+	rec.InstanceType = string(best.InstanceType)
+	if best.Placement != nil {
+		rec.AvailabilityZone = awssdk.ToString(best.Placement.AvailabilityZone)
+	}
+	rec.PrivateIP = awssdk.ToString(best.PrivateIpAddress)
+	rec.PublicIP = awssdk.ToString(best.PublicIpAddress)
 }
 
 // realBudgetFetcher is the real AWS-backed BudgetFetcher.
@@ -473,6 +518,27 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 				idleLabel = "Idle Stop"
 			}
 			fmt.Fprintf(out, "%s:  %s\n", idleLabel, idleStr)
+		}
+	}
+
+	// Live EC2 instance details — best-effort, only when resolved (EC2 substrate
+	// with a discoverable instance). Empty fields are omitted.
+	if rec.InstanceID != "" || rec.InstanceType != "" {
+		fmt.Fprintf(out, "Instance:\n")
+		if rec.InstanceType != "" {
+			fmt.Fprintf(out, "  Type:      %s\n", rec.InstanceType)
+		}
+		if rec.InstanceID != "" {
+			fmt.Fprintf(out, "  ID:        %s\n", rec.InstanceID)
+		}
+		if rec.AvailabilityZone != "" {
+			fmt.Fprintf(out, "  AZ:        %s\n", rec.AvailabilityZone)
+		}
+		if rec.PrivateIP != "" {
+			fmt.Fprintf(out, "  Private IP: %s\n", rec.PrivateIP)
+		}
+		if rec.PublicIP != "" {
+			fmt.Fprintf(out, "  Public IP: %s\n", rec.PublicIP)
 		}
 	}
 

@@ -36,6 +36,15 @@ type SandboxRecord struct {
 	TeardownPolicy string     `json:"teardown_policy,omitempty"` // "destroy", "stop", or "retain"
 	Resources      []string   `json:"resources,omitempty"`      // ARNs, populated in status output only
 
+	// Live EC2 instance details — populated in km status output only (best-effort,
+	// resolved by km:sandbox-id tag). Empty for non-EC2 substrates or when the
+	// DescribeInstances lookup fails/finds nothing.
+	InstanceID       string `json:"instance_id,omitempty"`
+	InstanceType     string `json:"instance_type,omitempty"`     // e.g. "g6.12xlarge"
+	AvailabilityZone string `json:"availability_zone,omitempty"` // e.g. "us-east-1c"
+	PrivateIP        string `json:"private_ip,omitempty"`
+	PublicIP         string `json:"public_ip,omitempty"`
+
 	// Phase 63/67 — Slack metadata (populated from DDB in status/list).
 	// SlackChannelID is the Slack channel ID (C...) the sandbox posts to.
 	// Empty when notifySlackEnabled was false at create time.
