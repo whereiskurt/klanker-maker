@@ -46,18 +46,41 @@ for entry in "${PLATFORMS[@]}"; do
   chmod 0755 "$out/terragrunt"
 done
 
-cat > "$EXTRAS_DIR/THIRD-PARTY-LICENSES.txt" <<EOF
-This archive bundles the following third-party binaries:
+# Fetch the FULL upstream license texts. Both the MIT (terragrunt) and BSL 1.1
+# (terraform) licenses require the license/notice to travel WITH the binary — a
+# URL reference alone does not satisfy "shall be included in all copies".
+tf_license="$CACHE_DIR/terraform_${TF_VER}_LICENSE"
+fetch "https://raw.githubusercontent.com/hashicorp/terraform/v${TF_VER}/LICENSE" "$tf_license"
 
+tg_license="$CACHE_DIR/terragrunt_${TG_VER}_LICENSE.txt"
+fetch "https://raw.githubusercontent.com/gruntwork-io/terragrunt/v${TG_VER}/LICENSE.txt" "$tg_license"
+
+{
+  cat <<EOF
+This archive bundles the following third-party binaries. The full text of each
+binary's upstream license is reproduced below.
+
+================================================================================
 terraform v${TF_VER}
   © HashiCorp, Inc. Licensed under the Business Source License 1.1.
-  Source: https://github.com/hashicorp/terraform
+  Source:  https://github.com/hashicorp/terraform
   License: https://github.com/hashicorp/terraform/blob/v${TF_VER}/LICENSE
+--------------------------------------------------------------------------------
 
+EOF
+  cat "$tf_license"
+  cat <<EOF
+
+
+================================================================================
 terragrunt v${TG_VER}
   © Gruntwork, Inc. Licensed under the MIT License.
-  Source: https://github.com/gruntwork-io/terragrunt
+  Source:  https://github.com/gruntwork-io/terragrunt
   License: https://github.com/gruntwork-io/terragrunt/blob/v${TG_VER}/LICENSE.txt
+--------------------------------------------------------------------------------
+
 EOF
+  cat "$tg_license"
+} > "$EXTRAS_DIR/THIRD-PARTY-LICENSES.txt"
 
 echo "✓ bundled tools fetched into $EXTRAS_DIR/"
