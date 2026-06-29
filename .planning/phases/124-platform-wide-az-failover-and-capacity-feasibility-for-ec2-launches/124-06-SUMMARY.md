@@ -105,9 +105,25 @@ One-liner: Phase 124 docs + uninit count regression fix; AZ-failover + capacity 
 
 These are the "known-8 environmental set" acknowledged in the June 28 LoadAWSConfig seam commit (`6aa1398d`). Not caused by Phase 124.
 
-## Checkpoint State
+## Checkpoint State — RESOLVED
 
-Paused at Task 2 (checkpoint:human-action — live deploy). Task 3 (live UAT) follows after Task 2 is confirmed.
+**Task 2 (deploy) — DONE.** Operator ran `make build && make build-lambdas && km init --dry-run=false`
+in order; the full apply created the `km-capacity` table (ACTIVE, `(instanceType HASH, az RANGE)`,
+PAY_PER_REQUEST, TTL on `ttl`) and re-applied the 27-module fleet to clean exit. Orchestrator verified
+via `describe-table` + `km doctor` (Capacity Table row present; GPU vCPU quota = 64 vCPUs).
+
+**Task 3 (live UAT) — PARTIAL (G1/G2 passed, G3–G5 deferred).** Evidence captured in `124-UAT.md`:
+- G1 — 4 distinct AZ subnets (1a/1b/1c/1d) in vpc-027ba3e68c2e32549 ✓
+- G2 — `km capacity --type g6e.12xlarge` honest per-AZ verdict table; 1e/1f `not-offered`, never "available" ✓
+- G3–G5 — DEFERRED (live GPU launch cost + us-east-1 g6e capacity-hang risk; not authorized for this
+  unattended session). GPU quota is now present (64 vCPUs) so an operator can run them attended, per the
+  Phase 122 live-UAT pattern.
+
+## Self-Check: PASSED (final)
+
+- FOUND: 124-UAT.md (deploy + G1 + G2 evidence; G3–G5 quota-deferred note)
+- VERIFIED: km-capacity table ACTIVE in us-east-1
+- VERIFIED: km doctor Capacity Table + GPU vCPU quota checks live
 
 ## Self-Check: PASSED
 
