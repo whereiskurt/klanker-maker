@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 113-01 (starting)
 status: in-progress
-stopped_at: "Checkpoint at 124-06 Task 2: deploy gate — awaiting operator make build + km init"
-last_updated: "2026-06-28T23:38:37.651Z"
-last_activity: 2026-06-28
+stopped_at: Completed 124-07-PLAN.md
+last_updated: "2026-06-29T03:47:07.351Z"
+last_activity: 2026-06-29
 progress:
   total_phases: 8
   completed_phases: 6
-  total_plans: 47
-  completed_plans: 42
+  total_plans: 48
+  completed_plans: 43
   percent: 91
 ---
 
@@ -31,7 +31,7 @@ Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; t
 Total Plans in Phase: 3 (113-01 → 113-03)
 Current Plan: 113-01 (starting)
 Status: in-progress
-Last activity: 2026-06-28
+Last activity: 2026-06-29
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -616,6 +616,7 @@ Progress: [█████████░] 91%
 | Phase 124 P02 | 458 | 2 tasks | 4 files |
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P04 | 853 | 3 tasks | 6 files |
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P06 | 1040s | 1 tasks | 3 files |
+| Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P07 | 4 | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -1766,6 +1767,9 @@ Recent decisions affecting current work:
 - [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: RankAZs wired in create.go pre-loop for all non-docker substrates; docker skipped; maxAttempts recomputed after AZ filtering
 - [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: Phase 124 dynamodb-capacity raised regionalModules 26->27; updated uninit test wantOrder + count checks in 3 tests
 - [Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches]: 8 pre-existing cmd env failures (known-8: 2 bootstrap, 3 cluster, 3 configure) not caused by Phase 124; documented not fixed
+- [Phase 124-07]: RecordICE fires on ClassICE only to keep the capacity signal precise
+- [Phase 124-07]: bestEffortRecordCapacity uses 5s bounded context so slow DDB never delays create
+- [Phase 124-07]: capacity_table_name defaults empty for back-compat with pre-Phase-124 installs
 
 ### Roadmap Evolution
 
@@ -1915,6 +1919,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-06-28T23:38:37.645Z
-Stopped at: Checkpoint at 124-06 Task 2: deploy gate — awaiting operator make build + km init
+Last session: 2026-06-29T03:47:07.344Z
+Stopped at: Completed 124-07-PLAN.md
 Resume file: None
