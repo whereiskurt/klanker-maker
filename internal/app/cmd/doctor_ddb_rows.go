@@ -236,6 +236,15 @@ func scanIdentitiesTable(
 			if sandboxID == "" {
 				continue
 			}
+			// The operator public-key row (sandbox_id="operator") is NOT a
+			// sandbox and is never in the active set — it is platform identity.
+			// Deleting it breaks every operator-signed action with
+			// unknown_sender (it is what `km doctor --republish-operator-identity`
+			// re-creates). Preserve it unconditionally so a `--with-deletes`
+			// sweep does not eat it every run.
+			if sandboxID == operatorIdentitySandboxID {
+				continue
+			}
 			if !active[sandboxID] {
 				ops = append(ops, ddbDeleteOp{
 					table: table,

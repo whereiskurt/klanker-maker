@@ -372,6 +372,34 @@ func TestDoctor_OrphanedDDBRows_Delete(t *testing.T) {
 	}
 }
 
+func TestDoctor_OrphanedDDBRows_PreservesOperatorRow(t *testing.T) {
+	// Regression: the operator public-key row (sandbox_id="operator") lives in
+	// the identities table but is NOT a sandbox, so it is never in the active
+	// set. It must be preserved — otherwise every `km doctor --with-deletes
+	// --dry-run=false` deletes it and operator-signed actions fail with
+	// unknown_sender until --republish-operator-identity is run.
+	scanFn := buildDDBScanFn(map[string][]map[string]dynamodbtypes.AttributeValue{
+		testBudgetsTbl: {},
+		testIdentitiesTbl: {
+			{"sandbox_id": strAttr(operatorIdentitySandboxID)},
+		},
+		testSlackThreadsTbl: {},
+		testSandboxesTbl:    {},
+	})
+	tracker := &trackingDDBScanDelete{mock: &mockDDBScanDelete{scanFn: scanFn}}
+	lister := listerOf() // empty active set — operator row would orphan if unguarded
+
+	result := checkOrphanedDDBRows(context.Background(), tracker, lister, false /*dryRun*/, true /*deleteDDBRows*/,
+		testBudgetsTbl, testIdentitiesTbl, testSlackThreadsTbl, testSandboxesTbl)
+
+	if len(tracker.deletedItems) != 0 {
+		t.Errorf("operator row must never be deleted, got %d DeleteItem call(s)", len(tracker.deletedItems))
+	}
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK (operator row preserved, nothing orphaned), got %s: %s", result.Status, result.Message)
+	}
+}
+
 func TestDoctor_OrphanedDDBRows_Paginate(t *testing.T) {
 	// DBG-PAGE: orphan on page 2 (LastEvaluatedKey) must be detected.
 	const page1ID = "sb-page1"   // active
