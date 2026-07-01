@@ -23,6 +23,17 @@ spec:
     idleTimeout: "1h"
     teardownPolicy: stop
 
+  # Override base/platform's $2/$0.50 defaults. This install runs Claude via a
+  # Max (subscription) OAuth login, not metered -p API keys, so AI "spend" is
+  # notional — maxSpendUSD:0 disables AI suspension entirely (limit<=0 = no cap
+  # in the budget-enforcer). Compute stays capped ($10 ~= 30h of t3.2xlarge) so
+  # a forgotten box still has a real-money circuit breaker beyond TTL/idle.
+  budget:
+    ai:
+      maxSpendUSD: 0
+    compute:
+      maxSpendUSD: 10.00
+
   runtime:
     substrate: ec2
     instanceType: t3.2xlarge
