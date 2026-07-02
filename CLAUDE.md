@@ -8,6 +8,15 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**`km-github commit` — verified, bot-attributed signed commits from a sandbox (2026-07-02):**
+- New `km-github commit` sidecar verb creates a **GitHub-SIGNED, `klanker-maker[bot]`-attributed** commit (committer `GitHub`, `verified:true reason:valid`) via the GraphQL **`createCommitOnBranch`** mutation. This is the ONLY commit path that auto-signs: a sandbox's local `git commit` is unsigned, and the low-level REST `POST /git/commits` is bot-attributed but `verified:false reason:unsigned`. The mutation signs with GitHub's key and attributes the commit to the **token's own identity** (no hardcoded bot email → portable across installs) and supports multi-file commits in one commit.
+- **Usage:** `km-github commit --repo O/R --branch BR [--parent SHA] --message-file MSG -- <repo-relative files...>` → prints the new commit OID to **stdout**, the `verified=… reason=… author=… committer=…` line to **stderr**. Then sync the local worktree: `git fetch origin && git reset --hard origin/BR`. The message file's first line is the headline, the rest (leading blank lines stripped) the body.
+- **Precondition — `contents:write`:** the mutation needs a token with `contents:write`, minted only when the sandbox profile's GitHub permissions include **`push`** (`CompilePermissions`, `pkg/github/token.go`). Without it the mutation 403s. See `docs/github-app-permissions.md` § `contents`.
+- **`--parent` gotcha:** `--parent` force-resets the branch to SHA first — if a PR is already open and the head is reset to exactly the base SHA, GitHub auto-closes it ("no commits between base and head"). `gh pr reopen`, or create signed commits BEFORE opening the PR.
+- **Durable Go form (not the interim bash helper the originating spec proposed):** `cmd/km-github` already has SSM token-fetch + subcommand dispatch + test seams, so the Go verb reuses all of it and drops the bash/jq/gh/base64 + exported-`gh`-function fragility — and avoids churning the byte-identity userdata goldens. New `commit.go` + `commit_test.go`; dispatch case + usage line in `main.go`.
+- **Pure `cmd/km-github` sidecar change.** No SandboxProfile schema change, no userdata change (userdata already downloads `km-github` from `s3://…/sidecars/km-github`), no Lambda/IAM/DDB change, no golden change.
+- **Deploy = `make build` + `km init --sidecars`** (rebuilds + uploads the `km-github` sidecar; NOT `--dry-run=false`, NOT `--lambdas`). Existing sandboxes gain the verb on `km destroy && km create` (the sidecar is fetched at boot).
+
 **Phase 124 (2026-06-28) — Platform-wide AZ failover + capacity feasibility for EC2 launches (code-complete; live GPU UAT pending G-quota):**
 - **AZ sweep with classify-and-retry:** `km create` pre-orders the region's AZs via `capacity.RankAZs` (drops non-offering AZs, checks GPU quota, sorts by historical success) then loops classify-and-retry: ICE / SpotPrice / SpotLimit / WaiterTimeout → rotate to next AZ; Quota / Auth / Invalid → **fail-fast** (no AZ rotation helps a quota wall). `sweepDecision(class, attempt, maxAttempts)` is the single classification callsite.
 - **GPU quota fail-fast gate in `RankAZs`:** for GPU families (`g4dn`, `g5`, `g6`, `g6e`, `p3`, `p4`, `p5`), `RankAZs` calls Service Quotas for `L-DB2E81BA` ("Running On-Demand G and VT instances") **before** the sweep. Headroom=0 → immediate `*QuotaError` with the quota code and increase URL; this is NOT an ICE error and never triggers AZ rotation. The quota defaults to 0 per-account; verify in the TARGET application account/region, not the org management account.
@@ -219,6 +228,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Private per-sandbox Slack channel (`notification.slack.private`, `is_private:true`) | `docs/slack-notifications.md` § Phase 118 |
 | Slack trigger allowlist (`slack.allow` / `notification.slack.inbound.allow`, `KM_SLACK_ALLOW`, `slack_allow` attr, resolution order, silent-drop) | `docs/slack-notifications.md` § Phase 118 |
 | Slack inbound per-thread parallelism (`notification.slack.inbound.maxConcurrentThreads`, `KM_SLACK_MAX_CONCURRENCY`, threadTS FIFO grouping, bounded-concurrent poller, ack-after + 1800s visibility heartbeat, `last_processed_event_ts` dedup, /workspace caveat) | `docs/slack-notifications.md` § Phase 119 |
+| Verified, `klanker-maker[bot]`-attributed **signed** commits from a sandbox — `km-github commit` (GraphQL `createCommitOnBranch`), `contents:write`/`push` precondition, `--parent` PR-auto-close gotcha | CLAUDE.md § `km-github commit` + `docs/github-app-permissions.md` |
+| Sandbox-side helper binaries convention — everything a klanker does for GitHub/Slack/Email/HackerOne starts at `/opt/km/bin` | CLAUDE.md § Sandbox-side helper binaries |
 | GitHub comment-trigger bridge — `@km-bot review this PR` → sandbox agent → PR review | `docs/github-bridge.md` (Phase 97) |
 | GitHub bridge federated relay — one GitHub App across multiple km installs (`github.peer_bridges`) | `docs/github-bridge.md` § Phase 100 |
 | GitHub App permissions reference — every scope/event + why, `contents:write` push opt-in | `docs/github-app-permissions.md` |
@@ -248,6 +259,22 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Cut a release (goreleaser + GH Actions, tag-driven) | `docs/release.md` |
 | SOPS / SSM allowlist via `iam.allowedSecretPaths` | `docs/sandbox-secrets.md` (Phase 89, renamed `identity:`→`iam:` in Phase 92) |
 | Composable multi-parent profile inheritance — `extends:` list, deep-merge, `profiles/base/` fragments, `initCommandsAppend`, v1 narrowing limitation | `OPERATOR-GUIDE.md` § Composable inheritance |
+
+## Sandbox-side helper binaries (`/opt/km/bin`)
+
+**Everything a sandbox agent ("klanker") does to act on the outside world starts at `/opt/km/bin`.** These are the `km-*` helper binaries km bakes onto every EC2 sandbox — not the operator `km` CLI (that runs on the operator's workstation). They are cross-compiled `linux/amd64` sidecars uploaded to `s3://{artifacts}/sidecars/km-*` by `km init --sidecars` (`buildAndUploadSidecars` → `sidecarBuilds()` in `internal/app/cmd/init.go`), then fetched at boot by userdata (`aws s3 cp …/sidecars/… /opt/km/bin/…`) and symlinked into `/usr/local/bin`, so a bare `km-slack`/`km-github`/`km-send` resolves on `PATH`. Each reads its per-sandbox GitHub/Slack/SES/HackerOne credentials from SSM itself (`/{prefix}/sandbox/{id}/…`) — the agent never handles a raw token.
+
+**When a klanker needs to act, reach for the matching helper before anything hand-rolled:**
+
+| Channel | Helper(s) in `/opt/km/bin` | Verbs / use |
+|---|---|---|
+| **GitHub** | `km-github` | `comment` / `review` / `check` / `pr create` / **`commit`** (verified signed commit via GraphQL `createCommitOnBranch`) — all keyless (token from SSM). Prefer this over raw `gh`/`git push`. |
+| **Slack** | `km-slack` | post status/progress/threaded replies + Block-Kit rich rendering (see `klanker:slack` skill). |
+| **Email** | `km-send`, `km-recv` (+ `km-mail-poller`) | signed inter-sandbox / operator email (see `klanker:email` skill). |
+| **HackerOne** | `km-h1` | comment on reports (internal-by-default). |
+| **Git auth** | `km-git-askpass`, `km-git-credential-helper` | inject the installation token into plain `git` operations (baked-in sandbox id, works in any subprocess). |
+
+Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, `km-presence`, `km-queue-runner`, `km-notify-hook`, `km-upload-artifacts`, `otelcol-contrib`, `sops`) plus the source-aware inbound pollers (`km-{github,slack,h1}-inbound-poller`, `km-mail-poller`) — an agent rarely calls these directly, but their presence is how the box self-censuses its capabilities (see the `klanker:sandbox` skill + `/opt/km/.km-profile.yaml`, Phase 113). New sandbox-side capability ⇒ new `km-*` binary in this dir + a `sidecarBuilds()` entry + a userdata `s3 cp`, delivered by `km init --sidecars`.
 
 ## CLI
 
