@@ -69,8 +69,10 @@ type GitHubManifestOpts struct {
 //
 //	issues:        read & write  — post/edit PR review comments
 //	pull_requests: read & write  — read PR metadata, post inline reviews
-//	contents:      read          — clone / read repository contents
+//	contents:      write         — clone/read repo + push commits/branches
 //	checks:        read & write  — create check runs for code-review status
+//	actions:       write         — dispatch/rerun Actions runs
+//	workflows:     write         — edit .github/workflows/* files
 //
 // webhook: issue_comment covers both PR review comments and issue body comments.
 type githubManifestPayload struct {
@@ -116,8 +118,14 @@ func RunGitHubManifest(ctx context.Context, cfg *config.Config, opts GitHubManif
 	defaultPermissions := map[string]string{
 		"issues":        "write",
 		"pull_requests": "write",
-		"contents":      "read",
+		"contents":      "write",
 		"checks":        "write",
+		// actions/workflows: let inbound agents manage CI — dispatch Actions runs
+		// and edit .github/workflows/* files. Must be declared here so the minted
+		// installation token (GitHubInboundWritePerms) can request them without a
+		// 403. contents is write (not read) to match the token's contents:write.
+		"actions":   "write",
+		"workflows": "write",
 	}
 	// Phase 115: repository events require metadata:read to receive the
 	// full repository payload (name, html_url, default_branch, etc.).
@@ -156,7 +164,7 @@ func newGithubManifestCmd(cfg *config.Config) *cobra.Command {
 	c := &cobra.Command{
 		Use:          "manifest",
 		Short:        "Render a GitHub App manifest (JSON) for the bridge webhook",
-		Long:         "Generates a GitHub App manifest with PR-review scopes (issues/pull_requests/contents/checks)\nand issue_comment webhook. Pipe to a file and paste into GitHub App creation UI:\n\n  km github manifest > app.json\n  # GitHub → Settings → Developer settings → GitHub Apps → New → From manifest\n\nWhen --bridge-url is provided, hook_attributes.url is set and active=true.\nOmit --bridge-url to create the App first, get the URL from `km init`, then run\n`km github init --bridge-url <URL>` to store it.",
+		Long:         "Generates a GitHub App manifest with PR-review + CI scopes (issues/pull_requests/contents/checks/actions/workflows)\nand issue_comment webhook. Pipe to a file and paste into GitHub App creation UI:\n\n  km github manifest > app.json\n  # GitHub → Settings → Developer settings → GitHub Apps → New → From manifest\n\nWhen --bridge-url is provided, hook_attributes.url is set and active=true.\nOmit --bridge-url to create the App first, get the URL from `km init`, then run\n`km github init --bridge-url <URL>` to store it.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()

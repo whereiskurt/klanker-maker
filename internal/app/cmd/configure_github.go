@@ -411,9 +411,18 @@ func BuildManifestJSON(redirectURL string) string {
 		"name":   "klanker-maker-sandbox",
 		"url":    "https://github.com/whereiskurt/klanker-maker",
 		"public": true,
+		// Match GitHubInboundWritePerms (the minted installation-token set) so an
+		// App created through this flow can actually request every scope the token
+		// asks for. actions/workflows let inbound agents manage CI; metadata:read
+		// is required for repository/push/release webhook payloads.
 		"default_permissions": map[string]interface{}{
-			"contents":      "read",
+			"contents":      "write",
 			"pull_requests": "write",
+			"issues":        "write",
+			"checks":        "write",
+			"actions":       "write",
+			"workflows":     "write",
+			"metadata":      "read",
 		},
 		"hook_attributes": map[string]interface{}{
 			"url":    "https://example.com",

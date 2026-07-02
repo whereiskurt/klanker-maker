@@ -284,7 +284,8 @@ func TestCompilePermissions_CommentAndReview(t *testing.T) {
 }
 
 // TestGitHubInboundWritePerms verifies the github-inbound write permission set
-// includes issues:write, pull_requests:write, contents:write, and checks:write.
+// includes issues:write, pull_requests:write, contents:write, checks:write,
+// actions:write, and workflows:write.
 func TestGitHubInboundWritePerms(t *testing.T) {
 	perms := github.GitHubInboundWritePerms()
 	checks := map[string]string{
@@ -292,6 +293,8 @@ func TestGitHubInboundWritePerms(t *testing.T) {
 		"pull_requests": "write",
 		"contents":      "write",
 		"checks":        "write",
+		"actions":       "write",
+		"workflows":     "write",
 	}
 	for k, want := range checks {
 		if got := perms[k]; got != want {
@@ -314,7 +317,7 @@ func TestCompilePermissions_Checks(t *testing.T) {
 // TestCompilePermissions_AllInboundVerbs verifies all four github-inbound verbs
 // together produce the full write permission set.
 func TestCompilePermissions_AllInboundVerbs(t *testing.T) {
-	perms := github.CompilePermissions([]string{"comment", "review", "push", "checks"})
+	perms := github.CompilePermissions([]string{"comment", "review", "push", "checks", "actions", "workflow"})
 	want := github.GitHubInboundWritePerms()
 	for k, wantVal := range want {
 		if got := perms[k]; got != wantVal {
