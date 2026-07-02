@@ -78,6 +78,8 @@ func dispatch(args []string, stderr io.Writer) int {
 		return runReview(args[1:], stderr)
 	case "check":
 		return runCheck(args[1:], stderr)
+	case "commit":
+		return runCommit(args[1:], stderr)
 	case "pr":
 		if len(args) < 2 {
 			usage(stderr)
@@ -112,6 +114,9 @@ Subcommands:
   check      Post a CI check run (checks:write).
              --repo owner/repo --name "check-name" --conclusion success|failure|neutral
              --summary "..." --head-sha <sha> [--number N]
+  commit     Create a VERIFIED, bot-attributed commit via GraphQL createCommitOnBranch (contents:write).
+             --repo owner/repo --branch BR [--parent SHA] --message-file MSG -- <repo-relative files...>
+             Prints the new commit OID to stdout; the verification line to stderr.
   pr create  Open a new pull request (pull_requests:write).
              --repo owner/repo --title "..." --head <branch> --base <branch> [--body "..."]
              Prints the html_url of the created PR to stdout.`)
