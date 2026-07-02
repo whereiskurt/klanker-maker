@@ -21,10 +21,18 @@ km github manifest > app.json   # generate the manifest
 |------------|------------------|-----------|
 | `issues` | **write** | post/edit PR & issue comments, add the 👀 reaction |
 | `pull_requests` | **write** | read PR metadata, submit PR reviews |
-| `contents` | **read** | clone/fetch repo contents (→ **write** only if you want the bot to push) |
+| `contents` | **write** | clone/fetch repo contents **and** push commits/branches |
 | `checks` | **write** | post check runs (pass/fail/neutral status) |
+| `actions` | **write** | dispatch/rerun Actions workflow runs |
+| `workflows` | **write** | create/edit `.github/workflows/*` files |
 | `metadata` | **read** (implicit) | GitHub auto-adds this to every App; read repo metadata |
 | **event** `issue_comment` | — | the only webhook: fires on PR **and** issue comments |
+
+> The minted per-sandbox installation token requests the full write set above
+> (`pkg/github.GitHubInboundWritePerms`). The manifest must declare at least
+> what the token requests, or the mint 403s with
+> `X-Accepted-Github-Permissions: workflows=write` (the bug this set closes).
+> `actions`/`workflows` were added so inbound agents can manage CI.
 
 ---
 

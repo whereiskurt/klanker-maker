@@ -196,6 +196,8 @@ func repoShortName(repo string) string {
 //   - comment        → issues: write
 //   - review         → pull_requests: write
 //   - checks         → checks: write
+//   - workflow       → workflows: write (edit .github/workflows/* files)
+//   - actions        → actions: write (dispatch/manage Actions runs)
 func CompilePermissions(permissions []string) map[string]string {
 	result := make(map[string]string)
 	for _, p := range permissions {
@@ -213,6 +215,10 @@ func CompilePermissions(permissions []string) map[string]string {
 			result["pull_requests"] = "write"
 		case "checks":
 			result["checks"] = "write"
+		case "workflow":
+			result["workflows"] = "write"
+		case "actions":
+			result["actions"] = "write"
 		}
 	}
 	return result
@@ -221,15 +227,25 @@ func CompilePermissions(permissions []string) map[string]string {
 // GitHubInboundWritePerms returns the compiled GitHub API permission map required
 // for a github-inbound sandbox that posts comments and reviews back via km-github.
 //
-// Returned map: issues:write, pull_requests:write, contents:write, checks:write.
-// This is the permission set passed to generateAndStoreGitHubToken for sandboxes
-// with spec.sourceAccess.github configured (Pitfall 6 fix — Phase 97).
+// Returned map: issues:write, pull_requests:write, contents:write, checks:write,
+// actions:write, workflows:write. This is the permission set passed to
+// generateAndStoreGitHubToken for sandboxes with spec.sourceAccess.github
+// configured (Pitfall 6 fix — Phase 97).
+//
+// actions:write + workflows:write let an inbound agent manage CI — edit
+// .github/workflows/* files (workflows) and dispatch/rerun Actions runs
+// (actions). Both are declared by the GitHub App manifest (km github manifest),
+// so requesting them at mint time is accepted by any install whose App has been
+// (re)installed with the current manifest. Omitting them was the cause of 403
+// "X-Accepted-Github-Permissions: workflows=write" failures on workflow edits.
 func GitHubInboundWritePerms() map[string]string {
 	return map[string]string{
 		"issues":        "write",
 		"pull_requests": "write",
 		"contents":      "write",
 		"checks":        "write",
+		"actions":       "write",
+		"workflows":     "write",
 	}
 }
 

@@ -349,16 +349,24 @@ func TestManifestJSON_Structure(t *testing.T) {
 		t.Errorf("public: got %v, want true", m["public"])
 	}
 
-	// default_permissions: contents = "read", pull_requests = "write"
+	// default_permissions must match the minted installation-token set
+	// (GitHubInboundWritePerms + metadata:read for webhook payloads).
 	dp, ok := m["default_permissions"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("default_permissions missing or wrong type")
 	}
-	if dp["contents"] != "read" {
-		t.Errorf("default_permissions.contents: got %v, want read", dp["contents"])
-	}
-	if dp["pull_requests"] != "write" {
-		t.Errorf("default_permissions.pull_requests: got %v, want write", dp["pull_requests"])
+	for key, want := range map[string]string{
+		"contents":      "write",
+		"pull_requests": "write",
+		"issues":        "write",
+		"checks":        "write",
+		"actions":       "write",
+		"workflows":     "write",
+		"metadata":      "read",
+	} {
+		if got, _ := dp[key].(string); got != want {
+			t.Errorf("default_permissions.%s: got %v, want %q", key, dp[key], want)
+		}
 	}
 
 	// hook_attributes.active = false

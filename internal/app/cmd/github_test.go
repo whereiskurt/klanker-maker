@@ -39,7 +39,7 @@ func TestGitHubManifest_RendersValidJSON(t *testing.T) {
 		t.Fatalf("RunGitHubManifest output is not valid JSON: %v\nraw: %s", err, out.String())
 	}
 
-	// Permissions: issues = write, pull_requests = write, contents = read, checks = write
+	// Permissions: issues/pull_requests/contents/checks/actions/workflows = write
 	perms, ok := payload["default_permissions"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("default_permissions missing or wrong type")
@@ -47,8 +47,10 @@ func TestGitHubManifest_RendersValidJSON(t *testing.T) {
 	for key, want := range map[string]string{
 		"issues":        "write",
 		"pull_requests": "write",
-		"contents":      "read",
+		"contents":      "write",
 		"checks":        "write",
+		"actions":       "write",
+		"workflows":     "write",
 	} {
 		if got, _ := perms[key].(string); got != want {
 			t.Errorf("default_permissions.%s: got %q, want %q", key, got, want)
