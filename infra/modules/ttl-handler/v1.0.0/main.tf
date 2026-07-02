@@ -120,6 +120,46 @@ resource "aws_iam_role_policy" "scheduler_delete" {
   })
 }
 
+# Policy: TTL extend / resume-reschedule — handleExtend and the resume path both
+# rediscover the handler's own Lambda ARN (lambda:GetFunction on self) and the
+# scheduler role (iam:GetRole on {prefix}-ttl-scheduler), then recreate the TTL
+# schedule in the default scheduler group ({prefix}-ttl-*). Without these grants
+# `km extend --remote` and remote resume fail at GetFunction with AccessDenied and
+# the TTL schedule is never rewritten. (The local `km extend` path is unaffected —
+# it writes DynamoDB directly from the operator.) iam:PassRole on the scheduler
+# role is already granted in the scheduler_delete policy below.
+resource "aws_iam_role_policy" "extend_reschedule" {
+  name = "${var.resource_prefix}-ttl-handler-extend-reschedule"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "SelfGetFunction"
+        Effect   = "Allow"
+        Action   = ["lambda:GetFunction"]
+        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.resource_prefix}-ttl-handler"
+      },
+      {
+        Sid      = "SchedulerRoleGetRole"
+        Effect   = "Allow"
+        Action   = ["iam:GetRole"]
+        Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-ttl-scheduler"
+      },
+      {
+        Sid    = "TTLScheduleReschedule"
+        Effect = "Allow"
+        Action = [
+          "scheduler:CreateSchedule",
+          "scheduler:GetSchedule",
+        ]
+        Resource = "arn:aws:scheduler:*:*:schedule/default/${var.resource_prefix}-ttl-*"
+      },
+    ]
+  })
+}
+
 # Policy: Terraform destroy permissions — allows the Lambda to run terraform destroy
 # on sandbox state. Scoped to km-* resources where possible.
 resource "aws_iam_role_policy" "terraform_destroy" {
