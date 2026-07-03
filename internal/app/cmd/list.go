@@ -148,9 +148,10 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, check
 		ec2Client := ec2.NewFromConfig(awsCfg)
 		for i := range records {
 			if strings.HasPrefix(records[i].Substrate, "ec2") {
-				if records[i].Status == "running" {
-					records[i].Status = checkEC2InstanceStatus(ctx, ec2Client, records[i].SandboxID)
-				}
+				// Reconcile in both directions — a box restarted after an idle-stop
+				// (or a resume whose status write raced) leaves DDB "stopped" while
+				// the instance is actually running; without this it looks terminated.
+				records[i].Status = reconcileSandboxStatus(ctx, ec2Client, records[i].SandboxID, records[i].Status)
 				records[i].Hibernation = checkEC2Hibernation(ctx, ec2Client, records[i].SandboxID)
 			}
 		}
@@ -725,40 +726,94 @@ func checkEC2Hibernation(ctx context.Context, client *ec2.Client, sandboxID stri
 	return false
 }
 
-// checkEC2InstanceStatus looks up the EC2 instance for a sandbox by tag and returns
-// the live status: "running", "stopped", "terminated" (shown as "killed"), etc.
-func checkEC2InstanceStatus(ctx context.Context, client *ec2.Client, sandboxID string) string {
+// reconcileSandboxStatus cross-checks the stored DDB status against the live EC2
+// instances (found by the km:sandbox-id tag) and returns the status to display.
+//
+// It is BIDIRECTIONAL, unlike the old checkEC2InstanceStatus which callers only
+// consulted when the DDB status was already "running". A box the DDB believes is
+// "stopped" but which is actually running — an idle-stop followed by a restart,
+// or a resume whose best-effort status write raced — now reconciles to "running"
+// instead of looking terminated. On any AWS error the stored status is returned
+// unchanged: a transient DescribeInstances blip must never mislabel a live box.
+func reconcileSandboxStatus(ctx context.Context, client *ec2.Client, sandboxID, stored string) string {
+	// "failed" is a create-time verdict, not an instance state — never override it.
+	if stored == "failed" {
+		return stored
+	}
 	out, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{
-			{
-				Name:   awssdk.String("tag:km:sandbox-id"),
-				Values: []string{sandboxID},
-			},
+			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
 		},
 	})
-	if err != nil || len(out.Reservations) == 0 {
-		return "killed" // can't find instance — likely terminated and gone
+	if err != nil {
+		return stored
 	}
-
+	var all []ec2types.Instance
 	for _, res := range out.Reservations {
-		for _, inst := range res.Instances {
-			switch inst.State.Name {
-			case ec2types.InstanceStateNameRunning:
-				return "running"
-			case ec2types.InstanceStateNameStopped:
-				return "stopped"
-			case ec2types.InstanceStateNameTerminated, ec2types.InstanceStateNameShuttingDown:
-				if inst.StateReason != nil && inst.StateReason.Code != nil &&
-					*inst.StateReason.Code == "Server.SpotInstanceTermination" {
-					return "reaped"
-				}
-				return "killed"
-			case ec2types.InstanceStateNamePending:
-				return "starting"
-			default:
-				return string(inst.State.Name)
+		all = append(all, res.Instances...)
+	}
+	return reconcileStatusFromInstances(stored, all)
+}
+
+// reconcileStatusFromInstances is the pure decision core of reconcileSandboxStatus,
+// split out so the reconciliation rules are unit-tested without AWS. It selects the
+// most-recently-launched non-terminated instance (so a fresh instance wins over a
+// lingering terminated one after a replace) and maps its state to a display status,
+// preserving "paused" (a hibernated instance reads as EC2 "stopped").
+func reconcileStatusFromInstances(stored string, instances []ec2types.Instance) string {
+	// "failed" is a create-time verdict, not an instance state — never override it.
+	if stored == "failed" {
+		return stored
+	}
+	var best *ec2types.Instance
+	sawTerminated, sawSpotReaped := false, false
+	for i := range instances {
+		inst := &instances[i]
+		if inst.State == nil {
+			continue
+		}
+		switch inst.State.Name {
+		case ec2types.InstanceStateNameTerminated, ec2types.InstanceStateNameShuttingDown:
+			sawTerminated = true
+			if inst.StateReason != nil && inst.StateReason.Code != nil &&
+				*inst.StateReason.Code == "Server.SpotInstanceTermination" {
+				sawSpotReaped = true
 			}
+			continue
+		}
+		if best == nil || (inst.LaunchTime != nil &&
+			(best.LaunchTime == nil || inst.LaunchTime.After(*best.LaunchTime))) {
+			best = inst
 		}
 	}
-	return "killed"
+
+	if best == nil {
+		// No live instance. A definitively terminated instance is authoritative;
+		// an empty result only downgrades a "running" claim (an empty describe can
+		// be eventual consistency, so a stopped/paused box keeps its stored label).
+		switch {
+		case sawSpotReaped:
+			return "reaped"
+		case sawTerminated:
+			return "killed"
+		case stored == "running":
+			return "killed"
+		default:
+			return stored
+		}
+	}
+
+	switch best.State.Name {
+	case ec2types.InstanceStateNameRunning:
+		return "running"
+	case ec2types.InstanceStateNamePending:
+		return "starting"
+	case ec2types.InstanceStateNameStopped, ec2types.InstanceStateNameStopping:
+		if stored == "paused" {
+			return "paused" // hibernated instance reads as EC2 "stopped"
+		}
+		return "stopped"
+	default:
+		return string(best.State.Name)
+	}
 }

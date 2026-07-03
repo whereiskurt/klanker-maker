@@ -297,9 +297,11 @@ func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) 
 		awsCfg, cfgErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 		if cfgErr == nil {
 			ec2Client := ec2.NewFromConfig(awsCfg)
-			if rec.Status == "running" {
-				rec.Status = checkEC2InstanceStatus(ctx, ec2Client, sandboxID)
-			}
+			// Reconcile the stored status against the live instance in both
+			// directions — a box restarted after an idle-stop (or whose resume
+			// status write raced) leaves DDB "stopped" while the instance is
+			// actually running; without this it looks terminated.
+			rec.Status = reconcileSandboxStatus(ctx, ec2Client, sandboxID, rec.Status)
 			fetchEC2InstanceDetails(ctx, ec2Client, rec)
 		}
 	}
