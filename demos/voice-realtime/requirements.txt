@@ -1,0 +1,8 @@
+# Pin fastrtc — its API (ReplyOnPause / AdditionalOutputs / the Cloudflare TURN
+# helpers) has moved between releases. If you bump it, re-check app.py's imports.
+fastrtc[vad]==0.0.34
+openai>=1.51,<2
+httpx>=0.27
+numpy>=1.26
+# gradio + aiortc are pulled in by fastrtc; pinning them here would fight its
+# own constraints, so we let fastrtc choose.

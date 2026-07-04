@@ -1,0 +1,169 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: voice-realtime
+  labels:
+    tier: demo
+    kind: realtime-voice
+  # Realtime voice AI demo — the "best cascade" from the HF/Cerebras reference
+  # blog, with premium streaming pieces swapped in:
+  #   FastRTC (WebRTC + Silero VAD + barge-in)  ->  Deepgram STT
+  #   ->  Cerebras/Groq LLM (streamed)          ->  ElevenLabs Flash v2.5 TTS
+  # Full source + architecture: demos/voice-realtime/README.md.
+  #
+  # NO GPU: every heavy piece is an external streaming API, so this is a cheap
+  # CPU box whose whole job is orchestration. km provisions it, injects the keys
+  # via SOPS, gates egress to just the vendors, and meters compute.
+  #
+  # Exposed publicly via an ngrok tunnel (ngrok connects over 443 — cloudflared
+  # needs port 7844, which km's SG blocks). WebRTC media relays via Cloudflare
+  # TURN over TLS/443 (FastRTC's HF-token helper), since the sandbox has no
+  # inbound + no UDP. enforcement:ebpf (SNI allowlist, NO MITM) so TURN-over-TLS
+  # and the HTTP-streaming API calls pass through uninspected.
+
+extends:
+  - base/os/debian        # ubuntu-24.04 + python3/pip/git/jq (apt over HTTPS)
+  - base/platform         # sidecars, observability, budget, iam, agent config
+
+spec:
+  runtime:
+    instanceType: t3.large   # 2 vCPU / 8 GB — plenty for orchestration + Silero VAD
+    region: us-east-1
+    spot: false              # a demo wants to stay up; on-demand is steadier
+    hibernation: false
+    substrate: ec2
+
+  lifecycle:
+    ttl: "6h"
+    idleTimeout: "1h"
+    teardownPolicy: stop
+
+  budget:
+    compute:
+      maxSpendUSD: 5.00      # t3.large ~$0.083/hr; the STT/LLM/TTS spend is on the vendors' bills, not km's
+    ai:
+      maxSpendUSD: 0.10      # km meters Bedrock/Anthropic/OpenAI only — none used here
+
+  # Purpose-built egress allowlist. enforcement:ebpf = SNI/DNS allowlist with NO
+  # MITM interception, which is required for (a) Cloudflare TURN-over-TLS and
+  # (b) native HTTP streaming to the voice vendors. If boot ever fails on egress,
+  # temporarily swap this whole block for `extends: [..., base/network/safenetwork]`
+  # (allow "*") to isolate the offending host.
+  network:
+    enforcement: ebpf
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"        # REQUIRED: SSM agent, S3 sidecar/artifact fetch, KMS (SOPS decrypt)
+        - "time.aws.com"          # NTP
+        - ".ubuntu.com"           # apt (archive + security)
+        - ".pypi.org"             # pip
+        - ".pythonhosted.org"     # pip wheels
+        - ".githubusercontent.com" # pip/git raw assets
+        - ".github.com"           # (some wheels/redirects)
+        - ".huggingface.co"       # FastRTC Silero VAD model + Cloudflare TURN token broker
+        - ".hf.co"
+        - ".deepgram.com"         # STT
+        - ".elevenlabs.io"        # TTS
+        - ".cerebras.ai"          # LLM (primary)
+        - ".groq.com"             # LLM (fallback)
+        - ".cloudflare.com"       # WebRTC TURN relay (turns:443)
+        - ".ngrok.com"            # public tunnel control plane
+        - ".ngrok-agent.com"
+        - ".ngrok.io"
+        - ".ngrok-free.app"       # the public demo URL (free tier)
+        - ".equinox.io"           # ngrok binary download
+      allowedHosts:
+        - "*"                     # host-level list left open; the suffix list above is the real gate
+
+  # API keys arrive via SOPS (KMS-decrypted to /etc/sandbox-secrets.env at boot;
+  # the sandbox role gets kms:Decrypt automatically when sopsFile is set). The
+  # systemd units below read that file directly via EnvironmentFile.
+  # Create the bundle (see demos/voice-realtime/README.md):
+  #   DEEPGRAM_API_KEY / ELEVENLABS_API_KEY / CEREBRAS_API_KEY (or GROQ_API_KEY)
+  #   HF_TOKEN (for TURN) / NGROK_AUTHTOKEN (for the tunnel)
+  secrets:
+    sopsFile: ./secrets/voice.enc.yaml
+
+  # No repo access needed — this box orchestrates APIs, it doesn't clone code.
+  sourceAccess:
+    mode: none
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+
+    # Bring-up runs AFTER base initCommands (python/pip/apt are already present).
+    # app.py + requirements.txt + announce-url.sh are delivered base64-embedded so
+    # the profile is fully self-contained (no repo clone at boot). Regenerate after
+    # editing demos/voice-realtime/*:
+    #   base64 -w0 demos/voice-realtime/app.py
+    #   base64 -w0 demos/voice-realtime/requirements.txt
+    #   base64 -w0 demos/voice-realtime/announce-url.sh
+    initCommandsAppend:
+      # 1. Runtime libs: venv support + opus (aiortc audio) + ffmpeg (PyAV).
+      - "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-venv libopus0 ffmpeg || true"
+
+      # 2. Deliver the app (base64 -> files under /opt/km-voice).
+      - "mkdir -p /opt/km-voice"
+      - "echo 'IiIiUmVhbHRpbWUgdm9pY2UgQUkgZGVtbyDigJQgc3RyZWFtaW5nIGNhc2NhZGUgKFNUVCAtPiBMTE0gLT4gVFRTKS4KClRoaXMgaXMgdGhlICJiZXN0IGNhc2NhZGUiIGFyY2hpdGVjdHVyZSBmcm9tIHRoZSBIRi9DZXJlYnJhcyByZWZlcmVuY2UgYmxvZywgYnV0CndpdGggcHJlbWl1bSBzdHJlYW1pbmcgcGllY2VzIHN3YXBwZWQgaW4gZm9yIHRoZSB3ZWFrIENQVS1vbmx5IGRlZmF1bHRzIHRoYXQgbWFrZQp0aGUgc21vbGFnZW50cyAvIGh1Z2dpbmdmYWNlIGBzcGVlY2gtdG8tc3BlZWNoYCBkZW1vcyBzb3VuZCBmbGF0OgoKICAgIHRyYW5zcG9ydCA6IEZhc3RSVEMgKFdlYlJUQywgd2l0aCBTaWxlcm8gVkFEICsgdHVybi10YWtpbmcgKyBiYXJnZS1pbikKICAgIFNUVCAgICAgICA6IERlZXBncmFtICAobm92YS0zIGJ5IGRlZmF1bHQ7IHN3YXAgdG8gRmx1eCBmb3IgRU9UIHN0cmVhbWluZykKICAgIExMTSAgICAgICA6IENlcmVicmFzIG9yIEdyb3EgKE9wZW5BSS1jb21wYXRpYmxlLCB1bHRyYS1mYXN0IHRva2VuIHN0cmVhbWluZykKICAgIFRUUyAgICAgICA6IEVsZXZlbkxhYnMgRmxhc2ggdjIuNSAofjc1bXMgaW5mZXJlbmNlLCBiZXN0IHZvaWNlKSwgc3RyZWFtZWQKClRoZSBzaW5nbGUgbW9zdCBpbXBvcnRhbnQgdHJpY2sgbGl2ZXMgaW4gYHJlc3BvbnNlKClgOiB3ZSBETyBOT1QgcnVuIHRoZSBzdGFnZXMKc2VyaWFsbHkgKFNUVCAtPiB3YWl0IC0+IExMTSAtPiB3YWl0IC0+IFRUUykuIFdlIHN0cmVhbSBMTE0gdG9rZW5zIGFuZCwgdGhlIG1vbWVudAp0aGUgZmlyc3QgKnNlbnRlbmNlKiBpcyBjb21wbGV0ZSwgd2Ugc3RhcnQgc3ludGhlc2l6aW5nICsgcGxheWluZyBpdCB3aGlsZSB0aGUgTExNCmlzIHN0aWxsIGdlbmVyYXRpbmcgdGhlIHJlc3QuIFRoZSB1c2VyIGhlYXJzIHNwZWVjaCBiZWdpbiB+MSBzZW50ZW5jZSBhZnRlciB0aGV5CnN0b3AgdGFsa2luZyBpbnN0ZWFkIG9mIGFmdGVyIHRoZSB3aG9sZSByZXBseSBpcyB3cml0dGVuLiBUaGF0IG92ZXJsYXAg4oCUIHBsdXMgYQpmYXN0IExMTSB0byBraWxsIHRoZSBQOTUgdGFpbCDigJQgaXMgd2hhdCBtYWtlcyBpdCBmZWVsIHJlYWwtdGltZS4KCkV2ZXJ5IGtub2IgaXMgYW4gZW52IHZhciAoc2VlIC5lbnYuZXhhbXBsZSkuIFJ1bnMgaWRlbnRpY2FsbHkgb24gYSBsYXB0b3AKKGBydW4tbG9jYWwuc2hgKSBhbmQgb24gYSBrbSBzYW5kYm94IChgcHJvZmlsZXMvdm9pY2UtcmVhbHRpbWUueWFtbGApLgoiIiIKCmZyb20gX19mdXR1cmVfXyBpbXBvcnQgYW5ub3RhdGlvbnMKCmltcG9ydCBpbwppbXBvcnQgb3MKaW1wb3J0IHJlCmltcG9ydCB3YXZlCgppbXBvcnQgZ3JhZGlvIGFzIGdyCmltcG9ydCBodHRweAppbXBvcnQgbnVtcHkgYXMgbnAKZnJvbSBmYXN0cnRjIGltcG9ydCBBZGRpdGlvbmFsT3V0cHV0cywgQWxnb09wdGlvbnMsIFJlcGx5T25QYXVzZSwgU3RyZWFtCmZyb20gb3BlbmFpIGltcG9ydCBPcGVuQUkKCiMgLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tICMKIyBDb25maWcgKGFsbCBvdmVycmlkYWJsZSB2aWEgZW52aXJvbm1lbnQpICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIwojIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSAjCgpERUVQR1JBTV9BUElfS0VZID0gb3MuZW52aXJvbi5nZXQoIkRFRVBHUkFNX0FQSV9LRVkiLCAiIikKRUxFVkVOTEFCU19BUElfS0VZID0gb3MuZW52aXJvbi5nZXQoIkVMRVZFTkxBQlNfQVBJX0tFWSIsICIiKQoKIyBMTE06IGRlZmF1bHQgQ2VyZWJyYXMgKHRoZSByZWZlcmVuY2UgYmxvZydzIGVuZ2luZSk7IEdyb3EgaXMgYSBkcm9wLWluIGZhbGxiYWNrLgojIEJvdGggc3BlYWsgdGhlIE9wZW5BSSBBUEksIHNvIHdlIGp1c3Qgc3dhcCBiYXNlX3VybCArIGtleSArIG1vZGVsLgpDRVJFQlJBU19BUElfS0VZID0gb3MuZW52aXJvbi5nZXQoIkNFUkVCUkFTX0FQSV9LRVkiLCAiIikKR1JPUV9BUElfS0VZID0gb3MuZW52aXJvbi5nZXQoIkdST1FfQVBJX0tFWSIsICIiKQppZiBDRVJFQlJBU19BUElfS0VZOgogICAgTExNX0JBU0VfVVJMID0gb3MuZW52aXJvbi5nZXQoIkxMTV9CQVNFX1VSTCIsICJodHRwczovL2FwaS5jZXJlYnJhcy5haS92MSIpCiAgICBMTE1fQVBJX0tFWSA9IENFUkVCUkFTX0FQSV9LRVkKICAgIExMTV9NT0RFTCA9IG9zLmVudmlyb24uZ2V0KCJMTE1fTU9ERUwiLCAibGxhbWEtMy4zLTcwYiIpCmVsc2U6CiAgICBMTE1fQkFTRV9VUkwgPSBvcy5lbnZpcm9uLmdldCgiTExNX0JBU0VfVVJMIiwgImh0dHBzOi8vYXBpLmdyb3EuY29tL29wZW5haS92MSIpCiAgICBMTE1fQVBJX0tFWSA9IEdST1FfQVBJX0tFWQogICAgTExNX01PREVMID0gb3MuZW52aXJvbi5nZXQoIkxMTV9NT0RFTCIsICJsbGFtYS0zLjMtNzBiLXZlcnNhdGlsZSIpCgpERUVQR1JBTV9NT0RFTCA9IG9zLmVudmlyb24uZ2V0KCJERUVQR1JBTV9NT0RFTCIsICJub3ZhLTMiKQpFTEVWRU5MQUJTX1ZPSUNFX0lEID0gb3MuZW52aXJvbi5nZXQoIkVMRVZFTkxBQlNfVk9JQ0VfSUQiLCAiRVhBVklUUXU0dnI0eG5TRHhNYUwiKSAgIyAiU2FyYWgiCkVMRVZFTkxBQlNfTU9ERUwgPSBvcy5lbnZpcm9uLmdldCgiRUxFVkVOTEFCU19NT0RFTCIsICJlbGV2ZW5fZmxhc2hfdjJfNSIpClRUU19TQU1QTEVfUkFURSA9IDI0XzAwMCAgIyBFbGV2ZW5MYWJzIHBjbV8yNDAwMAoKU1lTVEVNX1BST01QVCA9IG9zLmVudmlyb24uZ2V0KAogICAgIlNZU1RFTV9QUk9NUFQiLAogICAgIllvdSBhcmUgYSB3YXJtLCBxdWljay13aXR0ZWQgdm9pY2UgYXNzaXN0YW50LiBLZWVwIHJlcGxpZXMgc2hvcnQgYW5kICIKICAgICJjb252ZXJzYXRpb25hbCDigJQgb25lIG9yIHR3byBzZW50ZW5jZXMgdW5sZXNzIGFza2VkIGZvciBtb3JlLiBZb3UgYXJlIGJlaW5nICIKICAgICJzcG9rZW4gdG8gb3V0IGxvdWQsIHNvIG5ldmVyIHVzZSBtYXJrZG93biwgbGlzdHMsIG9yIGVtb2ppOyB3cml0ZSB0aGUgd2F5ICIKICAgICJ5b3Ugd291bGQgYWN0dWFsbHkgc3BlYWsuIiwKKQoKUE9SVCA9IGludChvcy5lbnZpcm9uLmdldCgiUE9SVCIsICI4MDAwIikpCkhPU1QgPSBvcy5lbnZpcm9uLmdldCgiSE9TVCIsICIxMjcuMC4wLjEiKSAgIyBsb29wYmFjazoga20gc2FuZGJveGVzIGhhdmUgbm8gaW5ib3VuZAoKX2xsbSA9IE9wZW5BSShiYXNlX3VybD1MTE1fQkFTRV9VUkwsIGFwaV9rZXk9TExNX0FQSV9LRVkgb3IgIm1pc3NpbmciKQoKCiMgLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tICMKIyBTdGFnZSAxIOKAlCBTVFQgKERlZXBncmFtKSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIwojIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSAjCgpkZWYgX3RvX3dhdl9ieXRlcyhzYW1wbGVfcmF0ZTogaW50LCBhdWRpbzogbnAubmRhcnJheSkgLT4gYnl0ZXM6CiAgICAiIiJGYXN0UlRDIGhhbmRzIHVzIChzYW1wbGVfcmF0ZSwgaW50MTYgbmRhcnJheSkuIFBhY2sgaXQgYXMgYSBXQVYgZm9yIERlZXBncmFtLiIiIgogICAgYXVkaW8gPSBucC5hc2FycmF5KGF1ZGlvKS5zcXVlZXplKCkKICAgIGlmIGF1ZGlvLmR0eXBlICE9IG5wLmludDE2OgogICAgICAgICMgRmxvYXQgUENNIGluIFstMSwgMV0gLT4gaW50MTYuCiAgICAgICAgYXVkaW8gPSBucC5jbGlwKGF1ZGlvLCAtMS4wLCAxLjApCiAgICAgICAgYXVkaW8gPSAoYXVkaW8gKiAzMjc2NykuYXN0eXBlKG5wLmludDE2KQogICAgYnVmID0gaW8uQnl0ZXNJTygpCiAgICB3aXRoIHdhdmUub3BlbihidWYsICJ3YiIpIGFzIHc6CiAgICAgICAgdy5zZXRuY2hhbm5lbHMoMSkKICAgICAgICB3LnNldHNhbXB3aWR0aCgyKQogICAgICAgIHcuc2V0ZnJhbWVyYXRlKHNhbXBsZV9yYXRlKQogICAgICAgIHcud3JpdGVmcmFtZXMoYXVkaW8udG9ieXRlcygpKQogICAgcmV0dXJuIGJ1Zi5nZXR2YWx1ZSgpCgoKZGVmIHRyYW5zY3JpYmUoc2FtcGxlX3JhdGU6IGludCwgYXVkaW86IG5wLm5kYXJyYXkpIC0+IHN0cjoKICAgICIiIlV0dGVyYW5jZSAtPiB0ZXh0LiBGYXN0UlRDJ3MgU2lsZXJvIFZBRCBhbHJlYWR5IGdhdmUgdXMgYSBjbGVhbiB0dXJuLCBzbyBhCiAgICBzaW5nbGUgcHJlcmVjb3JkZWQgY2FsbCBpcyBmYXN0ICh+MTUwLTMwMG1zKSBhbmQgZGVhZCBzaW1wbGUuIEZvciB0aGUgbGFzdAogICAgZHJvcCBvZiBsYXRlbmN5LCBzd2FwIHRoaXMgZm9yIERlZXBncmFtIEZsdXggc3RyZWFtaW5nIChzZWUgUkVBRE1FKS4iIiIKICAgIGlmIG5vdCBERUVQR1JBTV9BUElfS0VZOgogICAgICAgIHJldHVybiAiIgogICAgd2F2ID0gX3RvX3dhdl9ieXRlcyhzYW1wbGVfcmF0ZSwgYXVkaW8pCiAgICByZXNwID0gaHR0cHgucG9zdCgKICAgICAgICAiaHR0cHM6Ly9hcGkuZGVlcGdyYW0uY29tL3YxL2xpc3RlbiIsCiAgICAgICAgcGFyYW1zPXsibW9kZWwiOiBERUVQR1JBTV9NT0RFTCwgInNtYXJ0X2Zvcm1hdCI6ICJ0cnVlIiwgInB1bmN0dWF0ZSI6ICJ0cnVlIn0sCiAgICAgICAgaGVhZGVycz17IkF1dGhvcml6YXRpb24iOiBmIlRva2VuIHtERUVQR1JBTV9BUElfS0VZfSIsICJDb250ZW50LVR5cGUiOiAiYXVkaW8vd2F2In0sCiAgICAgICAgY29udGVudD13YXYsCiAgICAgICAgdGltZW91dD0xNS4wLAogICAgKQogICAgcmVzcC5yYWlzZV9mb3Jfc3RhdHVzKCkKICAgIGFsdHMgPSByZXNwLmpzb24oKVsicmVzdWx0cyJdWyJjaGFubmVscyJdWzBdWyJhbHRlcm5hdGl2ZXMiXQogICAgcmV0dXJuIGFsdHNbMF1bInRyYW5zY3JpcHQiXS5zdHJpcCgpIGlmIGFsdHMgZWxzZSAiIgoKCiMgLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tICMKIyBTdGFnZSAyIOKAlCBMTE0gKENlcmVicmFzIC8gR3JvcSksIHN0cmVhbWVkIGFuZCBjaHVua2VkIGF0IHNlbnRlbmNlIGJvdW5kYXJpZXMgIwojIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSAjCgpfU0VOVEVOQ0VfRU5EID0gcmUuY29tcGlsZShyIihbLiE/XStbXHNcIicpXF1dKnxcbispIikKCgpkZWYgc3RyZWFtX3NlbnRlbmNlcyhoaXN0b3J5OiBsaXN0W2RpY3RdKToKICAgICIiIllpZWxkIHRoZSBhc3Npc3RhbnQgcmVwbHkgb25lICpzZW50ZW5jZSogYXQgYSB0aW1lIGFzIHRoZSBMTE0gcHJvZHVjZXMgaXQuCiAgICBTZW50ZW5jZSBncmFudWxhcml0eSBpcyB0aGUgc3dlZXQgc3BvdDogc21hbGwgZW5vdWdoIHRoYXQgVFRTIHN0YXJ0cyBhbG1vc3QKICAgIGltbWVkaWF0ZWx5LCBsYXJnZSBlbm91Z2ggdGhhdCBFbGV2ZW5MYWJzIGdldHMgbmF0dXJhbCBwcm9zb2R5IChuZXZlcgogICAgd29yZC1ieS13b3JkIHJvYm90IHNwZWVjaCkuIiIiCiAgICBzdHJlYW0gPSBfbGxtLmNoYXQuY29tcGxldGlvbnMuY3JlYXRlKAogICAgICAgIG1vZGVsPUxMTV9NT0RFTCwKICAgICAgICBtZXNzYWdlcz1beyJyb2xlIjogInN5c3RlbSIsICJjb250ZW50IjogU1lTVEVNX1BST01QVH0sICpoaXN0b3J5XSwKICAgICAgICBzdHJlYW09VHJ1ZSwKICAgICAgICB0ZW1wZXJhdHVyZT0wLjYsCiAgICAgICAgbWF4X3Rva2Vucz0zMDAsCiAgICApCiAgICBidWZmZXIgPSAiIgogICAgZm9yIGNodW5rIGluIHN0cmVhbToKICAgICAgICBkZWx0YSA9IGNodW5rLmNob2ljZXNbMF0uZGVsdGEuY29udGVudCBvciAiIgogICAgICAgIGlmIG5vdCBkZWx0YToKICAgICAgICAgICAgY29udGludWUKICAgICAgICBidWZmZXIgKz0gZGVsdGEKICAgICAgICAjIEZsdXNoIGV2ZXJ5IGNvbXBsZXRlIHNlbnRlbmNlLCBrZWVwIHRoZSB0YWlsLgogICAgICAgIHdoaWxlIFRydWU6CiAgICAgICAgICAgIG0gPSBfU0VOVEVOQ0VfRU5ELnNlYXJjaChidWZmZXIpCiAgICAgICAgICAgIGlmIG5vdCBtOgogICAgICAgICAgICAgICAgYnJlYWsKICAgICAgICAgICAgY3V0ID0gbS5lbmQoKQogICAgICAgICAgICBzZW50ZW5jZSwgYnVmZmVyID0gYnVmZmVyWzpjdXRdLnN0cmlwKCksIGJ1ZmZlcltjdXQ6XQogICAgICAgICAgICBpZiBzZW50ZW5jZToKICAgICAgICAgICAgICAgIHlpZWxkIHNlbnRlbmNlCiAgICBpZiBidWZmZXIuc3RyaXAoKToKICAgICAgICB5aWVsZCBidWZmZXIuc3RyaXAoKQoKCiMgLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tICMKIyBTdGFnZSAzIOKAlCBUVFMgKEVsZXZlbkxhYnMgRmxhc2ggdjIuNSksIHN0cmVhbWVkIGFzIHJhdyBQQ00gICAgICAgICAgICAgICAgICAgIwojIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSAjCgpkZWYgc3ludGhlc2l6ZSh0ZXh0OiBzdHIpOgogICAgIiIiU3RyZWFtIG9uZSBzZW50ZW5jZSBvZiBzcGVlY2guIGBwY21fMjQwMDBgID0gcmF3IDE2LWJpdCBMRSBtb25vLCBzbyB0aGVyZSdzCiAgICBubyBtcDMgZGVjb2RlIHN0ZXAg4oCUIHdlIGhhbmQgRmFzdFJUQyBpbnQxNiBmcmFtZXMgYXMgdGhleSBhcnJpdmUgb2ZmIHRoZSB3aXJlLAogICAgd2hpY2ggaXMgd2hhdCBnaXZlcyBhIGxvdyB0aW1lLXRvLWZpcnN0LWF1ZGlvLiIiIgogICAgaWYgbm90IChFTEVWRU5MQUJTX0FQSV9LRVkgYW5kIHRleHQpOgogICAgICAgIHJldHVybgogICAgdXJsID0gZiJodHRwczovL2FwaS5lbGV2ZW5sYWJzLmlvL3YxL3RleHQtdG8tc3BlZWNoL3tFTEVWRU5MQUJTX1ZPSUNFX0lEfS9zdHJlYW0iCiAgICBib2R5ID0gewogICAgICAgICJ0ZXh0IjogdGV4dCwKICAgICAgICAibW9kZWxfaWQiOiBFTEVWRU5MQUJTX01PREVMLAogICAgICAgICJ2b2ljZV9zZXR0aW5ncyI6IHsic3RhYmlsaXR5IjogMC40LCAic2ltaWxhcml0eV9ib29zdCI6IDAuNzUsICJzcGVlZCI6IDEuMH0sCiAgICB9CiAgICBoZWFkZXJzID0geyJ4aS1hcGkta2V5IjogRUxFVkVOTEFCU19BUElfS0VZLCAiQ29udGVudC1UeXBlIjogImFwcGxpY2F0aW9uL2pzb24ifQogICAgd2l0aCBodHRweC5zdHJlYW0oCiAgICAgICAgIlBPU1QiLCB1cmwsIHBhcmFtcz17Im91dHB1dF9mb3JtYXQiOiAicGNtXzI0MDAwIn0sCiAgICAgICAganNvbj1ib2R5LCBoZWFkZXJzPWhlYWRlcnMsIHRpbWVvdXQ9MzAuMCwKICAgICkgYXMgcmVzcDoKICAgICAgICByZXNwLnJhaXNlX2Zvcl9zdGF0dXMoKQogICAgICAgIHRhaWwgPSBiIiIKICAgICAgICBmb3IgcmF3IGluIHJlc3AuaXRlcl9ieXRlcyhjaHVua19zaXplPTQwOTYpOgogICAgICAgICAgICBpZiBub3QgcmF3OgogICAgICAgICAgICAgICAgY29udGludWUKICAgICAgICAgICAgZGF0YSA9IHRhaWwgKyByYXcKICAgICAgICAgICAgaWYgbGVuKGRhdGEpICUgMjogICMga2VlcCBhIGRhbmdsaW5nIG9kZCBieXRlIGZvciB0aGUgbmV4dCBmcmFtZQogICAgICAgICAgICAgICAgdGFpbCwgZGF0YSA9IGRhdGFbLTE6XSwgZGF0YVs6LTFdCiAgICAgICAgICAgIGVsc2U6CiAgICAgICAgICAgICAgICB0YWlsID0gYiIiCiAgICAgICAgICAgIGlmIGRhdGE6CiAgICAgICAgICAgICAgICB5aWVsZCBUVFNfU0FNUExFX1JBVEUsIG5wLmZyb21idWZmZXIoZGF0YSwgZHR5cGU9bnAuaW50MTYpLnJlc2hhcGUoMSwgLTEpCgoKIyAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0gIwojIE9yY2hlc3RyYXRpb24g4oCUIHRoZSBvdmVybGFwcGVkIHBpcGVsaW5lICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAjCiMgLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tICMKCmRlZiByZXNwb25zZShhdWRpbzogdHVwbGVbaW50LCBucC5uZGFycmF5XSwgY2hhdGJvdDogbGlzdFtkaWN0XSB8IE5vbmUgPSBOb25lKToKICAgIGNoYXRib3QgPSBjaGF0Ym90IG9yIFtdCiAgICBzYW1wbGVfcmF0ZSwgYXJyYXkgPSBhdWRpbwoKICAgIHVzZXJfdGV4dCA9IHRyYW5zY3JpYmUoc2FtcGxlX3JhdGUsIGFycmF5KQogICAgaWYgbm90IHVzZXJfdGV4dDoKICAgICAgICByZXR1cm4gICMgVkFEIHRyaXBwZWQgb24gbm9pc2U7IHNheSBub3RoaW5nCiAgICBjaGF0Ym90LmFwcGVuZCh7InJvbGUiOiAidXNlciIsICJjb250ZW50IjogdXNlcl90ZXh0fSkKICAgIHlpZWxkIEFkZGl0aW9uYWxPdXRwdXRzKGNoYXRib3QpICAjIHNob3cgdGhlIHVzZXIncyBsaW5lIGltbWVkaWF0ZWx5CgogICAgc3Bva2VuID0gIiIKICAgIGZvciBzZW50ZW5jZSBpbiBzdHJlYW1fc2VudGVuY2VzKGNoYXRib3QpOgogICAgICAgIHNwb2tlbiArPSBzZW50ZW5jZSArICIgIgogICAgICAgIGZvciBmcmFtZSBpbiBzeW50aGVzaXplKHNlbnRlbmNlKTogICMgPC0tIHNwZWFrIHNlbnRlbmNlIE4gd2hpbGUgTExNIHdyaXRlcyBOKzEKICAgICAgICAgICAgeWllbGQgZnJhbWUKCiAgICBjaGF0Ym90LmFwcGVuZCh7InJvbGUiOiAiYXNzaXN0YW50IiwgImNvbnRlbnQiOiBzcG9rZW4uc3RyaXAoKX0pCiAgICB5aWVsZCBBZGRpdGlvbmFsT3V0cHV0cyhjaGF0Ym90KQoKCiMgLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tICMKIyBUcmFuc3BvcnQg4oCUIEZhc3RSVEMgV2ViUlRDIHdpdGggQ2xvdWRmbGFyZSBUVVJOIChuZWVkZWQgYmVoaW5kIGFuICAgICAgICAgICAgIwojIGVncmVzcy1vbmx5IGttIHNhbmRib3ggKyB0dW5uZWw7IFNUVU4tb25seSBpcyBmaW5lIGZvciBwdXJlIGxvY2FsaG9zdCkuICAgICAgIwojIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSAjCgpkZWYgX3J0Y19jb25maWd1cmF0aW9uKCk6CiAgICAiIiJXZWJSVEMgbWVkaWEgY2FuJ3QgcmVhY2ggYW4gZWdyZXNzLW9ubHkgc2FuZGJveCBkaXJlY3RseSwgc28gd2UgcmVsYXkgdmlhCiAgICBUVVJOLiBGYXN0UlRDIHByb3hpZXMgQ2xvdWRmbGFyZSdzIFRVUk4gZm9yIGZyZWUgd2l0aCBhbiBIRiB0b2tlbiDigJQgdGhlCiAgICBsb3dlc3QtZnJpY3Rpb24gd2F5IHRvIG1ha2UgdGhlIHNoYXJlZCBsaW5rIGFjdHVhbGx5IGNhcnJ5IGF1ZGlvLiBGYWxscyBiYWNrCiAgICB0byBTVFVOLW9ubHkgKHdvcmtzIG9uIGxvY2FsaG9zdCwgYW5kIGZvciBjYWxsZXJzIHdpdGggYSBwdWJsaWMgcGF0aCkuIiIiCiAgICBpZiBvcy5lbnZpcm9uLmdldCgiSEZfVE9LRU4iKToKICAgICAgICB0cnk6CiAgICAgICAgICAgIGZyb20gZmFzdHJ0YyBpbXBvcnQgZ2V0X2Nsb3VkZmxhcmVfdHVybl9jcmVkZW50aWFsc19hc3luYwogICAgICAgICAgICByZXR1cm4gZ2V0X2Nsb3VkZmxhcmVfdHVybl9jcmVkZW50aWFsc19hc3luYyAgIyBGYXN0UlRDIGNhbGxzIGl0IHBlci1jb25uZWN0aW9uCiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbjoKICAgICAgICAgICAgcGFzcwogICAgaWYgb3MuZW52aXJvbi5nZXQoIlRVUk5fS0VZX0lEIikgYW5kIG9zLmVudmlyb24uZ2V0KCJUVVJOX0tFWV9BUElfVE9LRU4iKToKICAgICAgICB0cnk6CiAgICAgICAgICAgIGZyb20gZmFzdHJ0YyBpbXBvcnQgZ2V0X2Nsb3VkZmxhcmVfdHVybl9jcmVkZW50aWFscwogICAgICAgICAgICByZXR1cm4gZ2V0X2Nsb3VkZmxhcmVfdHVybl9jcmVkZW50aWFscygKICAgICAgICAgICAgICAgIHR1cm5fa2V5X2lkPW9zLmVudmlyb25bIlRVUk5fS0VZX0lEIl0sCiAgICAgICAgICAgICAgICB0dXJuX2tleV9hcGlfdG9rZW49b3MuZW52aXJvblsiVFVSTl9LRVlfQVBJX1RPS0VOIl0sCiAgICAgICAgICAgICkKICAgICAgICBleGNlcHQgRXhjZXB0aW9uOgogICAgICAgICAgICBwYXNzCiAgICByZXR1cm4gTm9uZSAgIyBTVFVOLW9ubHkKCgpzdHJlYW0gPSBTdHJlYW0oCiAgICBSZXBseU9uUGF1c2UoCiAgICAgICAgcmVzcG9uc2UsCiAgICAgICAgY2FuX2ludGVycnVwdD1UcnVlLCAgIyBiYXJnZS1pbjogdGFsayBvdmVyIHRoZSBhc3Npc3RhbnQgYW5kIGl0IHN0b3BzCiAgICAgICAgYWxnb19vcHRpb25zPUFsZ29PcHRpb25zKAogICAgICAgICAgICBhdWRpb19jaHVua19kdXJhdGlvbj0wLjYsCiAgICAgICAgICAgIHN0YXJ0ZWRfdGFsa2luZ190aHJlc2hvbGQ9MC4yLAogICAgICAgICAgICBzcGVlY2hfdGhyZXNob2xkPTAuMSwKICAgICAgICApLAogICAgKSwKICAgIG1vZGFsaXR5PSJhdWRpbyIsCiAgICBtb2RlPSJzZW5kLXJlY2VpdmUiLAogICAgcnRjX2NvbmZpZ3VyYXRpb249X3J0Y19jb25maWd1cmF0aW9uKCksCiAgICBhZGRpdGlvbmFsX2lucHV0cz1bZ3IuQ2hhdGJvdCh0eXBlPSJtZXNzYWdlcyIsIGxhYmVsPSJDb252ZXJzYXRpb24iKV0sCiAgICBhZGRpdGlvbmFsX291dHB1dHM9W2dyLkNoYXRib3QodHlwZT0ibWVzc2FnZXMiLCBsYWJlbD0iQ29udmVyc2F0aW9uIildLAogICAgYWRkaXRpb25hbF9vdXRwdXRzX2hhbmRsZXI9bGFtYmRhIF9vbGQsIG5ldzogbmV3LAogICAgdWlfYXJncz17CiAgICAgICAgInRpdGxlIjogImttIMK3IHJlYWx0aW1lIHZvaWNlIiwKICAgICAgICAic3VidGl0bGUiOiAiRGVlcGdyYW0g4oaSIENlcmVicmFzIOKGkiBFbGV2ZW5MYWJzIEZsYXNoIMK3IHN0cmVhbWVkLCBvdmVybGFwcGVkLCBpbnRlcnJ1cHRpYmxlIiwKICAgIH0sCikKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgbWlzc2luZyA9IFtuIGZvciBuLCB2IGluICgKICAgICAgICAoIkRFRVBHUkFNX0FQSV9LRVkiLCBERUVQR1JBTV9BUElfS0VZKSwKICAgICAgICAoIkVMRVZFTkxBQlNfQVBJX0tFWSIsIEVMRVZFTkxBQlNfQVBJX0tFWSksCiAgICAgICAgKCJDRVJFQlJBU19BUElfS0VZIG9yIEdST1FfQVBJX0tFWSIsIExMTV9BUElfS0VZKSwKICAgICkgaWYgbm90IHZdCiAgICBpZiBtaXNzaW5nOgogICAgICAgIHByaW50KGYiW3dhcm5dIG1pc3Npbmcga2V5czogeycsICcuam9pbihtaXNzaW5nKX0g4oCUIHRoYXQgc3RhZ2Ugd2lsbCBuby1vcC4iKQogICAgcHJpbnQoZiJba20tdm9pY2VdIExMTT17TExNX01PREVMfSBAIHtMTE1fQkFTRV9VUkx9IHwgU1RUPXtERUVQR1JBTV9NT0RFTH0gfCAiCiAgICAgICAgICBmIlRUUz17RUxFVkVOTEFCU19NT0RFTH0gfCBzZXJ2aW5nIGh0dHA6Ly97SE9TVH06e1BPUlR9IikKICAgIHN0cmVhbS51aS5sYXVuY2goc2VydmVyX25hbWU9SE9TVCwgc2VydmVyX3BvcnQ9UE9SVCwgcXVpZXQ9VHJ1ZSwgc2hvd19hcGk9RmFsc2UpCg==' | base64 -d > /opt/km-voice/app.py"
+      - "echo 'IyBQaW4gZmFzdHJ0YyDigJQgaXRzIEFQSSAoUmVwbHlPblBhdXNlIC8gQWRkaXRpb25hbE91dHB1dHMgLyB0aGUgQ2xvdWRmbGFyZSBUVVJOCiMgaGVscGVycykgaGFzIG1vdmVkIGJldHdlZW4gcmVsZWFzZXMuIElmIHlvdSBidW1wIGl0LCByZS1jaGVjayBhcHAucHkncyBpbXBvcnRzLgpmYXN0cnRjW3ZhZF09PTAuMC4zNApvcGVuYWk+PTEuNTEsPDIKaHR0cHg+PTAuMjcKbnVtcHk+PTEuMjYKIyBncmFkaW8gKyBhaW9ydGMgYXJlIHB1bGxlZCBpbiBieSBmYXN0cnRjOyBwaW5uaW5nIHRoZW0gaGVyZSB3b3VsZCBmaWdodCBpdHMKIyBvd24gY29uc3RyYWludHMsIHNvIHdlIGxldCBmYXN0cnRjIGNob29zZS4K' | base64 -d > /opt/km-voice/requirements.txt"
+      - "echo 'IyEvdXNyL2Jpbi9lbnYgYmFzaAojIFdhaXQgZm9yIG5ncm9rIHRvIGVzdGFibGlzaCB0aGUgdHVubmVsLCB0aGVuIHBlcnNpc3QgKyBsb2cgdGhlIHB1YmxpYyBVUkwgc28gdGhlCiMgb3BlcmF0b3IgY2FuIGdyYWIgaXQgd2l0aDogIGttIHNoZWxsIDxpZD4gLS0gY2F0IC9vcHQva20tdm9pY2UvUFVCTElDX1VSTC50eHQKc2V0IC11ClVSTD0iIgpmb3IgXyBpbiAkKHNlcSAxIDkwKTsgZG8KICBVUkw9IiQoY3VybCAtZnNTIGh0dHA6Ly8xMjcuMC4wLjE6NDA0MC9hcGkvdHVubmVscyAyPi9kZXYvbnVsbCBcCiAgICAgICAgIHwganEgLXIgJy50dW5uZWxzW10/LnB1YmxpY191cmwnIDI+L2Rldi9udWxsIFwKICAgICAgICAgfCBncmVwIC1tMSAnXmh0dHBzJyB8fCB0cnVlKSIKICBbIC1uICIkVVJMIiBdICYmIGJyZWFrCiAgc2xlZXAgMgpkb25lCmlmIFsgLW4gIiRVUkwiIF07IHRoZW4KICBwcmludGYgJyVzXG4nICIkVVJMIiA+IC9vcHQva20tdm9pY2UvUFVCTElDX1VSTC50eHQKICBsb2dnZXIgLXQga20tdm9pY2UgInJlYWx0aW1lIHZvaWNlIGRlbW8gcHVibGljIFVSTDogJFVSTCIKICBlY2hvICJrbS12b2ljZSBwdWJsaWMgVVJMOiAkVVJMIgplbHNlCiAgbG9nZ2VyIC10IGttLXZvaWNlICJuZ3JvayB0dW5uZWwgVVJMIG5vdCBmb3VuZCBhZnRlciB0aW1lb3V0IgpmaQo=' | base64 -d > /opt/km-voice/announce-url.sh && chmod +x /opt/km-voice/announce-url.sh"
+
+      # 3. Python env + deps (pip from pypi; the slow step, a few minutes).
+      - "python3 -m venv /opt/km-voice/.venv && /opt/km-voice/.venv/bin/pip install --upgrade pip && /opt/km-voice/.venv/bin/pip install -r /opt/km-voice/requirements.txt"
+
+      # 4. ngrok (connects to its edge over 443 — fits km's SG; cloudflared's 7844 does not).
+      - "curl -fsSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -o /tmp/ngrok.tgz && tar -xzf /tmp/ngrok.tgz -C /usr/local/bin && chmod +x /usr/local/bin/ngrok || true"
+
+      # 5. systemd units. All read /etc/sandbox-secrets.env (SOPS-decrypted dotenv)
+      #    for the API keys / HF_TOKEN / NGROK_AUTHTOKEN.
+      - |
+        cat > /etc/systemd/system/km-voice.service <<'KM_VOICE_UNIT'
+        [Unit]
+        Description=km realtime voice service (FastRTC streaming cascade)
+        After=network-online.target
+        Wants=network-online.target
+        [Service]
+        Type=simple
+        WorkingDirectory=/opt/km-voice
+        EnvironmentFile=-/etc/sandbox-secrets.env
+        Environment=HOST=127.0.0.1
+        Environment=PORT=8000
+        ExecStart=/opt/km-voice/.venv/bin/python /opt/km-voice/app.py
+        Restart=on-failure
+        RestartSec=10
+        [Install]
+        WantedBy=multi-user.target
+        KM_VOICE_UNIT
+      - |
+        cat > /etc/systemd/system/km-tunnel.service <<'KM_TUNNEL_UNIT'
+        [Unit]
+        Description=km public tunnel (ngrok -> loopback :8000)
+        After=km-voice.service network-online.target
+        Wants=km-voice.service network-online.target
+        [Service]
+        Type=simple
+        EnvironmentFile=-/etc/sandbox-secrets.env
+        ExecStart=/usr/local/bin/ngrok http 8000 --log stdout --log-format logfmt
+        Restart=on-failure
+        RestartSec=10
+        [Install]
+        WantedBy=multi-user.target
+        KM_TUNNEL_UNIT
+      - |
+        cat > /etc/systemd/system/km-voice-url.service <<'KM_URL_UNIT'
+        [Unit]
+        Description=km voice public-URL capture/announce
+        After=km-tunnel.service
+        Wants=km-tunnel.service
+        [Service]
+        Type=oneshot
+        RemainAfterExit=true
+        ExecStart=/opt/km-voice/announce-url.sh
+        KM_URL_UNIT
+
+      # 6. Start everything.
+      - "systemctl daemon-reload"
+      - "systemctl enable --now km-voice.service || true"
+      - "systemctl enable --now km-tunnel.service || true"
+      - "systemctl enable --now km-voice-url.service || true"
