@@ -243,7 +243,10 @@ same literal already points ECS at a nonexistent `ecs/v1.2.0`, so ECS creation i
 on main today. Restructure into a per-substrate version map (ec2spot->v1.3.0,
 ecs->v1.0.0) + a general regression test that every declared substrate/version pair
 resolves to a module dir that exists. Fixes the pre-existing ECS pin break; does NOT
-commit to ECS substrate working end-to-end and carries no live ECS UAT),
+commit to ECS substrate working end-to-end and carries no live ECS UAT. NOTE: the ECS
+substrate is NOT IN USE and has never been tested in this install, so repointing it at
+v1.0.0 cannot regress any working behavior -- the fix is zero-risk and the absence of
+ECS UAT costs nothing),
 REQ-125-TOGGLE (install `network.nat_gateway` -> `KM_NAT_GATEWAY_ENABLED` ->
 `get_env` in the network live unit, incl. the config v2->v merge-list entry;
 profile `spec.network.privateSubnet` added to the JSON schema, which is
