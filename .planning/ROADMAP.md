@@ -284,4 +284,4 @@ Plans:
 - [ ] 125-06-PLAN.md — `km init`: new network outputs, NAT env export + drift WARN, cost print, refuse-to-disable guard
 - [ ] 125-07-PLAN.md — `km doctor`: NAT-idle and private-without-NAT WARNs
 - [ ] 125-08-PLAN.md — `km create`/`budget`: single-point placement resolution, sweep retarget, NAT-aware `RankAZs`, fail-fast
-- [ ] 125-09-PLAN.md — operator doc, full-suite gate, and the seven-step live UAT
+- [ ] 125-09-PLAN.md — operator doc, full-suite gate, and the eight-step live UAT (adds a ttl-handler auto-destroy step that exercises the v1.0.0-pinned destroy stub against a v1.3.0-created sandbox)
