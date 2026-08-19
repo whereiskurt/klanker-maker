@@ -237,6 +237,13 @@ leaves private subnets as routeless islands),
 REQ-125-EC2SPOT (ec2spot v1.3.0: `public_subnets` -> `sandbox_subnets` rename +
 new `associate_public_ip` bool defaulting true, replacing the two hardcoded
 `associate_public_ip_address = true` sites),
+REQ-125-SUBPIN (`infra/templates/sandbox/terragrunt.hcl:43` hardcodes ONE literal
+`/v1.2.0` shared by both substrates -- the ec2spot bump is inert without this, and the
+same literal already points ECS at a nonexistent `ecs/v1.2.0`, so ECS creation is broken
+on main today. Restructure into a per-substrate version map (ec2spot->v1.3.0,
+ecs->v1.0.0) + a general regression test that every declared substrate/version pair
+resolves to a module dir that exists. Fixes the pre-existing ECS pin break; does NOT
+commit to ECS substrate working end-to-end and carries no live ECS UAT),
 REQ-125-TOGGLE (install `network.nat_gateway` -> `KM_NAT_GATEWAY_ENABLED` ->
 `get_env` in the network live unit, incl. the config v2->v merge-list entry;
 profile `spec.network.privateSubnet` added to the JSON schema, which is
@@ -265,8 +272,16 @@ for subnet-list resolution; per-AZ NAT exists specifically to serve it). Additiv
 otherwise. Explicitly NOT in scope: EFS (one mount target per AZ already serves
 private subnets in that AZ), SSM (outbound-only, unaffected), VPC endpoints.
 
-**Plans:** 0 plans
+**Plans:** 9 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 125 to break down)
+- [ ] 125-01-PLAN.md — network module v1.1.0: per-AZ NAT/EIP/route tables + `KM_NAT_GATEWAY_ENABLED` in the live unit
+- [ ] 125-02-PLAN.md — ec2spot v1.3.0 (`sandbox_subnets`, `associate_public_ip`) + per-substrate module version pin
+- [ ] 125-03-PLAN.md — both dormant toggles: `network.nat_gateway` config key + `spec.network.privateSubnet` schema field + demo profile
+- [ ] 125-04-PLAN.md — `network_placement` round-trip through `SandboxMetadata` marshal/unmarshal
+- [ ] 125-05-PLAN.md — compiler: `SandboxSubnets` threading + `associate_public_ip` emission (EC2 only)
+- [ ] 125-06-PLAN.md — `km init`: new network outputs, NAT env export + drift WARN, cost print, refuse-to-disable guard
+- [ ] 125-07-PLAN.md — `km doctor`: NAT-idle and private-without-NAT WARNs
+- [ ] 125-08-PLAN.md — `km create`/`budget`: single-point placement resolution, sweep retarget, NAT-aware `RankAZs`, fail-fast
+- [ ] 125-09-PLAN.md — operator doc, full-suite gate, and the seven-step live UAT
