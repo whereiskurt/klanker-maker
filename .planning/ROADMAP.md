@@ -6,6 +6,7 @@
 **Plans:** 5/5 plans complete
 
 Plans:
+
 - [ ] 117-01-PLAN.md — extends string|[]string union type, fragment marker, initCommandsAppend + JSON schema, fix 3 call sites
 - [ ] 117-02-PLAN.md — generic deepMerge engine + DAG resolve (diamond/memoized); delete the typed merger zoo
 - [ ] 117-03-PLAN.md — wire Resolve into km validate/create; abstract-fragment skip; validate-all skips base/
@@ -20,6 +21,7 @@ Plans:
 **Plans:** 6/6 plans complete
 
 Plans:
+
 - [ ] 118-01-PLAN.md — Wave 0 RED test stubs (allowlist enforcement, slack_allow round-trip, CreateChannel mocks, validate warns) + struct stub fields
 - [ ] 118-02-PLAN.md — Feature A: thread private bool through CreateChannel + validate warns + JSON schema
 - [ ] 118-03-PLAN.md — Feature B per-sandbox plumbing: slack_allow DDB round-trip + FetchByChannel + km create write
@@ -35,6 +37,7 @@ Plans:
 **Plans:** 5/5 plans complete
 
 Plans:
+
 - [x] 119-01-PLAN.md — Wave 0 RED test stubs (bridge group==threadTS, validate WARN, KM_SLACK_MAX_CONCURRENCY env, queue VisibilityTimeout) + MaxConcurrentThreads struct/schema field
 - [x] 119-02-PLAN.md — Layer 1 bridge: MessageGroupId→threadTS at both Send sites + doc-comment fix; raise Slack inbound queue base VisibilityTimeout to 1800s
 - [x] 119-03-PLAN.md — schema/validate/NotifyEnv plumbing: km validate WARN cap>1 w/o perSandbox+inbound; emit KM_SLACK_MAX_CONCURRENCY only when cap>1 (dormancy)
@@ -50,6 +53,7 @@ Plans:
 **Plans:** 4/4 plans complete
 
 Plans:
+
 - [ ] 120-01-PLAN.md — Author 5 new base fragments (os/redhat, os/debian, toolchain-agents single-pin, plugin-klanker, slack-persandbox)
 - [ ] 120-02-PLAN.md — Author 4 composed leaves (learner, desktop, github, h1); km validate clean no-WARN
 - [ ] 120-03-PLAN.md — git mv retired demos + frozen fixtures to testdata/profiles/ + update 6 test-path constants (atomic, no red commit)
@@ -69,6 +73,7 @@ trip notices, a three-tier breach policy (`warn`/`block`/`freeze`), and a latche
 **Depends on:** Phase 120
 
 **Success criteria:**
+
 - [ ] `pkg/quota` records multi-window counters (`lifetime` / `hour` / `day`) per (sandbox, action) in a new `{prefix}-action-quota` DynamoDB table via atomic `ADD`, fixed calendar buckets, TTL on rolling windows.
 - [ ] http-proxy meters `github_pr` / `github_comment` / `github_review` / `email_send` by URL pattern; slack-bridge meters `slack_post`; h1-bridge meters `h1_comment`.
 - [ ] Limits resolve per (action, window) as profile (`spec.limits`) → install default (`km-config.yaml limits:`) → unlimited; resolved map reaches the proxy via userdata and the bridges via the `km-sandboxes` row (`action_limits`, round-tripped through `SandboxMetadata`).
@@ -84,6 +89,7 @@ trip notices, a three-tier breach policy (`warn`/`block`/`freeze`), and a latche
 **Plans:** 12/12 plans complete
 
 Plans:
+
 - [ ] 121-01-PLAN.md — Wave 0: pkg/quota skeleton + RED test stubs + module-count bump (24→26) + all Wave 0 stubs
 - [ ] 121-02-PLAN.md — pkg/quota core: multi-window atomic ADD counter + bucket math + TTL + ResolveLimits (TDD)
 - [ ] 121-03-PLAN.md — spec.limits profile schema + validate + km-config limits: v2→v merge-list
@@ -107,6 +113,7 @@ Plans:
 **Design spec:** `docs/superpowers/specs/2026-06-27-gpu-vllm-serving-profiles-design.md`. RESEARCH/CONTEXT supersede the spec: O7 → a gateway is CORE (Codex needs the Responses API since Feb 2026); the bake-off chose **Bifrost** on `:8001` as a 5-route multi-provider router (local/claude-bedrock/claude-anthropic/gpt-oss-bedrock/gpt-frontier). Resume: `.planning/phases/122-*/122-UAT.md`.
 
 Plans:
+
 - [x] 122-01-PLAN.md — Wave 0: AgentCodexSpec localBaseURL/localModel + JSON schema + 6 Wave-0 RED test stubs ✓
 - [x] 122-02-PLAN.md — base/gpu/serve fragment (Bifrost v1.0.6 5-route router + OTEL) + 7 GPU leaves; validate-all 20/20 ✓
 - [x] 122-03-PLAN.md — synthesizeCodexConfig emits [model_providers.local] (wire_api=responses, :8001) + golden; full suite green ✓
@@ -140,6 +147,7 @@ fails build), REQ-123-HOST (static hosting story for klankermaker.ai; S3+CloudFr
 Independent of Phase 122 — planned as 123 with GSD focus deliberately left on 122.
 
 Plans:
+
 - [ ] 123-01-PLAN.md — Wave 1: question-graph schema + capability-descriptor format + pure emitter + golden bundles per preset (no UI). The testable core; the runbook/bundle format that is the contract for B/C/D.
 - [ ] 123-02-PLAN.md — Wave 2: static renderer (graph-driven branching UI, client-side validation, in-browser bundle generation) + frontend-design pass.
 - [ ] 123-03-PLAN.md — Wave 3: CI contract test — add thin `km configure --check`, emit km-config per preset, run real km over each; drift fails CI.
@@ -172,7 +180,9 @@ DescribeInstanceTypeOfferings, regional-quota gate up front, last-success sticky
 ICE deprioritize, `spec.runtime.azPreference` override),
 REQ-124-STORE (new `{prefix}-capacity` DDB table + TF module + regionalModules()
 bump + live unit; (instanceType, az) key, TTL'd ICE rows, read/write from operator
+
 + Lambda),
+
 REQ-124-CAPCMD (`km capacity <profile|--type>` feasibility report;
 verdicts likely/quota-blocked/not-offered/recently-dry/unknown),
 REQ-124-SURFACE (`spec.runtime.azPreference` additive schema; `km create
@@ -182,7 +192,9 @@ all 4 subnets exist).
 
 **Design spec:** `docs/superpowers/specs/2026-06-28-az-failover-capacity-feasibility-design.md`
 **Depends on:** none hard (additive; touches the `ec2spot` module + `pkg/compiler`
+
 + a new DDB table). Motivated by Phase 122 (GPU vLLM profiles) and supersedes the
+
 `spot-multi-az` todo; EBS coupling interacts with Phase 87 (additionalSnapshots).
 Independent of Phase 123 (setup wizard) — sequential number only, no code dependency.
 
@@ -193,9 +205,68 @@ interruption handling. (See spec § Non-goals.)
 **Plans:** 7/7 plans complete
 
 Plans:
+
 - [ ] 124-01-PLAN.md — Wave 0: `pkg/capacity/` core (pure `ClassifyError` taxonomy + DDB capacity store w/ TTL + `RankAZs` interface surface/stub) + `servicequotas` SDK + `spec.runtime.azPreference` field/schema + `GetCapacityTableName()` + azPreference byte-identity test.
 - [ ] 124-02-PLAN.md — Wave 1: refactor `cmd/create-handler` `nocap` onto `pkg/capacity.ClassifyError` + upgrade the existing `km create` AZ-rotation loop (create.go:746-869) into classify-and-retry (ICE iterate; quota/auth/invalid fail-fast w/ L-DB2E81BA-named remediation). (TDD)
 - [ ] 124-03-PLAN.md — Wave 0: `dynamodb-capacity` TF module (+TTL) + live unit + `regionalModules()` entry + module-count test bump (26→27) + bounded spot `timeouts.create=3m` on `aws_spot_instance_request` only. **`make build` before `km init`** gotcha called out.
 - [ ] 124-04-PLAN.md — Wave 2: capacity-aware `RankAZs` impl (offerings drop + GPU-quota gate + last-success sticky + ICE deprioritize + azPreference merge) + wire RankAZs into `km create` pre-loop ordering + `km capacity <profile|--type>` honest-verdict report.
 - [ ] 124-05-PLAN.md — Wave 3: `km create --wait-for-capacity[=30m]` opt-in outer backoff (never forwarded to the Lambda subprocess) + `km doctor` capacity-table check + GPU-family quota=0 WARN.
 - [ ] 124-06-PLAN.md — Wave 4 (live UAT, G-quota gated): full `go test ./...` green + 20/20 profiles + deploy (make build BEFORE km init; make build-lambdas) + docs + G1 4-subnets / G2 km capacity accuracy / G3-G5 GPU 1a→1c failover + quota-0 fail-fast + sticky (quota-deferred like Phase 122).
+
+
+### Phase 125: Per-profile private-subnet sandboxes with per-AZ NAT gateways (additive, reversible)
+
+**Goal:** Let an operator run public-subnet and private-subnet sandboxes side by
+side in the same VPC. Add a per-profile placement toggle
+(`spec.network.privateSubnet`) that lands a sandbox on the already-existing private
+subnets with no public IPv4, and an independent install-level toggle
+(`network.nat_gateway`) that provisions **one NAT gateway + EIP per AZ** so the
+Phase 124 AZ-failover sweep keeps working without cross-AZ egress charges or a
+single-AZ egress failure domain. Both toggles are dormant by default (absent =>
+byte-identical to Phase 124), and the NAT half is deliberately *reversible*:
+turning it on is a pure-additive apply, turning it off is safe whenever no private
+sandboxes are running, because NAT is the expensive component (~$132/mo for 4 AZs
+plus $0.045/GB) and the operator wants it gone when idle.
+
+**Requirements** (phase-local synthetic IDs, derived from the design spec):
+REQ-125-NETMOD (network module v1.1.0: per-AZ EIP+NAT counted off
+`private_subnets_cidr`, NAT placed in the same-AZ public subnet, single private
+route table split into one-per-AZ with `moved` blocks, plural
+`nat_gateway_ids`/`nat_eip_public_ips`/`private_route_table_ids` outputs; NAT-off
+leaves private subnets as routeless islands),
+REQ-125-EC2SPOT (ec2spot v1.3.0: `public_subnets` -> `sandbox_subnets` rename +
+new `associate_public_ip` bool defaulting true, replacing the two hardcoded
+`associate_public_ip_address = true` sites),
+REQ-125-TOGGLE (install `network.nat_gateway` -> `KM_NAT_GATEWAY_ENABLED` ->
+`get_env` in the network live unit, incl. the config v2->v merge-list entry;
+profile `spec.network.privateSubnet` added to the JSON schema, which is
+`additionalProperties:false`; no apiVersion bump),
+REQ-125-PLUMB (`NetworkOutputs` gains `PrivateSubnets` + `NATGatewayIDs`;
+placement resolved once into a single `SandboxSubnets` list *before* the Phase 124
+AZ sweep so create.go:790-921 is not forked; consumers create.go:621/2431,
+budget.go:376, service_hcl.go 3 structs + 2 templates; `RankAZs` drops NAT-less AZs),
+REQ-125-REMOTE (create-handler S3-cached network outputs carry the new fields;
+**resolve first** whether ttl-handler's `v1.0.0`-pinned destroy-placeholder
+main.tf at cmd/ttl-handler/main.go:1215 survives the ec2spot var rename -- highest-risk
+unknown in the phase),
+REQ-125-GUARD (`network_placement` attr on the sandboxes row, round-tripped through
+`SandboxMetadata` or pause/resume strips it; `km create` fails fast when a private
+profile meets a NAT-less install; `km init` refuses to disable NAT while private
+sandboxes run),
+REQ-125-DOCTOR (WARN on NAT-enabled-but-unused with the monthly cost, WARN on
+private-sandboxes-without-NAT; `km init` prints the NAT cost when enabling),
+REQ-125-UAT (live, 7 steps: additive-only plan, private box has no public IP,
+egress source IP == that AZ's NAT EIP, allowlist still enforced, ICE rotation picks
+a different AZ *and* its NAT, clean NAT teardown, negative fail-fast).
+
+**Design spec:** `docs/superpowers/specs/2026-08-19-private-subnet-nat-design.md`
+**Depends on:** Phase 124 (the AZ sweep at create.go:790-921 is the integration point
+for subnet-list resolution; per-AZ NAT exists specifically to serve it). Additive
+otherwise. Explicitly NOT in scope: EFS (one mount target per AZ already serves
+private subnets in that AZ), SSM (outbound-only, unaffected), VPC endpoints.
+
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 125 to break down)
