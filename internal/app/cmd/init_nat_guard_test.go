@@ -30,13 +30,42 @@ func TestNATDisableGuard(t *testing.T) {
 			wantContains: []string{"sb-alpha", "sb-beta", "destroy"},
 		},
 		{
-			name:           "disabling with private sandboxes stopped/destroyed does not block",
+			// Phase 125 live-UAT correction: a STOPPED private sandbox still depends
+			// on NAT — it needs an egress path again the moment it resumes, and
+			// tearing NAT down under it would break that resume silently. Only
+			// definitively terminal statuses are excluded. This case previously
+			// asserted that stopped did not block, codifying the same fail-open bug.
+			name:           "disabling with a stopped private sandbox DOES block",
 			desiredEnabled: false,
 			sandboxes: []awspkg.SandboxMetadata{
 				{SandboxID: "sb-alpha", NetworkPlacement: "private", Status: "stopped"},
+			},
+			wantErr:      true,
+			wantContains: []string{"sb-alpha", "destroy"},
+		},
+		{
+			name:           "disabling with terminal private sandboxes does not block",
+			desiredEnabled: false,
+			sandboxes: []awspkg.SandboxMetadata{
 				{SandboxID: "sb-beta", NetworkPlacement: "private", Status: "killed"},
+				{SandboxID: "sb-gamma", NetworkPlacement: "private", Status: "failed"},
 			},
 			wantErr: false,
+		},
+		{
+			// THE live-UAT regression case. km create does NOT write a `status`
+			// attribute — km list derives status from live EC2 — so priv-913ff0f3 had
+			// Status == "" the entire time it was running and egressing through
+			// nat-0dc28e8f9fb164acb. The original guard required Status == "running",
+			// matched nothing, and would have failed OPEN: NAT torn out from under a
+			// live sandbox with no diagnostic. An empty status MUST block.
+			name:           "disabling with a private sandbox whose status was never written MUST block",
+			desiredEnabled: false,
+			sandboxes: []awspkg.SandboxMetadata{
+				{SandboxID: "priv-913ff0f3", NetworkPlacement: "private", Status: ""},
+			},
+			wantErr:      true,
+			wantContains: []string{"priv-913ff0f3", "destroy"},
 		},
 		{
 			name:           "disabling with zero private sandboxes does not block",

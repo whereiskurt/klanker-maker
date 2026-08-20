@@ -34,16 +34,34 @@ func natDisableGuard(desiredEnabled bool, sandboxes []awspkg.SandboxMetadata) er
 
 	var offending []string
 	for _, sb := range sandboxes {
-		if sb.NetworkPlacement == "private" && sb.Status == "running" {
-			offending = append(offending, sb.SandboxID)
+		if sb.NetworkPlacement != "private" {
+			continue
 		}
+		// Phase 125 live-UAT finding (Defect 2, and the same defect this guard
+		// originally carried): `km create` does NOT write a `status` attribute —
+		// `km list` derives status by reconciling against live EC2 — so a fully
+		// live, actively egressing private sandbox has Status == "". Requiring
+		// Status == "running" here matched nothing, so the guard failed OPEN and
+		// would have let an operator tear NAT out from under a running sandbox's
+		// egress with no diagnostic.
+		//
+		// Mirrors the fail-safe in runningPrivateSandboxIDs (doctor_network.go):
+		// count a private row unless its status is definitively terminal. Rows are
+		// deleted on destroy (Phase 109), so a present row means the sandbox still
+		// exists; "stopped"/"starting"/"" all count, since a stopped private
+		// sandbox needs NAT again the moment it resumes.
+		switch sb.Status {
+		case "failed", "killed", "destroyed", "terminated":
+			continue
+		}
+		offending = append(offending, sb.SandboxID)
 	}
 	if len(offending) == 0 {
 		return nil
 	}
 
 	return fmt.Errorf(
-		"refusing to disable NAT: %d running private sandbox(es) depend on it for egress: %s — destroy them first (km destroy <id> --remote --yes), then re-run km init to disable network.nat_gateway",
+		"refusing to disable NAT: %d private sandbox(es) depend on it for egress: %s — destroy them first (km destroy <id> --remote --yes), then re-run km init to disable network.nat_gateway",
 		len(offending), strings.Join(offending, ", "),
 	)
 }

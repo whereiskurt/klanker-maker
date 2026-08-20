@@ -86,11 +86,19 @@ km destroy <private-sandbox-id> --remote --yes
 km init --dry-run=false
 ```
 
-`km init` **refuses** to disable NAT while any sandbox row is `network_placement=private` and
-`status=running` — it lists the offending sandbox ids and stops. There is no
+`km init` **refuses** to disable NAT while any sandbox row is `network_placement=private`
+unless that row's status is definitively terminal (`failed`, `killed`, `destroyed`,
+`terminated`) — it lists the offending sandbox ids and stops. There is no
 `--force`/`--i-accept-destroys` override for this guard, by design: NAT is what gives those
-sandboxes egress, so pulling it out from under a running private sandbox would silently sever
-its internet access.
+sandboxes egress, so pulling it out from under a private sandbox would silently sever its
+internet access.
+
+Note the guard deliberately does NOT require `status=running`. `km create` does not write a
+`status` attribute at all — `km list` derives status by reconciling against live EC2 — so a
+fully live private sandbox has an empty status, and a `status=running` filter would match
+nothing and fail open. A **stopped** private sandbox also blocks: it needs an egress path
+again the moment it resumes. Rows are deleted on destroy, so a present non-terminal row means
+the sandbox still exists.
 
 When NAT is disabled, **the private subnets and their per-AZ route tables still exist, with no
 default route — a routeless island.** This is intentional and costs nothing. It's what makes
