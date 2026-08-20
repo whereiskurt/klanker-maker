@@ -450,6 +450,10 @@
               "enum": ["proxy", "ebpf", "both"],
               "default": "proxy",
               "description": "Network enforcement mechanism: proxy (iptables DNAT, default), ebpf (cgroup BPF, EC2-only), or both (eBPF primary + proxy for L7 inspection, EC2-only)"
+            },
+            "privateSubnet": {
+              "type": "boolean",
+              "description": "Place the sandbox ENI in a private subnet behind a per-AZ NAT gateway instead of a public subnet with a public IPv4 (Phase 125). Requires install-level network.nat_gateway: true, checked at km create time (not km validate time, since the profile is never wrong, only the install's current NAT state can make it unsatisfiable). Omitting this field is byte-identical to Phase 124 (public subnet, public IPv4)."
             }
           }
         },

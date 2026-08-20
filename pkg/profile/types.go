@@ -583,6 +583,14 @@ type NetworkSpec struct {
 	// Omitting the field is equivalent to "proxy" (backwards compatible).
 	// eBPF enforcement is scoped to EC2 substrate only in Phase 40.
 	Enforcement string `yaml:"enforcement,omitempty"`
+	// PrivateSubnet places the sandbox ENI in a private subnet behind a per-AZ
+	// NAT gateway instead of a public subnet with a public IPv4 (Phase 125).
+	// Requires install-level network.nat_gateway: true; this is checked at
+	// `km create` time and deliberately NOT at `km validate` time, because the
+	// profile itself is never wrong — only the install's current NAT state can
+	// make it momentarily unsatisfiable. false (the default) is byte-identical
+	// to Phase 124 (public subnet, public IPv4).
+	PrivateSubnet bool `yaml:"privateSubnet,omitempty"`
 }
 
 // EgressSpec defines what outbound network traffic is permitted.
