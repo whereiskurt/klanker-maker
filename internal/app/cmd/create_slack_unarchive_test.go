@@ -88,8 +88,8 @@ func TestResolveSlackChannel_UnarchiveFailureFallsThrough(t *testing.T) {
 	if !strings.Contains(err.Error(), "sb-xyz-github-bot") {
 		t.Errorf("error %q does not name the channel's real name", err.Error())
 	}
-	if !strings.Contains(err.Error(), "km slack forget") {
-		t.Errorf("error %q does not point at the in-product remedy (km slack forget)", err.Error())
+	if !strings.Contains(err.Error(), "km slack forget-channel") {
+		t.Errorf("error %q does not point at the in-product remedy (km slack forget-channel)", err.Error())
 	}
 }
 

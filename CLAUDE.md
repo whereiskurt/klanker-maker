@@ -288,6 +288,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Private per-sandbox Slack channel (`notification.slack.private`, `is_private:true`) | `docs/slack-notifications.md` § Phase 118 |
 | Slack trigger allowlist (`slack.allow` / `notification.slack.inbound.allow`, `KM_SLACK_ALLOW`, `slack_allow` attr, resolution order, silent-drop) | `docs/slack-notifications.md` § Phase 118 |
 | Slack inbound per-thread parallelism (`notification.slack.inbound.maxConcurrentThreads`, `KM_SLACK_MAX_CONCURRENCY`, threadTS FIFO grouping, bounded-concurrent poller, ack-after + 1800s visibility heartbeat, `last_processed_event_ts` dedup, /workspace caveat) | `docs/slack-notifications.md` § Phase 119 |
+| Alias reuse vs archived channels — unarchive-on-reuse (`path=cache_unarchived`), why a renamed `channelName` never takes effect on a mapped alias, `km slack forget-channel` / `km slack adopt` as the escape hatches | `docs/slack-notifications.md` § Alias reuse and archived channels |
 | Verified, `klanker-maker[bot]`-attributed **signed** commits from a sandbox — `km-github commit` (GraphQL `createCommitOnBranch`), `contents:write`/`push` precondition, `--parent` PR-auto-close gotcha | CLAUDE.md § `km-github commit` + `docs/github-app-permissions.md` |
 | Sandbox-side helper binaries convention — everything a klanker does for GitHub/Slack/Email/HackerOne starts at `/opt/km/bin` | CLAUDE.md § Sandbox-side helper binaries |
 | GitHub comment-trigger bridge — `@km-bot review this PR` → sandbox agent → PR review | `docs/github-bridge.md` (Phase 97) |

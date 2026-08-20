@@ -405,7 +405,7 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 					}
 					return "", false, fmt.Errorf("channel #%s (%s) is archived and km could not unarchive it "+
 						"(the bot needs channels:manage for public / groups:write for private channels).\n"+
-						"Recover with `km slack forget <alias>` to drop the stale mapping, or unarchive manually:\n"+
+						"Recover with `km slack forget-channel <alias>` to drop the stale mapping, or unarchive manually:\n"+
 						"  curl -H \"Authorization: Bearer $BOT_TOKEN\" -d \"channel=%s\" https://slack.com/api/conversations.unarchive",
 						realName, chID, chID)
 				default:
@@ -465,7 +465,7 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 				log.Warn().Str("alias", alias).Str("stored_channel", actualName).
 					Str("derived_name", channelName).Str("channel_id", storedID).
 					Msg("alias is pinned to a channel whose name differs from the profile's template; " +
-						"the stored mapping wins — use `km slack forget <alias>` to re-derive")
+						"the stored mapping wins — use `km slack forget-channel <alias>` to re-derive")
 			}
 
 			// Archived is recoverable, not dead. Lift it back out and carry on;

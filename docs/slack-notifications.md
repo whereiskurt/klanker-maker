@@ -177,6 +177,31 @@ All new fields are under `spec.notification` (Phase 92; formerly `spec.cli`). Al
 
 `bool*` indicates the field is a pointer (`*bool`) in the schema, allowing three states: unset (nil → default), `true`, `false`. Omitting the field is different from `false` for `notification.email.enabled` (omit = email on; `false` = email off).
 
+### Alias reuse and archived channels
+
+`archiveOnDestroy` defaults to **true**, and the `alias → channel_id` mapping in
+`{prefix}-slack-channels` is **permanent by design** — nothing on the destroy path clears it, because
+its durability is what makes reuse resolve in O(1) instead of scanning the workspace.
+
+Those two together used to make every alias reuse fail: `km create --alias github-bot` resolved the
+stored row, `conversations.info` reported the archived channel as perfectly healthy, and the create
+then died at `conversations.join` with `is_archived`. **km now unarchives and reuses the channel
+automatically** (`path=cache_unarchived` in the resolve log), so archive-on-destroy is
+round-trippable and no action is needed.
+
+Two related behaviours worth knowing:
+
+- **A renamed `channelName` template has no effect on an already-mapped alias.** The stored row is
+  consulted before the derived name and wins. `km create` now WARNs, naming both the stored channel
+  and the one the profile would derive, and `km doctor` reports the same mismatch. To re-derive, drop
+  the mapping with `km slack forget-channel <alias>`, or repoint it with `km slack adopt <alias> <channelID>`.
+- **Privacy is create-only.** `notification.slack.private` applies when the channel is created; a
+  reused (or unarchived) channel is never converted public↔private.
+
+If the unarchive itself fails — the bot needs `channels:manage` for public channels, `groups:write`
+for private ones — the create surfaces an actionable error naming the channel's **real** name and
+pointing at `km slack forget-channel`.
+
 ---
 
 ## Validation Rules
