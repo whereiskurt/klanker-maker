@@ -8,6 +8,64 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 125 (2026-08-19) — Per-profile private-subnet sandboxes with per-AZ NAT gateways (code-complete; live UAT pending):**
+- Two decoupled, dormant-by-default toggles: install-level `network.nat_gateway`
+  (`km-config.yaml`) controls whether NAT/EIP infrastructure **exists**; per-profile
+  `spec.network.privateSubnet` (SandboxProfile) controls whether **this** sandbox's ENI lands
+  private. Both absent ⇒ byte-identical to Phase 124. No `apiVersion` bump.
+- **One NAT gateway + one EIP per AZ** (4 total), each sitting in the public subnet of the AZ
+  it serves — not one shared NAT — because Phase 124's AZ-failover sweep rotates launches
+  across all 4 AZs, and a shared NAT would add cross-AZ data-transfer charges to every byte and
+  make one AZ a SPOF for the whole install's internet access.
+- **`infra/modules/network/v1.1.0`** (new immutable dir): `aws_route_table.private` becomes
+  `count`-based (one per private subnet — a single route table cannot hold four different
+  `0.0.0.0/0` NAT targets), with `moved` blocks so the first apply against an existing install
+  shows moves, not destroy+create. Plural outputs (`private_route_table_ids`,
+  `nat_gateway_ids`, `nat_eip_public_ips`) replace the old singular ones.
+  **The route-table split is UNCONDITIONAL** — it fires the moment the live unit sources
+  v1.1.0, independent of the NAT toggle, so the first `km init` after this phase shows a
+  non-empty (additive, non-destructive) plan even for an operator who touches neither toggle.
+- **`infra/modules/ec2spot/v1.3.0`**: `public_subnets` renamed to `sandbox_subnets` (truthful
+  for either placement) and a new `associate_public_ip` bool (default `true`, `false` for
+  private placement — a public IPv4 in a private subnet is both unroutable and billable).
+- **REQ-125-SUBPIN:** `infra/templates/sandbox/terragrunt.hcl`'s single shared module-version
+  literal is now a per-substrate `locals.substrate_module_versions` map + lookup — this also
+  repairs a pre-existing bug where the shared literal pointed the (never-tested) ECS substrate
+  at a nonexistent module directory. Scope boundary: this fixed the PIN only, not ECS substrate
+  functionality — ECS is not in use and remains unproven end to end.
+- Go plumbing: `NetworkOutputs` gains `PrivateSubnets`/`NATGatewayIDs` (both the local
+  `outputs.json` path and the S3 tfstate fallback used by `--remote`); placement is resolved
+  **once**, into `compiler.NetworkConfig.SandboxSubnets`, before the Phase 124 AZ sweep — the
+  sweep itself was retargeted (not forked) to read/write `SandboxSubnets` exclusively;
+  `capacity.RankAZs` drops any AZ with no NAT gateway for a private sandbox.
+- **Guards:** `km create` fails fast (before any artifact/upload) when a private profile hits a
+  NAT-less install, naming `network.nat_gateway` and the fix command; `km init` **refuses** to
+  disable NAT while any sandbox row is `network_placement=private` and `status=running` (no
+  override flag, by design); two `km doctor` WARNs — NAT enabled but idle (cost + "safe to
+  disable"), and a running private sandbox with NAT off. `network_placement` is a
+  schema-on-write DynamoDB attribute on `{prefix}-sandboxes`, threaded through the shared
+  marshal/unmarshal chokepoint so it survives pause/resume/extend/ttl-handler.
+- **Cost:** ~$132/month baseline for 4 AZs plus $0.045/GB processed — e.g. a GPU profile
+  pulling 300GB of weights costs ~$13.50 in NAT processing alone. This is the entire reason the
+  toggle is reversible: disabling NAT leaves the private subnets as free, routeless islands.
+- **Residual risk (accepted pending live UAT):** `cmd/ttl-handler/main.go` renders its
+  destroy-placeholder `main.tf` against a frozen `ec2spot/v1.0.0` pin regardless of which
+  version a sandbox was created against; an automatic TTL expiry of a v1.3.0-created private
+  sandbox is the only path that actually crosses this version boundary (`km destroy` reuses the
+  create-time `terragrunt.hcl` and never crosses versions). Resolved analytically at HIGH
+  confidence in `RESEARCH.md` Finding 1 (`terraform destroy` operates on state, not
+  destroy-time config, and the pin has already survived two prior bumps); live UAT step 6
+  proves it. See `docs/private-subnet-nat.md` for the current UAT status.
+- **Deploy = `make build` (BEFORE `km init` — binary carries the new `NetworkOutputs`
+  extraction and the `KM_NAT_GATEWAY_ENABLED` export; a stale binary silently skips both) +
+  `make build-lambdas` + `km init --dry-run=false`.** NOT `--sidecars` (no sidecar binary
+  changed; the NAT/EIP/route resources need a full terragrunt apply). Existing sandboxes are
+  unaffected and keep public placement until `km destroy && km create`.
+- See `docs/private-subnet-nat.md` for the full operator runbook (toggles, cost, the one-time
+  route-table split, reversal, guards, deploy surface, scope fences) and
+  `.planning/phases/125-per-profile-private-subnet-sandboxes-with-per-az-nat-gateway/125-UAT.md`
+  for the live UAT record.
+
 **`km-github commit` — verified, bot-attributed signed commits from a sandbox (2026-07-02):**
 - New `km-github commit` sidecar verb creates a **GitHub-SIGNED, `klanker-maker[bot]`-attributed** commit (committer `GitHub`, `verified:true reason:valid`) via the GraphQL **`createCommitOnBranch`** mutation. This is the ONLY commit path that auto-signs: a sandbox's local `git commit` is unsigned, and the low-level REST `POST /git/commits` is bot-attributed but `verified:false reason:unsigned`. The mutation signs with GitHub's key and attributes the commit to the **token's own identity** (no hardcoded bot email → portable across installs) and supports multi-file commits in one commit.
 - **Usage:** `km-github commit --repo O/R --branch BR [--parent SHA] --message-file MSG -- <repo-relative files...>` → prints the new commit OID to **stdout**, the `verified=… reason=… author=… committer=…` line to **stderr**. Then sync the local worktree: `git fetch origin && git reset --hard origin/BR`. The message file's first line is the headline, the rest (leading blank lines stripped) the body.
@@ -213,6 +271,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 
 | You want to… | Look at |
 |---|---|
+| Private-subnet sandboxes + per-AZ NAT gateways — `network.nat_gateway` / `spec.network.privateSubnet` toggles, cost, the one-time route-table split, reversal, guards, deploy surface | `docs/private-subnet-nat.md` (Phase 125) |
 | AZ failover + capacity feasibility — `km create` classify-and-retry sweep, GPU quota wall (`L-DB2E81BA`), `km capacity` verdicts, `--wait-for-capacity`, `{prefix}-capacity` DDB table, deploy-surface order | `docs/operational-gotchas.md` § AZ failover + capacity feasibility (Phase 124) |
 | Action quotas + freeze quarantine — `spec.limits`/install `limits:`, windows (lifetime/perHour/perDay), `onBreach` warn/block/freeze, zero=hard-deny, `km freeze`/`km unlock`, `km status` Quotas section, the `km-quota-alerter`, deploy surface | `docs/action-quotas.md` (Phase 121) |
 | Operator CLI tour | `klanker:user` skill |
