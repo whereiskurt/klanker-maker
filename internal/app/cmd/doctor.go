@@ -297,6 +297,9 @@ type DoctorConfigProvider interface {
 	// GetCapacityTableName returns the Phase 124 {prefix}-capacity DynamoDB table name.
 	// Stores per-(instanceType,az) ICE/success history for capacity-aware AZ ranking.
 	GetCapacityTableName() string
+	// GetNATGatewayEnabled returns the Phase 125 network.nat_gateway install-level
+	// toggle. False when the key is absent (Phase 124 install; NAT never touched).
+	GetNATGatewayEnabled() bool
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -362,6 +365,9 @@ func (a *appConfigAdapter) GetChecksTriggers() []appcfg.CheckTrigger {
 }
 func (a *appConfigAdapter) GetCapacityTableName() string {
 	return a.cfg.GetCapacityTableName()
+}
+func (a *appConfigAdapter) GetNATGatewayEnabled() bool {
+	return a.cfg.GetNATGatewayEnabled()
 }
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
@@ -550,6 +556,13 @@ type DoctorDeps struct {
 	// CodexFetchProfile returns the parsed SandboxProfile for a given sandbox ID.
 	// Wraps downloadProfileFromS3 + profile.Parse in production.
 	CodexFetchProfile ProfileFetcherFunc
+
+	// NetworkListSandboxMetadata returns full, unfiltered sandbox metadata for
+	// the Phase 125 NAT-network doctor checks. Nil causes both checks to
+	// return SKIPPED rather than a false ERROR/WARN — a doctor check that
+	// cannot read state should not report on infrastructure it did not
+	// observe.
+	NetworkListSandboxMetadata func(ctx context.Context) ([]kmaws.SandboxMetadata, error)
 
 	// Phase 94 — leaked-debris cleanup clients.
 	// CWLogsCleanupClient is used by checkStaleLogGroups to enumerate and delete orphaned
@@ -4615,6 +4628,33 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkEmailDomainMatchesSESIdentity(ctx, cfg, sesClient)
 	})
 
+	// Phase 125 — NAT idle / private-without-NAT checks. Both are read-only
+	// reporting: a metadata-fetch failure degrades to SKIPPED (not ERROR/WARN)
+	// so an operator with no DynamoDB access isn't shown a false alarm about
+	// infrastructure the check never observed.
+	natEnabled := cfg.GetNATGatewayEnabled()
+	networkListSandboxes := deps.NetworkListSandboxMetadata
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if networkListSandboxes == nil {
+			return CheckResult{Name: "NAT gateway idle", Status: CheckSkipped, Message: "sandbox metadata lister not configured"}
+		}
+		metas, err := networkListSandboxes(ctx)
+		if err != nil {
+			return CheckResult{Name: "NAT gateway idle", Status: CheckSkipped, Message: fmt.Sprintf("could not list sandbox metadata: %v", err)}
+		}
+		return checkNATIdle(natEnabled, metas)
+	})
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if networkListSandboxes == nil {
+			return CheckResult{Name: "Private sandboxes without NAT", Status: CheckSkipped, Message: "sandbox metadata lister not configured"}
+		}
+		metas, err := networkListSandboxes(ctx)
+		if err != nil {
+			return CheckResult{Name: "Private sandboxes without NAT", Status: CheckSkipped, Message: fmt.Sprintf("could not list sandbox metadata: %v", err)}
+		}
+		return checkPrivateWithoutNAT(natEnabled, metas)
+	})
+
 	return checks
 }
 
@@ -4915,6 +4955,14 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 			})
 		}
 		return refs, nil
+	}
+
+	// Phase 125 — NAT idle / private-without-NAT doctor check deps.
+	// Reuses the same DDB client + table as the Codex scanner above
+	// (ddbClientForInbound / sandboxTableForCodex); returns full, unfiltered
+	// SandboxMetadata so both checks can read NetworkPlacement and Status.
+	deps.NetworkListSandboxMetadata = func(innerCtx context.Context) ([]kmaws.SandboxMetadata, error) {
+		return kmaws.ListAllSandboxMetadataDynamo(innerCtx, ddbClientForInbound, sandboxTableForCodex)
 	}
 
 	// CodexSSMRunner: production SSM SendCommand is blocked by the org-level SCP
