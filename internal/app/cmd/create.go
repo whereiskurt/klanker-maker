@@ -143,6 +143,28 @@ func resolveSandboxSubnets(wantsPrivate bool, publicSubnets, privateSubnets []st
 	return publicSubnets
 }
 
+// natServedAZs derives the subset of availabilityZones that have a NAT gateway,
+// for RankAZs' natAZs parameter (Phase 125). The network module builds
+// nat_gateway_ids and availability_zones from the SAME index space (one NAT
+// gateway per AZ, in AZ order) — index i of natGatewayIDs is the NAT gateway
+// (or empty string) for availabilityZones[i]. That index-pairing assumption is
+// the whole correctness argument for this function: if the two slices were
+// ever built independently, or in a different order, this derivation would
+// silently pair the wrong AZ with the wrong NAT gateway.
+//
+// Always returns a non-nil slice (possibly empty) — the caller only invokes
+// this for private sandboxes, and RankAZs treats a non-nil-but-empty natAZs
+// as "private placement requested, but no AZ has NAT" rather than "no filter".
+func natServedAZs(availabilityZones, natGatewayIDs []string) []string {
+	served := make([]string, 0, len(availabilityZones))
+	for i, az := range availabilityZones {
+		if i < len(natGatewayIDs) && natGatewayIDs[i] != "" {
+			served = append(served, az)
+		}
+	}
+	return served
+}
+
 // networkPlacementLabel returns the exact "private"/"public" literal that
 // SandboxMetadata.NetworkPlacement, the km init NAT-disable guard
 // (natDisableGuard), and the km doctor checks (Plan 07) all compare against.
@@ -868,10 +890,18 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		ddbForCapacity := dynamodbpkg.NewFromConfig(awsCfg)
 		capacityStore = capacity.NewDynamoCapacityStore(ddbForCapacity, cfg.GetCapacityTableName())
 
+		// Phase 125: nil for a public sandbox (RankAZs applies no NAT filter —
+		// byte-identical to Phase 124). For a private sandbox, the AZ list actually
+		// served by a NAT gateway, so the sweep never rotates into a NAT-less AZ.
+		var natAZs []string
+		if resolvedProfile.Spec.Network.PrivateSubnet {
+			natAZs = natServedAZs(network.AvailabilityZones, network.NATGatewayIDs)
+		}
+
 		ranked, rankErr := capacity.RankAZs(ctx, rankInstanceType, region,
 			resolvedProfile.Spec.Runtime.AZPreference,
 			capacityStore, ec2OfferingsClient, sqClient,
-			network.AvailabilityZones)
+			network.AvailabilityZones, natAZs)
 		if rankErr != nil {
 			var qe *capacity.QuotaError
 			if errors.As(rankErr, &qe) {

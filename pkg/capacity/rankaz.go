@@ -146,13 +146,19 @@ func rankScore(ctx context.Context, store CapacityStore, instanceType, az string
 //  1. DescribeInstanceTypeOfferings — drops AZs that do not offer instanceType.
 //     On API error: warns and falls back to allAZs (non-fatal; best-effort).
 //
-//  2. GPU quota gate (isGPUFamily only): if GetGPUVCPUQuota returns headroom==0,
+//  2. NAT-AZ filter (Phase 125, private sandboxes only): intersects the offered list
+//     with natAZs, preserving order. A nil natAZs is a no-op — byte-identical to
+//     Phase 124 for public sandboxes. A non-nil, EMPTY natAZs means private
+//     placement was requested but no AZ in the region has a NAT gateway, and
+//     returns a clear error rather than an empty ranking.
+//
+//  3. GPU quota gate (isGPUFamily only): if GetGPUVCPUQuota returns headroom==0,
 //     returns (nil, *QuotaError) immediately — iterating AZs cannot fix a regional
 //     quota wall. Quota errors are fail-fast. Non-GPU types skip this call entirely.
 //
-//  3. azPreference AZs that are offered appear first (intersect(azPreference, offered)).
+//  4. azPreference AZs that are offered appear first (intersect(azPreference, offered)).
 //
-//  4. Remaining offered AZs are sorted by rankScore: last-success first (sticky),
+//  5. Remaining offered AZs are sorted by rankScore: last-success first (sticky),
 //     fresh-ICE last, alphabetical tiebreak for stability.
 func RankAZs(
 	ctx context.Context,
@@ -162,6 +168,7 @@ func RankAZs(
 	ec2c EC2OfferingsAPI,
 	sqc ServiceQuotasAPI,
 	allAZs []string,
+	natAZs []string,
 ) ([]string, error) {
 	// Step 1: Filter to AZs that offer this instance type.
 	offered, err := DescribeAZOfferings(ctx, ec2c, instanceType, allAZs)
@@ -173,6 +180,30 @@ func RankAZs(
 	// If offerings returns empty (unusual but possible), fall back to allAZs.
 	if len(offered) == 0 {
 		offered = allAZs
+	}
+
+	// Step 1b (Phase 125): filter to NAT-served AZs when the caller is placing a
+	// private sandbox. nil natAZs means "no filter" — the public-sandbox path is
+	// untouched. A non-nil-but-empty natAZs is NOT the same as "no AZ offers this
+	// instance type": it means private placement was requested in a region where
+	// no AZ has a NAT gateway at all, which is a distinct, more actionable error
+	// than an empty ranking (which the caller would otherwise misdiagnose as a
+	// capacity/offerings problem).
+	if natAZs != nil {
+		if len(natAZs) == 0 {
+			return nil, fmt.Errorf("private placement requested but no AZ in region %s has a NAT gateway (network.nat_gateway may be disabled or not yet applied)", region)
+		}
+		natSet := make(map[string]bool, len(natAZs))
+		for _, az := range natAZs {
+			natSet[az] = true
+		}
+		natFiltered := make([]string, 0, len(offered))
+		for _, az := range offered {
+			if natSet[az] {
+				natFiltered = append(natFiltered, az)
+			}
+		}
+		offered = natFiltered
 	}
 
 	// Step 2: Regional quota gate for GPU families (fail-fast; regional, not per-AZ).
