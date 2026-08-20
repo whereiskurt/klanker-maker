@@ -99,6 +99,15 @@ var InitSESPreflight SESPreflightFunc = defaultSESPreflight
 // unknown_sender (incident 2026-06-14). Nil → skipped (the test/default zero value).
 var PublishOperatorIdentityHook func(ctx context.Context) error
 
+// InitNATDisableGuardHook, when non-nil, is invoked by RunInitWithRunner
+// IMMEDIATELY BEFORE the network module's Apply — a pre-apply gate scoped to that
+// module only, mirroring the InitSESPreflight pattern. runInit binds it (closed
+// over cfg + awsCfg + repoRoot + region, via checkNATDisableGuardBeforeApply in
+// init_nat_guard.go) so a NAT-disabling apply that would strand a running private
+// sandbox's egress is refused before terraform ever runs (T-125-17). Nil (the
+// test/default zero value) skips the check entirely.
+var InitNATDisableGuardHook func(ctx context.Context) error
+
 // RunInitPlanFunc is the package-level entry point for km init --plan, exported as a
 // var so cmd_test can override it with a mock to verify routing without needing real
 // AWS credentials / a real terragrunt binary. The default implementation is runInitPlan.
@@ -439,6 +448,11 @@ type NetworkOutputs struct {
 	PublicSubnets     []string `json:"public_subnets"`
 	AvailabilityZones []string `json:"availability_zones"`
 	SandboxMgmtSGID   string   `json:"sandbox_mgmt_sg_id"`
+	// PrivateSubnets and NATGatewayIDs are new in network module v1.1.0 (Phase
+	// 125). Absent on a pre-125 outputs.json — see the non-fatal extraction in
+	// LoadNetworkOutputs below.
+	PrivateSubnets []string `json:"private_subnets"`
+	NATGatewayIDs  []string `json:"nat_gateway_ids"`
 }
 
 // regionalModule describes a single regional infrastructure module.
@@ -1351,6 +1365,15 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	}
 	defer func() { PublishOperatorIdentityHook = nil }()
 
+	// Phase 125: bind the NAT-disable refuse guard, closed over cfg + awsCfg +
+	// repoRoot + region so RunInitWithRunner's module loop can invoke it
+	// immediately before the network module applies. Cleared on return so a
+	// subsequent in-process init re-binds it to its own cfg/awsCfg.
+	InitNATDisableGuardHook = func(hookCtx context.Context) error {
+		return checkNATDisableGuardBeforeApply(hookCtx, cfg, awsCfg, repoRoot, region)
+	}
+	defer func() { InitNATDisableGuardHook = nil }()
+
 	if err := RunInitWithRunner(runner, repoRoot, region); err != nil {
 		return err
 	}
@@ -1843,6 +1866,25 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			os.Setenv("KM_H1_BOT_HANDLE", cfg.H1.BotHandle) //nolint:errcheck
 		}
 	}
+
+	// Phase 125: KM_NAT_GATEWAY_ENABLED — install-level toggle for whether the
+	// per-AZ NAT gateway infrastructure exists. Consumed by
+	// infra/live/use1/network/terragrunt.hcl
+	// tobool(get_env("KM_NAT_GATEWAY_ENABLED", "false")). Only export when the
+	// operator has explicitly set network.nat_gateway in km-config.yaml (nil =>
+	// omit => terragrunt default "false" applies => NAT dormant, Phase 124
+	// byte-identical). env-wins: when the env var is already set to a DIFFERENT
+	// value, emit a drift WARN and do NOT overwrite it. Mirrors the
+	// KM_SLACK_DEFAULT_ROUTER / KM_GITHUB_DEFAULT_ROUTER *bool tri-state pattern
+	// exactly.
+	if cfg.Network.NATGateway != nil {
+		yamlNATGatewayEnabled := strconv.FormatBool(*cfg.Network.NATGateway)
+		if envVal := os.Getenv("KM_NAT_GATEWAY_ENABLED"); envVal != "" && envVal != yamlNATGatewayEnabled {
+			fmt.Fprintf(os.Stderr, "WARN: KM_NAT_GATEWAY_ENABLED=%s (env) overrides km-config.yaml network.nat_gateway=%s\n", envVal, yamlNATGatewayEnabled)
+		} else if envVal == "" {
+			os.Setenv("KM_NAT_GATEWAY_ENABLED", yamlNATGatewayEnabled) //nolint:errcheck
+		}
+	}
 }
 
 // EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at
@@ -2323,6 +2365,34 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 			continue
 		}
 
+		// Phase 125: NAT gateway cost notice, scoped to the network module only.
+		// Fires BEFORE the apply (not after) — this is the entire reason the
+		// toggle exists, so the operator must see the bill before spending it,
+		// not after.
+		if mod.name == "network" && os.Getenv("KM_NAT_GATEWAY_ENABLED") == "true" {
+			fmt.Println()
+			fmt.Println("  NAT gateway cost notice:")
+			fmt.Println("    Enabling network.nat_gateway provisions one NAT gateway + one Elastic IP")
+			fmt.Println("    per AZ (4 AZs by default) — roughly $132/month baseline (~$0.045/hr each)")
+			fmt.Println("    PLUS ~$0.045/GB of data processed through each NAT gateway.")
+			fmt.Println("    Example: a GPU profile pulling 300GB of model weights costs ~$13.50 in")
+			fmt.Println("    NAT data-processing charges alone, per box.")
+			fmt.Println("    This toggle is reversible — disable network.nat_gateway and re-run")
+			fmt.Println("    'km init' once no private sandboxes are running. 'km doctor' flags NAT")
+			fmt.Println("    sitting idle (enabled with zero private sandboxes).")
+			fmt.Println()
+		}
+
+		// Phase 125: refuse-to-disable-NAT pre-apply gate, scoped to the network
+		// module only (T-125-17). Runs after the cost notice above — a disable
+		// never prints a cost, so the two never collide — and can abort the
+		// apply outright before terraform ever runs.
+		if mod.name == "network" && InitNATDisableGuardHook != nil {
+			if guardErr := InitNATDisableGuardHook(ctx); guardErr != nil {
+				return guardErr
+			}
+		}
+
 		// Phase 84: preflight check for the regional ses module.
 		// The ses v2.0.0 module references "sandbox-email-shared" as a string constant —
 		// no Terraform data source for SES rule sets exists. If the shared rule set
@@ -2418,6 +2488,20 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 			}
 			if v, ok := outputMap["availability_zones"]; ok {
 				fmt.Printf("    AZs:     %v\n", extractValue(v))
+			}
+			// Phase 125: private subnets + per-AZ NAT gateway ids/EIPs — printed
+			// only when the module actually emitted them (network v1.1.0+; a
+			// v1.0.0 module or NAT-disabled apply may omit or empty these).
+			// The NAT EIPs are what live UAT step 4 compares an observed egress
+			// source IP against, so print them in AZ order.
+			if v, ok := outputMap["private_subnets"]; ok {
+				fmt.Printf("    Private Subnets: %v\n", extractValue(v))
+			}
+			if v, ok := outputMap["nat_gateway_ids"]; ok {
+				fmt.Printf("    NAT Gateways:    %v\n", extractValue(v))
+			}
+			if v, ok := outputMap["nat_eip_public_ips"]; ok {
+				fmt.Printf("    NAT EIPs:        %v\n", extractValue(v))
 			}
 			fmt.Println()
 		}
@@ -2839,6 +2923,21 @@ func LoadNetworkOutputs(repoRoot, regionLabel string) (*NetworkOutputs, error) {
 		return nil, err
 	}
 	_ = extractTFOutput(raw, "sandbox_mgmt_sg_id", &outputs.SandboxMgmtSGID)
+
+	// Phase 125: private_subnets and nat_gateway_ids are new outputs on network
+	// module v1.1.0. Non-fatal (`_ =`), same as sandbox_mgmt_sg_id above: a
+	// network module still on v1.0.0, or a create-handler Lambda whose bundled
+	// infra/live/<region>/network/outputs.json predates this apply, simply won't
+	// have these keys — a hard error here would break `km create` entirely
+	// rather than just disabling private placement.
+	//
+	// fetchAndCacheOutputs (the S3 raw-tfstate fallback used by `km create
+	// --remote` and the create-handler Lambda) needs NO code change for this:
+	// it re-serializes ALL outputs from the tfstate unfiltered and caches them
+	// to this same outputs.json path, so these two keys flow through the
+	// extraction calls above automatically once the module emits them.
+	_ = extractTFOutput(raw, "private_subnets", &outputs.PrivateSubnets)
+	_ = extractTFOutput(raw, "nat_gateway_ids", &outputs.NATGatewayIDs)
 
 	return outputs, nil
 }

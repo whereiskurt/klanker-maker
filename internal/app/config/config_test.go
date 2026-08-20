@@ -1111,6 +1111,125 @@ slack:
 	}
 }
 
+// TestLoadNetworkNATGateway_True verifies Phase 125 nested key network.nat_gateway
+// loads from yaml end-to-end (catches the merge-loop allowlist footgun).
+// If "network.nat_gateway" is missing from the v2→v merge-list, cfg.Network.NATGateway
+// stays nil even when the key is present in km-config.yaml (project_config_key_merge_list).
+func TestLoadNetworkNATGateway_True(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+network:
+    nat_gateway: true
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Network.NATGateway == nil {
+		t.Fatal("Network.NATGateway is nil; expected non-nil from yaml load (merge-loop must include network.nat_gateway)")
+	}
+	if *cfg.Network.NATGateway != true {
+		t.Errorf("Network.NATGateway: got %v, want true", *cfg.Network.NATGateway)
+	}
+	if !cfg.GetNATGatewayEnabled() {
+		t.Errorf("GetNATGatewayEnabled(): got false, want true")
+	}
+}
+
+// TestLoadNetworkNATGateway_False verifies explicit false in yaml loads correctly —
+// an operator-visible explicit off, distinct from absent.
+func TestLoadNetworkNATGateway_False(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+network:
+    nat_gateway: false
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Network.NATGateway == nil {
+		t.Fatal("Network.NATGateway is nil; expected non-nil &false")
+	}
+	if *cfg.Network.NATGateway != false {
+		t.Errorf("Network.NATGateway: got %v, want false", *cfg.Network.NATGateway)
+	}
+	if cfg.GetNATGatewayEnabled() {
+		t.Errorf("GetNATGatewayEnabled(): got true, want false")
+	}
+}
+
+// TestLoadNetworkNATGateway_Absent verifies that omitting the network: block
+// from yaml yields a nil pointer — the dormancy guarantee (Phase 124 byte-identical).
+func TestLoadNetworkNATGateway_Absent(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Network.NATGateway != nil {
+		t.Errorf("Network.NATGateway: got &%v, want nil (key absent => NAT off)", *cfg.Network.NATGateway)
+	}
+	if cfg.GetNATGatewayEnabled() {
+		t.Errorf("GetNATGatewayEnabled(): got true, want false when Network.NATGateway is nil")
+	}
+}
+
+// TestLoadNetworkNATGateway_MergeListRegression is the merge-list footgun regression
+// test (project_config_key_merge_list): a config that sets ONLY network.nat_gateway:true
+// must still surface the value — must NOT be silently dropped by an absent merge-list entry.
+func TestLoadNetworkNATGateway_MergeListRegression(t *testing.T) {
+	dir := t.TempDir()
+	// Only set network.nat_gateway — no other network.* keys — to isolate the merge-list path.
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+network:
+    nat_gateway: true
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	// If this assertion fails, the most likely cause is that "network.nat_gateway"
+	// is missing from the v2→v merge-list in config.go (the known silent-drop footgun).
+	if cfg.Network.NATGateway == nil {
+		t.Fatal("Network.NATGateway is nil after loading a config that explicitly sets network.nat_gateway: true — " +
+			"check that \"network.nat_gateway\" is in the v2→v merge-list in config.go (project_config_key_merge_list)")
+	}
+	if *cfg.Network.NATGateway != true {
+		t.Errorf("Network.NATGateway: got %v, want true", *cfg.Network.NATGateway)
+	}
+}
+
 // TestDoctorRetentionAndExpireDays verifies the five-touchpoint pattern for the two
 // Phase 94 config knobs: doctor_log_retention_days and doctor_s3_expire_days.
 func TestDoctorRetentionAndExpireDays(t *testing.T) {

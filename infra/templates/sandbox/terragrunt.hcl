@@ -13,6 +13,23 @@ locals {
 
   # Per-sandbox state key includes region + sandbox_id for isolation (INFR-06)
   state_key = "${local.region_label}/sandboxes/${local.sandbox_id}"
+
+  # Per-substrate module version pin (Phase 125 REQ-125-SUBPIN). This file is
+  # copied VERBATIM with no templating by pkg/terragrunt.CreateSandboxDir, for
+  # both `km create` and the `km destroy` local-directory-missing fallback —
+  # so this map is the single live version pin for every new sandbox.
+  #
+  # Before this map existed, terraform.source below hardcoded a single shared
+  # version literal for both substrates. That silently pointed the ECS
+  # substrate at a nonexistent ecs module directory — ecs's only real version
+  # is v1.0.0. TestSubstrateVersionPinPointsAtExistingModules
+  # (pkg/terragrunt/substrate_version_pin_test.go) now fails the build if any
+  # substrate here resolves to a module directory that does not exist.
+  substrate_module_versions = {
+    ec2spot = "v1.3.0"
+    ecs     = "v1.0.0"
+  }
+  substrate_module_version = lookup(local.substrate_module_versions, local.svc_config.locals.substrate_module, "v1.0.0")
 }
 
 # Include root terragrunt.hcl (remote_state + provider generation)
@@ -38,9 +55,10 @@ remote_state {
   }
 }
 
-# Terraform source points to the appropriate module based on substrate
+# Terraform source points to the appropriate module based on substrate, at
+# that substrate's own pinned version (see local.substrate_module_versions above).
 terraform {
-  source = "${local.repo_root}/infra/modules/${local.svc_config.locals.substrate_module}/v1.2.0"
+  source = "${local.repo_root}/infra/modules/${local.svc_config.locals.substrate_module}/${local.substrate_module_version}"
 }
 
 inputs = merge(

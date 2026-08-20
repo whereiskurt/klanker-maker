@@ -3,6 +3,7 @@ package capacity_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,7 +148,7 @@ func TestRankAZs_DropsNonOffering(t *testing.T) {
 
 	allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
 	ranked, err := capacity.RankAZs(context.Background(), "t3.medium", "us-east-1",
-		nil, store, ec2c, sqc, allAZs)
+		nil, store, ec2c, sqc, allAZs, nil)
 
 	if err != nil {
 		t.Fatalf("RankAZs returned error: %v", err)
@@ -173,7 +174,7 @@ func TestRankAZs_GPUQuotaBlock(t *testing.T) {
 
 	allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
 	ranked, err := capacity.RankAZs(context.Background(), "g6e.12xlarge", "us-east-1",
-		nil, store, ec2c, sqc, allAZs)
+		nil, store, ec2c, sqc, allAZs, nil)
 
 	if ranked != nil {
 		t.Errorf("expected nil AZ list on quota block, got %v", ranked)
@@ -203,7 +204,7 @@ func TestRankAZs_AZPreference(t *testing.T) {
 
 	allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
 	ranked, err := capacity.RankAZs(context.Background(), "t3.medium", "us-east-1",
-		[]string{"us-east-1c"}, store, ec2c, sqc, allAZs)
+		[]string{"us-east-1c"}, store, ec2c, sqc, allAZs, nil)
 
 	if err != nil {
 		t.Fatalf("RankAZs returned error: %v", err)
@@ -243,7 +244,7 @@ func TestRankAZs_ICEStickySuccess(t *testing.T) {
 
 	allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
 	ranked, err := capacity.RankAZs(context.Background(), "g6e.12xlarge", "us-east-1",
-		nil, store, ec2c, sqc, allAZs)
+		nil, store, ec2c, sqc, allAZs, nil)
 
 	if err != nil {
 		t.Fatalf("RankAZs returned error: %v", err)
@@ -277,7 +278,7 @@ func TestRankAZs(t *testing.T) {
 
 		allAZs := []string{"us-east-1a", "us-east-1b"}
 		ranked, err := capacity.RankAZs(context.Background(), "c5.xlarge", "us-east-1",
-			nil, store, ec2c, sqc, allAZs)
+			nil, store, ec2c, sqc, allAZs, nil)
 
 		if err != nil {
 			t.Fatalf("non-GPU type should not return error even with quota=0, got %v", err)
@@ -299,7 +300,7 @@ func TestRankAZs(t *testing.T) {
 
 		allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
 		ranked, err := capacity.RankAZs(context.Background(), "t3.medium", "us-east-1",
-			nil, store, ec2c, sqc, allAZs)
+			nil, store, ec2c, sqc, allAZs, nil)
 
 		if err != nil {
 			t.Fatalf("offerings error should not block the create; RankAZs should fall back to allAZs, got %v", err)
@@ -309,6 +310,133 @@ func TestRankAZs(t *testing.T) {
 			if !containsAZ(ranked, az) {
 				t.Errorf("AZ %q missing from ranked list after offerings error fallback: %v", az, ranked)
 			}
+		}
+	})
+}
+
+// TestRankAZs_NAT covers the Phase 125 natAZs filter (125-08-PLAN.md Task 3,
+// behaviour Tests 1-5).
+func TestRankAZs_NAT(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Test1_drops_AZs_absent_from_natAZs_preserving_order", func(t *testing.T) {
+		t.Parallel()
+
+		ec2c := &fakeEC2Offerings{offered: []string{"us-east-1a", "us-east-1b", "us-east-1c"}}
+		sqc := &fakeServiceQuotas{value: 100}
+		store := &fakeCapacityStore{}
+
+		allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
+		// Only 1a and 1c have NAT — 1b must be dropped, and 1a must stay before 1c
+		// (offered's relative order, not natAZs' order).
+		natAZs := []string{"us-east-1a", "us-east-1c"}
+		ranked, err := capacity.RankAZs(context.Background(), "t3.medium", "us-east-1",
+			nil, store, ec2c, sqc, allAZs, natAZs)
+
+		if err != nil {
+			t.Fatalf("RankAZs returned error: %v", err)
+		}
+		if containsAZ(ranked, "us-east-1b") {
+			t.Errorf("us-east-1b should be dropped (no NAT), got %v", ranked)
+		}
+		iA := indexAZ(ranked, "us-east-1a")
+		iC := indexAZ(ranked, "us-east-1c")
+		if iA == -1 || iC == -1 {
+			t.Fatalf("expected both 1a and 1c (NAT-served) in ranked list, got %v", ranked)
+		}
+		if iA >= iC {
+			t.Errorf("expected 1a before 1c (offered order preserved), got %v", ranked)
+		}
+	})
+
+	t.Run("Test2_nil_natAZs_applies_no_filter", func(t *testing.T) {
+		t.Parallel()
+
+		// Two identical calls, one with natAZs=nil (explicit) and one omitting it via
+		// the existing pre-125 test helper shape — both must produce the same ranking,
+		// proving the public-sandbox path is byte-identical to Phase 124.
+		ec2c1 := &fakeEC2Offerings{offered: []string{"us-east-1a", "us-east-1b", "us-east-1c"}}
+		sqc1 := &fakeServiceQuotas{value: 100}
+		store1 := &fakeCapacityStore{}
+		allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
+
+		ranked, err := capacity.RankAZs(context.Background(), "t3.medium", "us-east-1",
+			nil, store1, ec2c1, sqc1, allAZs, nil)
+		if err != nil {
+			t.Fatalf("RankAZs returned error: %v", err)
+		}
+		for _, az := range allAZs {
+			if !containsAZ(ranked, az) {
+				t.Errorf("nil natAZs must apply no filter — AZ %q missing from %v", az, ranked)
+			}
+		}
+	})
+
+	t.Run("Test3_empty_non_nil_natAZs_errors_clearly", func(t *testing.T) {
+		t.Parallel()
+
+		ec2c := &fakeEC2Offerings{offered: []string{"us-east-1a", "us-east-1b", "us-east-1c"}}
+		sqc := &fakeServiceQuotas{value: 100}
+		store := &fakeCapacityStore{}
+		allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
+
+		ranked, err := capacity.RankAZs(context.Background(), "t3.medium", "us-east-1",
+			nil, store, ec2c, sqc, allAZs, []string{})
+
+		if err == nil {
+			t.Fatal("expected an error for private placement with no NAT-served AZ, got nil")
+		}
+		if ranked != nil {
+			t.Errorf("expected nil ranked list on the no-NAT-anywhere error, got %v", ranked)
+		}
+		if !strings.Contains(err.Error(), "NAT") {
+			t.Errorf("error %q should name NAT so the operator isn't misled into an offerings/capacity diagnosis", err.Error())
+		}
+	})
+
+	t.Run("Test4_NAT_filter_runs_before_GPU_quota_gate", func(t *testing.T) {
+		t.Parallel()
+
+		// natAZs successfully filters (non-empty), but GPU quota is exhausted — the
+		// quota error must still surface on its own terms, not be masked or replaced
+		// by a NAT-related error.
+		ec2c := &fakeEC2Offerings{offered: []string{"us-east-1a", "us-east-1b", "us-east-1c"}}
+		sqc := &fakeServiceQuotas{value: 0} // zero headroom
+		store := &fakeCapacityStore{}
+		allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
+		natAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
+
+		ranked, err := capacity.RankAZs(context.Background(), "g6e.12xlarge", "us-east-1",
+			nil, store, ec2c, sqc, allAZs, natAZs)
+
+		if ranked != nil {
+			t.Errorf("expected nil AZ list on quota block, got %v", ranked)
+		}
+		var qe *capacity.QuotaError
+		if !errors.As(err, &qe) {
+			t.Fatalf("expected *QuotaError (not masked by the NAT filter), got %T: %v", err, err)
+		}
+	})
+
+	t.Run("Test5_NAT_filter_composes_with_offered_filter", func(t *testing.T) {
+		t.Parallel()
+
+		// Offerings drops 1a (not offered); natAZs drops 1b (no NAT). Only 1c survives
+		// both filters — an AZ must be BOTH offered AND NAT-served.
+		ec2c := &fakeEC2Offerings{offered: []string{"us-east-1b", "us-east-1c"}}
+		sqc := &fakeServiceQuotas{value: 100}
+		store := &fakeCapacityStore{}
+		allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
+		natAZs := []string{"us-east-1a", "us-east-1c"}
+
+		ranked, err := capacity.RankAZs(context.Background(), "t3.medium", "us-east-1",
+			nil, store, ec2c, sqc, allAZs, natAZs)
+
+		if err != nil {
+			t.Fatalf("RankAZs returned error: %v", err)
+		}
+		if len(ranked) != 1 || ranked[0] != "us-east-1c" {
+			t.Errorf("expected only us-east-1c (offered AND NAT-served), got %v", ranked)
 		}
 	})
 }

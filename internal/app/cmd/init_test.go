@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -52,9 +53,11 @@ func (m *mockRunner) Output(_ context.Context, _ string) (map[string]interface{}
 		return m.outputs, nil
 	}
 	return map[string]interface{}{
-		"vpc_id": map[string]interface{}{"value": "vpc-test123"},
-		"public_subnets": map[string]interface{}{"value": []interface{}{"subnet-1", "subnet-2"}},
+		"vpc_id":             map[string]interface{}{"value": "vpc-test123"},
+		"public_subnets":     map[string]interface{}{"value": []interface{}{"subnet-1", "subnet-2"}},
 		"availability_zones": map[string]interface{}{"value": []interface{}{"us-east-1a", "us-east-1b"}},
+		"private_subnets":    map[string]interface{}{"value": []interface{}{"subnet-priv-1", "subnet-priv-2"}},
+		"nat_gateway_ids":    map[string]interface{}{"value": []interface{}{"nat-1", "nat-2"}},
 	}, nil
 }
 
@@ -369,6 +372,7 @@ func TestRegionalModulesIncludesEFS(t *testing.T) {
 //   - dynamodb-h1-threads applies BEFORE lambda-h1-bridge (the bridge writes to it).
 //   - lambda-h1-bridge applies AFTER lambda-github-bridge and the shared deps
 //     (dynamodb-sandboxes, dynamodb-slack-nonces), and BEFORE ses (ses is last).
+//
 // A regression here = the bridge Lambda is silently never deployed.
 func TestRegionalModulesIncludesH1Bridge(t *testing.T) {
 	mods := cmd.RegionalModules(t.TempDir())
@@ -1836,16 +1840,16 @@ func TestDeploySurfaceGitHubBridgePhase98(t *testing.T) {
 
 		// The condition MUST use the tag km sandbox instances actually carry.
 		if !strings.Contains(src, "aws:ResourceTag/km:resource-prefix") {
-			t.Errorf("ec2:StartInstances IAM condition must use aws:ResourceTag/km:resource-prefix — "+
-				"every km sandbox EC2 instance carries this tag; without it every auto-resume 403s. "+
+			t.Errorf("ec2:StartInstances IAM condition must use aws:ResourceTag/km:resource-prefix — " +
+				"every km sandbox EC2 instance carries this tag; without it every auto-resume 403s. " +
 				"Got main.tf content (first 200 chars of ec2_resume block): check the ec2_resume policy")
 		}
 
 		// The condition MUST NOT regress to km:managed (the broken tag that caused the UAT 403).
 		// km sandbox instances carry km:resource-prefix, km:sandbox-id, km:label — NOT km:managed.
 		if strings.Contains(src, `"aws:ResourceTag/km:managed"`) {
-			t.Errorf("ec2:StartInstances IAM condition must NOT use aws:ResourceTag/km:managed — "+
-				"no km sandbox EC2 instance carries this tag; using it denies every auto-resume StartInstances. "+
+			t.Errorf("ec2:StartInstances IAM condition must NOT use aws:ResourceTag/km:managed — " +
+				"no km sandbox EC2 instance carries this tag; using it denies every auto-resume StartInstances. " +
 				"This was the live-UAT Gap A blocker (2026-06-07). Revert to km:resource-prefix.")
 		}
 
@@ -1997,4 +2001,103 @@ func TestFetchAndUploadSops(t *testing.T) {
 			t.Fatal("expected error from aws upload failure, got nil")
 		}
 	})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 125-06 Task 1: TestLoadNetworkOutputs — private_subnets / nat_gateway_ids
+// ─────────────────────────────────────────────────────────────────────────────
+
+// writeNetworkOutputsFile writes a network outputs.json fixture at
+// infra/live/<regionLabel>/network/outputs.json under a fresh t.TempDir() and
+// returns the repoRoot for use with cmd.LoadNetworkOutputs.
+func writeNetworkOutputsFile(t *testing.T, regionLabel, body string) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	networkDir := filepath.Join(repoRoot, "infra", "live", regionLabel, "network")
+	if err := os.MkdirAll(networkDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll network dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(networkDir, "outputs.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write outputs.json: %v", err)
+	}
+	return repoRoot
+}
+
+// TestLoadNetworkOutputs_PrivateSubnetsAndNATGatewayIDs verifies that an
+// outputs.json containing private_subnets and nat_gateway_ids populates the
+// corresponding NetworkOutputs fields (Phase 125 network module v1.1.0).
+func TestLoadNetworkOutputs_PrivateSubnetsAndNATGatewayIDs(t *testing.T) {
+	repoRoot := writeNetworkOutputsFile(t, "use1", `{
+		"vpc_id": {"value": "vpc-test123"},
+		"public_subnets": {"value": ["subnet-1", "subnet-2"]},
+		"availability_zones": {"value": ["us-east-1a", "us-east-1b"]},
+		"private_subnets": {"value": ["subnet-priv-1", "subnet-priv-2"]},
+		"nat_gateway_ids": {"value": ["nat-1", "nat-2"]}
+	}`)
+
+	out, err := cmd.LoadNetworkOutputs(repoRoot, "use1")
+	if err != nil {
+		t.Fatalf("LoadNetworkOutputs: %v", err)
+	}
+	if want := []string{"subnet-priv-1", "subnet-priv-2"}; !reflect.DeepEqual(out.PrivateSubnets, want) {
+		t.Errorf("PrivateSubnets = %v, want %v", out.PrivateSubnets, want)
+	}
+	if want := []string{"nat-1", "nat-2"}; !reflect.DeepEqual(out.NATGatewayIDs, want) {
+		t.Errorf("NATGatewayIDs = %v, want %v", out.NATGatewayIDs, want)
+	}
+}
+
+// TestLoadNetworkOutputs_Pre125Compatibility verifies that an outputs.json with
+// NEITHER private_subnets nor nat_gateway_ids (a pre-125 network module v1.0.0)
+// still loads successfully with the existing three fields populated and the two
+// new ones left empty — no error. This is the compatibility case that matters:
+// a create-handler Lambda may boot with a stale bundled outputs.json.
+func TestLoadNetworkOutputs_Pre125Compatibility(t *testing.T) {
+	repoRoot := writeNetworkOutputsFile(t, "use1", `{
+		"vpc_id": {"value": "vpc-test123"},
+		"public_subnets": {"value": ["subnet-1", "subnet-2"]},
+		"availability_zones": {"value": ["us-east-1a", "us-east-1b"]}
+	}`)
+
+	out, err := cmd.LoadNetworkOutputs(repoRoot, "use1")
+	if err != nil {
+		t.Fatalf("LoadNetworkOutputs on pre-125 outputs.json: %v", err)
+	}
+	if out.VPCID != "vpc-test123" {
+		t.Errorf("VPCID = %q, want vpc-test123", out.VPCID)
+	}
+	if len(out.PublicSubnets) != 2 {
+		t.Errorf("PublicSubnets = %v, want 2 entries", out.PublicSubnets)
+	}
+	if len(out.PrivateSubnets) != 0 {
+		t.Errorf("PrivateSubnets = %v, want empty on a pre-125 outputs.json", out.PrivateSubnets)
+	}
+	if len(out.NATGatewayIDs) != 0 {
+		t.Errorf("NATGatewayIDs = %v, want empty on a pre-125 outputs.json", out.NATGatewayIDs)
+	}
+}
+
+// TestLoadNetworkOutputs_NATGatewayIDsEmptyWhenDisabled verifies that
+// nat_gateway_ids present but empty (NAT disabled, the Terraform splat yields
+// []) unmarshals to an empty, non-nil slice — not a nil-vs-empty distinction
+// callers have to special-case.
+func TestLoadNetworkOutputs_NATGatewayIDsEmptyWhenDisabled(t *testing.T) {
+	repoRoot := writeNetworkOutputsFile(t, "use1", `{
+		"vpc_id": {"value": "vpc-test123"},
+		"public_subnets": {"value": ["subnet-1", "subnet-2"]},
+		"availability_zones": {"value": ["us-east-1a", "us-east-1b"]},
+		"private_subnets": {"value": ["subnet-priv-1", "subnet-priv-2"]},
+		"nat_gateway_ids": {"value": []}
+	}`)
+
+	out, err := cmd.LoadNetworkOutputs(repoRoot, "use1")
+	if err != nil {
+		t.Fatalf("LoadNetworkOutputs: %v", err)
+	}
+	if out.NATGatewayIDs == nil {
+		t.Error("NATGatewayIDs = nil, want a non-nil empty slice")
+	}
+	if len(out.NATGatewayIDs) != 0 {
+		t.Errorf("NATGatewayIDs = %v, want empty", out.NATGatewayIDs)
+	}
 }

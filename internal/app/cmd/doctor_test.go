@@ -663,6 +663,7 @@ func (c *testConfig) GetSlackChannelsTableName() string { return "km-slack-chann
 func (c *testConfig) GetChecksTableName() string        { return "km-checks" }
 func (c *testConfig) GetChecksTriggers() []appcfg.CheckTrigger { return nil }
 func (c *testConfig) GetCapacityTableName() string { return "km-capacity" }
+func (c *testConfig) GetNATGatewayEnabled() bool    { return false }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -1017,6 +1018,7 @@ func (c *testDoctorConfig) GetSlackChannelsTableName() string { return "km-slack
 func (c *testDoctorConfig) GetChecksTableName() string        { return "km-checks" }
 func (c *testDoctorConfig) GetChecksTriggers() []appcfg.CheckTrigger { return nil }
 func (c *testDoctorConfig) GetCapacityTableName() string { return "km-capacity" }
+func (c *testDoctorConfig) GetNATGatewayEnabled() bool    { return false }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{

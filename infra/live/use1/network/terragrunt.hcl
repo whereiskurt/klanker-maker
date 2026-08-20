@@ -30,7 +30,7 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/network/v1.0.0"
+  source = "${local.repo_root}/infra/modules/network/v1.1.0"
 }
 
 inputs = {
@@ -50,7 +50,13 @@ inputs = {
     }
   }
 
+  # Phase 125: install-level toggle for per-AZ NAT gateways. tobool(...) is
+  # load-bearing here — unlike every other get_env toggle in this repo, which
+  # flows into a Lambda environment.variables string map needing no
+  # coercion, var.nat_gateway.enabled is a native Terraform bool. The
+  # default "false" keeps this dormant when KM_NAT_GATEWAY_ENABLED is unset,
+  # reproducing Phase 124 behaviour byte-for-byte.
   nat_gateway = {
-    enabled = false
+    enabled = tobool(get_env("KM_NAT_GATEWAY_ENABLED", "false"))
   }
 }

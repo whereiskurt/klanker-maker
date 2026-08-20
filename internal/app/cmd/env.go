@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
@@ -50,6 +51,15 @@ func runEnvExport(cfg *config.Config, w io.Writer, includeAWSProfile bool) error
 		"KM_ACCOUNTS_APPLICATION":  cfg.ApplicationAccountID,
 		"KM_ARTIFACTS_BUCKET":      cfg.ArtifactsBucket,
 		"KM_OPERATOR_EMAIL":        cfg.OperatorEmail,
+	}
+
+	// Phase 125: KM_NAT_GATEWAY_ENABLED must appear here as well as in
+	// ExportTerragruntEnvVars — `eval $(km env)` is the documented way to drive
+	// terragrunt directly, and omitting it there would silently plan the network
+	// module with NAT disabled even though km-config.yaml enables it. Emitted only
+	// when network.nat_gateway is explicitly set, so an absent block stays dormant.
+	if cfg.Network.NATGateway != nil {
+		vars["KM_NAT_GATEWAY_ENABLED"] = strconv.FormatBool(*cfg.Network.NATGateway)
 	}
 
 	keys := make([]string, 0, len(vars))

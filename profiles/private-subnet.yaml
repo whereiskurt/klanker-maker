@@ -1,0 +1,65 @@
+# Phase 125 demo profile: places the sandbox ENI in a private subnet behind a
+# per-AZ NAT gateway (spec.network.privateSubnet set true, below) instead of the
+# default public subnet + public IPv4.
+#
+# REQUIRES install-level network.nat_gateway: true in km-config.yaml (followed by
+# `km init --dry-run=false`). If NAT is off, `km create` fails fast naming this key
+# and the fix command — this profile itself is never invalid, only the install's
+# current NAT state can make it momentarily unsatisfiable (see 125-CONTEXT.md).
+#
+# The egress allowlist below is deliberately real (not "*") — live UAT step 4
+# proves egress filtering is still enforced from a private subnet by asserting
+# evil.example.com is blocked while AWS endpoints are reachable via the NAT EIP.
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: private-subnet
+  labels:
+    tier: development
+    tool: private-subnet-demo
+  prefix: priv
+
+extends:
+  - base/os/redhat
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "20m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+    spot: true
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: true
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  network:
+    privateSubnet: true
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts:
+        - "sts.us-east-1.amazonaws.com"
+        - "ssm.us-east-1.amazonaws.com"
+        - "bedrock-runtime.us-east-1.amazonaws.com"
+
+  notification:
+    email:
+      enabled: true

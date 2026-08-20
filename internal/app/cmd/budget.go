@@ -377,7 +377,16 @@ func reprovisionECSSandbox(ctx context.Context, cfg *config.Config, sandboxID, a
 		AvailabilityZones: networkOutputs.AvailabilityZones,
 		RegionLabel:       regionLabel,
 		EmailDomain:       cfg.GetEmailDomain(),
+		PrivateSubnets:    networkOutputs.PrivateSubnets,
+		NATGatewayIDs:     networkOutputs.NATGatewayIDs,
 	}
+	// Phase 125: this recompile re-provisions an existing sandbox from its stored
+	// profile, so placement was already validated at original create time — no
+	// fail-fast guard here (matches the plan: budget.go does not need the guard).
+	// It still must resolve SandboxSubnets so a private sandbox's budget top-up
+	// recompile does not silently fall back to EffectiveSandboxSubnets()'s public
+	// default and re-provision it into the wrong subnet.
+	network.SandboxSubnets = resolveSandboxSubnets(resolvedProfile.Spec.Network.PrivateSubnet, network.PublicSubnets, network.PrivateSubnets)
 
 	// Step 5: Compile with existing sandboxID — never generate a new one.
 	// Reusing the existing ID ensures Terraform state maps to the existing ECS cluster.

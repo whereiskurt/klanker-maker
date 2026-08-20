@@ -1807,3 +1807,121 @@ func TestGPULeafRawAMI_WarnNotError(t *testing.T) {
 		}
 	}
 }
+
+// minimalProfileWithNetworkYAML returns a full valid profile YAML with the given
+// spec.network YAML block substituted in place of the default egress-only block.
+func minimalProfileWithNetworkYAML(networkYAML string) []byte {
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: network-schema-test
+spec:
+  lifecycle:
+    ttl: "24h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+` + networkYAML + `
+  iam:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/network
+
+`)
+}
+
+// TestValidateSchema_PrivateSubnet verifies Phase 125's spec.network.privateSubnet:
+// the schema accepts it, an unrecognised sibling key still fails (additionalProperties:
+// false was extended, not loosened), and the Go zero value is false when omitted.
+func TestValidateSchema_PrivateSubnet(t *testing.T) {
+	t.Run("privateSubnet true passes schema validation", func(t *testing.T) {
+		data := minimalProfileWithNetworkYAML(`    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts: []
+    privateSubnet: true
+`)
+		errs := profile.Validate(data)
+		if len(errs) != 0 {
+			t.Errorf("expected no validation errors for spec.network.privateSubnet: true, got %d:", len(errs))
+			for _, e := range errs {
+				t.Logf("  - %s", e.Error())
+			}
+		}
+	})
+
+	t.Run("privateSubnet true unmarshals to Spec.Network.PrivateSubnet == true", func(t *testing.T) {
+		data := minimalProfileWithNetworkYAML(`    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts: []
+    privateSubnet: true
+`)
+		p, err := profile.Parse(data)
+		if err != nil {
+			t.Fatalf("Parse() error: %v", err)
+		}
+		if !p.Spec.Network.PrivateSubnet {
+			t.Errorf("Spec.Network.PrivateSubnet: got false, want true")
+		}
+	})
+
+	t.Run("unrecognised sibling key under spec.network still fails validation", func(t *testing.T) {
+		data := minimalProfileWithNetworkYAML(`    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts: []
+    privateSubnet: true
+    bogusNetworkKey: true
+`)
+		errs := profile.Validate(data)
+		if len(errs) == 0 {
+			t.Error("expected validation errors for unrecognised spec.network key 'bogusNetworkKey', got none — additionalProperties:false may have been loosened")
+		}
+	})
+
+	t.Run("omitting privateSubnet yields Go zero value false", func(t *testing.T) {
+		data := minimalProfileWithNetworkYAML(`    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts: []
+`)
+		p, err := profile.Parse(data)
+		if err != nil {
+			t.Fatalf("Parse() error: %v", err)
+		}
+		if p.Spec.Network.PrivateSubnet {
+			t.Errorf("Spec.Network.PrivateSubnet: got true, want false (field omitted)")
+		}
+	})
+}

@@ -102,7 +102,7 @@ const ec2ServiceHCLTemplate = `locals {
   module_inputs = {
     sandbox_id         = "{{ .SandboxID }}"
     vpc_id             = "{{ .VPCID }}"
-    public_subnets     = [{{ joinStrings .PublicSubnets }}]
+    sandbox_subnets    = [{{ joinStrings .SandboxSubnets }}]
     availability_zones = [{{ joinStrings .AvailabilityZones }}]
 
     ec2spots = [
@@ -133,6 +133,7 @@ const ec2ServiceHCLTemplate = `locals {
     }
 
     enable_bedrock = {{ .EnableBedrock }}
+    associate_public_ip = {{ .AssociatePublicIP }}
 
     # EC2 storage and AMI (Phase 33 / 33.1)
     root_volume_size_gb    = {{ .RootVolumeSizeGB }}
@@ -483,7 +484,12 @@ type ec2HCLParams struct {
 	UseSpot           bool
 	UserDataBase64    string
 	VPCID             string
-	PublicSubnets     []string
+	// SandboxSubnets is the RESOLVED subnet list the sandbox ENI lands in — either the
+	// shared VPC's public or private subnets, chosen by the caller via
+	// NetworkConfig.EffectiveSandboxSubnets() before this struct is built. Named
+	// SandboxSubnets (not PublicSubnets) because a field holding private subnet IDs but
+	// named "public" would be exactly the naming lie Phase 125 removes (Phase 125).
+	SandboxSubnets    []string
 	AvailabilityZones []string
 	SGEgressRules     []SGRule
 	IAMPolicy         *IAMSessionPolicy
@@ -496,6 +502,8 @@ type ec2HCLParams struct {
 	WarningThreshold float64 // warning fraction (default 0.8)
 	// Bedrock access control
 	EnableBedrock bool // true unless --no-bedrock flag is set
+	// Network placement (Phase 125)
+	AssociatePublicIP bool // negation of spec.network.privateSubnet; always emitted explicitly
 	// GitHub token inputs (GH-02, GH-04, GH-05)
 	HasGitHub          bool     // true when sourceAccess.github is set
 	GitHubSSMPath      string   // /sandbox/{sandbox-id}/github-token
@@ -722,6 +730,39 @@ type NetworkConfig struct {
 	// Compile(). The compiler resolves profile limits MERGED WITH these per-window; profile
 	// wins per-window. Nil/empty map → no install defaults (dormant for install-level).
 	InstallLimits quota.Limits
+	// PrivateSubnets is the private subnet ID list from the network module, index-paired
+	// with AvailabilityZones exactly as PublicSubnets is. Populated from network/outputs.json
+	// when network.nat_gateway is enabled at the install level (Phase 125).
+	PrivateSubnets []string
+	// NATGatewayIDs is the per-AZ NAT gateway ID list, also index-paired with
+	// AvailabilityZones. An empty entry, or a slice shorter than AvailabilityZones, means
+	// that AZ has no NAT gateway (Phase 125).
+	NATGatewayIDs []string
+	// SandboxSubnets is the RESOLVED subnet list the sandbox ENI actually lands in — either
+	// PublicSubnets or PrivateSubnets, decided by the caller (create.go / budget.go) from
+	// spec.network.privateSubnet before Compile() runs. PublicSubnets deliberately remains
+	// populated with the true public list regardless of this choice: the ECS path always
+	// uses public subnets, and anything that legitimately wants "the public subnets" must
+	// keep getting them. Use EffectiveSandboxSubnets() rather than reading this field
+	// directly (Phase 125).
+	SandboxSubnets []string
+}
+
+// EffectiveSandboxSubnets returns SandboxSubnets when it has been resolved by the caller,
+// falling back to PublicSubnets when it has not.
+//
+// This is a deliberate safety net, not a convenience: three separate call sites construct
+// a NetworkConfig (two in create.go, one in budget.go), and if any one of them fails to
+// resolve placement, an empty subnet list passed straight to the ec2spot module would make
+// it self-provision subnets in a fresh per-sandbox VPC — a silent, expensive, hard-to-
+// diagnose regression that bypasses the shared VPC's security groups and NAT topology
+// entirely (Phase 125, T-125-15). Falling back to the known-good public list is always
+// safer than an empty one.
+func (n *NetworkConfig) EffectiveSandboxSubnets() []string {
+	if len(n.SandboxSubnets) > 0 {
+		return n.SandboxSubnets
+	}
+	return n.PublicSubnets
 }
 
 // budgetHCLFields extracts the budget-related template fields from a SandboxProfile.
@@ -793,10 +834,11 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		UseSpot:           useSpot,
 		UserDataBase64:    userData,
 		VPCID:             network.VPCID,
-		PublicSubnets:     network.PublicSubnets,
+		SandboxSubnets:    network.EffectiveSandboxSubnets(),
 		AvailabilityZones: network.AvailabilityZones,
 		SGEgressRules:     sgRules,
 		IAMPolicy:         iamPolicy,
+		AssociatePublicIP: !p.Spec.Network.PrivateSubnet,
 		// Budget enforcement fields
 		HasBudget:        hasBudget,
 		SpotRateUSD:      network.SpotRateUSD,
