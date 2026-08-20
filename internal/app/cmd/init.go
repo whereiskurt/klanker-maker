@@ -1885,6 +1885,31 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			os.Setenv("KM_NAT_GATEWAY_ENABLED", yamlNATGatewayEnabled) //nolint:errcheck
 		}
 	}
+
+	// KM_PRIVATE_SUBNET_COUNT — caps how many private subnets (and therefore NAT
+	// gateways) the network module builds. Consumed by
+	// infra/live/<region>/network/terragrunt.hcl slice(..., 0,
+	// tonumber(get_env("KM_PRIVATE_SUBNET_COUNT", <full list length>))). Absent key
+	// => omit => full list => byte-identical to the pre-knob behaviour. Same
+	// env-wins drift WARN as the *bool toggles above.
+	//
+	// An out-of-range value is reported and NOT exported: slice() with a bound past
+	// the end of the list fails inside terraform with a message that names neither
+	// the yaml key nor the file, so catching it here is the difference between a
+	// one-line fix and a confusing plan failure.
+	if cfg.Network.PrivateSubnetCount != nil {
+		if err := config.ValidatePrivateSubnetCount(*cfg.Network.PrivateSubnetCount); err != nil {
+			fmt.Fprintf(os.Stderr, "WARN: %v — ignoring the key; using all %d private subnets\n",
+				err, config.DefaultPrivateSubnetCount)
+		} else {
+			yamlPrivateSubnetCount := strconv.Itoa(*cfg.Network.PrivateSubnetCount)
+			if envVal := os.Getenv("KM_PRIVATE_SUBNET_COUNT"); envVal != "" && envVal != yamlPrivateSubnetCount {
+				fmt.Fprintf(os.Stderr, "WARN: KM_PRIVATE_SUBNET_COUNT=%s (env) overrides km-config.yaml network.private_subnet_count=%s\n", envVal, yamlPrivateSubnetCount)
+			} else if envVal == "" {
+				os.Setenv("KM_PRIVATE_SUBNET_COUNT", yamlPrivateSubnetCount) //nolint:errcheck
+			}
+		}
+	}
 }
 
 // EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at

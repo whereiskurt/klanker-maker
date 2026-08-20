@@ -62,6 +62,13 @@ func runEnvExport(cfg *config.Config, w io.Writer, includeAWSProfile bool) error
 		vars["KM_NAT_GATEWAY_ENABLED"] = strconv.FormatBool(*cfg.Network.NATGateway)
 	}
 
+	// Same contract for the private-subnet cap: emitted only when explicitly set,
+	// so an absent network block leaves the terragrunt slice() default (the full
+	// CIDR list) in place.
+	if cfg.Network.PrivateSubnetCount != nil {
+		vars["KM_PRIVATE_SUBNET_COUNT"] = strconv.Itoa(*cfg.Network.PrivateSubnetCount)
+	}
+
 	keys := make([]string, 0, len(vars))
 	for k := range vars {
 		keys = append(keys, k)
