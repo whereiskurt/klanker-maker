@@ -17,6 +17,28 @@ import (
 // IRSA (IAM Roles for Service Accounts) integration. Each entry maps a cluster's
 // OIDC provider to a per-namespace/service-account IAM role in the application account.
 // Populated from the km-config.yaml `clusters:` list (Plan 80).
+
+// NetworkConfig holds install-level network defaults for Phase 125 (per-profile
+// private-subnet sandboxes with per-AZ NAT gateways). It is a brand-new top-level
+// block with no existing atomic UnmarshalKey call to piggyback on.
+type NetworkConfig struct {
+	// NATGateway is the Phase 125 install-level toggle for whether the per-AZ NAT
+	// gateway and EIP infrastructure exists. Tri-state via *bool:
+	//   nil    → key absent from yaml; NAT off (Phase 124 byte-identical)
+	//   &true  → per-AZ NAT gateways + EIPs are provisioned (one per AZ, ~$132/mo
+	//            baseline for 4 AZs plus $0.045/GB processed); private-subnet
+	//            sandboxes can reach the internet
+	//   &false → explicit, operator-visible off (same runtime effect as nil, but
+	//            distinguishable in yaml from "never configured")
+	// Maps to km-config.yaml key network.nat_gateway. Exported as
+	// KM_NAT_GATEWAY_ENABLED for infra/live/use1/network/terragrunt.hcl
+	// get_env() at terragrunt-apply time during `km init`.
+	// Decoupled from spec.network.privateSubnet on the profile: NAT may exist with
+	// zero private sandboxes (flagged by `km doctor`), and a private profile may be
+	// authored while NAT is off (rejected at `km create`, NOT at `km validate`).
+	NATGateway *bool `mapstructure:"nat_gateway" yaml:"nat_gateway,omitempty"`
+}
+
 // SlackConfig holds install-level Slack defaults that flow into the bridge
 // Lambda environment via terragrunt.hcl get_env() calls. Phase 91.1 added
 // MentionOnly so operators no longer need to `export KM_SLACK_MENTION_ONLY=true`
@@ -678,6 +700,13 @@ type Config struct {
 	// Absent key → empty slice (no error). Managed via `km cluster add/list/rm`.
 	Clusters []ClusterConfig `mapstructure:"clusters" yaml:"clusters"`
 
+	// Network holds install-level network defaults (Phase 125). Currently only
+	// NATGateway is populated. Maps to km-config.yaml key network. Absent key →
+	// zero value (no error, NAT off — Phase 124 byte-identical).
+	// CRITICAL: "network.nat_gateway" must be in the v2→v merge-list in Load() or
+	// this field is silently ignored (project_config_key_merge_list footgun).
+	Network NetworkConfig `mapstructure:"network" yaml:"network,omitempty"`
+
 	// Slack holds install-level Slack defaults (Phase 91.1). Currently only
 	// MentionOnly is populated; future Slack-wide knobs slot in here. Maps to
 	// km-config.yaml key slack. Absent key → zero value (no error).
@@ -883,6 +912,10 @@ func Load() (*Config, error) {
 			"email_subdomain",
 			"container_substrates_enabled",
 			"clusters",
+			// Phase 125: install-level NAT gateway toggle. CRITICAL: without this
+			// entry, network.nat_gateway: true is silently ignored (the known
+			// project_config_key_merge_list footgun) — mirrors slack.default_router.
+			"network.nat_gateway",
 			// Phase 91.1: nested key for the polite-bot install-level default.
 			"slack.mention_only",
 			// Phase 91.4: nested key for the first-only reactor install-level default.
@@ -997,6 +1030,16 @@ func Load() (*Config, error) {
 	if v.IsSet("container_substrates_enabled") {
 		val := v.GetBool("container_substrates_enabled")
 		cfg.ContainerSubstratesEnabled = &val
+	}
+
+	// Phase 125: network.nat_gateway is tri-state via *bool. Only populated when
+	// the operator has explicitly set the key — absent yaml key → nil pointer →
+	// ExportTerragruntEnvVars emits nothing → terragrunt.hcl get_env() default
+	// ("false") kicks in → NAT off (Phase 124 byte-identical). Set to true to
+	// provision per-AZ NAT gateways + EIPs.
+	if v.IsSet("network.nat_gateway") {
+		val := v.GetBool("network.nat_gateway")
+		cfg.Network.NATGateway = &val
 	}
 
 	// Phase 91.1: slack.mention_only is tri-state via *bool. Only populated when
@@ -1203,6 +1246,17 @@ func (c *Config) GetResourcePrefix() string {
 		return "km"
 	}
 	return c.ResourcePrefix
+}
+
+// GetNATGatewayEnabled returns whether the install-level per-AZ NAT gateway
+// toggle (network.nat_gateway) is on. Nil-safe: a nil receiver or a nil
+// Network.NATGateway pointer (key absent from km-config.yaml) both resolve to
+// false, so downstream callers do not each re-implement the nil check.
+func (c *Config) GetNATGatewayEnabled() bool {
+	if c == nil || c.Network.NATGateway == nil {
+		return false
+	}
+	return *c.Network.NATGateway
 }
 
 // GetDoctorIgnorePrefixes returns the configured sibling resource_prefix values
