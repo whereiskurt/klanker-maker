@@ -1,7 +1,6 @@
 package compiler_test
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,29 +23,10 @@ func repoRootForSecretsTest(t *testing.T) string {
 	return filepath.Join(filepath.Dir(file), "..", "..")
 }
 
-// TestSandboxTemplateUsesEC2SpotV120 asserts that the sandbox terragrunt.hcl template
-// references ec2spot/v1.2.0 (not v1.1.0). This locks down WARNING 3 / phase 89 module bump.
-// The template is at infra/templates/sandbox/terragrunt.hcl and is copied verbatim
-// by terragrunt.CreateSandboxDir — so checking the file directly is authoritative.
-func TestSandboxTemplateUsesEC2SpotV120(t *testing.T) {
-	root := repoRootForSecretsTest(t)
-	templatePath := filepath.Join(root, "infra", "templates", "sandbox", "terragrunt.hcl")
-	data, err := os.ReadFile(templatePath)
-	if err != nil {
-		t.Fatalf("read sandbox template: %v", err)
-	}
-	content := string(data)
-
-	// The template uses a Terraform local for the module name:
-	// source = "${local.repo_root}/infra/modules/${local.svc_config.locals.substrate_module}/v1.2.0"
-	// So check for the version literal, not the full "ec2spot/v1.2.0" string.
-	if strings.Contains(content, "/v1.1.0") {
-		t.Errorf("sandbox template still references v1.1.0; expected v1.2.0 after Phase 89 bump\n%s", templatePath)
-	}
-	if !strings.Contains(content, "/v1.2.0") {
-		t.Errorf("sandbox template does not reference /v1.2.0; expected bump from v1.1.0\n%s", templatePath)
-	}
-}
+// The single shared-literal sandbox-template version check that used to live
+// here was superseded in Phase 125 Plan 02 by the per-substrate assertion in
+// pkg/terragrunt/substrate_version_pin_test.go, which the per-substrate
+// version map broke (there is no longer one shared literal to assert on).
 
 // TestCompileEC2ServiceHCLHasArtifactsBucket asserts that the compiled service.hcl
 // for an EC2 sandbox contains 'artifacts_bucket' in its module_inputs block.
