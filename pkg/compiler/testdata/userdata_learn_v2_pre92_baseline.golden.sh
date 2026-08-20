@@ -15,21 +15,45 @@ set -euo pipefail
 KM_OS_ID="${ID:-amzn}"
 echo "[km-bootstrap] OS detected: ${KM_OS_ID} (${PRETTY_NAME:-unknown})"
 
-# km_apt_https — rewrite apt sources from http:// to https://. The sandbox SG
-# allows ONLY 443 egress (no port 80), so apt's default HTTP fetches are blocked;
-# the EC2 Ubuntu mirror and Launchpad PPAs all serve HTTPS. Call after the base
-# sources are present AND after any add-apt-repository. No-op on Amazon Linux.
+# km_apt_https — normalise apt sources for the sandbox network. Two rewrites:
+#
+#   1. http:// -> https://. The sandbox SG allows ONLY 443 egress (no port 80),
+#      so apt's default HTTP fetches are blocked outright (port 80 to the mirror
+#      times out after 15s).
+#
+#   2. <region>.ec2.archive.ubuntu.com -> archive.ubuntu.com (and the arm64
+#      .ec2.ports. analog). The EC2 regional mirror is HTTP-oriented; over HTTPS
+#      it returns 503 on /pool objects and throttles the connections that do
+#      survive to ~100-350 KB/s. A desktop profile pulls 64.7MB of X11/mesa deps,
+#      so cloud-init never reaches the km-session-entry write below and every
+#      "km shell" fails with "km-session-entry: not found". Measured us-east-1
+#      on a 30MB libllvm20 deb: ec2 mirror 503 / 2-11MB per 25s / one connection
+#      0 bytes; archive.ubuntu.com 30MB in 0.16s. security.ubuntu.com, Launchpad
+#      PPAs, and vendor repos (Google, Brave) are deliberately left alone.
+#
+# KM_APT_ROOT is a test seam only — empty in production, so the paths below are
+# the real /etc/apt ones. Call after the base sources are present AND after any
+# add-apt-repository. Idempotent. No-op on Amazon Linux.
 km_apt_https() {
   command -v apt-get >/dev/null 2>&1 || return 0
-  sed -i 's|http://|https://|g' /etc/apt/sources.list 2>/dev/null || true
-  for f in /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
-    [ -e "$f" ] && sed -i 's|http://|https://|g' "$f" 2>/dev/null || true
+  _km_apt_root="${KM_APT_ROOT:-}"
+  for f in "${_km_apt_root}/etc/apt/sources.list" \
+           "${_km_apt_root}"/etc/apt/sources.list.d/*.sources \
+           "${_km_apt_root}"/etc/apt/sources.list.d/*.list; do
+    [ -e "$f" ] || continue
+    sed -i -E \
+      -e 's|http://|https://|g' \
+      -e 's|https://[A-Za-z0-9-]+\.ec2\.archive\.ubuntu\.com|https://archive.ubuntu.com|g' \
+      -e 's|https://[A-Za-z0-9-]+\.ec2\.ports\.ubuntu\.com|https://ports.ubuntu.com|g' \
+      "$f" 2>/dev/null || true
   done
 }
 # EC2 Ubuntu's apt mirror also advertises IPv6 addresses that are typically
-# unroutable from the instance, so force apt to IPv4. (No-op on Amazon Linux.)
+# unroutable from the instance, so force apt to IPv4. Retries cover a mirror or
+# PPA that answers 503 under load. (Both no-ops on Amazon Linux.)
 if command -v apt-get >/dev/null 2>&1; then
   echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99km-force-ipv4
+  echo 'Acquire::Retries "3";' >> /etc/apt/apt.conf.d/99km-force-ipv4
   km_apt_https
 fi
 
