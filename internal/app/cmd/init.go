@@ -99,6 +99,15 @@ var InitSESPreflight SESPreflightFunc = defaultSESPreflight
 // unknown_sender (incident 2026-06-14). Nil → skipped (the test/default zero value).
 var PublishOperatorIdentityHook func(ctx context.Context) error
 
+// InitNATDisableGuardHook, when non-nil, is invoked by RunInitWithRunner
+// IMMEDIATELY BEFORE the network module's Apply — a pre-apply gate scoped to that
+// module only, mirroring the InitSESPreflight pattern. runInit binds it (closed
+// over cfg + awsCfg + repoRoot + region, via checkNATDisableGuardBeforeApply in
+// init_nat_guard.go) so a NAT-disabling apply that would strand a running private
+// sandbox's egress is refused before terraform ever runs (T-125-17). Nil (the
+// test/default zero value) skips the check entirely.
+var InitNATDisableGuardHook func(ctx context.Context) error
+
 // RunInitPlanFunc is the package-level entry point for km init --plan, exported as a
 // var so cmd_test can override it with a mock to verify routing without needing real
 // AWS credentials / a real terragrunt binary. The default implementation is runInitPlan.
@@ -1356,6 +1365,15 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	}
 	defer func() { PublishOperatorIdentityHook = nil }()
 
+	// Phase 125: bind the NAT-disable refuse guard, closed over cfg + awsCfg +
+	// repoRoot + region so RunInitWithRunner's module loop can invoke it
+	// immediately before the network module applies. Cleared on return so a
+	// subsequent in-process init re-binds it to its own cfg/awsCfg.
+	InitNATDisableGuardHook = func(hookCtx context.Context) error {
+		return checkNATDisableGuardBeforeApply(hookCtx, cfg, awsCfg, repoRoot, region)
+	}
+	defer func() { InitNATDisableGuardHook = nil }()
+
 	if err := RunInitWithRunner(runner, repoRoot, region); err != nil {
 		return err
 	}
@@ -2363,6 +2381,16 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 			fmt.Println("    'km init' once no private sandboxes are running. 'km doctor' flags NAT")
 			fmt.Println("    sitting idle (enabled with zero private sandboxes).")
 			fmt.Println()
+		}
+
+		// Phase 125: refuse-to-disable-NAT pre-apply gate, scoped to the network
+		// module only (T-125-17). Runs after the cost notice above — a disable
+		// never prints a cost, so the two never collide — and can abort the
+		// apply outright before terraform ever runs.
+		if mod.name == "network" && InitNATDisableGuardHook != nil {
+			if guardErr := InitNATDisableGuardHook(ctx); guardErr != nil {
+				return guardErr
+			}
 		}
 
 		// Phase 84: preflight check for the regional ses module.
