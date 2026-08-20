@@ -439,6 +439,11 @@ type NetworkOutputs struct {
 	PublicSubnets     []string `json:"public_subnets"`
 	AvailabilityZones []string `json:"availability_zones"`
 	SandboxMgmtSGID   string   `json:"sandbox_mgmt_sg_id"`
+	// PrivateSubnets and NATGatewayIDs are new in network module v1.1.0 (Phase
+	// 125). Absent on a pre-125 outputs.json — see the non-fatal extraction in
+	// LoadNetworkOutputs below.
+	PrivateSubnets []string `json:"private_subnets"`
+	NATGatewayIDs  []string `json:"nat_gateway_ids"`
 }
 
 // regionalModule describes a single regional infrastructure module.
@@ -2839,6 +2844,21 @@ func LoadNetworkOutputs(repoRoot, regionLabel string) (*NetworkOutputs, error) {
 		return nil, err
 	}
 	_ = extractTFOutput(raw, "sandbox_mgmt_sg_id", &outputs.SandboxMgmtSGID)
+
+	// Phase 125: private_subnets and nat_gateway_ids are new outputs on network
+	// module v1.1.0. Non-fatal (`_ =`), same as sandbox_mgmt_sg_id above: a
+	// network module still on v1.0.0, or a create-handler Lambda whose bundled
+	// infra/live/<region>/network/outputs.json predates this apply, simply won't
+	// have these keys — a hard error here would break `km create` entirely
+	// rather than just disabling private placement.
+	//
+	// fetchAndCacheOutputs (the S3 raw-tfstate fallback used by `km create
+	// --remote` and the create-handler Lambda) needs NO code change for this:
+	// it re-serializes ALL outputs from the tfstate unfiltered and caches them
+	// to this same outputs.json path, so these two keys flow through the
+	// extraction calls above automatically once the module emits them.
+	_ = extractTFOutput(raw, "private_subnets", &outputs.PrivateSubnets)
+	_ = extractTFOutput(raw, "nat_gateway_ids", &outputs.NATGatewayIDs)
 
 	return outputs, nil
 }
