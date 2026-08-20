@@ -6,6 +6,23 @@ locals {
   region_config = read_terragrunt_config("${get_terragrunt_dir()}/../region.hcl")
   region_label  = local.region_config.locals.region_label
   region_full   = local.region_config.locals.region_full
+
+  # Full private subnet CIDR list — one per AZ. The network module counts private
+  # subnets, their route tables, the subnet associations, the EIPs AND the NAT
+  # gateways all off length(var.vpc.private_subnets_cidr), so trimming this list
+  # is what makes network.private_subnet_count control the NAT bill.
+  all_private_subnets_cidr = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24", "10.0.104.0/24"]
+
+  # KM_PRIVATE_SUBNET_COUNT — install-level cap on how many of the above are built,
+  # written by `km init` from km-config.yaml network.private_subnet_count. The
+  # default is the list's OWN length rather than a literal "4": an operator who
+  # adds a fifth CIDR above gets it automatically, and the dormant path can never
+  # silently start truncating. Out-of-range values are rejected by `km init`
+  # (config.ValidatePrivateSubnetCount) before they reach slice(), which would
+  # otherwise fail here with an error naming neither the key nor this file.
+  private_subnet_count = tonumber(
+    get_env("KM_PRIVATE_SUBNET_COUNT", tostring(length(local.all_private_subnets_cidr)))
+  )
 }
 
 include "root" {
@@ -43,7 +60,7 @@ inputs = {
     enable_dns_hostnames    = true
     enable_dns_support      = true
     public_subnets_cidr     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24", "10.0.4.0/24"]
-    private_subnets_cidr    = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24", "10.0.104.0/24"]
+    private_subnets_cidr    = slice(local.all_private_subnets_cidr, 0, local.private_subnet_count)
     availability_zone_count = 4
     tags = {
       "km:purpose" = "shared-sandbox-vpc"

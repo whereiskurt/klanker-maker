@@ -272,6 +272,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | You want to… | Look at |
 |---|---|
 | Private-subnet sandboxes + per-AZ NAT gateways — `network.nat_gateway` / `spec.network.privateSubnet` toggles, cost, the one-time route-table split, reversal, guards, deploy surface | `docs/private-subnet-nat.md` (Phase 125) |
+| Sizing the private topology to cut the NAT bill — `network.private_subnet_count` (1–4, absent = all 4), the AZ-rotation tradeoff it buys, and the subnet destroys on lowering it | `docs/private-subnet-nat.md` § Paying for fewer AZs |
 | AZ failover + capacity feasibility — `km create` classify-and-retry sweep, GPU quota wall (`L-DB2E81BA`), `km capacity` verdicts, `--wait-for-capacity`, `{prefix}-capacity` DDB table, deploy-surface order | `docs/operational-gotchas.md` § AZ failover + capacity feasibility (Phase 124) |
 | Action quotas + freeze quarantine — `spec.limits`/install `limits:`, windows (lifetime/perHour/perDay), `onBreach` warn/block/freeze, zero=hard-deny, `km freeze`/`km unlock`, `km status` Quotas section, the `km-quota-alerter`, deploy surface | `docs/action-quotas.md` (Phase 121) |
 | Operator CLI tour | `klanker:user` skill |

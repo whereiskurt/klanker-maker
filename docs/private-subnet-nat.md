@@ -5,17 +5,19 @@ straight through the Internet Gateway (IGW). This phase adds the ability to plac
 on a **private** subnet behind a NAT gateway, chosen **per profile**, while public-subnet
 sandboxes keep working unchanged in the same VPC.
 
-## The two toggles
+## The toggles
 
-There are exactly two independent knobs, and they are deliberately decoupled:
+There are three knobs. The first two are the load-bearing pair and are deliberately decoupled;
+the third only sizes the topology.
 
 | Toggle | Scope | Default | Controls |
 |---|---|---|---|
 | `network.nat_gateway` (`km-config.yaml`) | install / region | absent (`false`) | whether NAT + EIP infrastructure **exists** at all |
 | `spec.network.privateSubnet` (SandboxProfile) | per sandbox | `false` | whether **this** sandbox's ENI lands private |
+| `network.private_subnet_count` (`km-config.yaml`) | install / region | absent (all 4) | **how many** private subnets — and therefore NAT gateways — are built |
 
-Both absent means byte-identical behaviour to Phase 124 — no new resources, no new sandbox
-behaviour, no `apiVersion` bump.
+The first two absent means byte-identical behaviour to Phase 124 — no new resources, no new
+sandbox behaviour, no `apiVersion` bump.
 
 They are decoupled on purpose: NAT can exist with zero private sandboxes running against it
 (costs money, `km doctor` WARNs — see below), and a profile can declare
@@ -49,6 +51,38 @@ Worked example: a GPU profile pulling 300GB of model weights through NAT costs r
 **$13.50 in NAT data-processing charges alone, per box**, on top of the baseline. If you are
 not currently running a private sandbox, there is no reason to be paying the baseline — see
 Reversal below.
+
+### Paying for fewer AZs — `network.private_subnet_count`
+
+The baseline scales linearly with AZ count, so the cheapest way to keep NAT on is to build
+fewer of them:
+
+```yaml
+network:
+    nat_gateway: true
+    private_subnet_count: 1    # 1 private subnet, 1 NAT, ~$33/mo instead of ~$132
+```
+
+The network module counts private subnets, their route tables, the subnet associations, the
+EIPs **and** the NAT gateways all off `length(var.vpc.private_subnets_cidr)`, so this single
+number sizes the whole private topology. Absent key → all 4, byte-identical to before.
+Accepted range is 1–4; `km init` rejects anything outside it, naming the key. Raising the
+ceiling means adding CIDRs to `all_private_subnets_cidr` in
+`infra/live/<region>/network/terragrunt.hcl` first.
+
+**The tradeoff is capacity tolerance, and it is not visible from the yaml.** Private subnets
+are index-paired with AZs, so `private_subnet_count: 1` confines every private sandbox to the
+**first** AZ. Phase 124's sweep then has exactly one candidate and cannot rotate: a private
+`km create` fails outright when that AZ is capacity-dry for the requested instance type,
+rather than shifting to another AZ as it would with all 4 built. Weigh ~$99/month against that.
+
+**Public-subnet sandboxes — the default — are unaffected.** `availability_zone_count` and the
+public subnet list are untouched by this knob; only private placement narrows.
+
+**Lowering it on an existing install destroys subnets.** Going 4 → 1 destroys 3 private
+subnets, 3 route tables, and 3 associations. `aws_subnet` and `aws_route_table` are **not** on
+the destroy-class protected list, so `km init --plan` will *not* stop you — it shows them as
+ordinary destroys. Read the plan, and make sure nothing is running in those subnets first.
 
 ## The one-time route-table split on first apply — read this before your first `km init`
 

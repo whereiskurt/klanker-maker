@@ -37,6 +37,56 @@ type NetworkConfig struct {
 	// zero private sandboxes (flagged by `km doctor`), and a private profile may be
 	// authored while NAT is off (rejected at `km create`, NOT at `km validate`).
 	NATGateway *bool `mapstructure:"nat_gateway" yaml:"nat_gateway,omitempty"`
+
+	// PrivateSubnetCount caps how many of the VPC's private subnets are built.
+	// The network module counts private subnets, their route tables, the subnet
+	// associations, the EIPs AND the NAT gateways all off
+	// length(var.vpc.private_subnets_cidr), so this one number controls both
+	// topology and the NAT bill (~$33/mo per AZ). Tri-state via *int:
+	//   nil  → key absent; the full CIDR list is used (4 AZs, ~$132/mo with NAT on)
+	//   &N   → only the first N CIDRs are built, i.e. N subnets and N NAT gateways
+	// Maps to km-config.yaml key network.private_subnet_count. Exported as
+	// KM_PRIVATE_SUBNET_COUNT for infra/live/use1/network/terragrunt.hcl
+	// slice(...) at terragrunt-apply time during `km init`.
+	//
+	// TRADEOFF, and it is not obvious from the yaml: private subnets are
+	// index-paired with availability zones, so N=1 confines every private-subnet
+	// sandbox to the FIRST AZ. The Phase 124 capacity sweep then has a single
+	// candidate and cannot rotate — a private `km create` fails outright when that
+	// AZ is capacity-dry for the requested instance type. Public-subnet sandboxes
+	// (the default) are unaffected: availability_zone_count and the public subnet
+	// list are untouched by this knob.
+	PrivateSubnetCount *int `mapstructure:"private_subnet_count" yaml:"private_subnet_count,omitempty"`
+}
+
+// DefaultPrivateSubnetCount is the number of private subnets built when
+// network.private_subnet_count is absent — the full length of the
+// private_subnets_cidr list in infra/live/<region>/network/terragrunt.hcl.
+// Keeping the absent case at this value is what makes the key dormant.
+const DefaultPrivateSubnetCount = 4
+
+// MaxPrivateSubnetCount is the upper bound accepted for
+// network.private_subnet_count. It is the length of the private_subnets_cidr list
+// the network unit declares; slice() fails inside terraform if the bound exceeds
+// the list, so the ceiling is enforced here where the error can name the yaml key.
+// Raising it requires adding CIDRs to that list first.
+const MaxPrivateSubnetCount = 4
+
+// ValidatePrivateSubnetCount bounds-checks network.private_subnet_count. Callers
+// run this before exporting KM_PRIVATE_SUBNET_COUNT so an out-of-range value
+// surfaces as a named config error rather than a slice() failure deep inside a
+// terragrunt plan.
+func ValidatePrivateSubnetCount(count int) error {
+	if count < 1 {
+		return fmt.Errorf("network.private_subnet_count must be at least 1, got %d "+
+			"(remove the key to use all %d private subnets)", count, DefaultPrivateSubnetCount)
+	}
+	if count > MaxPrivateSubnetCount {
+		return fmt.Errorf("network.private_subnet_count is %d but only %d private subnet "+
+			"CIDRs are declared in infra/live/<region>/network/terragrunt.hcl — add CIDRs "+
+			"there first, or lower the value", count, MaxPrivateSubnetCount)
+	}
+	return nil
 }
 
 // SlackConfig holds install-level Slack defaults that flow into the bridge
@@ -916,6 +966,11 @@ func Load() (*Config, error) {
 			// entry, network.nat_gateway: true is silently ignored (the known
 			// project_config_key_merge_list footgun) — mirrors slack.default_router.
 			"network.nat_gateway",
+			// Companion to network.nat_gateway, and it needs its OWN entry — the
+			// merge-list is keyed on the full dotted path, so "network.nat_gateway"
+			// does not cover sibling network.* keys. Without this line,
+			// network.private_subnet_count is silently ignored.
+			"network.private_subnet_count",
 			// Phase 91.1: nested key for the polite-bot install-level default.
 			"slack.mention_only",
 			// Phase 91.4: nested key for the first-only reactor install-level default.
@@ -1040,6 +1095,16 @@ func Load() (*Config, error) {
 	if v.IsSet("network.nat_gateway") {
 		val := v.GetBool("network.nat_gateway")
 		cfg.Network.NATGateway = &val
+	}
+
+	// network.private_subnet_count is tri-state via *int, same dormancy contract as
+	// nat_gateway above: absent yaml key → nil pointer → nothing exported →
+	// terragrunt slice() falls back to the full CIDR list length. Bounds are NOT
+	// checked here — Load() stays a pure read so a malformed value is reported by
+	// `km init` (which names the key) rather than making every km subcommand fail.
+	if v.IsSet("network.private_subnet_count") {
+		val := v.GetInt("network.private_subnet_count")
+		cfg.Network.PrivateSubnetCount = &val
 	}
 
 	// Phase 91.1: slack.mention_only is tri-state via *bool. Only populated when
@@ -1257,6 +1322,17 @@ func (c *Config) GetNATGatewayEnabled() bool {
 		return false
 	}
 	return *c.Network.NATGateway
+}
+
+// GetPrivateSubnetCount returns how many private subnets (and therefore how many
+// NAT gateways) the network module should build. Nil-safe: a nil receiver or an
+// absent network.private_subnet_count key both resolve to DefaultPrivateSubnetCount,
+// so callers do not each re-implement the nil check.
+func (c *Config) GetPrivateSubnetCount() int {
+	if c == nil || c.Network.PrivateSubnetCount == nil {
+		return DefaultPrivateSubnetCount
+	}
+	return *c.Network.PrivateSubnetCount
 }
 
 // GetDoctorIgnorePrefixes returns the configured sibling resource_prefix values
