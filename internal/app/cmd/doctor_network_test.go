@@ -48,12 +48,16 @@ func TestDoctorNetworkNATIdle(t *testing.T) {
 			wantStatus: CheckSkipped,
 		},
 		{
-			name:       "Test 7a: NAT enabled, private-but-stopped sandbox excluded -> WARN",
+			// Phase 125 live-UAT correction: a stopped private sandbox still DEPENDS
+			// on NAT — it needs an egress path again the moment it resumes. Tearing
+			// down NAT under it would break the resume. This case previously
+			// asserted the opposite and codified the bug.
+			name:       "Test 7a: NAT enabled, private-but-stopped sandbox still depends -> OK",
 			natEnabled: true,
 			metas: []kmaws.SandboxMetadata{
 				{SandboxID: "sb-1", NetworkPlacement: "private", Status: "stopped"},
 			},
-			wantStatus: CheckWarn,
+			wantStatus: CheckOK,
 		},
 		{
 			name:       "Test 7b: NAT enabled, running-but-empty-placement sandbox excluded -> WARN",
@@ -124,12 +128,14 @@ func TestDoctorNetworkPrivateWithoutNAT(t *testing.T) {
 			wantStatus: CheckSkipped,
 		},
 		{
-			name:       "Test 7c: NAT not enabled, private-but-stopped excluded -> SKIPPED",
+			// Phase 125 live-UAT correction: mirror of 7a. A stopped private sandbox
+			// with NAT off IS a problem — it has no egress path to resume into.
+			name:       "Test 7c: NAT not enabled, private-but-stopped is still broken -> WARN",
 			natEnabled: false,
 			metas: []kmaws.SandboxMetadata{
 				{SandboxID: "sb-1", NetworkPlacement: "private", Status: "stopped"},
 			},
-			wantStatus: CheckSkipped,
+			wantStatus: CheckWarn,
 		},
 		{
 			name:       "Test 7d: NAT not enabled, running-but-empty-placement excluded -> SKIPPED",

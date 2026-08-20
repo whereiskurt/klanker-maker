@@ -14,9 +14,26 @@ import (
 func runningPrivateSandboxIDs(metas []kmaws.SandboxMetadata) []string {
 	var ids []string
 	for _, m := range metas {
-		if m.NetworkPlacement == "private" && m.Status == "running" {
-			ids = append(ids, m.SandboxID)
+		if m.NetworkPlacement != "private" {
+			continue
 		}
+		// Phase 125 live-UAT finding: `km create` does NOT write a `status`
+		// attribute at create time — `km list` derives status from live EC2 — so a
+		// freshly created, actively running private sandbox has Status == "".
+		// Requiring Status == "running" here matched nothing, so checkNATIdle
+		// reported "safe to disable" while a private sandbox was live; an operator
+		// following that remediation would have torn down the NAT its egress
+		// depends on.
+		//
+		// Fail safe in the direction that cannot break a live sandbox: count a
+		// private row as NAT-dependent unless its status is definitively terminal.
+		// Rows are deleted on destroy (Phase 109), so a present row means the
+		// sandbox still exists. "stopped"/"starting"/"" all count — a stopped
+		// private sandbox needs NAT again the moment it resumes.
+		if m.Status == "failed" {
+			continue
+		}
+		ids = append(ids, m.SandboxID)
 	}
 	return ids
 }
@@ -44,7 +61,7 @@ func checkNATIdle(natEnabled bool, metas []kmaws.SandboxMetadata) CheckResult {
 		return CheckResult{
 			Name:   name,
 			Status: CheckWarn,
-			Message: "network.nat_gateway is enabled but no running private sandbox depends on it — " +
+			Message: "network.nat_gateway is enabled but no private sandbox depends on it — " +
 				"you are paying about $132/month (4 AZs) for NAT/EIP infrastructure nothing is using; safe to disable",
 			Remediation: "Set network.nat_gateway: false in km-config.yaml and run `km init --dry-run=false` to tear down the NAT/EIP infrastructure.",
 		}
@@ -53,7 +70,7 @@ func checkNATIdle(natEnabled bool, metas []kmaws.SandboxMetadata) CheckResult {
 	return CheckResult{
 		Name:    name,
 		Status:  CheckOK,
-		Message: fmt.Sprintf("network.nat_gateway enabled; %d running private sandbox(es) depend on it", len(privateIDs)),
+		Message: fmt.Sprintf("network.nat_gateway enabled; %d private sandbox(es) depend on it", len(privateIDs)),
 	}
 }
 
