@@ -708,3 +708,39 @@ terragrunt module, which only runs on a full `km init --dry-run=false`. `--sidec
 not apply terragrunt modules.
 
 **No SandboxProfile schema change, no bridge Lambda change, no sandbox recreate required.**
+
+## `km shell` → "km-session-entry: not found" on an Ubuntu sandbox
+
+**Symptom.** `km shell <id>` connects, then:
+
+    exec /usr/local/bin/km-session-entry ""
+    $ sh: 1: exec: /usr/local/bin/km-session-entry: not found
+
+**This almost never means the file is missing permanently — it means cloud-init is still running.**
+`km-session-entry` is written at `pkg/compiler/userdata.go:4617`; the Phase 93 KasmVNC desktop install is
+~1000 template lines earlier at `:3578`. Until the desktop install completes, the wrapper does not exist.
+(`sh: 1:` is dash — Ubuntu's `/bin/sh`. It is not a clue.)
+
+**Diagnose without a shell.** The session document is what is broken, so go around it with
+`AWS-RunShellScript`:
+
+    aws ssm send-command --instance-ids <i-...> --document-name AWS-RunShellScript \
+      --parameters 'commands=["cloud-init status --long","ps -eo etime,cmd --sort=-etime | grep apt-get | grep -v grep","du -sh /var/cache/apt/archives","grep -cE \"^Ign:\" /var/log/cloud-init-output.log"]'
+
+`cloud-init status` → `running` with an `apt-get install` in `ps` confirms it. `Ign:` lines are apt
+shelving failed fetches for retry — a count in the tens means the mirror is degraded, not that the packages
+are missing.
+
+**Root cause (fixed 2026-08-19).** `km_apt_https()` rewrote apt sources to HTTPS (the SG allows only 443)
+but left the host as `<region>.ec2.archive.ubuntu.com`, whose HTTPS front end 503s on `pool/` objects and
+throttles surviving connections to ~100–350 KB/s. Measured in us-east-1 on a 30MB `libllvm20` deb: EC2
+mirror returned 503 / 2–11MB per 25s / one connection 0 bytes, versus 30MB in **0.16s** from
+`archive.ubuntu.com`. `km_apt_https` now rewrites the host too. A desktop profile's 64.7MB dep set went
+from a 45–60+ minute stall to a normal boot.
+
+**Not affected:** `ami: amazon-linux-2023` profiles (dnf against Amazon's own mirrors — e.g. `learn.v3`).
+This is why an AL2023 profile "works" while the Ubuntu one appears hung.
+
+**Pre-fix workarounds, if you meet an old sandbox:** wait it out (watch `du -sh /var/cache/apt/archives`
+climb toward 67M), or bake a desktop AMI once — the Phase 93 `command -v vncserver` guard skips the
+reinstall on a baked AMI.

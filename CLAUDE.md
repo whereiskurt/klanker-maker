@@ -307,6 +307,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Serve a local 70B model on a GPU sandbox (vLLM + Bifrost multi-provider router), reach it via VS Code / Slack codex / `km model start [--anthropic]`; G-quota + DLAMI prereqs, secret/route wiring, deploy surface | `docs/gpu-model-serving.md` (Phase 122) |
 | Cross-account k8s (IRSA) cluster onboarding | `klanker:cluster` skill |
 | Non-obvious operational footguns (deploy surface, terragrunt, teardown, Ubuntu userdata) | `docs/operational-gotchas.md` |
+| `km shell` → "km-session-entry: not found" on Ubuntu; apt mirror host rewrite (`ec2.archive.ubuntu.com` → `archive.ubuntu.com`), diagnosing a still-running cloud-init without a shell | `docs/operational-gotchas.md` § km shell → "km-session-entry: not found" |
 | Full operator runbook | `OPERATOR-GUIDE.md` |
 | Email protocol deep-dive (SES, IAM, signing) | `docs/multi-agent-email.md` |
 | Slack runbook (full setup, troubleshooting) | `docs/slack-notifications.md` |
