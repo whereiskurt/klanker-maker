@@ -143,6 +143,16 @@ func resolveSandboxSubnets(wantsPrivate bool, publicSubnets, privateSubnets []st
 	return publicSubnets
 }
 
+// networkPlacementLabel returns the exact "private"/"public" literal that
+// SandboxMetadata.NetworkPlacement, the km init NAT-disable guard
+// (natDisableGuard), and the km doctor checks (Plan 07) all compare against.
+func networkPlacementLabel(wantsPrivate bool) string {
+	if wantsPrivate {
+		return "private"
+	}
+	return "public"
+}
+
 // ErrAmbiguousInstallation is returned by resolveInstallationID when allowedRepos
 // contains only wildcards (or bare repos) AND multiple per-owner installation
 // parameters exist under /km/config/github/installations/. Without a concrete
@@ -823,12 +833,21 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		maxAttempts = 1 // on-demand doesn't need AZ rotation
 	}
 
+	// Phase 125: resolve placement ONCE, into network.SandboxSubnets, before the Phase
+	// 124 AZ sweep begins (REQ-125-PLUMB). network.PublicSubnets is left untouched here
+	// — it still holds the true public list for the ECS path and anything that
+	// legitimately wants it. The sweep below is retargeted to read SandboxSubnets, never
+	// PublicSubnets directly, so a private profile's ENI never lands on a public subnet
+	// mid-sweep.
+	network.SandboxSubnets = resolveSandboxSubnets(resolvedProfile.Spec.Network.PrivateSubnet, network.PublicSubnets, network.PrivateSubnets)
+
 	// Phase 124.04: Pre-order network.AvailabilityZones by capacity preference before the
 	// sweep loop. RankAZs drops non-offering AZs, gates on GPU quota (fail-fast at 0 headroom),
 	// and orders by: azPreference hint > last-success sticky > deprioritize fresh-ICE AZs.
 	// On *QuotaError: fail fast immediately — AZ rotation cannot fix a regional quota wall.
 	// On any other error: log warn and keep original AZ order (ranking is best-effort, non-fatal).
-	// network.PublicSubnets is reordered in lockstep to preserve AZ[i] <-> subnet[i] pairing.
+	// network.SandboxSubnets (the Phase 125 resolved placement list — private or public,
+	// decided above) is reordered in lockstep to preserve AZ[i] <-> subnet[i] pairing.
 	//
 	// Phase 124.07: capacityStore and rankInstanceType are hoisted so the sweep loop can
 	// write RecordSuccess/RecordICE after each apply attempt. A nil capacityStore (docker
@@ -865,10 +884,13 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				Msg("capacity: AZ ranking failed; keeping original AZ order")
 		} else if len(ranked) > 0 {
 			// Build a subnet map keyed by AZ so we can reorder subnets in lockstep.
+			// Reads the Phase 125 resolved SandboxSubnets placement list — never the
+			// raw public-subnet field — so a private profile's ENI stays private
+			// through every reorder.
 			subnetByAZ := make(map[string]string, len(network.AvailabilityZones))
 			for i, az := range network.AvailabilityZones {
-				if i < len(network.PublicSubnets) {
-					subnetByAZ[az] = network.PublicSubnets[i]
+				if i < len(network.SandboxSubnets) {
+					subnetByAZ[az] = network.SandboxSubnets[i]
 				}
 			}
 			network.AvailabilityZones = ranked
@@ -879,7 +901,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				}
 			}
 			if len(reorderedSubnets) > 0 {
-				network.PublicSubnets = reorderedSubnets
+				network.SandboxSubnets = reorderedSubnets
 			}
 			// Recompute maxAttempts: RankAZs may drop non-offering AZs, so
 			// len(network.AvailabilityZones) could be smaller now.
@@ -940,14 +962,15 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 
 	// Save the initial AZ/subnet order established by RankAZs so each outer re-sweep
 	// starts from the same preferred order (inner loop rotates the slices in-place).
+	// network.SandboxSubnets is the Phase 125 resolved placement list.
 	initialAZs := append([]string{}, network.AvailabilityZones...)
-	initialSubnets := append([]string{}, network.PublicSubnets...)
+	initialSubnets := append([]string{}, network.SandboxSubnets...)
 
 	for outerSweep := 0; ; outerSweep++ {
 		if outerSweep > 0 {
 			// Restore the ranked AZ/subnet order for each fresh re-sweep.
 			network.AvailabilityZones = append([]string{}, initialAZs...)
-			network.PublicSubnets = append([]string{}, initialSubnets...)
+			network.SandboxSubnets = append([]string{}, initialSubnets...)
 		}
 
 		// exhaustedIterateClass is set when all AZs returned iterate-class errors and no
@@ -957,9 +980,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		for attempt := 0; attempt < maxAttempts; attempt++ {
 			if attempt > 0 {
 				// Rotate subnets and AZs so index 0 points to the next AZ
-				network.PublicSubnets = append(network.PublicSubnets[1:], network.PublicSubnets[0])
+				network.SandboxSubnets = append(network.SandboxSubnets[1:], network.SandboxSubnets[0])
 				network.AvailabilityZones = append(network.AvailabilityZones[1:], network.AvailabilityZones[0])
-				fmt.Fprintf(os.Stderr, "  Retrying in %s (%s)...\n", network.AvailabilityZones[0], network.PublicSubnets[0])
+				fmt.Fprintf(os.Stderr, "  Retrying in %s (%s)...\n", network.AvailabilityZones[0], network.SandboxSubnets[0])
 			}
 
 			// Step 7: Compile profile into Terragrunt artifacts
@@ -1192,6 +1215,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			TeardownPolicy: resolvedProfile.Spec.Lifecycle.TeardownPolicy,
 			CreatedBy:      "cli",
 			Alias:          sandboxAlias,
+			// Phase 125: record whether this sandbox's ENI landed on a private or
+			// public subnet, so the km init NAT-disable guard and km doctor can see it.
+			NetworkPlacement: networkPlacementLabel(resolvedProfile.Spec.Network.PrivateSubnet),
 			// Phase 63 — Slack metadata. Populated from Step 6c resolution.
 			SlackChannelID:  slackChannelID,
 			SlackPerSandbox: slackPerSandbox,
@@ -2695,6 +2721,10 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
 		CreatedBy:   "remote",
 		Alias:       sandboxAlias,
+		// Phase 125: recorded here (not just at the local create.go:1196 site) so
+		// --remote placement survives even though the create-handler Lambda does the
+		// actual AZ sweep — this starting row is what km list/doctor see immediately.
+		NetworkPlacement: networkPlacementLabel(resolvedProfile.Spec.Network.PrivateSubnet),
 	}
 	if len(clonedFromOverride) > 0 && clonedFromOverride[0] != "" {
 		startingMeta.ClonedFrom = clonedFromOverride[0]
@@ -3011,12 +3041,12 @@ func checkSandboxLimit(ctx context.Context, s3Client awspkg.S3ListAPI, bucket st
 // the bytes the create-handler Lambda runs `km create` on.
 //
 // The MERGED (flattened) profile is uploaded whenever:
-//   1. extendsSet — the Lambda has NO profiles/base/** fragments in its search paths,
-//      so it cannot resolve `extends:`. Uploading the raw child would fail the subprocess
-//      with `profile "base/os/redhat" not found` (the Phase 120 remote-create bug). The
-//      resolved profile has extends cleared (profile.Resolve / TestResolveExtendsCleared)
-//      and every base merged in, so it is self-contained.
-//   2. ttl/idle overrides — the Lambda must observe the overridden lifecycle values.
+//  1. extendsSet — the Lambda has NO profiles/base/** fragments in its search paths,
+//     so it cannot resolve `extends:`. Uploading the raw child would fail the subprocess
+//     with `profile "base/os/redhat" not found` (the Phase 120 remote-create bug). The
+//     resolved profile has extends cleared (profile.Resolve / TestResolveExtendsCleared)
+//     and every base merged in, so it is self-contained.
+//  2. ttl/idle overrides — the Lambda must observe the overridden lifecycle values.
 //
 // resolvedProfile already carries all mutations (extends merge, ttl/idle, --no-bedrock
 // strip applied upstream), so marshaling it is the complete, correct picture. A monolithic,

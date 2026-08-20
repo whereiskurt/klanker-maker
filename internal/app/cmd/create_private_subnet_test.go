@@ -87,3 +87,126 @@ func TestCreatePrivateSubnetGuard(t *testing.T) {
 		checkGuardBeforeWrite(t, remoteSrc, "runCreateRemote", "s3Client.PutObject(")
 	})
 }
+
+// TestResolveSandboxSubnets exercises resolveSandboxSubnets — the single
+// placement-resolution point inserted before the Phase 124 AZ sweep — plus the
+// sweep's reorder/rotate mechanics that operate on its result (125-08-PLAN.md
+// Task 2 Tests 1-5).
+func TestResolveSandboxSubnets(t *testing.T) {
+	publicSubnets := []string{"subnet-pub-1a", "subnet-pub-1b", "subnet-pub-1c"}
+	privateSubnets := []string{"subnet-priv-1a", "subnet-priv-1b", "subnet-priv-1c"}
+
+	t.Run("Test1_private_true_resolves_to_private_list", func(t *testing.T) {
+		got := resolveSandboxSubnets(true, publicSubnets, privateSubnets)
+		if !stringSlicesEqual(got, privateSubnets) {
+			t.Errorf("resolveSandboxSubnets(true, ...) = %v, want %v", got, privateSubnets)
+		}
+	})
+
+	t.Run("Test2_private_false_resolves_to_public_list", func(t *testing.T) {
+		got := resolveSandboxSubnets(false, publicSubnets, privateSubnets)
+		if !stringSlicesEqual(got, publicSubnets) {
+			t.Errorf("resolveSandboxSubnets(false, ...) = %v, want %v", got, publicSubnets)
+		}
+	})
+
+	t.Run("Test3_PublicSubnets_field_untouched_by_resolution_either_way", func(t *testing.T) {
+		// resolveSandboxSubnets is a pure function returning a new slice reference —
+		// it must never mutate its inputs. The caller (create.go) separately keeps
+		// network.PublicSubnets populated; this test locks in that resolveSandboxSubnets
+		// itself is not the thing that could break that guarantee.
+		publicCopy := append([]string{}, publicSubnets...)
+		privateCopy := append([]string{}, privateSubnets...)
+		_ = resolveSandboxSubnets(true, publicCopy, privateCopy)
+		_ = resolveSandboxSubnets(false, publicCopy, privateCopy)
+		if !stringSlicesEqual(publicCopy, publicSubnets) {
+			t.Errorf("public subnets slice mutated: got %v, want %v", publicCopy, publicSubnets)
+		}
+		if !stringSlicesEqual(privateCopy, privateSubnets) {
+			t.Errorf("private subnets slice mutated: got %v, want %v", privateCopy, privateSubnets)
+		}
+	})
+
+	t.Run("Test4_attempt_rotation_keeps_AZ_subnet_pairing", func(t *testing.T) {
+		// Reproduces the exact "attempt > 0" rotation the sweep performs on
+		// network.AvailabilityZones / network.SandboxSubnets (create.go, inside the
+		// attempt loop): rotate both slices left by one in lockstep.
+		azs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
+		subnets := resolveSandboxSubnets(true, publicSubnets, privateSubnets)
+		pairing := map[string]string{azs[0]: subnets[0], azs[1]: subnets[1], azs[2]: subnets[2]}
+
+		subnets = append(subnets[1:], subnets[0])
+		azs = append(azs[1:], azs[0])
+
+		for i, az := range azs {
+			if subnets[i] != pairing[az] {
+				t.Errorf("after rotation, AZ %q paired with subnet %q, want %q", az, subnets[i], pairing[az])
+			}
+		}
+	})
+
+	t.Run("Test5_ranked_reorder_keeps_AZ_subnet_pairing", func(t *testing.T) {
+		// Reproduces the exact zip-then-reorder the sweep performs after RankAZs
+		// returns a ranked AZ list (create.go: subnetByAZ map keyed by AZ, then
+		// reordered to follow `ranked`'s order).
+		azs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
+		subnets := resolveSandboxSubnets(true, publicSubnets, privateSubnets)
+		pairing := map[string]string{azs[0]: subnets[0], azs[1]: subnets[1], azs[2]: subnets[2]}
+
+		ranked := []string{"us-east-1c", "us-east-1a", "us-east-1b"}
+		subnetByAZ := make(map[string]string, len(azs))
+		for i, az := range azs {
+			subnetByAZ[az] = subnets[i]
+		}
+		reordered := make([]string, 0, len(ranked))
+		for _, az := range ranked {
+			reordered = append(reordered, subnetByAZ[az])
+		}
+
+		for i, az := range ranked {
+			if reordered[i] != pairing[az] {
+				t.Errorf("after ranked reorder, AZ %q paired with subnet %q, want %q", az, reordered[i], pairing[az])
+			}
+		}
+	})
+}
+
+// TestNetworkPlacementRecorded exercises networkPlacementLabel (Test 6: a private
+// create records "private" on the sandbox row; a public one records "public") and
+// confirms both create.go SandboxMetadata literals are wired to it.
+func TestNetworkPlacementRecorded(t *testing.T) {
+	t.Run("Test6_private_true_labels_private", func(t *testing.T) {
+		if got := networkPlacementLabel(true); got != "private" {
+			t.Errorf("networkPlacementLabel(true) = %q, want %q", got, "private")
+		}
+	})
+
+	t.Run("Test6_private_false_labels_public", func(t *testing.T) {
+		if got := networkPlacementLabel(false); got != "public" {
+			t.Errorf("networkPlacementLabel(false) = %q, want %q", got, "public")
+		}
+	})
+
+	t.Run("both_SandboxMetadata_literals_set_NetworkPlacement", func(t *testing.T) {
+		src, err := os.ReadFile("create.go")
+		if err != nil {
+			t.Fatalf("read create.go: %v", err)
+		}
+		count := strings.Count(string(src), "NetworkPlacement: networkPlacementLabel(resolvedProfile.Spec.Network.PrivateSubnet)")
+		if count != 2 {
+			t.Errorf("expected 2 NetworkPlacement wiring sites (EC2 local + --remote starting row), found %d", count)
+		}
+	})
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
