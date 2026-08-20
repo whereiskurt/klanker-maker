@@ -279,12 +279,12 @@ private subnets in that AZ), SSM (outbound-only, unaffected), VPC endpoints.
 
 Plans:
 
-- [ ] 125-01-PLAN.md — network module v1.1.0: per-AZ NAT/EIP/route tables + `KM_NAT_GATEWAY_ENABLED` in the live unit
-- [ ] 125-02-PLAN.md — ec2spot v1.3.0 (`sandbox_subnets`, `associate_public_ip`) + per-substrate module version pin
-- [ ] 125-03-PLAN.md — both dormant toggles: `network.nat_gateway` config key + `spec.network.privateSubnet` schema field + demo profile
-- [ ] 125-04-PLAN.md — `network_placement` round-trip through `SandboxMetadata` marshal/unmarshal
-- [ ] 125-05-PLAN.md — compiler: `SandboxSubnets` threading + `associate_public_ip` emission (EC2 only)
-- [ ] 125-06-PLAN.md — `km init`: new network outputs, NAT env export + drift WARN, cost print, refuse-to-disable guard
-- [ ] 125-07-PLAN.md — `km doctor`: NAT-idle and private-without-NAT WARNs
-- [ ] 125-08-PLAN.md — `km create`/`budget`: single-point placement resolution, sweep retarget, NAT-aware `RankAZs`, fail-fast
-- [ ] 125-09-PLAN.md — operator doc, full-suite gate, and the eight-step live UAT (adds a ttl-handler auto-destroy step that exercises the v1.0.0-pinned destroy stub against a v1.3.0-created sandbox)
+- [x] 125-01-PLAN.md — network module v1.1.0: per-AZ NAT/EIP/route tables + `KM_NAT_GATEWAY_ENABLED` in the live unit
+- [x] 125-02-PLAN.md — ec2spot v1.3.0 (`sandbox_subnets`, `associate_public_ip`) + per-substrate module version pin
+- [x] 125-03-PLAN.md — both dormant toggles: `network.nat_gateway` config key + `spec.network.privateSubnet` schema field + demo profile
+- [x] 125-04-PLAN.md — `network_placement` round-trip through `SandboxMetadata` marshal/unmarshal
+- [x] 125-05-PLAN.md — compiler: `SandboxSubnets` threading + `associate_public_ip` emission (EC2 only)
+- [x] 125-06-PLAN.md — `km init`: new network outputs, NAT env export + drift WARN, cost print, refuse-to-disable guard
+- [x] 125-07-PLAN.md — `km doctor`: NAT-idle and private-without-NAT WARNs
+- [x] 125-08-PLAN.md — `km create`/`budget`: single-point placement resolution, sweep retarget, NAT-aware `RankAZs`, fail-fast
+- [x] 125-09-PLAN.md — operator doc, full-suite gate, and the eight-step live UAT (adds a ttl-handler auto-destroy step that exercises the v1.0.0-pinned destroy stub against a v1.3.0-created sandbox)
