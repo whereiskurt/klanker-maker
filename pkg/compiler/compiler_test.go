@@ -2,6 +2,7 @@ package compiler_test
 
 import (
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -122,6 +123,41 @@ func TestCompileEC2(t *testing.T) {
 	}
 	if artifacts.SandboxID != id {
 		t.Errorf("Compile() SandboxID = %q; want %q", artifacts.SandboxID, id)
+	}
+}
+
+// ============================================================
+// Task 5-01: NetworkConfig.EffectiveSandboxSubnets() tests
+// ============================================================
+
+func TestEffectiveSandboxSubnets_ResolvedTakesPrecedence(t *testing.T) {
+	n := &compiler.NetworkConfig{
+		PublicSubnets:  []string{"subnet-pub1", "subnet-pub2"},
+		SandboxSubnets: []string{"subnet-priv1", "subnet-priv2"},
+	}
+	got := n.EffectiveSandboxSubnets()
+	want := []string{"subnet-priv1", "subnet-priv2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("EffectiveSandboxSubnets() = %v; want %v", got, want)
+	}
+}
+
+func TestEffectiveSandboxSubnets_FallsBackToPublic(t *testing.T) {
+	n := &compiler.NetworkConfig{
+		PublicSubnets: []string{"subnet-pub1", "subnet-pub2"},
+	}
+	got := n.EffectiveSandboxSubnets()
+	want := []string{"subnet-pub1", "subnet-pub2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("EffectiveSandboxSubnets() = %v; want %v", got, want)
+	}
+}
+
+func TestEffectiveSandboxSubnets_BothEmptyReturnsEmpty(t *testing.T) {
+	n := &compiler.NetworkConfig{}
+	got := n.EffectiveSandboxSubnets()
+	if len(got) != 0 {
+		t.Errorf("EffectiveSandboxSubnets() = %v; want empty (docker substrate case)", got)
 	}
 }
 
