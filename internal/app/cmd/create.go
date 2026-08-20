@@ -112,6 +112,37 @@ func bestEffortRecordCapacity(ctx context.Context, store capacity.CapacityStore,
 	}
 }
 
+// checkPrivateSubnetGuard fails a create fast when the profile requests
+// private-subnet placement but the install has no NAT-served private
+// subnets. Pure — takes only the profile bool and the private-subnet slice
+// from network outputs, so it is table-testable without an AWS session
+// (Phase 125, REQ-125-PLUMB). Mirrors the mountEFS guard's shape: name the
+// exact km-config.yaml key and the command that fixes it.
+func checkPrivateSubnetGuard(wantsPrivate bool, privateSubnets []string) error {
+	if !wantsPrivate {
+		return nil
+	}
+	if len(privateSubnets) > 0 {
+		return nil
+	}
+	return fmt.Errorf("profile requests spec.network.privateSubnet but this install has no NAT gateway — " +
+		"set network.nat_gateway: true in km-config.yaml and run 'km init --dry-run=false' first")
+}
+
+// resolveSandboxSubnets is the SINGLE placement-resolution point (Phase 125,
+// REQ-125-PLUMB): it decides, once, which subnet list a sandbox's ENI lands
+// in — privateSubnets when the profile asks for private placement,
+// publicSubnets otherwise. Every downstream consumer (the Phase 124 AZ sweep,
+// the budget.go recompile path) must read the result of this call rather than
+// re-deciding placement itself, so the decision can never be forked or made
+// twice with different answers. Pure — no AWS session needed to test it.
+func resolveSandboxSubnets(wantsPrivate bool, publicSubnets, privateSubnets []string) []string {
+	if wantsPrivate {
+		return privateSubnets
+	}
+	return publicSubnets
+}
+
 // ErrAmbiguousInstallation is returned by resolveInstallationID when allowedRepos
 // contains only wildcards (or bare repos) AND multiple per-owner installation
 // parameters exist under /km/config/github/installations/. Without a concrete
@@ -623,6 +654,16 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			RegionLabel:       regionLabel,
 			EmailDomain:       cfg.GetEmailDomain(),
 			ArtifactsBucket:   artifactsBucket,
+			PrivateSubnets:    networkOutputs.PrivateSubnets,
+			NATGatewayIDs:     networkOutputs.NATGatewayIDs,
+		}
+
+		// Phase 125: fail fast, before any terragrunt artifact hits disk, when the
+		// profile asks for private-subnet placement but this install has no NAT
+		// gateway. Mirrors the mountEFS guard directly below (same shape: load
+		// outputs, check a profile bool against install state, name the fix).
+		if guardErr := checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.PrivateSubnets); guardErr != nil {
+			return guardErr
 		}
 	}
 
@@ -2433,6 +2474,14 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		RegionLabel:       regionLabel,
 		EmailDomain:       cfg.GetEmailDomain(),
 		ArtifactsBucket:   remoteArtifactsBucket,
+		PrivateSubnets:    networkOutputs.PrivateSubnets,
+		NATGatewayIDs:     networkOutputs.NATGatewayIDs,
+	}
+
+	// Phase 125: same fail-fast guard as the local create path — before any
+	// artifact is uploaded to S3 or dispatched to the create-handler Lambda.
+	if guardErr := checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.PrivateSubnets); guardErr != nil {
+		return "", guardErr
 	}
 
 	// Apply --ttl and --idle overrides (after profile resolution, before compilation).
