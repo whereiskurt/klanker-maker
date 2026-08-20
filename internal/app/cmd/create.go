@@ -113,16 +113,26 @@ func bestEffortRecordCapacity(ctx context.Context, store capacity.CapacityStore,
 }
 
 // checkPrivateSubnetGuard fails a create fast when the profile requests
-// private-subnet placement but the install has no NAT-served private
-// subnets. Pure — takes only the profile bool and the private-subnet slice
+// private-subnet placement but the install has no NAT gateways. Pure —
+// takes only the profile bool and the NAT-gateway-ID slice
 // from network outputs, so it is table-testable without an AWS session
 // (Phase 125, REQ-125-PLUMB). Mirrors the mountEFS guard's shape: name the
 // exact km-config.yaml key and the command that fixes it.
-func checkPrivateSubnetGuard(wantsPrivate bool, privateSubnets []string) error {
+func checkPrivateSubnetGuard(wantsPrivate bool, natGatewayIDs []string) error {
 	if !wantsPrivate {
 		return nil
 	}
-	if len(privateSubnets) > 0 {
+	// Phase 125 live-UAT finding: this originally tested len(privateSubnets) > 0,
+	// which is ALWAYS true — the private subnets exist unconditionally and remain
+	// as routeless islands when network.nat_gateway is false (that is precisely
+	// what makes the toggle reversible). The guard could therefore never fire, and
+	// `km create` happily provisioned priv-e8e27350 into a private subnet whose
+	// route table had no default route: no egress, not even reachable by SSM, and
+	// so completely unmanageable.
+	//
+	// NAT gateway IDs are the correct signal — they are empty exactly when the
+	// install has no egress path for private subnets.
+	if len(natGatewayIDs) > 0 {
 		return nil
 	}
 	return fmt.Errorf("profile requests spec.network.privateSubnet but this install has no NAT gateway — " +
@@ -694,7 +704,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		// profile asks for private-subnet placement but this install has no NAT
 		// gateway. Mirrors the mountEFS guard directly below (same shape: load
 		// outputs, check a profile bool against install state, name the fix).
-		if guardErr := checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.PrivateSubnets); guardErr != nil {
+		if guardErr := checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.NATGatewayIDs); guardErr != nil {
 			return guardErr
 		}
 	}
@@ -2536,7 +2546,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 
 	// Phase 125: same fail-fast guard as the local create path — before any
 	// artifact is uploaded to S3 or dispatched to the create-handler Lambda.
-	if guardErr := checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.PrivateSubnets); guardErr != nil {
+	if guardErr := checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.NATGatewayIDs); guardErr != nil {
 		return "", guardErr
 	}
 

@@ -31,10 +31,47 @@ func TestCreatePrivateSubnetGuard(t *testing.T) {
 		}
 	})
 
-	t.Run("private profile against install WITH private subnets does not error", func(t *testing.T) {
-		err := checkPrivateSubnetGuard(true, []string{"subnet-priv-1a", "subnet-priv-1b"})
+	t.Run("private profile against install WITH NAT gateways does not error", func(t *testing.T) {
+		err := checkPrivateSubnetGuard(true, []string{"nat-1a", "nat-1b"})
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	// Phase 125 live-UAT regression. The guard originally received
+	// networkOutputs.PrivateSubnets, which is NEVER empty — private subnets exist
+	// unconditionally and survive as routeless islands when network.nat_gateway is
+	// false. The guard therefore never fired, and `km create` provisioned
+	// priv-e8e27350 into a private subnet with no default route: no egress, not
+	// even registered with SSM, completely unmanageable.
+	//
+	// This case pins the semantic that broke: subnets present but ZERO NAT
+	// gateways is exactly the NAT-disabled install, and it MUST error. A unit test
+	// over the pure function could not have caught the original bug — the defect
+	// was in which slice the caller passed — so this test exists to document the
+	// required signal, and the two call sites in create.go must pass
+	// networkOutputs.NATGatewayIDs.
+	t.Run("private profile with subnets present but zero NAT gateways MUST error", func(t *testing.T) {
+		err := checkPrivateSubnetGuard(true, nil)
+		if err == nil {
+			t.Fatal("expected an error when the install has no NAT gateways, got nil")
+		}
+		if !strings.Contains(err.Error(), "network.nat_gateway") {
+			t.Errorf("error must name the km-config.yaml key to fix; got %v", err)
+		}
+	})
+
+	t.Run("guard call sites pass NAT gateway IDs, not private subnets", func(t *testing.T) {
+		src, readErr := os.ReadFile("create.go")
+		if readErr != nil {
+			t.Fatalf("read create.go: %v", readErr)
+		}
+		text := string(src)
+		if strings.Contains(text, "checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.PrivateSubnets)") {
+			t.Error("guard is wired to networkOutputs.PrivateSubnets, which is never empty — it must receive networkOutputs.NATGatewayIDs")
+		}
+		if got := strings.Count(text, "checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.NATGatewayIDs)"); got != 2 {
+			t.Errorf("expected both guard call sites to pass NATGatewayIDs, found %d", got)
 		}
 	})
 
