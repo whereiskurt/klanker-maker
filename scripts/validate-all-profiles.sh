@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # scripts/validate-all-profiles.sh — Phase 92 hard gate (updated Phase 122 Plan 02).
 #
-# Validates every concrete leaf profile in the 20-entry Profile Inventory using
+# Validates every concrete leaf profile in the 21-entry Profile Inventory using
 # `km validate`. Exits non-zero on any failure. Single source of truth for the
-# inventory (4 composed leaves + 8 pkg/profile/builtins entries + 7 GPU leaves).
+# inventory (5 composed leaves + 8 pkg/profile/builtins entries + 7 GPU leaves +
+# 1 Phase 125 private-subnet demo leaf).
 #
 # profiles/base/** is intentionally EXCLUDED (recursive): abstract base fragments
 # live there (including the new profiles/base/os/ and profiles/base/gpu/ subdirs)
@@ -42,6 +43,7 @@ PROFILES=(
   profiles/github.yaml
   profiles/h1.yaml
   profiles/spot.yaml
+  profiles/private-subnet.yaml  # Phase 125
   pkg/profile/builtins/ao.yaml
   pkg/profile/builtins/codex.yaml
   pkg/profile/builtins/goose.yaml
