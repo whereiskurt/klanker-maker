@@ -1895,13 +1895,18 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 
 		// SCP policy section
 		if loadedCfg.OrganizationAccountID != "" {
-			fmt.Fprintf(w, "  SCP Policy:        km-sandbox-containment\n")
+			// Display text must track the prefix the SCP is actually built with
+			// (BuildSCPPolicyFromPrefix); the literals here described a "km" install
+			// only, and misreported both the policy name and the trusted roles on
+			// every other install.
+			scpPrefix := loadedCfg.GetResourcePrefix()
+			fmt.Fprintf(w, "  SCP Policy:        %s-sandbox-containment\n", scpPrefix)
 			fmt.Fprintf(w, "    Target:          Application account (%s)\n", loadedCfg.ApplicationAccountID)
 			fmt.Fprintf(w, "    Threat coverage: SG mutation, network escape, instance mutation,\n")
 			fmt.Fprintf(w, "                     IAM escalation, storage exfiltration, SSM pivot,\n")
 			fmt.Fprintf(w, "                     Organizations discovery, region lock\n")
-			fmt.Fprintf(w, "    Trusted roles:   AWSReservedSSO_*_*, km-provisioner-*, km-lifecycle-*,\n")
-			fmt.Fprintf(w, "                     km-ecs-spot-handler, km-ttl-handler\n")
+			fmt.Fprintf(w, "    Trusted roles:   AWSReservedSSO_*_*, %[1]s-provisioner-*, %[1]s-lifecycle-*,\n", scpPrefix)
+			fmt.Fprintf(w, "                     %[1]s-ecs-spot-handler, %[1]s-ttl-handler\n", scpPrefix)
 			fmt.Fprintf(w, "    Deploy via:      km bootstrap (organization account credentials required)\n")
 		} else {
 			fmt.Fprintf(w, "  SCP Policy:        [SKIPPED — accounts.organization not set]\n")
