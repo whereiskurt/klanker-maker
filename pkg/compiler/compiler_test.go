@@ -177,7 +177,7 @@ func TestCompileEC2ServiceHCL(t *testing.T) {
 		`substrate_module = "ec2spot"`,
 		"ec2spots",
 		"vpc_id",
-		"public_subnets",
+		"sandbox_subnets",
 		"availability_zones",
 		"module_inputs",
 	}
@@ -185,6 +185,93 @@ func TestCompileEC2ServiceHCL(t *testing.T) {
 		if !strings.Contains(hcl, want) {
 			t.Errorf("ServiceHCL missing %q\nGot:\n%s", want, hcl)
 		}
+	}
+}
+
+// ============================================================
+// Task 5-02: sandbox_subnets rename + associate_public_ip tests
+// ============================================================
+
+// TestCompileEC2ServiceHCL_SandboxSubnetsKey is Task 2 behaviour Test 1: an EC2 profile's
+// module_inputs carries the renamed sandbox_subnets key.
+func TestCompileEC2ServiceHCL_SandboxSubnetsKey(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+
+	artifacts, err := compiler.Compile(p, "sb-privsub1", false, testNetwork(), nil)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	if !strings.Contains(artifacts.ServiceHCL, "sandbox_subnets") {
+		t.Errorf("ServiceHCL missing sandbox_subnets\nGot:\n%s", artifacts.ServiceHCL)
+	}
+}
+
+// TestCompileEC2ServiceHCL_AssociatePublicIP_PrivateSubnetTrue is Task 2 behaviour Test 2:
+// spec.network.privateSubnet: true compiles to associate_public_ip = false.
+func TestCompileEC2ServiceHCL_AssociatePublicIP_PrivateSubnetTrue(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+	p.Spec.Network.PrivateSubnet = true
+
+	artifacts, err := compiler.Compile(p, "sb-privsub2", false, testNetwork(), nil)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	if !strings.Contains(artifacts.ServiceHCL, "associate_public_ip = false") {
+		t.Errorf("ServiceHCL missing associate_public_ip = false\nGot:\n%s", artifacts.ServiceHCL)
+	}
+}
+
+// TestCompileEC2ServiceHCL_AssociatePublicIP_DefaultTrue is Task 2 behaviour Test 3: a
+// profile without spec.network.privateSubnet compiles to associate_public_ip = true.
+func TestCompileEC2ServiceHCL_AssociatePublicIP_DefaultTrue(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+
+	artifacts, err := compiler.Compile(p, "sb-privsub3", false, testNetwork(), nil)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	if !strings.Contains(artifacts.ServiceHCL, "associate_public_ip = true") {
+		t.Errorf("ServiceHCL missing associate_public_ip = true\nGot:\n%s", artifacts.ServiceHCL)
+	}
+}
+
+// TestCompileECSServiceHCL_PublicSubnetsUnchanged is Task 2 behaviour Test 4: the ECS path
+// is untouched by the EC2-only rename — it still emits public_subnets.
+func TestCompileECSServiceHCL_PublicSubnetsUnchanged(t *testing.T) {
+	p := loadTestProfile(t, "ecs-basic.yaml")
+
+	artifacts, err := compiler.Compile(p, "sb-privsub4", false, testNetwork(), nil)
+	if err != nil {
+		t.Fatalf("Compile(ECS) error = %v", err)
+	}
+
+	if !strings.Contains(artifacts.ServiceHCL, "public_subnets") {
+		t.Errorf("ECS ServiceHCL missing public_subnets\nGot:\n%s", artifacts.ServiceHCL)
+	}
+}
+
+// TestCompileEC2ServiceHCL_SandboxSubnetsUsesPrivateList is Task 2 behaviour Test 5: an EC2
+// profile compiled with a NetworkConfig whose SandboxSubnets is set to the private list
+// emits those private subnet IDs, not the public ones.
+func TestCompileEC2ServiceHCL_SandboxSubnetsUsesPrivateList(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+	network := testNetwork()
+	network.PrivateSubnets = []string{"subnet-priv1", "subnet-priv2"}
+	network.SandboxSubnets = network.PrivateSubnets
+
+	artifacts, err := compiler.Compile(p, "sb-privsub5", false, network, nil)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	if !strings.Contains(artifacts.ServiceHCL, "subnet-priv1") {
+		t.Errorf("ServiceHCL missing private subnet subnet-priv1\nGot:\n%s", artifacts.ServiceHCL)
+	}
+	if strings.Contains(artifacts.ServiceHCL, "subnet-pub1") {
+		t.Errorf("ServiceHCL unexpectedly contains public subnet subnet-pub1 when SandboxSubnets was resolved to private\nGot:\n%s", artifacts.ServiceHCL)
 	}
 }
 

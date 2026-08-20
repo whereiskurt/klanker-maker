@@ -102,7 +102,7 @@ const ec2ServiceHCLTemplate = `locals {
   module_inputs = {
     sandbox_id         = "{{ .SandboxID }}"
     vpc_id             = "{{ .VPCID }}"
-    public_subnets     = [{{ joinStrings .PublicSubnets }}]
+    sandbox_subnets    = [{{ joinStrings .SandboxSubnets }}]
     availability_zones = [{{ joinStrings .AvailabilityZones }}]
 
     ec2spots = [
@@ -133,6 +133,7 @@ const ec2ServiceHCLTemplate = `locals {
     }
 
     enable_bedrock = {{ .EnableBedrock }}
+    associate_public_ip = {{ .AssociatePublicIP }}
 
     # EC2 storage and AMI (Phase 33 / 33.1)
     root_volume_size_gb    = {{ .RootVolumeSizeGB }}
@@ -483,7 +484,12 @@ type ec2HCLParams struct {
 	UseSpot           bool
 	UserDataBase64    string
 	VPCID             string
-	PublicSubnets     []string
+	// SandboxSubnets is the RESOLVED subnet list the sandbox ENI lands in — either the
+	// shared VPC's public or private subnets, chosen by the caller via
+	// NetworkConfig.EffectiveSandboxSubnets() before this struct is built. Named
+	// SandboxSubnets (not PublicSubnets) because a field holding private subnet IDs but
+	// named "public" would be exactly the naming lie Phase 125 removes (Phase 125).
+	SandboxSubnets    []string
 	AvailabilityZones []string
 	SGEgressRules     []SGRule
 	IAMPolicy         *IAMSessionPolicy
@@ -496,6 +502,8 @@ type ec2HCLParams struct {
 	WarningThreshold float64 // warning fraction (default 0.8)
 	// Bedrock access control
 	EnableBedrock bool // true unless --no-bedrock flag is set
+	// Network placement (Phase 125)
+	AssociatePublicIP bool // negation of spec.network.privateSubnet; always emitted explicitly
 	// GitHub token inputs (GH-02, GH-04, GH-05)
 	HasGitHub          bool     // true when sourceAccess.github is set
 	GitHubSSMPath      string   // /sandbox/{sandbox-id}/github-token
@@ -826,10 +834,11 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		UseSpot:           useSpot,
 		UserDataBase64:    userData,
 		VPCID:             network.VPCID,
-		PublicSubnets:     network.PublicSubnets,
+		SandboxSubnets:    network.EffectiveSandboxSubnets(),
 		AvailabilityZones: network.AvailabilityZones,
 		SGEgressRules:     sgRules,
 		IAMPolicy:         iamPolicy,
+		AssociatePublicIP: !p.Spec.Network.PrivateSubnet,
 		// Budget enforcement fields
 		HasBudget:        hasBudget,
 		SpotRateUSD:      network.SpotRateUSD,
