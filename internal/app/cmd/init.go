@@ -1848,6 +1848,25 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			os.Setenv("KM_H1_BOT_HANDLE", cfg.H1.BotHandle) //nolint:errcheck
 		}
 	}
+
+	// Phase 125: KM_NAT_GATEWAY_ENABLED — install-level toggle for whether the
+	// per-AZ NAT gateway infrastructure exists. Consumed by
+	// infra/live/use1/network/terragrunt.hcl
+	// tobool(get_env("KM_NAT_GATEWAY_ENABLED", "false")). Only export when the
+	// operator has explicitly set network.nat_gateway in km-config.yaml (nil =>
+	// omit => terragrunt default "false" applies => NAT dormant, Phase 124
+	// byte-identical). env-wins: when the env var is already set to a DIFFERENT
+	// value, emit a drift WARN and do NOT overwrite it. Mirrors the
+	// KM_SLACK_DEFAULT_ROUTER / KM_GITHUB_DEFAULT_ROUTER *bool tri-state pattern
+	// exactly.
+	if cfg.Network.NATGateway != nil {
+		yamlNATGatewayEnabled := strconv.FormatBool(*cfg.Network.NATGateway)
+		if envVal := os.Getenv("KM_NAT_GATEWAY_ENABLED"); envVal != "" && envVal != yamlNATGatewayEnabled {
+			fmt.Fprintf(os.Stderr, "WARN: KM_NAT_GATEWAY_ENABLED=%s (env) overrides km-config.yaml network.nat_gateway=%s\n", envVal, yamlNATGatewayEnabled)
+		} else if envVal == "" {
+			os.Setenv("KM_NAT_GATEWAY_ENABLED", yamlNATGatewayEnabled) //nolint:errcheck
+		}
+	}
 }
 
 // EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at
@@ -2328,6 +2347,24 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 			continue
 		}
 
+		// Phase 125: NAT gateway cost notice, scoped to the network module only.
+		// Fires BEFORE the apply (not after) — this is the entire reason the
+		// toggle exists, so the operator must see the bill before spending it,
+		// not after.
+		if mod.name == "network" && os.Getenv("KM_NAT_GATEWAY_ENABLED") == "true" {
+			fmt.Println()
+			fmt.Println("  NAT gateway cost notice:")
+			fmt.Println("    Enabling network.nat_gateway provisions one NAT gateway + one Elastic IP")
+			fmt.Println("    per AZ (4 AZs by default) — roughly $132/month baseline (~$0.045/hr each)")
+			fmt.Println("    PLUS ~$0.045/GB of data processed through each NAT gateway.")
+			fmt.Println("    Example: a GPU profile pulling 300GB of model weights costs ~$13.50 in")
+			fmt.Println("    NAT data-processing charges alone, per box.")
+			fmt.Println("    This toggle is reversible — disable network.nat_gateway and re-run")
+			fmt.Println("    'km init' once no private sandboxes are running. 'km doctor' flags NAT")
+			fmt.Println("    sitting idle (enabled with zero private sandboxes).")
+			fmt.Println()
+		}
+
 		// Phase 84: preflight check for the regional ses module.
 		// The ses v2.0.0 module references "sandbox-email-shared" as a string constant —
 		// no Terraform data source for SES rule sets exists. If the shared rule set
@@ -2423,6 +2460,20 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 			}
 			if v, ok := outputMap["availability_zones"]; ok {
 				fmt.Printf("    AZs:     %v\n", extractValue(v))
+			}
+			// Phase 125: private subnets + per-AZ NAT gateway ids/EIPs — printed
+			// only when the module actually emitted them (network v1.1.0+; a
+			// v1.0.0 module or NAT-disabled apply may omit or empty these).
+			// The NAT EIPs are what live UAT step 4 compares an observed egress
+			// source IP against, so print them in AZ order.
+			if v, ok := outputMap["private_subnets"]; ok {
+				fmt.Printf("    Private Subnets: %v\n", extractValue(v))
+			}
+			if v, ok := outputMap["nat_gateway_ids"]; ok {
+				fmt.Printf("    NAT Gateways:    %v\n", extractValue(v))
+			}
+			if v, ok := outputMap["nat_eip_public_ips"]; ok {
+				fmt.Printf("    NAT EIPs:        %v\n", extractValue(v))
 			}
 			fmt.Println()
 		}
