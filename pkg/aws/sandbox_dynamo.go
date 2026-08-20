@@ -326,6 +326,20 @@ func unmarshalSlackFields(item map[string]dynamodbtypes.AttributeValue, meta *Sa
 	}
 }
 
+// unmarshalNetworkFields reads the Phase 125 network_placement attribute from a
+// raw DynamoDB item into SandboxMetadata. Called by ReadSandboxMetadataDynamo,
+// ListAllSandboxesByDynamo, and ListAllSandboxMetadataDynamo after
+// toSandboxMetadata() — every entry point that turns a raw DynamoDB item into a
+// SandboxMetadata. A pre-125 row has no network_placement attribute, so absence
+// here leaves meta.NetworkPlacement at its zero value (""), which callers treat
+// as public (the footgun guard this field exists to close —
+// project_sandboxmetadata_lossy_roundtrip).
+func unmarshalNetworkFields(item map[string]dynamodbtypes.AttributeValue, meta *SandboxMetadata) {
+	if v, ok := item["network_placement"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		meta.NetworkPlacement = v.Value
+	}
+}
+
 // readTriStateBool reads a tri-state *bool DynamoDB attribute that may have been
 // written either as a native BOOL (marshalSandboxItem) or as a string
 // "true"/"false" (UpdateSandboxAttr in create_slack_inbound.go). Returns nil when
@@ -566,6 +580,18 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 		item["frozen_by"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.FrozenBy}
 	}
 
+	// Phase 125 — per-profile private-subnet placement. Only written when
+	// non-empty, so rows for sandboxes that never set it stay byte-identical.
+	// Symmetric with unmarshalNetworkFields. Must be emitted here so
+	// read-modify-write paths (resume/extend/ttl-handler full-row PutItem) do
+	// NOT silently strip it on the next write
+	// (project_sandboxmetadata_lossy_roundtrip footgun) — the km init
+	// refuse-to-disable-NAT guard depends on this attribute surviving every
+	// lifecycle write.
+	if meta.NetworkPlacement != "" {
+		item["network_placement"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.NetworkPlacement}
+	}
+
 	return item
 }
 
@@ -603,6 +629,7 @@ func ReadSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI, t
 	unmarshalGitHubFields(out.Item, meta)
 	unmarshalFailureFields(out.Item, meta)
 	unmarshalFrozenFields(out.Item, meta)
+	unmarshalNetworkFields(out.Item, meta)
 	return meta, nil
 }
 
@@ -670,6 +697,7 @@ func ListAllSandboxesByDynamo(ctx context.Context, client SandboxMetadataAPI, ta
 			unmarshalGitHubFields(item, meta)
 			unmarshalFailureFields(item, meta)
 			unmarshalFrozenFields(item, meta)
+			unmarshalNetworkFields(item, meta)
 			records = append(records, metadataToRecord(meta))
 		}
 
@@ -715,6 +743,7 @@ func ListAllSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI
 			unmarshalGitHubFields(item, meta)
 			unmarshalFailureFields(item, meta)
 			unmarshalFrozenFields(item, meta)
+			unmarshalNetworkFields(item, meta)
 			metas = append(metas, *meta)
 		}
 

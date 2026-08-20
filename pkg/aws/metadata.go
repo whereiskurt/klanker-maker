@@ -106,4 +106,19 @@ type SandboxMetadata struct {
 	// FrozenBy identifies the agent that froze the sandbox.
 	// "auto:{action}:{window}" for quota-triggered freezes; "operator:{id}" for manual.
 	FrozenBy string `json:"frozen_by,omitempty"`
+
+	// Phase 125 — per-profile private-subnet placement.
+	// NetworkPlacement is "private" or "public", fixed for the sandbox's entire
+	// lifetime (placement is an EC2-launch-time decision, not a runtime toggle).
+	// Empty means a pre-125 sandbox row and MUST be treated as public.
+	//
+	// MUST round-trip through marshal/unmarshal: every read-modify-write path
+	// (resume.go TTL recreation, extend.go, the ttl-handler Lambda) PutItems the
+	// whole row — dropping this field would revert the sandbox to looking public
+	// on the next lifecycle write (the SandboxMetadata lossy round-trip footgun
+	// documented in project_sandboxmetadata_lossy_roundtrip). The `km init`
+	// refuse-to-disable-NAT guard (Plan 06) finds running private sandboxes by
+	// this attribute alone, so a dropped field lets the operator tear NAT out
+	// from under a live private box without warning.
+	NetworkPlacement string `json:"network_placement,omitempty"`
 }
