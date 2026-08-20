@@ -1,27 +1,12 @@
 package compiler_test
 
 import (
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
-
-// repoRoot returns the absolute path to the repo root by walking up from this test file.
-// Uses the runtime caller to locate the file and navigates to the repo root.
-func repoRootForSecretsTest(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	// file is .../klankrmkr/pkg/compiler/compiler_secrets_test.go
-	// Navigate up 3 dirs: compiler -> pkg -> klankrmkr
-	return filepath.Join(filepath.Dir(file), "..", "..")
-}
 
 // The single shared-literal sandbox-template version check that used to live
 // here was superseded in Phase 125 Plan 02 by the per-substrate assertion in
