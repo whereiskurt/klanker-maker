@@ -29,6 +29,14 @@ func (f *fakeSlackAPIWithMembers) FindChannelByName(_ context.Context, _ string,
 }
 func (f *fakeSlackAPIWithMembers) JoinChannel(_ context.Context, _ string) error      { return nil }
 func (f *fakeSlackAPIWithMembers) InviteShared(_ context.Context, _, _ string) error  { return nil }
+// Healthy-channel stubs — these tests cover the transcript audience warning, not
+// the archive trap.
+func (f *fakeSlackAPIWithMembers) ChannelDetails(_ context.Context, _ string) (string, bool, bool, error) {
+	return "", false, true, nil
+}
+
+func (f *fakeSlackAPIWithMembers) UnarchiveChannel(_ context.Context, _ string) error { return nil }
+
 func (f *fakeSlackAPIWithMembers) ChannelInfo(_ context.Context, _ string) (int, bool, error) {
 	return f.members, f.isMem, f.err
 }

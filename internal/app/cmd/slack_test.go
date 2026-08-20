@@ -95,6 +95,14 @@ func (f *fakeSlackInitAPI) ChannelInfo(_ context.Context, _ string) (int, bool, 
 	return 0, false, nil
 }
 
+// Healthy-channel stubs for the grown SlackAPI interface — slack init/test paths
+// do not resolve a stored alias mapping, so the archive branch never runs here.
+func (f *fakeSlackInitAPI) ChannelDetails(_ context.Context, _ string) (string, bool, bool, error) {
+	return "", false, false, nil
+}
+
+func (f *fakeSlackInitAPI) UnarchiveChannel(_ context.Context, _ string) error { return nil }
+
 type fakeSSM struct {
 	store map[string]string
 	puts  []string

@@ -89,6 +89,13 @@ type SlackAPI interface {
 	JoinChannel(ctx context.Context, channelID string) error
 	InviteShared(ctx context.Context, channelID, email string) error
 	ChannelInfo(ctx context.Context, channelID string) (memberCount int, isMember bool, err error)
+	// ChannelDetails surfaces is_archived (and the channel's ACTUAL name), which
+	// ChannelInfo does not. Without it an archived channel reads as a healthy
+	// cache hit and the create dies later at conversations.join. UnarchiveChannel
+	// is the recovery: archive-on-destroy is the default, and the alias→channel
+	// mapping is durable, so reuse MUST be able to lift a channel back out.
+	ChannelDetails(ctx context.Context, channelID string) (name string, archived, isMember bool, err error)
+	UnarchiveChannel(ctx context.Context, channelID string) error
 	// Phase 72 invite orchestrator methods (also implements slack.InviteAPI).
 	LookupUserByEmail(ctx context.Context, email string) (userID string, found bool, err error)
 	InviteUserToChannelStrict(ctx context.Context, channelID, userID string) error
@@ -174,16 +181,26 @@ func storeChannelMapping(ctx context.Context, store SlackChannelStore, ssmStore 
 //	ok=true             → channel live, use it
 //	gone=true           → definitive channel_not_found, invalidate + recreate
 //	ok=false,gone=false → transient after retries → caller optimistically uses the ID
-func validateStoredChannel(ctx context.Context, api SlackAPI, channelID string) (ok, gone bool) {
+//
+// archived reports that the channel exists but is archived, and actualName carries
+// the channel's real current name. Both are only meaningful when ok=true.
+//
+// This probes ChannelDetails rather than ChannelInfo precisely so is_archived is
+// visible: previously an archived channel returned ok=true here, the resolver
+// logged path=cache_hit ("reused a live channel"), and the create then died at
+// conversations.join with is_archived — after the mapping had already been
+// blessed. Only channel_not_found may invalidate a stored mapping; archived is a
+// recoverable state, not a dead one.
+func validateStoredChannel(ctx context.Context, api SlackAPI, channelID string) (ok, gone, archived bool, actualName string) {
 	var lastErr error
 	for attempt := 0; attempt <= slackInfoRetries; attempt++ {
-		if _, _, err := api.ChannelInfo(ctx, channelID); err == nil {
-			return true, false
-		} else {
-			lastErr = err
-			if slack.IsChannelNotFound(err) {
-				return false, true
-			}
+		name, isArchived, _, err := api.ChannelDetails(ctx, channelID)
+		if err == nil {
+			return true, false, isArchived, name
+		}
+		lastErr = err
+		if slack.IsChannelNotFound(err) {
+			return false, true, false, ""
 		}
 		if attempt < slackInfoRetries {
 			if sleepErr := slackResolveSleep(ctx, slackInfoRetryDelay); sleepErr != nil {
@@ -193,7 +210,7 @@ func validateStoredChannel(ctx context.Context, api SlackAPI, channelID string) 
 	}
 	log.Debug().Err(lastErr).Str("channel", channelID).
 		Msg("conversations.info transient after retries — optimistically trusting stored ID")
-	return false, false
+	return false, false, false, ""
 }
 
 // slackResolveFailFast returns the fail-fast error when a channel exists but km
@@ -374,9 +391,23 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 					return "", false, fmt.Errorf("bot needs channels:join scope to ensure membership in #%s (channel %s): %w\n"+
 						"Add the scope in Slack App config → OAuth & Permissions, reinstall the app, then re-run km slack rotate-token", channelName, chID, joinErr)
 				case isAPIErr && apierr.Code == "is_archived":
-					return "", false, fmt.Errorf("channel #%s (%s) is archived; pick a different --alias or unarchive it via:\n"+
+					// Backstop only — the resolver now unarchives on reuse, so reaching
+					// here means the unarchive itself failed (missing scope, or an
+					// override-mode/created-channel path that skipped the resolver).
+					//
+					// Report the channel's REAL name, not the derived template name.
+					// The old message interpolated the derived name with the stored ID,
+					// naming a channel that never existed and making a stale-mapping
+					// problem read as a naming problem.
+					realName := channelName
+					if n, _, _, dErr := api.ChannelDetails(ctx, chID); dErr == nil && n != "" {
+						realName = n
+					}
+					return "", false, fmt.Errorf("channel #%s (%s) is archived and km could not unarchive it "+
+						"(the bot needs channels:manage for public / groups:write for private channels).\n"+
+						"Recover with `km slack forget <alias>` to drop the stale mapping, or unarchive manually:\n"+
 						"  curl -H \"Authorization: Bearer $BOT_TOKEN\" -d \"channel=%s\" https://slack.com/api/conversations.unarchive",
-						channelName, chID, chID)
+						realName, chID, chID)
 				default:
 					log.Warn().Err(joinErr).Str("channel", chID).Msg("auto-join channel failed (non-fatal); /invite the bot manually if needed")
 				}
@@ -424,7 +455,39 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 
 		// ── Step 1: lookup-first ─────────────────────────────────────────────────
 		if storedID, fromDDB := lookupStoredChannelID(ctx, store, ssmStore, slackPrefix, alias, channelName); storedID != "" {
-			ok, gone := validateStoredChannel(ctx, api, storedID)
+			ok, gone, archived, actualName := validateStoredChannel(ctx, api, storedID)
+
+			// A renamed profile template has NO effect on resolution for an
+			// already-mapped alias — the DDB row wins and the derived name is never
+			// compared. Surfacing the mismatch is the difference between "km reused
+			// a channel I didn't expect" being silent and being visible.
+			if ok && actualName != "" && actualName != channelName {
+				log.Warn().Str("alias", alias).Str("stored_channel", actualName).
+					Str("derived_name", channelName).Str("channel_id", storedID).
+					Msg("alias is pinned to a channel whose name differs from the profile's template; " +
+						"the stored mapping wins — use `km slack forget <alias>` to re-derive")
+			}
+
+			// Archived is recoverable, not dead. Lift it back out and carry on;
+			// otherwise ensureBotMemberAndInvite's conversations.join aborts the
+			// whole create with is_archived and no in-product remedy.
+			if ok && archived {
+				if unErr := api.UnarchiveChannel(ctx, storedID); unErr != nil {
+					log.Warn().Err(unErr).Str("channel_id", storedID).Str("channel", actualName).
+						Msg("stored channel is archived and unarchive failed; falling through to the join error")
+				} else {
+					path = "cache_unarchived"
+					log.Info().Str("alias", alias).Str("channel_id", storedID).Str("channel", actualName).
+						Msg("reused archived channel (unarchived)")
+					if !fromDDB && store != nil && alias != "" {
+						if upsertErr := store.UpsertByAlias(ctx, alias, storedID); upsertErr != nil {
+							log.Debug().Err(upsertErr).Str("alias", alias).Msg("DDB back-fill on unarchive failed (non-fatal)")
+						}
+					}
+					return ensureBotMemberAndInvite(storedID)
+				}
+			}
+
 			switch {
 			case ok:
 				// cache_hit: stored ID is live → O(1), no create.

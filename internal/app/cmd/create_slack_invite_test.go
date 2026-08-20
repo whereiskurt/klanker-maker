@@ -65,6 +65,15 @@ func (f *fakeSlackAPIForInvite) JoinChannel(_ context.Context, _ string) error {
 	return f.joinChannelErr
 }
 
+// ChannelDetails/UnarchiveChannel: healthy-channel stubs. These tests exercise the
+// invite orchestrator, not the archive trap, so a live non-archived channel keeps
+// their behaviour identical to before the SlackAPI interface grew.
+func (f *fakeSlackAPIForInvite) ChannelDetails(_ context.Context, _ string) (string, bool, bool, error) {
+	return "", false, true, nil
+}
+
+func (f *fakeSlackAPIForInvite) UnarchiveChannel(_ context.Context, _ string) error { return nil }
+
 func (f *fakeSlackAPIForInvite) ChannelInfo(_ context.Context, _ string) (int, bool, error) {
 	return f.channelInfoCount, f.channelInfoMember, f.channelInfoErr
 }
