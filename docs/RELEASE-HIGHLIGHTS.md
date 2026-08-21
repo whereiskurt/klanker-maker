@@ -13,75 +13,113 @@
 -->
 ## ✨ Major additions highlighted
 
-### 🚀 GPU local-model serving — 🧪 **Preview** (Phase 122)
+This release is about **where a sandbox sits on the network and what it can reach** — private
+placement, egress deny lists, and letting a running sandbox tighten its own policy.
 
-> **Preview / early-adopter.** Shipped code-complete, but **live end-to-end validation is still
-> in progress** — the GPU profiles and full Slack→model flows (e.g. Slack→Kimi, Slack→GLM) have
-> not yet been exercised end-to-end, are gated on the G-instance quota, and may change. **Not
-> recommended for production use yet.**
+### 🕸️ Per-profile private-subnet sandboxes with per-AZ NAT gateways (Phase 125)
 
-Seven new GPU SandboxProfiles stand up **vLLM**-served local models on g6e instances (4–8× NVIDIA
-L40S), with an on-box multi-provider gateway that makes the local model reachable from *every* km
-interface:
+> **Live UAT pending.** Code-complete and unit-verified; the full seven-step live runbook in
+> `docs/private-subnet-nat.md` has not been executed end to end.
 
-- **7 GPU profiles** — `gpu-qwen-{12x,48x}`, `gpu-llama-{12x,48x}`, `gpu-glmair-12x`,
-  `gpu-kimidev-12x`, `gpu-glm46-48x` — serving 70B-class weights on a Deep Learning AMI
-  (Ubuntu 24.04), weights cached on a 300 GB persistent volume (`HF_HOME`), exposed as
-  `--served-model-name local`. Composed from a new abstract `base/gpu/serve` inheritance fragment.
-- **On-box Bifrost gateway (`:8001`) — a real multi-provider router**, not a shim. Codex now
-  requires the OpenAI **Responses API** and vLLM speaks only Chat Completions, so Bifrost
-  (`maximhq/bifrost:v1.6.0`) bridges Responses → vLLM, serves Anthropic Messages for Claude Code,
-  and routes purely by the `provider/model` string the caller sends — `vllm-local/local`,
-  `bedrock/…` (keyless instance-role SigV4), `anthropic/…`, `bedrock/openai.gpt-oss-120b`. Cloud
-  routes flow through the MITM proxy and are **metered automatically**; OTLP telemetry lands in
-  `km otel`.
-- **Reach the local model from anywhere** — box-global Codex repoint
-  (`spec.agent.default: codex`) makes the 70B reachable via **VS Code (Continue)**, **Slack
-  chat-with-resume**, on-box terminal/headless Codex, and your laptop via the new
-  **`km model start <id> [--anthropic]`** (SSM port-forward). Claude stays cloud-pointed on-box,
-  giving you a **`/claude` (cloud) vs `/codex` (local 70B) A/B in one Slack channel**.
-- **New CLI:** `km model start` / `km model status`.
-- ⚠️ **Prereq:** the On-Demand **G/VT instances** vCPU quota (`L-DB2E81BA`) defaults to **0** per
-  account — request it in your target account/region first. Full runbook: `docs/gpu-model-serving.md`.
+A sandbox's ENI can now land in a **private subnet** behind NAT instead of a public subnet with a
+public IPv4 — controlled by two decoupled, **dormant-by-default** toggles:
 
-### 🛰️ Platform-wide AZ failover + capacity feasibility (Phase 124)
+- **`network.nat_gateway`** (install-level, `km-config.yaml`) decides whether NAT/EIP
+  infrastructure *exists*. **`spec.network.privateSubnet`** (per-profile) decides whether *this*
+  sandbox lands private. Both absent ⇒ byte-identical to before.
+- **One NAT gateway + one EIP per AZ**, each in the public subnet of the AZ it serves — not one
+  shared NAT. The Phase 124 AZ-failover sweep rotates launches across all four AZs, so a shared
+  NAT would add cross-AZ data-transfer charges to every byte and make one AZ a SPOF for the whole
+  install's internet access.
+- **`network.private_subnet_count`** (1–4, absent = all four) sizes the private topology so you can
+  trade AZ-rotation breadth against the NAT bill.
+- ⚠️ **Cost:** roughly **$132/month** for four AZs plus **$0.045/GB** processed — a GPU profile
+  pulling 300 GB of weights is ~$13.50 in NAT processing alone. This is exactly why the toggle is
+  reversible: disabling NAT leaves the private subnets as free, routeless islands.
+- **Guards:** `km create` fails fast when a private profile meets a NAT-less install; `km init`
+  refuses to disable NAT while a private sandbox is running; `km doctor` warns on NAT-enabled-but-idle
+  and on private-sandbox-without-NAT.
 
-`km create` now hunts for capacity instead of failing on the first Availability Zone — directly
-taming the GPU-launch pain above (and every spot/on-demand EC2 launch):
+Full runbook, reversal procedure, and the one-time route-table split: `docs/private-subnet-nat.md`.
 
-- **AZ sweep with classify-and-retry** — `km create` pre-orders the region's AZs, then on a launch
-  failure classifies the cause: transient capacity errors (ICE / spot price / spot limit / waiter
-  timeout) **rotate to the next AZ**, while quota / auth / invalid errors **fail fast** (no AZ
-  rotation can clear a quota wall).
-- **`km capacity [profile | --type t]`** — a per-AZ feasibility table with honest verdicts
-  (`likely`, `recently-dry`, `not-offered`, `quota-blocked`, `unknown`). Capacity is probabilistic,
-  so it never claims "available."
-- **`km create --wait-for-capacity[=30m]`** — an outer backoff loop that re-sweeps every 5 minutes
-  until capacity frees up or the deadline hits. Dormant by default (single-sweep without the flag).
-- **GPU quota fail-fast gate** — for GPU families, `km create` checks the `L-DB2E81BA` G/VT quota
-  *before* sweeping and fails immediately (with the increase URL) when headroom is 0.
-- **New `{prefix}-capacity` table** records recent ICE / success per (instance-type, AZ) so the
-  sweep develops sticky AZ preference; `km doctor` checks the table + GPU quota.
+### 🚫 Egress deny lists — subtract known-bad from a wide-open profile
 
-### 🛡️ Action quotas + freeze quarantine (Phase 121)
+The egress policy was allowlist-only, with `*` as an allow-everything wildcard. That made the
+natural authoring loop inexpressible: run wide open under `learnMode`, subtract the known-bad as you
+find it, then replace `*` with the generated allowlist. The middle step had no allowlist-shaped
+answer, because narrowing `*` means enumerating the very list learn mode is being run to discover.
 
-A circuit-breaker for high-impact outbound actions — like budgets, but for *actions* (PRs opened,
-Slack posts, emails sent) — to contain runaway loops or an offensive-test breakout that
-accidentally succeeds:
+```yaml
+spec:
+  network:
+    egress:
+      allowedDNSSuffixes: ["*"]
+      deniedDNSSuffixes: ["evil.example.com", ".tracker.example.net"]
+      deniedHosts: ["evil.example.com"]
+```
 
-- **`spec.limits` / install-level `limits:`** with per-window caps (lifetime / perHour / perDay)
-  and `onBreach: warn | block | freeze`; a limit of **0 is a hard-deny floor**.
-- **Freeze quarantine** — auto-freeze on breach; `km freeze` / `km unlock` to drive it manually,
-  a `FROZEN` marker in `km list` / `km status`, and a live **Quotas** usage section.
-- **`km-quota-alerter`** Lambda (DDB-Stream → SES + Slack) on first breach; enforced at the proxy
-  chokepoint and the Slack + HackerOne bridges. **Dormant by default.** See `docs/action-quotas.md`.
+- **A deny beats every allow** — including the `*` wildcard, the GitHub repo-filter carve-out, the
+  OpenAI budget path, and the Bedrock/SES/Anthropic MITM interceptors. The deny gate is registered
+  ahead of all of them, because goproxy dispatches first-match and a deny evaluated later would be
+  silently bypassable.
+- **Enforced at every layer** — the DNS proxy (NXDOMAIN), the HTTP proxy (403), and the eBPF
+  resolver, which also refuses to seed a denied host's IPs into the BPF trie.
+- Deny matching is deliberately **broader** than allow matching: a bare entry covers subdomains, so
+  `evil.example.com` also blocks `api.evil.example.com`. Strictness on an allowlist permits less;
+  the same strictness on a denylist would fail open.
+- **Dormant by default** — a profile declaring no denies renders byte-identical user-data.
 
-### 🧬 Profiles reset + OS-layered fragment library (Phase 120)
+### 🔒 Runtime egress narrowing — a sandbox can tighten its own policy
 
-The built-in profile library was rebuilt on the composable-inheritance engine: lean leaves that
-`extends:` a shared **`profiles/base/`** fragment set + **OS-layered base fragments**, so profiles
-compose instead of copy-paste — which is exactly what makes the 7 GPU profiles above so small.
+`spec.network.egress.runtimeDeny: true` lets a **running** sandbox add denies to itself from
+user-land, with no operator round-trip and no restart:
 
----
-*On the horizon:* a from-zero **setup wizard** at klankermaker.ai (interview → AWS config +
-`km-config.yaml` + a staged `km` runbook) is in planning.
+```console
+$ km-netpolicy deny telemetry.example.com
+denied telemetry.example.com
+1 runtime deny entry now in force (takes effect within ~1s)
+```
+
+Narrowing is **one-way, and enforced rather than promised**:
+
+- **The data structure.** The only operation is *append to a deny list*, which can only ever shrink
+  the reachable set. There is no removal verb — `km-netpolicy` has exactly `deny` and `list`.
+- **The kernel.** The deny file is created with `chattr +a`. An append-only file cannot be
+  truncated, unlinked, renamed, or have the attribute cleared without `CAP_LINUX_IMMUTABLE`.
+
+Widening still requires what it always did: a new profile and a fresh sandbox. Denies live under
+`/var/lib` (not `/run`) so they survive reboot — a reboot that dropped them would *widen* the policy.
+
+Verified end to end on a live EC2 sandbox: append-only enforced, all four widening attempts refused,
+a reachable host blocked with no restart, unrelated hosts still reachable, and denies still enforced
+after a reboot. Caveat worth knowing: a `*` allowlist with denies layered on is an **open** box with
+holes plugged, not a closed one. Details and limits: `docs/egress-deny-lists.md`.
+
+### ✍️ `km-github commit` — verified, bot-attributed signed commits from a sandbox
+
+The only path that produces a **GitHub-signed**, `klanker-maker[bot]`-attributed commit from inside
+a sandbox (`verified:true reason:valid`). A sandbox's local `git commit` is unsigned, and the
+low-level REST path is bot-attributed but `verified:false`. Uses the GraphQL `createCommitOnBranch`
+mutation, supports multi-file commits, and attributes to the token's own identity so it stays
+portable across installs.
+
+```bash
+km-github commit --repo O/R --branch BR --message-file MSG -- path/a path/b
+```
+
+⚠️ Needs a token with `contents:write`, which is only minted when the profile's GitHub permissions
+include **`push`**. See `docs/github-app-permissions.md`.
+
+### 🩹 Notable fixes
+
+- **apt now points at `archive.ubuntu.com`**, not the frequently-degraded EC2 regional mirror —
+  this was breaking Ubuntu sandbox bootstrap outright.
+- **Slack alias reuse unarchives** the existing channel instead of failing the create.
+- **`km status` reconciles stale DynamoDB state against live EC2 in both directions**, so a row that
+  drifted out of sync no longer blocks `km start` / `km resume`.
+- **Two ttl-handler IAM gaps closed:** remote `km extend` / `km resume` silently no-op'd (the role
+  couldn't `GetFunction` on itself), and `km destroy` left the per-sandbox `github-token` Lambda,
+  schedule, and IAM roles alive — the cleanup code ran but 403'd and logged the failure as
+  non-fatal.
+- **GitHub installation tokens** are minted with `actions` + `workflows` write.
+- **`km doctor --delete-ddb-rows`** no longer sweeps away the operator identity row.

@@ -8,7 +8,7 @@ Tag-driven releases via [goreleaser](https://goreleaser.com) + GitHub Actions. C
 |---|---|---|
 | Dev build counter | `VERSION` file | Auto-bumped by every `make build` (see `scripts/bump-version.sh`) — currently ~v0.3.7xx |
 | Release identity | git tag `vX.Y.Z` | You, when cutting a release |
-| Plugin version | `skills/plugin.json`, `skills/marketplace.json` | You, in lockstep with km releases when skill content changes |
+| Plugin version | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | You, in lockstep with km releases when skill content changes |
 
 The `VERSION` file is intentionally a build counter — it ticks every time you `make build`, so its value is meaningless as a release marker. Release tags are the source of truth.
 
@@ -103,7 +103,7 @@ Click **Publish release**.
 
 ### 6. Post-release
 
-- If any `skills/` content changed in this release, bump `skills/plugin.json` `version` AND `skills/marketplace.json` plugin entry, then commit. Clients cache the old plugin version otherwise. See memory `project_plugin_version_gates_cache`.
+- If any `skills/` content changed in this release, bump `.claude-plugin/plugin.json` `version` AND the `.claude-plugin/marketplace.json` plugin entry, then commit. Clients cache the old plugin version otherwise. See memory `project_plugin_version_gates_cache`.
 - Update `CHANGELOG.md` if you maintain one (not currently committed).
 - Announce in the team Slack `#km-notifications` (or wherever).
 

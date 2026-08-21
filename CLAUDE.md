@@ -8,6 +8,36 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Egress deny lists + runtime narrowing (2026-08-21):**
+- **`spec.network.egress.deniedDNSSuffixes` / `deniedHosts`** block destinations outright, ahead of
+  the allowlist. A deny beats every allow — including the `*` wildcard, the GitHub repo-filter
+  carve-out, the OpenAI budget path, and the Bedrock/SES/Anthropic MITM interceptors. The HTTP deny
+  gate is registered FIRST because goproxy dispatches first-match and every later handler is a
+  carve-out; a deny evaluated after them would be silently bypassable.
+- **Deny matching is deliberately BROADER than allow matching** — a bare entry covers subdomains
+  (`evil.example.com` also blocks `api.evil.example.com`). Strictness on an allowlist permits less;
+  the same strictness on a denylist fails OPEN.
+- **`spec.network.egress.runtimeDeny: true`** lets a RUNNING sandbox append denies to itself from
+  user-land via **`km-netpolicy deny|list`** (`/opt/km/bin`), effective within ~1s, no restart.
+  Narrow-only is enforced twice: the only operation is *append* (there is no removal verb, and a
+  test fails if one is added), and the file carries `chattr +a` so the kernel refuses truncate,
+  unlink, rename, and attribute-clear. Lives under `/var/lib`, NOT `/run` — a reboot that dropped
+  accumulated denies would WIDEN the policy.
+- **`pkg/netpolicy`** is now the single canonical deny matcher, replacing three near-copies in
+  `sidecars/dns-proxy`, `sidecars/http-proxy`, and `pkg/ebpf/resolver`. All three consult it per
+  decision rather than snapshotting, which is what makes runtime denies take effect live.
+- **The eBPF resolver reads the runtime file too.** In `ebpf`/`both` mode the bootstrap deliberately
+  leaves `km-dns-proxy` disabled and the resolver serves DNS — so without this, `km-netpolicy deny x`
+  would report success while `x` stayed resolvable.
+- **Guard:** `/etc/km/netpolicy.env` mirrors the profile-baked lists, because those otherwise live
+  only in the proxy units' `Environment` blocks and `km-netpolicy list` would report `(none)`.
+- **Limit:** on `privileged: true` the sandbox has sudo and can clear `+a` — but it can equally stop
+  the proxies, so the guarantee is meaningful on unprivileged boxes.
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`** (NOT `--sidecars` —
+  that does not refresh the create-handler zip that renders userdata). Dormant by default; existing
+  sandboxes keep their config until `km destroy && km create`. Live UAT passed.
+- See `docs/egress-deny-lists.md`.
+
 **Phase 125 (2026-08-19) — Per-profile private-subnet sandboxes with per-AZ NAT gateways (code-complete; live UAT pending):**
 - Two decoupled, dormant-by-default toggles: install-level `network.nat_gateway`
   (`km-config.yaml`) controls whether NAT/EIP infrastructure **exists**; per-profile
