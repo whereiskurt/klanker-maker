@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	dnsproxy "github.com/whereiskurt/klanker-maker/sidecars/dns-proxy/dnsproxy"
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog"
@@ -23,7 +24,22 @@ func main() {
 	// which leaves the list empty and the behaviour identical to before.
 	deniedSuffixes := splitCSV(os.Getenv("DENIED_SUFFIXES"))
 
-	handler := dnsproxy.NewHandler(allowedSuffixes, deniedSuffixes, upstream, sandboxID)
+	// KM_NETPOLICY_FILE is set only when the profile enables runtime narrowing.
+	// The file itself may not exist yet — a sandbox that has never narrowed
+	// itself reads as no runtime denies.
+	var runtimeStore *netpolicy.Store
+	if p := os.Getenv("KM_NETPOLICY_FILE"); p != "" {
+		runtimeStore = netpolicy.NewStore(p, netpolicy.DefaultReloadInterval)
+	}
+
+	// A nil denier when neither source is configured keeps the hot path free of
+	// any deny work at all.
+	var denier *netpolicy.Denier
+	if len(deniedSuffixes) > 0 || runtimeStore != nil {
+		denier = netpolicy.NewDenier(deniedSuffixes, runtimeStore)
+	}
+
+	handler := dnsproxy.NewHandler(allowedSuffixes, denier, upstream, sandboxID)
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", handler)
 

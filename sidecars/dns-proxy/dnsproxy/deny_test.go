@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	"github.com/whereiskurt/klanker-maker/sidecars/dns-proxy/dnsproxy"
 	"github.com/miekg/dns"
 )
@@ -21,7 +22,7 @@ func startDNSProxyWithDeny(t *testing.T, allowed, denied []string, upstreamAddr 
 	listenAddr := pc.LocalAddr().String()
 	pc.Close()
 
-	handler := dnsproxy.NewHandler(allowed, denied, upstreamAddr, "test-sandbox")
+	handler := dnsproxy.NewHandler(allowed, netpolicy.NewDenier(denied, nil), upstreamAddr, "test-sandbox")
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", handler)
 

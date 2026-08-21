@@ -5,10 +5,10 @@ package dnsproxy
 
 import (
 	"net"
-	"strings"
 
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
+	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 )
 
 // IsAllowed reports whether name is permitted by the suffixes list.
@@ -16,7 +16,7 @@ import (
 // case-insensitive. A name is allowed if it equals a suffix or ends
 // with ".<suffix>". An empty suffixes list denies everything.
 func IsAllowed(name string, suffixes []string) bool {
-	return matchesSuffix(name, suffixes)
+	return netpolicy.Match(name, suffixes)
 }
 
 // IsDenied reports whether name is blocked by the denied list. Matching is
@@ -28,39 +28,20 @@ func IsAllowed(name string, suffixes []string) bool {
 // including the "*" allow-all wildcard; that ordering is what lets an operator
 // layer known-bad hosts on top of a wide-open learn-mode profile.
 func IsDenied(name string, denied []string) bool {
-	if len(denied) == 0 {
-		return false
-	}
-	return matchesSuffix(name, denied)
+	return netpolicy.Match(name, denied)
 }
 
-// matchesSuffix reports whether name matches any entry in patterns, where "*"
-// matches everything. Shared by IsAllowed and IsDenied so the two lists can
-// never drift in how they interpret a pattern.
-func matchesSuffix(name string, patterns []string) bool {
-	name = strings.TrimSuffix(name, ".")
-	name = strings.ToLower(name)
-
-	for _, s := range patterns {
-		if s == "*" {
-			return true
-		}
-		s = strings.ToLower(strings.TrimSuffix(s, "."))
-		s = strings.TrimPrefix(s, ".") // handle ".amazonaws.com" format from profile
-		if name == s || strings.HasSuffix(name, "."+s) {
-			return true
-		}
-	}
-	return false
-}
-
-// NewHandler returns a dns.HandlerFunc that enforces the allowlist, with
-// deniedSuffixes taking precedence over it. Allowed queries are forwarded to
-// upstream (host:port, where port 53 is appended if upstreamAddr has no port).
-// Blocked queries receive NXDOMAIN. Every query is logged as a JSON line to
-// zerolog, carrying a "denied" field so an explicit deny is distinguishable
-// from a name that simply never matched the allowlist.
-func NewHandler(allowedSuffixes, deniedSuffixes []string, upstreamAddr, sandboxID string) dns.HandlerFunc {
+// NewHandler returns a dns.HandlerFunc that enforces the allowlist, with denier
+// taking precedence over it. Allowed queries are forwarded to upstream
+// (host:port, where port 53 is appended if upstreamAddr has no port). Blocked
+// queries receive NXDOMAIN. Every query is logged as a JSON line to zerolog,
+// carrying a "denied" field so an explicit deny is distinguishable from a name
+// that simply never matched the allowlist.
+//
+// denier may be nil, which is the shape for a sandbox with no denies at all. It
+// is consulted per query rather than snapshotted, so a deny the sandbox appends
+// to its runtime list at 10:00 is enforced on the next query without a restart.
+func NewHandler(allowedSuffixes []string, denier *netpolicy.Denier, upstreamAddr, sandboxID string) dns.HandlerFunc {
 	// Ensure upstream has a port.
 	upstream := upstreamAddr
 	if _, _, err := net.SplitHostPort(upstream); err != nil {
@@ -78,7 +59,7 @@ func NewHandler(allowedSuffixes, deniedSuffixes []string, upstreamAddr, sandboxI
 		q := r.Question[0]
 		domain := q.Name
 		// Deny is evaluated first and beats every allow, including "*".
-		denied := IsDenied(domain, deniedSuffixes)
+		denied := denier.IsDenied(domain)
 		allowed := !denied && IsAllowed(domain, allowedSuffixes)
 
 		log.Info().

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 )
 
 // resolvedEntry stores the IPs resolved for a domain and the time at which
@@ -28,32 +30,44 @@ type Allowlist struct {
 	suffixes []string
 	// allowAll is true when the suffixes list contains "*", meaning all domains are permitted.
 	allowAll bool
-	// denied stores the normalized denied suffixes. A match here blocks the
-	// name regardless of what suffixes or allowAll say.
-	denied []string
-	// denyAll is true when the denied list contains "*", sealing the sandbox.
-	denyAll bool
+	// denier answers the deny question, unioning the profile-baked list with an
+	// optional runtime file the sandbox appends to itself. May be nil.
+	denier *netpolicy.Denier
 
 	mu       sync.RWMutex
 	resolved map[string]resolvedEntry // domain (without trailing dot) -> entry
 }
 
-// NewAllowlist creates an Allowlist from slices of allowed and denied domain
-// suffixes. Both lists are normalized: lowercased, trailing dots stripped,
-// leading dots stripped. Both ".github.com" and "github.com" are equivalent.
+// NewAllowlist creates an Allowlist from a slice of allowed domain suffixes and
+// an optional Denier. Suffixes are normalized: lowercased, trailing dots
+// stripped, leading dots stripped. Both ".github.com" and "github.com" are
+// equivalent.
 //
-// denied takes precedence over suffixes, including over the "*" wildcard. A nil
-// or empty denied list blocks nothing and leaves behaviour unchanged.
-func NewAllowlist(suffixes, denied []string) *Allowlist {
+// denier takes precedence over suffixes, including over the "*" wildcard, and is
+// consulted per query rather than snapshotted — so a deny the sandbox appends to
+// its runtime list is honoured by an already-running resolver. A nil denier
+// blocks nothing.
+func NewAllowlist(suffixes []string, denier *netpolicy.Denier) *Allowlist {
 	allowSet, allowAll := normalizeSuffixes(suffixes)
-	denySet, denyAll := normalizeSuffixes(denied)
 	return &Allowlist{
 		suffixes: allowSet,
 		allowAll: allowAll,
-		denied:   denySet,
-		denyAll:  denyAll,
+		denier:   denier,
 		resolved: make(map[string]resolvedEntry),
 	}
+}
+
+// denierFor builds the resolver's Denier from its config, returning nil when the
+// sandbox declares no denies at all so the hot path does no deny work.
+func denierFor(cfg ResolverConfig) *netpolicy.Denier {
+	var store *netpolicy.Store
+	if cfg.RuntimeDenyFile != "" {
+		store = netpolicy.NewStore(cfg.RuntimeDenyFile, netpolicy.DefaultReloadInterval)
+	}
+	if len(cfg.DeniedSuffixes) == 0 && store == nil {
+		return nil
+	}
+	return netpolicy.NewDenier(cfg.DeniedSuffixes, store)
 }
 
 // normalizeSuffixes lowercases entries, strips leading and trailing dots, drops
@@ -89,7 +103,7 @@ func (a *Allowlist) IsAllowed(name string) bool {
 	}
 
 	// Deny is evaluated first and beats every allow, including allowAll.
-	if a.isDeniedNormalized(name) {
+	if a.denier.IsDenied(name) {
 		return false
 	}
 
@@ -106,20 +120,7 @@ func (a *Allowlist) IsAllowed(name string) bool {
 // the BPF trie at startup. Seeding a denied host's IPs there would let a caller
 // reach it by address even though the resolver refuses to answer for the name.
 func (a *Allowlist) IsDenied(name string) bool {
-	name = strings.ToLower(strings.TrimSuffix(name, "."))
-	if name == "" {
-		return false
-	}
-	return a.isDeniedNormalized(name)
-}
-
-// isDeniedNormalized expects name already lowercased with its trailing dot
-// stripped.
-func (a *Allowlist) isDeniedNormalized(name string) bool {
-	if a.denyAll {
-		return true
-	}
-	return matchesAny(name, a.denied)
+	return a.denier.IsDenied(name)
 }
 
 // matchesAny reports whether name equals any normalized suffix or ends with
