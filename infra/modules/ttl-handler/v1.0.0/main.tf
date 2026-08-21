@@ -62,6 +62,10 @@ resource "aws_iam_role_policy" "s3_artifacts" {
           "s3:GetObject",
           "s3:PutObject",
           "s3:ListBucket",
+          # DeleteObject is required to remove the per-sandbox SOPS bundle at
+          # teardown. Without it that delete 403s and the bundle lingers until
+          # the bucket lifecycle rule expires it.
+          "s3:DeleteObject",
         ]
         Resource = [
           "${var.artifact_bucket_arn}",
@@ -260,6 +264,10 @@ resource "aws_iam_role_policy" "terraform_destroy" {
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-ec2spot-*",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-budget-enforcer-*",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-budget-scheduler-*",
+          # github-token submodule roles. cleanupGitHubToken deletes these; without
+          # the grant it 403s and logs the failure as non-fatal, leaving them live.
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-github-token-refresher-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-github-token-scheduler-*",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/${var.resource_prefix}-ec2spot-*",
         ]
       },
@@ -272,7 +280,10 @@ resource "aws_iam_role_policy" "terraform_destroy" {
           "lambda:RemovePermission",
           "lambda:GetPolicy",
         ]
-        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.resource_prefix}-budget-enforcer-*"
+        Resource = [
+          "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.resource_prefix}-budget-enforcer-*",
+          "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.resource_prefix}-github-token-refresher-*",
+        ]
       },
       {
         Sid    = "SchedulerCleanup"
@@ -281,7 +292,10 @@ resource "aws_iam_role_policy" "terraform_destroy" {
           "scheduler:DeleteSchedule",
           "scheduler:GetSchedule",
         ]
-        Resource = "arn:aws:scheduler:*:*:schedule/default/${var.resource_prefix}-budget-*"
+        Resource = [
+          "arn:aws:scheduler:*:*:schedule/default/${var.resource_prefix}-budget-*",
+          "arn:aws:scheduler:*:*:schedule/default/${var.resource_prefix}-github-token-*",
+        ]
       },
       {
         Sid    = "KMSCleanup"
