@@ -618,6 +618,23 @@ type EgressSpec struct {
 	// an allowlist permits less; the same strictness on a denylist would fail
 	// open.
 	DeniedHosts []string `yaml:"deniedHosts,omitempty"`
+
+	// RuntimeDeny lets the sandbox add to its own deny lists from user-land after
+	// boot, via the on-box `km-netpolicy deny` helper.
+	//
+	// It is narrowing-only and one-way. The file the helper appends to is held
+	// append-only by the kernel (chattr +a), so the sandbox user can add entries
+	// but cannot truncate, unlink, rename, or rewrite it — "never widens" is a
+	// property of the filesystem rather than a rule that has to be trusted.
+	// Widening still requires a new profile and a fresh sandbox.
+	//
+	// The guarantee is meaningful on an unprivileged sandbox. On one with
+	// spec.execution.privileged: true the sandbox user has sudo and can clear the
+	// attribute — but it can equally kill the proxies outright, so the guarantee
+	// was already void there for larger reasons.
+	//
+	// false (the default) provisions nothing and renders byte-identical user-data.
+	RuntimeDeny bool `yaml:"runtimeDeny,omitempty"`
 }
 
 // IAMSpec controls AWS IAM identity and session configuration.
