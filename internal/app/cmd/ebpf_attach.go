@@ -47,6 +47,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		firewallMode  string
 		allowedDNS    string
 		allowedHosts  string
+		deniedDNS     string
+		deniedHosts   string
 		proxyHosts    string
 		cgroupPath    string
 		enableTLS     bool
@@ -64,7 +66,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		Hidden: true, // internal command, not user-facing
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
-				allowedDNS, allowedHosts, proxyHosts, cgroupPath,
+				allowedDNS, allowedHosts, deniedDNS, deniedHosts, proxyHosts, cgroupPath,
 				enableTLS, allowedRepos, httpProxyPID, observe, observeOutput,
 				minIPLifetime)
 		},
@@ -81,6 +83,10 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Comma-separated DNS domain suffixes to allow (e.g. github.com,amazonaws.com)")
 	cmd.Flags().StringVar(&allowedHosts, "allowed-hosts", "",
 		"Comma-separated hosts for L7 proxy allowlist")
+	cmd.Flags().StringVar(&deniedDNS, "denied-dns", "",
+		"Comma-separated DNS domain suffixes to block outright; takes precedence over --allowed-dns including its \"*\" wildcard")
+	cmd.Flags().StringVar(&deniedHosts, "denied-hosts", "",
+		"Comma-separated hosts to block outright; takes precedence over --allowed-hosts")
 	cmd.Flags().StringVar(&proxyHosts, "proxy-hosts", "",
 		"Comma-separated hosts whose resolved IPs are redirected to L7 proxy")
 	cmd.Flags().StringVar(&cgroupPath, "cgroup", "",
@@ -176,7 +182,7 @@ func runEbpfAttach(
 	sandboxID string,
 	dnsPort, httpPort uint32,
 	firewallMode string,
-	allowedDNS, allowedHosts, proxyHosts string,
+	allowedDNS, allowedHosts, deniedDNS, deniedHosts, proxyHosts string,
 	cgroupOverride string,
 	enableTLS bool,
 	allowedRepos string,
@@ -268,6 +274,29 @@ func runEbpfAttach(
 		}
 	}
 
+	// Parse denied DNS suffixes. The resolver applies these ahead of the
+	// allowlist, so a denied name never reaches the BPF trie.
+	var deniedDNSSuffixes []string
+	if deniedDNS != "" {
+		for _, s := range strings.Split(deniedDNS, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				deniedDNSSuffixes = append(deniedDNSSuffixes, s)
+			}
+		}
+	}
+
+	// Parse denied hosts (L7 / BPF-seed side).
+	var deniedHostList []string
+	if deniedHosts != "" {
+		for _, h := range strings.Split(deniedHosts, ",") {
+			h = strings.TrimSpace(h)
+			if h != "" {
+				deniedHostList = append(deniedHostList, h)
+			}
+		}
+	}
+
 	// Parse proxy host suffixes.
 	var proxyHostList []string
 	if proxyHosts != "" {
@@ -292,6 +321,7 @@ func runEbpfAttach(
 			UpstreamAddr:    "169.254.169.253:53",
 			SandboxID:       sandboxID,
 			AllowedSuffixes: dnsSuffixes,
+			DeniedSuffixes:  deniedDNSSuffixes,
 			MapUpdater:      enforcer,
 			ProxyHosts:      proxyHostList,
 			MinIPLifetime:   minIPLifetime,
@@ -318,6 +348,9 @@ func runEbpfAttach(
 	// because connect4 blocks before DNS resolution can populate the trie.
 	var hostsToResolve []string
 	allowAllHosts := false
+	// denyMatcher reuses the resolver's matching rules so a host cannot be
+	// refused by the resolver yet seeded into the BPF trie here.
+	denyMatcher := resolver.NewAllowlist(nil, deniedHostList)
 	if allowedHosts != "" {
 		for _, h := range strings.Split(allowedHosts, ",") {
 			h = strings.TrimSpace(h)
@@ -330,6 +363,13 @@ func runEbpfAttach(
 			}
 			// Strip leading dot from DNS suffix entries (e.g. ".amazonaws.com")
 			h = strings.TrimPrefix(h, ".")
+			if denyMatcher.IsDenied(h) {
+				logger.Info().
+					Str("event_type", "ebpf_host_denied").
+					Str("host", h).
+					Msg("skipping pre-resolve of denied host")
+				continue
+			}
 			hostsToResolve = append(hostsToResolve, h)
 		}
 	}

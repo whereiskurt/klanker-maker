@@ -1254,6 +1254,9 @@ After=network.target
 User=km-sidecar
 Environment=SANDBOX_ID={{ .SandboxID }}
 Environment=ALLOWED_SUFFIXES={{ .AllowedDNSSuffixes }}
+{{- if .DeniedDNSSuffixes }}
+Environment=DENIED_SUFFIXES={{ .DeniedDNSSuffixes }}
+{{- end }}
 Environment=UPSTREAM_DNS=169.254.169.253
 Environment=DNS_PORT=5353
 ExecStart=/opt/km/bin/km-dns-proxy
@@ -1272,6 +1275,9 @@ User=km-sidecar
 Environment=SANDBOX_ID={{ .SandboxID }}
 Environment=AWS_REGION={{ .AWSRegion }}
 Environment=ALLOWED_HOSTS={{ .AllowedHTTPHosts }}
+{{- if .DeniedHTTPHosts }}
+Environment=DENIED_HOSTS={{ .DeniedHTTPHosts }}
+{{- end }}
 Environment=KM_GITHUB_ALLOWED_REPOS={{ .GitHubAllowedRepos }}
 Environment=PROXY_PORT=3128
 ExecStart=/opt/km/bin/km-http-proxy
@@ -4569,6 +4575,12 @@ ExecStart=/usr/local/bin/km ebpf-attach \
 {{- end }}
   --allowed-dns "{{ .AllowedDNSSuffixes }}" \
   --allowed-hosts "{{ .AllowedHTTPHosts }}" \
+{{- if .DeniedDNSSuffixes }}
+  --denied-dns "{{ .DeniedDNSSuffixes }}" \
+{{- end }}
+{{- if .DeniedHTTPHosts }}
+  --denied-hosts "{{ .DeniedHTTPHosts }}" \
+{{- end }}
   --proxy-hosts "{{ .L7ProxyHosts }}" \
 {{- if eq .Enforcement "both" }}
   --proxy-pid ${KM_HTTP_PROXY_PID} \
@@ -4999,6 +5011,12 @@ type userDataParams struct {
 	AllowedRefs        string // colon-separated list for KM_ALLOWED_REFS env var
 	AllowedDNSSuffixes string // comma-separated, from profile.Network.Egress.AllowedDNSSuffixes
 	AllowedHTTPHosts   string // comma-separated, from profile.Network.Egress.AllowedHosts
+	// DeniedDNSSuffixes and DeniedHTTPHosts are comma-separated deny lists from
+	// profile.Network.Egress. Both are empty on any profile that declares no
+	// denies, and every template site is guarded on non-empty so such a sandbox
+	// renders byte-identical user-data.
+	DeniedDNSSuffixes string
+	DeniedHTTPHosts   string
 	GitHubAllowedRepos string // comma-separated GitHub repos from profile.sourceAccess.github.allowedRepos
 	KMArtifactsBucket  string // from config env var KM_ARTIFACTS_BUCKET
 	// Filesystem enforcement (section 2.5)
@@ -5588,6 +5606,8 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		AllowedRefs:        joinAllowedRefs(p),
 		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
 		AllowedHTTPHosts:   strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
+		DeniedDNSSuffixes:  strings.Join(p.Spec.Network.Egress.DeniedDNSSuffixes, ","),
+		DeniedHTTPHosts:    strings.Join(p.Spec.Network.Egress.DeniedHosts, ","),
 		GitHubAllowedRepos: joinGitHubAllowedRepos(p),
 		KMArtifactsBucket:  artifactsBucket,
 		UseSpot:            useSpot,

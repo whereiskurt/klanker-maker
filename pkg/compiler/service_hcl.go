@@ -321,6 +321,9 @@ const ecsServiceHCLTemplate = `locals {
         environment = [
           { name = "SANDBOX_ID",       value = "{{ .SandboxID }}" },
           { name = "ALLOWED_SUFFIXES", value = "{{ .AllowedDNSSuffixes }}" },
+{{- if .DeniedDNSSuffixes }}
+          { name = "DENIED_SUFFIXES", value = "{{ .DeniedDNSSuffixes }}" },
+{{- end }}
           { name = "UPSTREAM_DNS",     value = "169.254.169.253" },
         ]
         port_mappings     = []
@@ -337,6 +340,9 @@ const ecsServiceHCLTemplate = `locals {
         environment = [
           { name = "SANDBOX_ID",               value = "{{ .SandboxID }}" },
           { name = "ALLOWED_HOSTS",             value = "{{ .AllowedHTTPHosts }}" },
+{{- if .DeniedHTTPHosts }}
+          { name = "DENIED_HOSTS",              value = "{{ .DeniedHTTPHosts }}" },
+{{- end }}
           { name = "KM_GITHUB_ALLOWED_REPOS",   value = "{{ .GitHubAllowedReposCSV }}" },
           { name = "PROXY_PORT",                value = "3128" },
         ]
@@ -558,6 +564,11 @@ type ecsHCLParams struct {
 	// Sidecar configuration fields (populated from profile network spec and env vars)
 	AllowedDNSSuffixes   string // comma-separated allowed DNS suffixes
 	AllowedHTTPHosts     string // comma-separated allowed HTTP hosts
+	// DeniedDNSSuffixes and DeniedHTTPHosts are the comma-separated deny lists,
+	// empty unless the profile declares denies. Every template site guards on
+	// non-empty so an unchanged profile renders identical HCL.
+	DeniedDNSSuffixes string
+	DeniedHTTPHosts   string
 	GitHubAllowedReposCSV string // comma-separated GitHub repos for KM_GITHUB_ALLOWED_REPOS proxy env var
 	ArtifactsBucket      string // S3 bucket for sidecar OTel traces (KM_ARTIFACTS_BUCKET)
 	// Sidecar image URIs (computed from KM_ACCOUNTS_APPLICATION + region + KM_SIDECAR_VERSION)
@@ -1062,6 +1073,8 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		SGEgressRules:         sgRules,
 		AllowedDNSSuffixes:    strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
 		AllowedHTTPHosts:      strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
+		DeniedDNSSuffixes:     strings.Join(p.Spec.Network.Egress.DeniedDNSSuffixes, ","),
+		DeniedHTTPHosts:       strings.Join(p.Spec.Network.Egress.DeniedHosts, ","),
 		GitHubAllowedReposCSV: joinGitHubAllowedReposCSV(p),
 		ArtifactsBucket:       artifactBucket,
 		// Sidecar ECR image URIs computed from KM_ACCOUNTS_APPLICATION + region + KM_SIDECAR_VERSION.
