@@ -77,6 +77,13 @@ spec:
       deniedHosts:
         - "evil.example.com"
         - ".tracker.example.net"
+      # Let the box narrow itself further while it runs:
+      #   km-netpolicy deny some-host.example.com
+      #   km-netpolicy list
+      # Appends land in a kernel-append-only file, so the sandbox can add denies
+      # but cannot remove them. Widening still needs a new profile and a fresh
+      # sandbox. Takes effect within ~1s, no restart.
+      runtimeDeny: true
 
   observability:
     # Record everything the workload actually reaches, so step 3 can generate a
