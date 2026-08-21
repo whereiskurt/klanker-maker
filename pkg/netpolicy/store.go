@@ -24,7 +24,7 @@ const DefaultPath = "/var/lib/km/netpolicy/deny.list"
 // It never reports an error to its callers. A missing, unreadable, or entirely
 // malformed file reads as "no runtime denies", which is the correct default for
 // the overwhelmingly common case of a sandbox that has never narrowed itself.
-// Errors surface through Dropped and LastError for diagnostics only.
+// Malformed lines surface through Dropped for diagnostics only.
 //
 // Safe for concurrent use.
 type Store struct {
@@ -34,7 +34,6 @@ type Store struct {
 	mu        sync.RWMutex
 	entries   []string
 	dropped   int
-	lastErr   error
 	lastMod   time.Time
 	lastSize  int64
 	lastCheck time.Time
@@ -85,11 +84,10 @@ func (s *Store) Reload() []string {
 	if err != nil {
 		// Absent file is the normal "never narrowed" state, not a failure.
 		if os.IsNotExist(err) {
-			s.entries, s.dropped, s.lastErr, s.loaded = nil, 0, nil, true
+			s.entries, s.dropped, s.loaded = nil, 0, true
 			s.lastMod, s.lastSize = time.Time{}, 0
 			return nil
 		}
-		s.lastErr = err
 		s.loaded = true
 		return s.entries
 	}
@@ -101,13 +99,12 @@ func (s *Store) Reload() []string {
 
 	body, err := os.ReadFile(s.path)
 	if err != nil {
-		s.lastErr = err
 		s.loaded = true
 		return s.entries
 	}
 
 	entries, dropped := ParseLines(string(body))
-	s.entries, s.dropped, s.lastErr = entries, dropped, nil
+	s.entries, s.dropped = entries, dropped
 	s.lastMod, s.lastSize, s.loaded = fi.ModTime(), fi.Size(), true
 	return s.entries
 }
@@ -120,16 +117,6 @@ func (s *Store) Dropped() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.dropped
-}
-
-// LastError reports the last non-fatal read failure, if any.
-func (s *Store) LastError() error {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.lastErr
 }
 
 // Denier answers the single question every egress decision needs: is this host
@@ -158,29 +145,4 @@ func (d *Denier) IsDenied(host string) bool {
 		return true
 	}
 	return Match(host, d.store.Entries())
-}
-
-// Any reports whether the denier has any patterns at all, letting callers skip
-// registering machinery that would never fire.
-func (d *Denier) Any() bool {
-	if d == nil {
-		return false
-	}
-	return len(d.static) > 0 || len(d.store.Entries()) > 0
-}
-
-// Static returns the profile-baked patterns.
-func (d *Denier) Static() []string {
-	if d == nil {
-		return nil
-	}
-	return d.static
-}
-
-// Runtime returns the patterns currently in the runtime store.
-func (d *Denier) Runtime() []string {
-	if d == nil {
-		return nil
-	}
-	return d.store.Entries()
 }

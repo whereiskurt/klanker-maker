@@ -173,7 +173,35 @@ func TestDenier_EmptyIsInert(t *testing.T) {
 	if d.IsDenied("anything.example.com") {
 		t.Error("a denier with no sources must deny nothing")
 	}
-	if d.Any() {
-		t.Error("Any() must be false when there are no sources")
+}
+
+// The proxies hold a Denier for the life of the process and consult it from
+// multiple request goroutines while the sandbox may be appending. Run under
+// -race to catch a regression in the Store's locking.
+func TestDenier_ConcurrentReadsWhileFileGrows(t *testing.T) {
+	path := writeDenyFile(t, "seed.example.com\n")
+	d := netpolicy.NewDenier([]string{"static.example.com"}, netpolicy.NewStore(path, 0))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				return
+			}
+			_, _ = f.WriteString("appended.example.net\n")
+			f.Close()
+		}
+	}()
+
+	for i := 0; i < 200; i++ {
+		_ = d.IsDenied("seed.example.com")
+		_ = d.IsDenied("unrelated.example.org")
+	}
+	<-done
+
+	if !d.IsDenied("appended.example.net") {
+		t.Error("appended entry not visible after concurrent writes")
 	}
 }
