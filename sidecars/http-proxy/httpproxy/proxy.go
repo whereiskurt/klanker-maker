@@ -54,6 +54,7 @@ type proxyConfig struct {
 	budget      *budgetEnforcementOptions
 	actionQuota *actionQuotaOptions
 	githubRepos []string
+	deniedHosts []string
 	httpsOnly   bool
 }
 
@@ -72,6 +73,19 @@ func WithBudgetEnforcement(client aws.BudgetAPI, tableName string, modelRates ma
 			cache:          NewBudgetCache(),
 			onBudgetUpdate: onBudgetUpdate,
 		}
+	}
+}
+
+// WithDeniedHosts blocks the given hosts unconditionally. The deny gate is
+// registered ahead of every other handler, so a denied host is rejected before
+// the Bedrock/SES/Anthropic MITM interceptors, the GitHub repo filter, the
+// OpenAI budget path, and the general allowlist ever see it.
+//
+// An empty or nil list registers nothing at all, leaving the proxy byte-for-byte
+// the same as before this option existed.
+func WithDeniedHosts(denied []string) ProxyOption {
+	return func(_ *goproxy.ProxyHttpServer, cfg *proxyConfig) {
+		cfg.deniedHosts = denied
 	}
 }
 
@@ -144,6 +158,46 @@ func IsHostAllowed(host string, allowed []string) bool {
 	return false
 }
 
+// IsHostDenied reports whether host is blocked by the denied list. The port is
+// stripped from "host:port" before comparison and matching is case-insensitive.
+// An empty list denies nothing; "*" denies everything.
+//
+// Callers must consult IsHostDenied BEFORE IsHostAllowed. A deny beats every
+// allow, including the "*" allow-all wildcard and the GitHub repo-filter
+// carve-out, so that layering a known-bad host onto a wide-open profile
+// actually closes the door.
+//
+// Matching is deliberately BROADER than IsHostAllowed: an entry without a
+// leading dot still covers subdomains, so "evil.example.com" also denies
+// "api.evil.example.com". On the allow side, strict exact-matching errs toward
+// permitting less; on the deny side the same strictness would fail OPEN. This
+// also keeps deny semantics identical to the DNS proxy's, so a name can never
+// be blocked at one layer and reachable at the other.
+func IsHostDenied(host string, denied []string) bool {
+	if len(denied) == 0 {
+		return false
+	}
+
+	h, _, err := net.SplitHostPort(host)
+	if err != nil {
+		// No port present — use as-is.
+		h = host
+	}
+	h = strings.ToLower(h)
+
+	for _, d := range denied {
+		if d == "*" {
+			return true
+		}
+		d = strings.ToLower(strings.TrimSuffix(d, "."))
+		d = strings.TrimPrefix(d, ".") // ".tracker.net" and "tracker.net" are equivalent
+		if h == d || strings.HasSuffix(h, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
 // InjectTraceContext injects W3C traceparent and tracestate headers into h using
 // the globally registered OTel text map propagator. ctx is used as the span
 // context source. This is exported so tests can verify injection without
@@ -173,6 +227,48 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	cfg := &proxyConfig{}
 	for _, opt := range opts {
 		opt(proxy, cfg)
+	}
+
+	// -------------------------------------------------------------------------
+	// Deny gate (registered FIRST — goproxy dispatches handlers first-match).
+	//
+	// Every later handler is a carve-out of some kind: the Bedrock/SES/Anthropic
+	// MITM interceptors match on host regex, the GitHub repo filter and the
+	// OpenAI budget path return early and skip the allowlist entirely. A deny
+	// that ran after any of them would be silently bypassable, so it runs
+	// before all of them. Nothing is registered when the list is empty.
+	// -------------------------------------------------------------------------
+	if len(cfg.deniedHosts) > 0 {
+		denied := cfg.deniedHosts
+
+		proxy.OnRequest().HandleConnectFunc(
+			func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+				if !IsHostDenied(host, denied) {
+					return nil, host // fall through to the handlers below
+				}
+				log.Info().
+					Str("sandbox_id", sandboxID).
+					Str("event_type", "http_denied").
+					Str("host", host).
+					Msg("")
+				return goproxy.RejectConnect, host
+			},
+		)
+
+		proxy.OnRequest().DoFunc(
+			func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+				if !IsHostDenied(req.Host, denied) {
+					return req, nil // fall through to the handlers below
+				}
+				log.Info().
+					Str("sandbox_id", sandboxID).
+					Str("event_type", "http_denied").
+					Str("host", req.Host).
+					Msg("")
+				return req, goproxy.NewResponse(req, goproxy.ContentTypeText,
+					http.StatusForbidden, "Blocked: host is on the km sandbox deny list")
+			},
+		)
 	}
 
 	// -------------------------------------------------------------------------

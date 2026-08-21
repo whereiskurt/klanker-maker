@@ -56,6 +56,11 @@ type ResolverConfig struct {
 	// leading-dot ("github.com" / ".github.com" both accepted).
 	AllowedSuffixes []string
 
+	// DeniedSuffixes is the list of domain suffixes blocked outright, taking
+	// precedence over AllowedSuffixes including its "*" wildcard. Empty on any
+	// sandbox whose profile declares no denies.
+	DeniedSuffixes []string
+
 	// SandboxID is included in log fields for correlation.
 	SandboxID string
 
@@ -125,7 +130,7 @@ func NewResolver(cfg ResolverConfig) *Resolver {
 
 	return &Resolver{
 		cfg:           cfg,
-		allowlist:     NewAllowlist(cfg.AllowedSuffixes),
+		allowlist:     NewAllowlist(cfg.AllowedSuffixes, cfg.DeniedSuffixes),
 		upstream:      upstream,
 		sweepEvery:    sweepEvery,
 		minIPLifetime: minLife,
