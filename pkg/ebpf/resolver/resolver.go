@@ -61,6 +61,15 @@ type ResolverConfig struct {
 	// sandbox whose profile declares no denies.
 	DeniedSuffixes []string
 
+	// RuntimeDenyFile, when set, is a file the sandbox may append further denies
+	// to from user-land. It is polled rather than snapshotted, so an append is
+	// honoured by an already-running resolver.
+	//
+	// This matters most in ebpf-only enforcement, where the resolver IS the DNS
+	// server: without it, a runtime deny would report success while the name
+	// stayed resolvable. Empty unless the profile sets runtimeDeny.
+	RuntimeDenyFile string
+
 	// SandboxID is included in log fields for correlation.
 	SandboxID string
 
@@ -130,7 +139,7 @@ func NewResolver(cfg ResolverConfig) *Resolver {
 
 	return &Resolver{
 		cfg:           cfg,
-		allowlist:     NewAllowlist(cfg.AllowedSuffixes, cfg.DeniedSuffixes),
+		allowlist:     NewAllowlist(cfg.AllowedSuffixes, denierFor(cfg)),
 		upstream:      upstream,
 		sweepEvery:    sweepEvery,
 		minIPLifetime: minLife,

@@ -1528,6 +1528,8 @@ func TestSidecarBuildsIncludesGitHub(t *testing.T) {
 	want := map[string]bool{
 		"km-github": false,
 		"km-slack":  false,
+		// km-netpolicy is fetched by userdata when runtimeDeny is enabled.
+		"km-netpolicy": false,
 	}
 	for _, n := range names {
 		if _, ok := want[n]; ok {

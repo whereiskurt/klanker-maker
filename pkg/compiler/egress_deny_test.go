@@ -133,6 +133,119 @@ func TestECSServiceHCL_NoDenyLists_EmitsNothing(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Runtime narrowing (spec.network.egress.runtimeDeny)
+// ---------------------------------------------------------------------------
+
+func TestUserData_RuntimeDenyOff_EmitsNothing(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+
+	artifacts, err := compiler.Compile(p, "sb-rtoff", false, testNetwork(), nil)
+	if err != nil {
+		t.Fatalf("Compile error = %v", err)
+	}
+
+	for _, token := range []string{"KM_NETPOLICY_FILE", "km-netpolicy", "chattr", "netpolicy"} {
+		if strings.Contains(artifacts.UserData, token) {
+			t.Errorf("UserData must not contain %q when runtimeDeny is off", token)
+		}
+	}
+}
+
+func TestUserData_RuntimeDenyOn_ProvisionsAppendOnlyFile(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+	p.Spec.Network.Egress.RuntimeDeny = true
+
+	artifacts, err := compiler.Compile(p, "sb-rton", false, testNetwork(), nil)
+	if err != nil {
+		t.Fatalf("Compile error = %v", err)
+	}
+	ud := artifacts.UserData
+
+	// The file must exist before km-netpolicy can append to it — the helper
+	// deliberately refuses to create it, since a file created without the
+	// append-only attribute would look like it worked while being unenforced.
+	if !strings.Contains(ud, "/var/lib/km/netpolicy/deny.list") {
+		t.Error("UserData should create the runtime deny file")
+	}
+
+	// chattr +a is the whole guarantee: the sandbox user may append but not
+	// truncate, unlink, rename, or clear the attribute.
+	if !strings.Contains(ud, "chattr +a") {
+		t.Error("UserData should mark the deny file append-only")
+	}
+
+	// It must live outside /run, which is a tmpfs cleared on boot. A reboot that
+	// dropped accumulated denies would WIDEN the policy.
+	if strings.Contains(ud, "/run/km/netpolicy") {
+		t.Error("the runtime deny file must not live under /run — a reboot would widen the policy")
+	}
+}
+
+// Both proxies have to be told where the file is, or a runtime deny would be
+// enforced at one layer and ignored at the other.
+func TestUserData_RuntimeDenyOn_BothProxiesGetTheFile(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+	p.Spec.Network.Egress.RuntimeDeny = true
+
+	artifacts, err := compiler.Compile(p, "sb-rtboth", false, testNetwork(), nil)
+	if err != nil {
+		t.Fatalf("Compile error = %v", err)
+	}
+
+	got := strings.Count(artifacts.UserData, "Environment=KM_NETPOLICY_FILE=/var/lib/km/netpolicy/deny.list")
+	if got != 2 {
+		t.Errorf("KM_NETPOLICY_FILE appears in %d systemd units, want 2 (dns-proxy and http-proxy)", got)
+	}
+}
+
+// The profile-baked denies otherwise live only in the two proxy units'
+// Environment blocks, which a sandbox shell never sees — so `km-netpolicy list`
+// would report "(none)" for them on a box that actually has them.
+func TestUserData_RuntimeDenyOn_WritesEnvFileForTheHelper(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+	p.Spec.Network.Egress.RuntimeDeny = true
+	p.Spec.Network.Egress.DeniedDNSSuffixes = []string{"evil.example.com"}
+	p.Spec.Network.Egress.DeniedHosts = []string{"bad.example.net"}
+
+	artifacts, err := compiler.Compile(p, "sb-rtenv", false, testNetwork(), nil)
+	if err != nil {
+		t.Fatalf("Compile error = %v", err)
+	}
+	ud := artifacts.UserData
+
+	if !strings.Contains(ud, "/etc/km/netpolicy.env") {
+		t.Error("UserData should write /etc/km/netpolicy.env for km-netpolicy to read")
+	}
+	for _, want := range []string{
+		"DENIED_SUFFIXES=evil.example.com",
+		"DENIED_HOSTS=bad.example.net",
+		"KM_NETPOLICY_FILE=/var/lib/km/netpolicy/deny.list",
+	} {
+		if !strings.Contains(ud, want) {
+			t.Errorf("netpolicy.env should carry %q", want)
+		}
+	}
+}
+
+func TestUserData_RuntimeDenyOn_InstallsHelper(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+	p.Spec.Network.Egress.RuntimeDeny = true
+
+	artifacts, err := compiler.Compile(p, "sb-rthelper", false, testNetwork(), nil)
+	if err != nil {
+		t.Fatalf("Compile error = %v", err)
+	}
+	ud := artifacts.UserData
+
+	if !strings.Contains(ud, "sidecars/km-netpolicy") {
+		t.Error("UserData should download the km-netpolicy helper")
+	}
+	if !strings.Contains(ud, "ln -sf /opt/km/bin/km-netpolicy /usr/local/bin/km-netpolicy") {
+		t.Error("km-netpolicy should be on PATH for non-login shells")
+	}
+}
+
 // In eBPF mode the resolver, not the DNS proxy, is what refuses to populate the
 // BPF trie — so the denies have to reach `km ebpf-attach` too, or an eBPF-mode
 // sandbox would enforce the allowlist but silently ignore every deny.

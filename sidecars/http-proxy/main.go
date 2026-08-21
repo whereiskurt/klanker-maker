@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	"github.com/whereiskurt/klanker-maker/pkg/quota"
 	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
@@ -34,12 +35,24 @@ func main() {
 	// Build proxy options.
 	var proxyOpts []httpproxy.ProxyOption
 
-	if len(deniedHosts) > 0 {
-		proxyOpts = append(proxyOpts, httpproxy.WithDeniedHosts(deniedHosts))
-		log.Info().
+	// KM_NETPOLICY_FILE is set only when the profile enables runtime narrowing.
+	// The file itself may not exist yet, and may legitimately be empty — the
+	// gate is still registered so the sandbox's first append takes effect.
+	var runtimeStore *netpolicy.Store
+	if p := os.Getenv("KM_NETPOLICY_FILE"); p != "" {
+		runtimeStore = netpolicy.NewStore(p, netpolicy.DefaultReloadInterval)
+	}
+
+	if len(deniedHosts) > 0 || runtimeStore != nil {
+		proxyOpts = append(proxyOpts,
+			httpproxy.WithDenier(netpolicy.NewDenier(deniedHosts, runtimeStore)))
+		ev := log.Info().
 			Str("event_type", "http_proxy_deny_enabled").
-			Strs("denied_hosts", deniedHosts).
-			Msg("")
+			Strs("denied_hosts", deniedHosts)
+		if runtimeStore != nil {
+			ev = ev.Str("runtime_deny_file", runtimeStore.Path())
+		}
+		ev.Msg("")
 	}
 
 	// Budget enforcement state — hoisted so both goproxy and transparent listener

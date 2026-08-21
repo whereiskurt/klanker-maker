@@ -448,6 +448,10 @@
                   "type": "array",
                   "items": { "type": "string" },
                   "description": "Hostnames blocked outright; takes precedence over allowedHosts and every proxy carve-out. A bare entry also covers subdomains."
+                },
+                "runtimeDeny": {
+                  "type": "boolean",
+                  "description": "Allow the sandbox to append to its own deny list from user-land via km-netpolicy. Narrowing-only and one-way (kernel-enforced append-only file). Default false."
                 }
               }
             },

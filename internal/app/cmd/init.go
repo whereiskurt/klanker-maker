@@ -3319,6 +3319,10 @@ func sidecarBuilds() []sidecarBuild {
 		// notification.h1.inbound.enabled. Missing upload here 404s the gated
 		// download and aborts bootstrap (memory project_km_init_skips_existing_lambda_zips).
 		{name: "km-h1", srcDir: "cmd/km-h1"},
+		// Sandbox-side runtime egress narrowing helper. Downloaded by userdata
+		// when spec.network.egress.runtimeDeny is set; a missing upload here 404s
+		// that gated download and aborts bootstrap.
+		{name: "km-netpolicy", srcDir: "cmd/km-netpolicy"},
 	}
 }
 

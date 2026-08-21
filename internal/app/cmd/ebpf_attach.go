@@ -27,6 +27,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf"
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf/audit"
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf/resolver"
+	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	ebpftls "github.com/whereiskurt/klanker-maker/pkg/ebpf/tls"
 )
 
@@ -49,6 +50,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		allowedHosts  string
 		deniedDNS     string
 		deniedHosts   string
+		netpolicyFile string
 		proxyHosts    string
 		cgroupPath    string
 		enableTLS     bool
@@ -66,7 +68,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		Hidden: true, // internal command, not user-facing
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
-				allowedDNS, allowedHosts, deniedDNS, deniedHosts, proxyHosts, cgroupPath,
+				allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, proxyHosts, cgroupPath,
 				enableTLS, allowedRepos, httpProxyPID, observe, observeOutput,
 				minIPLifetime)
 		},
@@ -87,6 +89,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Comma-separated DNS domain suffixes to block outright; takes precedence over --allowed-dns including its \"*\" wildcard")
 	cmd.Flags().StringVar(&deniedHosts, "denied-hosts", "",
 		"Comma-separated hosts to block outright; takes precedence over --allowed-hosts")
+	cmd.Flags().StringVar(&netpolicyFile, "netpolicy-file", "",
+		"Path to the runtime deny list the sandbox may append to; empty disables runtime narrowing")
 	cmd.Flags().StringVar(&proxyHosts, "proxy-hosts", "",
 		"Comma-separated hosts whose resolved IPs are redirected to L7 proxy")
 	cmd.Flags().StringVar(&cgroupPath, "cgroup", "",
@@ -105,6 +109,21 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Minimum lifetime a resolved IP is retained in the BPF allowlist, independent of DNS TTL (prevents mid-download eviction for short-TTL CDNs)")
 
 	return cmd
+}
+
+// hostDenier builds the deny matcher used to decide which allowed hosts get
+// pre-resolved into the BPF trie. It unions the profile-baked host denies with
+// the runtime file, so a host the sandbox denies at runtime is never seeded —
+// seeding it would leave the host reachable by address.
+func hostDenier(staticHosts []string, netpolicyFile string) *netpolicy.Denier {
+	var store *netpolicy.Store
+	if netpolicyFile != "" {
+		store = netpolicy.NewStore(netpolicyFile, netpolicy.DefaultReloadInterval)
+	}
+	if len(staticHosts) == 0 && store == nil {
+		return nil
+	}
+	return netpolicy.NewDenier(staticHosts, store)
 }
 
 // parsefirewallMode converts a mode string to the BPF uint16 constant.
@@ -182,7 +201,7 @@ func runEbpfAttach(
 	sandboxID string,
 	dnsPort, httpPort uint32,
 	firewallMode string,
-	allowedDNS, allowedHosts, deniedDNS, deniedHosts, proxyHosts string,
+	allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, proxyHosts string,
 	cgroupOverride string,
 	enableTLS bool,
 	allowedRepos string,
@@ -322,6 +341,7 @@ func runEbpfAttach(
 			SandboxID:       sandboxID,
 			AllowedSuffixes: dnsSuffixes,
 			DeniedSuffixes:  deniedDNSSuffixes,
+			RuntimeDenyFile: netpolicyFile,
 			MapUpdater:      enforcer,
 			ProxyHosts:      proxyHostList,
 			MinIPLifetime:   minIPLifetime,
@@ -350,7 +370,7 @@ func runEbpfAttach(
 	allowAllHosts := false
 	// denyMatcher reuses the resolver's matching rules so a host cannot be
 	// refused by the resolver yet seeded into the BPF trie here.
-	denyMatcher := resolver.NewAllowlist(nil, deniedHostList)
+	denyMatcher := resolver.NewAllowlist(nil, hostDenier(deniedHostList, netpolicyFile))
 	if allowedHosts != "" {
 		for _, h := range strings.Split(allowedHosts, ",") {
 			h = strings.TrimSpace(h)
