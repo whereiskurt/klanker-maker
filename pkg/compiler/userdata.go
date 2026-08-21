@@ -1332,6 +1332,16 @@ if [ ! -f {{ .RuntimeDenyFile }} ]; then
   printf '# Runtime egress denies for this sandbox — append-only, one entry per line.\n' > {{ .RuntimeDenyFile }}
 fi
 chmod 666 {{ .RuntimeDenyFile }}
+# The profile-baked denies otherwise live only inside the two proxy units'
+# Environment blocks, which a sandbox shell never sees — so km-netpolicy would
+# report "(none)" for them on a box that actually has them. Mirror them here.
+mkdir -p /etc/km
+cat > /etc/km/netpolicy.env << 'NETPOLICYENV'
+DENIED_SUFFIXES={{ .DeniedDNSSuffixes }}
+DENIED_HOSTS={{ .DeniedHTTPHosts }}
+KM_NETPOLICY_FILE={{ .RuntimeDenyFile }}
+NETPOLICYENV
+chmod 644 /etc/km/netpolicy.env
 if chattr +a {{ .RuntimeDenyFile }} 2>/dev/null; then
   echo "[km-bootstrap] runtime deny list append-only: {{ .RuntimeDenyFile }}"
 else

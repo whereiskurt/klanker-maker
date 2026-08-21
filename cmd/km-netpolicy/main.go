@@ -52,14 +52,72 @@ Narrowing is one-way. There is no verb to remove a deny or widen the policy;
 that requires a new profile and a fresh sandbox.
 `
 
+// DefaultEnvFile is written at boot alongside the deny list. The profile-baked
+// denies otherwise live only inside the two proxy units' Environment blocks,
+// which a sandbox shell never sees — so without this, `list` would report
+// "(none)" for profile-baked denies on a box that actually has them.
+const DefaultEnvFile = "/etc/km/netpolicy.env"
+
 func main() {
-	os.Exit(run(os.Args[1:], opts{
-		denyFile:    envOr("KM_NETPOLICY_FILE", netpolicy.DefaultPath),
-		staticDNS:   splitCSV(os.Getenv("DENIED_SUFFIXES")),
-		staticHosts: splitCSV(os.Getenv("DENIED_HOSTS")),
+	os.Exit(run(os.Args[1:], buildOpts(os.Getenv, DefaultEnvFile)))
+}
+
+// buildOpts resolves configuration with real environment variables taking
+// precedence over the boot-written env file, which in turn beats the
+// compiled-in default.
+func buildOpts(getenv func(string) string, envFile string) opts {
+	fileVals := parseEnvFile(envFile)
+
+	pick := func(key string) string {
+		if v := getenv(key); v != "" {
+			return v
+		}
+		return fileVals[key]
+	}
+
+	denyFile := pick("KM_NETPOLICY_FILE")
+	if denyFile == "" {
+		denyFile = netpolicy.DefaultPath
+	}
+
+	return opts{
+		denyFile:    denyFile,
+		staticDNS:   splitCSV(pick("DENIED_SUFFIXES")),
+		staticHosts: splitCSV(pick("DENIED_HOSTS")),
 		stdout:      os.Stdout,
 		stderr:      os.Stderr,
-	}))
+	}
+}
+
+// parseEnvFile reads simple KEY=VALUE lines, ignoring blanks, "#" comments, and
+// anything without an "=". A missing or unreadable file yields an empty map
+// rather than an error — the file is absent on any sandbox without runtime
+// narrowing, which is the common case.
+func parseEnvFile(path string) map[string]string {
+	out := map[string]string{}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+			v = v[1 : len(v)-1]
+		}
+		if k != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func run(args []string, o opts) int {
@@ -85,7 +143,7 @@ func run(args []string, o opts) int {
 
 func runDeny(patterns []string, o opts) int {
 	if len(patterns) == 0 {
-		fmt.Fprint(o.stderr, fmt.Sprintf("%s deny: needs at least one pattern\n\n", prog))
+		fmt.Fprintf(o.stderr, "%s deny: needs at least one pattern\n\n", prog)
 		fmt.Fprint(o.stderr, usage)
 		return 2
 	}
@@ -161,8 +219,11 @@ func runList(o opts) int {
 	store := netpolicy.NewStore(o.denyFile, 0)
 	runtime := store.Entries()
 
+	// A profile commonly names the same host in both deniedDNSSuffixes and
+	// deniedHosts, to block it at the DNS and HTTP layers alike. Listing it twice
+	// reads as duplicated config rather than one host blocked at two layers.
 	fmt.Fprintln(o.stdout, "profile-baked denies (fixed at create time):")
-	printList(o.stdout, append(append([]string{}, o.staticDNS...), o.staticHosts...))
+	printList(o.stdout, dedupe(append(append([]string{}, o.staticDNS...), o.staticHosts...)))
 
 	fmt.Fprintln(o.stdout, "\nruntime denies (appended from inside this sandbox):")
 	printList(o.stdout, runtime)
@@ -172,6 +233,20 @@ func runList(o opts) int {
 			n, plural(n), o.denyFile)
 	}
 	return 0
+}
+
+// dedupe removes repeats while preserving first-seen order.
+func dedupe(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func printList(w io.Writer, entries []string) {
@@ -198,13 +273,6 @@ func plural(n int) string {
 		return "y"
 	}
 	return "ies"
-}
-
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }
 
 func splitCSV(raw string) []string {

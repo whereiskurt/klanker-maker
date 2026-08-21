@@ -199,6 +199,35 @@ func TestUserData_RuntimeDenyOn_BothProxiesGetTheFile(t *testing.T) {
 	}
 }
 
+// The profile-baked denies otherwise live only in the two proxy units'
+// Environment blocks, which a sandbox shell never sees — so `km-netpolicy list`
+// would report "(none)" for them on a box that actually has them.
+func TestUserData_RuntimeDenyOn_WritesEnvFileForTheHelper(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+	p.Spec.Network.Egress.RuntimeDeny = true
+	p.Spec.Network.Egress.DeniedDNSSuffixes = []string{"evil.example.com"}
+	p.Spec.Network.Egress.DeniedHosts = []string{"bad.example.net"}
+
+	artifacts, err := compiler.Compile(p, "sb-rtenv", false, testNetwork(), nil)
+	if err != nil {
+		t.Fatalf("Compile error = %v", err)
+	}
+	ud := artifacts.UserData
+
+	if !strings.Contains(ud, "/etc/km/netpolicy.env") {
+		t.Error("UserData should write /etc/km/netpolicy.env for km-netpolicy to read")
+	}
+	for _, want := range []string{
+		"DENIED_SUFFIXES=evil.example.com",
+		"DENIED_HOSTS=bad.example.net",
+		"KM_NETPOLICY_FILE=/var/lib/km/netpolicy/deny.list",
+	} {
+		if !strings.Contains(ud, want) {
+			t.Errorf("netpolicy.env should carry %q", want)
+		}
+	}
+}
+
 func TestUserData_RuntimeDenyOn_InstallsHelper(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	p.Spec.Network.Egress.RuntimeDeny = true

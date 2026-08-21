@@ -133,6 +133,45 @@ func TestList_ShowsStaticAndRuntimeSeparately(t *testing.T) {
 	}
 }
 
+// Profiles commonly list the same host in BOTH deniedDNSSuffixes and
+// deniedHosts (blocking it at the DNS and HTTP layers alike). Printing it twice
+// reads like a duplicated config rather than one host blocked at two layers.
+func TestList_DeduplicatesAcrossTheTwoStaticLists(t *testing.T) {
+	o, out, _ := newEnv(t, "")
+	o.staticDNS = []string{"evil.example.com", ".tracker.example.net"}
+	o.staticHosts = []string{"evil.example.com", ".tracker.example.net"}
+
+	if rc := run([]string{"list"}, o); rc != 0 {
+		t.Fatalf("run = %d, want 0", rc)
+	}
+
+	got := out.String()
+	if n := strings.Count(got, "evil.example.com"); n != 1 {
+		t.Errorf("evil.example.com appears %d times, want 1:\n%s", n, got)
+	}
+	if n := strings.Count(got, ".tracker.example.net"); n != 1 {
+		t.Errorf(".tracker.example.net appears %d times, want 1:\n%s", n, got)
+	}
+}
+
+// Deduping must not drop a host that genuinely appears in only one of the lists.
+func TestList_KeepsEntriesUniqueToOneList(t *testing.T) {
+	o, out, _ := newEnv(t, "")
+	o.staticDNS = []string{"dns-only.example.com"}
+	o.staticHosts = []string{"host-only.example.net"}
+
+	if rc := run([]string{"list"}, o); rc != 0 {
+		t.Fatalf("run = %d, want 0", rc)
+	}
+
+	got := out.String()
+	for _, want := range []string{"dns-only.example.com", "host-only.example.net"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("list output missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestList_EmptyRuntimeIsNotAnError(t *testing.T) {
 	o, out, _ := newEnv(t, "")
 	if rc := run([]string{"list"}, o); rc != 0 {
