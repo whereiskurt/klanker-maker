@@ -44,6 +44,7 @@ PROFILES=(
   profiles/h1.yaml
   profiles/spot.yaml
   profiles/private-subnet.yaml  # Phase 125
+  profiles/deny-layered.yaml    # egress deny lists
   pkg/profile/builtins/ao.yaml
   pkg/profile/builtins/codex.yaml
   pkg/profile/builtins/goose.yaml

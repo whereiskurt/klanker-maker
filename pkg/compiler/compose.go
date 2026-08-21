@@ -72,6 +72,11 @@ type dockerComposeData struct {
 	Region             string
 	AllowedDNSSuffixes string // space-separated
 	AllowedHosts       string // space-separated
+	// DeniedDNSSuffixes and DeniedHosts are the comma-separated deny lists.
+	// Both empty unless the profile declares denies; the template guards on
+	// non-empty so an unchanged profile renders identical compose output.
+	DeniedDNSSuffixes string
+	DeniedHosts       string
 	AllowedRepos          string // space-separated
 	GitHubAllowedReposCSV string // comma-separated for KM_GITHUB_ALLOWED_REPOS
 	AllowedRefs        string // space-separated
@@ -146,6 +151,9 @@ services:
     container_name: km-{{ .SandboxID }}-dns-proxy
     environment:
       ALLOWED_SUFFIXES: "{{ .AllowedDNSSuffixes }}"
+{{- if .DeniedDNSSuffixes }}
+      DENIED_SUFFIXES: "{{ .DeniedDNSSuffixes }}"
+{{- end }}
       UPSTREAM_DNS: "8.8.8.8"
       SANDBOX_ID: "{{ .SandboxID }}"
       KM_SANDBOX_ID: "{{ .SandboxID }}"
@@ -159,6 +167,9 @@ services:
     container_name: km-{{ .SandboxID }}-http-proxy
     environment:
       ALLOWED_HOSTS: "{{ .AllowedHosts }}"
+{{- if .DeniedHosts }}
+      DENIED_HOSTS: "{{ .DeniedHosts }}"
+{{- end }}
       AWS_SHARED_CREDENTIALS_FILE: "/creds/sidecar"
       AWS_PROFILE: "sidecar"
       SANDBOX_ID: "{{ .SandboxID }}"
@@ -359,6 +370,8 @@ func generateDockerCompose(p *profile.SandboxProfile, sandboxID string, network 
 		Region:             p.Spec.Runtime.Region,
 		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
 		AllowedHosts:       strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
+		DeniedDNSSuffixes:  strings.Join(p.Spec.Network.Egress.DeniedDNSSuffixes, ","),
+		DeniedHosts:        strings.Join(p.Spec.Network.Egress.DeniedHosts, ","),
 		AllowedRepos:          allowedRepos,
 		GitHubAllowedReposCSV: strings.ReplaceAll(allowedRepos, " ", ","),
 		AllowedRefs:        allowedRefs,

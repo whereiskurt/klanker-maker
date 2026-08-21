@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -219,6 +220,27 @@ func deduplicateErrors(errs []ValidationError) []ValidationError {
 // Returns a slice of ValidationError. An empty slice means no semantic violations.
 func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	var errs []ValidationError
+
+	// Rule 0: "*" in a deny list is legal — it seals the sandbox — but is
+	// almost always someone reaching for a wildcard placeholder rather than a
+	// kill switch. Warn so it is a deliberate choice, but never block.
+	// Ordered, not a map, so km validate prints the same order every run.
+	denyLists := []struct {
+		path string
+		list []string
+	}{
+		{"spec.network.egress.deniedDNSSuffixes", p.Spec.Network.Egress.DeniedDNSSuffixes},
+		{"spec.network.egress.deniedHosts", p.Spec.Network.Egress.DeniedHosts},
+	}
+	for _, dl := range denyLists {
+		if slices.Contains(dl.list, "*") {
+			errs = append(errs, ValidationError{
+				Path:      dl.path,
+				Message:   `"*" denies ALL egress, overriding every allow entry — use an explicit suffix unless you intend to seal the sandbox`,
+				IsWarning: true,
+			})
+		}
+	}
 
 	// Rule 1: TTL must not be shorter than idleTimeout.
 	// TTL="" or "0" means no auto-destroy (--ttl 0 sentinel); skip TTL >= idle check.

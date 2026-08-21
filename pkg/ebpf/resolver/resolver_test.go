@@ -103,7 +103,7 @@ func TestAllowlistIsAllowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			al := resolver.NewAllowlist(tt.suffixes)
+			al := resolver.NewAllowlist(tt.suffixes, nil)
 			got := al.IsAllowed(tt.domain)
 			if got != tt.want {
 				t.Errorf("IsAllowed(%q, %v) = %v; want %v", tt.domain, tt.suffixes, got, tt.want)
@@ -114,7 +114,7 @@ func TestAllowlistIsAllowed(t *testing.T) {
 
 // TestAllowlistTTL tests resolved IP tracking and expiry.
 func TestAllowlistTTL(t *testing.T) {
-	al := resolver.NewAllowlist([]string{".github.com"})
+	al := resolver.NewAllowlist([]string{".github.com"}, nil)
 
 	ip := net.ParseIP("1.2.3.4").To4()
 
@@ -151,7 +151,7 @@ func TestAllowlistTTL(t *testing.T) {
 
 // TestAllowlistSweepKeepsNonExpired verifies Sweep only removes expired entries.
 func TestAllowlistSweepKeepsNonExpired(t *testing.T) {
-	al := resolver.NewAllowlist([]string{".github.com"})
+	al := resolver.NewAllowlist([]string{".github.com"}, nil)
 
 	ipExpiring := net.ParseIP("1.2.3.4").To4()
 	ipKeeping := net.ParseIP("5.6.7.8").To4()
@@ -242,7 +242,7 @@ func TestProxyHosts(t *testing.T) {
 
 	// Use NewAllowlist with the L7 proxy host suffixes to replicate the
 	// isProxyHost suffix matching algorithm.
-	proxyAllowlist := resolver.NewAllowlist(l7ProxyHosts)
+	proxyAllowlist := resolver.NewAllowlist(l7ProxyHosts, nil)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

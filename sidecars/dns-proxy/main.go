@@ -14,20 +14,16 @@ func main() {
 	// JSON-only output to stdout.
 	log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 
-	allowedRaw := os.Getenv("ALLOWED_SUFFIXES")
 	upstream := getEnv("UPSTREAM_DNS", "169.254.169.253")
 	port := getEnv("DNS_PORT", "53")
 	sandboxID := getEnv("SANDBOX_ID", "unknown")
 
-	var allowedSuffixes []string
-	for _, s := range strings.Split(allowedRaw, ",") {
-		s = strings.TrimSpace(s)
-		if s != "" {
-			allowedSuffixes = append(allowedSuffixes, s)
-		}
-	}
+	allowedSuffixes := splitCSV(os.Getenv("ALLOWED_SUFFIXES"))
+	// DENIED_SUFFIXES is absent on any sandbox whose profile declares no denies,
+	// which leaves the list empty and the behaviour identical to before.
+	deniedSuffixes := splitCSV(os.Getenv("DENIED_SUFFIXES"))
 
-	handler := dnsproxy.NewHandler(allowedSuffixes, upstream, sandboxID)
+	handler := dnsproxy.NewHandler(allowedSuffixes, deniedSuffixes, upstream, sandboxID)
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", handler)
 
@@ -37,6 +33,7 @@ func main() {
 		Str("addr", addr).
 		Str("upstream", upstream).
 		Strs("allowed_suffixes", allowedSuffixes).
+		Strs("denied_suffixes", deniedSuffixes).
 		Str("sandbox_id", sandboxID).
 		Msg("")
 
@@ -52,6 +49,18 @@ func main() {
 	if err := <-errCh; err != nil {
 		log.Fatal().Err(err).Msg("dns server error")
 	}
+}
+
+// splitCSV parses a comma-separated env value into a trimmed, empty-free list.
+// An unset or empty value yields a nil slice.
+func splitCSV(raw string) []string {
+	var out []string
+	for _, s := range strings.Split(raw, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func getEnv(key, defaultVal string) string {

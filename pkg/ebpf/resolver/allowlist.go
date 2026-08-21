@@ -28,33 +28,50 @@ type Allowlist struct {
 	suffixes []string
 	// allowAll is true when the suffixes list contains "*", meaning all domains are permitted.
 	allowAll bool
+	// denied stores the normalized denied suffixes. A match here blocks the
+	// name regardless of what suffixes or allowAll say.
+	denied []string
+	// denyAll is true when the denied list contains "*", sealing the sandbox.
+	denyAll bool
 
 	mu       sync.RWMutex
 	resolved map[string]resolvedEntry // domain (without trailing dot) -> entry
 }
 
-// NewAllowlist creates an Allowlist from a slice of domain suffixes.
-// Suffixes are normalized: lowercased, trailing dots stripped, leading dots
-// stripped. Both ".github.com" and "github.com" are equivalent.
-func NewAllowlist(suffixes []string) *Allowlist {
-	allowAll := false
-	normalized := make([]string, 0, len(suffixes))
-	for _, s := range suffixes {
+// NewAllowlist creates an Allowlist from slices of allowed and denied domain
+// suffixes. Both lists are normalized: lowercased, trailing dots stripped,
+// leading dots stripped. Both ".github.com" and "github.com" are equivalent.
+//
+// denied takes precedence over suffixes, including over the "*" wildcard. A nil
+// or empty denied list blocks nothing and leaves behaviour unchanged.
+func NewAllowlist(suffixes, denied []string) *Allowlist {
+	allowSet, allowAll := normalizeSuffixes(suffixes)
+	denySet, denyAll := normalizeSuffixes(denied)
+	return &Allowlist{
+		suffixes: allowSet,
+		allowAll: allowAll,
+		denied:   denySet,
+		denyAll:  denyAll,
+		resolved: make(map[string]resolvedEntry),
+	}
+}
+
+// normalizeSuffixes lowercases entries, strips leading and trailing dots, drops
+// empties, and reports whether the list contained the "*" wildcard.
+func normalizeSuffixes(in []string) (out []string, star bool) {
+	out = make([]string, 0, len(in))
+	for _, s := range in {
 		if s == "*" {
-			allowAll = true
+			star = true
 			continue
 		}
 		s = strings.ToLower(strings.TrimSuffix(s, "."))
 		s = strings.TrimPrefix(s, ".") // handle ".amazonaws.com" format
 		if s != "" {
-			normalized = append(normalized, s)
+			out = append(out, s)
 		}
 	}
-	return &Allowlist{
-		suffixes: normalized,
-		allowAll: allowAll,
-		resolved: make(map[string]resolvedEntry),
-	}
+	return out, star
 }
 
 // IsAllowed reports whether name is permitted by the allowlist.
@@ -65,15 +82,50 @@ func NewAllowlist(suffixes []string) *Allowlist {
 //
 // This is the same algorithm as sidecars/dns-proxy/dnsproxy.IsAllowed.
 func (a *Allowlist) IsAllowed(name string) bool {
-	if a.allowAll {
-		return true
-	}
 	name = strings.TrimSuffix(name, ".")
 	name = strings.ToLower(name)
 	if name == "" {
 		return false
 	}
-	for _, s := range a.suffixes {
+
+	// Deny is evaluated first and beats every allow, including allowAll.
+	if a.isDeniedNormalized(name) {
+		return false
+	}
+
+	if a.allowAll {
+		return true
+	}
+	return matchesAny(name, a.suffixes)
+}
+
+// IsDenied reports whether name is on the deny list, independent of whether the
+// allowlist would otherwise have permitted it.
+//
+// `km ebpf-attach` uses this to decide which allowed hosts to pre-resolve into
+// the BPF trie at startup. Seeding a denied host's IPs there would let a caller
+// reach it by address even though the resolver refuses to answer for the name.
+func (a *Allowlist) IsDenied(name string) bool {
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	if name == "" {
+		return false
+	}
+	return a.isDeniedNormalized(name)
+}
+
+// isDeniedNormalized expects name already lowercased with its trailing dot
+// stripped.
+func (a *Allowlist) isDeniedNormalized(name string) bool {
+	if a.denyAll {
+		return true
+	}
+	return matchesAny(name, a.denied)
+}
+
+// matchesAny reports whether name equals any normalized suffix or ends with
+// ".<suffix>". name must already be lowercased with its trailing dot stripped.
+func matchesAny(name string, suffixes []string) bool {
+	for _, s := range suffixes {
 		if name == s || strings.HasSuffix(name, "."+s) {
 			return true
 		}

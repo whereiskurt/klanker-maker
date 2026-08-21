@@ -271,6 +271,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 
 | You want to… | Look at |
 |---|---|
+| Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
 | Private-subnet sandboxes + per-AZ NAT gateways — `network.nat_gateway` / `spec.network.privateSubnet` toggles, cost, the one-time route-table split, reversal, guards, deploy surface | `docs/private-subnet-nat.md` (Phase 125) |
 | Sizing the private topology to cut the NAT bill — `network.private_subnet_count` (1–4, absent = all 4), the AZ-rotation tradeoff it buys, and the subnet destroys on lowering it | `docs/private-subnet-nat.md` § Paying for fewer AZs |
 | AZ failover + capacity feasibility — `km create` classify-and-retry sweep, GPU quota wall (`L-DB2E81BA`), `km capacity` verdicts, `--wait-for-capacity`, `{prefix}-capacity` DDB table, deploy-surface order | `docs/operational-gotchas.md` § AZ failover + capacity feasibility (Phase 124) |

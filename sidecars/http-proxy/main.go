@@ -23,20 +23,24 @@ func main() {
 	// JSON-only output to stdout.
 	log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 
-	allowedRaw := os.Getenv("ALLOWED_HOSTS")
 	port := getEnv("PROXY_PORT", "3128")
 	sandboxID := getEnv("SANDBOX_ID", "unknown")
 
-	var allowedHosts []string
-	for _, h := range strings.Split(allowedRaw, ",") {
-		h = strings.TrimSpace(h)
-		if h != "" {
-			allowedHosts = append(allowedHosts, h)
-		}
-	}
+	allowedHosts := splitCSV(os.Getenv("ALLOWED_HOSTS"))
+	// DENIED_HOSTS is absent on any sandbox whose profile declares no denies,
+	// which leaves the list empty and registers no deny gate at all.
+	deniedHosts := splitCSV(os.Getenv("DENIED_HOSTS"))
 
 	// Build proxy options.
 	var proxyOpts []httpproxy.ProxyOption
+
+	if len(deniedHosts) > 0 {
+		proxyOpts = append(proxyOpts, httpproxy.WithDeniedHosts(deniedHosts))
+		log.Info().
+			Str("event_type", "http_proxy_deny_enabled").
+			Strs("denied_hosts", deniedHosts).
+			Msg("")
+	}
 
 	// Budget enforcement state — hoisted so both goproxy and transparent listener
 	// can share the same DynamoDB client, model rates, and budget update callback.
@@ -165,6 +169,18 @@ func main() {
 			log.Fatal().Err(err).Msg("http proxy server error")
 		}
 	}
+}
+
+// splitCSV parses a comma-separated env value into a trimmed, empty-free list.
+// An unset or empty value yields a nil slice.
+func splitCSV(raw string) []string {
+	var out []string
+	for _, s := range strings.Split(raw, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func getEnv(key, defaultVal string) string {

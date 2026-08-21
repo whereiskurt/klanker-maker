@@ -1,0 +1,84 @@
+# Demo profile: a wide-open, observed sandbox with known-bad destinations
+# subtracted from it — the authoring loop the egress deny lists exist to serve.
+#
+# The loop this profile is the first step of:
+#
+#   1. Run wide open (`allowedDNSSuffixes: ["*"]`) with learnMode on, so every
+#      destination the workload touches is recorded.
+#   2. As you discover destinations you never want reached, add them to
+#      `deniedDNSSuffixes` / `deniedHosts` here. A deny beats every allow,
+#      including the "*" wildcard, so you can tighten the box WITHOUT first
+#      having to enumerate the allowlist — which is precisely what learn mode
+#      is being run to discover.
+#   3. When the recording is representative, `km shell --learn <id>` generates a
+#      real allowlist and the "*" goes away.
+#
+# Denies are not a substitute for step 3. A "*" allowlist with denies layered on
+# is an OPEN box with holes plugged, not a closed one — a destination nobody
+# thought to deny is still reachable. Treat this as scaffolding for producing a
+# real allowlist, not as a resting state.
+#
+# Deny matching note: an entry covers the apex AND its subdomains whether or not
+# it carries a leading dot, so "evil.example.com" also blocks
+# "api.evil.example.com". This is deliberately broader than the allow side,
+# where a bare `allowedHosts` entry matches exactly — strictness on an allowlist
+# permits less, but the same strictness on a denylist would fail open.
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: deny-layered
+  labels:
+    tier: development
+    tool: deny-layered-demo
+  prefix: deny
+
+extends:
+  - base/os/redhat
+  - base/userinit
+  - base/platform
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "20m"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+    spot: true
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: true
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  network:
+    # Both proxies and the eBPF resolver apply denies ahead of the allowlist.
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        - "*"
+      allowedHosts:
+        - "*"
+      # Known-bad, subtracted from the wildcard above.
+      deniedDNSSuffixes:
+        - "evil.example.com"
+        - ".tracker.example.net"
+      deniedHosts:
+        - "evil.example.com"
+        - ".tracker.example.net"
+
+  observability:
+    # Record everything the workload actually reaches, so step 3 can generate a
+    # real allowlist to replace the "*" above.
+    learnMode: true

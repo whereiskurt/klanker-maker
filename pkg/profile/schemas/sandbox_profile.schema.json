@@ -438,6 +438,16 @@
                   "type": "array",
                   "items": { "type": "string" },
                   "description": "Explicit hostnames allowed for egress"
+                },
+                "deniedDNSSuffixes": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "DNS suffixes blocked outright; takes precedence over allowedDNSSuffixes including its \"*\" wildcard"
+                },
+                "deniedHosts": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Hostnames blocked outright; takes precedence over allowedHosts and every proxy carve-out. A bare entry also covers subdomains."
                 }
               }
             },

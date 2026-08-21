@@ -599,6 +599,25 @@ type EgressSpec struct {
 	AllowedDNSSuffixes []string `yaml:"allowedDNSSuffixes"`
 	// AllowedHosts is the list of explicit hostnames allowed for egress.
 	AllowedHosts []string `yaml:"allowedHosts"`
+
+	// DeniedDNSSuffixes blocks DNS resolution for the listed suffixes, taking
+	// precedence over AllowedDNSSuffixes including its "*" wildcard.
+	//
+	// This exists so a wide-open learn-mode profile can have known-bad
+	// destinations subtracted from it without first having to enumerate the
+	// allowlist — which is precisely what learn mode is being run to discover.
+	// Omitting the field is byte-identical to not having it.
+	DeniedDNSSuffixes []string `yaml:"deniedDNSSuffixes,omitempty"`
+
+	// DeniedHosts blocks HTTP/HTTPS egress to the listed hosts, taking
+	// precedence over AllowedHosts and over every proxy carve-out (GitHub repo
+	// filter, OpenAI budget path, Bedrock/SES MITM).
+	//
+	// NOTE: a deny entry covers subdomains whether or not it carries a leading
+	// dot, unlike AllowedHosts where a bare entry matches exactly. Strictness on
+	// an allowlist permits less; the same strictness on a denylist would fail
+	// open.
+	DeniedHosts []string `yaml:"deniedHosts,omitempty"`
 }
 
 // IAMSpec controls AWS IAM identity and session configuration.
