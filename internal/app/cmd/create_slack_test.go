@@ -27,6 +27,12 @@ type fakeSlackAPI struct {
 	channelInfoMember   bool
 	channelInfoCount    int
 	channelInfoErr      error
+	// Archive/reuse trap fields. Zero values are the healthy case (live channel,
+	// no name mismatch), so every pre-existing test is unaffected.
+	channelDetailsName     string
+	channelDetailsArchived bool
+	unarchiveCalled        bool
+	unarchiveErr           error
 
 	// Phase 104: additional fields for lookup-first resolver tests.
 	findShouldPanic bool // if true, FindChannelByName panics (asserts it was never called)
@@ -69,6 +75,20 @@ func (f *fakeSlackAPI) InviteShared(_ context.Context, _, _ string) error {
 func (f *fakeSlackAPI) ChannelInfo(_ context.Context, _ string) (int, bool, error) {
 	f.channelInfoCalled = true
 	return f.channelInfoCount, f.channelInfoMember, f.channelInfoErr
+}
+
+// ChannelDetails mirrors ChannelInfo's liveness signal (same call, same error) so
+// existing tests keep their behaviour, and adds the archive/name fields the
+// resolver now reads. Defaults are the healthy case: not archived, and a name
+// matching whatever the test derived (channelDetailsName empty ⇒ no mismatch warn).
+func (f *fakeSlackAPI) ChannelDetails(_ context.Context, _ string) (string, bool, bool, error) {
+	f.channelInfoCalled = true
+	return f.channelDetailsName, f.channelDetailsArchived, f.channelInfoMember, f.channelInfoErr
+}
+
+func (f *fakeSlackAPI) UnarchiveChannel(_ context.Context, _ string) error {
+	f.unarchiveCalled = true
+	return f.unarchiveErr
 }
 
 // Phase 72 InviteAPI methods — required by the extended SlackAPI interface.

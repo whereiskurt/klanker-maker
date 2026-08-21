@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
@@ -77,7 +78,25 @@ func runLogs(cmd *cobra.Command, cfg *config.Config, client kmaws.CWLogsAPI, san
 		cwClient = cloudwatchlogs.NewFromConfig(awsCfg)
 	}
 
-	err := kmaws.TailLogs(ctx, cwClient, logGroup, stream, follow, cmd.OutOrStdout())
+	// Count what TailLogs actually emits. The audit sidecar creates the group and
+	// its stream at boot, so both exist immediately but empty — and TailLogs prints
+	// nothing and returns nil, which looks exactly like a broken command. The Phase
+	// 77 fallback below does not help: it only fires when the group is ABSENT.
+	counting := &countingWriter{w: cmd.OutOrStdout()}
+
+	err := kmaws.TailLogs(ctx, cwClient, logGroup, stream, follow, counting)
+	if err == nil && counting.n == 0 && !follow {
+		// Say what happened AND what this stream can never contain, because the
+		// usual reason an operator is here ("why didn't my sandbox boot?") is a
+		// question these events structurally cannot answer: the producer is the
+		// _km_audit PROMPT_COMMAND hook, which fires only in interactive bash login
+		// shells. No cloud-init output, no agent activity, no sidecar stdout.
+		fmt.Fprintf(cmd.OutOrStdout(),
+			"no audit events yet for %s — this stream carries interactive shell commands only.\n"+
+				"For provisioning and agent activity see: km status %s / km otel %s\n",
+			sandboxID, sandboxID, sandboxID)
+		return nil
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		// Phase 77: fall back to the create-handler Lambda log group when the
 		// per-sandbox group never existed (failed sandboxes whose user-data
@@ -92,6 +111,20 @@ func runLogs(cmd *cobra.Command, cfg *config.Config, client kmaws.CWLogsAPI, san
 	}
 
 	return nil
+}
+
+// countingWriter tracks whether anything was written, so runLogs can tell an empty
+// stream apart from a stream it simply forwarded. Wrapping the writer keeps
+// kmaws.TailLogs' signature (and its other callers) untouched.
+type countingWriter struct {
+	w io.Writer
+	n int
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += n
+	return n, err
 }
 
 // runLogsLambdaFallback queries the create-handler Lambda's CloudWatch log group

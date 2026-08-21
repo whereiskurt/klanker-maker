@@ -192,20 +192,29 @@ func identitiesTable() string {
 	return resourcePrefix() + "-identities"
 }
 
-// ttlHandlerName returns the TTL handler Lambda function name from the KM_TTL_HANDLER_NAME env var.
+// ttlHandlerName returns the TTL handler Lambda function name from the
+// KM_TTL_HANDLER_NAME env var, falling back to "<resource_prefix>-ttl-handler".
+//
+// The fallback was hardcoded "km-ttl-handler", which is wrong on any install
+// whose resource_prefix is not "km". Not currently biting — the deployed function
+// sets KM_TTL_HANDLER_NAME explicitly — but it is a one-forgotten-tfvar bug in the
+// self-referencing GetFunction/scheduler calls, so it now matches the sibling
+// helpers above.
 func ttlHandlerName() string {
 	if v := os.Getenv("KM_TTL_HANDLER_NAME"); v != "" {
 		return v
 	}
-	return "km-ttl-handler"
+	return resourcePrefix() + "-ttl-handler"
 }
 
-// ttlSchedulerRole returns the TTL scheduler IAM role name from the KM_TTL_SCHEDULER_ROLE env var.
+// ttlSchedulerRole returns the TTL scheduler IAM role name from the
+// KM_TTL_SCHEDULER_ROLE env var, falling back to "<resource_prefix>-ttl-scheduler".
+// Same hardcoded-prefix bug as ttlHandlerName above.
 func ttlSchedulerRole() string {
 	if v := os.Getenv("KM_TTL_SCHEDULER_ROLE"); v != "" {
 		return v
 	}
-	return "km-ttl-scheduler"
+	return resourcePrefix() + "-ttl-scheduler"
 }
 
 // atGroupName returns the EventBridge schedule group name from the KM_AT_GROUP_NAME env var.

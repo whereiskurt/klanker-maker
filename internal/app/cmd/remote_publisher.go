@@ -44,6 +44,11 @@ func (p *realRemotePublisher) PublishSandboxCommand(ctx context.Context, sandbox
 	if region == "" {
 		region = "us-east-1"
 	}
-	fmt.Printf("Monitor: aws logs tail /aws/lambda/km-ttl-handler --follow --profile klanker-terraform --region %s\n", region)
+	// The function name is prefix-scoped. Hardcoding "km-" here printed a hint at
+	// a log group that does not exist on any install whose resource_prefix is not
+	// "km" — following it yields ResourceNotFoundException, which is a large part
+	// of why `km logs` has a reputation for never working.
+	fmt.Printf("Monitor: aws logs tail /aws/lambda/%s-ttl-handler --follow --profile klanker-terraform --region %s\n",
+		p.cfg.GetResourcePrefix(), region)
 	return nil
 }

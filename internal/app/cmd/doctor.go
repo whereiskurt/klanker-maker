@@ -497,6 +497,13 @@ type DoctorDeps struct {
 	SlackListSandboxesWithInbound func(ctx context.Context) ([]inboundRow, error)
 	// SlackAuthTestScopes returns the list of OAuth scopes the bot token has.
 	SlackAuthTestScopes func(ctx context.Context) ([]string, error)
+
+	// SlackListChannelMappings reads the km-slack-channels alias→channel rows, and
+	// SlackResolveChannel reports a channel's current name (dead=true only for a
+	// definitive channel_not_found). Both nil ⇒ the mapping check SKIPs, which is
+	// the right posture for installs with no per-sandbox Slack.
+	SlackListChannelMappings func(ctx context.Context) ([]SlackChannelMapping, error)
+	SlackResolveChannel      SlackChannelResolver
 	// SlackResourcePrefix is the resource prefix used to detect stale queues.
 	SlackResourcePrefix string
 	// SSMDeleterClient is used by checkStaleSSMParameters to delete orphaned
@@ -3807,6 +3814,17 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// Content check on the same table: a stored row can diverge from the profile
+	// that created it, and resolution never notices (the row is consulted before
+	// the derived name, and the two are never compared). READ-ONLY — alias rows
+	// must survive destroy and are never auto-deleted.
+	slackMappingLister := deps.SlackListChannelMappings
+	slackChannelResolver := deps.SlackResolveChannel
+	slackDerive := func(alias string) string { return "sb-" + sanitizeChannelName(alias) }
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkSlackChannelMappings(ctx, slackMappingLister, slackChannelResolver, slackDerive)
+	})
+
 	// Phase 124 — DynamoDB: capacity table (per-(instanceType,az) ICE/success history).
 	// WARN-level demote mirrors the slack-channels pattern: installs on pre-Phase-124
 	// builds may not have this table yet, so a missing table is advisory.
@@ -4866,6 +4884,46 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 			return nil, fmt.Errorf("get bot token: %w", tokenErr)
 		}
 		return fetchSlackBotScopes(innerCtx, awssdk.ToString(token.Parameter.Value))
+	}
+
+	// Slack channel-mapping deps. Both are best-effort: any failure below leaves
+	// the dep nil (or returns an error), and the check SKIPs rather than failing
+	// doctor for an install that has no per-sandbox Slack at all.
+	slackChannelsTableForDoctor := cfg.GetSlackChannelsTableName()
+	ddbScanForChannels := dynamodb.NewFromConfig(awsCfg)
+	deps.SlackListChannelMappings = func(innerCtx context.Context) ([]SlackChannelMapping, error) {
+		out, scanErr := ddbScanForChannels.Scan(innerCtx, &dynamodb.ScanInput{
+			TableName: awssdk.String(slackChannelsTableForDoctor),
+		})
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan %s: %w", slackChannelsTableForDoctor, scanErr)
+		}
+		mappings := make([]SlackChannelMapping, 0, len(out.Items))
+		for _, item := range out.Items {
+			alias, _ := item["alias"].(*dynamodbtypes.AttributeValueMemberS)
+			channel, _ := item["channel_id"].(*dynamodbtypes.AttributeValueMemberS)
+			if alias == nil || channel == nil {
+				continue
+			}
+			mappings = append(mappings, SlackChannelMapping{Alias: alias.Value, ChannelID: channel.Value})
+		}
+		return mappings, nil
+	}
+	deps.SlackResolveChannel = func(innerCtx context.Context, channelID string) (string, bool, error) {
+		token, tokenErr := ssmClientForSlack.GetParameter(innerCtx, &ssm.GetParameterInput{
+			Name:           awssdk.String(cfg.GetSsmPrefix() + "slack/bot-token"),
+			WithDecryption: awssdk.Bool(true),
+		})
+		if tokenErr != nil {
+			return "", false, fmt.Errorf("get bot token: %w", tokenErr)
+		}
+		client := slackpkg.NewClient(awssdk.ToString(token.Parameter.Value), nil)
+		name, _, _, infoErr := client.ChannelDetails(innerCtx, channelID)
+		if infoErr != nil {
+			// Only channel_not_found is definitive; everything else is unprobed.
+			return "", slackpkg.IsChannelNotFound(infoErr), infoErr
+		}
+		return name, false, nil
 	}
 
 	// Slack transcript-streaming health deps (Plan 68-11).

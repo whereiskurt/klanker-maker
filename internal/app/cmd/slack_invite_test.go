@@ -84,6 +84,14 @@ func (f *fakeSlackAPIForInvite) ChannelInfo(_ context.Context, _ string) (int, b
 	return 0, false, nil
 }
 
+// Healthy-channel stubs — the invite command never resolves a stored mapping, so
+// the archive path is out of scope for these tests.
+func (f *fakeSlackAPIForInvite) ChannelDetails(_ context.Context, _ string) (string, bool, bool, error) {
+	return "", false, false, nil
+}
+
+func (f *fakeSlackAPIForInvite) UnarchiveChannel(_ context.Context, _ string) error { return nil }
+
 // ─────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────

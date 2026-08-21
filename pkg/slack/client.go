@@ -101,6 +101,14 @@ type SlackChannelField struct {
 	ID         string
 	IsMember   bool
 	NumMembers int
+	// Name and IsArchived come from the conversations.info object shape. They are
+	// additive: the string shape leaves them zero, and no existing reader consults
+	// them. IsArchived in particular was NOT decoded here before — the identically
+	// named field on SlackChannelSummary belongs to the conversations.list shape —
+	// so an archived channel was indistinguishable from a healthy one on the
+	// info path, which is the whole archive/reuse trap. See ChannelDetails.
+	Name       string
+	IsArchived bool
 }
 
 func (c *SlackChannelField) UnmarshalJSON(b []byte) error {
@@ -120,11 +128,14 @@ func (c *SlackChannelField) UnmarshalJSON(b []byte) error {
 		ID         string `json:"id"`
 		IsMember   bool   `json:"is_member"`
 		NumMembers int    `json:"num_members"`
+		Name       string `json:"name"`
+		IsArchived bool   `json:"is_archived"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return err
 	}
 	c.ID, c.IsMember, c.NumMembers = obj.ID, obj.IsMember, obj.NumMembers
+	c.Name, c.IsArchived = obj.Name, obj.IsArchived
 	return nil
 }
 
@@ -852,6 +863,52 @@ func (c *Client) ArchiveChannel(ctx context.Context, channelID string) error {
 		"channel": channelID,
 	})
 	return err
+}
+
+// UnarchiveChannel calls conversations.unarchive — the inverse of ArchiveChannel,
+// and the piece that makes archive-on-destroy round-trippable.
+//
+// Without it, km could put a channel in the hole but never lift it out: destroying
+// any per-sandbox-channel sandbox (archive-on-destroy is the DEFAULT) and then
+// creating again on the same alias was a guaranteed create failure, because the
+// alias→channel mapping is durable by design and resolves to the archived channel
+// forever. The only escape was a raw `aws dynamodb delete-item`.
+//
+// Scope-wise this is free: conversations.unarchive needs channels:manage (public)
+// / groups:write (private) — exactly the scopes km already holds in order to
+// create and archive. The capability was unimplemented, not unauthorized.
+func (c *Client) UnarchiveChannel(ctx context.Context, channelID string) error {
+	_, err := c.callJSON(ctx, "conversations.unarchive", map[string]any{
+		"channel": channelID,
+	})
+	return err
+}
+
+// ChannelDetails returns the channel's name, whether it is archived, and whether
+// the bot is a member.
+//
+// This exists because ChannelInfo above parses is_archived (see the Channel struct)
+// and then discards it, so every caller treated an archived channel as healthy:
+// validateStoredChannel returned ok, the resolver logged a cache hit, and the
+// create marched on to a conversations.join that fails with is_archived — aborting
+// the whole sandbox provision with an error naming the DERIVED channel name and the
+// STORED id, two things that never belonged together.
+//
+// Deliberately a NEW method rather than a signature change to ChannelInfo: the
+// existing callers (adopt, repair, transcript audience, invite) and their fakes
+// stay untouched. The returned name is the channel's ACTUAL current name, which is
+// what lets a caller notice that a renamed profile template no longer matches the
+// channel the alias is pinned to.
+func (c *Client) ChannelDetails(ctx context.Context, channelID string) (name string, archived, isMember bool, err error) {
+	// Form-encoded for the same reason as ChannelInfo: conversations.info rejects
+	// a JSON body with invalid_arguments.
+	resp, err := c.callForm(ctx, "conversations.info", url.Values{
+		"channel": {channelID},
+	})
+	if err != nil {
+		return "", false, false, err
+	}
+	return resp.Channel.Name, resp.Channel.IsArchived, resp.Channel.IsMember, nil
 }
 
 // PostResponse is the bridge Lambda's 200-path response shape.
