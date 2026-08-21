@@ -195,6 +195,27 @@ If `chattr` fails at boot (an exotic filesystem without append-only support),
 bootstrap logs a `WARNING` and continues. Runtime denies still apply — they are
 simply no longer protected against removal by the sandbox.
 
+### Live UAT
+
+Verified end to end on a real EC2 sandbox (`profiles/deny-layered.yaml`,
+`enforcement: both`, AL2023, us-east-1a):
+
+| Assertion | Result |
+|---|---|
+| `lsattr` shows the append-only bit on the deny file | `-----a----------------` |
+| Sandbox user truncate / unlink / rename / `chattr -a` | all refused |
+| Host reachable before the deny | yes |
+| `km-netpolicy deny <host>` then reachable? | blocked, no restart |
+| Unrelated host after the deny | still reachable — narrowing, not sealing |
+| Denies survive a reboot | yes, file and attribute both |
+| Still enforced after reboot | yes |
+| eBPF resolver honours the runtime file | yes — with `km-dns-proxy` inactive, a runtime-denied name returned NXDOMAIN and a freshly appended deny took effect live |
+
+That last row is the one worth knowing about. In `ebpf`/`both` mode the
+bootstrap deliberately does not enable `km-dns-proxy` — the eBPF resolver
+serves DNS instead. So on those profiles the resolver is the *only* thing
+enforcing a DNS-level deny, which is why it reads the runtime file too.
+
 ### Operational notes
 
 - A deny takes effect within about a second. Both proxies re-stat the file
@@ -207,8 +228,12 @@ simply no longer protected against removal by the sandbox.
   append is irreversible.
 - It reads the file back after writing and reports failure if the entry is not
   actually in force, rather than assuming the write landed.
-- The runtime file feeds both the DNS proxy and the HTTP proxy. There is one
-  list, not one per layer.
+- The runtime file feeds the DNS proxy, the HTTP proxy, and the eBPF resolver.
+  There is one list, not one per layer.
+- `/etc/km/netpolicy.env` mirrors the profile-baked lists so `km-netpolicy list`
+  can show them. Without it the helper would report `(none)` for profile-baked
+  denies on a box that has them, since those values otherwise live only inside
+  the proxy units' `Environment` blocks.
 
 ### All three enforcement modes
 
