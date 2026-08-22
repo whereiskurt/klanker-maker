@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 126
 current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 126-02-PLAN.md
-last_updated: "2026-08-22T23:23:00.591Z"
+stopped_at: Completed 126-03-PLAN.md
+last_updated: "2026-08-22T23:36:15.704Z"
 last_activity: 2026-08-22
 last_activity_desc: Phase 126 execution started
 progress:
   total_phases: 10
   completed_phases: 7
   total_plans: 67
-  completed_plans: 54
+  completed_plans: 55
   percent: 70
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
-Plan: 3 of 10
+Plan: 4 of 10
 Total Plans in Phase: 10
-Current Plan: 3
+Current Plan: 4
 Status: Ready to execute
 Last activity: 2026-08-22 — Phase 126 execution started
 
@@ -624,6 +624,7 @@ Progress: [█████████░] 91%
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P07 | 4 | 3 tasks | 8 files |
 | Phase 126 P01 | 25min | 3 tasks | 10 files |
 | Phase 126 P02 | 25min | 3 tasks | 5 files |
+| Phase 126 P03 | 1h | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -1781,6 +1782,8 @@ Recent decisions affecting current work:
 - [Phase 126-01]: config-aware launchAccount validation (unknown-link check) lives in internal/app/cmd, not pkg/profile.ValidateSemantic, to avoid pkg/profile importing internal/app/config
 - [Phase 126-02]: Replaced the planned %{if}/%{endif} heredoc control sequence with a conditional local + plain interpolation to achieve dormant byte-identity of the generated provider.tf
 - [Phase 126-02]: Generated provider.tf region expression reads local.site_vars.locals.region.full (root's own expression), not local.svc_config.locals.region_full, so dormant render is provably identical to root's own output
+- [Phase 126]: AssumeRoleConfig's STS-client construction is a second, exported package-level var (NewAssumeRoleSTSClient), not a parameter on AssumeRoleConfig itself — Keeps the public signature exactly as specified while giving external _test packages a seam to inject a stub STS client and exercise the real Retrieve/cache/ExternalId logic
+- [Phase 126]: Home account's capacity-store namespace stays permanently empty (bare pre-Phase-126 key), never namespaced for symmetry — Success rows carry no TTL and persist indefinitely; namespacing home would orphan every accumulated sticky-AZ record with no recovery path (126-RESEARCH.md Pitfall 5)
 
 ### Roadmap Evolution
 
@@ -1933,6 +1936,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-22T23:23:00.578Z
-Stopped at: Completed 126-02-PLAN.md
+Last session: 2026-08-22T23:36:15.690Z
+Stopped at: Completed 126-03-PLAN.md
 Resume file: None
