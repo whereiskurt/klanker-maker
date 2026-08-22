@@ -1,7 +1,8 @@
 # Cross-Account Capacity Borrowing (GPU-motivated) — Design Spec
 
 **Date:** 2026-06-29
-**Status:** Draft for review
+**Status:** Draft for review — **line references re-verified 2026-08-22 against `6b682f7e`;
+five substantive corrections applied (see § Re-verification, 2026-08-22)**
 **Author:** brainstorming session (operator: whereiskurt@gmail.com)
 **Scope:** Let specific SandboxProfiles launch their EC2 box into a *different* AWS account — to **borrow that account's vCPU quota / capacity** — via a pre-provisioned, tightly-bounded launcher role. Single km control plane stays home. GPU is the motivating first use; the mechanism is instance-type-agnostic.
 
@@ -17,10 +18,85 @@ Nothing here is GPU-specific: the launcher's `--instance-types` allowlist is the
 
 The operator's GPU/EC2 capacity lives in the **org management account** (call it **account B**), not the **application account** (**account A**) where km launches sandboxes today. Two hard facts shape the design:
 
-1. **Sandboxes launch into whatever `--aws-profile` resolves to.** The generated sandbox AWS provider (`infra/live/root.hcl:46-55`) has **no `assume_role` block** — it uses ambient credentials. `accounts.application` is only string-interpolated into ARNs, never used to target the provider. (recon: `pkg/terragrunt/runner.go:420`, `internal/app/cmd/create.go:302-303`.)
+1. **Sandboxes launch into whatever `--aws-profile` resolves to.** The generated sandbox AWS provider (`infra/live/root.hcl:46-55`) has **no `assume_role` block** — it uses ambient credentials. `accounts.application` is only string-interpolated into ARNs, never used to target the provider. (recon: `pkg/terragrunt/runner.go:420`, `internal/app/cmd/create.go:268-270` + flag default at `:375`.)
 2. **The management account is SCP-exempt.** AWS Service Control Policies do **not** apply to the org management account. So the blast-radius containment km normally gets from its SCP guardrails (`infra/modules/scp`) is **unavailable** in B. Containment must live entirely in the IAM role we pre-deploy in B.
 
-A secondary, already-known footgun: the Phase-124 capacity/quota check (`pkg/capacity/RankAZs`, GPU quota `L-DB2E81BA`) runs in the **same account as the launch** because its clients all derive from one `awsCfg` (`internal/app/cmd/create.go:802-814`, `capacity.go:122-173`). If capacity lives in B but the check runs in A, it checks the **wrong account** — exactly the warning in `CLAUDE.md:13,25`.
+A secondary, already-known footgun: the Phase-124 capacity/quota check (`pkg/capacity/RankAZs`, GPU quota `L-DB2E81BA`) runs in the **same account as the launch** because its clients all derive from one `awsCfg` (`internal/app/cmd/create.go:886-950`, `internal/app/cmd/capacity.go:115-175`). If capacity lives in B but the check runs in A, it checks the **wrong account** — exactly the warning in `CLAUDE.md:13,25`.
+
+## Re-verification, 2026-08-22 (against `6b682f7e`)
+
+This spec was written 2026-06-29 and sat unimplemented for ~8 weeks, across Phases 122-125.
+Every line citation was re-checked; the body above now carries the corrected offsets inline.
+Verified still absent from the tree: `launchAccount` / `LaunchAccount` / `launch_accounts` in
+any `.go` / `.json` / `.yaml` / `.hcl`; an `internal/app/cmd/account.go`; a phase directory
+under `.planning/phases/`; and any `stscreds` / `AssumeRoleProvider` use anywhere in the repo.
+
+### Citation drift
+
+| Original citation | Verdict | Current |
+|---|---|---|
+| `infra/live/root.hcl:8-23` (backend) | exact | unchanged |
+| `infra/live/root.hcl:46-55` (provider) | exact | `provider "aws"` 46-55 inside `generate "provider"` 26-57 |
+| `scp/terragrunt.hcl:31-33` (assume_role) | exact | unchanged — still the pattern to copy |
+| `scp/terragrunt.hcl:28-60` | loose | `generate` 13-43, `remote_state` 46-61 |
+| `pkg/terragrunt/runner.go:420` (AWS_PROFILE inject) | exact | unchanged |
+| `pkg/profile/types.go:465` (RuntimeSpec) | exact | unchanged |
+| `capacity.go:122-173` | ~exact | it is `internal/app/cmd/capacity.go`; `runCapacity` 115, clients 123-172 |
+| `create.go:302-303` (--aws-profile recon) | moved | 268-270, flag default 375 |
+| `create.go:601-644` (network resolution) | moved | 688-709 **and a second copy at 2528-2552** |
+| `create.go:802-814` (capacity/quota) | moved | 886-950; `RankAZs` call at 911 |
+| `create.go:2325` (`runCreateRemote`) | moved | 2432 (file now 3423 lines) |
+
+### C1 — There is no sandbox provider template to modify
+
+Create-flow step 1 assumed `pkg/compiler` emits the sandbox provider. It does not.
+`infra/templates/sandbox/terragrunt.hcl` is copied **verbatim** by `CreateSandboxDir`
+(`pkg/terragrunt/sandbox.go:13`) and inherits its provider entirely from `include "root"`;
+the compiler writes only `service.hcl` (`PopulateSandboxDir`, `sandbox.go:33`). The workable
+shape is a static `generate "provider"` block **in the sandbox template** that overrides
+root's, keyed off a `launch_account` local the compiler writes into `service.hcl`.
+Templating the `.hcl` itself would break the verbatim-copy invariant Phase 125 guards with
+`TestSubstrateVersionPinPointsAtExistingModules` (`pkg/terragrunt/substrate_version_pin_test.go`).
+
+### C2 — Teardown is a third trust principal, and it belongs in Wave 2
+
+Q1 resolved "both principals" (operator SSO + create-handler). But `cmd/ttl-handler/main.go:1196-1232`
+renders its **own** `main.tf` with a bare `provider "aws" { region = … }` — so the ttl-handler
+Lambda role must be trusted too, or nothing auto-reaps an expired B box. The trust policy is
+authored in B with B admin credentials (Wave 2); discovering this in Wave 5 costs a second
+privileged trip. Enumerate all three principals up front. (Same file also hardcodes
+`km_label = "km"` — the known prefix bug, now on the cross-account path.)
+
+### C3 — `km destroy`'s cold-clone fallback is launch-account-blind
+
+`internal/app/cmd/destroy.go:258-267` synthesizes a `minimalHCL` `service.hcl` with five
+hardcoded locals when the sandbox directory is absent locally. If the provider's `assume_role`
+keys off a service.hcl local (C1), destroying a B sandbox from a fresh clone silently runs
+against A and fails. Wave 5 must extend that literal.
+
+### C4 — Q3's capacity key collides with the offerings lookup
+
+`RankAZs` passes its `instanceType` argument to **both** the store key (`rankScore` →
+`itemKey`, `pkg/capacity/store.go:151`) **and** `DescribeInstanceTypeOfferings` / `IsGPUFamily`
+(`pkg/capacity/rankaz.go:174`, `:71`). Passing `"481723467561#g6e.12xlarge"` as `instanceType`,
+as Q3 literally describes, breaks the EC2 call. Namespace inside the store instead —
+`NewDynamoCapacityStore(client, table, accountNS)` — which touches the two construction sites
+(`create.go:889`, `capacity.go:172`) and leaves the `CapacityStore` interface alone.
+
+### C5 — Phase 125 landed after this spec, and a single-subnet link disables AZ failover
+
+This spec predates Phase 125 by seven weeks. Two consequences:
+
+- `RankAZs` gained a `natAZs` parameter and placement now resolves once into
+  `network.SandboxSubnets` (`create.go:874`, `resolveSandboxSubnets` at `:149`).
+  `launchAccount` + `spec.network.privateSubnet` is an unsupported combination
+  `km validate` should reject outright — the link record has one subnet and no NAT concept.
+- More consequential: the link record's single `subnet_id` collapses `maxAttempts` to 1,
+  switching off the entire Phase-124 AZ-failover sweep **precisely where GPU ICE bites
+  hardest**. `km account add --provision-network` is building the VPC anyway, so it should
+  provision one subnet per AZ and store a **list**. Cheap now; needs B admin credentials to redo.
+
+---
 
 ## Non-goals (YAGNI)
 
@@ -70,7 +146,7 @@ km account add        ──►     km account register      ──►      prof
                                                             SECOND assumed-role awsCfg (account B)
 ```
 
-State always lives in **A's** home S3 backend (`infra/live/root.hcl:8-23`) — terragrunt uses A creds for the backend and the assumed-role creds only for the AWS provider. This is exactly how the SCP stack already operates cross-account (`infra/live/management/scp/terragrunt.hcl:28-60`).
+State always lives in **A's** home S3 backend (`infra/live/root.hcl:8-23`) — terragrunt uses A creds for the backend and the assumed-role creds only for the AWS provider. This is exactly how the SCP stack already operates cross-account (`infra/live/management/scp/terragrunt.hcl:13-61` — provider `generate` 13-43, `remote_state` 46-61).
 
 ---
 
@@ -259,10 +335,10 @@ spec:
 
 ## Create-flow changes
 
-1. **Provider generation** (`pkg/compiler`, the sandbox provider template that derives from `infra/live/root.hcl:46-55`): when the resolved profile has `launchAccount` set, emit an `assume_role { role_arn = <launcher-arn>; external_id = <ext-id> }` block — copying `infra/live/management/scp/terragrunt.hcl:31-33`. Absent ⇒ unchanged (no assume_role).
-2. **Network resolution** (`internal/app/cmd/create.go:601-644`): when `launchAccount` is set, source subnet/SG/region from the link record instead of `infra/live/<region>/network/outputs.json`. If the profile sets `mountEFS: true`, the EFS id also resolves from the link record (`efs_id`) instead of home's `efs/outputs.json`; `km validate` errors if `mountEFS` is set against a link enrolled without `--provision-efs`.
-3. **Capacity/quota check** (`create.go:802-814`, `capacity.go:122-173`): build a **second `awsCfg`** with `stscreds.AssumeRoleProvider` for the launcher role (the first net-new Go AssumeRole helper in `pkg/aws`), and pass its EC2 + ServiceQuotas clients into `RankAZs`. The `L-DB2E81BA` gate now checks **account B**. The capacity DynamoDB store stays home (A creds), but its partition-key value is namespaced by the resolved launch account (`<account_id>#<instance_type>`) so per-account AZ history is self-consistent — see Q3.
-4. **Remote create** (`runCreateRemote`, `create.go:2325`): the create-handler Lambda role in A must be the trusted principal in the launcher trust policy (or assume into it). Local create uses the operator SSO role as the trusted principal.
+1. **Provider generation** — *corrected 2026-08-22, see C1.* There is **no per-sandbox provider template**: `infra/templates/sandbox/terragrunt.hcl` is copied **verbatim** by `pkg/terragrunt.CreateSandboxDir` (`pkg/terragrunt/sandbox.go:13`) and inherits its provider entirely from `include "root"` (`infra/live/root.hcl:46-55`); the compiler writes only `service.hcl` (`PopulateSandboxDir`, `sandbox.go:33`). So the assume_role must come from a **static `generate "provider"` block added to the sandbox template** that overrides root's, emitting `assume_role { role_arn = …; external_id = … }` (copying `infra/live/management/scp/terragrunt.hcl:31-33`) only when a `launch_account` local is present in the compiler-written `service.hcl`. Absent ⇒ the block emits root's provider unchanged (no assume_role).
+2. **Network resolution** (`internal/app/cmd/create.go:688-709` — **and the second, near-identical copy in `runCreateRemote` at `:2528-2552`**; both build a `compiler.NetworkConfig` from `LoadNetworkOutputs` and both carry the Phase-125 private-subnet guard): when `launchAccount` is set, source subnet/SG/region from the link record instead of `infra/live/<region>/network/outputs.json`. If the profile sets `mountEFS: true`, the EFS id also resolves from the link record (`efs_id`) instead of home's `efs/outputs.json`; `km validate` errors if `mountEFS` is set against a link enrolled without `--provision-efs`.
+3. **Capacity/quota check** (`create.go:886-950`, `RankAZs` call at `:911`; `internal/app/cmd/capacity.go:115-175`): build a **second `awsCfg`** with `stscreds.AssumeRoleProvider` for the launcher role (still the first net-new Go AssumeRole helper in `pkg/aws` — re-verified 2026-08-22: no `stscreds` / `AssumeRoleProvider` exists anywhere in the repo), and pass its EC2 + ServiceQuotas clients into `RankAZs`. The `L-DB2E81BA` gate now checks **account B**. The capacity DynamoDB store stays home (A creds); its rows are namespaced by the resolved launch account — but **not** by rewriting the `instanceType` argument (see C4 and the amended Q3: that argument also feeds `DescribeInstanceTypeOfferings`). Namespace inside the store constructor instead.
+4. **Remote create** (`runCreateRemote`, `create.go:2432`): the create-handler Lambda role in A must be the trusted principal in the launcher trust policy (or assume into it). Local create uses the operator SSO role as the trusted principal. **A third principal is required — the ttl-handler Lambda role** (see C2): it renders its own destroy `main.tf` and is the only thing that auto-reaps an expired box.
 
 ## Deploy surface
 
@@ -278,18 +354,18 @@ spec:
 A new GSD phase, sketched as waves so it can be planned/executed incrementally. Each wave is independently testable.
 
 - **Wave 1 — Config + profile plumbing (no AWS).** `launch_accounts` config block + merge-list entry + getters; `RuntimeSpec.LaunchAccount` field + JSON schema + `km validate` rules. Unit-tested, zero infra. *Exit:* a profile with `launchAccount` validates against a configured link and rejects an unknown one.
-- **Wave 2 — B-side enrollment (`km account add`).** New TF module(s) for the launcher role + box role + boundary + optional minimal network + the `{prefix}-results-{B-account}` bucket (bucket-owner-enforced, policy: B box RW / A read) + optional `--provision-efs` (EFS + mount targets + NFS ingress); the `km account add` command (terragrunt against B). *Exit:* run with B creds, the bounded roles + subnet/SG + results bucket (+ EFS if requested) exist in B; `aws iam simulate-principal-policy` confirms the launcher can't do anything but the GPU launch.
+- **Wave 2 — B-side enrollment (`km account add`).** New TF module(s) for the launcher role + box role + boundary + optional minimal network + the `{prefix}-results-{B-account}` bucket (bucket-owner-enforced, policy: B box RW / A read) + optional `--provision-efs` (EFS + mount targets + NFS ingress); the `km account add` command (terragrunt against B). **Amended 2026-08-22:** this wave must (a) trust **all three** A-side principals in the launcher trust policy up front — operator SSO, `*-create-handler`, **`*-ttl-handler`** (C2) — and (b) provision **one subnet per AZ and record a subnet *list*** in the link, not a single `subnet_id` (C5). Both are cheap here and require a second trip through B admin credentials if deferred. *Exit:* run with B creds, the bounded roles + per-AZ subnets/SG + results bucket (+ EFS if requested) exist in B; `aws iam simulate-principal-policy` confirms the launcher can't do anything but the GPU launch.
 - **Wave 3 — A-side register (`km account register` + `list`/`rm`).** Writes the link (incl. `results_bucket`) to `km-config.yaml`; adds the read-only artifacts grant for B's box role. *Exit:* `km account list` shows the link; B's box role can `GetObject` from the home artifacts bucket; A principals can read the B results bucket.
-- **Wave 4 — Full create path (local + remote) + capacity-in-B.** Compiler emits the provider `assume_role` block; create-flow sources network from the link; new `pkg/aws` AssumeRole helper; second assumed-role `awsCfg` so `RankAZs`/`km capacity` check B's `L-DB2E81BA`; **both** trusted principals wired (operator SSO for local create, `*-create-handler` Lambda role + its `sts:AssumeRole` grant for remote create). Local and remote land together because the capacity-check-in-B is indivisible from the launch (the GPU quota gate fail-fasts *before* the sweep — checking A would abort every GPU create). *Exit:* `km capacity <gpu-profile>` reads B's quota; `km create` (local **and** remote) lands a GPU instance in B, reachable via `km shell`/`km model start`.
-- **Wave 5 — Teardown + `km doctor` + docs.** Cross-account teardown: `km account rm`, `km destroy` assumes the launcher to terminate the B instance, **ttl-handler** cross-account auto-reap (else linked-account sandboxes never expire). `km doctor` checks (link reachable, launcher assumable, S3 grant present, no orphaned B instances). `docs/` runbook + `klanker:` skill updates. Live GPU UAT.
+- **Wave 4 — Full create path (local + remote) + capacity-in-B.** The sandbox template gains the conditional `generate "provider"` override and the compiler emits the `launch_account` local into `service.hcl` (C1); create-flow sources network from the link; new `pkg/aws` AssumeRole helper; second assumed-role `awsCfg` so `RankAZs`/`km capacity` check B's `L-DB2E81BA`; **both** trusted principals wired (operator SSO for local create, `*-create-handler` Lambda role + its `sts:AssumeRole` grant for remote create). Local and remote land together because the capacity-check-in-B is indivisible from the launch (the GPU quota gate fail-fasts *before* the sweep — checking A would abort every GPU create). *Exit:* `km capacity <gpu-profile>` reads B's quota; `km create` (local **and** remote) lands a GPU instance in B, reachable via `km shell`/`km model start`.
+- **Wave 5 — Teardown + `km doctor` + docs. NOT OPTIONAL** — without it a $10.49/hr box in an account `km list` does not watch never auto-expires. Cross-account teardown: `km account rm`; `km destroy` assumes the launcher to terminate the B instance — **including the cold-clone fallback at `internal/app/cmd/destroy.go:258-267`, whose synthesized `minimalHCL` `service.hcl` carries five hardcoded locals and no launch account** (C3); **ttl-handler** cross-account auto-reap, which needs `assume_role` in the `main.tf` it renders at `cmd/ttl-handler/main.go:1196-1232` plus the Wave-2 trust-policy entry (C2). `km doctor` checks (link reachable, launcher assumable, S3 grant present, no orphaned B instances). `docs/` runbook + `klanker:` skill updates. Live GPU UAT.
 
 ---
 
 ## Open questions
 
-- **Q1 — Trusted principal for remote create. RESOLVED.** Both principals trusted from the start: operator SSO role (local create) **and** `*-create-handler` Lambda role + its `sts:AssumeRole` grant (remote create). Folded into Wave 4 — remote create is cheap on top of the launch, and capacity-in-B (required for any GPU create) lands in the same wave regardless.
+- **Q1 — Trusted principal for remote create. RESOLVED; AMENDED 2026-08-22 to three principals.** Operator SSO role (local create), `*-create-handler` Lambda role + its `sts:AssumeRole` grant (remote create), **and `*-ttl-handler` Lambda role (auto-reap — C2)**. All three are authored into the trust policy in Wave 2, because retrofitting it needs B admin credentials again. Folded into Wave 4 — remote create is cheap on top of the launch, and capacity-in-B (required for any GPU create) lands in the same wave regardless.
 - **Q2 — ExternalId storage. RESOLVED.** Runtime source of truth = SSM SecureString at `{prefix}/launch-accounts/<name>/external-id`; `km-config.yaml` stores only the SSM path. Auto-generated by `km account add`, or seeded via `--external-id <v>` / `--sops <file>` (Phase-89 SOPS→SSM pattern, `docs/sandbox-secrets.md`).
-- **Q3 — Capacity store for linked accounts. RESOLVED (account-scoped store from v1).** Sticky-AZ memory pays off *most* exactly where this design points it: repeated GPU capacity-hunting in B (ICE → retry). So we build it in from the start rather than bypassing. **Approach:** fold the launch account into the **partition-key value** — `<account_id>#<instance_type>` (e.g. `481723467561#g6e.12xlarge`) — instead of bare `<instance_type>`. This is **schema-on-write** (the PK attribute is still a string; only its constructed value changes), so **no table rebuild**. Both home and linked launches share the one `{prefix}-capacity` table in **A**, but each account's rows are namespaced, so per-account AZ history stays self-consistent — which *solves* (not works around) the AZ-name-instability problem: `us-east-1a` history from B is only ever read back in B's context. Writes stay home-account (the create process holds A creds for DynamoDB and only assumes the launcher for the EC2 provider — no cross-account DynamoDB). `RankAZs` and `bestEffortRecordCapacity` thread the resolved launch account into the key. *Back-compat is a non-issue:* B has no production dependencies and is freely clean-slated; existing bare-keyed home rows age out via the 45-min TTL (or get wiped) — the operator explicitly accepts this.
+- **Q3 — Capacity store for linked accounts. RESOLVED (account-scoped store from v1).** Sticky-AZ memory pays off *most* exactly where this design points it: repeated GPU capacity-hunting in B (ICE → retry). So we build it in from the start rather than bypassing. **Approach:** fold the launch account into the **partition-key value** — `<account_id>#<instance_type>` (e.g. `481723467561#g6e.12xlarge`) — instead of bare `<instance_type>`. **Amended 2026-08-22 (C4): do this inside the store, not by rewriting the `instanceType` argument.** `RankAZs` passes that one argument to *both* `rankScore`→`itemKey` (`pkg/capacity/store.go:151`) *and* `DescribeInstanceTypeOfferings`/`IsGPUFamily` (`pkg/capacity/rankaz.go:174`, `:71`), so a namespaced string would break the EC2 offerings lookup. Take the namespace as a `NewDynamoCapacityStore(client, table, accountNS)` constructor argument instead — two construction sites (`create.go:889`, `capacity.go:172`), interface unchanged. This is **schema-on-write** (the PK attribute is still a string; only its constructed value changes), so **no table rebuild**. Both home and linked launches share the one `{prefix}-capacity` table in **A**, but each account's rows are namespaced, so per-account AZ history stays self-consistent — which *solves* (not works around) the AZ-name-instability problem: `us-east-1a` history from B is only ever read back in B's context. Writes stay home-account (the create process holds A creds for DynamoDB and only assumes the launcher for the EC2 provider — no cross-account DynamoDB). `RankAZs` and `bestEffortRecordCapacity` thread the resolved launch account into the key. *Back-compat is a non-issue:* B has no production dependencies and is freely clean-slated; existing bare-keyed home rows age out via the 45-min TTL (or get wiped) — the operator explicitly accepts this.
 - **Q4 — Bedrock from B. RESOLVED (opt-in at enrollment; default = API keys via SOPS).** **Common case:** the lean GPU box serves **vLLM-local** and receives **direct API keys** (Anthropic/OpenAI, via SOPS) for any cloud model — box role needs **no** `bedrock:InvokeModel`. **Opt-in case:** `km account add --enable-bedrock` (or an interactive prompt during enrollment — "Enable Bedrock model access in this account for GPU boxes?") makes Bedrock a first-class capability *of the linked account*: it grants the box role `bedrock:InvokeModel` against **B's** Bedrock and attempts to enable the relevant model access in B (the Bedrock model-access enablement is partly account/region-gated and may still require a console confirm — `km account add` grants the IAM and prints a reminder + the exact models if it can't fully self-serve). This lets Bifrost's Bedrock routes (Phase 122: `bedrock/us.anthropic.claude-sonnet-4-6`, `bedrock/openai.gpt-oss-120b`) work keyless on a B box. **Caveat (documented, not blocked):** Bedrock calls via B are **unmetered** in lean mode — the MITM proxy meters into home DynamoDB, which lean boxes don't reach. Wiring metering home is the deferred "full sandbox" path. So `--enable-bedrock` is an explicit, eyes-open choice; the box role stays minimal by default.
 
 ---
