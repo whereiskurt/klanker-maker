@@ -61,6 +61,9 @@ PROFILES=(
   profiles/gpu-glmair-12x.yaml
   profiles/gpu-kimidev-12x.yaml
   profiles/gpu-glm46-48x.yaml
+  # Qwen3.8-27B-OBLITERATED (BF16, S3-staged weights) — g6e primary + L4 fallback.
+  profiles/gpu-qwen38-oblit-12x.yaml
+  profiles/gpu-qwen38-oblit-12x-l4.yaml
 )
 
 fail=0

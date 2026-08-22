@@ -1,0 +1,128 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: gpu-qwen38-oblit-12x-l4
+  labels:
+    tier: gpu-serving
+    model: qwen3.8-27b-obliterated
+    instance: g6.12xlarge
+  # L4 capacity-fallback variant of gpu-qwen38-oblit-12x, following the same
+  # pattern as gpu-qwen-12x-l4: when the L40S fleet (g6e) is capacity-dry in
+  # us-east-1, g6.12xlarge (4x L4 = 96GB VRAM, 48 vCPU) can still serve this
+  # model. BF16 weights are ~55.6GB, so ~13.9GB/GPU — the same as on L40S, since
+  # weights do not shrink with the card. What shrinks is the headroom: 0.90 of a
+  # 24GB L4 leaves ~7.7GB/GPU for KV cache versus ~29GB on an L40S, so
+  # --max-model-len is clamped to 32768 here.
+  #
+  # L4 has roughly a third of the L40S memory bandwidth, so decode is noticeably
+  # slower — fine for demos and batch work, sluggish for interactive chat.
+  #
+  # Everything else (S3 weight staging, tool-call parser, sampling overrides) is
+  # identical to gpu-qwen38-oblit-12x; see that file for the full rationale.
+
+extends:
+  - base/os/debian
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+  - base/gpu/serve
+
+spec:
+  secrets:
+    sopsFile: ./secrets/qwen.enc.yaml
+
+  # Bool zero-value trap (Phase 117 Pitfall 2): mixed-bool runtime block in the LEAF.
+  runtime:
+    instanceType: g6.12xlarge
+    region: us-east-1
+    spot: false
+    hibernation: false
+
+  execution:
+    # See gpu-qwen38-oblit-12x.yaml for why these three writes live in
+    # initCommands (they must precede base/gpu/serve's initCommandsAppend
+    # bring-up) and why the drop-in needs its own TimeoutStartSec.
+    initCommands:
+      - |
+        cat > /usr/local/bin/km-stage-model.sh <<'KM_STAGE_SCRIPT'
+        #!/usr/bin/env bash
+        # Sync pre-staged model weights from S3 into /data/hf before vLLM starts.
+        # Populated by scripts/stage-model-to-s3.sh (one-time, per install).
+        set -uo pipefail
+
+        MODEL_SLUG="qwen38-oblit-27b"
+        DEST="/data/hf/models/${MODEL_SLUG}"
+
+        # KM_ARTIFACTS_BUCKET is exported by userdata into /etc/profile.d/km-identity.sh.
+        # systemd gives ExecStartPre no login shell, so source it explicitly.
+        if [ -z "${KM_ARTIFACTS_BUCKET:-}" ] && [ -r /etc/profile.d/km-identity.sh ]; then
+          . /etc/profile.d/km-identity.sh
+        fi
+        if [ -z "${KM_ARTIFACTS_BUCKET:-}" ]; then
+          echo "km-stage-model: KM_ARTIFACTS_BUCKET unset; cannot locate staged weights" >&2
+          exit 1
+        fi
+
+        SRC="s3://${KM_ARTIFACTS_BUCKET}/models/${MODEL_SLUG}/"
+        mkdir -p "$DEST"
+        echo "km-stage-model: syncing ${SRC} -> ${DEST}"
+        aws s3 sync "$SRC" "$DEST" --only-show-errors
+
+        IDX="${DEST}/model.safetensors.index.json"
+        if [ ! -s "$IDX" ]; then
+          echo "km-stage-model: ${IDX} missing — weights are not staged in S3 yet." >&2
+          echo "km-stage-model: run scripts/stage-model-to-s3.sh, then this unit's" >&2
+          echo "km-stage-model: Restart=on-failure will pick the weights up automatically." >&2
+          exit 1
+        fi
+
+        REQUIRED=$(python3 -c "import json,sys;print('\n'.join(sorted(set(json.load(open(sys.argv[1]))['weight_map'].values()))))" "$IDX")
+        if [ -z "$REQUIRED" ]; then
+          echo "km-stage-model: could not read weight_map from ${IDX}" >&2
+          exit 1
+        fi
+
+        missing=0
+        for shard in $REQUIRED; do
+          if [ ! -s "${DEST}/${shard}" ]; then
+            echo "km-stage-model: missing shard ${shard}" >&2
+            missing=1
+          fi
+        done
+        for f in config.json generation_config.json tokenizer.json tokenizer_config.json; do
+          if [ ! -s "${DEST}/${f}" ]; then
+            echo "km-stage-model: missing ${f}" >&2
+            missing=1
+          fi
+        done
+
+        if [ "$missing" -ne 0 ]; then
+          echo "km-stage-model: staged weights incomplete at ${DEST}." >&2
+          echo "km-stage-model: re-run scripts/stage-model-to-s3.sh, OR set" >&2
+          echo "km-stage-model:   VLLM_MODEL=OBLITERATUS/Qwen3.8-27B-OBLITERATED" >&2
+          echo "km-stage-model: in /etc/km/vllm.env and 'systemctl restart vllm' to pull" >&2
+          echo "km-stage-model: direct from HuggingFace instead." >&2
+          exit 1
+        fi
+
+        echo "km-stage-model: ${DEST} complete"
+        KM_STAGE_SCRIPT
+        chmod 0755 /usr/local/bin/km-stage-model.sh
+      - |
+        mkdir -p /etc/systemd/system/vllm.service.d
+        cat > /etc/systemd/system/vllm.service.d/10-stage-model.conf <<'KM_STAGE_DROPIN'
+        [Service]
+        TimeoutStartSec=3600
+        ExecStartPre=/usr/local/bin/km-stage-model.sh
+        KM_STAGE_DROPIN
+      # max-model-len 32768 (vs 131072 on L40S) — see the header note on KV headroom.
+      # If vLLM OOMs at startup on this shape, halve max-model-len before touching
+      # gpu-memory-utilization; the weights are a fixed 13.9GB/GPU floor either way.
+      - |
+        mkdir -p /etc/km
+        cat > /etc/km/vllm.env <<'KM_VLLM_ENV'
+        VLLM_MODEL=/root/.cache/huggingface/models/qwen38-oblit-27b
+        VLLM_TP=4
+        VLLM_EXTRA=--max-model-len 32768 --gpu-memory-utilization 0.90 --limit-mm-per-prompt {"video":0} --enable-auto-tool-choice --tool-call-parser qwen3_xml --override-generation-config {"temperature":0,"repetition_penalty":1.15}
+        KM_VLLM_ENV
