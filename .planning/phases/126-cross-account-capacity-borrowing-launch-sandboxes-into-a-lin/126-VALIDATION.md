@@ -1,8 +1,8 @@
 ---
 phase: 126
 slug: cross-account-capacity-borrowing-launch-sandboxes-into-a-linked-capacity-account-gpu-motivated
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-08-22
 ---
@@ -104,13 +104,22 @@ below is the contract those rows must satisfy.*
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 600s
-- [ ] Every verification step checks the `go test` exit code directly, never through a pipe
-- [ ] Wave gates run all three commands, not just `make test`
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references — all four Wave-0 test files are delivered inside
+      Wave-1 plans' TDD tasks
+- [x] No watch-mode flags
+- [x] Feedback latency < 600s
+- [x] Every verification step checks the `go test` exit code directly, never through a pipe
+      (plan-checker confirmed zero pipe-masked verify blocks across all ten plans)
+- [x] Wave gates run the excluded packages explicitly, not just `make test`
+- [x] `nyquist_compliant: true` set in frontmatter
+- [ ] `wave_0_complete` — stays false until the Wave-1 plans actually execute and the four
+      test files exist on disk. This is an execution-time flag, not a planning-time one.
 
-**Approval:** pending
+**Approval:** approved 2026-08-22 (plan-checker: VERIFICATION PASSED, 0 blockers)
+
+**Gate correction (post-planning):** the planner extended the three-command gate to **four** —
+`make test` also excludes `pkg/compiler`, which plan 02 modifies (`service_hcl.go`). Plan 10's
+phase gate is seven commands: `make test`, the three excluded packages, `validate-all-profiles.sh`,
+`terraform validate`/`fmt` on both modules, and `go build ./...`.

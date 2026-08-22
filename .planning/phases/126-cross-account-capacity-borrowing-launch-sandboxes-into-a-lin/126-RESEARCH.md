@@ -492,15 +492,28 @@ Verified via direct `terragrunt render --json` execution (Pattern 1) that these 
 
 ## Open Questions
 
-1. **Does `km account add` use real `terraform apply`/`destroy`, or the SCP org-admin path's CLI-command-printing wizard?**
+> **Both questions below were RESOLVED at planning time (2026-08-22). Annotations added
+> after the fact — the bodies are left verbatim as the reasoning record.**
+
+1. **(RESOLVED — see 126-05-PLAN.md § Decisions recorded by this plan)** **Does `km account add` use real `terraform apply`/`destroy`, or the SCP org-admin path's CLI-command-printing wizard?**
    - What we know: the design spec's CLI surface (`km account rm` "tears down B-side roles/network") implies real, destroyable Terraform state; `km cluster add` is the closer precedent (real terraform) than the SCP bootstrap (printed CLI commands, no state tracking).
    - What's unclear: whether the plan should treat this as settled by precedent-weight (this research recommends: yes, real terraform, per Pattern 3) or whether the user wants the lighter-weight, no-state CLI-print approach for a rarely-run bootstrap step.
    - Recommendation: proceed with real terraform + local state (Pattern 3) unless corrected; it's the only option that makes `km account rm` a clean, idempotent teardown rather than a manual cleanup checklist.
 
-2. **Exact shape of the `km account add --provision-network` "one subnet per AZ" output consumed by C5's AZ-sweep fix.**
+2. **(RESOLVED — see 126-06-PLAN.md § Decisions recorded by this plan)** **Exact shape of the `km account add --provision-network` "one subnet per AZ" output consumed by C5's AZ-sweep fix.**
    - What we know: C5 requires the link record to store a subnet **list**, not a single ID, so `RankAZs`'s `maxAttempts` doesn't collapse to 1 in B.
    - What's unclear: whether the link's subnet list needs the exact same `natAZs`-style filtering `create.go:688-709` already applies for Phase 125 private subnets, or whether B's subnets (public, per the design's "lean network... skips EFS/NAT by design" framing) sidestep that entirely.
    - Recommendation: since B's design explicitly has no NAT-gateway concept ("the link record has one subnet and no NAT concept" per C5's own text before the fix), the per-AZ subnet list in B should be treated as always-public — `natAZs` filtering should be skipped (nil) for any `launchAccount`-scoped sweep, not derived from B's (nonexistent) NAT gateways.
+
+**Resolutions as planned:**
+
+- **OQ1 → real terraform, standalone unit, local state.** Adopted as recommended, with one
+  extension the planner added: the unit lives under `~/.km/account-links/<name>/`, **not** in
+  the repo, because the state file contains the launcher trust policy and therefore the
+  ExternalId in plaintext. Repo-relative state would have made "don't commit a secret" depend
+  on a gitignore rule, and `.gitignore` has no `*.tfstate` entry today.
+- **OQ2 → target-account subnets are always-public; pass `natAZs = nil`** for any link-scoped
+  AZ sweep. Adopted exactly as recommended.
 
 ## Environment Availability
 
