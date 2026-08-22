@@ -98,6 +98,17 @@ const ec2ServiceHCLTemplate = `locals {
   substrate_module = "ec2spot"
   region_label     = "{{ .RegionLabel }}"
   region_full      = "{{ .Region }}"
+{{- if .LaunchAccount }}
+
+  # Cross-account launch (Phase 126, REQ-126-LAUNCH). Read by
+  # infra/templates/sandbox/terragrunt.hcl's provider-generation override via
+  # read_terragrunt_config(service.hcl) at generate time. Emitted only when
+  # spec.runtime.launchAccount is set on the profile — a profile without a
+  # launch account produces a service.hcl with none of these three locals.
+  launch_account       = "{{ .LaunchAccount }}"
+  launcher_role_arn    = "{{ .LauncherRoleARN }}"
+  launcher_external_id = "{{ .LauncherExternalID }}"
+{{- end }}
 
   module_inputs = {
     sandbox_id         = "{{ .SandboxID }}"
@@ -482,14 +493,14 @@ type AdditionalSnapshotEntry struct {
 
 // ec2HCLParams holds the data for the EC2 service.hcl template.
 type ec2HCLParams struct {
-	ProfileName       string
-	SandboxID         string
-	Region            string
-	RegionLabel       string
-	InstanceType      string
-	UseSpot           bool
-	UserDataBase64    string
-	VPCID             string
+	ProfileName    string
+	SandboxID      string
+	Region         string
+	RegionLabel    string
+	InstanceType   string
+	UseSpot        bool
+	UserDataBase64 string
+	VPCID          string
 	// SandboxSubnets is the RESOLVED subnet list the sandbox ENI lands in — either the
 	// shared VPC's public or private subnets, chosen by the caller via
 	// NetworkConfig.EffectiveSandboxSubnets() before this struct is built. Named
@@ -497,8 +508,17 @@ type ec2HCLParams struct {
 	// named "public" would be exactly the naming lie Phase 125 removes (Phase 125).
 	SandboxSubnets    []string
 	AvailabilityZones []string
-	SGEgressRules     []SGRule
-	IAMPolicy         *IAMSessionPolicy
+	// Cross-account launch fields (Phase 126, REQ-126-LAUNCH). Empty LaunchAccount
+	// means the home application account and is byte-identical to Phase 125 — the
+	// template guards emission of all three service.hcl locals on LaunchAccount
+	// being non-empty. LauncherRoleARN/LauncherExternalID are only meaningful when
+	// LaunchAccount is non-empty. LauncherExternalID is a RESOLVED SECRET VALUE
+	// (read from SSM by the caller) and must never be logged.
+	LaunchAccount      string
+	LauncherRoleARN    string
+	LauncherExternalID string
+	SGEgressRules      []SGRule
+	IAMPolicy          *IAMSessionPolicy
 	// Budget enforcement fields (BUDG-03, BUDG-07)
 	HasBudget        bool    // true when profile.spec.budget is set
 	SpotRateUSD      float64 // pre-calculated hourly rate (0.0 when no budget)
@@ -562,15 +582,15 @@ type ecsHCLParams struct {
 	PublicSubnets         []string
 	SGEgressRules         []SGRule
 	// Sidecar configuration fields (populated from profile network spec and env vars)
-	AllowedDNSSuffixes   string // comma-separated allowed DNS suffixes
-	AllowedHTTPHosts     string // comma-separated allowed HTTP hosts
+	AllowedDNSSuffixes string // comma-separated allowed DNS suffixes
+	AllowedHTTPHosts   string // comma-separated allowed HTTP hosts
 	// DeniedDNSSuffixes and DeniedHTTPHosts are the comma-separated deny lists,
 	// empty unless the profile declares denies. Every template site guards on
 	// non-empty so an unchanged profile renders identical HCL.
-	DeniedDNSSuffixes string
-	DeniedHTTPHosts   string
+	DeniedDNSSuffixes     string
+	DeniedHTTPHosts       string
 	GitHubAllowedReposCSV string // comma-separated GitHub repos for KM_GITHUB_ALLOWED_REPOS proxy env var
-	ArtifactsBucket      string // S3 bucket for sidecar OTel traces (KM_ARTIFACTS_BUCKET)
+	ArtifactsBucket       string // S3 bucket for sidecar OTel traces (KM_ARTIFACTS_BUCKET)
 	// Sidecar image URIs (computed from KM_ACCOUNTS_APPLICATION + region + KM_SIDECAR_VERSION)
 	// PLACEHOLDER_ECR/ prefix used when KM_ACCOUNTS_APPLICATION is unset.
 	DNSProxyImage  string // ECR URI for km-dns-proxy sidecar
@@ -757,6 +777,18 @@ type NetworkConfig struct {
 	// keep getting them. Use EffectiveSandboxSubnets() rather than reading this field
 	// directly (Phase 125).
 	SandboxSubnets []string
+	// LaunchAccount is the linked account name (km-config.yaml launch_accounts key)
+	// this sandbox should launch into, or empty for the home application account —
+	// empty is byte-identical to Phase 125 (Phase 126, REQ-126-LAUNCH). Populated by
+	// create.go from spec.runtime.launchAccount before Compile() runs.
+	LaunchAccount string
+	// LauncherRoleARN is the launcher role ARN in the linked account the generated
+	// provider assumes into. Only meaningful when LaunchAccount is non-empty.
+	LauncherRoleARN string
+	// LauncherExternalID is the ExternalId the assume-role call must present. This is
+	// a RESOLVED SECRET VALUE (read from SSM SecureString by the caller) and must
+	// never be logged. Only meaningful when LaunchAccount is non-empty.
+	LauncherExternalID string
 }
 
 // EffectiveSandboxSubnets returns SandboxSubnets when it has been resolved by the caller,
@@ -836,20 +868,23 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	hasBudget, computeLimit, aiLimit, warningThreshold := budgetHCLFields(p)
 
 	params := ec2HCLParams{
-		EnableBedrock:     enableBedrock(p),
-		ProfileName:       p.Metadata.Name,
-		SandboxID:         sandboxID,
-		Region:            p.Spec.Runtime.Region,
-		RegionLabel:       network.RegionLabel,
-		InstanceType:      p.Spec.Runtime.InstanceType,
-		UseSpot:           useSpot,
-		UserDataBase64:    userData,
-		VPCID:             network.VPCID,
-		SandboxSubnets:    network.EffectiveSandboxSubnets(),
-		AvailabilityZones: network.AvailabilityZones,
-		SGEgressRules:     sgRules,
-		IAMPolicy:         iamPolicy,
-		AssociatePublicIP: !p.Spec.Network.PrivateSubnet,
+		EnableBedrock:      enableBedrock(p),
+		ProfileName:        p.Metadata.Name,
+		SandboxID:          sandboxID,
+		Region:             p.Spec.Runtime.Region,
+		RegionLabel:        network.RegionLabel,
+		InstanceType:       p.Spec.Runtime.InstanceType,
+		UseSpot:            useSpot,
+		UserDataBase64:     userData,
+		VPCID:              network.VPCID,
+		SandboxSubnets:     network.EffectiveSandboxSubnets(),
+		AvailabilityZones:  network.AvailabilityZones,
+		LaunchAccount:      network.LaunchAccount,
+		LauncherRoleARN:    network.LauncherRoleARN,
+		LauncherExternalID: network.LauncherExternalID,
+		SGEgressRules:      sgRules,
+		IAMPolicy:          iamPolicy,
+		AssociatePublicIP:  !p.Spec.Network.PrivateSubnet,
 		// Budget enforcement fields
 		HasBudget:        hasBudget,
 		SpotRateUSD:      network.SpotRateUSD,
