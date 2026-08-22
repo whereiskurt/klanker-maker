@@ -2,17 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 113-01 (starting)
-status: in-progress
+current_phase: 126
+current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
+current_plan: 1
+status: executing
 stopped_at: Completed 124-07-PLAN.md
-last_updated: "2026-06-29T03:53:22.352Z"
-last_activity: 2026-06-29
+last_updated: "2026-08-22T22:45:48.495Z"
+last_activity: 2026-08-22
+last_activity_desc: Phase 126 execution started
 progress:
-  total_phases: 8
-  completed_phases: 6
-  total_plans: 48
-  completed_plans: 43
-  percent: 91
+  total_phases: 10
+  completed_phases: 7
+  total_plans: 67
+  completed_plans: 52
+  percent: 70
 ---
 
 # Project State
@@ -22,16 +25,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-21)
 
 **Core value:** A sandbox is a declarative policy object that compiles into a controlled, auditable execution environment
-**Current focus:** Phase 113 — Sandbox self-awareness (on-box profile + capability/network/privilege self-census in klanker:sandbox)
+**Current focus:** Phase 126 — cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
 
 ## Current Position
 
-Phase: 113 (sandbox-self-awareness) — 3 plans (113-01 → 113-03); execution starting
-Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; threads ProfileYAML through template-data struct
-Total Plans in Phase: 3 (113-01 → 113-03)
-Current Plan: 113-01 (starting)
-Status: in-progress
-Last activity: 2026-06-29
+Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
+Plan: 1 of 10
+Total Plans in Phase: 10
+Current Plan: 1
+Status: Executing Phase 126
+Last activity: 2026-08-22 — Phase 126 execution started
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -49,6 +52,7 @@ Progress: [█████████░] 91%
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0
 - Average duration: —
 - Total execution time: 0 hours
@@ -60,6 +64,7 @@ Progress: [█████████░] 91%
 | - | - | - | - |
 
 **Recent Trend:**
+
 - Last 5 plans: —
 - Trend: —
 
@@ -1821,6 +1826,7 @@ Recent decisions affecting current work:
 ## Accumulated Context
 
 ### Roadmap Evolution
+
 - Phase 22 added: Remote Sandbox Dispatch — km create/destroy/stop/extend --remote via Lambda
 - Phase 23 added: Email-Driven Operations — operator inbox, email-to-create, safe phrase auth, EventBridge
 - Phase-24 added: Credential Rotation — km roll creds for platform and sandbox secrets (since renumbered; no standalone 24-* dir)
