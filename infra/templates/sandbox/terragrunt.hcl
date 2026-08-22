@@ -37,6 +37,19 @@ locals {
   # the cold-clone destroy fallback's synthesized service.hcl, neither of
   # which declare this local at all.
   launch_account = try(local.svc_config.locals.launch_account, "")
+
+  # The role-assumption stanza, rendered inline into the provider generate
+  # block below via a plain string interpolation rather than an HCL
+  # %{ if }/%{ endif } template control sequence. That was the first approach
+  # tried; verified by direct execution against the pinned terragrunt v0.99.1
+  # that %{ if }/%{ endif } markers embedded in a <<- heredoc interact with
+  # the heredoc's automatic dedent-margin calculation in ways that either
+  # leave stray trailing whitespace on the blank line above default_tags or
+  # disable dedent for the whole heredoc, both of which break the dormant
+  # byte-identity guarantee this template exists to provide. A conditional
+  # local avoids the heredoc dedent machinery entirely. Empty (nothing
+  # rendered at all) whenever launch_account is empty.
+  assume_role_block = local.launch_account != "" ? "\n  assume_role {\n    role_arn    = \"${local.svc_config.locals.launcher_role_arn}\"\n    external_id = \"${local.svc_config.locals.launcher_external_id}\"\n  }" : ""
 }
 
 # Include root terragrunt.hcl (remote_state + provider generation)
@@ -113,13 +126,7 @@ generate "provider" {
     }
 
     provider "aws" {
-      region = "${local.site_vars.locals.region.full}"
-      %{ if local.launch_account != "" ~}
-      assume_role {
-        role_arn    = "${local.svc_config.locals.launcher_role_arn}"
-        external_id = "${local.svc_config.locals.launcher_external_id}"
-      }
-      %{ endif ~}
+      region = "${local.site_vars.locals.region.full}"${local.assume_role_block}
 
       default_tags {
         tags = {
