@@ -340,6 +340,21 @@ func unmarshalNetworkFields(item map[string]dynamodbtypes.AttributeValue, meta *
 	}
 }
 
+// unmarshalLaunchAccountField reads the Phase 126 launch_account attribute
+// from a raw DynamoDB item into SandboxMetadata. Called from the same three
+// entry points as unmarshalNetworkFields (ReadSandboxMetadataDynamo,
+// ListAllSandboxesByDynamo, ListAllSandboxMetadataDynamo), but kept as its
+// own helper rather than folded into unmarshalNetworkFields — the two fields
+// belong to different phases and different concerns, and a separate helper
+// keeps a call-site grep for either field honest. A pre-126 row has no
+// launch_account attribute, so absence here leaves meta.LaunchAccount at its
+// zero value (""), which callers treat as the home account.
+func unmarshalLaunchAccountField(item map[string]dynamodbtypes.AttributeValue, meta *SandboxMetadata) {
+	if v, ok := item["launch_account"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		meta.LaunchAccount = v.Value
+	}
+}
+
 // readTriStateBool reads a tri-state *bool DynamoDB attribute that may have been
 // written either as a native BOOL (marshalSandboxItem) or as a string
 // "true"/"false" (UpdateSandboxAttr in create_slack_inbound.go). Returns nil when
@@ -592,6 +607,16 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 		item["network_placement"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.NetworkPlacement}
 	}
 
+	// Phase 126 — cross-account capacity borrowing. Only written when
+	// non-empty, so home-account sandbox rows stay byte-identical. Symmetric
+	// with unmarshalLaunchAccountField, guarded for the same reason
+	// network_placement is above: a dropped launch_account on a
+	// read-modify-write full-row PutItem strands a running linked-account
+	// instance with nothing in the home account able to reach it.
+	if meta.LaunchAccount != "" {
+		item["launch_account"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.LaunchAccount}
+	}
+
 	return item
 }
 
@@ -630,6 +655,7 @@ func ReadSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI, t
 	unmarshalFailureFields(out.Item, meta)
 	unmarshalFrozenFields(out.Item, meta)
 	unmarshalNetworkFields(out.Item, meta)
+	unmarshalLaunchAccountField(out.Item, meta)
 	return meta, nil
 }
 
@@ -698,6 +724,7 @@ func ListAllSandboxesByDynamo(ctx context.Context, client SandboxMetadataAPI, ta
 			unmarshalFailureFields(item, meta)
 			unmarshalFrozenFields(item, meta)
 			unmarshalNetworkFields(item, meta)
+			unmarshalLaunchAccountField(item, meta)
 			records = append(records, metadataToRecord(meta))
 		}
 
@@ -744,6 +771,7 @@ func ListAllSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI
 			unmarshalFailureFields(item, meta)
 			unmarshalFrozenFields(item, meta)
 			unmarshalNetworkFields(item, meta)
+			unmarshalLaunchAccountField(item, meta)
 			metas = append(metas, *meta)
 		}
 
