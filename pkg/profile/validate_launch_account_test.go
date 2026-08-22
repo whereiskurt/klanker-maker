@@ -122,3 +122,55 @@ func TestValidateSchema_LaunchAccount(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateSemantic_LaunchAccount_PrivateSubnetMutex verifies the profile-only
+// mutual-exclusion gate (Task 3, pkg/profile tests 1-3): launchAccount and
+// privateSubnet cannot both be set; either alone is fine; neither is unaffected.
+func TestValidateSemantic_LaunchAccount_PrivateSubnetMutex(t *testing.T) {
+	t.Run("launchAccount and privateSubnet both set yields a non-warning error at spec.runtime.launchAccount", func(t *testing.T) {
+		data := minimalLaunchAccountProfile("mgmt-gpu", true, true)
+		errs := profile.Validate(data)
+
+		found := false
+		for _, e := range errs {
+			if e.Path == "spec.runtime.launchAccount" && !e.IsWarning {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected a non-warning ValidationError at spec.runtime.launchAccount, got %d errors:", len(errs))
+			for _, e := range errs {
+				t.Logf("  - warning=%v %s", e.IsWarning, e.Error())
+			}
+		}
+	})
+
+	t.Run("launchAccount set and privateSubnet unset yields no ValidateSemantic error", func(t *testing.T) {
+		data := minimalLaunchAccountProfile("mgmt-gpu", false, false)
+		p, err := profile.Parse(data)
+		if err != nil {
+			t.Fatalf("Parse() error: %v", err)
+		}
+		errs := profile.ValidateSemantic(p)
+		for _, e := range errs {
+			if e.Path == "spec.runtime.launchAccount" {
+				t.Errorf("unexpected ValidateSemantic error at spec.runtime.launchAccount: %s", e.Error())
+			}
+		}
+	})
+
+	t.Run("neither field set yields the identical ValidateSemantic result as before this plan", func(t *testing.T) {
+		data := minimalLaunchAccountProfile("", false, false)
+		p, err := profile.Parse(data)
+		if err != nil {
+			t.Fatalf("Parse() error: %v", err)
+		}
+		errs := profile.ValidateSemantic(p)
+		if len(errs) != 0 {
+			t.Errorf("expected zero ValidateSemantic errors for a profile with neither launchAccount nor privateSubnet (dormancy), got %d:", len(errs))
+			for _, e := range errs {
+				t.Logf("  - %s", e.Error())
+			}
+		}
+	})
+}

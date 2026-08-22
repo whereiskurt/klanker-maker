@@ -553,6 +553,19 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	// (mirrors the eBPF enforcement rule style above).
 	errs = append(errs, validateLimits(p)...)
 
+	// Phase 126: spec.runtime.launchAccount and spec.network.privateSubnet are
+	// mutually exclusive — a linked cross-account launch has no NAT-gateway
+	// concept, so private-subnet placement is unsupported there. This check
+	// needs no external config (unlike the unknown-link-name check, which lives
+	// in internal/app/cmd because it needs *config.Config — see
+	// ValidateLaunchAccountLink) and therefore belongs here.
+	if p.Spec.Runtime.LaunchAccount != "" && p.Spec.Network.PrivateSubnet {
+		errs = append(errs, ValidationError{
+			Path:    "spec.runtime.launchAccount",
+			Message: "spec.runtime.launchAccount and spec.network.privateSubnet are mutually exclusive: a linked launch account has no NAT-gateway concept, so private-subnet placement is unsupported there — drop one of the two fields",
+		})
+	}
+
 	return errs
 }
 

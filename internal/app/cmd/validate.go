@@ -118,6 +118,9 @@ func validateFile(cfg *config.Config, filePath string) bool {
 		}
 
 		errs := profile.Validate(mergedBytes)
+		// Phase 126: config-aware launchAccount link check. Appended to the same
+		// slice the reporting loop below walks — do not write a second loop.
+		errs = append(errs, ValidateLaunchAccountLink(resolved, cfg)...)
 		if len(errs) > 0 {
 			failed := false
 			for _, e := range errs {
@@ -141,6 +144,13 @@ func validateFile(cfg *config.Config, filePath string) bool {
 
 	// No extends — validate raw bytes directly
 	errs := profile.Validate(raw)
+	// Phase 126: config-aware launchAccount link check. Appended to the same
+	// slice the reporting loop below walks — do not write a second loop.
+	// Guarded on parseErr == nil: Step 3 above parsed raw into `parsed`; if that
+	// parse failed, profile.Validate's own schema/parse errors already cover it.
+	if parseErr == nil {
+		errs = append(errs, ValidateLaunchAccountLink(parsed, cfg)...)
+	}
 
 	// Step 5: Report results — separate warnings from errors.
 	// Warnings (IsWarning=true) print with WARN: prefix but do not cause exit 1.
