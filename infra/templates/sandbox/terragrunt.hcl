@@ -30,11 +30,31 @@ locals {
     ecs     = "v1.0.0"
   }
   substrate_module_version = lookup(local.substrate_module_versions, local.svc_config.locals.substrate_module, "v1.0.0")
+
+  # Cross-account launch (Phase 126, REQ-126-LAUNCH). The compiler writes this
+  # local into service.hcl only when spec.runtime.launchAccount is set on the
+  # profile; try(...) defaults it to "" for every pre-126 service.hcl and for
+  # the cold-clone destroy fallback's synthesized service.hcl, neither of
+  # which declare this local at all.
+  launch_account = try(local.svc_config.locals.launch_account, "")
 }
 
 # Include root terragrunt.hcl (remote_state + provider generation)
+#
+# The deep-merge argument below is REQUIRED once this template declares its
+# own provider-generation override further down. Under terragrunt's default
+# (shallow) merge behaviour, a same-labeled generate block in both parent
+# (root.hcl) and child is a hard error ("Detected generate blocks with the
+# same name: [provider]"), verified by direct execution against the pinned
+# terragrunt v0.99.1 -- not read from documentation. That collision is static
+# and structural: it fires on every sandbox render, cross-account or not,
+# dormant launch account or not, so omitting this argument breaks ALL
+# sandbox creates, not only cross-account ones. This setting is configured
+# per-include in the child file, so it affects only this template and none
+# of the 40+ other units across the repo that also include root.hcl.
 include "root" {
-  path = find_in_parent_folders("root.hcl")
+  path           = find_in_parent_folders("root.hcl")
+  merge_strategy = "deep"
 }
 
 # Override the remote_state key to include region + sandbox_id for isolation
@@ -53,6 +73,62 @@ remote_state {
     encrypt        = local.site_vars.locals.backend.encrypt
     dynamodb_table = local.site_vars.locals.backend.dynamodb_table
   }
+}
+
+# AWS provider generation override (Phase 126, REQ-126-LAUNCH).
+#
+# Because the include above deep-merges, this block fully REPLACES root.hcl's
+# same-labeled provider-generation block (it does not merge into it), so this
+# contents heredoc reproduces root.hcl's entire generated output
+# byte-for-byte -- the terraform{} block with its required_version and both
+# required_providers pins, and the provider "aws" stanza with the identical
+# region expression and default_tags root uses -- plus exactly one addition:
+# a conditional role-assumption block, guarded on local.launch_account being
+# non-empty. Losing any of root's original contents here would silently
+# affect every sandbox, not just cross-account ones (see infra/live/root.hcl
+# for the block being overridden). The region expression deliberately reads
+# local.site_vars.locals.region.full (root's own expression), NOT
+# local.svc_config.locals.region_full, so the dormant (no launch account)
+# render is provably identical to what root alone would have generated.
+# The state backend stays in the home account by design (see remote_state
+# override above, untouched) -- only the provider crosses accounts.
+generate "provider" {
+  path      = "provider.tf"
+  if_exists = "overwrite_terragrunt"
+
+  contents = <<-EOF
+    terraform {
+      required_version = ">= 1.7.0"
+
+      required_providers {
+        aws = {
+          source  = "hashicorp/aws"
+          version = "6.46.0"
+        }
+        tls = {
+          source  = "hashicorp/tls"
+          version = "4.3.0"
+        }
+      }
+    }
+
+    provider "aws" {
+      region = "${local.site_vars.locals.region.full}"
+      %{ if local.launch_account != "" ~}
+      assume_role {
+        role_arn    = "${local.svc_config.locals.launcher_role_arn}"
+        external_id = "${local.svc_config.locals.launcher_external_id}"
+      }
+      %{ endif ~}
+
+      default_tags {
+        tags = {
+          ManagedBy  = "Terragrunt"
+          km_label   = "${local.site_vars.locals.site.label}"
+        }
+      }
+    }
+  EOF
 }
 
 # Terraform source points to the appropriate module based on substrate, at
