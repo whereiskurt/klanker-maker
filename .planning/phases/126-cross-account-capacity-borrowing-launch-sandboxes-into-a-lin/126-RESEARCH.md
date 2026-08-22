@@ -507,11 +507,20 @@ Verified via direct `terragrunt render --json` execution (Pattern 1) that these 
 
 **Resolutions as planned:**
 
-- **OQ1 → real terraform, standalone unit, local state.** Adopted as recommended, with one
-  extension the planner added: the unit lives under `~/.km/account-links/<name>/`, **not** in
-  the repo, because the state file contains the launcher trust policy and therefore the
-  ExternalId in plaintext. Repo-relative state would have made "don't commit a secret" depend
-  on a gitignore rule, and `.gitignore` has no `*.tfstate` entry today.
+- **OQ1 → real terraform, standalone unit, REMOTE state in the target account.** Real
+  terraform adopted as recommended. The state location was then **overruled by the operator
+  (2026-08-22): no local Terraform state anywhere in this project, ever.** The enrollment
+  unit's state lives in an S3 bucket with a DynamoDB lock table **in the target account**,
+  both created by `km account add` itself through the AWS API immediately before the first
+  `terragrunt init`, named deterministically as
+  `tf-{prefix}-linkstate-{target-account-id}-{region-label}` /
+  `tf-{prefix}-linklocks-{region-label}` with state key `account-links/{name}/terraform.tfstate`.
+  Because enrollment authenticates as the target account for both the provider and the
+  backend, this is strictly simpler than the sandbox launch path — there is no cross-account
+  credential split in `km account add` at all. The backend is shared per (prefix, account,
+  region) and keyed per link. The generated unit directory still lives under
+  `~/.km/account-links/<name>/`, but only as a regenerable artifact — the link record carries
+  the backend identifiers, so teardown works from a fresh clone with no local unit present.
 - **OQ2 → target-account subnets are always-public; pass `natAZs = nil`** for any link-scoped
   AZ sweep. Adopted exactly as recommended.
 
