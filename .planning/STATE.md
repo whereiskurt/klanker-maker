@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 126
 current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 126-01-PLAN.md
-last_updated: "2026-08-22T23:01:59.505Z"
+stopped_at: Completed 126-02-PLAN.md
+last_updated: "2026-08-22T23:23:00.591Z"
 last_activity: 2026-08-22
 last_activity_desc: Phase 126 execution started
 progress:
   total_phases: 10
   completed_phases: 7
   total_plans: 67
-  completed_plans: 53
+  completed_plans: 54
   percent: 70
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
-Plan: 2 of 10
+Plan: 3 of 10
 Total Plans in Phase: 10
-Current Plan: 2
+Current Plan: 3
 Status: Ready to execute
 Last activity: 2026-08-22 — Phase 126 execution started
 
@@ -623,6 +623,7 @@ Progress: [█████████░] 91%
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P06 | 1040s | 1 tasks | 3 files |
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P07 | 4 | 3 tasks | 8 files |
 | Phase 126 P01 | 25min | 3 tasks | 10 files |
+| Phase 126 P02 | 25min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1778,6 +1779,8 @@ Recent decisions affecting current work:
 - [Phase 124-07]: capacity_table_name defaults empty for back-compat with pre-Phase-124 installs
 - [Phase 126-01]: launch_accounts is a new top-level km-config.yaml key with its own merge-list entry (not piggybacked on github.commands' parent-entry pattern)
 - [Phase 126-01]: config-aware launchAccount validation (unknown-link check) lives in internal/app/cmd, not pkg/profile.ValidateSemantic, to avoid pkg/profile importing internal/app/config
+- [Phase 126-02]: Replaced the planned %{if}/%{endif} heredoc control sequence with a conditional local + plain interpolation to achieve dormant byte-identity of the generated provider.tf
+- [Phase 126-02]: Generated provider.tf region expression reads local.site_vars.locals.region.full (root's own expression), not local.svc_config.locals.region_full, so dormant render is provably identical to root's own output
 
 ### Roadmap Evolution
 
@@ -1930,6 +1933,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-22T23:01:59.491Z
-Stopped at: Completed 126-01-PLAN.md
+Last session: 2026-08-22T23:23:00.578Z
+Stopped at: Completed 126-02-PLAN.md
 Resume file: None
