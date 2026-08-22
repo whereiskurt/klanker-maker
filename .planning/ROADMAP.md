@@ -213,7 +213,6 @@ Plans:
 - [ ] 124-05-PLAN.md — Wave 3: `km create --wait-for-capacity[=30m]` opt-in outer backoff (never forwarded to the Lambda subprocess) + `km doctor` capacity-table check + GPU-family quota=0 WARN.
 - [ ] 124-06-PLAN.md — Wave 4 (live UAT, G-quota gated): full `go test ./...` green + 20/20 profiles + deploy (make build BEFORE km init; make build-lambdas) + docs + G1 4-subnets / G2 km capacity accuracy / G3-G5 GPU 1a→1c failover + quota-0 fail-fast + sticky (quota-deferred like Phase 122).
 
-
 ### Phase 125: Per-profile private-subnet sandboxes with per-AZ NAT gateways (additive, reversible)
 
 **Goal:** Let an operator run public-subnet and private-subnet sandboxes side by
@@ -318,7 +317,9 @@ entry, which is `additionalProperties:false`; `km validate` rejects an unknown l
 rejects `launchAccount` + `spec.network.privateSubnet` together — C5; no apiVersion bump),
 REQ-126-ENROLL (`km account add`, run with **B** admin creds: launcher role + box role +
 permissions boundary + `{prefix}-results-{B}` bucket (bucket-owner-enforced; B box RW / A read)
+
 + optional `--provision-efs`. Trust policy names **all three** A-side principals up front —
+
 operator SSO, `*-create-handler`, `*-ttl-handler` — because retrofitting needs B admin creds
 again (C2). `--provision-network` provisions **one subnet per AZ** and the link stores a subnet
 **list**, not a single id: a single subnet collapses `maxAttempts` to 1 and disables the Phase
@@ -372,11 +373,11 @@ path was never exercised on hardware. Two things resolvable only on a live GPU b
 `vllm/vllm-openai:latest` resolves to ≥ v0.27.1, and whether `qwen3_xml` actually parses that
 chat template's tool calls.
 
-**Plans:** 10 plans across 5 waves
+**Plans:** 1/10 plans executed
 
 Plans:
 
-- [ ] 126-01-PLAN.md — Wave 1: `launch_accounts` config block + merge-list entry + getters; `spec.runtime.launchAccount` field + JSON schema; profile-only `launchAccount`+`privateSubnet` gate in `ValidateSemantic` and a config-aware unknown-link gate wired into `km validate`.
+- [x] 126-01-PLAN.md — Wave 1: `launch_accounts` config block + merge-list entry + getters; `spec.runtime.launchAccount` field + JSON schema; profile-only `launchAccount`+`privateSubnet` gate in `ValidateSemantic` and a config-aware unknown-link gate wired into `km validate`.
 - [ ] 126-02-PLAN.md — Wave 1: the load-bearing terragrunt change — `merge_strategy = "deep"` on the sandbox template's `include "root"` plus a conditional `generate "provider"` that reproduces root's FULL contents (incl. the `required_providers` pins deep-merge would otherwise drop) + compiler emits the three `service.hcl` locals only when set + a two-layer regression guard (always-on structural test; `terragrunt render` dormancy byte-identity test).
 - [ ] 126-03-PLAN.md — Wave 1: fail-closed `pkg/aws.AssumeRoleConfig` (first `stscreds` use in the repo) + `SandboxMetadata.LaunchAccount` marshal/unmarshal round trip + `NewDynamoCapacityStore(client, table, accountNS)` with the home account deliberately un-namespaced.
 - [ ] 126-04-PLAN.md — Wave 1: new `infra/modules/gpu-launcher-account/v1.0.0` — launcher role (3 trusted A-side principals, ExternalId-conditioned) + bounded permission policy + box role + permissions boundary + bucket-owner-enforced results bucket + optional one-subnet-per-AZ network + optional EFS.

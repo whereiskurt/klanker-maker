@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 126
 current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
-current_plan: 1
+current_plan: 2
 status: executing
-stopped_at: Completed 124-07-PLAN.md
-last_updated: "2026-08-22T22:45:48.495Z"
+stopped_at: Completed 126-01-PLAN.md
+last_updated: "2026-08-22T23:01:59.505Z"
 last_activity: 2026-08-22
 last_activity_desc: Phase 126 execution started
 progress:
   total_phases: 10
   completed_phases: 7
   total_plans: 67
-  completed_plans: 52
+  completed_plans: 53
   percent: 70
 ---
 
@@ -30,10 +30,10 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
-Plan: 1 of 10
+Plan: 2 of 10
 Total Plans in Phase: 10
-Current Plan: 1
-Status: Executing Phase 126
+Current Plan: 2
+Status: Ready to execute
 Last activity: 2026-08-22 — Phase 126 execution started
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
@@ -622,6 +622,7 @@ Progress: [█████████░] 91%
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P04 | 853 | 3 tasks | 6 files |
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P06 | 1040s | 1 tasks | 3 files |
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P07 | 4 | 3 tasks | 8 files |
+| Phase 126 P01 | 25min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -1775,6 +1776,8 @@ Recent decisions affecting current work:
 - [Phase 124-07]: RecordICE fires on ClassICE only to keep the capacity signal precise
 - [Phase 124-07]: bestEffortRecordCapacity uses 5s bounded context so slow DDB never delays create
 - [Phase 124-07]: capacity_table_name defaults empty for back-compat with pre-Phase-124 installs
+- [Phase 126-01]: launch_accounts is a new top-level km-config.yaml key with its own merge-list entry (not piggybacked on github.commands' parent-entry pattern)
+- [Phase 126-01]: config-aware launchAccount validation (unknown-link check) lives in internal/app/cmd, not pkg/profile.ValidateSemantic, to avoid pkg/profile importing internal/app/config
 
 ### Roadmap Evolution
 
@@ -1927,6 +1930,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-19
-Stopped at: Phase 125 EXECUTED — all 9 plans complete, live eight-step UAT run against real AWS (6 PASS, 2 NOT EXERCISED with reasons). Three defects found by live UAT that the green test suite missed, all fixed: km env omitting KM_NAT_GATEWAY_ENABLED (7b2b6af6), checkNATIdle filtering on a never-written DDB status (fa43cf4f), checkPrivateSubnetGuard testing a never-empty slice (d92dbc93). Install returned to public-only; NAT/EIPs released, private subnets retained as routeless islands. Verification: PASSED 9/9 after a fourth fix (a54a2800) — the verifier caught natDisableGuard carrying the same never-written-status bug, failing OPEN so an operator could tear NAT out from under a live private sandbox; the live UAT missed it because teardown ran after the only private sandbox was already destroyed.
+Last session: 2026-08-22T23:01:59.491Z
+Stopped at: Completed 126-01-PLAN.md
 Resume file: None
