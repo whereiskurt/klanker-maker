@@ -12,7 +12,7 @@ new `km model start` laptop port-forward (incl. local Claude Code).
 
 ## Profile matrix
 
-All seven extend a new abstract fragment `profiles/base/gpu/serve.yaml` and serve
+All of them extend a new abstract fragment `profiles/base/gpu/serve.yaml` and serve
 their model as `--served-model-name local` (so one Continue config / one codex knob
 works everywhere). 12x = quantized/cheaper; 48x = full-precision/headroom.
 
@@ -25,10 +25,112 @@ works everywhere). 12x = quantized/cheaper; 48x = full-precision/headroom.
 | `gpu-glmair-12x` | g6e.12xlarge | 192GB | `zai-org/GLM-4.5-Air` (106B MoE) | 4-bit/FP8 | 4 |
 | `gpu-kimidev-12x` | g6e.12xlarge | 192GB | `moonshotai/Kimi-Dev-72B` (dense) | GPTQ 8-bit | 4 |
 | `gpu-glm46-48x` | g6e.48xlarge | 384GB | `zai-org/GLM-4.6` (355B MoE) | 4-bit | 8 |
+| `gpu-qwen38-oblit-12x` | g6e.12xlarge | 192GB | `OBLITERATUS/Qwen3.8-27B-OBLITERATED` (27.8B) | **BF16** | 4 |
+
+**L4 capacity-fallback leaves.** When the L40S fleet (g6e) is capacity-dry in
+us-east-1, these run the same stack on g6.12xlarge (4×L4 = 96GB, 48 vCPU). L4 has
+roughly a third of the L40S memory bandwidth, so decode is noticeably slower —
+fine for demos and batch, sluggish for interactive chat. Context is trimmed to fit
+the smaller per-GPU headroom.
+
+| Profile | Instance | VRAM | Model | Precision | TP | ctx |
+|---|---|---|---|---|---|---|
+| `gpu-qwen-12x-l4` | g6.12xlarge | 96GB (4×L4) | `Qwen/Qwen2.5-72B-Instruct-AWQ` | AWQ 4-bit | 4 | 16384 |
+| `gpu-qwen-32b-l4` | g6.12xlarge | 96GB | `Qwen/Qwen2.5-32B-Instruct-AWQ` | AWQ 4-bit | 4 | 32768 |
+| `gpu-qwen38-oblit-12x-l4` | g6.12xlarge | 96GB | `OBLITERATUS/Qwen3.8-27B-OBLITERATED` | **BF16** | 4 | 32768 |
+
+(`gpu-rehearsal-cpu` is a GPU-free Docker rehearsal leaf for validating the Bifrost
+config without burning GPU capacity — see `122-BIFROST-VALIDATION.md`.)
 
 Only the two **Llama** leaves are gated (need `HF_TOKEN` after accepting the Meta
-license). Qwen / GLM / Kimi are ungated. **Kimi K2 (~1T) is intentionally out of
-scope** — it exceeds 384GB and needs gated P-family capacity.
+license). Qwen / GLM / Kimi / OBLITERATUS are ungated. **Kimi K2 (~1T) is
+intentionally out of scope** — it exceeds 384GB and needs gated P-family capacity.
+
+### Qwen3.8-27B-OBLITERATED — what differs from the other leaves
+
+The two `gpu-qwen38-oblit-*` leaves are the first here to serve **native BF16 with
+no `--quantization` flag** (27.78B params ≈ 55.6GB across 18 shards, ~13.9GB/GPU at
+TP=4), the first to read their weights from **S3 rather than HuggingFace** (see
+[Weight delivery](#weight-delivery-huggingface-pull-vs-s3-staging)), and the first
+that needs a **non-`hermes` tool-call parser**:
+
+- **`--tool-call-parser qwen3_xml`, not `hermes`.** This model's chat template emits
+  the XML form (`<tool_call><function=name><parameter=x>`), not the Hermes
+  `<tool_call>{json}` form every other GPU leaf uses. With `hermes`, serving looks
+  healthy and codex is silently unable to call tools.
+- **Architecture `Qwen3_5ForConditionalGeneration`** — hybrid linear attention
+  (48 linear + 16 full-attention layers of 64) and multimodal (image + video).
+  Supported by vLLM from **v0.27.1** (2026-08-11). If a future `vllm-openai:latest`
+  regresses, pin the image tag in the `vllm.service` drop-in.
+- **No 48xlarge variant, deliberately.** TP=8 would have to replicate the model's 4
+  KV heads across 8 ranks for no throughput gain; TP=4 divides cleanly (24 attention
+  heads, 4 KV heads, 48 linear value heads).
+- **`--override-generation-config {"temperature":0,"repetition_penalty":1.15}`**
+  bakes the model card's required sampling in server-side, so codex / Continue /
+  Slack / `km model start` all inherit it with no per-client config. Thinking needs
+  no flag — the shipped chat template already defaults it off, and enabling it
+  reintroduces refusals.
+- **JSON in `VLLM_EXTRA` must stay space-free.** The base unit passes `$VLLM_EXTRA`
+  unbraced so systemd word-splits it; a space inside `{"video":0}` would shatter it
+  into broken argv. (Inner double quotes *are* safe: an unquoted `EnvironmentFile`
+  value enters systemd's `VALUE` state, where only `\` and newline are special.)
+- **Abliterated model** — refusal directions removed from the weights. The card is
+  explicit that a system prompt or thinking mode partially reintroduces refusals, so
+  the serving flags send neither. Treat this box's output as unfiltered by
+  construction, and note that `base/network/safenetwork` gives it `*`/`*` egress.
+
+## Weight delivery: HuggingFace pull vs S3 staging
+
+Most leaves let vLLM pull weights from HuggingFace on first boot into `/data/hf`.
+That re-downloads on every fresh sandbox and depends on the upstream repo staying
+public and unmodified.
+
+The `gpu-qwen38-oblit-*` leaves instead read **pre-staged weights from S3**. Stage
+them once per install:
+
+```bash
+# On a box with fast network and >=60GB free disk — a running km sandbox is ideal.
+# NOT a laptop: this moves ~111GB total (down, then back up).
+. /etc/profile.d/km-identity.sh          # exports KM_ARTIFACTS_BUCKET
+scripts/stage-model-to-s3.sh             # --bucket/--slug/--repo to override
+```
+
+This lands the BF16 safetensors at `s3://$KM_ARTIFACTS_BUCKET/models/qwen38-oblit-27b/`,
+excluding the repo's GGUF (5 quantizations) and MLX (4-bit + 8-bit) trees — well over
+100GB that nothing in this stack uses.
+
+At boot the leaf's `initCommands` install `/usr/local/bin/km-stage-model.sh` plus a
+`vllm.service.d/10-stage-model.conf` drop-in that runs it as an `ExecStartPre`.
+Three details are load-bearing:
+
+- **`TimeoutStartSec=3600` in the drop-in.** systemd's 90s default start timeout
+  applies to `ExecStartPre` and would kill a 55.6GB sync mid-flight.
+- **`VLLM_MODEL` is the in-container path** (`/root/.cache/huggingface/models/…`).
+  The base unit mounts `-v /data/hf:/root/.cache/huggingface`, so a host path does
+  not resolve inside the container.
+- **The writes must land in `initCommands`, not `initCommandsAppend`.** All
+  `initCommands` precede every `initCommandsAppend`, so the drop-in exists before
+  `base/gpu/serve` runs `systemctl daemon-reload && systemctl enable --now
+  vllm.service` — picked up on vLLM's first start, no restart, no wasted partial
+  download.
+
+The staging script verifies every shard named in `model.safetensors.index.json`
+before uploading, and `km-stage-model.sh` verifies the same set after syncing. If
+S3 is not staged yet the unit fails loudly in `systemctl status vllm` rather than
+crash-looping on a half-populated model dir — and because the base unit sets
+`Restart=on-failure`/`RestartSec=30`, a box booted *while* staging is still
+uploading heals itself once the upload completes.
+
+**No IAM change is required.** The sandbox role already carries `Action:"*"` on
+`Resource:"*"` scoped to `iam.allowedRegions` (`ec2spot_region_lock`, ec2spot
+`main.tf`), which is what the boot-time sidecar `s3 cp` calls rely on.
+
+**These leaves are account-portable.** The bucket is resolved at boot from
+`KM_ARTIFACTS_BUCKET` rather than hardcoded, so the same profile works against any
+install — just stage the weights into the bucket of whichever install you run in.
+
+Escape hatch: set `VLLM_MODEL=OBLITERATUS/Qwen3.8-27B-OBLITERATED` in
+`/etc/km/vllm.env` and `systemctl restart vllm` to pull direct from HuggingFace.
 
 ## Architecture — vLLM + Bifrost multi-provider router
 
@@ -148,6 +250,8 @@ sops -e -i secrets/qwen.enc.yaml      # encrypt in place (matches the .sops.yaml
 
 1. **AWS G-instance quota.** New accounts default to **0** vCPU for "Running
    On-Demand G and VT instances" (`L-DB2E81BA`). g6e.12x needs 48, g6e.48x needs 192.
+   The L4 fallback shapes draw on the **same** quota — g6.12x is also 48 vCPU — so
+   falling back from g6e to g6 dodges L40S *capacity*, not a quota wall.
    **Verify against the target account/region** (not the org management account —
    quotas are per-account):
    ```bash
@@ -196,6 +300,9 @@ promptly after a UAT run.
 | `claude-bedrock` / `gpt-oss-bedrock` 403 | Sandbox role lacks `bedrock:InvokeModel` for that model ID — add the Claude + `openai.gpt-oss-*` IDs to the role's Bedrock allowlist. |
 | Slack 👀 but no reply | Inbound poller not emitted — needs `Spec.CLI != nil` (satisfied by `base/platform`); check `systemctl is-active km-slack-inbound-poller` + `/etc/km/notify.env`. |
 | Remote create: "profile base/gpu/serve not found" | The create-handler has no `profiles/base/` fragments — the operator binary must flatten `extends` before upload (refresh `toolchain/km` via `km init`). |
+| `vllm.service` fails at `ExecStartPre`, "weights are not staged in S3 yet" | The `gpu-qwen38-oblit-*` leaves read weights from S3 — run `scripts/stage-model-to-s3.sh` once per install. The unit retries every 30s, so it recovers on its own once the upload finishes; no restart needed. |
+| Model serves fine but codex never calls tools | Wrong tool-call parser. Qwen3.5 emits XML (`<function=…>`), so it needs `--tool-call-parser qwen3_xml`; `hermes` parses nothing and fails silently. |
+| vLLM argparse `IndexError` at boot after editing `VLLM_EXTRA` | A space crept into a JSON value. `$VLLM_EXTRA` is word-split unbraced, so `{"video": 0}` becomes two argv tokens — keep JSON space-free. |
 
 See also: `docs/sandbox-secrets.md` (SOPS), `docs/codex-parity.md` (codex/Slack
 agent switching), `docs/slack-notifications.md` (inbound poller), `klanker:vscode`

@@ -1,0 +1,176 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: gpu-qwen38-oblit-12x
+  labels:
+    tier: gpu-serving
+    model: qwen3.8-27b-obliterated
+    instance: g6e.12xlarge
+  # OBLITERATUS/Qwen3.8-27B-OBLITERATED on g6e.12xlarge (4x L40S = 192GB VRAM).
+  #
+  # 27.78B params served in native BF16 (~55.6GB across 18 shards) — no
+  # --quantization flag, unlike the AWQ leaves. ~13.9GB of weights per GPU leaves
+  # ~29GB/GPU for KV cache at 0.90 utilization, which is why this leaf can afford
+  # a 131072 context where the AWQ 72B leaves clamp to 32768.
+  #
+  # ARCHITECTURE: Qwen3_5ForConditionalGeneration — hybrid linear attention
+  # (48 linear + 16 full-attention layers of 64) and multimodal (image + video).
+  # Supported by vLLM from v0.27.1 (2026-08-11), which is what
+  # vllm/vllm-openai:latest resolves to as of this writing. If a future `latest`
+  # regresses, pin the image tag in the vllm.service drop-in below.
+  #
+  # TP=4 divides cleanly: 24 attention heads, 4 KV heads (1/GPU), 48 linear value
+  # heads (12/GPU). There is deliberately NO 48xlarge variant — TP=8 would have to
+  # replicate the 4 KV heads across 8 ranks for no throughput gain.
+  #
+  # WEIGHTS COME FROM S3, NOT HUGGINGFACE. Stage them once with
+  # `scripts/stage-model-to-s3.sh` before the first `km create` against this
+  # profile. See the initCommands block for the sync + completeness guard.
+  #
+  # ABLITERATED MODEL: refusal directions have been removed from the weights.
+  # The model card is explicit that a system prompt or thinking mode partially
+  # reintroduces refusals, so the serving flags below send neither. Treat the
+  # output of this box as unfiltered by construction.
+
+extends:
+  - base/os/debian
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+  - base/gpu/serve
+
+spec:
+  # Default cloud-routing mode: direct keys via SOPS (anthropic/openai Bifrost
+  # providers). For keyless Bedrock instead, remove this block and set
+  # iam.allowBedrock: true (see docs/gpu-model-serving.md).
+  secrets:
+    sopsFile: ./secrets/qwen.enc.yaml
+
+  # Bool zero-value trap (Phase 117 Pitfall 2): mixed-bool runtime block in the LEAF.
+  runtime:
+    instanceType: g6e.12xlarge
+    region: us-east-1
+    spot: false
+    hibernation: false
+
+  execution:
+    # These run BEFORE base/gpu/serve's initCommandsAppend bring-up (initCommands
+    # always precede every initCommandsAppend), so the staging script, the
+    # systemd drop-in and vllm.env are all in place by the time that fragment
+    # runs `systemctl daemon-reload && systemctl enable --now vllm.service`.
+    # The drop-in is therefore picked up on vLLM's FIRST start — no restart, and
+    # no wasted partial download.
+    initCommands:
+      # 1. Weight staging script, run as an ExecStartPre of vllm.service.
+      #    Syncs the pre-staged weights from S3 into /data/hf, then verifies the
+      #    set is complete — an incomplete model dir makes vLLM crash-loop with an
+      #    opaque error, so this fails loudly and specifically instead.
+      - |
+        cat > /usr/local/bin/km-stage-model.sh <<'KM_STAGE_SCRIPT'
+        #!/usr/bin/env bash
+        # Sync pre-staged model weights from S3 into /data/hf before vLLM starts.
+        # Populated by scripts/stage-model-to-s3.sh (one-time, per install).
+        set -uo pipefail
+
+        MODEL_SLUG="qwen38-oblit-27b"
+        DEST="/data/hf/models/${MODEL_SLUG}"
+
+        # KM_ARTIFACTS_BUCKET is exported by userdata into /etc/profile.d/km-identity.sh.
+        # systemd gives ExecStartPre no login shell, so source it explicitly.
+        if [ -z "${KM_ARTIFACTS_BUCKET:-}" ] && [ -r /etc/profile.d/km-identity.sh ]; then
+          . /etc/profile.d/km-identity.sh
+        fi
+        if [ -z "${KM_ARTIFACTS_BUCKET:-}" ]; then
+          echo "km-stage-model: KM_ARTIFACTS_BUCKET unset; cannot locate staged weights" >&2
+          exit 1
+        fi
+
+        SRC="s3://${KM_ARTIFACTS_BUCKET}/models/${MODEL_SLUG}/"
+        mkdir -p "$DEST"
+        echo "km-stage-model: syncing ${SRC} -> ${DEST}"
+        aws s3 sync "$SRC" "$DEST" --only-show-errors
+
+        IDX="${DEST}/model.safetensors.index.json"
+        if [ ! -s "$IDX" ]; then
+          echo "km-stage-model: ${IDX} missing — weights are not staged in S3 yet." >&2
+          echo "km-stage-model: run scripts/stage-model-to-s3.sh, then this unit's" >&2
+          echo "km-stage-model: Restart=on-failure will pick the weights up automatically." >&2
+          exit 1
+        fi
+
+        REQUIRED=$(python3 -c "import json,sys;print('\n'.join(sorted(set(json.load(open(sys.argv[1]))['weight_map'].values()))))" "$IDX")
+        if [ -z "$REQUIRED" ]; then
+          echo "km-stage-model: could not read weight_map from ${IDX}" >&2
+          exit 1
+        fi
+
+        missing=0
+        for shard in $REQUIRED; do
+          if [ ! -s "${DEST}/${shard}" ]; then
+            echo "km-stage-model: missing shard ${shard}" >&2
+            missing=1
+          fi
+        done
+        for f in config.json generation_config.json tokenizer.json tokenizer_config.json; do
+          if [ ! -s "${DEST}/${f}" ]; then
+            echo "km-stage-model: missing ${f}" >&2
+            missing=1
+          fi
+        done
+
+        if [ "$missing" -ne 0 ]; then
+          echo "km-stage-model: staged weights incomplete at ${DEST}." >&2
+          echo "km-stage-model: re-run scripts/stage-model-to-s3.sh, OR set" >&2
+          echo "km-stage-model:   VLLM_MODEL=OBLITERATUS/Qwen3.8-27B-OBLITERATED" >&2
+          echo "km-stage-model: in /etc/km/vllm.env and 'systemctl restart vllm' to pull" >&2
+          echo "km-stage-model: direct from HuggingFace instead." >&2
+          exit 1
+        fi
+
+        echo "km-stage-model: ${DEST} complete"
+        KM_STAGE_SCRIPT
+        chmod 0755 /usr/local/bin/km-stage-model.sh
+      # 2. systemd drop-in wiring the staging script into vllm.service.
+      #    TimeoutStartSec is MANDATORY here: systemd's 90s default start timeout
+      #    applies to ExecStartPre and would kill a ~55.6GB sync mid-flight.
+      #    A failing ExecStartPre leaves the unit failed, and the base unit's
+      #    Restart=on-failure/RestartSec=30 retries — so a box booted while
+      #    staging is still uploading heals itself once S3 is complete.
+      - |
+        mkdir -p /etc/systemd/system/vllm.service.d
+        cat > /etc/systemd/system/vllm.service.d/10-stage-model.conf <<'KM_STAGE_DROPIN'
+        [Service]
+        TimeoutStartSec=3600
+        ExecStartPre=/usr/local/bin/km-stage-model.sh
+        KM_STAGE_DROPIN
+      # 3. vllm.env. VLLM_MODEL is the IN-CONTAINER path: the base unit mounts
+      #    -v /data/hf:/root/.cache/huggingface, so the host path /data/hf/models/...
+      #    does not resolve inside the container. --served-model-name local is set
+      #    by the base unit, so Continue / codex / Slack / `km model start` are
+      #    unchanged.
+      #
+      #    Every JSON value below is SPACE-FREE on purpose. The base unit passes
+      #    $VLLM_EXTRA unbraced so systemd word-splits it on whitespace (see the
+      #    braces warning in profiles/base/gpu/serve.yaml); a space inside the JSON
+      #    would shatter it into broken argv and crash-loop vLLM at boot.
+      #
+      #    --tool-call-parser qwen3_xml, NOT hermes: this model's chat template
+      #    emits the XML form (<tool_call><function=name><parameter=x>), not the
+      #    Hermes <tool_call>{json} form every other GPU leaf here uses. Hermes
+      #    would leave codex silently unable to call tools.
+      #
+      #    --override-generation-config bakes the model card's required sampling
+      #    (greedy + repetition_penalty 1.15) server-side, so every client inherits
+      #    it with no per-client config. Thinking needs no flag — the shipped chat
+      #    template already defaults it off, and enabling it reintroduces refusals.
+      #
+      #    --limit-mm-per-prompt {"video":0} skips vLLM's video profiling
+      #    reservation; this is a vision-language model and images stay available.
+      - |
+        mkdir -p /etc/km
+        cat > /etc/km/vllm.env <<'KM_VLLM_ENV'
+        VLLM_MODEL=/root/.cache/huggingface/models/qwen38-oblit-27b
+        VLLM_TP=4
+        VLLM_EXTRA=--max-model-len 131072 --gpu-memory-utilization 0.90 --limit-mm-per-prompt {"video":0} --enable-auto-tool-choice --tool-call-parser qwen3_xml --override-generation-config {"temperature":0,"repetition_penalty":1.15}
+        KM_VLLM_ENV
