@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 126
 current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 126-03-PLAN.md
-last_updated: "2026-08-22T23:36:15.704Z"
+stopped_at: Completed 126-04-PLAN.md
+last_updated: "2026-08-22T23:48:03.741Z"
 last_activity: 2026-08-22
 last_activity_desc: Phase 126 execution started
 progress:
   total_phases: 10
   completed_phases: 7
   total_plans: 67
-  completed_plans: 55
+  completed_plans: 56
   percent: 70
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
-Plan: 4 of 10
+Plan: 5 of 10
 Total Plans in Phase: 10
-Current Plan: 4
+Current Plan: 5
 Status: Ready to execute
 Last activity: 2026-08-22 — Phase 126 execution started
 
@@ -625,6 +625,7 @@ Progress: [█████████░] 91%
 | Phase 126 P01 | 25min | 3 tasks | 10 files |
 | Phase 126 P02 | 25min | 3 tasks | 5 files |
 | Phase 126 P03 | 1h | 3 tasks | 10 files |
+| Phase 126 P04 | 40min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1784,6 +1785,7 @@ Recent decisions affecting current work:
 - [Phase 126-02]: Generated provider.tf region expression reads local.site_vars.locals.region.full (root's own expression), not local.svc_config.locals.region_full, so dormant render is provably identical to root's own output
 - [Phase 126]: AssumeRoleConfig's STS-client construction is a second, exported package-level var (NewAssumeRoleSTSClient), not a parameter on AssumeRoleConfig itself — Keeps the public signature exactly as specified while giving external _test packages a seam to inject a stub STS client and exercise the real Retrieve/cache/ExternalId logic
 - [Phase 126]: Home account's capacity-store namespace stays permanently empty (bare pre-Phase-126 key), never namespaced for symmetry — Success rows carry no TTL and persist indefinitely; namespacing home would orphan every accumulated sticky-AZ record with no recovery path (126-RESEARCH.md Pitfall 5)
+- [Phase 126]: gpu-launcher-account/v1.0.0 module authored and validated as a single interconnected unit; all 3 tasks landed in one commit since the box role references the results bucket resource and the outputs reference resources from both — Per-task terraform validate would fail on an intermediate commit missing a referenced resource
 
 ### Roadmap Evolution
 
@@ -1936,6 +1938,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-22T23:36:15.690Z
-Stopped at: Completed 126-03-PLAN.md
+Last session: 2026-08-22T23:48:03.728Z
+Stopped at: Completed 126-04-PLAN.md
 Resume file: None

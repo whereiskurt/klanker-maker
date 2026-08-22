@@ -373,14 +373,14 @@ path was never exercised on hardware. Two things resolvable only on a live GPU b
 `vllm/vllm-openai:latest` resolves to ≥ v0.27.1, and whether `qwen3_xml` actually parses that
 chat template's tool calls.
 
-**Plans:** 3/10 plans executed
+**Plans:** 4/10 plans executed
 
 Plans:
 
 - [x] 126-01-PLAN.md — Wave 1: `launch_accounts` config block + merge-list entry + getters; `spec.runtime.launchAccount` field + JSON schema; profile-only `launchAccount`+`privateSubnet` gate in `ValidateSemantic` and a config-aware unknown-link gate wired into `km validate`.
 - [x] 126-02-PLAN.md — Wave 1: the load-bearing terragrunt change — `merge_strategy = "deep"` on the sandbox template's `include "root"` plus a conditional `generate "provider"` that reproduces root's FULL contents (incl. the `required_providers` pins deep-merge would otherwise drop) + compiler emits the three `service.hcl` locals only when set + a two-layer regression guard (always-on structural test; `terragrunt render` dormancy byte-identity test).
 - [x] 126-03-PLAN.md — Wave 1: fail-closed `pkg/aws.AssumeRoleConfig` (first `stscreds` use in the repo) + `SandboxMetadata.LaunchAccount` marshal/unmarshal round trip + `NewDynamoCapacityStore(client, table, accountNS)` with the home account deliberately un-namespaced.
-- [ ] 126-04-PLAN.md — Wave 1: new `infra/modules/gpu-launcher-account/v1.0.0` — launcher role (3 trusted A-side principals, ExternalId-conditioned) + bounded permission policy + box role + permissions boundary + bucket-owner-enforced results bucket + optional one-subnet-per-AZ network + optional EFS.
+- [x] 126-04-PLAN.md — Wave 1: new `infra/modules/gpu-launcher-account/v1.0.0` — launcher role (3 trusted A-side principals, ExternalId-conditioned) + bounded permission policy + box role + permissions boundary + bucket-owner-enforced results bucket + optional one-subnet-per-AZ network + optional EFS.
 - [ ] 126-05-PLAN.md — Wave 2: `km account add` (B admin creds) — standalone local-state terragrunt unit outside the repo, ExternalId minting, three trusted principals, protected link fragment.
 - [ ] 126-06-PLAN.md — Wave 2: create path — `ResolveLaunchTarget` + EFS/region guards; network from the link and second assumed-role `awsCfg` for the quota gate at BOTH `create.go` copies; namespaced capacity store; `launch_account` on the sandbox row; `km capacity --launch-account`.
 - [ ] 126-07-PLAN.md — Wave 3: `km account register` / `list` / `rm` (A creds) — config entry + ExternalId to SSM SecureString + the one read-only artifacts bucket-policy grant (Go read-modify-write; the bucket has no TF-owned policy), removed by Sid on `rm`.
