@@ -170,7 +170,9 @@ func runCapacity(ctx context.Context, cfg *config.Config, args []string, typeFla
 
 	// Capacity store lookups.
 	ddbClient := dynamodb.NewFromConfig(awsCfg)
-	store := capacity.NewDynamoCapacityStore(ddbClient, cfg.GetCapacityTableName())
+	// Phase 126: "" (home account, unnamespaced) here — the launch-account-
+	// scoped create path (plan 06) passes the resolved link's account id.
+	store := capacity.NewDynamoCapacityStore(ddbClient, cfg.GetCapacityTableName(), "")
 
 	// Build per-AZ report rows.
 	var rows []CapacityAZReport

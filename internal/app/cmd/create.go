@@ -898,7 +898,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			o.Region = region
 		})
 		ddbForCapacity := dynamodbpkg.NewFromConfig(awsCfg)
-		capacityStore = capacity.NewDynamoCapacityStore(ddbForCapacity, cfg.GetCapacityTableName())
+		// Phase 126: "" (home account, unnamespaced) here — the launch-account-
+		// scoped create path (plan 06) passes the resolved link's account id.
+		capacityStore = capacity.NewDynamoCapacityStore(ddbForCapacity, cfg.GetCapacityTableName(), "")
 
 		// Phase 125: nil for a public sandbox (RankAZs applies no NAT filter —
 		// byte-identical to Phase 124). For a private sandbox, the AZ list actually
