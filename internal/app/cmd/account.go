@@ -203,8 +203,16 @@ type AccountLinkFragment struct {
 // LinkStateBucketName returns the deterministic S3 bucket name an enrollment
 // unit's Terraform state lives in, in the TARGET account. Exported so plan
 // 07's teardown and any later doctor check derive the same string rather
-// than re-deriving it by hand. The account id is in the name because S3
-// bucket names are globally unique.
+// than re-deriving it by hand.
+//
+// targetAccountID MUST be the TARGET (account-B) id, never the home/trust
+// account id: S3 bucket names are globally unique across all of AWS, so
+// naming the bucket after the home account makes every target enrolled from
+// that home collide on one name — the second enrollment fails with
+// BucketAlreadyExists. `km account register` already derives it from the
+// target id, so a home-id derivation here also desynchronises add from
+// register and points `km account rm --purge-backend` at a bucket that was
+// never created.
 func LinkStateBucketName(prefix, targetAccountID, regionLabel string) string {
 	return fmt.Sprintf("tf-%s-linkstate-%s-%s", prefix, targetAccountID, regionLabel)
 }
@@ -534,14 +542,29 @@ func hclStringList(vals []string) string {
 
 // deriveOperatorPrincipalARN converts the caller identity resolved from the
 // account-B admin credentials into the ARN of the SAME-NAMED role in account
-// A (trustAccountID) — the common AWS-Organizations pattern where an SSO
-// permission set creates an identically-named IAM role in every account. An
-// assumed-role session ARN
+// A (trustAccountID). An assumed-role session ARN
 // (arn:aws:sts::<acct>:assumed-role/<role>/<session>) is normalized to the
 // role ARN form (arn:aws:iam::<trustAccountID>:role/<role>) because IAM trust
 // policies accept role ARNs, not session ARNs, as principals. Other principal
 // forms (IAM user, root) are re-homed by swapping only the account id
 // segment.
+//
+// IAM Identity Center (SSO) roles CANNOT be re-homed this way and are
+// rejected outright — see isSSORoleName. Two independent reasons, either
+// fatal on its own:
+//
+//  1. The trailing hash in AWSReservedSSO_<PermissionSet>_<hash> is derived
+//     per-account. The same permission set provisions a DIFFERENT hash in
+//     every account, so account B's hash never names a real role in A.
+//  2. SSO roles live under the path /aws-reserved/sso.amazonaws.com/, which
+//     the bare role/<name> form omits entirely.
+//
+// A guessed SSO ARN is not merely useless — IAM validates principal
+// existence at CreateRole and rejects the whole trust policy with
+// MalformedPolicyDocument, so the enrollment fails after the state backend
+// has already been provisioned. Failing here, before any AWS mutation, with
+// the exact lookup command is strictly better than emitting an ARN we know
+// cannot resolve.
 func deriveOperatorPrincipalARN(callerARN, trustAccountID string) (string, error) {
 	parts := strings.SplitN(callerARN, ":", 6)
 	if len(parts) != 6 || parts[0] != "arn" {
@@ -554,9 +577,21 @@ func deriveOperatorPrincipalARN(callerARN, trustAccountID string) (string, error
 		if len(segs) < 2 || segs[1] == "" {
 			return "", fmt.Errorf("caller ARN %q: malformed assumed-role resource", callerARN)
 		}
+		if isSSORoleName(segs[1]) {
+			return "", fmt.Errorf("caller is an IAM Identity Center (SSO) role (%s); "+
+				"its per-account name hash and /aws-reserved/sso.amazonaws.com/ path cannot be "+
+				"re-homed into account %s", segs[1], trustAccountID)
+		}
 		return fmt.Sprintf("arn:aws:iam::%s:role/%s", trustAccountID, segs[1]), nil
 	}
 	return fmt.Sprintf("arn:%s:%s::%s:%s", partition, service, trustAccountID, resource), nil
+}
+
+// isSSORoleName reports whether a role name was provisioned by IAM Identity
+// Center. Matches the reserved AWSReservedSSO_ prefix AWS applies to every
+// permission-set role.
+func isSSORoleName(roleName string) bool {
+	return strings.HasPrefix(roleName, "AWSReservedSSO_")
 }
 
 // resolveTrustedPrincipals assembles the trusted_principal_arns list: the
@@ -566,22 +601,37 @@ func deriveOperatorPrincipalARN(callerARN, trustAccountID string) (string, error
 // operator ARN when none were supplied. Derivation failure is non-fatal —
 // it is logged to out and the third slot is simply omitted, matching the
 // documented fall-back-to-pattern escape hatch.
-func resolveTrustedPrincipals(prefix, trustAccountID string, explicit []string, caller AccountCallerIdentity, out io.Writer) []string {
+func resolveTrustedPrincipals(prefix, trustAccountID string, explicit []string, caller AccountCallerIdentity, out io.Writer) ([]string, error) {
 	createHandlerARN := fmt.Sprintf("arn:aws:iam::%s:role/%s-create-handler", trustAccountID, prefix)
 	ttlHandlerARN := fmt.Sprintf("arn:aws:iam::%s:role/%s-ttl-handler", trustAccountID, prefix)
 	principals := []string{createHandlerARN, ttlHandlerARN}
 
 	if len(explicit) > 0 {
-		return append(principals, explicit...)
+		return append(principals, explicit...), nil
 	}
 
 	derived, err := deriveOperatorPrincipalARN(caller.ARN, trustAccountID)
 	if err != nil {
-		fmt.Fprintf(out, "note: could not derive an operator principal from caller ARN %q (%v) — "+
-			"supply --trust-principal or --trust-principal-pattern explicitly\n", caller.ARN, err)
-		return principals
+		// Hard failure, not a note. Dropping the operator principal would
+		// still produce a link that a REMOTE create can use (create-handler
+		// is trusted), so the enrollment would look successful — but
+		// `km create --local` and, worse, `km destroy` run as the operator
+		// and could not assume the launcher. A link that cannot be torn
+		// down is the expensive failure this phase exists to prevent.
+		return nil, fmt.Errorf(
+			"cannot derive the operator's principal in account %s: %w\n\n"+
+				"Look up the real ARN with your HOME-account profile:\n"+
+				"    aws iam list-roles --profile <home-profile> \\\n"+
+				"      --path-prefix /aws-reserved/sso.amazonaws.com/ \\\n"+
+				"      --query \"Roles[?starts_with(RoleName,'AWSReservedSSO_<PermissionSet>')].Arn\" --output text\n\n"+
+				"then re-run with:\n"+
+				"    --trust-principal <that-arn>\n\n"+
+				"(--trust-principal replaces only this derived entry; %s-create-handler and\n"+
+				"%s-ttl-handler are still trusted automatically. Use --trust-principal-pattern\n"+
+				"for an ArnLike glob if the role name is not stable.)",
+			trustAccountID, err, prefix, prefix)
 	}
-	return append(principals, derived)
+	return append(principals, derived), nil
 }
 
 // ======================== External id resolution ================================
@@ -820,7 +870,10 @@ func RunAccountAdd(cfg *config.Config, opts AccountAddOpts, repoRoot string, out
 	}
 
 	// 5. Resolve the three trusted principals (T-126-26) + any patterns.
-	principals := resolveTrustedPrincipals(cfg.GetResourcePrefix(), opts.TrustAccountID, opts.TrustPrincipals, caller, out)
+	principals, err := resolveTrustedPrincipals(cfg.GetResourcePrefix(), opts.TrustAccountID, opts.TrustPrincipals, caller, out)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(out, "Trusting %d principal(s):\n", len(principals))
 	for _, p := range principals {
 		fmt.Fprintf(out, "  - %s\n", p)
@@ -854,7 +907,7 @@ func RunAccountAdd(cfg *config.Config, opts AccountAddOpts, repoRoot string, out
 		// load-bearing note in the function doc comment.
 		bucket := opts.StateBucketOverride
 		if bucket == "" {
-			bucket = LinkStateBucketName(cfg.GetResourcePrefix(), opts.TrustAccountID, regionLabel)
+			bucket = LinkStateBucketName(cfg.GetResourcePrefix(), caller.AccountID, regionLabel)
 		}
 		table := opts.LockTableOverride
 		if table == "" {
@@ -898,7 +951,7 @@ func RunAccountAdd(cfg *config.Config, opts AccountAddOpts, repoRoot string, out
 	// and BEFORE the first runner invocation — the backend block names the
 	// bucket/table this call returns.
 	bucket, table, key, err := EnsureLinkStateBackend(
-		ctx, awsCfg, cfg.GetResourcePrefix(), opts.TrustAccountID, regionLabel, opts.Name,
+		ctx, awsCfg, cfg.GetResourcePrefix(), caller.AccountID, regionLabel, opts.Name,
 		opts.StateBucketOverride, opts.LockTableOverride,
 	)
 	if err != nil {

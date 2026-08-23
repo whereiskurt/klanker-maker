@@ -256,9 +256,21 @@ func baseAccountAddOpts(name string) cmd.AccountAddOpts {
 	}
 }
 
+// testCaller is a plain (non-SSO) assumed-role caller — the case that IS
+// re-homeable into the trust account. Used as the default fixture so tests
+// unrelated to principal derivation are not entangled with it.
 var testCaller = cmd.AccountCallerIdentity{
 	AccountID: "222222222222",
-	ARN:       "arn:aws:sts::222222222222:assumed-role/AWSReservedSSO_Admin/operator@example.com",
+	ARN:       "arn:aws:sts::222222222222:assumed-role/OrgAdmin/operator@example.com",
+}
+
+// testCallerSSO is an IAM Identity Center caller. Its role name carries a
+// per-account hash and lives under /aws-reserved/sso.amazonaws.com/, so it
+// can never be re-homed into another account — enrollment must reject it and
+// demand an explicit --trust-principal.
+var testCallerSSO = cmd.AccountCallerIdentity{
+	AccountID: "222222222222",
+	ARN:       "arn:aws:sts::222222222222:assumed-role/AWSReservedSSO_Admin_574bfc731f4810d3/operator@example.com",
 }
 
 // ======================== Task 1: HCL generation ================================
@@ -548,11 +560,44 @@ func TestAccountAdd_ExternalID(t *testing.T) {
 	})
 }
 
-func TestAccountAdd_TrustedPrincipals_Default(t *testing.T) {
+// testCaller is an SSO caller, which can NEVER be re-homed into the trust
+// account (per-account name hash + /aws-reserved/sso.amazonaws.com/ path).
+// Enrollment must fail fast and name the fix rather than emitting an ARN that
+// IAM rejects at CreateRole with MalformedPolicyDocument.
+func TestAccountAdd_TrustedPrincipals_SSOCallerIsRejected(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	runner := &mockAccountRunner{}
-	installAccountSeams(t, runner, &mockLinkStateS3{}, &mockLinkLockDynamoDB{}, testCaller)
+	installAccountSeams(t, runner, &mockLinkStateS3{}, &mockLinkLockDynamoDB{}, testCallerSSO)
+	cfg := &config.Config{}
+	opts := baseAccountAddOpts("mgmt-gpu")
+	opts.DryRun = true
+
+	err := cmd.RunAccountAdd(cfg, opts, t.TempDir(), &discardWriter{})
+	if err == nil {
+		t.Fatal("RunAccountAdd must fail when the caller is an SSO role and no --trust-principal is given")
+	}
+	// The message has to be actionable — it is the operator's only signal.
+	for _, want := range []string{"--trust-principal", "aws-reserved/sso.amazonaws.com"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error message must mention %q, got:\n%s", want, err.Error())
+		}
+	}
+	// A guessed SSO ARN must never reach the rendered unit.
+	if strings.Contains(err.Error(), "arn:aws:iam::111111111111:role/AWSReservedSSO_Admin") {
+		t.Error("must not emit a re-homed SSO ARN — its per-account hash cannot resolve in the trust account")
+	}
+}
+
+// A non-SSO assumed-role caller IS re-homeable and must still work.
+func TestAccountAdd_TrustedPrincipals_NonSSOCallerIsDerived(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	runner := &mockAccountRunner{}
+	installAccountSeams(t, runner, &mockLinkStateS3{}, &mockLinkLockDynamoDB{}, cmd.AccountCallerIdentity{
+		AccountID: "222222222222",
+		ARN:       "arn:aws:sts::222222222222:assumed-role/OrgAdmin/operator@example.com",
+	})
 	cfg := &config.Config{}
 	opts := baseAccountAddOpts("mgmt-gpu")
 	opts.DryRun = true
@@ -563,11 +608,66 @@ func TestAccountAdd_TrustedPrincipals_Default(t *testing.T) {
 	for _, want := range []string{
 		"arn:aws:iam::111111111111:role/km-create-handler",
 		"arn:aws:iam::111111111111:role/km-ttl-handler",
-		"arn:aws:iam::111111111111:role/AWSReservedSSO_Admin", // derived from testCaller.ARN
+		"arn:aws:iam::111111111111:role/OrgAdmin", // re-homed from the caller
 	} {
 		if !strings.Contains(hcl, want) {
 			t.Errorf("trusted_principal_arns missing %q\nHCL:\n%s", want, hcl)
 		}
+	}
+}
+
+// An SSO caller WITH --trust-principal is the documented escape hatch and
+// must succeed — the derivation is never consulted.
+func TestAccountAdd_TrustedPrincipals_SSOCallerWithExplicitPrincipal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	runner := &mockAccountRunner{}
+	installAccountSeams(t, runner, &mockLinkStateS3{}, &mockLinkLockDynamoDB{}, testCallerSSO)
+	cfg := &config.Config{}
+	opts := baseAccountAddOpts("mgmt-gpu")
+	opts.DryRun = true
+	realARN := "arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_024532ccbde75573"
+	opts.TrustPrincipals = []string{realARN}
+
+	if err := cmd.RunAccountAdd(cfg, opts, t.TempDir(), &discardWriter{}); err != nil {
+		t.Fatalf("RunAccountAdd with explicit --trust-principal: %v", err)
+	}
+	hcl := readUnitHCL(t, home, "mgmt-gpu")
+	if !strings.Contains(hcl, realARN) {
+		t.Errorf("explicit --trust-principal missing from trusted_principal_arns\nHCL:\n%s", hcl)
+	}
+}
+
+// The link-state bucket is named after the TARGET account, never the home
+// account. S3 names are global, so a home-id name collides across every
+// target enrolled from one home — and desynchronises `add` from `register`,
+// which already derives from the target id.
+func TestAccountAdd_StateBucketNamedForTargetAccount(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	runner := &mockAccountRunner{}
+	installAccountSeams(t, runner, &mockLinkStateS3{}, &mockLinkLockDynamoDB{}, cmd.AccountCallerIdentity{
+		AccountID: "222222222222",
+		ARN:       "arn:aws:sts::222222222222:assumed-role/OrgAdmin/operator@example.com",
+	})
+	cfg := &config.Config{}
+	opts := baseAccountAddOpts("mgmt-gpu")
+	opts.DryRun = true
+	if err := cmd.RunAccountAdd(cfg, opts, t.TempDir(), &discardWriter{}); err != nil {
+		t.Fatalf("RunAccountAdd: %v", err)
+	}
+	hcl := readUnitHCL(t, home, "mgmt-gpu")
+
+	// 222222222222 is the target (caller) account; 111111111111 is the home
+	// account passed as --trust.
+	wantBucket := cmd.LinkStateBucketName("km", "222222222222", "use1")
+	if !strings.Contains(hcl, wantBucket) {
+		t.Errorf("state bucket must be named for the TARGET account, want %q\nHCL:\n%s", wantBucket, hcl)
+	}
+	badBucket := cmd.LinkStateBucketName("km", "111111111111", "use1")
+	if strings.Contains(hcl, badBucket) {
+		t.Errorf("state bucket must NOT be named for the home/trust account (%q) — "+
+			"S3 names are global and every target from this home would collide", badBucket)
 	}
 }
 
@@ -805,7 +905,7 @@ func TestAccountAdd_BackendBootstrapOrdering(t *testing.T) {
 	}
 
 	hcl := readUnitHCL(t, home, "mgmt-gpu")
-	wantBucket := cmd.LinkStateBucketName("km", "111111111111", "use1")
+	wantBucket := cmd.LinkStateBucketName("km", "222222222222", "use1")
 	wantTable := cmd.LinkLockTableName("km", "use1")
 	if !strings.Contains(hcl, wantBucket) || !strings.Contains(hcl, wantTable) {
 		t.Errorf("rendered unit must name exactly the bucket/table EnsureLinkStateBackend returned (%s / %s)\nHCL:\n%s", wantBucket, wantTable, hcl)
@@ -828,7 +928,7 @@ func TestAccountAdd_DryRunProvisionsNothing(t *testing.T) {
 		t.Fatalf("RunAccountAdd: %v", err)
 	}
 
-	wantBucket := cmd.LinkStateBucketName("km", "111111111111", "use1")
+	wantBucket := cmd.LinkStateBucketName("km", "222222222222", "use1")
 	wantTable := cmd.LinkLockTableName("km", "use1")
 	msg := out.String()
 	if !strings.Contains(msg, wantBucket) || !strings.Contains(msg, wantTable) {

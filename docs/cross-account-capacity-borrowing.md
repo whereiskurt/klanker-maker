@@ -97,6 +97,61 @@ same bucket and table under a different key. The generated unit directory under
 record itself carries the backend identifiers, so teardown works even from a fresh clone
 with no local unit directory present.
 
+#### If you sign in with IAM Identity Center (SSO), you must pass `--trust-principal`
+
+`km account add` derives the third trusted principal — you, the operator — from the caller
+identity it resolves in the target account, re-homing that role name into the home account.
+That works for a plain IAM role. It **cannot** work for an IAM Identity Center role, and
+enrollment fails fast rather than guessing:
+
+```
+cannot derive the operator's principal in account <home>: caller is an IAM Identity Center
+(SSO) role (AWSReservedSSO_AdministratorAccess_574bfc731f4810d3); its per-account name hash
+and /aws-reserved/sso.amazonaws.com/ path cannot be re-homed into account <home>
+```
+
+Two independent reasons, either fatal alone:
+
+1. **The trailing hash is per-account.** The same permission set provisions
+   `AWSReservedSSO_AdministratorAccess_<hash>` with a *different* hash in every account, so
+   the target account's hash never names a real role in the home account.
+2. **The path is dropped.** SSO roles live under `/aws-reserved/sso.amazonaws.com/`; the
+   bare `role/<name>` form omits it.
+
+IAM validates principal existence at `CreateRole`, so a guessed ARN doesn't degrade
+gracefully — it fails the whole trust policy with `MalformedPolicyDocument`, *after* the
+state backend has been provisioned. Hence the fail-fast.
+
+Look up your real home-account ARN:
+
+```bash
+aws iam list-roles --profile <home-profile> \
+  --path-prefix /aws-reserved/sso.amazonaws.com/ \
+  --query "Roles[?starts_with(RoleName,'AWSReservedSSO_<PermissionSet>')].Arn" --output text
+```
+
+then add it to the `km account add` invocation:
+
+```bash
+--trust-principal arn:aws:iam::<home>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdministratorAccess_<home-hash>
+```
+
+`--trust-principal` replaces **only** the derived operator entry — `{prefix}-create-handler`
+and `{prefix}-ttl-handler` are still trusted automatically, so you still get all three. It is
+repeatable if more than one operator principal needs access.
+
+If your SSO role names are not stable across permission-set changes, use
+`--trust-principal-pattern` instead for an `ArnLike` glob (e.g.
+`arn:aws:iam::<home>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdministratorAccess_*`).
+That is looser than an exact ARN — it delegates to the account root under an `ArnLike`
+condition — so prefer the exact ARN when you can.
+
+**Why this is a hard error and not a warning:** dropping the operator principal would still
+leave a link a *remote* create could use, because `{prefix}-create-handler` is trusted
+independently. Enrollment would look like it worked. But `km create --local` and — far worse
+— `km destroy` run as you, and neither could assume the launcher. A link that cannot be torn
+down is precisely the failure this feature exists to avoid.
+
 ### Step 2 — `km account register` (home account's credentials)
 
 ```bash
