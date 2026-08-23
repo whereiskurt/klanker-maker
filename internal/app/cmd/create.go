@@ -184,12 +184,69 @@ func natServedAZs(availabilityZones, natGatewayIDs []string) []string {
 // call sites (T-126-31: an unwired remote path would silently launch into the
 // home account with a link-shaped profile).
 func applyLaunchAccountNetwork(network *compiler.NetworkConfig, target *LaunchTarget) {
+	network.VPCID = target.VPCID
 	network.PublicSubnets = target.SubnetIDs
 	network.SandboxSubnets = target.SubnetIDs
 	network.AvailabilityZones = target.AvailabilityZones
 	network.LaunchAccount = target.LinkName
 	network.LauncherRoleARN = target.LauncherRoleARN
 	network.LauncherExternalID = target.ExternalID
+}
+
+// ec2SubnetDescriber is the minimal EC2 interface hydrateLaunchAccountVPCID
+// needs. Narrowed for testability (a stub in tests, *ec2svc.Client in
+// production), following this package's established narrow-interface
+// convention (see doctor.go's EC2DescribeAPI).
+type ec2SubnetDescriber interface {
+	DescribeSubnets(ctx context.Context, params *ec2svc.DescribeSubnetsInput, optFns ...func(*ec2svc.Options)) (*ec2svc.DescribeSubnetsOutput, error)
+}
+
+// resolveLaunchTargetVPCID looks up the VPC id that owns a link's first subnet.
+// The launch_accounts link record carries subnet ids but no VPC id (config
+// schema doesn't have one, and neither does any output of the
+// gpu-launcher-account enrollment module) — without resolving it here,
+// infra/modules/ec2spot/v1.3.0 receives an empty vpc_id, self-provisions a
+// brand-new, disconnected VPC (its create_vpc = vpc_id == "" branch), and then
+// tries to place the instance's ENI into a subnet from a DIFFERENT vpc (the
+// link's real one) — AWS rejects that at apply time ("subnet belongs to a
+// different network"). All of a link's subnets are provisioned together by
+// the same enrollment run, so the first subnet's VPC is authoritative for all
+// of them.
+func resolveLaunchTargetVPCID(ctx context.Context, client ec2SubnetDescriber, target *LaunchTarget) (string, error) {
+	if len(target.SubnetIDs) == 0 {
+		return "", fmt.Errorf("launch_accounts.%s has no subnet_ids to resolve a VPC from", target.LinkName)
+	}
+	out, err := client.DescribeSubnets(ctx, &ec2svc.DescribeSubnetsInput{
+		SubnetIds: []string{target.SubnetIDs[0]},
+	})
+	if err != nil {
+		return "", fmt.Errorf("describe subnet %s for launch_accounts.%s: %w", target.SubnetIDs[0], target.LinkName, err)
+	}
+	if len(out.Subnets) == 0 || out.Subnets[0].VpcId == nil || *out.Subnets[0].VpcId == "" {
+		return "", fmt.Errorf("subnet %s for launch_accounts.%s has no VPC id in the DescribeSubnets response", target.SubnetIDs[0], target.LinkName)
+	}
+	return *out.Subnets[0].VpcId, nil
+}
+
+// hydrateLaunchAccountVPCID resolves and sets target.VPCID in place, using the
+// launcher-role-assumed config (via buildCapacityAWSConfig — same fail-closed
+// contract, T-126-29: never falls back to a home-account lookup). A no-op for
+// a home create (target == nil). Called once per create, right after
+// ResolveLaunchTarget, in both runCreate and runCreateRemote.
+func hydrateLaunchAccountVPCID(ctx context.Context, base aws.Config, target *LaunchTarget) error {
+	if target == nil {
+		return nil
+	}
+	assumedCfg, err := buildCapacityAWSConfig(ctx, base, target)
+	if err != nil {
+		return err
+	}
+	vpcID, err := resolveLaunchTargetVPCID(ctx, ec2svc.NewFromConfig(assumedCfg, func(o *ec2svc.Options) { o.Region = target.Region }), target)
+	if err != nil {
+		return fmt.Errorf("resolve VPC id for launch_accounts.%s: %w", target.LinkName, err)
+	}
+	target.VPCID = vpcID
+	return nil
 }
 
 // resolveLaunchRegion returns the effective region for a create — the linked
@@ -723,6 +780,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	launchTarget, err := ResolveLaunchTarget(ctx, cfg, resolvedProfile, launchAccountOverride, &productionSSMParamStore{client: ssm.NewFromConfig(awsCfg)})
 	if err != nil {
 		return err
+	}
+	if hydrateErr := hydrateLaunchAccountVPCID(ctx, awsCfg, launchTarget); hydrateErr != nil {
+		return hydrateErr
 	}
 
 	// Step 5c: Enforce sandbox limit before any provisioning.
@@ -2666,6 +2726,9 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	launchTarget, err := ResolveLaunchTarget(ctx, cfg, resolvedProfile, launchAccountOverride, &productionSSMParamStore{client: ssm.NewFromConfig(awsCfg)})
 	if err != nil {
 		return "", err
+	}
+	if hydrateErr := hydrateLaunchAccountVPCID(ctx, awsCfg, launchTarget); hydrateErr != nil {
+		return "", hydrateErr
 	}
 
 	// Step 5c: Enforce sandbox limit before dispatching remote create.

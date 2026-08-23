@@ -37,6 +37,15 @@ type LaunchTarget struct {
 	// pairs them by index.
 	SubnetIDs         []string
 	AvailabilityZones []string
+	// VPCID is the VPC that owns SubnetIDs. It is NOT part of the link record
+	// (launch_accounts config carries subnet ids only) — it is resolved
+	// separately, post-construction, via a DescribeSubnets call against the
+	// launcher-role-assumed account (see create.go's hydrateLaunchAccountVPCID).
+	// Empty until that call runs. Required: infra/modules/ec2spot/v1.3.0
+	// self-provisions a brand-new VPC whenever its vpc_id input is empty, and
+	// would then try to place the ENI into a subnet from a DIFFERENT vpc (the
+	// link's real one) — AWS rejects that at apply time.
+	VPCID string
 	// SecurityGroupID is the linked account's pre-provisioned security group id.
 	SecurityGroupID string
 	// ResultsBucket is the linked account's results bucket (B→A read path).

@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	ec2svc "github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 )
@@ -29,6 +31,7 @@ func testTarget() *LaunchTarget {
 		LauncherRoleARN:   "arn:aws:iam::222233334444:role/km-gpu-launcher",
 		ExternalID:        "secret-ext-id",
 		Region:            "us-west-2",
+		VPCID:             "vpc-0123456789",
 		SubnetIDs:         []string{"subnet-a", "subnet-b"},
 		AvailabilityZones: []string{"us-west-2a", "us-west-2b"},
 		SecurityGroupID:   "sg-0123456789",
@@ -57,6 +60,9 @@ func TestApplyLaunchAccountNetwork_PopulatesFromTarget(t *testing.T) {
 	network := &compiler.NetworkConfig{}
 	applyLaunchAccountNetwork(network, target)
 
+	if network.VPCID != "vpc-0123456789" {
+		t.Errorf("VPCID: got %q", network.VPCID)
+	}
 	if len(network.PublicSubnets) != 2 || network.PublicSubnets[0] != "subnet-a" {
 		t.Errorf("PublicSubnets: got %v", network.PublicSubnets)
 	}
@@ -355,5 +361,92 @@ func TestCapacityGo_AssumeFailureAbortsBeforeAnyClient(t *testing.T) {
 	}
 	if returnIdx >= ec2Idx {
 		t.Error("the fatal return on assume failure must precede client construction — found ec2 client built first")
+	}
+}
+
+// stubSubnetDescriber is an ec2SubnetDescriber stub that records the request
+// and returns either a canned VpcId or an error.
+type stubSubnetDescriber struct {
+	vpcID   string
+	err     error
+	lastReq *ec2svc.DescribeSubnetsInput
+}
+
+func (s *stubSubnetDescriber) DescribeSubnets(_ context.Context, params *ec2svc.DescribeSubnetsInput, _ ...func(*ec2svc.Options)) (*ec2svc.DescribeSubnetsOutput, error) {
+	s.lastReq = params
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &ec2svc.DescribeSubnetsOutput{
+		Subnets: []ec2types.Subnet{{VpcId: awssdk.String(s.vpcID)}},
+	}, nil
+}
+
+// resolveLaunchTargetVPCID resolves the VPC id from the link's first subnet —
+// without this, ec2spot's create_vpc=vpc_id=="" branch would self-provision a
+// brand-new VPC and try to place the ENI into a subnet from the link's real
+// (different) VPC, which AWS rejects at apply time.
+func TestResolveLaunchTargetVPCID_Success(t *testing.T) {
+	target := testTarget()
+	stub := &stubSubnetDescriber{vpcID: "vpc-resolved"}
+
+	vpcID, err := resolveLaunchTargetVPCID(context.Background(), stub, target)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vpcID != "vpc-resolved" {
+		t.Errorf("got %q, want vpc-resolved", vpcID)
+	}
+	if stub.lastReq == nil || len(stub.lastReq.SubnetIds) != 1 || stub.lastReq.SubnetIds[0] != target.SubnetIDs[0] {
+		t.Errorf("expected DescribeSubnets to be called with the link's first subnet, got %+v", stub.lastReq)
+	}
+}
+
+func TestResolveLaunchTargetVPCID_DescribeFailureIsFatal(t *testing.T) {
+	target := testTarget()
+	stub := &stubSubnetDescriber{err: errors.New("ec2: throttled")}
+
+	_, err := resolveLaunchTargetVPCID(context.Background(), stub, target)
+	if err == nil {
+		t.Fatal("expected an error when DescribeSubnets fails")
+	}
+}
+
+func TestResolveLaunchTargetVPCID_NoSubnetsIsFatal(t *testing.T) {
+	target := testTarget()
+	target.SubnetIDs = nil
+	stub := &stubSubnetDescriber{vpcID: "vpc-resolved"}
+
+	_, err := resolveLaunchTargetVPCID(context.Background(), stub, target)
+	if err == nil {
+		t.Fatal("expected an error when the target has no subnet ids")
+	}
+}
+
+// hydrateLaunchAccountVPCID is a no-op for a home create (nil target) and
+// fails closed (no VPCID set, error returned) when the assume-role call
+// itself fails — mirrors buildCapacityAWSConfig's contract exactly since it
+// is built on top of it.
+func TestHydrateLaunchAccountVPCID_HomeIsNoop(t *testing.T) {
+	if err := hydrateLaunchAccountVPCID(context.Background(), awssdk.Config{Region: "us-east-1"}, nil); err != nil {
+		t.Fatalf("unexpected error for a home (nil target) create: %v", err)
+	}
+}
+
+func TestHydrateLaunchAccountVPCID_AssumeFailurePropagates(t *testing.T) {
+	orig := awspkg.AssumeRoleConfig
+	defer func() { awspkg.AssumeRoleConfig = orig }()
+	awspkg.AssumeRoleConfig = func(_ context.Context, _ awssdk.Config, _, _, _ string) (awssdk.Config, error) {
+		return awssdk.Config{}, errors.New("sts: access denied")
+	}
+
+	target := testTarget()
+	target.VPCID = "" // unresolved, as it would be right after ResolveLaunchTarget
+	err := hydrateLaunchAccountVPCID(context.Background(), awssdk.Config{Region: "us-east-1"}, target)
+	if err == nil {
+		t.Fatal("expected an error when the assume-role call fails")
+	}
+	if target.VPCID != "" {
+		t.Errorf("VPCID must stay empty on failure, got %q", target.VPCID)
 	}
 }
