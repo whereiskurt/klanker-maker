@@ -39,6 +39,52 @@ the smaller per-GPU headroom.
 | `gpu-qwen-32b-l4` | g6.12xlarge | 96GB | `Qwen/Qwen2.5-32B-Instruct-AWQ` | AWQ 4-bit | 4 | 32768 |
 | `gpu-qwen38-oblit-12x-l4` | g6.12xlarge | 96GB | `OBLITERATUS/Qwen3.8-27B-OBLITERATED` | **BF16** | 4 | 32768 |
 
+**Single-GPU FP8 leaf — the capacity-reachable option.** Every leaf above needs a
+4- or 8-GPU shape, and those are the shapes that go capacity-dry first. A live
+`run-instances` sweep on 2026-08-22 (us-east-1) found `g6e.12xlarge` **dry in all
+four offered AZs** and `g6.12xlarge` available in only one — while the
+**single-L40S** shapes had capacity in two. Quota was never the constraint (64
+G-vCPU, headroom in every AZ).
+
+What forces the big shape is precision, not parameter count: 27.8B in BF16 is
+~55.6GB, which fits on no single card. FP8 halves that to ~29.9GB, which fits one
+L40S with room for KV.
+
+| Profile | Instance | VRAM | Model | Precision | TP | ctx |
+|---|---|---|---|---|---|---|
+| `gpu-qwen38-oblit-fp8-4x` | g6e.4xlarge | 48GB (1×L40S) | `MrPewpy/Qwen3.8-27B-OBLITERATED-FP8` | **FP8** | 1 | 131072 |
+
+$3.00/hr versus $10.49 for `g6e.12xlarge`, and 16 of the G-vCPU quota instead of
+48. The weights are a third-party `llm-compressor` repack (`FP8_DYNAMIC`,
+`ignore: [lm_head]`, `recipe.yaml` published); MMLU 80.70 vs 81.4 for BF16, and
+the abliteration survives quantization. vLLM reads the `compressed-tensors` config
+straight from `config.json`, so the leaf passes **no** `--quantization` flag —
+adding one would override the checkpoint's own scheme.
+
+Two settings are specific to the single-card shape and are documented in the leaf:
+
+- **`--max-num-seqs 128`** (default 256). This architecture is hybrid — the
+  Gated-DeltaNet linear-attention layers hold a fixed-size state per *sequence*,
+  and vLLM allocates one "Mamba cache block" per concurrent decode slot from
+  whatever VRAM the weights left. Only 177 fit here, so the default aborts
+  CUDA-graph capture at startup with `max_num_seqs (256) exceeds available Mamba
+  cache blocks (177)`. This is a **concurrency** ceiling, not a context one.
+- **`VLLM_CACHE_ROOT`** pointed inside `/data/hf`. `torch.compile`'s Inductor and
+  CUDA-graph cache otherwise lands in the container's writable layer, and the unit
+  runs `docker run --rm` — so every restart re-compiled from scratch. Measured on
+  this leaf: compilation **125.04s → 5.91s**, init engine 211.68s → 91.04s. `/data`
+  survives `km stop`, so a stop/resume now returns warm.
+
+Reported KV on a live box: **141,803 tokens**, i.e. 1.08× concurrency at the full
+131072 context — enough, but only just.
+
+**vLLM image is pinned** (`VLLM_IMAGE=vllm/vllm-openai:v0.27.1` in
+`base/gpu/serve`, digest-identical to `:latest` when pinned). Two reasons: this
+architecture only became supported in 0.27.1, and the `torch.compile` hash
+includes the vLLM version — so a silent `:latest` bump discards every cached graph
+fleet-wide. Override per-leaf by setting `VLLM_IMAGE` in its `/etc/km/vllm.env`;
+the unit declares the default *before* `EnvironmentFile`, so the leaf wins.
+
 (`gpu-rehearsal-cpu` is a GPU-free Docker rehearsal leaf for validating the Bifrost
 config without burning GPU capacity — see `122-BIFROST-VALIDATION.md`.)
 
@@ -98,6 +144,24 @@ scripts/stage-model-to-s3.sh             # --bucket/--slug/--repo to override
 This lands the BF16 safetensors at `s3://$KM_ARTIFACTS_BUCKET/models/qwen38-oblit-27b/`,
 excluding the repo's GGUF (5 quantizations) and MLX (4-bit + 8-bit) trees — well over
 100GB that nothing in this stack uses.
+
+The FP8 leaf reads a **different slug**, so stage it separately (~30GB, one file
+set, no GGUF/MLX trees to exclude):
+
+```bash
+scripts/stage-model-to-s3.sh \
+  --repo MrPewpy/Qwen3.8-27B-OBLITERATED-FP8 \
+  --slug qwen38-oblit-27b-fp8
+```
+
+The `--slug` MUST match `MODEL_SLUG` in the leaf's `km-stage-model.sh`; a mismatch
+shows up as a permanently crash-looping `vllm.service` complaining the weights are
+not staged. Staging *from the GPU box itself* is usually right when capacity is
+tight — the instance is the scarce resource, not the ~$1.50 of GPU time, and
+`vllm.service` crash-looping while the upload runs is harmless and self-healing.
+
+The FP8 leaf also derives a patched chat template next to the weights at staging
+time — see Troubleshooting for why.
 
 At boot the leaf's `initCommands` install `/usr/local/bin/km-stage-model.sh` plus a
 `vllm.service.d/10-stage-model.conf` drop-in that runs it as an `ExecStartPre`.
@@ -303,6 +367,12 @@ promptly after a UAT run.
 | `vllm.service` fails at `ExecStartPre`, "weights are not staged in S3 yet" | The `gpu-qwen38-oblit-*` leaves read weights from S3 — run `scripts/stage-model-to-s3.sh` once per install. The unit retries every 30s, so it recovers on its own once the upload finishes; no restart needed. |
 | Model serves fine but codex never calls tools | Wrong tool-call parser. Qwen3.5 emits XML (`<function=…>`), so it needs `--tool-call-parser qwen3_xml`; `hermes` parses nothing and fails silently. |
 | vLLM argparse `IndexError` at boot after editing `VLLM_EXTRA` | A space crept into a JSON value. `$VLLM_EXTRA` is word-split unbraced, so `{"video": 0}` becomes two argv tokens — keep JSON space-free. |
+| `vllm serve: error: argument --limit-mm-per-prompt: Value {video:0} cannot be converted` (exit 2/INVALIDARGUMENT) | Space-free is necessary but **not sufficient** — that same unbraced split also does shell-style quote removal, eating the JSON's own double quotes. Wrap each JSON value in **single quotes**: `'{"video":0}'` arrives intact, `{"video":0}` and `{\"video\":0}` both arrive as `{video:0}`. Not an `EnvironmentFile` problem — the value is correct in the environment; `ExecStart` expansion strips it. |
+| `ValueError: max_num_seqs (256) exceeds available Mamba cache blocks (N)` | Hybrid-architecture concurrency ceiling on a small VRAM budget — set `--max-num-seqs` below N (128 on the single-L40S leaf). Lowering `--max-model-len` does **not** help; this is per-sequence state, not per-token KV. |
+| `Bind for 127.0.0.1:8000 failed: port is already allocated`, then crash-loop | Pre-fix `vllm.service` had no `--name`/`ExecStop`, so `systemctl restart` killed the docker *client* while the container kept the port, and `Restart=on-failure` looped against its own orphan. Fixed in `base/gpu/serve`; on an older box recover with `docker rm -f $(docker ps -aq --filter ancestor=vllm/vllm-openai:latest)`. |
+| Claude Code via Bifrost 400s `System message must be at the beginning.` | The model's shipped `chat_template.jinja` raises on a `system`-role entry that is not first in `messages`, which Claude Code produces in normal use. Bifrost is **not** at fault (it correctly merges the Anthropic `system` field, including multiple blocks). The FP8 leaf stages a patched copy that re-emits a stray system message as a user turn and points vLLM at it with `--chat-template`. |
+| `error: externally-managed-environment` from `stage-model-to-s3.sh` | PEP 668 on Ubuntu 24.04 (the DLAMI). Fixed — the script now installs `huggingface_hub` into a venv. On an older copy, re-pull the script or pass `--break-system-packages`. |
+| `stage-model-to-s3.sh` reports `Fetching 0 files` then exits 0 | huggingface_hub 1.x moved the CLI to Typer, where `--exclude` takes one value and trailing bare patterns are parsed as the positional `FILENAMES` argument — silently turning the command into "download exactly these files". Use one `--exclude` per pattern. |
 
 See also: `docs/sandbox-secrets.md` (SOPS), `docs/codex-parity.md` (codex/Slack
 agent switching), `docs/slack-notifications.md` (inbound poller), `klanker:vscode`
