@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 126
 current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
-current_plan: 6
+current_plan: 7
 status: executing
-stopped_at: Completed 126-05-PLAN.md
-last_updated: "2026-08-23T00:13:10.858Z"
+stopped_at: Completed 126-06-PLAN.md
+last_updated: "2026-08-23T00:48:53.135Z"
 last_activity: 2026-08-22
 last_activity_desc: Phase 126 execution started
 progress:
   total_phases: 10
   completed_phases: 7
   total_plans: 67
-  completed_plans: 57
+  completed_plans: 58
   percent: 70
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
-Plan: 6 of 10
+Plan: 7 of 10
 Total Plans in Phase: 10
-Current Plan: 6
+Current Plan: 7
 Status: Ready to execute
 Last activity: 2026-08-22 — Phase 126 execution started
 
@@ -627,6 +627,7 @@ Progress: [█████████░] 91%
 | Phase 126 P03 | 1h | 3 tasks | 10 files |
 | Phase 126 P04 | 40min | 3 tasks | 5 files |
 | Phase 126 P05 | 90min | 3 tasks | 4 files |
+| Phase 126 P06 | 24min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -1791,6 +1792,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Generated enrollment unit is standalone on both provider and backend (no root include, own S3 backend in the target account) — no local Terraform state anywhere in this project
 - [Phase 126]: Operator's own trust principal is derived by re-homing the account-B caller's role name into account A (AWS SSO identical-permission-set pattern); --trust-principal overrides, --trust-principal-pattern is the escape hatch
 - [Phase 126]: km account add dry-run validates via terragrunt init -backend=false + validate, never a backend-attached plan, because the rendered unit's S3 backend does not exist yet on a dry run
+- [Phase 126]: ResolveLaunchTarget gained an SSMParamStore parameter beyond the plan's literal 4-arg signature (mirrors 126-03's AssumeRoleConfig seam pattern)
+- [Phase 126]: Found and fixed during execution: linked launch_accounts links carry no VPC id anywhere in the schema; without resolving it via DescribeSubnets, ec2spot would self-provision a disconnected VPC and hard-fail at apply time placing the ENI into a subnet from a different VPC
 
 ### Roadmap Evolution
 
@@ -1943,6 +1946,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-23T00:13:10.845Z
-Stopped at: Completed 126-05-PLAN.md
+Last session: 2026-08-23T00:48:53.121Z
+Stopped at: Completed 126-06-PLAN.md
 Resume file: None
