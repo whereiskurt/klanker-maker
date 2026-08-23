@@ -66,6 +66,20 @@ spec:
     # pull works through the MITM proxy). Leaves write /etc/km/vllm.env via
     # `initCommands` so it exists before vllm starts. Full sequence PROVEN on hardware.
     initCommandsAppend:
+      # codex (the box-default agent, agent.default: codex below) sandboxes every
+      # bash command it runs inside bubblewrap. The Ubuntu 24.04 DLAMI does NOT ship
+      # bubblewrap, so on a bare box `codex exec` fails every command with exit 101
+      # ("bubblewrap is unavailable") — the model calls the tool correctly, but codex
+      # cannot execute it. Install it here. Defensive (|| true, echo on failure) so a
+      # transient apt hiccup degrades to "no shell tools" rather than bricking boot
+      # under set -e; apt-over-HTTPS works because the SG allows 443 (see the Ubuntu
+      # userdata constraints). Idempotent: apt is a no-op if it is already present.
+      - |
+        if ! command -v bwrap >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq && apt-get install -y -qq bubblewrap \
+            || echo "km-gpu-serve: bubblewrap install failed; codex bash tools will be unavailable" >&2
+        fi
       # Phase 122 fix: relocate docker + containerd storage to /data BEFORE any image
       # pull. The DLAMI root volume (~72G, ~50G consumed by the base image) cannot hold
       # the ~25-30G uncompressed vllm/vllm-openai image — extraction fails with "no space
@@ -95,15 +109,37 @@ spec:
         Wants=docker.service
         [Service]
         Type=simple
+        # Pinned, NOT :latest. Two independent reasons:
+        #   1. regressions — this arch (Qwen3_5ForConditionalGeneration) only became
+        #      supported in 0.27.1, and a floating tag can move under a running fleet.
+        #   2. torch.compile cache — the compile hash includes the vLLM version, so a
+        #      silent :latest bump throws away every cached graph and re-compiles
+        #      (several minutes) on the next restart of every GPU box.
+        # v0.27.1 was digest-identical to :latest when pinned (2026-08-22), so this
+        # froze then-current behaviour rather than changing it.
+        # Declared BEFORE EnvironmentFile so a leaf's /etc/km/vllm.env can override
+        # VLLM_IMAGE (later directives win). Braced ${VLLM_IMAGE} on purpose: an image
+        # ref is ONE argument and must not word-split — the opposite of $VLLM_EXTRA.
+        Environment=VLLM_IMAGE=vllm/vllm-openai:v0.27.1
         EnvironmentFile=-/etc/km/vllm.env
         ExecStartPre=/bin/sleep 5
+        # Named + explicitly removed, mirroring bifrost.service below. Without a
+        # --name and an ExecStop, `systemctl restart vllm` kills the `docker run`
+        # CLIENT while the container keeps running and keeps 127.0.0.1:8000 bound,
+        # so the replacement dies with
+        #   "Bind for 127.0.0.1:8000 failed: port is already allocated"
+        # and Restart=on-failure then crash-loops against its own orphan. Observed
+        # live 2026-08-22; recovery needed a manual `docker rm -f`. The rm is
+        # prefixed `-` so a missing container is not a startup failure.
+        ExecStartPre=-/usr/bin/docker rm -f km-vllm
         # systemd ${VAR} (braces) is a SINGLE argument — it does NOT word-split,
         # so braced ${VLLM_EXTRA} passed the whole "--max-model-len N --quantization
         # awq ..." multi-flag string as ONE argv token → vLLM argparse IndexError →
         # crash-loop at boot (every GPU leaf sets a multi-flag VLLM_EXTRA). Unbraced
         # $VAR word-splits on whitespace (and yields zero args when empty). Verified
         # live on a g6.xlarge L4: braced crashes, unbraced serves. DO NOT re-brace.
-        ExecStart=/usr/bin/docker run --rm --gpus all --ipc=host -p 127.0.0.1:8000:8000 -v /data/hf:/root/.cache/huggingface --env-file /etc/km/vllm.env vllm/vllm-openai:latest --model $VLLM_MODEL --tensor-parallel-size $VLLM_TP --served-model-name local $VLLM_EXTRA
+        ExecStart=/usr/bin/docker run --rm --name km-vllm --gpus all --ipc=host -p 127.0.0.1:8000:8000 -v /data/hf:/root/.cache/huggingface --env-file /etc/km/vllm.env ${VLLM_IMAGE} --model $VLLM_MODEL --tensor-parallel-size $VLLM_TP --served-model-name local $VLLM_EXTRA
+        ExecStop=/usr/bin/docker rm -f km-vllm
         Restart=on-failure
         RestartSec=30
         [Install]
