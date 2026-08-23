@@ -49,4 +49,8 @@ inputs = {
   budget_table_name    = "${local.site_vars.locals.site.label}-budgets"
   schedules_table_name = "${local.site_vars.locals.site.label}-schedules"
   identities_table_name = "${local.site_vars.locals.site.label}-identities"
+  # Phase 126 (REQ-126-TEARDOWN): JSON-encoded launch_accounts link map.
+  # Exported by km init/init.go alongside the create-time compiler locals;
+  # empty string (default) = no links configured = dormant.
+  launch_accounts_json = get_env("KM_LAUNCH_ACCOUNTS", "")
 }

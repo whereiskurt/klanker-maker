@@ -1800,6 +1800,52 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 		}
 	}
 
+	// Phase 126 (REQ-126-TEARDOWN): KM_LAUNCH_ACCOUNTS — JSON-encoded
+	// launch_accounts link map, keyed by link name. Consumed by
+	// infra/live/use1/ttl-handler/terragrunt.hcl's get_env("KM_LAUNCH_ACCOUNTS")
+	// and parsed by the ttl-handler Lambda's parseLaunchAccountsEnv into
+	// map[string]launchAccountLink — the expiry Lambda's launcher-role-ARN list
+	// (the sts:AssumeRole grant in infra/modules/ttl-handler/v1.0.0/main.tf) is
+	// DERIVED from this same payload via Terraform's jsondecode(), not a second
+	// env var. Exported only when at least one link is configured (len > 0);
+	// absent block leaves KM_LAUNCH_ACCOUNTS unset (cross-account teardown
+	// dormant, byte-identical to Phase 125). env-wins: mirrors the
+	// KM_GITHUB_EVENTS export block exactly, including its drift WARN.
+	//
+	// config.LaunchAccountConfig has no `json` tags (only mapstructure/yaml —
+	// json.Marshal would emit Go field names like "LauncherRoleARN" verbatim),
+	// so this uses a small inline payload type with the snake_case tags the
+	// Lambda-side launchAccountLink struct expects, rather than marshaling
+	// LaunchAccountConfig directly or adding json tags to internal/app/config
+	// (out of this plan's files_modified).
+	//
+	// env-block change => needs a full `km init --dry-run=false` (NOT --sidecars,
+	// which does not update the Lambda environment block).
+	if len(cfg.LaunchAccounts) > 0 {
+		type launchAccountPayloadEntry struct {
+			LauncherRoleARN string `json:"launcher_role_arn"`
+			ExternalIDSSM   string `json:"external_id_ssm"`
+			Region          string `json:"region"`
+		}
+		payload := make(map[string]launchAccountPayloadEntry, len(cfg.LaunchAccounts))
+		for name, link := range cfg.GetLaunchAccounts() {
+			payload[name] = launchAccountPayloadEntry{
+				LauncherRoleARN: link.LauncherRoleARN,
+				ExternalIDSSM:   link.ExternalIDSSM,
+				Region:          link.Region,
+			}
+		}
+		jsonBytes, err := json.Marshal(payload)
+		if err == nil {
+			yamlLaunchAccounts := string(jsonBytes)
+			if envVal := os.Getenv("KM_LAUNCH_ACCOUNTS"); envVal != "" && envVal != yamlLaunchAccounts {
+				fmt.Fprintf(os.Stderr, "WARN: KM_LAUNCH_ACCOUNTS=%s (env) overrides km-config.yaml launch_accounts=%s\n", envVal, yamlLaunchAccounts)
+			} else if envVal == "" {
+				os.Setenv("KM_LAUNCH_ACCOUNTS", yamlLaunchAccounts) //nolint:errcheck
+			}
+		}
+	}
+
 	// Phase 103: KM_H1_PROGRAMS — JSON-encoded HackerOne program-to-target routing.
 	// Consumed by infra/live/use1/lambda-h1-bridge/terragrunt.hcl get_env("KM_H1_PROGRAMS")
 	// and parsed by km-h1-bridge main.go into []bridge.ProgramEntry. Gate: only export
