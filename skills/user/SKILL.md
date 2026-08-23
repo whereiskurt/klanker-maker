@@ -12,6 +12,7 @@ This skill guides usage of the `km` CLI on the operator's workstation. It covers
 - `klanker:init` — one-time platform setup (`km configure`, `km init`, multi-instance `resource_prefix`, Slack bootstrap, rollout sequences)
 - `klanker:vscode` — VS Code Remote-SSH operator workflow
 - `klanker:cluster` — cross-account k8s IRSA onboarding
+- `docs/cross-account-capacity-borrowing.md` — `km account add/register/list/rm` and `spec.runtime.launchAccount`: launch a sandbox into a second AWS account to borrow its vCPU quota
 - `klanker:email` / `klanker:slack` / `klanker:operator` — the matching agent-side skills that run *inside* a sandbox
 
 ## Getting Started
