@@ -61,9 +61,11 @@ PROFILES=(
   profiles/gpu-glmair-12x.yaml
   profiles/gpu-kimidev-12x.yaml
   profiles/gpu-glm46-48x.yaml
-  # Qwen3.8-27B-OBLITERATED (BF16, S3-staged weights) — g6e primary + L4 fallback.
+  # Qwen3.8-27B-OBLITERATED, S3-staged weights. BF16 needs a 4-GPU shape (g6e
+  # primary + L4 fallback); the FP8 repack fits one L40S on g6e.4xlarge.
   profiles/gpu-qwen38-oblit-12x.yaml
   profiles/gpu-qwen38-oblit-12x-l4.yaml
+  profiles/gpu-qwen38-oblit-fp8-4x.yaml
 )
 
 fail=0

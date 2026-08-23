@@ -83,12 +83,40 @@ elif command -v huggingface-cli >/dev/null 2>&1; then
   HF_BIN="huggingface-cli"
 else
   echo "==> installing huggingface_hub (no hf CLI found)"
-  python3 -m pip install --quiet --upgrade "huggingface_hub[cli]"
-  if command -v hf >/dev/null 2>&1; then
-    HF_BIN="hf"
+  # Ubuntu 24.04 and Debian 12+ mark the system Python "externally managed"
+  # (PEP 668), so a bare `pip install` aborts with
+  # "error: externally-managed-environment" — and under `set -e` that killed
+  # this script before it downloaded a byte. The DLAMI these GPU profiles boot
+  # on is Ubuntu 24.04, so this is the normal path, not an edge case.
+  #
+  # Prefer an isolated venv: it needs no --break-system-packages override and
+  # cannot disturb the system Python that the DLAMI's NVIDIA tooling rides on.
+  HF_VENV=/opt/km/hf-cli
+  if python3 -m venv "$HF_VENV" >/dev/null 2>&1; then
+    "$HF_VENV/bin/pip" install --quiet --upgrade "huggingface_hub[cli]"
+    if [[ -x "$HF_VENV/bin/hf" ]]; then
+      HF_BIN="$HF_VENV/bin/hf"
+    else
+      HF_BIN="$HF_VENV/bin/huggingface-cli"
+    fi
   else
-    HF_BIN="huggingface-cli"
+    # No venv module (python3-venv absent on minimal images). Try a user-site
+    # install, then the PEP 668 override as a last resort.
+    python3 -m pip install --quiet --upgrade --user "huggingface_hub[cli]" 2>/dev/null \
+      || python3 -m pip install --quiet --upgrade --break-system-packages "huggingface_hub[cli]"
+    export PATH="${PATH}:${HOME}/.local/bin"
+    if command -v hf >/dev/null 2>&1; then
+      HF_BIN="hf"
+    else
+      HF_BIN="huggingface-cli"
+    fi
   fi
+fi
+
+# Fail loudly here rather than 200 lines later with an opaque "command not found".
+if ! command -v "$HF_BIN" >/dev/null 2>&1 && [[ ! -x "$HF_BIN" ]]; then
+  echo "ERROR: could not install a HuggingFace CLI (tried venv, --user, --break-system-packages)." >&2
+  exit 1
 fi
 
 DEST="s3://${BUCKET}/models/${SLUG}/"
@@ -100,10 +128,20 @@ echo
 
 mkdir -p "$WORKDIR"
 
-echo "==> downloading BF16 safetensors (GGUF and MLX trees excluded)"
+echo "==> downloading safetensors (GGUF, MLX and benchmark trees excluded)"
+# One --exclude PER pattern. huggingface_hub 1.x moved this CLI to Typer, where
+# --exclude takes a single TEXT value; trailing bare patterns are then parsed as
+# the positional FILENAMES argument instead, which silently flips the command
+# into "download exactly these files" and warns
+#   "Ignoring `--exclude` since filenames have been explicitly set"
+# before fetching 0 files and exiting 0. Repeated flags DO accumulate (verified
+# against 1.28.0 with --dry-run: 14 files / 29.9G, benchmarks excluded).
 "$HF_BIN" download "$REPO" \
   --local-dir "$WORKDIR" \
-  --exclude "*.gguf" "mlx-4bit/*" "mlx-8bit/*"
+  --exclude "*.gguf" \
+  --exclude "mlx-4bit/*" \
+  --exclude "mlx-8bit/*" \
+  --exclude "benchmarks/*"
 
 # Verify locally before uploading — a partial upload turns into a crash-looping
 # vllm.service on every sandbox that syncs it, so catch it here instead.
@@ -148,5 +186,10 @@ if [[ $KEEP -eq 0 ]]; then
 fi
 
 echo
-echo "Next: km create profiles/gpu-qwen38-oblit-12x.yaml"
-echo "      (or profiles/gpu-qwen38-oblit-12x-l4.yaml on the L4 fallback shape)"
+echo "Next: km create <the profile whose MODEL_SLUG matches --slug ${SLUG}>"
+echo "        BF16        profiles/gpu-qwen38-oblit-12x.yaml      (4x L40S, g6e.12xlarge)"
+echo "        BF16        profiles/gpu-qwen38-oblit-12x-l4.yaml   (4x L4,   g6.12xlarge)"
+echo "        FP8         profiles/gpu-qwen38-oblit-fp8-4x.yaml   (1x L40S, g6e.4xlarge)"
+echo
+echo "      If vllm.service is already crash-looping on this box waiting for these"
+echo "      weights, it heals itself on the next Restart=on-failure tick (~30s)."
