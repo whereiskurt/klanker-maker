@@ -21,9 +21,9 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	var logLevel string
 
 	root := &cobra.Command{
-		Use:   "km",
-		Short: "klanker-maker — sandbox profile management CLI",
-		Long:  helpText("root"),
+		Use:     "km",
+		Short:   "klanker-maker — sandbox profile management CLI",
+		Long:    helpText("root"),
 		Version: cfg.Version,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return configureLogging(logLevel)
@@ -93,6 +93,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewModelCmd(cfg))
 	root.AddCommand(newCapacityCmd(cfg))
 	root.AddCommand(NewClusterCmd(cfg))
+	root.AddCommand(NewAccountCmd(cfg))
 
 	// "km at" — schedule deferred and recurring sandbox operations.
 	// "km schedule" is registered as an alias so both work identically.
