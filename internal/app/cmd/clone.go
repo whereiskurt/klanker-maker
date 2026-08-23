@@ -226,7 +226,7 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 
 		if rec.Substrate == "docker" {
 			// Docker: synchronous local create
-			if err := runCreate(cfg, tmpFile.Name(), onDemand, noBedrock, awsProfile, verbose, "", cloneAlias, "", ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, "" /*waitForCapacity*/, sourceID); err != nil {
+			if err := runCreate(cfg, tmpFile.Name(), onDemand, noBedrock, awsProfile, verbose, "", cloneAlias, "", ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, "" /*waitForCapacity*/, nil /*launchAccountOverride*/, sourceID); err != nil {
 				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, err)
 			}
 			// Docker workspace download (synchronous — instance ready immediately)
@@ -245,7 +245,7 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 			}
 		} else {
 			// EC2: fire-and-forget remote create (pass sourceID so cloned_from is set in the initial PutItem)
-			cloneID, createErr := runCreateRemote(cfg, tmpFile.Name(), onDemand, noBedrock, awsProfile, cloneAlias, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, sourceID)
+			cloneID, createErr := runCreateRemote(cfg, tmpFile.Name(), onDemand, noBedrock, awsProfile, cloneAlias, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, nil /*launchAccountOverride*/, sourceID)
 			if createErr != nil {
 				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, createErr)
 			}
