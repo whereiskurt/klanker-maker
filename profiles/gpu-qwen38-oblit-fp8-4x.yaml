@@ -1,0 +1,283 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: gpu-qwen38-oblit-fp8-4x
+  labels:
+    tier: gpu-serving
+    model: qwen3.8-27b-obliterated-fp8
+    instance: g6e.4xlarge
+  # SINGLE-GPU FP8 variant of gpu-qwen38-oblit-12x — the capacity-reachable leaf.
+  #
+  # WHY THIS EXISTS. The BF16 leaves need ~55.6GB of weights, which fits on no
+  # single card, so they are forced onto 4-GPU shapes (g6e.12xlarge / g6.12xlarge).
+  # Those are exactly the shapes that are capacity-walled: a live run-instances
+  # sweep on 2026-08-22 found g6e.12xlarge dry in ALL FOUR offered AZs, and
+  # g6.12xlarge available in us-east-1c only. Meanwhile the SINGLE-L40S shapes had
+  # capacity in two AZs. FP8 halves the weights to ~29.9GB, which fits one L40S
+  # (48GB) — trading a quantization step for a shape you can actually launch.
+  #
+  # Cost falls out of the same trade: $3.00/hr here versus $10.49/hr for
+  # g6e.12xlarge, and 16 of your 64 G-vCPU quota instead of 48.
+  #
+  # WEIGHTS ARE A THIRD-PARTY REPACK. MrPewpy/Qwen3.8-27B-OBLITERATED-FP8 is
+  # compressed-tensors "float-quantized" 8-bit on Linear layers (attention norms
+  # excluded), same Qwen3_5ForConditionalGeneration architecture as upstream. vLLM
+  # reads the quantization config out of config.json, so there is deliberately NO
+  # --quantization flag below — passing one overrides the checkpoint's own scheme.
+  #
+  # Two things to verify on first boot rather than assume:
+  #   1. The repack had ~300 downloads and one day of age when this leaf was
+  #      written. Smoke-test coherence before trusting output.
+  #   2. Abliteration is a small-magnitude directional edit to the weights, and
+  #      FP8 rounding can partially restore what the surgery removed. If refusals
+  #      reappear, that is the likely cause — re-quantize from the BF16 upstream
+  #      with llm-compressor rather than assuming the abliteration failed.
+  #
+  # TP=1, so none of the 12x leaf's head-divisibility reasoning applies.
+  #
+  # WEIGHTS COME FROM S3, NOT HUGGINGFACE. Stage them once before the first
+  # `km create` against this profile:
+  #   scripts/stage-model-to-s3.sh \
+  #     --repo MrPewpy/Qwen3.8-27B-OBLITERATED-FP8 \
+  #     --slug qwen38-oblit-27b-fp8
+  # The --slug MUST match MODEL_SLUG in the staging script below.
+  #
+  # ABLITERATED MODEL: refusal directions have been removed from the weights.
+  # The model card is explicit that a system prompt or thinking mode partially
+  # reintroduces refusals, so the serving flags below send neither. Treat the
+  # output of this box as unfiltered by construction.
+
+extends:
+  - base/os/debian
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+  - base/gpu/serve
+
+spec:
+  # Default cloud-routing mode: direct keys via SOPS (anthropic/openai Bifrost
+  # providers). For keyless Bedrock instead, remove this block and set
+  # iam.allowBedrock: true (see docs/gpu-model-serving.md).
+  secrets:
+    sopsFile: ./secrets/qwen.enc.yaml
+
+  # Bool zero-value trap (Phase 117 Pitfall 2): mixed-bool runtime block in the LEAF.
+  runtime:
+    instanceType: g6e.4xlarge
+    region: us-east-1
+    spot: false
+    hibernation: false
+    # On-demand takes exactly ONE launch attempt — internal/app/cmd/create.go
+    # pins `maxAttempts = 1` when onDemand, so RankAZs reorders the list but the
+    # sweep never rotates off the top entry. That makes this hint load-bearing
+    # rather than advisory: it is the only AZ this profile will ever try.
+    # Both entries had live capacity on 2026-08-22. Re-probe before assuming
+    # they still do — `km capacity` reports quota and recorded ICE, not
+    # availability, so a "likely" verdict is the absence of evidence, not
+    # evidence of capacity.
+    azPreference:
+      - us-east-1a
+      - us-east-1d
+
+  execution:
+    # See gpu-qwen38-oblit-12x.yaml for why these three writes live in
+    # initCommands (they must precede base/gpu/serve's initCommandsAppend
+    # bring-up) and why the drop-in needs its own TimeoutStartSec.
+    initCommands:
+      - |
+        cat > /usr/local/bin/km-stage-model.sh <<'KM_STAGE_SCRIPT'
+        #!/usr/bin/env bash
+        # Sync pre-staged model weights from S3 into /data/hf before vLLM starts.
+        # Populated by scripts/stage-model-to-s3.sh (one-time, per install).
+        set -uo pipefail
+
+        MODEL_SLUG="qwen38-oblit-27b-fp8"
+        DEST="/data/hf/models/${MODEL_SLUG}"
+
+        # KM_ARTIFACTS_BUCKET is exported by userdata into /etc/profile.d/km-identity.sh.
+        # systemd gives ExecStartPre no login shell, so source it explicitly.
+        if [ -z "${KM_ARTIFACTS_BUCKET:-}" ] && [ -r /etc/profile.d/km-identity.sh ]; then
+          . /etc/profile.d/km-identity.sh
+        fi
+        if [ -z "${KM_ARTIFACTS_BUCKET:-}" ]; then
+          echo "km-stage-model: KM_ARTIFACTS_BUCKET unset; cannot locate staged weights" >&2
+          exit 1
+        fi
+
+        SRC="s3://${KM_ARTIFACTS_BUCKET}/models/${MODEL_SLUG}/"
+        mkdir -p "$DEST"
+        echo "km-stage-model: syncing ${SRC} -> ${DEST}"
+        aws s3 sync "$SRC" "$DEST" --only-show-errors
+
+        IDX="${DEST}/model.safetensors.index.json"
+        if [ ! -s "$IDX" ]; then
+          echo "km-stage-model: ${IDX} missing — weights are not staged in S3 yet." >&2
+          echo "km-stage-model: run scripts/stage-model-to-s3.sh --repo \\" >&2
+          echo "km-stage-model:   MrPewpy/Qwen3.8-27B-OBLITERATED-FP8 --slug ${MODEL_SLUG}," >&2
+          echo "km-stage-model: then this unit's Restart=on-failure picks them up." >&2
+          exit 1
+        fi
+
+        REQUIRED=$(python3 -c "import json,sys;print('\n'.join(sorted(set(json.load(open(sys.argv[1]))['weight_map'].values()))))" "$IDX")
+        if [ -z "$REQUIRED" ]; then
+          echo "km-stage-model: could not read weight_map from ${IDX}" >&2
+          exit 1
+        fi
+
+        missing=0
+        for shard in $REQUIRED; do
+          if [ ! -s "${DEST}/${shard}" ]; then
+            echo "km-stage-model: missing shard ${shard}" >&2
+            missing=1
+          fi
+        done
+        for f in config.json generation_config.json tokenizer.json tokenizer_config.json; do
+          if [ ! -s "${DEST}/${f}" ]; then
+            echo "km-stage-model: missing ${f}" >&2
+            missing=1
+          fi
+        done
+
+        if [ "$missing" -ne 0 ]; then
+          echo "km-stage-model: staged copy is incomplete; refusing to start vLLM." >&2
+          exit 1
+        fi
+
+        # Derive a patched chat template alongside the weights.
+        #
+        # The shipped chat_template.jinja hard-aborts on a system-role message that
+        # is not first in `messages`:
+        #     raise_exception('System message must be at the beginning.')
+        # Claude Code hits this in normal use, so the Anthropic route through Bifrost
+        # 400s mid-conversation even though tools, extended thinking, cache_control
+        # and multi-turn all work. (Bifrost is NOT at fault — it correctly merges the
+        # Anthropic `system` field, including multiple blocks, into one leading system
+        # message. The failure is only for a system entry inside `messages`.)
+        #
+        # That branch does nothing except raise — the leading system message is
+        # emitted earlier in the template — so a stray one is re-emitted as a user
+        # turn instead, which leaves the ChatML structure intact. Applied to a COPY:
+        # the staged upstream weights stay byte-identical to what was pulled.
+        #
+        # Deliberately a single-line anchor rather than a multi-line block: this
+        # string is nested inside a YAML scalar inside a shell heredoc, and every
+        # extra line of anchor is another chance for indentation to silently break
+        # the match. If upstream ever reshapes the template the anchor simply misses
+        # and the stock template is copied through unchanged (logged, not fatal).
+        PATCHED=/data/hf/km-chat-template.jinja
+        python3 - "${DEST}/chat_template.jinja" "$PATCHED" <<'KM_TMPL_PY'
+        import sys
+        src, dst = sys.argv[1], sys.argv[2]
+        s = open(src).read()
+        old = "raise_exception('System message must be at the beginning.')"
+        new = "'<|im_start|>user\\n' + content + '<|im_end|>' + '\\n'"
+        if old not in s:
+            sys.stderr.write("km-stage-model: chat-template anchor missing; using stock template\n")
+            open(dst, "w").write(s)
+        else:
+            open(dst, "w").write(s.replace(old, new, 1))
+            sys.stderr.write("km-stage-model: chat template patched -> %s\n" % dst)
+        KM_TMPL_PY
+
+        echo "km-stage-model: ${DEST} complete"
+        KM_STAGE_SCRIPT
+        chmod 0755 /usr/local/bin/km-stage-model.sh
+      # 2. systemd drop-in wiring the staging script into vllm.service.
+      #    TimeoutStartSec is MANDATORY here: systemd's 90s default start timeout
+      #    applies to ExecStartPre and would kill a ~29.9GB sync mid-flight.
+      #    A failing ExecStartPre leaves the unit failed, and the base unit's
+      #    Restart=on-failure/RestartSec=30 retries — so a box booted while
+      #    staging is still uploading heals itself once S3 is complete.
+      - |
+        mkdir -p /etc/systemd/system/vllm.service.d
+        cat > /etc/systemd/system/vllm.service.d/10-stage-model.conf <<'KM_STAGE_DROPIN'
+        [Service]
+        TimeoutStartSec=3600
+        ExecStartPre=/usr/local/bin/km-stage-model.sh
+        KM_STAGE_DROPIN
+      # 3. vllm.env. VLLM_MODEL is the IN-CONTAINER path: the base unit mounts
+      #    -v /data/hf:/root/.cache/huggingface, so the host path /data/hf/models/...
+      #    does not resolve inside the container. --served-model-name local is set
+      #    by the base unit, so Continue / codex / Slack / `km model start` are
+      #    unchanged.
+      #
+      #    Every JSON value below is SINGLE-QUOTED and SPACE-FREE. Both are load
+      #    bearing, for two DIFFERENT reasons, and dropping either crash-loops
+      #    vLLM at boot:
+      #
+      #      * space-free — the base unit passes $VLLM_EXTRA unbraced so systemd
+      #        word-splits it on whitespace (see the braces warning in
+      #        profiles/base/gpu/serve.yaml); an unquoted space inside the JSON
+      #        would shatter it into broken argv.
+      #      * single-quoted — that same unbraced split ALSO performs shell-style
+      #        quote removal, which eats the JSON's own double quotes. Verified on
+      #        this exact unit shape: `{"video":0}` and `{\"video\":0}` both arrive
+      #        as `{video:0}` (invalid JSON — vLLM exits 2 INVALIDARGUMENT with
+      #        "Value {video:0} cannot be converted"), while `'{"video":0}'`
+      #        arrives intact as `{"video":0}`. The outer single quotes are
+      #        consumed by systemd, the inner double quotes survive.
+      #
+      #    EnvironmentFile parsing is NOT the culprit — the value is correct in
+      #    the environment; it is the ExecStart expansion that strips quotes.
+      #
+      #    NO --quantization FLAG. The checkpoint carries its own compressed-tensors
+      #    config in config.json and vLLM honours it; passing --quantization here
+      #    would override the checkpoint's scheme rather than confirm it.
+      #
+      #    --max-model-len 131072 is kept from the L40S BF16 leaf because this
+      #    architecture is hybrid: only 16 of its 64 layers hold a per-token KV
+      #    cache (the other 48 are linear-attention with fixed-size state), so KV
+      #    is roughly 32KB/token and the ~13GB left after weights at 0.90 util
+      #    carries the full context with margin. If vLLM OOMs during the KV-cache
+      #    profiling step at startup, that estimate was wrong — drop to 65536
+      #    before touching gpu-memory-utilization; the ~29.9GB of weights is a
+      #    fixed floor either way.
+      #
+      #    --tool-call-parser qwen3_xml, NOT hermes: this model's chat template
+      #    emits the XML form (<tool_call><function=name><parameter=x>), not the
+      #    Hermes <tool_call>{json} form every other GPU leaf here uses. Hermes
+      #    would leave codex silently unable to call tools.
+      #
+      #    --override-generation-config bakes the model card's required sampling
+      #    (greedy + repetition_penalty 1.15) server-side, so every client inherits
+      #    it with no per-client config. Thinking needs no flag — the shipped chat
+      #    template already defaults it off, and enabling it reintroduces refusals.
+      #
+      #    --limit-mm-per-prompt '{"video":0}' skips vLLM's video profiling
+      #    reservation; this is a vision-language model and images stay available.
+      #
+      #    --max-num-seqs 128 (default 256) is REQUIRED on a single card, and the
+      #    reason is specific to this architecture. The Gated-DeltaNet linear
+      #    attention layers keep a fixed-size recurrent state per SEQUENCE, and
+      #    vLLM allocates one "Mamba cache block" per concurrent decode slot out
+      #    of whatever VRAM the weights left behind. On one 45GB L40S carrying
+      #    28GB of weights only 177 such blocks fit, so the default 256 aborts
+      #    CUDA-graph capture outright at startup:
+      #      ValueError: max_num_seqs (256) exceeds available Mamba cache blocks (177)
+      #    This is a CONCURRENCY ceiling, not a context one — --max-model-len is
+      #    unaffected. The 4-GPU BF16 leaves have far more headroom and do not
+      #    need this; it is the price of the single-card shape.
+      #
+      #    VLLM_CACHE_ROOT redirects torch.compile's Inductor/CUDA-graph cache
+      #    into /data/hf, which is the ONLY writable path that outlives the
+      #    container: the base unit runs `docker run --rm`, so the default
+      #    ~/.cache/vllm dies with every restart and this model re-compiles from
+      #    scratch (several minutes) on each one. /data survives `km stop` too,
+      #    so with this set a stop/resume comes back fast. Costs no change to the
+      #    shared base unit — /data/hf is already mounted at
+      #    /root/.cache/huggingface, and vLLM reads VLLM_CACHE_ROOT from the
+      #    --env-file the unit already passes.
+      #
+      #    The vLLM image itself is pinned in base/gpu/serve
+      #    (VLLM_IMAGE=vllm/vllm-openai:v0.27.1). Override it here by adding a
+      #    VLLM_IMAGE line to this env file if this leaf ever needs a different
+      #    build; note that changing it invalidates the compile cache above.
+      - |
+        mkdir -p /etc/km
+        cat > /etc/km/vllm.env <<'KM_VLLM_ENV'
+        VLLM_MODEL=/root/.cache/huggingface/models/qwen38-oblit-27b-fp8
+        VLLM_TP=1
+        VLLM_CACHE_ROOT=/root/.cache/huggingface/vllm-compile
+        VLLM_EXTRA=--chat-template /root/.cache/huggingface/km-chat-template.jinja --max-model-len 131072 --max-num-seqs 128 --gpu-memory-utilization 0.90 --limit-mm-per-prompt '{"video":0}' --enable-auto-tool-choice --tool-call-parser qwen3_xml --override-generation-config '{"temperature":0,"repetition_penalty":1.15}'
+        KM_VLLM_ENV

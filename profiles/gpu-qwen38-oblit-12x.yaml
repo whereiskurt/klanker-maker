@@ -16,8 +16,10 @@ metadata:
   # ARCHITECTURE: Qwen3_5ForConditionalGeneration — hybrid linear attention
   # (48 linear + 16 full-attention layers of 64) and multimodal (image + video).
   # Supported by vLLM from v0.27.1 (2026-08-11), which is what
-  # vllm/vllm-openai:latest resolves to as of this writing. If a future `latest`
-  # regresses, pin the image tag in the vllm.service drop-in below.
+  # base/gpu/serve now pins (VLLM_IMAGE=vllm/vllm-openai:v0.27.1) rather than
+  # tracking :latest. To move a single leaf off that pin, set VLLM_IMAGE in this
+  # profile's /etc/km/vllm.env — the unit declares its default BEFORE the
+  # EnvironmentFile, so the leaf wins.
   #
   # TP=4 divides cleanly: 24 attention heads, 4 KV heads (1/GPU), 48 linear value
   # heads (12/GPU). There is deliberately NO 48xlarge variant — TP=8 would have to
@@ -150,10 +152,24 @@ spec:
       #    by the base unit, so Continue / codex / Slack / `km model start` are
       #    unchanged.
       #
-      #    Every JSON value below is SPACE-FREE on purpose. The base unit passes
-      #    $VLLM_EXTRA unbraced so systemd word-splits it on whitespace (see the
-      #    braces warning in profiles/base/gpu/serve.yaml); a space inside the JSON
-      #    would shatter it into broken argv and crash-loop vLLM at boot.
+      #    Every JSON value below is SINGLE-QUOTED and SPACE-FREE. Both are load
+      #    bearing, for two DIFFERENT reasons, and dropping either crash-loops
+      #    vLLM at boot:
+      #
+      #      * space-free — the base unit passes $VLLM_EXTRA unbraced so systemd
+      #        word-splits it on whitespace (see the braces warning in
+      #        profiles/base/gpu/serve.yaml); an unquoted space inside the JSON
+      #        would shatter it into broken argv.
+      #      * single-quoted — that same unbraced split ALSO performs shell-style
+      #        quote removal, which eats the JSON's own double quotes. Verified on
+      #        this exact unit shape: `{"video":0}` and `{\"video\":0}` both arrive
+      #        as `{video:0}` (invalid JSON — vLLM exits 2 INVALIDARGUMENT with
+      #        "Value {video:0} cannot be converted"), while `'{"video":0}'`
+      #        arrives intact as `{"video":0}`. The outer single quotes are
+      #        consumed by systemd, the inner double quotes survive.
+      #
+      #    EnvironmentFile parsing is NOT the culprit — the value is correct in
+      #    the environment; it is the ExecStart expansion that strips quotes.
       #
       #    --tool-call-parser qwen3_xml, NOT hermes: this model's chat template
       #    emits the XML form (<tool_call><function=name><parameter=x>), not the
@@ -165,12 +181,12 @@ spec:
       #    it with no per-client config. Thinking needs no flag — the shipped chat
       #    template already defaults it off, and enabling it reintroduces refusals.
       #
-      #    --limit-mm-per-prompt {"video":0} skips vLLM's video profiling
+      #    --limit-mm-per-prompt '{"video":0}' skips vLLM's video profiling
       #    reservation; this is a vision-language model and images stay available.
       - |
         mkdir -p /etc/km
         cat > /etc/km/vllm.env <<'KM_VLLM_ENV'
         VLLM_MODEL=/root/.cache/huggingface/models/qwen38-oblit-27b
         VLLM_TP=4
-        VLLM_EXTRA=--max-model-len 131072 --gpu-memory-utilization 0.90 --limit-mm-per-prompt {"video":0} --enable-auto-tool-choice --tool-call-parser qwen3_xml --override-generation-config {"temperature":0,"repetition_penalty":1.15}
+        VLLM_EXTRA=--max-model-len 131072 --gpu-memory-utilization 0.90 --limit-mm-per-prompt '{"video":0}' --enable-auto-tool-choice --tool-call-parser qwen3_xml --override-generation-config '{"temperature":0,"repetition_penalty":1.15}'
         KM_VLLM_ENV
