@@ -683,8 +683,9 @@ func writeAccountLinkFragment(frag AccountLinkFragment) (string, error) {
 
 // ======================== Cobra Command Tree ====================================
 
-// NewAccountCmd returns the "km account" parent command. Only "add" is wired
-// in this plan; plan 07 adds register/list/rm to this same file.
+// NewAccountCmd returns the "km account" parent command: "add" (plan 05,
+// this file) provisions the target-account footprint; "register"/"list"/"rm"
+// (plan 07, account_register.go) manage the home-account half.
 func NewAccountCmd(cfg *config.Config) *cobra.Command {
 	accountCmd := &cobra.Command{
 		Use:          "account",
@@ -692,6 +693,9 @@ func NewAccountCmd(cfg *config.Config) *cobra.Command {
 		SilenceUsage: true,
 	}
 	accountCmd.AddCommand(newAccountAddCmd(cfg))
+	accountCmd.AddCommand(newAccountRegisterCmd(cfg))
+	accountCmd.AddCommand(newAccountListCmd(cfg))
+	accountCmd.AddCommand(newAccountRmCmd(cfg))
 	return accountCmd
 }
 
