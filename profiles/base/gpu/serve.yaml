@@ -66,6 +66,20 @@ spec:
     # pull works through the MITM proxy). Leaves write /etc/km/vllm.env via
     # `initCommands` so it exists before vllm starts. Full sequence PROVEN on hardware.
     initCommandsAppend:
+      # codex (the box-default agent, agent.default: codex below) sandboxes every
+      # bash command it runs inside bubblewrap. The Ubuntu 24.04 DLAMI does NOT ship
+      # bubblewrap, so on a bare box `codex exec` fails every command with exit 101
+      # ("bubblewrap is unavailable") — the model calls the tool correctly, but codex
+      # cannot execute it. Install it here. Defensive (|| true, echo on failure) so a
+      # transient apt hiccup degrades to "no shell tools" rather than bricking boot
+      # under set -e; apt-over-HTTPS works because the SG allows 443 (see the Ubuntu
+      # userdata constraints). Idempotent: apt is a no-op if it is already present.
+      - |
+        if ! command -v bwrap >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq && apt-get install -y -qq bubblewrap \
+            || echo "km-gpu-serve: bubblewrap install failed; codex bash tools will be unavailable" >&2
+        fi
       # Phase 122 fix: relocate docker + containerd storage to /data BEFORE any image
       # pull. The DLAMI root volume (~72G, ~50G consumed by the base image) cannot hold
       # the ~25-30G uncompressed vllm/vllm-openai image — extraction fails with "no space
