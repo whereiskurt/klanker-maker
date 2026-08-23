@@ -373,7 +373,7 @@ path was never exercised on hardware. Two things resolvable only on a live GPU b
 `vllm/vllm-openai:latest` resolves to ≥ v0.27.1, and whether `qwen3_xml` actually parses that
 chat template's tool calls.
 
-**Plans:** 9/10 plans executed
+**Plans:** 10/10 plans complete
 
 Plans:
 
@@ -386,4 +386,4 @@ Plans:
 - [x] 126-07-PLAN.md — Wave 3: `km account register` / `list` / `rm` (A creds) — config entry + ExternalId to SSM SecureString + the one read-only artifacts bucket-policy grant (Go read-modify-write; the bucket has no TF-owned policy), removed by Sid on `rm`.
 - [x] 126-08-PLAN.md — Wave 3: teardown — `km destroy` reads the sandbox row BEFORE the A-scoped tag scan (which can never see a B-hosted box) and carries the locals into the cold-clone `minimalHCL`; ttl-handler renders a conditional `assume_role` against the link's region; `KM_LAUNCH_ACCOUNTS` env + scoped `sts:AssumeRole` IAM grant.
 - [x] 126-09-PLAN.md — Wave 4: four read-only `km doctor` checks — link well-formed, launcher assumable (forced credential resolution), artifacts grant present and not write-widened, orphaned B instances vs the home inventory.
-- [ ] 126-10-PLAN.md — Wave 5: operator runbook + CLAUDE.md/skill/ROADMAP updates; the four-command full-suite gate (the default `make test` target excludes `internal/app/cmd`, `cmd/ttl-handler`, `pkg/compiler`); live UAT incl. the 8-row `simulate-principal-policy` containment matrix.
+- [x] 126-10-PLAN.md — Wave 5: operator runbook + CLAUDE.md/skill/ROADMAP updates; the four-command full-suite gate (the default `make test` target excludes `internal/app/cmd`, `cmd/ttl-handler`, `pkg/compiler`); live UAT incl. the 8-row `simulate-principal-policy` containment matrix.

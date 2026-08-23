@@ -5,17 +5,17 @@ milestone_name: milestone
 current_phase: 126
 current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
 current_plan: 10
-status: executing
-stopped_at: Completed 126-09-PLAN.md
-last_updated: "2026-08-23T01:58:35.378Z"
+status: verifying
+stopped_at: "Phase 126 checkpoint reached: live cross-account UAT (126-10-PLAN.md Task 3) awaiting human execution"
+last_updated: "2026-08-23T02:09:50.729Z"
 last_activity: 2026-08-22
 last_activity_desc: Phase 126 execution started
 progress:
   total_phases: 10
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 67
-  completed_plans: 61
-  percent: 70
+  completed_plans: 62
+  percent: 80
 ---
 
 # Project State
@@ -33,7 +33,7 @@ Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EX
 Plan: 10 of 10
 Total Plans in Phase: 10
 Current Plan: 10
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-08-22 — Phase 126 execution started
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
@@ -631,6 +631,7 @@ Progress: [█████████░] 91%
 | Phase 126 P07 | 65min | 2 tasks | 3 files |
 | Phase 126 P08 | 55min | 3 tasks | 9 files |
 | Phase 126 P09 | 50min | 2 tasks | 3 files |
+| Phase 126 P10 | 50min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -1803,6 +1804,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Home-account teardown is asserted byte-identical to Phase 125 on both km destroy's cold-clone service.hcl and the ttl-handler's rendered main.tf via embedded-literal tests
 - [Phase ?]: checkLaunchAccountAssumable forces credential resolution via Credentials.Retrieve(ctx), not just config construction, so a broken trust policy cannot report healthy (T-126-50)
 - [Phase 126]: checkLaunchAccountOrphanInstances treats an unreachable link as its own WARN, never collapsed into a clean 'no orphans found' result (T-126-47)
+- [Phase 126]: Phase 126 pre-flight gate green (7 commands incl. the 3 excluded packages); live cross-account UAT checkpointed pending human execution with real two-account credentials + GPU quota — docs/cross-account-capacity-borrowing.md is the operator runbook; 126-UAT.md carries the green pre-flight record and the pending 8-row containment matrix + 18-step live procedure
 
 ### Roadmap Evolution
 
@@ -1955,6 +1957,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-23T01:58:35.363Z
-Stopped at: Completed 126-09-PLAN.md
-Resume file: None
+Last session: 2026-08-23T02:09:50.716Z
+Stopped at: Phase 126 checkpoint reached: live cross-account UAT (126-10-PLAN.md Task 3) awaiting human execution
+Resume file: .planning/phases/126-cross-account-capacity-borrowing-launch-sandboxes-into-a-lin/126-UAT.md
