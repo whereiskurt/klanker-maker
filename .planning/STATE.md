@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 126
 current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
-current_plan: 8
+current_plan: 9
 status: executing
-stopped_at: Completed 126-07-PLAN.md
-last_updated: "2026-08-23T01:14:10.246Z"
+stopped_at: Completed 126-08-PLAN.md
+last_updated: "2026-08-23T01:37:47.936Z"
 last_activity: 2026-08-22
 last_activity_desc: Phase 126 execution started
 progress:
   total_phases: 10
   completed_phases: 7
   total_plans: 67
-  completed_plans: 59
+  completed_plans: 60
   percent: 70
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
-Plan: 8 of 10
+Plan: 9 of 10
 Total Plans in Phase: 10
-Current Plan: 8
+Current Plan: 9
 Status: Ready to execute
 Last activity: 2026-08-22 — Phase 126 execution started
 
@@ -629,6 +629,7 @@ Progress: [█████████░] 91%
 | Phase 126 P05 | 90min | 3 tasks | 4 files |
 | Phase 126 P06 | 24min | 3 tasks | 8 files |
 | Phase 126 P07 | 65min | 2 tasks | 3 files |
+| Phase 126 P08 | 55min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1796,6 +1797,9 @@ Recent decisions affecting current work:
 - [Phase 126]: ResolveLaunchTarget gained an SSMParamStore parameter beyond the plan's literal 4-arg signature (mirrors 126-03's AssumeRoleConfig seam pattern)
 - [Phase 126]: Found and fixed during execution: linked launch_accounts links carry no VPC id anywhere in the schema; without resolving it via DescribeSubnets, ec2spot would self-provision a disconnected VPC and hard-fail at apply time placing the ENI into a subnet from a different VPC
 - [Phase 126]: km account register/list/rm implemented; grant Sid is prefix-scoped (multi-instance safe); rm's default no-profile path prints a self-contained terragrunt destroy command (not a second km account rm call) since config removal is unconditional
+- [Phase ?]: Ttl-handler's launcher-role-ARN IAM list is derived in Terraform (jsondecode) from the single KM_LAUNCH_ACCOUNTS JSON blob rather than a second env-threaded list variable
+- [Phase ?]: km destroy and ttl-handler both fail-open on a metadata-read failure (proceed as home-account) but fail-closed on an unknown link or failed external-id read (hard error, never a silent home-account destroy attempt)
+- [Phase ?]: Home-account teardown is asserted byte-identical to Phase 125 on both km destroy's cold-clone service.hcl and the ttl-handler's rendered main.tf via embedded-literal tests
 
 ### Roadmap Evolution
 
@@ -1948,6 +1952,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-23T01:14:10.232Z
-Stopped at: Completed 126-07-PLAN.md
+Last session: 2026-08-23T01:37:47.921Z
+Stopped at: Completed 126-08-PLAN.md
 Resume file: None
