@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 126
 current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
-current_plan: 9
+current_plan: 10
 status: executing
-stopped_at: Completed 126-08-PLAN.md
-last_updated: "2026-08-23T01:37:47.936Z"
+stopped_at: Completed 126-09-PLAN.md
+last_updated: "2026-08-23T01:58:35.378Z"
 last_activity: 2026-08-22
 last_activity_desc: Phase 126 execution started
 progress:
   total_phases: 10
   completed_phases: 7
   total_plans: 67
-  completed_plans: 60
+  completed_plans: 61
   percent: 70
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
-Plan: 9 of 10
+Plan: 10 of 10
 Total Plans in Phase: 10
-Current Plan: 9
+Current Plan: 10
 Status: Ready to execute
 Last activity: 2026-08-22 — Phase 126 execution started
 
@@ -630,6 +630,7 @@ Progress: [█████████░] 91%
 | Phase 126 P06 | 24min | 3 tasks | 8 files |
 | Phase 126 P07 | 65min | 2 tasks | 3 files |
 | Phase 126 P08 | 55min | 3 tasks | 9 files |
+| Phase 126 P09 | 50min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1800,6 +1801,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Ttl-handler's launcher-role-ARN IAM list is derived in Terraform (jsondecode) from the single KM_LAUNCH_ACCOUNTS JSON blob rather than a second env-threaded list variable
 - [Phase ?]: km destroy and ttl-handler both fail-open on a metadata-read failure (proceed as home-account) but fail-closed on an unknown link or failed external-id read (hard error, never a silent home-account destroy attempt)
 - [Phase ?]: Home-account teardown is asserted byte-identical to Phase 125 on both km destroy's cold-clone service.hcl and the ttl-handler's rendered main.tf via embedded-literal tests
+- [Phase ?]: checkLaunchAccountAssumable forces credential resolution via Credentials.Retrieve(ctx), not just config construction, so a broken trust policy cannot report healthy (T-126-50)
+- [Phase 126]: checkLaunchAccountOrphanInstances treats an unreachable link as its own WARN, never collapsed into a clean 'no orphans found' result (T-126-47)
 
 ### Roadmap Evolution
 
@@ -1952,6 +1955,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-23T01:37:47.921Z
-Stopped at: Completed 126-08-PLAN.md
+Last session: 2026-08-23T01:58:35.363Z
+Stopped at: Completed 126-09-PLAN.md
 Resume file: None
