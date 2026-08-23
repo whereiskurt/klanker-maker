@@ -10,13 +10,14 @@ Klanker supports `km vscode start | status` so operators can connect their **loc
 3. [Per-sandbox lifecycle](#per-sandbox-lifecycle)
 4. [Rotating a sandbox key](#rotating-a-sandbox-key)
 5. [Profile field](#profile-field)
-6. [CLI commands](#cli-commands)
-7. [Operator state on disk](#operator-state-on-disk)
-8. [Sandbox-side state](#sandbox-side-state)
-9. [Network requirements](#network-requirements)
-10. [Troubleshooting](#troubleshooting)
-11. [Limitations](#limitations)
-12. [Security model](#security-model)
+6. [Idle timeout and Remote-SSH sessions](#idle-timeout-and-remote-ssh-sessions)
+7. [CLI commands](#cli-commands)
+8. [Operator state on disk](#operator-state-on-disk)
+9. [Sandbox-side state](#sandbox-side-state)
+10. [Network requirements](#network-requirements)
+11. [Troubleshooting](#troubleshooting)
+12. [Limitations](#limitations)
+13. [Security model](#security-model)
 
 ---
 
@@ -261,6 +262,49 @@ spec:
 Set `runtime.vscode.enabled: false` in profiles that do not need IDE access (e.g., headless agent
 sandboxes). Sandboxes without `runtime.vscode.enabled: true` do NOT get sshd provisioning retroactively —
 `km destroy` + `km create` to provision.
+
+## Idle timeout and Remote-SSH sessions
+
+A connected Remote-SSH session counts as activity and keeps the sandbox alive.
+
+This was **not** true before signal 7 was added, and the old behaviour was
+intermittent in a way that made it hard to diagnose. `km-presence` derives
+liveness from a fixed set of signals, and signal 1 reads `who` (utmp). `sshd`
+writes a utmp record only for sessions that allocate a PTY — and VS Code
+Remote-SSH runs `vscode-server` over a **non-PTY** exec channel, which `pgrep`
+shows as `sshd: sandbox@notty`. Measured on a live sandbox:
+
+| Session | `who` | Seen by signal 1 |
+|---|---|---|
+| Non-PTY exec (Remote-SSH bootstrap) | 0 | no |
+| PTY (`ssh -tt`, VS Code integrated terminal) | 1 | yes |
+
+So editing files over Remote-SSH was invisible and the sandbox was reaped by
+`spec.lifecycle.idleTimeout` — but opening VS Code's integrated terminal
+allocated a PTY and made the same session visible. Whether your box survived
+depended on an unrelated UI panel being open.
+
+Signal 7 checks for an established TCP socket owned by `sshd` (or `sshd-session`
+on OpenSSH 9.8+). Note this deliberately does **not** detect the `vscode-server`
+process: VS Code leaves that process running after a client disconnects so
+reconnects are fast, so keying on it would pin the sandbox awake indefinitely.
+The SSH connection drops on disconnect and is the honest signal.
+
+Consequences:
+
+- **An open VS Code window pins the sandbox alive**, even while idle. Close the
+  window (or Ctrl-C the `km vscode start` tunnel) to let the idle timer run.
+- **The signal fails idle.** If `ss` is missing or errors, it reports no session,
+  since a signal that cannot go negative would disable idle teardown fleet-wide.
+- `spec.lifecycle.ttl` is unaffected — it is a wall-clock cap.
+
+**Requires a sandbox created after this change.** `km-presence` ships in the
+sandbox image, so existing sandboxes keep the older daemon until
+`km destroy && km create`. Until then, raise `idleTimeout` or use
+`km extend <id> --idle <duration>`.
+
+See `docs/desktop.md` § Idle timeout and desktop sessions for the equivalent
+KasmVNC signal.
 
 ---
 

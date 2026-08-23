@@ -71,7 +71,7 @@ a glance.
 
 ### Signals
 
-Per 60-second tick, the daemon checks all five signals.
+Per 60-second tick, the daemon checks all seven signals.
 Emit one heartbeat event if **any** is positive (boolean OR).
 
 | # | Signal | Check | Cost | Notes |
@@ -81,6 +81,8 @@ Emit one heartbeat event if **any** is positive (boolean OR).
 | 3 | Recent inbound email | `find /var/mail/km/new/ -newer /run/km/.presence-last-tick -type f \| head -1` non-empty | <2ms | km-mail-poller drops new files atomically every 60s. Stamp-vs-mtime, no parsing. |
 | 4 | Recent inbound Slack | `[ /run/km/last-slack-inbound -nt /run/km/.presence-last-tick ]` | <1ms | Requires the one-line `touch` addition in km-slack-inbound-poller. |
 | 5 | Headless agent process | `pgrep -af '(^\|/)claude( \|$)\|(^\|/)codex( \|$)\|km-agent-run\.sh'` | ~3ms | Catches `km agent run` (detached tmux + `claude -p`) and future codex headless. Word-boundary regex avoids false positives like `claudia`. |
+| 6 | VNC viewer attached (Phase 93 desktop) | `ss -tnHp state established` contains `(("Xvnc",` | ~4ms | KasmVNC runs as a systemd service, not a login session, so an attached viewer writes no utmp record and is invisible to signal 1. Matched by owning process, not port: `network.websocket_port: auto` means the port is not a contract. Fails idle when `ss` is absent. |
+| 7 | SSH session established (VS Code Remote-SSH / `km vscode`) | `ss -tnHp state established` contains `(("sshd",` or `(("sshd-session",` | ~4ms | Signal 1 misses it: sshd writes utmp only for PTY sessions, and Remote-SSH runs vscode-server over a non-PTY channel (`sshd: user@notty`) — measured who=0 while connected. Detected via the live socket, NOT `pgrep vscode-server`: VS Code leaves that server running after disconnect, so pgrep would latch the box awake. Both process names matched (OpenSSH 9.8+ renamed the session process to sshd-session). Fails idle. |
 
 **Stamp-file pattern (signals 3+4):** Each tick ends by
 `touch /run/km/.presence-last-tick`. Next tick, "new since last
