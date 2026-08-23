@@ -227,6 +227,22 @@ func TestSandboxMetadata_LaunchAccountFieldWired(t *testing.T) {
 	if got := strings.Count(s, "meta.LaunchAccount = launchTarget.LinkName"); got != 1 {
 		t.Errorf("expected exactly one local-path meta.LaunchAccount assignment, found %d", got)
 	}
+	if got := strings.Count(s, "startingMeta.LaunchAccount = launchTarget.LinkName"); got != 1 {
+		t.Errorf("expected exactly one remote-path startingMeta.LaunchAccount assignment, found %d", got)
+	}
+}
+
+// Both the local and remote network-resolution sites in create.go reference
+// the resolved launch target — the specific way an unwired remote path would
+// silently launch into the home account with a link-shaped profile (T-126-31).
+func TestCreateGo_BothNetworkResolutionSitesReferenceLaunchTarget(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	if got := strings.Count(string(src), "applyLaunchAccountNetwork(network, launchTarget)"); got != 2 {
+		t.Errorf("expected exactly two applyLaunchAccountNetwork call sites (local + remote), found %d", got)
+	}
 }
 
 // Both NewDynamoCapacityStore call sites in create.go (local AZ-ranking block)
@@ -276,5 +292,68 @@ func TestCreateCmd_LaunchAccountFlagRegistered(t *testing.T) {
 	}
 	if flag.DefValue != "" {
 		t.Errorf("expected default empty string, got %q", flag.DefValue)
+	}
+}
+
+// `km capacity --help` lists --launch-account.
+func TestCapacityCmd_LaunchAccountFlagRegistered(t *testing.T) {
+	cmd := newCapacityCmd(nil)
+	flag := cmd.Flags().Lookup("launch-account")
+	if flag == nil {
+		t.Fatal("--launch-account flag not registered on km capacity")
+	}
+	if flag.DefValue != "" {
+		t.Errorf("expected default empty string, got %q", flag.DefValue)
+	}
+}
+
+// The capacity report header always names the account being reported on
+// (T-126-34) — "home" for a nil target, "{link} ({accountID})" for a linked
+// one — so a reader can never confuse a linked report for a home one.
+func TestLaunchAccountReportLabel(t *testing.T) {
+	if got := launchAccountReportLabel(nil); got != "home" {
+		t.Errorf("home: got %q, want \"home\"", got)
+	}
+	target := testTarget()
+	want := "mgmt-gpu (222233334444)"
+	if got := launchAccountReportLabel(target); got != want {
+		t.Errorf("linked: got %q, want %q", got, want)
+	}
+}
+
+// capacity.go must route through the single namespaced NewDynamoCapacityStore
+// constructor call — never a second, diverging call site.
+func TestCapacityGo_SingleNewDynamoCapacityStoreCallSite(t *testing.T) {
+	src, err := os.ReadFile("capacity.go")
+	if err != nil {
+		t.Fatalf("read capacity.go: %v", err)
+	}
+	if got := strings.Count(string(src), "NewDynamoCapacityStore("); got != 1 {
+		t.Errorf("expected exactly one NewDynamoCapacityStore( call site in capacity.go, found %d", got)
+	}
+}
+
+// Test 6 (the single most dangerous silent-wrong-answer in this phase,
+// mirrored on the capacity command): the assume-role failure branch in
+// runCapacity must return before constructing any client — no report is ever
+// produced with the home account's numbers under the link's name.
+func TestCapacityGo_AssumeFailureAbortsBeforeAnyClient(t *testing.T) {
+	src, err := os.ReadFile("capacity.go")
+	if err != nil {
+		t.Fatalf("read capacity.go: %v", err)
+	}
+	s := string(src)
+	idx := strings.Index(s, "capacityCfg, cfgErr := buildCapacityAWSConfig(ctx, awsCfg, launchTarget)")
+	if idx == -1 {
+		t.Fatal("buildCapacityAWSConfig call site not found in capacity.go")
+	}
+	tail := s[idx:]
+	returnIdx := strings.Index(tail, "return cfgErr")
+	ec2Idx := strings.Index(tail, "ec2.NewFromConfig(capacityCfg")
+	if returnIdx == -1 || ec2Idx == -1 {
+		t.Fatal("expected both the fatal return and the ec2Client construction after buildCapacityAWSConfig")
+	}
+	if returnIdx >= ec2Idx {
+		t.Error("the fatal return on assume failure must precede client construction — found ec2 client built first")
 	}
 }

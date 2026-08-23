@@ -2657,6 +2657,17 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		return "", fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
 	}
 
+	// Phase 126: resolve the launch-account link, exactly as the local path does
+	// (see runCreate) — early, before any artifact is uploaded or dispatched.
+	// This IS a second, easy-to-miss network-resolution site (126-RESEARCH.md §
+	// "Create-flow changes" step 2): leaving it unwired would make --remote
+	// silently launch into the home account with a link-shaped profile
+	// (T-126-31).
+	launchTarget, err := ResolveLaunchTarget(ctx, cfg, resolvedProfile, launchAccountOverride, &productionSSMParamStore{client: ssm.NewFromConfig(awsCfg)})
+	if err != nil {
+		return "", err
+	}
+
 	// Step 5c: Enforce sandbox limit before dispatching remote create.
 	if cfg.StateBucket != "" {
 		s3Client := s3.NewFromConfig(awsCfg)
@@ -2679,35 +2690,58 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 
 	// Step 6: Load network config for compilation
 	repoRoot := findRepoRoot()
-	region := resolvedProfile.Spec.Runtime.Region
+	// Phase 126: same region resolution as the local path — the account carries
+	// its region; a conflicting profile region is overridden with a warning.
+	region, regionWarning := resolveLaunchRegion(resolvedProfile.Spec.Runtime.Region, launchTarget)
+	if regionWarning != "" {
+		fmt.Fprintf(os.Stderr, "  [warn] %s\n", regionWarning)
+	}
 	regionLabel := compiler.RegionLabel(region)
 	// LoadNetworkOutputs → fetchAndCacheOutputs reads KM_RESOURCE_PREFIX
 	// (init.go:891) to build the S3 state-bucket path. On non-default-prefix
 	// installs this otherwise defaults to "km" and queries the wrong bucket.
 	ExportTerragruntEnvVars(cfg)
-	networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
-	if err != nil {
-		return "", fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
-	}
 	remoteArtifactsBucket := cfg.ArtifactsBucket
 	if remoteArtifactsBucket == "" {
 		remoteArtifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
 	}
-	network := &compiler.NetworkConfig{
-		VPCID:             networkOutputs.VPCID,
-		PublicSubnets:     networkOutputs.PublicSubnets,
-		AvailabilityZones: networkOutputs.AvailabilityZones,
-		RegionLabel:       regionLabel,
-		EmailDomain:       cfg.GetEmailDomain(),
-		ArtifactsBucket:   remoteArtifactsBucket,
-		PrivateSubnets:    networkOutputs.PrivateSubnets,
-		NATGatewayIDs:     networkOutputs.NATGatewayIDs,
-	}
+	var network *compiler.NetworkConfig
+	if launchTarget != nil {
+		// Phase 126: source placement from the link record instead of the home
+		// account's network outputs — same mapping as the local path
+		// (applyLaunchAccountNetwork), factored into one function so the two
+		// call sites cannot drift (T-126-31).
+		network = &compiler.NetworkConfig{
+			RegionLabel:     regionLabel,
+			EmailDomain:     cfg.GetEmailDomain(),
+			ArtifactsBucket: remoteArtifactsBucket,
+		}
+		applyLaunchAccountNetwork(network, launchTarget)
 
-	// Phase 125: same fail-fast guard as the local create path — before any
-	// artifact is uploaded to S3 or dispatched to the create-handler Lambda.
-	if guardErr := checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.NATGatewayIDs); guardErr != nil {
-		return "", guardErr
+		if guardErr := checkLaunchAccountEFSGuard(resolvedProfile.Spec.Runtime.MountEFS, launchTarget.EFSID); guardErr != nil {
+			return "", guardErr
+		}
+	} else {
+		networkOutputs, loadErr := LoadNetworkOutputs(repoRoot, regionLabel)
+		if loadErr != nil {
+			return "", fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, loadErr, region)
+		}
+		network = &compiler.NetworkConfig{
+			VPCID:             networkOutputs.VPCID,
+			PublicSubnets:     networkOutputs.PublicSubnets,
+			AvailabilityZones: networkOutputs.AvailabilityZones,
+			RegionLabel:       regionLabel,
+			EmailDomain:       cfg.GetEmailDomain(),
+			ArtifactsBucket:   remoteArtifactsBucket,
+			PrivateSubnets:    networkOutputs.PrivateSubnets,
+			NATGatewayIDs:     networkOutputs.NATGatewayIDs,
+		}
+
+		// Phase 125: same fail-fast guard as the local create path — before any
+		// artifact is uploaded to S3 or dispatched to the create-handler Lambda.
+		if guardErr := checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.NATGatewayIDs); guardErr != nil {
+			return "", guardErr
+		}
 	}
 
 	// Apply --ttl and --idle overrides (after profile resolution, before compilation).
@@ -2914,7 +2948,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		SandboxID:   sandboxID,
 		ProfileName: resolvedProfile.Metadata.Name,
 		Substrate:   remoteSubstrateLabel,
-		Region:      resolvedProfile.Spec.Runtime.Region,
+		Region:      region,
 		Status:      "starting",
 		CreatedAt:   time.Now().UTC(),
 		IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
@@ -2928,6 +2962,12 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	}
 	if len(clonedFromOverride) > 0 && clonedFromOverride[0] != "" {
 		startingMeta.ClonedFrom = clonedFromOverride[0]
+	}
+	// Phase 126: record which account holds the instance on the "starting" row
+	// too — km destroy/doctor must see this even if the create-handler Lambda
+	// never gets to overwrite this row (plan 08's cold-clone fallback).
+	if launchTarget != nil {
+		startingMeta.LaunchAccount = launchTarget.LinkName
 	}
 	if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, startingMeta); writeErr != nil {
 		fmt.Fprintf(os.Stderr, "  [warn] failed to write provisioning metadata: %v\n", writeErr)
