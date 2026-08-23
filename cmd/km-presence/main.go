@@ -1,7 +1,7 @@
 // km-presence is the Phase 79 sandbox-side liveness daemon.
 // It replaces the per-shell bash _km_heartbeat function with a single
 // systemd-managed service that ticks every 60 seconds and emits a heartbeat
-// event into /run/km/audit-pipe if any of five concrete signals is active.
+// event into /run/km/audit-pipe if any of seven concrete signals is active.
 //
 // See docs/superpowers/specs/2026-05-10-km-presence-daemon-design.md for design.
 package main

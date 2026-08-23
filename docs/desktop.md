@@ -17,9 +17,10 @@ The engine is **KasmVNC** — a web-native VNC server with a built-in HTML5 clie
 9. [Security model](#security-model)
 10. [First-boot install, network, and the AMI-bake workflow](#first-boot-install-network-and-the-ami-bake-workflow)
 11. [km resume behavior](#km-resume-behavior)
-12. [CLI commands](#cli-commands)
-13. [Troubleshooting](#troubleshooting)
-14. [Limitations](#limitations)
+12. [Idle timeout and desktop sessions](#idle-timeout-and-desktop-sessions)
+13. [CLI commands](#cli-commands)
+14. [Troubleshooting](#troubleshooting)
+15. [Limitations](#limitations)
 
 ---
 
@@ -284,6 +285,45 @@ With a baked AMI, subsequent sandbox launches skip all package installation and 
 ## km resume behavior
 
 The KasmVNC systemd unit is enabled at boot and restarts automatically. After `km resume <sandbox-id>`, run `km desktop start <sandbox-id>` again to re-open the tunnel. The session's browser state (tabs, history, local storage) is preserved from before the pause.
+
+## Idle timeout and desktop sessions
+
+An attached KasmVNC viewer counts as activity and keeps the sandbox alive.
+
+This is worth stating explicitly because it was **not** true before. `km-presence`
+decides liveness from a fixed set of signals, and until signal 6 was added none of
+them could see a VNC user: KasmVNC runs as a systemd service rather than a login
+session, so an attached viewer writes no utmp record and `who` stays empty. A
+desktop sandbox with someone actively working in it therefore looked idle on every
+signal and was reaped by `spec.lifecycle.idleTimeout` — the box would stop out from
+under a connected user, with an empty audit stream as the only trace.
+
+Signal 6 closes that: each tick checks for an established TCP socket owned by the
+`Xvnc` process. A viewer attached through the `km desktop start` tunnel holds one
+open; with no viewer, `Xvnc` owns none. Detection is by owning process rather than
+port because `network.websocket_port: auto` means the listener port is not a
+contract (it resolves to 8444 in practice).
+
+Two consequences worth knowing:
+
+- **An open browser tab pins the sandbox alive indefinitely**, even if you walk
+  away — the websocket stays established. This matches how an idle `km shell`
+  session behaves. Close the tab (or Ctrl-C the tunnel) to let the idle timer run.
+- **The signal fails idle.** If `ss` is missing or errors, the check reports no
+  viewer. A desktop reaped while connected is recoverable with `km resume`; a
+  signal that could never go negative would disable idle teardown on every desktop
+  sandbox and leak instances.
+
+`spec.lifecycle.ttl` is unaffected — it is a wall-clock cap and expires regardless
+of viewer activity.
+
+A connected VS Code Remote-SSH session is covered separately by signal 7; see
+`docs/vscode.md` § Idle timeout and Remote-SSH sessions.
+
+**Requires a sandbox created after this change.** `km-presence` ships in the
+sandbox image, so existing desktop sandboxes keep the five-signal daemon until
+`km destroy && km create`. Until then, raise `idleTimeout`, keep a `km shell`
+open alongside the desktop, or use `km extend <id> --idle <duration>`.
 
 ---
 
