@@ -200,6 +200,13 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 	// Step 2c: Check metadata for docker substrate — route before tag-based lookup.
 	// Docker sandboxes have no AWS-tagged EC2/ECS resources, so tag lookup would fail.
 	// Primary: DynamoDB; fallback: S3 on ResourceNotFoundException.
+	//
+	// The read result is hoisted to earlyMeta (function scope) rather than staying
+	// scoped to this block — Phase 126 needs it again below to resolve the sandbox's
+	// launch-account link before the account-scoped tag lookup runs (Pattern 5 /
+	// Pitfall 3: FindSandboxByID can only ever see the home account, so a
+	// linked-account sandbox must be recognized from this row, not from tags).
+	var earlyMeta *awspkg.SandboxMetadata
 	{
 		dynamoClientEarly := dynamodbpkg.NewFromConfig(awsCfg)
 		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientEarly, cfg.GetSandboxTableName(), sandboxID)
@@ -219,34 +226,53 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 				}
 			}
 		}
-		if metaErr == nil && meta != nil && meta.Substrate == "docker" {
-			return runDestroyDocker(ctx, cfg, awsCfg, sandboxID, verbose)
+		if metaErr == nil && meta != nil {
+			earlyMeta = meta
+			if meta.Substrate == "docker" {
+				return runDestroyDocker(ctx, cfg, awsCfg, sandboxID, verbose)
+			}
 		}
-		// If metadata not found or substrate is not docker, proceed with normal Terragrunt path.
+		// If metadata not found (metaErr != nil) or substrate is not docker, proceed
+		// with the normal Terragrunt path — a metadata-read failure leaves earlyMeta
+		// nil, which is exactly today's (Phase 125) home-account behavior: it must
+		// never block a destroy (Test 5 in 126-08's plan).
 	}
 
-	// Step 3: Discover sandbox via tag-based lookup
+	// Step 2d (Phase 126, REQ-126-TEARDOWN): resolve the sandbox's launch-account
+	// link, if any, from the row just read. Dormant (nil, nil, zero AWS calls beyond
+	// what destroyLaunchContext itself performs) for a home-account sandbox or a
+	// sandbox whose row could not be read at all.
+	var launchTarget *LaunchTarget
+	if earlyMeta != nil && earlyMeta.LaunchAccount != "" {
+		ssmClientForLaunch := ssm.NewFromConfig(awsCfg)
+		lt, ltErr := destroyLaunchContext(ctx, cfg, earlyMeta, &productionSSMParamStore{client: ssmClientForLaunch})
+		if ltErr != nil {
+			return fmt.Errorf("resolve launch account for sandbox %s: %w", sandboxID, ltErr)
+		}
+		launchTarget = lt
+	}
+
+	// Step 3: Discover sandbox via tag-based lookup. The home-account tagging API
+	// cannot see a resource living in a linked account (Pattern 5) — a not-found
+	// result here is EXPECTED, not fatal, exactly when launchTarget is set.
 	tagClient := resourcegroupstaggingapi.NewFromConfig(awsCfg)
-	location, err := awspkg.FindSandboxByID(ctx, tagClient, sandboxID)
+	location, findErr := awspkg.FindSandboxByID(ctx, tagClient, sandboxID)
+	location, err = destroyDiscoveryOutcome(sandboxID, location, findErr, launchTarget)
 	if err != nil {
-		if errors.Is(err, awspkg.ErrSandboxNotFound) {
-			return fmt.Errorf("sandbox %s not found: no AWS resources tagged with km:sandbox-id=%s", sandboxID, sandboxID)
-		}
-		return fmt.Errorf("failed to discover sandbox %s: %w", sandboxID, err)
+		return err
 	}
 
-	fmt.Printf("Destroying sandbox %s (%d resources)...\n", sandboxID, location.ResourceCount)
+	fmt.Print(destroyStartMessage(sandboxID, location, launchTarget))
 
 	// Step 4: Locate sandbox directory by scanning region directories
 	repoRoot := findRepoRoot()
 	sandboxDir, regionLabel := findSandboxDir(repoRoot, sandboxID)
 
 	if sandboxDir == "" {
-		// Not found locally — determine region from AWS resource tags and recreate
-		regionLabel = determineRegionFromTags(location)
-		if regionLabel == "" {
-			regionLabel = "use1" // fallback to default
-		}
+		// Not found locally — determine region from the link record for a linked
+		// sandbox (the home-account tag inspection found nothing to determine it
+		// from), or from AWS resource tags otherwise, and recreate the directory.
+		regionLabel = resolveDestroyRegionLabel(location, launchTarget)
 		log.Debug().Str("regionLabel", regionLabel).Msg("sandbox directory not found locally — recreating from template")
 		var createErr error
 		sandboxDir, createErr = terragrunt.CreateSandboxDir(repoRoot, regionLabel, sandboxID)
@@ -254,16 +280,11 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 			return fmt.Errorf("failed to recreate sandbox directory for destroy: %w", createErr)
 		}
 		// Write minimal service.hcl with all fields needed by terragrunt.hcl for destroy.
-		// substrate_module and module_inputs are required by the sandbox terragrunt.hcl template.
-		minimalHCL := fmt.Sprintf(`# Minimal service.hcl for state resolution during destroy
-locals {
-  sandbox_id       = %q
-  region_label     = %q
-  region_full      = ""
-  substrate_module = "ec2spot"
-  module_inputs    = {}
-}
-`, sandboxID, regionLabel)
+		// substrate_module and module_inputs are required by the sandbox terragrunt.hcl
+		// template. The three launch-account locals (Phase 126) are emitted only when
+		// launchTarget is set — a home sandbox's synthesized file stays byte-identical
+		// to Phase 125's.
+		minimalHCL := synthesizeDestroyServiceHCL(sandboxID, regionLabel, launchTarget)
 		if populateErr := terragrunt.PopulateSandboxDir(sandboxDir, minimalHCL, ""); populateErr != nil {
 			_ = terragrunt.CleanupSandboxDir(sandboxDir)
 			return fmt.Errorf("failed to populate sandbox directory for destroy: %w", populateErr)
