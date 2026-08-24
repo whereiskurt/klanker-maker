@@ -1,4 +1,15 @@
 data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+# Cross-account capacity borrowing (Phase 126, REQ-126-LAUNCH). The launcher
+# role ARNs are DERIVED from launch_accounts_json rather than threaded as a
+# second list variable, so the trust list cannot drift from the link records.
+# jsondecode() rejects an empty string, so the dormant default short-circuits
+# to {} first — mirrors the ttl-handler module's identical block.
+locals {
+  launch_accounts                   = var.launch_accounts_json != "" ? jsondecode(var.launch_accounts_json) : {}
+  launch_account_launcher_role_arns = [for name, link in local.launch_accounts : link.launcher_role_arn]
+}
 
 # ============================================================
 # IAM role for the create-handler Lambda
@@ -256,4 +267,82 @@ moved {
 moved {
   from = aws_iam_role_policy.sqs_slack_inbound
   to   = module.km_operator_policy.aws_iam_role_policy.sqs_slack_inbound
+}
+
+# ============================================================
+# Cross-account capacity borrowing (Phase 126, REQ-126-LAUNCH)
+# ============================================================
+
+# Policy: assume the launcher role in a linked account so a REMOTE create can
+# provision a sandbox there. Cross-account assume needs BOTH sides — account B's
+# launcher trust policy names this role (written by `km account add`), and this
+# grant is the account-A half. Phase 126 shipped the ttl-handler half
+# (REQ-126-TEARDOWN) but not this one, so every remote cross-account create
+# failed with:
+#
+#   AccessDenied: User: arn:aws:sts::<A>:assumed-role/<prefix>-create-handler/...
+#   is not authorized to perform: sts:AssumeRole on resource:
+#   arn:aws:iam::<B>:role/<prefix>-gpu-launcher
+#
+# Scoped to the specific launcher role ARNs derived from launch_accounts_json —
+# never a wildcard resource (T-126-43: Elevation of Privilege). Gated: emits NO
+# statement at all when no links are configured, so a dormant install's policy
+# surface is unchanged.
+resource "aws_iam_role_policy" "launch_account_assume_role" {
+  count = length(local.launch_account_launcher_role_arns) > 0 ? 1 : 0
+
+  name = "${var.resource_prefix}-create-handler-launch-account-assume-role"
+  role = aws_iam_role.create_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "LaunchAccountAssumeRole"
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = local.launch_account_launcher_role_arns
+      },
+    ]
+  })
+}
+
+# Policy: read + decrypt the per-link external-id SecureString parameters the
+# create path needs in order to assume the launcher role above. Scoped to the
+# launch-accounts parameter path prefix, not the whole parameter store. The KMS
+# grant mirrors the ttl-handler's identical block: these SecureStrings are
+# written by `km account register` with no explicit KeyId (the default
+# alias/aws/ssm managed key), so the grant is scoped to "any key SSM used" via
+# the kms:ViaService condition rather than a specific key ARN. Gated identically
+# to the assume-role policy above.
+resource "aws_iam_role_policy" "launch_account_external_id" {
+  count = length(local.launch_account_launcher_role_arns) > 0 ? 1 : 0
+
+  name = "${var.resource_prefix}-create-handler-launch-account-external-id"
+  role = aws_iam_role.create_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SSMReadLaunchAccountExternalID"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/launch-accounts/*",
+        ]
+      },
+      {
+        Sid      = "KMSDecryptLaunchAccountExternalID"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = ["arn:aws:kms:*:${data.aws_caller_identity.current.account_id}:key/*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "ssm.${data.aws_region.current.name}.amazonaws.com"
+          }
+        }
+      },
+    ]
+  })
 }

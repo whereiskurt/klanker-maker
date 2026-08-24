@@ -40,6 +40,12 @@ terraform {
 inputs = {
   lambda_zip_path      = "${local.repo_root}/build/create-handler.zip"
   artifact_bucket_name = get_env("KM_ARTIFACTS_BUCKET", "")
+
+  # Phase 126 (REQ-126-LAUNCH): grants sts:AssumeRole on each registered link's
+  # launcher role so a REMOTE create can provision into the linked account.
+  # Mirrors the ttl-handler unit's identical line. Empty = dormant, no grant.
+  launch_accounts_json = get_env("KM_LAUNCH_ACCOUNTS", "")
+
   artifact_bucket_arn  = "arn:aws:s3:::${get_env("KM_ARTIFACTS_BUCKET", "")}"
   email_domain         = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
   operator_email       = get_env("KM_OPERATOR_EMAIL", "")

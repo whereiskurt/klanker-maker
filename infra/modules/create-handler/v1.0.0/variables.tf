@@ -111,3 +111,11 @@ variable "capacity_table_name" {
   type        = string
   default     = ""
 }
+
+# Phase 126 — cross-account capacity borrowing (REQ-126-LAUNCH).
+# Additive, empty default: a dormant install emits no extra IAM statement.
+variable "launch_accounts_json" {
+  description = "JSON object (KM_LAUNCH_ACCOUNTS) of registered cross-account capacity-borrowing links, keyed by link name — {\"<name>\": {\"launcher_role_arn\":..., \"external_id_ssm\":..., \"region\":...}}. Empty string = no links configured (dormant). Grants the create-handler sts:AssumeRole on each link's launcher role so a REMOTE create can provision into the linked account."
+  type        = string
+  default     = ""
+}
