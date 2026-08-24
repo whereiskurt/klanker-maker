@@ -122,24 +122,41 @@ resource "aws_iam_role_policy" "launcher" {
     Version = "2012-10-17"
     Statement = [
       {
+        # Conditions here may only use keys AWS actually populates for the
+        # instance/* resource of a RunInstances call. `sts decode-authorization-message`
+        # on a real denial reports exactly two: ec2:AvailabilityZone and
+        # ec2:InstanceType. It reports NO aws:RequestTag/* keys and NO ec2:Subnet.
+        #
+        # This statement originally also required
+        #   StringEquals { "aws:RequestTag/km:managed-by" = "klankermaker" }
+        #   StringLike   { "aws:RequestTag/km:sandbox-id" = "*" }
+        #   ArnEquals    { "ec2:Subnet" = local.subnet_arns }
+        # none of which can ever be satisfied on this resource, so the statement
+        # never matched and every cross-account launch failed with
+        # "no identity-based policy allows the ec2:RunInstances action" — the
+        # message AWS emits for an unsatisfiable condition, which reads
+        # misleadingly like a missing statement.
+        #
+        # Removing them does not widen the launcher meaningfully, because the
+        # constraints they were meant to express are enforced by RESOURCE SCOPING
+        # in SupportingRunInstancesResources below: that statement lists the link's
+        # exact subnet ARNs and the one security group, so a launch into any other
+        # subnet or SG is denied there instead. Combined with the instance-type
+        # allowlist kept here, PassOnlyBoxRole, and the region pin, the launcher can
+        # still do nothing but start an allowlisted GPU type, in the link's own
+        # subnets, carrying the one pre-baked box role.
+        #
+        # Tag-based confinement survives where it IS enforceable: LifecycleTaggedOnly
+        # gates terminate/stop/start/attach/delete on aws:ResourceTag/km:managed-by,
+        # and CreateTaggedResources gates CreateVolume on aws:RequestTag — a key AWS
+        # does populate for that call, verified live.
         Sid      = "LaunchOnlyGpuBoxes"
         Effect   = "Allow"
         Action   = "ec2:RunInstances"
         Resource = "arn:aws:ec2:${var.region}:${local.account_id}:instance/*"
         Condition = {
           StringEquals = {
-            "ec2:InstanceType"             = var.instance_types
-            "aws:RequestTag/km:managed-by" = "klankermaker"
-          }
-          # ArnEquals against a LIST of subnet ARNs matches ANY element in the
-          # list — because network provisioning now creates one subnet per AZ
-          # (T-126-22), this condition must test list membership, not equality
-          # against a single scalar subnet ARN.
-          ArnEquals = {
-            "ec2:Subnet" = local.subnet_arns
-          }
-          StringLike = {
-            "aws:RequestTag/km:sandbox-id" = "*"
+            "ec2:InstanceType" = var.instance_types
           }
         }
       },
