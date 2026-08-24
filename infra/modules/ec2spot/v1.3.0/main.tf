@@ -652,6 +652,7 @@ resource "aws_spot_instance_request" "ec2spot" {
   tags = {
     Name                 = each.value.instance_name
     "km:sandbox-id"      = each.value.sandbox_id
+    "km:managed-by"      = "klankermaker"
     "km:resource-prefix" = var.resource_prefix
   }
 
@@ -659,6 +660,7 @@ resource "aws_spot_instance_request" "ec2spot" {
   # Without volume_tags, root volumes only inherit provider default_tags and miss km:sandbox-id.
   volume_tags = {
     "km:sandbox-id"      = each.value.sandbox_id
+    "km:managed-by"      = "klankermaker"
     "km:resource-prefix" = var.resource_prefix
     Name                 = "km-sandbox-${each.value.sandbox_id}-root"
   }
@@ -762,6 +764,7 @@ resource "aws_instance" "ec2_ondemand" {
   tags = {
     Name                 = each.value.instance_name
     "km:sandbox-id"      = each.value.sandbox_id
+    "km:managed-by"      = "klankermaker"
     "km:label"           = var.km_label
     "km:resource-prefix" = var.resource_prefix
     "Region"             = var.region_label
@@ -781,6 +784,7 @@ resource "aws_ebs_volume" "additional" {
 
   tags = {
     "km:sandbox-id"      = var.sandbox_id
+    "km:managed-by"      = "klankermaker"
     "km:resource-prefix" = var.resource_prefix
     Name                 = "km-sandbox-${var.sandbox_id}-data"
   }
@@ -813,6 +817,7 @@ resource "aws_ebs_volume" "snapshot" {
 
   tags = {
     "km:sandbox-id"      = var.sandbox_id
+    "km:managed-by"      = "klankermaker"
     "km:resource-prefix" = var.resource_prefix
     "km:source-snapshot" = each.value.snapshot_id
     Name                 = "${var.resource_prefix}-sandbox-${var.sandbox_id}-snap-${each.key}"
