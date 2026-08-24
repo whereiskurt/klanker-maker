@@ -1269,7 +1269,33 @@ func Load() (*Config, error) {
 	// error, every profile without spec.runtime.launchAccount is unaffected).
 	// The merge-list entry "launch_accounts" above is the precondition; without
 	// it this unmarshal sees an empty map (project_config_key_merge_list).
-	if err := v.UnmarshalKey("launch_accounts", &cfg.LaunchAccounts); err != nil {
+	//
+	// KM_LAUNCH_ACCOUNTS is WRITE-ONLY: config → env → terragrunt. It is never a
+	// config source. ExportTerragruntEnvVars derives it FROM this map and emits a
+	// deliberately minimal JSON payload — launcher_role_arn, external_id_ssm and
+	// region only — for the ttl-handler Lambda. It is not a round-trip of
+	// LaunchAccountConfig and carries neither account_id, nor the subnet list, nor
+	// the box role.
+	//
+	// viper's AutomaticEnv nonetheless binds that string over this map-typed key,
+	// which broke config.Load() outright as soon as the variable existed — and it
+	// exists in-process the moment `km init` runs:
+	//
+	//   unmarshal launch_accounts: '' expected a map, got 'string'
+	//
+	// Reading the env value back would be worse than the crash: it would yield
+	// half-populated links whose missing account_id and subnets silently relocate
+	// a cross-account sandbox. So take the map from the yaml layer (v2) directly,
+	// bypassing the env binding entirely, whenever the merged view has been
+	// shadowed by the string form.
+	if _, shadowedByEnv := v.Get("launch_accounts").(string); shadowedByEnv {
+		cfg.LaunchAccounts = map[string]LaunchAccountConfig{}
+		if v2.IsSet("launch_accounts") {
+			if err := v2.UnmarshalKey("launch_accounts", &cfg.LaunchAccounts); err != nil {
+				return nil, fmt.Errorf("unmarshal launch_accounts from km-config.yaml: %w", err)
+			}
+		}
+	} else if err := v.UnmarshalKey("launch_accounts", &cfg.LaunchAccounts); err != nil {
 		return nil, fmt.Errorf("unmarshal launch_accounts: %w", err)
 	}
 

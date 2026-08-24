@@ -83,8 +83,13 @@ type AccountAddOpts struct {
 	TrustPrincipalPatterns []string
 	AWSProfile             string
 	DryRun                 bool
-	StateBucketOverride    string
-	LockTableOverride      string
+	// Force re-applies the module against an ALREADY-enrolled link instead of
+	// exiting early. Needed whenever the gpu-launcher-account module changes,
+	// since this command owns the target account's Terraform and re-running it
+	// is the only way to converge an existing link's footprint.
+	Force               bool
+	StateBucketOverride string
+	LockTableOverride   string
 }
 
 // AccountRunner is the seam tests use to inject a mock runner. Mirrors the
@@ -785,6 +790,7 @@ func newAccountAddCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.TrustPrincipalPatterns, "trust-principal-pattern", nil, "ArnLike glob pattern to trust (repeatable; escape hatch for a non-derivable principal)")
 	cmd.Flags().StringVar(&opts.AWSProfile, "aws-profile", "", "AWS profile for the TARGET account's admin credentials (required)")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", true, "render + validate only; set --dry-run=false to apply")
+	cmd.Flags().BoolVar(&opts.Force, "force", false, "re-apply the module against an already-enrolled link (picks up launcher/box policy changes; leaves external id, role ARNs and network untouched)")
 	cmd.Flags().StringVar(&opts.StateBucketOverride, "state-bucket", "", "override the derived link-state S3 bucket name")
 	cmd.Flags().StringVar(&opts.LockTableOverride, "lock-table", "", "override the derived link-lock DynamoDB table name")
 	return cmd
@@ -839,11 +845,28 @@ func RunAccountAdd(cfg *config.Config, opts AccountAddOpts, repoRoot string, out
 		return fmt.Errorf("--instance-types is required — it is the only thing scoping the launcher")
 	}
 
-	// 2. Idempotency: if the name is already an enrolled link, report and exit.
+	// 2. Idempotency: if the name is already an enrolled link, report and exit —
+	// unless --force asks us to re-apply.
+	//
+	// The plain early-exit exists so a re-run of the enrollment command is cheap
+	// and safe. But it also blocks the one case that genuinely needs a re-run:
+	// this command owns the target account's Terraform, so when the
+	// gpu-launcher-account MODULE changes (a widened launcher policy, a fixed tag
+	// condition, a new box-role grant), the only way to converge an already-enrolled
+	// link is to apply it again. Without --force the operator's options were to
+	// tear the link down and rebuild it, or hand-edit IAM in the target account.
+	//
+	// Re-applying is a normal terraform apply against the link's own state: it
+	// converges the footprint and leaves the external id, role ARNs and network
+	// untouched.
 	if link, ok := cfg.GetLaunchAccount(opts.Name); ok {
-		fmt.Fprintf(out, "Launch account link %q already enrolled: launcher=%s box=%s\n",
-			opts.Name, link.LauncherRoleARN, link.BoxRoleARN)
-		return nil
+		if !opts.Force {
+			fmt.Fprintf(out, "Launch account link %q already enrolled: launcher=%s box=%s\n",
+				opts.Name, link.LauncherRoleARN, link.BoxRoleARN)
+			fmt.Fprintf(out, "  Re-run with --force to re-apply the module (picks up launcher/box policy changes).\n")
+			return nil
+		}
+		fmt.Fprintf(out, "Re-applying enrolled link %q (--force): launcher=%s\n", opts.Name, link.LauncherRoleARN)
 	}
 
 	// 3. Load the target account's AWS config and resolve caller identity.
