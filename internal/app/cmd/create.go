@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -173,6 +174,52 @@ func natServedAZs(availabilityZones, natGatewayIDs []string) []string {
 		}
 	}
 	return served
+}
+
+// assertLaunchAccountEmitted fails closed when a launch account was resolved for
+// this create but the compiled service.hcl does not actually carry the locals the
+// sandbox terragrunt template needs to build its cross-account provider.
+//
+// This exists because the dormancy mechanism is structurally FAIL-OPEN. The
+// template reads:
+//
+//	launch_account    = try(local.svc_config.locals.launch_account, "")
+//	assume_role_block = local.launch_account != "" ? "...assume_role..." : ""
+//
+// `try(..., "")` cannot distinguish "no launch account was requested" from "a
+// launch account was requested but went missing somewhere in the pipeline". Both
+// evaluate to the empty string, and the empty string means *use the home
+// account's credentials*. For a feature whose entire purpose is placing a
+// $10/hr GPU instance in one specific account, silently building it in the wrong
+// account is worse than any error — it looks like success, and the operator only
+// discovers it by auditing resources by hand.
+//
+// Live UAT (sb-8d5820ce) hit exactly this: `--launch-account` was dropped from the
+// uploaded profile, the Lambda re-compiled without it, and every resource landed
+// in the home account while `km create` and `km destroy` both reported success.
+//
+// Both create paths call this, so the create-handler Lambda — which runs
+// `km create` internally — inherits the same guard.
+func assertLaunchAccountEmitted(serviceHCL string, target *LaunchTarget) error {
+	if target == nil || target.LinkName == "" {
+		return nil
+	}
+	want := fmt.Sprintf("launch_account       = %q", target.LinkName)
+	if strings.Contains(serviceHCL, want) {
+		return nil
+	}
+	// Accept any whitespace alignment the emitter might use.
+	if regexp.MustCompile(`launch_account\s*=\s*"` + regexp.QuoteMeta(target.LinkName) + `"`).MatchString(serviceHCL) {
+		return nil
+	}
+	return fmt.Errorf(
+		"internal error: launch account %q was resolved for this sandbox but the compiled "+
+			"service.hcl does not declare it — refusing to continue.\n\n"+
+			"Continuing would build this sandbox in the HOME account instead of %s, because the "+
+			"sandbox terragrunt template treats a missing launch_account local as \"no cross-account "+
+			"launch requested\" and falls back to home credentials.\n\n"+
+			"This is a bug in km, not a misconfiguration. Please report it with the profile used.",
+		target.LinkName, target.AccountID)
 }
 
 // applyLaunchAccountNetwork overwrites the placement-relevant fields of a
@@ -1244,6 +1291,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			artifacts, compileErr = compiler.Compile(resolvedProfile, sandboxID, onDemand, network, amiBDMDevices)
 			if compileErr != nil {
 				return fmt.Errorf("failed to compile profile: %w", compileErr)
+			}
+			if guardErr := assertLaunchAccountEmitted(artifacts.ServiceHCL, launchTarget); guardErr != nil {
+				return guardErr
 			}
 
 			// Step 8: Create sandbox directory
@@ -2781,6 +2831,17 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		}
 		applyLaunchAccountNetwork(network, launchTarget)
 
+		// Persist the RESOLVED link name back onto the profile before it is
+		// serialized to .km-profile.yaml (REQ-126-LAUNCH). `--launch-account`
+		// is a CLI override that otherwise lives only in launchTarget, and the
+		// create-handler Lambda re-compiles from the uploaded profile — so
+		// without this write-back the override is silently dropped on the
+		// remote path and the sandbox is built in the HOME account. Found by
+		// live UAT (sb-8d5820ce): service.hcl was correct locally, the
+		// uploaded profile had no spec.runtime.launchAccount, and every
+		// resource landed in the home account.
+		resolvedProfile.Spec.Runtime.LaunchAccount = launchTarget.LinkName
+
 		if guardErr := checkLaunchAccountEFSGuard(resolvedProfile.Spec.Runtime.MountEFS, launchTarget.EFSID); guardErr != nil {
 			return "", guardErr
 		}
@@ -2890,6 +2951,9 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network, remoteAmiBDMDevices)
 	if err != nil {
 		return "", fmt.Errorf("failed to compile profile: %w", err)
+	}
+	if err := assertLaunchAccountEmitted(artifacts.ServiceHCL, launchTarget); err != nil {
+		return "", err
 	}
 
 	// Determine artifact bucket
@@ -3350,18 +3414,32 @@ func checkSandboxLimit(ctx context.Context, s3Client awspkg.S3ListAPI, bucket st
 //     resolved profile has extends cleared (profile.Resolve / TestResolveExtendsCleared)
 //     and every base merged in, so it is self-contained.
 //  2. ttl/idle overrides — the Lambda must observe the overridden lifecycle values.
+//  3. a launch account is in force — `--launch-account` is a CLI override written
+//     back onto resolvedProfile.Spec.Runtime.LaunchAccount, so it exists ONLY in the
+//     marshaled form. The raw bytes are whatever the operator's file said, which for a
+//     flag-supplied link is nothing at all. Uploading raw here drops the override, the
+//     Lambda re-compiles without it, and the sandbox is built in the HOME account
+//     (REQ-126-LAUNCH; found by live UAT).
 //
 // resolvedProfile already carries all mutations (extends merge, ttl/idle, --no-bedrock
 // strip applied upstream), so marshaling it is the complete, correct picture. A monolithic,
 // override-free, bedrock-default profile keeps the raw-bytes path to preserve
 // comments/formatting (profileYAMLForUpload also applies the --no-bedrock string edits).
 func selectRemoteProfileYAML(extendsSet bool, resolvedProfile *profile.SandboxProfile, raw []byte, noBedrock bool, ttlOverride, idleOverride string) (string, error) {
-	if extendsSet || ttlOverride != "" || idleOverride != "" {
+	launchAccountSet := resolvedProfile != nil && resolvedProfile.Spec.Runtime.LaunchAccount != ""
+	if extendsSet || ttlOverride != "" || idleOverride != "" || launchAccountSet {
 		mergedYAML, err := yaml.Marshal(resolvedProfile)
 		if err != nil {
 			if extendsSet {
 				// No safe fallback for extends — raw bytes would fail in the Lambda.
 				return "", fmt.Errorf("failed to marshal resolved (flattened) profile for remote upload: %w", err)
+			}
+			if launchAccountSet {
+				// No safe fallback for a launch account either: falling back to raw
+				// silently relocates the sandbox to the home account, which looks
+				// like success. Fail closed instead.
+				return "", fmt.Errorf("failed to marshal profile carrying launchAccount %q for remote upload: %w",
+					resolvedProfile.Spec.Runtime.LaunchAccount, err)
 			}
 			log.Warn().Err(err).Msg("failed to marshal mutated profile for remote upload — using raw")
 			return profileYAMLForUpload(resolvedProfile, raw, noBedrock), nil

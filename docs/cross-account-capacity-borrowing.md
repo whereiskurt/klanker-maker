@@ -356,6 +356,45 @@ capacity borrowing whenever one is available. This is documented here as an expl
 operator caveat, not resolved in code by this phase — a follow-up warning in `km account
 add`/`km doctor` is a reasonable future addition.
 
+## How km refuses to build in the wrong account
+
+The sandbox terragrunt template decides whether to assume the launcher role by reading a
+single local:
+
+```hcl
+launch_account    = try(local.svc_config.locals.launch_account, "")
+assume_role_block = local.launch_account != "" ? "...assume_role..." : ""
+```
+
+That `try(..., "")` is what makes the feature dormant for every pre-126 profile — but it is
+also structurally **fail-open**. It cannot distinguish *"no launch account was requested"*
+from *"a launch account was requested and went missing somewhere in the pipeline."* Both
+evaluate to the empty string, and the empty string means **use the home account's
+credentials**.
+
+For a feature whose whole purpose is placing an expensive instance in one specific account,
+a silent home-account fallback is worse than any error: `km create` reports success,
+`km list` shows a healthy sandbox, and the only way to notice is to audit resources by hand.
+
+Live UAT hit precisely this. `--launch-account` is a CLI override that lived only in the
+resolved launch target and was never written back onto the profile, so the profile uploaded
+to S3 carried no `launchAccount`. The create-handler Lambda re-compiles from that profile,
+produced a `service.hcl` with none of the three locals, and every resource was built in the
+home account while both `km create` and `km destroy` reported success.
+
+Two guards now close this:
+
+1. **The resolved link name is persisted onto the profile** before serialization, and the
+   presence of a launch account forces the merged-marshal upload path. The raw-bytes
+   shortcut can no longer drop a flag-supplied link.
+2. **`km create` asserts the emitted `service.hcl` actually declares the resolved link**, on
+   both the local and remote paths, and aborts before any apply if it does not. Because the
+   create-handler Lambda runs `km create` internally, it inherits the same guard.
+
+If you ever see that assertion fire, it is a bug in km rather than a misconfiguration —
+please report it with the profile used. What it is protecting you from is a sandbox built
+in the wrong account that looks entirely healthy.
+
 ## Cost
 
 An unreaped GPU box in the linked account bills continuously in an account the home
