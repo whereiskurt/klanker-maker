@@ -416,11 +416,29 @@ Get this right — deploy-surface mistakes are this project's single most common
 | `km account add/register/list/rm`, the `--launch-account` flags, and the create-flow wiring | `make build` | Pure operator-binary changes — no Lambda, no schema-on-write DDB change, no Terraform module change to apply from the home side. |
 | `spec.runtime.launchAccount` reaching a **remote** `km create` | `make build` **then** `make build-lambdas` **then** `km init --dry-run=false` | The create-handler Lambda validates and compiles the profile using its own bundled `toolchain/km` binary — a stale bundle silently rejects or ignores the new field on remote creates even though local creates already work. This is a full apply, not `--sidecars` (which does not refresh the create-handler's bundled toolchain). |
 | The expiry-Lambda cross-account teardown path (`KM_LAUNCH_ACCOUNTS`, the `sts:AssumeRole` and `ssm:GetParameter`/`kms:Decrypt` grants) | `make build-lambdas` **then** `km init --dry-run=false` | This changes both a Lambda environment block and an IAM policy on the ttl-handler role — both require a full terragrunt apply. `--sidecars` updates neither. |
+| The **create-handler**'s matching `sts:AssumeRole` + external-id grants | `km init --dry-run=false` (or `km init --only create-handler`) | Cross-account assume needs BOTH sides. `km account add` writes account B's launcher **trust** policy naming the create-handler; this is the account-A **permission** half. Without it every remote cross-account create fails with `AccessDenied ... not authorized to perform: sts:AssumeRole`. Both policies are `count`-gated on `launch_accounts_json`, so a dormant install emits nothing. |
 | The target account's launcher/box roles, network, and results bucket | `km account add ... --dry-run=false` (run once, at enrollment) | Provisioned by terraform running directly against the target account, driven entirely by `km account add` — **never** by `km init`, which never touches the target account at all. This is the same standalone-provisioning shape `km cluster add` already uses. |
 
 **Ordering constraint:** rebuild the operator binary (`make build`) before running any
 `km init` apply in this phase — `km init` itself is driven by the operator binary, so a
 stale binary silently skips whatever it doesn't yet know to emit.
+
+**Ordering constraint — re-run `km account register` after every `km init`.** The
+launch-account read grant on the home artifacts bucket is added *imperatively* by
+`km account register`, but that bucket's policy is owned *declaratively* by
+`infra/modules/ses/v2.0.0` (whose own comment notes only one `aws_s3_bucket_policy` can
+exist per bucket). Any `km init` therefore reconciles the policy and **erases the grant**,
+after which a cross-account box cannot read its profile or sidecars from the home bucket at
+boot. `km doctor`'s "Launch Account Artifacts Grant" check catches it, and re-running
+`km account register <name>` restores it idempotently. The durable fix is to move the grant
+into that policy document; until then the correct sequence is always:
+
+```bash
+km init --dry-run=false
+km account register <name> --from-fragment ~/.km/account-links/<name>.link.yaml
+km doctor 2>&1 | grep "Launch Account"     # expect all four green
+km create ... --launch-account <name>
+```
 
 **Sidecar-only (`km init --sidecars`) is not sufficient for any of the above.** Nothing in
 this phase changed a sandbox-side helper binary; every change here is either operator-binary,
