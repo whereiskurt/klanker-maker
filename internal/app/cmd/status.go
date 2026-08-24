@@ -266,19 +266,19 @@ func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) 
 	}
 
 	rec := &kmaws.SandboxRecord{
-		SandboxID:    meta.SandboxID,
-		Profile:      meta.ProfileName,
-		Substrate:    meta.Substrate,
-		Region:       meta.Region,
-		Status:       status,
-		CreatedAt:    meta.CreatedAt,
-		TTLExpiry:    meta.TTLExpiry,
-		IdleTimeout:  meta.IdleTimeout,
-		Alias:        meta.Alias,
-		Locked:       meta.Locked,
+		SandboxID:      meta.SandboxID,
+		Profile:        meta.ProfileName,
+		Substrate:      meta.Substrate,
+		Region:         meta.Region,
+		Status:         status,
+		CreatedAt:      meta.CreatedAt,
+		TTLExpiry:      meta.TTLExpiry,
+		IdleTimeout:    meta.IdleTimeout,
+		Alias:          meta.Alias,
+		Locked:         meta.Locked,
 		TeardownPolicy: meta.TeardownPolicy,
-		FailureReason: meta.FailureReason,
-		FailedAt:     meta.FailedAt,
+		FailureReason:  meta.FailureReason,
+		FailedAt:       meta.FailedAt,
 		// Phase 121 — action quota + freeze quarantine fields for km status display.
 		ActionLimits: meta.ActionLimits,
 		ActionFrozen: meta.ActionFrozen,
@@ -297,6 +297,19 @@ func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) 
 		awsCfg, cfgErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 		if cfgErr == nil {
 			ec2Client := ec2.NewFromConfig(awsCfg)
+			// A cross-account sandbox's instance lives in the LINKED account, so
+			// describing it with home credentials finds nothing and reports a
+			// running box as "killed" (Phase 126). Resolve the link's own client
+			// when the row names one; nil falls back to the home client.
+			if rec.LaunchAccount != "" {
+				// Best-effort: a config load failure here just leaves the home
+				// client in place, which is the pre-126 behaviour.
+				if linkCfg, loadErr := config.Load(); loadErr == nil {
+					if lc := newLaunchAccountEC2Cache(linkCfg, awsCfg).clientFor(ctx, rec.LaunchAccount); lc != nil {
+						ec2Client = lc
+					}
+				}
+			}
 			// Reconcile the stored status against the live instance in both
 			// directions — a box restarted after an idle-stop (or whose resume
 			// status write raced) leaves DDB "stopped" while the instance is

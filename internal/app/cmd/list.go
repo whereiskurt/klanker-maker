@@ -23,7 +23,6 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/localnumber"
 )
 
-
 // NewListCmd creates the "km list" subcommand.
 // Usage: km list [--json] [--tags]
 //
@@ -146,13 +145,24 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, check
 
 	if ec2Err == nil {
 		ec2Client := ec2.NewFromConfig(awsCfg)
+		// A cross-account sandbox's instance does NOT exist in the home account, so
+		// describing it here returns nothing and reconcileStatusFromInstances
+		// downgrades it to "killed" — a RUNNING GPU box reported as dead in the
+		// operator's primary view, which is the expensive direction to be wrong in.
+		// Resolve a per-link EC2 client so linked boxes are described where they
+		// actually live. Lazily built and cached: one AssumeRole per link, not per row.
+		linkClients := newLaunchAccountEC2Cache(cfg, awsCfg)
 		for i := range records {
 			if strings.HasPrefix(records[i].Substrate, "ec2") {
+				client := ec2Client
+				if lc := linkClients.clientFor(ctx, records[i].LaunchAccount); lc != nil {
+					client = lc
+				}
 				// Reconcile in both directions — a box restarted after an idle-stop
 				// (or a resume whose status write raced) leaves DDB "stopped" while
 				// the instance is actually running; without this it looks terminated.
-				records[i].Status = reconcileSandboxStatus(ctx, ec2Client, records[i].SandboxID, records[i].Status)
-				records[i].Hibernation = checkEC2Hibernation(ctx, ec2Client, records[i].SandboxID)
+				records[i].Status = reconcileSandboxStatus(ctx, client, records[i].SandboxID, records[i].Status)
+				records[i].Hibernation = checkEC2Hibernation(ctx, client, records[i].SandboxID)
 			}
 		}
 	}

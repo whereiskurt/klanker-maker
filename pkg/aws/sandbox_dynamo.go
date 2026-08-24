@@ -96,6 +96,9 @@ func (d *sandboxItemDynamo) toSandboxMetadata() (*SandboxMetadata, error) {
 		ClonedFrom:     d.ClonedFrom,
 		Locked:         d.Locked,
 		TeardownPolicy: d.TeardownPolicy,
+		// LaunchAccount is deliberately NOT set here: launch_account is a
+		// schema-on-write attribute read separately by unmarshalLaunchAccountField
+		// after this conversion, exactly like network_placement.
 	}
 
 	if d.TTLExpiryEpoch != 0 {
@@ -156,6 +159,7 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		ClonedFrom:            meta.ClonedFrom,
 		Locked:                meta.Locked,
 		TeardownPolicy:        meta.TeardownPolicy,
+		LaunchAccount:         meta.LaunchAccount,
 		SlackChannelID:        meta.SlackChannelID,
 		SlackInboundQueueURL:  meta.SlackInboundQueueURL,
 		GithubInboundQueueURL: meta.GithubInboundQueueURL,

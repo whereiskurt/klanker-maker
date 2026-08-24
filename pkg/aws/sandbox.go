@@ -12,29 +12,39 @@ import (
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	tagtypes "github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // SandboxRecord is the unified view of a sandbox used by km list and km status output.
 type SandboxRecord struct {
-	SandboxID    string     `json:"sandbox_id"`
-	Profile      string     `json:"profile"`
-	Substrate    string     `json:"substrate"`
-	Region       string     `json:"region"`
-	Status       string     `json:"status"`                    // "running", "stopped", "unknown"
-	CreatedAt    time.Time  `json:"created_at"`
-	TTLExpiry    *time.Time `json:"ttl_expiry,omitempty"`
-	TTLRemaining string     `json:"ttl_remaining,omitempty"` // "1h23m" or "expired"
-	IdleTimeout  string     `json:"idle_timeout,omitempty"`  // e.g. "15m", from profile
-	Alias         string     `json:"alias,omitempty"`          // human-friendly alias (e.g. "orc", "wrkr-1")
-	ClonedFrom    string     `json:"cloned_from,omitempty"`    // source sandbox ID if this is a clone
-	IdleRemaining string     `json:"idle_remaining,omitempty"` // "23m10s remaining" or "imminent"
+	SandboxID      string     `json:"sandbox_id"`
+	Profile        string     `json:"profile"`
+	Substrate      string     `json:"substrate"`
+	Region         string     `json:"region"`
+	Status         string     `json:"status"` // "running", "stopped", "unknown"
+	CreatedAt      time.Time  `json:"created_at"`
+	TTLExpiry      *time.Time `json:"ttl_expiry,omitempty"`
+	TTLRemaining   string     `json:"ttl_remaining,omitempty"`   // "1h23m" or "expired"
+	IdleTimeout    string     `json:"idle_timeout,omitempty"`    // e.g. "15m", from profile
+	Alias          string     `json:"alias,omitempty"`           // human-friendly alias (e.g. "orc", "wrkr-1")
+	ClonedFrom     string     `json:"cloned_from,omitempty"`     // source sandbox ID if this is a clone
+	IdleRemaining  string     `json:"idle_remaining,omitempty"`  // "23m10s remaining" or "imminent"
 	Locked         bool       `json:"locked,omitempty"`          // true if sandbox is locked against destroy/stop/pause
-	Hibernation    bool       `json:"hibernation,omitempty"`    // true if EC2 instance has hibernation configured
+	Hibernation    bool       `json:"hibernation,omitempty"`     // true if EC2 instance has hibernation configured
 	TeardownPolicy string     `json:"teardown_policy,omitempty"` // "destroy", "stop", or "retain"
-	Resources      []string   `json:"resources,omitempty"`      // ARNs, populated in status output only
+	Resources      []string   `json:"resources,omitempty"`       // ARNs, populated in status output only
+
+	// LaunchAccount names the launch_accounts.<name> link this sandbox was
+	// launched into, or empty for the home application account (Phase 126).
+	//
+	// Carried on the DISPLAY record, not just SandboxMetadata, because km list
+	// and km status resolve live instance state by describing EC2 with the
+	// km:sandbox-id tag — and a linked sandbox's instance does not exist in the
+	// home account. Without this field they describe the wrong account, find
+	// nothing, and render a running box as "killed".
+	LaunchAccount string `json:"launch_account,omitempty"`
 
 	// Live EC2 instance details — populated in km status output only (best-effort,
 	// resolved by km:sandbox-id tag). Empty for non-EC2 substrates or when the
