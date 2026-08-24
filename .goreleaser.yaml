@@ -136,10 +136,23 @@ release:
 
     You still need: `aws` CLI + `session-manager-plugin` (operator-provided).
 
-    ### Install — container (turn-key, nothing to install locally but Docker)
+    ### Install — container (nothing to install locally but Docker)
 
-    This archive carries everything the image build needs. Extract it and build
-    in place — no `git clone`, no `make`:
+    ```
+    docker run --rm -it \
+      -v "$HOME/.aws:/root/.aws" \
+      -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
+      ghcr.io/whereiskurt/klanker-maker/km-operator:v{{ .Version }}
+    ```
+
+    Multi-arch (amd64 + arm64). Lands you in a shell at `/klanker-maker` where
+    `./km create ...` works; or append a command to run one-shot:
+    `docker run ... km-operator ./km list`.
+
+    ### Build the container yourself
+
+    This archive also carries everything the image build needs. Extract it and
+    build in place — no `git clone`, no `make`:
 
     ```
     mkdir -p km-v{{ .Version }}

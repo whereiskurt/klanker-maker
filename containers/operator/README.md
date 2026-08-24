@@ -5,6 +5,42 @@ does not bundle: aws CLI v2, `session-manager-plugin`, `sops`, git/jq/ssh.
 Drops you into a shell at `/klanker-maker` with `km`, `km-config.yaml`, and
 `profiles/` in place.
 
+## Quick start — pull and run (no build)
+
+Published to GHCR on every release, multi-arch (amd64 + arm64), so `docker pull`
+picks the right one automatically:
+
+```bash
+docker run --rm -it \
+  -v "$HOME/.aws:/root/.aws" \
+  -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
+  ghcr.io/whereiskurt/klanker-maker/km-operator:latest
+```
+
+That lands you in a shell at `/klanker-maker`, where `./km ...` works directly.
+Pin a release with `:v0.7.0` instead of `:latest`.
+
+### Two ways to run it
+
+**Interactive** — the default. `-it` with no command gives you a shell in the
+work directory:
+
+```bash
+docker run --rm -it -v "$HOME/.aws:/root/.aws" ghcr.io/.../km-operator
+[sandbox]$ ./km create profiles/spot.yaml --remote
+```
+
+**One-shot** — append the command; it runs and exits with km's own exit code:
+
+```bash
+docker run --rm -v "$HOME/.aws:/root/.aws" ghcr.io/.../km-operator ./km list
+docker run --rm -v "$HOME/.aws:/root/.aws" ghcr.io/.../km-operator km validate profiles/spot.yaml
+```
+
+`./km` and a bare `km` both work — `/klanker-maker/km` is a symlink onto PATH.
+The startup banner is suppressed when output is not a TTY, so one-shot output
+pipes cleanly into `jq` and friends.
+
 ## Quick start — from a release tarball (no git clone)
 
 Every published release archive carries this Dockerfile, the profile library,
@@ -115,3 +151,8 @@ local cache write it then attempts is non-fatal).
 | `Dockerfile` | Two-stage build: verified fetch, then runtime |
 | `Dockerfile.dockerignore` | Build context allowlist — needed because the repo-root `.dockerignore` excludes `profiles/` |
 | `entrypoint.sh` | Startup banner reporting release + mount state |
+
+The image is published by `.github/workflows/publish-image.yml`, which triggers
+on `release: published` — not on tag push. goreleaser cuts a **draft** release,
+and a draft's assets are not publicly downloadable, so building at tag time
+would 404 or silently package the previous release.
