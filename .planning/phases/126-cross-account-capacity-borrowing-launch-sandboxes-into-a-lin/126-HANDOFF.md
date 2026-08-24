@@ -1,18 +1,27 @@
 # Phase 126 — session handoff (2026-08-24)
 
-## ⚠️ LIVE RESOURCE — CHECK THIS FIRST
-Sandbox **sb-be0fdcb8** (alias `xacct`) was created cross-account and may still be
-running at **~$10.49/hr** in account 481723467561.
+## ✅ NOTHING IS RUNNING (verified 2026-08-24)
+Account 481723467561 is clean: zero instances, zero volumes, no stale terraform
+locks. sb-be0fdcb8 was destroyed; its orphan 300GB volume and both stale lock
+items were removed by hand.
 
+Its failure was **"Error acquiring the state lock"** — a leftover lock from an
+earlier aborted run, NOT a cross-account defect. The locks are cleared, so a
+retry proceeds straight through.
+
+Always re-verify before assuming (km list can lag):
 ```bash
-./km list --wide                      # should now show it correctly (bug 11 fixed)
-./km destroy xacct --remote --yes     # tear down
-# verify (km list can lag):
 aws ec2 describe-instances --filters Name=tag:km:managed-by,Values=klankermaker \
   Name=instance-state-name,Values=pending,running,stopping,stopped \
   --region us-east-1 --profile sudo-management \
   --query 'Reservations[].Instances[].[InstanceId,State.Name]' --output text
+aws ec2 describe-volumes --region us-east-1 --profile sudo-management \
+  --filters Name=tag:km:managed-by,Values=klankermaker \
+  --query 'Volumes[].[VolumeId,State]' --output text
 ```
+If a create fails mid-apply, CHECK FOR AND CLEAR STALE LOCKS in
+tf-km-locks-use1 (LockID contains the sandbox id) — otherwise the next create
+fails with "Error acquiring the state lock".
 
 ## Status
 Phase 126 is EXECUTED and PROVEN LIVE. Branch `work/next3`, **PR #59**.
