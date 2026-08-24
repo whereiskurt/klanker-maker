@@ -115,6 +115,15 @@ const ec2ServiceHCLTemplate = `locals {
     vpc_id             = "{{ .VPCID }}"
     sandbox_subnets    = [{{ joinStrings .SandboxSubnets }}]
     availability_zones = [{{ joinStrings .AvailabilityZones }}]
+{{- if .ExistingSecurityGroupID }}
+
+    # Cross-account launch (Phase 126): reuse the security group and instance
+    # profile that km account add provisioned in the linked account. The launcher
+    # role holds neither ec2:CreateSecurityGroup nor iam:CreateRole, so creating
+    # per-sandbox equivalents here is not merely redundant but unauthorised.
+    existing_security_group_id     = "{{ .ExistingSecurityGroupID }}"
+    existing_instance_profile_name = "{{ .ExistingInstanceProfile }}"
+{{- end }}
 
     ec2spots = [
       {
@@ -517,7 +526,12 @@ type ec2HCLParams struct {
 	LaunchAccount      string
 	LauncherRoleARN    string
 	LauncherExternalID string
-	SGEgressRules      []SGRule
+	// Pre-provisioned linked-account security group / instance profile the sandbox
+	// reuses instead of creating its own. Emitted into module_inputs only when
+	// non-empty; the launcher role has no permission to create either (Phase 126).
+	ExistingSecurityGroupID string
+	ExistingInstanceProfile string
+	SGEgressRules           []SGRule
 	IAMPolicy          *IAMSessionPolicy
 	// Budget enforcement fields (BUDG-03, BUDG-07)
 	HasBudget        bool    // true when profile.spec.budget is set
@@ -789,6 +803,20 @@ type NetworkConfig struct {
 	// a RESOLVED SECRET VALUE (read from SSM SecureString by the caller) and must
 	// never be logged. Only meaningful when LaunchAccount is non-empty.
 	LauncherExternalID string
+	// ExistingSecurityGroupID and ExistingInstanceProfile are the PRE-PROVISIONED
+	// security group and instance profile in the linked account, which a
+	// cross-account sandbox reuses instead of creating its own per-sandbox pair.
+	//
+	// This is not an optimisation — it is what the launcher role permits. The
+	// launcher deliberately holds neither ec2:CreateSecurityGroup nor
+	// iam:CreateRole (its PassOnlyBoxRole statement: "The launcher never needs any
+	// role-creation permission at all"), and names this exact security group in its
+	// RunInstances resource list. Creating per-sandbox equivalents is unauthorised.
+	//
+	// Only meaningful when LaunchAccount is non-empty; empty keeps the ec2spot
+	// module creating its own, byte-identical to Phase 125.
+	ExistingSecurityGroupID string
+	ExistingInstanceProfile string
 }
 
 // EffectiveSandboxSubnets returns SandboxSubnets when it has been resolved by the caller,
@@ -882,7 +910,11 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		LaunchAccount:      network.LaunchAccount,
 		LauncherRoleARN:    network.LauncherRoleARN,
 		LauncherExternalID: network.LauncherExternalID,
-		SGEgressRules:      sgRules,
+		// Reuse the linked account's pre-provisioned pair rather than creating a
+		// per-sandbox one the launcher role has no permission to create.
+		ExistingSecurityGroupID: network.ExistingSecurityGroupID,
+		ExistingInstanceProfile: network.ExistingInstanceProfile,
+		SGEgressRules:           sgRules,
 		IAMPolicy:          iamPolicy,
 		AssociatePublicIP:  !p.Spec.Network.PrivateSubnet,
 		// Budget enforcement fields

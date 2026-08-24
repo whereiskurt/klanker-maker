@@ -238,6 +238,33 @@ func applyLaunchAccountNetwork(network *compiler.NetworkConfig, target *LaunchTa
 	network.LaunchAccount = target.LinkName
 	network.LauncherRoleARN = target.LauncherRoleARN
 	network.LauncherExternalID = target.ExternalID
+	// Reuse the linked account's pre-provisioned security group and instance
+	// profile instead of creating per-sandbox ones. Not an optimisation — the
+	// launcher role holds neither ec2:CreateSecurityGroup nor iam:CreateRole, so
+	// creating them is unauthorised and the apply fails outright.
+	network.ExistingSecurityGroupID = target.SecurityGroupID
+	network.ExistingInstanceProfile = instanceProfileNameFromRoleARN(target.BoxRoleARN)
+}
+
+// instanceProfileNameFromRoleARN derives the box instance-profile name from the
+// box role ARN. infra/modules/gpu-launcher-account names the two identically
+// ("${resource_prefix}-gpu-box"), so the profile name is the role ARN's final
+// path segment — which avoids threading a fourth field through the link record,
+// the handoff fragment, `km account register` and km-config.yaml just to carry a
+// value that is already determined.
+//
+// Returns "" for an empty or malformed ARN, which leaves the ec2spot module
+// creating its own profile — the pre-126 behaviour, and the safe direction to
+// fail for a same-account sandbox.
+func instanceProfileNameFromRoleARN(roleARN string) string {
+	if roleARN == "" {
+		return ""
+	}
+	idx := strings.LastIndex(roleARN, "/")
+	if idx < 0 || idx == len(roleARN)-1 {
+		return ""
+	}
+	return roleARN[idx+1:]
 }
 
 // ec2SubnetDescriber is the minimal EC2 interface hydrateLaunchAccountVPCID

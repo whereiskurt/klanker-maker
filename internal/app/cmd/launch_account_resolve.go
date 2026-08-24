@@ -47,7 +47,15 @@ type LaunchTarget struct {
 	// link's real one) — AWS rejects that at apply time.
 	VPCID string
 	// SecurityGroupID is the linked account's pre-provisioned security group id.
+	// The sandbox REUSES this rather than creating a per-sandbox group: the
+	// launcher role holds no ec2:CreateSecurityGroup, and names this exact group
+	// in its RunInstances resource list (Phase 126).
 	SecurityGroupID string
+	// BoxRoleARN is the linked account's pre-baked sandbox instance role. The
+	// sandbox reuses its instance profile rather than creating a per-sandbox role
+	// + profile: the launcher holds iam:PassRole on this one role and
+	// deliberately no iam:CreateRole at all.
+	BoxRoleARN string
 	// ResultsBucket is the linked account's results bucket (B→A read path).
 	ResultsBucket string
 	// EFSID is the linked account's shared filesystem id, or empty when the link
@@ -131,6 +139,7 @@ func ResolveLaunchTarget(ctx context.Context, cfg *config.Config, p *profile.San
 		SubnetIDs:         link.SubnetIDs,
 		AvailabilityZones: link.AvailabilityZones,
 		SecurityGroupID:   link.SecurityGroupID,
+		BoxRoleARN:        link.BoxRoleARN,
 		ResultsBucket:     link.ResultsBucket,
 		EFSID:             link.EFSID,
 	}, nil

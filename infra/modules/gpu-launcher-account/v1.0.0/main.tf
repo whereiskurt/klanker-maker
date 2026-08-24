@@ -174,16 +174,46 @@ resource "aws_iam_role_policy" "launcher" {
         }
       },
       {
+        # CREATE-time actions must gate on aws:RequestTag, never aws:ResourceTag.
+        # At authorization time the resource does not exist yet, so it carries no
+        # tags and an aws:ResourceTag condition can never match — the call is
+        # denied unconditionally. This was originally folded into the
+        # LifecycleTaggedOnly statement below and made every cross-account create
+        # fail with:
+        #
+        #   UnauthorizedOperation: not authorized to perform: ec2:CreateVolume on
+        #   resource: .../volume/* because no identity-based policy allows it
+        #
+        # ec2:CreateTags stays here too: the tag-on-create call terraform issues
+        # alongside CreateVolume/RunInstances is likewise authorized against the
+        # REQUESTED tags.
+        Sid    = "CreateTaggedResources"
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateVolume",
+          "ec2:CreateTags",
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestTag/km:managed-by" = "klankermaker"
+          }
+        }
+      },
+      {
+        # MUTATE-time actions on resources that already exist, so aws:ResourceTag
+        # is the correct condition key here — this is what confines the launcher
+        # to boxes km itself created.
         Sid    = "LifecycleTaggedOnly"
         Effect = "Allow"
         Action = [
-          "ec2:CreateTags",
           "ec2:TerminateInstances",
           "ec2:StopInstances",
           "ec2:StartInstances",
-          "ec2:CreateVolume",
           "ec2:AttachVolume",
+          "ec2:DetachVolume",
           "ec2:DeleteVolume",
+          "ec2:CreateTags",
         ]
         Resource = "*"
         Condition = {

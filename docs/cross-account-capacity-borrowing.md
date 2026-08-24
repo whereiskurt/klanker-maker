@@ -29,11 +29,30 @@ Phase 125. Nothing about this feature is GPU-specific — the launcher role's
   Slack/GitHub/HackerOne bridges, and email all continue to operate against the home
   account only.
 - **No multi-region support.** A link is single-region, matching the rest of km.
-- **No home-account metering or messaging on a linked box.** A linked sandbox's Bedrock
-  calls (if `--enable-bedrock` was set at enrollment) are **not** metered into the home
-  account's budget tables — this is explicit and documented, not an oversight. Slack/GitHub/
-  email notification wiring is unaffected either way, since none of it depends on which
-  account holds the EC2 instance.
+- **No home-account metering on a linked box.** A linked sandbox's Bedrock calls (if
+  `--enable-bedrock` was set at enrollment) are **not** metered into the home account's
+  budget tables — this is explicit and documented, not an oversight.
+- **A linked box runs with a narrower instance role, and loses the integrations that
+  depend on it.** A same-account sandbox gets a *per-sandbox* IAM role carrying twelve
+  grants. A linked sandbox instead reuses the pre-baked `{prefix}-gpu-box` role that
+  `km account add` provisioned, which carries four: read the home artifacts bucket, read/write
+  its own results bucket, read its own instance tags, and optional Bedrock. Concretely, on a
+  linked box these do **not** work: budget metering, GitHub token fetch, Slack inbound,
+  GitHub inbound, Slack transcript upload, sandbox secrets (SOPS), and EventBridge.
+  `km shell`, artifact fetch, results upload and model serving all work normally.
+
+  This is not a temporary gap that a wider policy would close. Most of those grants target
+  **home-account** resources, and cross-account access needs a resource-based policy on the
+  home side — which SQS, S3 and KMS support, but **SSM Parameter Store and DynamoDB do
+  not**. The GitHub token (SSM) and the budget/transcript tables (DynamoDB) therefore
+  cannot be reached from an account-B role by IAM alone at all. Restoring parity requires
+  the box to assume a role back into the home account, which is deliberately out of scope
+  for this phase.
+
+  Nor is reuse merely a convention: the launcher role holds neither
+  `ec2:CreateSecurityGroup` nor `iam:CreateRole` — its `PassOnlyBoxRole` statement is
+  explicit that "the launcher never needs any role-creation permission at all" — so a
+  sandbox that tried to create its own pair would fail the apply outright.
 - **No Go-side `RunInstances`.** The actual launch stays terragrunt-driven, exactly like
   every other sandbox — a generated Terraform provider `assume_role` block does the
   cross-account work, not a hand-rolled AWS SDK call.

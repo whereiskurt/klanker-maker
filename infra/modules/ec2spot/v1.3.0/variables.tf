@@ -182,3 +182,22 @@ variable "spot_create_timeout" {
   description = "Spot fulfillment timeout. Keep <=3m so a 4-AZ sweep fits the Lambda 900s budget."
   default     = "3m"
 }
+
+# ---------------------------------------------------------------------------
+# Cross-account capacity borrowing (Phase 126, REQ-126-LAUNCH)
+# ---------------------------------------------------------------------------
+# Both additive with empty defaults: an unset pair is byte-identical to pre-126
+# behaviour (this module creates its own per-sandbox security group, IAM role and
+# instance profile, exactly as before).
+
+variable "existing_security_group_id" {
+  type        = string
+  description = "Reuse this pre-provisioned security group instead of creating a per-sandbox one. Set from the launch-account link record when launching cross-account — the launcher role has no ec2:CreateSecurityGroup permission and names this exact group in its RunInstances resource list. Empty = create one (default, same-account behaviour)."
+  default     = ""
+}
+
+variable "existing_instance_profile_name" {
+  type        = string
+  description = "Reuse this pre-provisioned instance profile instead of creating a per-sandbox role + profile. Set from the launch-account link record when launching cross-account — the launcher role holds iam:PassRole on this one role and deliberately has no iam:CreateRole. NOTE: the pre-baked box role carries a narrower grant set than the per-sandbox role, so budget metering, GitHub token fetch, Slack/GitHub inbound and sandbox secrets are unavailable on a linked box. Empty = create one (default, same-account behaviour)."
+  default     = ""
+}

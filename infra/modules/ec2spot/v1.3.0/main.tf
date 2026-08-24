@@ -110,6 +110,41 @@ locals {
   # Gates count = 1 on data.aws_ami.base_ami below.
   use_slug_lookup = var.ami_slug != "" && local.total_ec2spot_count > 0
 
+  # ---------------------------------------------------------------------------
+  # Cross-account capacity borrowing (Phase 126, REQ-126-LAUNCH)
+  # ---------------------------------------------------------------------------
+  # When this sandbox launches into a LINKED account, it reuses the security
+  # group and instance profile that `km account add` already provisioned there,
+  # instead of creating its own per-sandbox pair.
+  #
+  # This is the design the launcher role was written for. Its PassOnlyBoxRole
+  # statement says so explicitly: "The launcher can attach ONLY the one pre-baked
+  # box role — never a role it (or an attacker holding the launcher) creates on
+  # the fly — and only when EC2 is the passed-to service. The launcher never
+  # needs any role-creation permission at all." The launcher likewise names the
+  # link's security group in its RunInstances resource list. Creating per-sandbox
+  # equivalents is therefore not merely unnecessary, it is unauthorised — the
+  # launcher has neither iam:CreateRole nor ec2:CreateSecurityGroup, by design.
+  #
+  # TRADE-OFF, deliberate and documented: the pre-baked box role carries only
+  # artifacts-read, results-read/write, own-instance-tag-read and optional
+  # Bedrock. A cross-account sandbox therefore does NOT get the twelve
+  # per-sandbox grants below (budget DynamoDB, GitHub token, Slack/GitHub inbound
+  # SQS, Slack transcript, sandbox secrets, EventBridge). Most of those target
+  # HOME-account resources, and SSM Parameter Store and DynamoDB support no
+  # resource-based policy at all, so they cannot be granted to an account-B role
+  # by IAM alone regardless. Restoring parity needs a back-assume path into the
+  # home account, which is out of scope here. See
+  # docs/cross-account-capacity-borrowing.md § What this buys.
+  #
+  # Both toggles are independently empty-defaulted, so a same-account sandbox is
+  # byte-identical to pre-126 behaviour.
+  create_security_group = local.total_ec2spot_count > 0 && var.existing_security_group_id == ""
+  create_instance_role  = local.total_ec2spot_count > 0 && var.existing_instance_profile_name == ""
+
+  effective_security_group_id = var.existing_security_group_id != "" ? var.existing_security_group_id : one(aws_security_group.ec2spot[*].id)
+  effective_instance_profile  = var.existing_instance_profile_name != "" ? var.existing_instance_profile_name : one(aws_iam_instance_profile.ec2spot[*].name)
+
   # Create a flattened list of EC2 spot instances
   ec2spot_instances = flatten([
     for idx, ec2spot in local.region_ec2spots : [
@@ -197,7 +232,7 @@ data "aws_ec2_spot_price" "price" {
 # Security group for EC2 spot instances (SSM-only; no SSH ingress)
 # Egress left empty — Phase 2 profile compiler configures per-profile egress rules
 resource "aws_security_group" "ec2spot" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.create_security_group ? 1 : 0
 
   name        = "${var.resource_prefix}-ec2spot-${var.sandbox_id}-${var.region_label}"
   description = "Security group for km sandbox EC2 spot hosts (SSM-only access)"
@@ -216,7 +251,7 @@ resource "aws_security_group" "ec2spot" {
 # Egress rules compiled from the sandbox profile (NETW-01)
 # The profile compiler populates sg_egress_rules via service.hcl module_inputs.
 resource "aws_security_group_rule" "ec2spot_egress" {
-  count = local.total_ec2spot_count > 0 ? length(var.sg_egress_rules) : 0
+  count = local.create_security_group ? length(var.sg_egress_rules) : 0
 
   type              = "egress"
   from_port         = var.sg_egress_rules[count.index].from_port
@@ -229,7 +264,7 @@ resource "aws_security_group_rule" "ec2spot_egress" {
 
 # IAM role for SSM access (no SSH needed)
 resource "aws_iam_role" "ec2spot_ssm" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.create_instance_role ? 1 : 0
 
   name                 = "${var.resource_prefix}-ec2spot-ssm-${var.sandbox_id}-${var.region_label}"
   max_session_duration = var.iam_session_policy.max_session_duration
@@ -257,7 +292,7 @@ resource "aws_iam_role" "ec2spot_ssm" {
 # Optional region-lock inline policy (NETW-04): restricts API calls to allowed regions only.
 # Only created when iam_session_policy.allowed_regions is non-empty.
 resource "aws_iam_role_policy" "ec2spot_region_lock" {
-  count = (local.total_ec2spot_count > 0 && length(var.iam_session_policy.allowed_regions) > 0) ? 1 : 0
+  count = (local.create_instance_role && length(var.iam_session_policy.allowed_regions) > 0) ? 1 : 0
 
   name = "${var.resource_prefix}-ec2spot-region-lock-${var.region_label}"
   role = aws_iam_role.ec2spot_ssm[0].id
@@ -280,7 +315,7 @@ resource "aws_iam_role_policy" "ec2spot_region_lock" {
 }
 
 resource "aws_iam_role_policy_attachment" "ec2spot_ssm" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.create_instance_role ? 1 : 0
 
   role       = aws_iam_role.ec2spot_ssm[0].name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -289,7 +324,7 @@ resource "aws_iam_role_policy_attachment" "ec2spot_ssm" {
 # Policy: EventBridge PutEvents so the audit-log sidecar can publish SandboxIdle events (PROV-06)
 # Note: PutEvents does not support resource-level restrictions for the default event bus.
 resource "aws_iam_role_policy" "ec2spot_eventbridge" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.create_instance_role ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-eventbridge"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
@@ -305,7 +340,7 @@ resource "aws_iam_role_policy" "ec2spot_eventbridge" {
 
 # Policy: Bedrock model invocation for Claude Code AI calls
 resource "aws_iam_role_policy" "ec2spot_bedrock" {
-  count = local.total_ec2spot_count > 0 && var.enable_bedrock ? 1 : 0
+  count = local.create_instance_role && var.enable_bedrock ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-bedrock"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
@@ -363,7 +398,7 @@ resource "aws_iam_role_policy" "ec2spot_bedrock" {
 # The km-http-proxy sidecar intercepts Bedrock responses via MITM, extracts token
 # counts, and writes AI spend to the km-budgets DynamoDB table.
 resource "aws_iam_role_policy" "ec2spot_budget_dynamo" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.create_instance_role ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-budget-dynamo"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
@@ -399,7 +434,7 @@ resource "aws_iam_role_policy" "ec2spot_budget_dynamo" {
 # The github-token module creates a per-sandbox KMS key and SSM parameter.
 # The sandbox role needs kms:Decrypt to read the SSM SecureString token.
 resource "aws_iam_role_policy" "ec2spot_github_token" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.create_instance_role ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-github-token"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
@@ -454,7 +489,7 @@ resource "aws_iam_role_policy" "ec2spot_github_token" {
 # The queue name follows the pattern: {resource_prefix}-slack-inbound-{sandbox_id}.fifo
 # where resource_prefix defaults to "km" (Phase 66 multi-instance aware).
 resource "aws_iam_role_policy" "ec2spot_slack_inbound_sqs" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.create_instance_role ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-slack-inbound"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
@@ -487,7 +522,7 @@ resource "aws_iam_role_policy" "ec2spot_slack_inbound_sqs" {
 # Scoped to the sandbox's OWN queue ARN only (cross-sandbox access prevented by
 # IAM, not just naming). Queue name: {resource_prefix}-github-inbound-{sandbox_id}.fifo
 resource "aws_iam_role_policy" "ec2spot_github_inbound_sqs" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.create_instance_role ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-github-inbound"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
@@ -516,7 +551,7 @@ resource "aws_iam_role_policy" "ec2spot_github_inbound_sqs" {
 # on var.artifacts_bucket — when empty, the policy is omitted entirely so
 # pre-Phase-68 callers continue to compile unchanged.
 resource "aws_iam_role_policy" "ec2spot_slack_transcript_s3" {
-  count = (local.total_ec2spot_count > 0 && var.artifacts_bucket != "") ? 1 : 0
+  count = (local.create_instance_role && var.artifacts_bucket != "") ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-slack-transcript-s3"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
@@ -538,7 +573,7 @@ resource "aws_iam_role_policy" "ec2spot_slack_transcript_s3" {
 # the sandbox might be launched in. Gated on var.slack_stream_messages_table_name —
 # when empty, the policy is omitted.
 resource "aws_iam_role_policy" "ec2spot_slack_transcript_ddb" {
-  count = (local.total_ec2spot_count > 0 && var.slack_stream_messages_table_name != "") ? 1 : 0
+  count = (local.create_instance_role && var.slack_stream_messages_table_name != "") ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-slack-transcript-ddb"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
@@ -556,7 +591,7 @@ resource "aws_iam_role_policy" "ec2spot_slack_transcript_ddb" {
 }
 
 resource "aws_iam_instance_profile" "ec2spot" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.create_instance_role ? 1 : 0
 
   name = "${var.resource_prefix}-ec2spot-profile-${var.sandbox_id}-${var.region_label}"
   role = aws_iam_role.ec2spot_ssm[0].name
@@ -590,8 +625,8 @@ resource "aws_spot_instance_request" "ec2spot" {
   user_data              = null # use user_data_base64 instead
   subnet_id              = each.value.subnet_id
   availability_zone      = each.value.availability_zone
-  vpc_security_group_ids = [aws_security_group.ec2spot[0].id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2spot[0].name
+  vpc_security_group_ids = [local.effective_security_group_id]
+  iam_instance_profile   = local.effective_instance_profile
 
   # IMDSv2 enforcement — http_tokens = required means only v2 token-based requests allowed
   metadata_options {
@@ -698,8 +733,8 @@ resource "aws_instance" "ec2_ondemand" {
   user_data_base64       = each.value.user_data_base64 != "" ? each.value.user_data_base64 : base64encode(local.default_user_data)
   subnet_id              = each.value.subnet_id
   availability_zone      = each.value.availability_zone
-  vpc_security_group_ids = [aws_security_group.ec2spot[0].id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2spot[0].name
+  vpc_security_group_ids = [local.effective_security_group_id]
+  iam_instance_profile   = local.effective_instance_profile
 
   # Hibernation must be set at launch time; requires encrypted root volume (set below).
   hibernation = var.hibernation_enabled
@@ -812,7 +847,7 @@ resource "aws_volume_attachment" "snapshot" {
 #   Gated on var.artifacts_bucket != "" so pre-Phase-89 callers compile unchanged.
 
 resource "aws_iam_role_policy" "ec2spot_sandbox_secrets_kms" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.create_instance_role ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-sandbox-secrets-kms"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
@@ -835,7 +870,7 @@ resource "aws_iam_role_policy" "ec2spot_sandbox_secrets_kms" {
 }
 
 resource "aws_iam_role_policy" "ec2spot_sandbox_secrets_s3" {
-  count = (local.total_ec2spot_count > 0 && var.artifacts_bucket != "") ? 1 : 0
+  count = (local.create_instance_role && var.artifacts_bucket != "") ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-sandbox-secrets-s3"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
