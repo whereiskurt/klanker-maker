@@ -17,6 +17,10 @@ LDFLAGS      = -X github.com/whereiskurt/klanker-maker/pkg/version.Number=v$(KM_
                -X github.com/whereiskurt/klanker-maker/pkg/version.GitCommit=$(GIT_COMMIT)
 
 VERSION     ?= latest
+
+# km release tag baked into the operator client image.
+# 'latest' resolves the newest published release at build time.
+KM_RELEASE  ?= latest
 REGION      ?= $(shell aws configure get region 2>/dev/null || grep '^region:' km-config.yaml 2>/dev/null | awk '{print $$2}')
 ACCOUNT_ID   = $(shell aws sts get-caller-identity --query Account --output text)
 ECR_REGISTRY = $(ACCOUNT_ID).dkr.ecr.$(REGION).amazonaws.com
@@ -29,7 +33,7 @@ SIDECARS := dns-proxy http-proxy audit-log
 OTELCOL_VERSION ?= 0.120.0
 OTELCOL_URL     := https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTELCOL_VERSION)/otelcol-contrib_$(OTELCOL_VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image smoke-test-sandbox generate-ebpf test test-no-82.1-leftovers test-phase-84-1-import-blocks test-phase-84-1-removed-blocks test-phase-84-1-terraform-validate
+.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image smoke-test-sandbox operator-image operator-shell generate-ebpf test test-no-82.1-leftovers test-phase-84-1-import-blocks test-phase-84-1-removed-blocks test-phase-84-1-terraform-validate
 
 ## generate-ebpf: compile BPF C programs via bpf2go inside Docker (works from macOS)
 ## Regenerates pkg/ebpf/bpf_bpfel.go, pkg/ebpf/bpf_bpfel.o,
@@ -186,6 +190,32 @@ sandbox-image:
 	  --tag km-sandbox:latest \
 	  --load \
 	  containers/sandbox/
+
+## operator-image: build the km operator client image (km release + aws CLI + ssm plugin)
+## Pin a release with: make operator-image KM_RELEASE=v0.7.0
+operator-image:
+	docker buildx build \
+	  --file containers/operator/Dockerfile \
+	  --build-arg KM_VERSION=$(KM_RELEASE) \
+	  --tag km:$(VERSION) \
+	  --tag km:latest \
+	  --load \
+	  .
+
+## operator-shell: run the operator image with ~/.aws and km-config.yaml mounted
+## Guarded: docker silently creates a DIRECTORY at a bind-mount source that does
+## not exist, which would shadow the baked km-config.yaml with an unreadable dir.
+operator-shell:
+	@test -f km-config.yaml || { \
+	  echo "km-config.yaml not found in $(PWD)."; \
+	  echo "It is gitignored — create one with 'km configure', or copy docs/km-config.example.yaml."; \
+	  echo "To start a shell without it: docker run --rm -it -v \"$$HOME/.aws:/root/.aws\" km:latest"; \
+	  exit 1; }
+	docker run --rm -it \
+	  -v "$(HOME)/.aws:/root/.aws" \
+	  -v "$(PWD)/km-config.yaml:/klanker-maker/km-config.yaml" \
+	  $(if $(AWS_PROFILE),-e AWS_PROFILE=$(AWS_PROFILE),) \
+	  km:latest
 
 ## smoke-test-sandbox: build and smoke-test the km-sandbox container image
 smoke-test-sandbox: sandbox-image

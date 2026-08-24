@@ -1,0 +1,208 @@
+# Publish the km operator client image to GHCR.
+#
+# Deliberately NOT part of release.yml. goreleaser creates a DRAFT release
+# (.goreleaser.yaml `release.draft: true`), and a draft's assets are not
+# publicly downloadable — nor does /releases/latest return drafts. The image
+# build downloads the km tarball from the release, so building at tag-push time
+# would 404, or worse, silently resolve to the PREVIOUS release and ship a
+# mislabeled image. Keying on `release: published` means this runs only once you
+# publish the draft from the GH UI, when the assets are actually public.
+#
+# ONE-TIME MANUAL STEP after the first successful run: GHCR packages default to
+# private even on a public repo. Open the package settings and set visibility to
+# Public, or `docker pull` fails with an auth error for everyone else.
+# GITHUB_TOKEN cannot change package visibility, so this cannot be automated here.
+
+name: publish-image
+
+on:
+  release:
+    types: [published]
+  # Manual re-publish (e.g. after fixing the Dockerfile without cutting a new km
+  # release). The tag must name an already-published, non-draft release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release tag to build (e.g. v0.7.0)'
+        required: true
+        type: string
+      mark_latest:
+        description: 'Also move the :latest tag to this image'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: publish-image-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/km
+
+jobs:
+  # Resolve tag + :latest eligibility once, in shell, rather than repeating a
+  # fragile expression in every job. On workflow_dispatch `github.event.release`
+  # is null, so `.prerelease` would render as an empty string — not the
+  # "true"/"false" that metadata-action's `enable=` requires.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      latest: ${{ steps.resolve.outputs.latest }}
+    steps:
+      - id: resolve
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+          MARK_LATEST: ${{ inputs.mark_latest }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE_TAG}" ]; then
+            tag="${RELEASE_TAG}"
+            # A prerelease (goreleaser sets `prerelease: auto`, so any -rc tag)
+            # must never take :latest away from the current stable release.
+            if [ "${IS_PRERELEASE}" = "true" ]; then latest=false; else latest=true; fi
+          else
+            tag="${INPUT_TAG}"
+            if [ "${MARK_LATEST}" = "false" ]; then latest=false; else latest=true; fi
+          fi
+          [ -n "${tag}" ] || { echo "could not resolve a release tag" >&2; exit 1; }
+          echo "tag=${tag}"       >> "$GITHUB_OUTPUT"
+          echo "latest=${latest}" >> "$GITHUB_OUTPUT"
+          echo "building ${tag} (latest=${latest})"
+
+  # One native runner per architecture. QEMU emulation would work but this image
+  # runs apt-get, the aws CLI installer and dpkg -i; emulated arm64 takes
+  # 15-25 min against a few minutes native. Each job pushes an untagged image by
+  # digest; the merge job joins them into one multi-arch tag.
+  build:
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          # Native arm64 runners are free for PUBLIC repos. If this repo ever
+          # goes private, this label needs a paid plan — swap to QEMU
+          # (docker/setup-qemu-action) and accept the slower build.
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      # Build the Dockerfile AS OF the released tag, not whatever main holds
+      # now, so the image matches the source people can read for that release.
+      - name: Checkout at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: containers/operator/Dockerfile
+          platforms: ${{ matrix.platform }}
+          # Pin km to THIS release rather than letting the Dockerfile resolve
+          # `latest` — otherwise an image tagged v0.7.0 could contain v0.7.1.
+          build-args: |
+            KM_VERSION=${{ needs.prepare.outputs.tag }}
+          provenance: false
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Smoke-test the image just built
+        run: |
+          set -euo pipefail
+          ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+          # Each runner is native for its own arch, so this really executes.
+          docker run --rm "$ref" ./km --version
+          docker run --rm "$ref" ./km validate profiles/spot.yaml
+          test "$(docker run --rm "$ref" ls profiles | grep -c '\.yaml$')" -ge 20
+
+      # The filename carries the digest, and the merge job re-adds the
+      # "sha256:" prefix — so strip it here. Leaving it on yields
+      # "@sha256:sha256:..." and imagetools rejects the reference.
+      - name: Export digest
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+          if-no-files-found: error
+
+  # Join the per-arch digests into a single multi-arch tag, so `docker pull`
+  # picks the right architecture automatically.
+  merge:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.tag }}
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.latest }}
+
+      - name: Create multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+      - name: Verify the published manifest
+        run: |
+          set -euo pipefail
+          ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.tag }}"
+          docker buildx imagetools inspect "$ref"
+          # Both architectures must be present, or the pull silently works for
+          # only half the audience.
+          for want in amd64 arm64; do
+            docker buildx imagetools inspect "$ref" --raw \
+              | jq -e --arg a "$want" '.manifests[] | select(.platform.architecture==$a)' >/dev/null \
+              || { echo "missing $want in the published manifest" >&2; exit 1; }
+          done
