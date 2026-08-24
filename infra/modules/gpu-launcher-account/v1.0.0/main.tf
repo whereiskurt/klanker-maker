@@ -339,6 +339,26 @@ locals {
       Resource = "${var.artifacts_bucket_arn}/*"
     },
     {
+      # s3:ListBucket is REQUIRED alongside GetObject, and is a separate
+      # statement because ListBucket authorizes against the BUCKET arn while
+      # GetObject authorizes against the OBJECT arn ("<bucket>/*") — one
+      # statement cannot carry both correctly.
+      #
+      # Without this a linked box cannot fetch its model weights at all: the
+      # profile's km-stage-model.sh runs `aws s3 sync`, which calls
+      # ListObjectsV2 to enumerate the prefix before it downloads anything, and
+      # the sync fails with AccessDenied even though every individual GetObject
+      # would have been allowed. The same applies to any sidecar or artifact
+      # fetch that enumerates rather than naming an exact key.
+      #
+      # Read-only: List and Get only. The no-cross-account-write invariant on
+      # the home bucket is unchanged — there is deliberately no PutObject here.
+      Sid      = "ListHomeArtifacts"
+      Effect   = "Allow"
+      Action   = ["s3:ListBucket"]
+      Resource = var.artifacts_bucket_arn
+    },
+    {
       Sid    = "ReadWriteOwnResultsBucket"
       Effect = "Allow"
       Action = [

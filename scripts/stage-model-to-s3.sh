@@ -45,6 +45,12 @@ set -euo pipefail
 
 REPO="OBLITERATUS/Qwen3.8-27B-OBLITERATED"
 SLUG="qwen38-oblit-27b"
+# Pin the upstream commit by default. This repo is rebuilt in place — the V3
+# pass on 2026-08-23 rewrote chat_template.jinja and fixed an eos_token_id/
+# pad_token_id bug that caused early stopping, without changing the repo id.
+# An unpinned stage therefore silently changes what every sandbox serves. Pass
+# --revision main to deliberately take whatever is current.
+REVISION="af34629438e091685513fe2f66c0f2918de5734c"
 BUCKET="${KM_ARTIFACTS_BUCKET:-}"
 WORKDIR=""
 KEEP=0
@@ -54,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --bucket)  BUCKET="$2"; shift 2 ;;
     --slug)    SLUG="$2"; shift 2 ;;
     --repo)    REPO="$2"; shift 2 ;;
+    --revision) REVISION="$2"; shift 2 ;;
     --workdir) WORKDIR="$2"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
@@ -121,27 +128,68 @@ fi
 
 DEST="s3://${BUCKET}/models/${SLUG}/"
 
-echo "==> repo   : ${REPO}"
-echo "==> local  : ${WORKDIR}"
-echo "==> target : ${DEST}"
+echo "==> repo     : ${REPO}"
+echo "==> revision : ${REVISION}"
+echo "==> local    : ${WORKDIR}"
+echo "==> target   : ${DEST}"
 echo
 
 mkdir -p "$WORKDIR"
 
-echo "==> downloading safetensors (GGUF, MLX and benchmark trees excluded)"
-# One --exclude PER pattern. huggingface_hub 1.x moved this CLI to Typer, where
-# --exclude takes a single TEXT value; trailing bare patterns are then parsed as
-# the positional FILENAMES argument instead, which silently flips the command
-# into "download exactly these files" and warns
-#   "Ignoring `--exclude` since filenames have been explicitly set"
-# before fetching 0 files and exiting 0. Repeated flags DO accumulate (verified
-# against 1.28.0 with --dry-run: 14 files / 29.9G, benchmarks excluded).
+# --------------------------------------------------------------------------
+# Pass 1: the index and the small files.
+# --------------------------------------------------------------------------
+# An exclude-list download is not sufficient here. This repo carries TWO
+# safetensors shard sets — an orphaned 18-shard set left over from before the
+# V2 multimodal rebuild, and the live 28-shard set the index actually
+# references. Excluding only *.gguf/mlx/benchmarks pulls BOTH, roughly doubling
+# the download and the S3 footprint with ~55G of weights nothing loads, and
+# every linked sandbox then pays cross-account egress on the dead half too.
+#
+# So: fetch the index first, then ask for exactly the shards it names. That is
+# also self-maintaining — the next orphaned shard set costs nothing.
+echo "==> downloading index + config files"
 "$HF_BIN" download "$REPO" \
+  --revision "$REVISION" \
   --local-dir "$WORKDIR" \
+  --exclude "*.safetensors" \
   --exclude "*.gguf" \
   --exclude "mlx-4bit/*" \
   --exclude "mlx-8bit/*" \
   --exclude "benchmarks/*"
+
+IDX="${WORKDIR}/model.safetensors.index.json"
+if [[ ! -s "$IDX" ]]; then
+  echo "ERROR: ${IDX} missing after pass 1 — cannot determine which shards to fetch." >&2
+  exit 1
+fi
+
+# --------------------------------------------------------------------------
+# Pass 2: exactly the shards the index references.
+# --------------------------------------------------------------------------
+# hf download takes positional FILENAMES; passing them turns the command into
+# "fetch exactly these", which is precisely what we want here. Note this is the
+# same behaviour that silently defeats --exclude (see the flag note below), so
+# the two passes must stay separate — never combine filenames with --exclude.
+mapfile -t SHARDS < <(python3 -c "import json,sys;print('\n'.join(sorted(set(json.load(open(sys.argv[1]))['weight_map'].values()))))" "$IDX")
+if [[ ${#SHARDS[@]} -eq 0 ]]; then
+  echo "ERROR: index references no shards — refusing to stage an empty weight set." >&2
+  exit 1
+fi
+
+echo "==> downloading ${#SHARDS[@]} shard(s) named by the index"
+"$HF_BIN" download "$REPO" \
+  --revision "$REVISION" \
+  --local-dir "$WORKDIR" \
+  "${SHARDS[@]}"
+
+# Flag note, kept from the original single-pass form because it still governs
+# pass 1: one --exclude PER pattern. huggingface_hub 1.x moved this CLI to
+# Typer, where --exclude takes a single TEXT value; trailing bare patterns are
+# then parsed as the positional FILENAMES argument instead, which silently
+# flips the command into "download exactly these files" and warns
+#   "Ignoring `--exclude` since filenames have been explicitly set"
+# before fetching 0 files and exiting 0. Repeated flags DO accumulate.
 
 # Verify locally before uploading — a partial upload turns into a crash-looping
 # vllm.service on every sandbox that syncs it, so catch it here instead.
