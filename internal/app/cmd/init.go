@@ -1826,6 +1826,13 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			LauncherRoleARN string `json:"launcher_role_arn"`
 			ExternalIDSSM   string `json:"external_id_ssm"`
 			Region          string `json:"region"`
+			// BoxRoleARN is consumed by the ses module, which emits the
+			// artifacts-bucket read grant for each link declaratively so a
+			// terragrunt apply converges on that grant instead of erasing the
+			// one `km account register` wrote imperatively (REQ-126-REGISTER).
+			// Additive: the ttl-handler and create-handler modules jsondecode
+			// the same payload and simply ignore the extra key.
+			BoxRoleARN string `json:"box_role_arn"`
 		}
 		payload := make(map[string]launchAccountPayloadEntry, len(cfg.LaunchAccounts))
 		for name, link := range cfg.GetLaunchAccounts() {
@@ -1833,6 +1840,7 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 				LauncherRoleARN: link.LauncherRoleARN,
 				ExternalIDSSM:   link.ExternalIDSSM,
 				Region:          link.Region,
+				BoxRoleARN:      link.BoxRoleARN,
 			}
 		}
 		jsonBytes, err := json.Marshal(payload)
