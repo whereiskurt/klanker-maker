@@ -14,7 +14,7 @@ picks the right one automatically:
 docker run --rm -it \
   -v "$HOME/.aws:/root/.aws" \
   -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
-  ghcr.io/whereiskurt/klanker-maker/km-operator:latest
+  ghcr.io/whereiskurt/klanker-maker/km:latest
 ```
 
 That lands you in a shell at `/klanker-maker`, where `./km ...` works directly.
@@ -26,15 +26,15 @@ Pin a release with `:v0.7.0` instead of `:latest`.
 work directory:
 
 ```bash
-docker run --rm -it -v "$HOME/.aws:/root/.aws" ghcr.io/.../km-operator
+docker run --rm -it -v "$HOME/.aws:/root/.aws" ghcr.io/.../km
 [sandbox]$ ./km create profiles/spot.yaml --remote
 ```
 
 **One-shot** — append the command; it runs and exits with km's own exit code:
 
 ```bash
-docker run --rm -v "$HOME/.aws:/root/.aws" ghcr.io/.../km-operator ./km list
-docker run --rm -v "$HOME/.aws:/root/.aws" ghcr.io/.../km-operator km validate profiles/spot.yaml
+docker run --rm -v "$HOME/.aws:/root/.aws" ghcr.io/.../km ./km list
+docker run --rm -v "$HOME/.aws:/root/.aws" ghcr.io/.../km km validate profiles/spot.yaml
 ```
 
 `./km` and a bare `km` both work — `/klanker-maker/km` is a symlink onto PATH.
@@ -53,9 +53,9 @@ tar -xJf km_v0.7.0_linux_amd64.tar.xz -C km-v0.7.0
 cd km-v0.7.0
 
 docker build -f containers/operator/Dockerfile \
-  --build-arg KM_VERSION=v0.7.0 -t km-operator .
+  --build-arg KM_VERSION=v0.7.0 -t km .
 
-docker run --rm -it -v "$HOME/.aws:/root/.aws" km-operator
+docker run --rm -it -v "$HOME/.aws:/root/.aws" km:latest
 ```
 
 Pass `--build-arg KM_VERSION=v0.7.0` so the image matches the archive you
@@ -71,12 +71,12 @@ No `make` required — two plain docker commands:
 git clone https://github.com/whereiskurt/klanker-maker.git
 cd klanker-maker
 
-docker build -f containers/operator/Dockerfile -t km-operator .
+docker build -f containers/operator/Dockerfile -t km .
 
 docker run --rm -it \
   -v "$HOME/.aws:/root/.aws" \
   -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
-  km-operator
+  km
 ```
 
 `make operator-image` and `make operator-shell` are aliases for exactly those
@@ -117,7 +117,7 @@ Pin a specific release for a reproducible image:
 
 ```bash
 docker build -f containers/operator/Dockerfile \
-  --build-arg KM_VERSION=v0.7.0 -t km-operator:v0.7.0 .
+  --build-arg KM_VERSION=v0.7.0 -t km:v0.7.0 .
 # or: make operator-image KM_RELEASE=v0.7.0
 ```
 

@@ -38,7 +38,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/km-operator
+  IMAGE_NAME: ${{ github.repository }}/km
 
 jobs:
   # Resolve tag + :latest eligibility once, in shell, rather than repeating a

@@ -197,8 +197,8 @@ operator-image:
 	docker buildx build \
 	  --file containers/operator/Dockerfile \
 	  --build-arg KM_VERSION=$(KM_RELEASE) \
-	  --tag km-operator:$(VERSION) \
-	  --tag km-operator:latest \
+	  --tag km:$(VERSION) \
+	  --tag km:latest \
 	  --load \
 	  .
 
@@ -209,13 +209,13 @@ operator-shell:
 	@test -f km-config.yaml || { \
 	  echo "km-config.yaml not found in $(PWD)."; \
 	  echo "It is gitignored — create one with 'km configure', or copy docs/km-config.example.yaml."; \
-	  echo "To start a shell without it: docker run --rm -it -v \"$$HOME/.aws:/root/.aws\" km-operator:latest"; \
+	  echo "To start a shell without it: docker run --rm -it -v \"$$HOME/.aws:/root/.aws\" km:latest"; \
 	  exit 1; }
 	docker run --rm -it \
 	  -v "$(HOME)/.aws:/root/.aws" \
 	  -v "$(PWD)/km-config.yaml:/klanker-maker/km-config.yaml" \
 	  $(if $(AWS_PROFILE),-e AWS_PROFILE=$(AWS_PROFILE),) \
-	  km-operator:latest
+	  km:latest
 
 ## smoke-test-sandbox: build and smoke-test the km-sandbox container image
 smoke-test-sandbox: sandbox-image

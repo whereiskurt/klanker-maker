@@ -142,12 +142,12 @@ release:
     docker run --rm -it \
       -v "$HOME/.aws:/root/.aws" \
       -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
-      ghcr.io/whereiskurt/klanker-maker/km-operator:v{{ .Version }}
+      ghcr.io/whereiskurt/klanker-maker/km:v{{ .Version }}
     ```
 
     Multi-arch (amd64 + arm64). Lands you in a shell at `/klanker-maker` where
     `./km create ...` works; or append a command to run one-shot:
-    `docker run ... km-operator ./km list`.
+    `docker run ... ghcr.io/whereiskurt/klanker-maker/km ./km list`.
 
     ### Build the container yourself
 
@@ -159,12 +159,12 @@ release:
     tar -xJf km_v{{ .Version }}_linux_$(uname -m | sed 's/x86_64/amd64/').tar.xz -C km-v{{ .Version }}
     cd km-v{{ .Version }}
     docker build -f containers/operator/Dockerfile \
-      --build-arg KM_VERSION=v{{ .Version }} -t km-operator .
+      --build-arg KM_VERSION=v{{ .Version }} -t km .
 
     docker run --rm -it \
       -v "$HOME/.aws:/root/.aws" \
       -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
-      km-operator
+      km
     ```
 
     The image bundles `aws` CLI v2, `session-manager-plugin`, and `sops`, and

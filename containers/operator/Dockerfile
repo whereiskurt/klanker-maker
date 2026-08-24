@@ -6,11 +6,11 @@
 # /klanker-maker with `km`, km-config.yaml, and profiles/ already in place.
 #
 # AWS credentials are NEVER baked in — mount ~/.aws at runtime:
-#   docker build -f containers/operator/Dockerfile -t km-operator .
+#   docker build -f containers/operator/Dockerfile -t km .
 #   docker run --rm -it \
 #     -v "$HOME/.aws:/root/.aws" \
 #     -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
-#     km-operator
+#     km
 #
 # `make operator-image` / `make operator-shell` are aliases for exactly those
 # two commands — convenience only, never required.
