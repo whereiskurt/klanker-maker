@@ -769,6 +769,19 @@ resource "aws_instance" "ec2_ondemand" {
     "km:resource-prefix" = var.resource_prefix
     "Region"             = var.region_label
   }
+
+  # Tag root EBS volumes, same rationale as the spot path above: without
+  # volume_tags a root volume inherits only provider default_tags and misses
+  # km:sandbox-id, so doctor's untagged-available-volume check cannot find it.
+  # The on-demand path had no volume_tags at all — a pre-existing gap that also
+  # left the root volume without km:managed-by, which the cross-account launcher
+  # requires.
+  volume_tags = {
+    "km:sandbox-id"      = each.value.sandbox_id
+    "km:managed-by"      = "klankermaker"
+    "km:resource-prefix" = var.resource_prefix
+    Name                 = "km-sandbox-${each.value.sandbox_id}-root"
+  }
 }
 
 # ============================================================

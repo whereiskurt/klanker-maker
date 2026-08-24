@@ -208,12 +208,43 @@ resource "aws_iam_role_policy" "launcher" {
         Effect = "Allow"
         Action = [
           "ec2:CreateVolume",
-          "ec2:CreateTags",
         ]
         Resource = "*"
         Condition = {
           StringEquals = {
             "aws:RequestTag/km:managed-by" = "klankermaker"
+          }
+        }
+      },
+      {
+        # Tag-on-create, which is a DIFFERENT authorization shape from either
+        # bucket above and needs its own statement.
+        #
+        # When RunInstances or CreateVolume tags the resources it creates, EC2
+        # authorizes a separate ec2:CreateTags call, and the key it populates for
+        # that call is ec2:CreateAction — naming the operation the tagging is part
+        # of. aws:RequestTag is not reliably present there (the launch that
+        # exposed this failed on ec2:CreateTags for volume/* even though the
+        # RunInstances gate had just passed), and aws:ResourceTag cannot apply
+        # because the resource does not exist yet.
+        #
+        # Scoping on ec2:CreateAction is the AWS-documented pattern and is tight
+        # by construction: it permits tagging ONLY as part of a create call that
+        # some other statement already authorized. It grants no ability to
+        # retag anything that already exists — standalone CreateTags carries no
+        # ec2:CreateAction key and so is still denied here, and mutating tags on
+        # existing resources remains gated by LifecycleTaggedOnly's
+        # aws:ResourceTag condition.
+        Sid      = "TagOnCreateOnly"
+        Effect   = "Allow"
+        Action   = "ec2:CreateTags"
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "ec2:CreateAction" = [
+              "RunInstances",
+              "CreateVolume",
+            ]
           }
         }
       },
