@@ -149,8 +149,15 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   lets stickiness apply), `ComputeCapacityVerdict` carries a cross-reference so the two cannot
   drift, and two regression tests pin it. NOTE: the pre-fix `TestRankAZs_ICEStickySuccess` gave
   only success-ONLY and ICE-ONLY AZs, never one holding both — which is how a green suite hid
-  this. Any new ranking rule needs the both-attributes case. **L2** terraform retries ICE internally, so km never sees the error, the sweep cannot
-  rotate, and the Lambda dies at 900s leaving the stale lock the next run reports.
+  this. Any new ranking rule needs the both-attributes case. **L2 — FIXED 2026-08-25** terraform retried ICE internally, so km never saw the error, the
+  sweep could not rotate, and the Lambda died at 900s leaving the stale lock the next run
+  reports. `aws_instance.ec2_ondemand` now has `timeouts { create = var.ondemand_create_timeout }`
+  (3m) — the on-demand twin of Phase 124's spot waiter; ICE and WaiterTimeout are both
+  iterate-class so either error shape rotates. **Uncovered two worse problems:** the guard test
+  asserted the defect (`_OnDemandNoTimeout` required NO timeouts block, on a rationale CloudTrail
+  disproves), and `pkg/compiler/ec2spot_timeout_test.go` had been reading `ec2spot/v1.2.0` while
+  the live pin was `v1.3.0` since Phase 125 — every assertion in it was inert. Retargeted + a
+  drift guard (`TestEC2SpotModuleDir_TracksLivePin`) parses the pin from the sandbox template.
   **L5 — FIXED 2026-08-25** a create killed mid-apply leaks its 300GB volume: `km destroy`
   reports success (the volume never reached state) and `km doctor` stayed green (its EBS check
   is scoped to *untagged* volumes, and these are correctly tagged). New

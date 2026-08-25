@@ -782,6 +782,31 @@ resource "aws_instance" "ec2_ondemand" {
     "km:resource-prefix" = var.resource_prefix
     Name                 = "km-sandbox-${each.value.sandbox_id}-root"
   }
+
+  # Bounded launch waiter — the on-demand twin of the spot path's timeouts block
+  # above, and the fix for 126-UAT.md Finding L2.
+  #
+  # Phase 124 built the AZ sweep AND bounded the spot waiter, but never bounded
+  # THIS resource. Without a create timeout the AWS provider retries
+  # InsufficientInstanceCapacity internally for its 10m default, so the ICE never
+  # returns to km, capacity.ClassifyError is never reached, sweepDecision is never
+  # consulted, and the sweep cannot rotate off a dry AZ — maxAttempts can be 4 and
+  # the apply still never advances past attempt 1. In a remote create the
+  # create-handler Lambda is then killed at its 900s ceiling mid-apply, which
+  # additionally leaves a stale state lock and an untracked EBS volume behind
+  # (Finding L5).
+  #
+  # This went unnoticed because a cross-account launch is on-demand-ONLY: the
+  # launcher role grants no ec2:RequestSpotInstances and no ec2:CreateFleet (both
+  # verified implicitDeny), so the one path that could reach a scarce-capacity
+  # account was the one path with no bounded waiter.
+  #
+  # Same 3m budget and same arithmetic as spot: ~4 x 3m = 12m per full sweep round,
+  # inside the 900s Lambda budget. ClassifyError already maps the surfaced
+  # "InsufficientInstanceCapacity" to ClassICE, which rotates.
+  timeouts {
+    create = var.ondemand_create_timeout
+  }
 }
 
 # ============================================================
