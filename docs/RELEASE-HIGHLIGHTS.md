@@ -13,113 +13,73 @@
 -->
 ## ✨ Major additions highlighted
 
-This release is about **where a sandbox sits on the network and what it can reach** — private
-placement, egress deny lists, and letting a running sandbox tighten its own policy.
+This release is about **getting km into your hands and keeping sandboxes alive while you use
+them** — a container distribution that needs nothing but Docker, and a fix for interactive
+sandboxes being reaped as idle out from under you.
 
-### 🕸️ Per-profile private-subnet sandboxes with per-AZ NAT gateways (Phase 125)
-
-> **Live UAT pending.** Code-complete and unit-verified; the full seven-step live runbook in
-> `docs/private-subnet-nat.md` has not been executed end to end.
-
-A sandbox's ENI can now land in a **private subnet** behind NAT instead of a public subnet with a
-public IPv4 — controlled by two decoupled, **dormant-by-default** toggles:
-
-- **`network.nat_gateway`** (install-level, `km-config.yaml`) decides whether NAT/EIP
-  infrastructure *exists*. **`spec.network.privateSubnet`** (per-profile) decides whether *this*
-  sandbox lands private. Both absent ⇒ byte-identical to before.
-- **One NAT gateway + one EIP per AZ**, each in the public subnet of the AZ it serves — not one
-  shared NAT. The Phase 124 AZ-failover sweep rotates launches across all four AZs, so a shared
-  NAT would add cross-AZ data-transfer charges to every byte and make one AZ a SPOF for the whole
-  install's internet access.
-- **`network.private_subnet_count`** (1–4, absent = all four) sizes the private topology so you can
-  trade AZ-rotation breadth against the NAT bill.
-- ⚠️ **Cost:** roughly **$132/month** for four AZs plus **$0.045/GB** processed — a GPU profile
-  pulling 300 GB of weights is ~$13.50 in NAT processing alone. This is exactly why the toggle is
-  reversible: disabling NAT leaves the private subnets as free, routeless islands.
-- **Guards:** `km create` fails fast when a private profile meets a NAT-less install; `km init`
-  refuses to disable NAT while a private sandbox is running; `km doctor` warns on NAT-enabled-but-idle
-  and on private-sandbox-without-NAT.
-
-Full runbook, reversal procedure, and the one-time route-table split: `docs/private-subnet-nat.md`.
-
-### 🚫 Egress deny lists — subtract known-bad from a wide-open profile
-
-The egress policy was allowlist-only, with `*` as an allow-everything wildcard. That made the
-natural authoring loop inexpressible: run wide open under `learnMode`, subtract the known-bad as you
-find it, then replace `*` with the generated allowlist. The middle step had no allowlist-shaped
-answer, because narrowing `*` means enumerating the very list learn mode is being run to discover.
-
-```yaml
-spec:
-  network:
-    egress:
-      allowedDNSSuffixes: ["*"]
-      deniedDNSSuffixes: ["evil.example.com", ".tracker.example.net"]
-      deniedHosts: ["evil.example.com"]
-```
-
-- **A deny beats every allow** — including the `*` wildcard, the GitHub repo-filter carve-out, the
-  OpenAI budget path, and the Bedrock/SES/Anthropic MITM interceptors. The deny gate is registered
-  ahead of all of them, because goproxy dispatches first-match and a deny evaluated later would be
-  silently bypassable.
-- **Enforced at every layer** — the DNS proxy (NXDOMAIN), the HTTP proxy (403), and the eBPF
-  resolver, which also refuses to seed a denied host's IPs into the BPF trie.
-- Deny matching is deliberately **broader** than allow matching: a bare entry covers subdomains, so
-  `evil.example.com` also blocks `api.evil.example.com`. Strictness on an allowlist permits less;
-  the same strictness on a denylist would fail open.
-- **Dormant by default** — a profile declaring no denies renders byte-identical user-data.
-
-### 🔒 Runtime egress narrowing — a sandbox can tighten its own policy
-
-`spec.network.egress.runtimeDeny: true` lets a **running** sandbox add denies to itself from
-user-land, with no operator round-trip and no restart:
-
-```console
-$ km-netpolicy deny telemetry.example.com
-denied telemetry.example.com
-1 runtime deny entry now in force (takes effect within ~1s)
-```
-
-Narrowing is **one-way, and enforced rather than promised**:
-
-- **The data structure.** The only operation is *append to a deny list*, which can only ever shrink
-  the reachable set. There is no removal verb — `km-netpolicy` has exactly `deny` and `list`.
-- **The kernel.** The deny file is created with `chattr +a`. An append-only file cannot be
-  truncated, unlinked, renamed, or have the attribute cleared without `CAP_LINUX_IMMUTABLE`.
-
-Widening still requires what it always did: a new profile and a fresh sandbox. Denies live under
-`/var/lib` (not `/run`) so they survive reboot — a reboot that dropped them would *widen* the policy.
-
-Verified end to end on a live EC2 sandbox: append-only enforced, all four widening attempts refused,
-a reachable host blocked with no restart, unrelated hosts still reachable, and denies still enforced
-after a reboot. Caveat worth knowing: a `*` allowlist with denies layered on is an **open** box with
-holes plugged, not a closed one. Details and limits: `docs/egress-deny-lists.md`.
-
-### ✍️ `km-github commit` — verified, bot-attributed signed commits from a sandbox
-
-The only path that produces a **GitHub-signed**, `klanker-maker[bot]`-attributed commit from inside
-a sandbox (`verified:true reason:valid`). A sandbox's local `git commit` is unsigned, and the
-low-level REST path is bot-attributed but `verified:false`. Uses the GraphQL `createCommitOnBranch`
-mutation, supports multi-file commits, and attributes to the token's own identity so it stays
-portable across installs.
+### 🐳 Run km from a container — nothing to install but Docker
 
 ```bash
-km-github commit --repo O/R --branch BR --message-file MSG -- path/a path/b
+docker run --rm -it \
+  -v "$HOME/.aws:/root/.aws" \
+  -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
+  ghcr.io/whereiskurt/klanker-maker/km:latest
 ```
 
-⚠️ Needs a token with `contents:write`, which is only minted when the profile's GitHub permissions
-include **`push`**. See `docs/github-app-permissions.md`.
+Multi-arch (amd64 + arm64), published to GHCR on every release. It lands you in a shell at
+`/klanker-maker` with `km`, your config, and the whole profile library in place — so `./km create
+profiles/spot.yaml --remote` just works. Append a command instead to run one-shot:
+`docker run ... km ./km list` exits with km's own exit code and prints nothing extra, so it pipes
+cleanly into `jq`.
 
-### 🩹 Notable fixes
+- **Bundles what km shells out to but never shipped**: `aws` CLI v2, `session-manager-plugin`,
+  `sops`, plus git/jq/ssh. That was previously a manual per-operator install.
+- **Credentials are never baked in.** `~/.aws` is mounted read-write at runtime, so the SSO token
+  cache is shared with the host — if you're logged in on the host, you're logged in in the
+  container. The startup banner reports whether each mount actually landed.
+- **Scoped to `--remote` sandbox work**: create, list, status, shell, agent, logs, otel, destroy,
+  doctor, capacity, validate — all verified live end to end. Platform provisioning (`km init`,
+  `km bootstrap`, `--local` create/destroy) stays on a native install; it needs the `infra/live/`
+  terragrunt tree no release archive carries. `terraform`/`terragrunt` are deliberately left out of
+  the image for the same reason (and 152 MB lighter for it).
+- **Prefer to build it yourself?** Every release archive now carries the Dockerfile, entrypoint,
+  profile library, and `km-config.example.yaml` at their repo-relative paths — extract the tarball
+  and `docker build -f containers/operator/Dockerfile .` in place, no clone required.
 
-- **apt now points at `archive.ubuntu.com`**, not the frequently-degraded EC2 regional mirror —
-  this was breaking Ubuntu sandbox bootstrap outright.
-- **Slack alias reuse unarchives** the existing channel instead of failing the create.
-- **`km status` reconciles stale DynamoDB state against live EC2 in both directions**, so a row that
-  drifted out of sync no longer blocks `km start` / `km resume`.
-- **Two ttl-handler IAM gaps closed:** remote `km extend` / `km resume` silently no-op'd (the role
-  couldn't `GetFunction` on itself), and `km destroy` left the per-sandbox `github-token` Lambda,
-  schedule, and IAM roles alive — the cleanup code ran but 403'd and logged the failure as
-  non-fatal.
-- **GitHub installation tokens** are minted with `actions` + `workflows` write.
-- **`km doctor --delete-ddb-rows`** no longer sweeps away the operator identity row.
+Details: `containers/operator/README.md`.
+
+### 🖥️ Sandboxes no longer reaped while you're working in them
+
+A sandbox someone was actively using through **KasmVNC or VS Code Remote-SSH** could be torn down by
+`spec.lifecycle.idleTimeout`, with an empty CloudWatch audit stream as the only trace.
+
+The root cause was **utmp, not the timer**: `sshd` writes a utmp record only for **PTY** sessions.
+KasmVNC runs as a systemd service and never logs in, and VS Code Remote-SSH runs `vscode-server`
+over a **non-PTY** exec channel — so a connected user looked idle on all five liveness signals.
+The VS Code case was intermittent in the worst way: opening the integrated terminal allocates a PTY
+and makes the session visible again, so survival depended on whether an unrelated UI panel was open.
+
+`km-presence` now ORs **seven** signals, adding *KasmVNC viewer attached* and *SSH session
+established*. Both detect the **live socket, never the process** — `pgrep vscode-server` is the
+obvious check and is wrong, since VS Code deliberately leaves that server running after a client
+disconnects and would latch the sandbox awake forever.
+
+⚠️ **Consequence:** an open browser tab or VS Code window now pins a sandbox alive indefinitely, the
+same tradeoff as leaving a `km shell` open. `spec.lifecycle.ttl` is unaffected and is now the real
+backstop against forgotten sessions.
+
+See `docs/desktop.md` § Idle timeout and `docs/vscode.md` § Idle timeout.
+
+### 🎮 70B-class models on a single GPU — FP8 on one L40S
+
+4-GPU `g6e` shapes have been capacity-walled, while single-GPU shapes stayed available. **FP8
+quantization halves the weights** enough to fit Qwen3.8-27B-OBLITERATED onto **one L40S**
+(`g6e.4xlarge`), turning a blocked deploy into a routine one — plus an S3-staged BF16 variant for
+where the capacity exists.
+
+### 🔧 Also in this release
+
+- **codex can run bash tools on the GPU DLAMI again** — the image was missing `bubblewrap`, which
+  codex requires for sandboxed tool execution.
+- Single-GPU FP8 deployment notes, including the six distinct failure modes it surfaced
+  (`docs/gpu-model-serving.md`).

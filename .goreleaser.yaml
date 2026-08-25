@@ -54,6 +54,37 @@ archives:
       - OPERATOR-GUIDE.md
       - src: .extras/THIRD-PARTY-LICENSES.txt
         dst: THIRD-PARTY-LICENSES.txt
+      # Turn-key container build. These keep their REPO-RELATIVE paths inside
+      # the archive on purpose: the same Dockerfile and the same build command
+      # then work from a git clone and from an extracted tarball, with no second
+      # copy of the file to drift. The Dockerfile downloads km from the GitHub
+      # release rather than using the adjacent binary — required, since the
+      # darwin archives carry a darwin binary that cannot go in a linux image.
+      - containers/operator/Dockerfile
+      - containers/operator/Dockerfile.dockerignore
+      - containers/operator/README.md
+      - src: containers/operator/entrypoint.sh
+        dst: containers/operator/entrypoint.sh
+        info:
+          mode: 0755
+      # Starting-point config (km-config.yaml itself is gitignored) and the
+      # profile library the container copies in.
+      - docs/km-config.example.yaml
+      # Two globs per type on purpose: `profiles/**/*.yaml` matches only NESTED
+      # files, so without the `profiles/*.yaml` partner every top-level leaf
+      # profile (spot, desktop, github, every gpu-*) is silently absent from the
+      # archive. Extension-scoped rather than `**/*` so gitignored local build
+      # detritus (__pycache__, .pytest_cache, .DS_Store) stays out of a public
+      # release. Types here match the tracked set under profiles/.
+      - profiles/*.yaml
+      - profiles/**/*.yaml
+      - profiles/*.txt
+      - profiles/**/*.txt
+      - profiles/**/*.py
+      # Named rather than globbed: `profiles/**/*.md` also drags in
+      # .pytest_cache/README.md from a local test run.
+      - profiles/checks/_bootstrap/KM_CHECK_TRIGGER.schema.md
+      - profiles/secrets/README.md
 
 checksum:
   name_template: "{{ .ProjectName }}_v{{ .Version }}_checksums.txt"
@@ -95,7 +126,7 @@ release:
 
     Single-archive download (xz-compressed): includes `km`, `terraform` v1.9.8, and `terragrunt` v0.99.1.
 
-    ### Install
+    ### Install — native
     ```
     tar -xJf km_v{{ .Version }}_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/').tar.xz
     sudo install -m 0755 km /usr/local/bin/km
@@ -104,6 +135,48 @@ release:
     ```
 
     You still need: `aws` CLI + `session-manager-plugin` (operator-provided).
+
+    ### Install — container (nothing to install locally but Docker)
+
+    ```
+    docker run --rm -it \
+      -v "$HOME/.aws:/root/.aws" \
+      -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
+      ghcr.io/whereiskurt/klanker-maker/km:v{{ .Version }}
+    ```
+
+    Multi-arch (amd64 + arm64). Lands you in a shell at `/klanker-maker` where
+    `./km create ...` works; or append a command to run one-shot:
+    `docker run ... ghcr.io/whereiskurt/klanker-maker/km ./km list`.
+
+    ### Build the container yourself
+
+    This archive also carries everything the image build needs. Extract it and
+    build in place — no `git clone`, no `make`:
+
+    ```
+    mkdir -p km-v{{ .Version }}
+    tar -xJf km_v{{ .Version }}_linux_$(uname -m | sed 's/x86_64/amd64/').tar.xz -C km-v{{ .Version }}
+    cd km-v{{ .Version }}
+    docker build -f containers/operator/Dockerfile \
+      --build-arg KM_VERSION=v{{ .Version }} -t km .
+
+    docker run --rm -it \
+      -v "$HOME/.aws:/root/.aws" \
+      -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
+      km
+    ```
+
+    The image bundles `aws` CLI v2, `session-manager-plugin`, and `sops`, and
+    lands you in a shell at `/klanker-maker` with `km` and the profile library
+    ready. Credentials are never baked in — they come from the mounted
+    `~/.aws`. Drop `--build-arg` to track the newest release instead of pinning
+    to this one.
+
+    Scoped to `--remote` sandbox work (create, list, shell, agent, logs,
+    destroy, doctor). It does not carry `terraform`/`terragrunt`, so platform
+    provisioning — `km init`, `km bootstrap`, `--local` create/destroy — belongs
+    on the native install above. Details: `containers/operator/README.md`.
     {{ with index .Env "KM_RELEASE_HIGHLIGHTS" }}
 
     {{ . }}

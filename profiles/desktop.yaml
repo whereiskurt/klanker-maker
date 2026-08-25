@@ -30,7 +30,7 @@ spec:
 
     desktop:
       enabled: true
-      mode: kiosk
+      mode: full
       browsers:
         - firefox
       geometry: 1920x1080

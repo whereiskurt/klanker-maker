@@ -1,0 +1,18 @@
+# Build context for containers/operator/Dockerfile.
+#
+# BuildKit prefers <dockerfile>.dockerignore over the repo-root .dockerignore.
+# A dedicated file is required here: the root .dockerignore excludes profiles/,
+# which this image must copy in.
+#
+# Allowlist style — exclude everything, then re-include only what the image
+# needs. Keeps the context to a few hundred KB instead of the whole repo.
+*
+!km-config.yaml
+!profiles
+!containers/operator
+!docs/km-config.example.yaml
+
+# Never ship these even from the re-included paths.
+**/.DS_Store
+**/.terraform
+**/.terragrunt-cache

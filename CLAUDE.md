@@ -8,6 +8,48 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Sandbox liveness: VNC + SSH presence signals (2026-08-23):**
+- `km-presence` gained **signal 6 (KasmVNC viewer attached)** and **signal 7 (SSH session
+  established)**, closing a gap where an interactively-used sandbox was reaped by
+  `spec.lifecycle.idleTimeout` while someone was working in it. Both were live-verified on a
+  desktop sandbox; the daemon now ORs seven signals instead of five.
+- **Root cause is utmp, not the timer.** Signal 1 reads `who`, and `sshd` writes a utmp record
+  ONLY for PTY sessions. KasmVNC runs as a systemd service (never a login session), and VS Code
+  Remote-SSH runs `vscode-server` over a **non-PTY** exec channel (`sshd: user@notty`). Measured
+  live: non-PTY session ⇒ `who=0`, PTY session ⇒ `who=1`. So a connected user looked idle on all
+  five original signals, with an **empty CloudWatch audit stream** as the only trace (the daemon
+  emits a heartbeat only when a signal is active — an empty stream is proof of zero signals, not
+  of a broken pipe).
+- **The VS Code case was INTERMITTENT**, which is what made it hard to see: opening VS Code's
+  integrated terminal allocates a PTY and makes the same session visible to signal 1. Whether a
+  box survived depended on an unrelated UI panel being open.
+- **Both signals detect the live socket, never the process.** `pgrep vscode-server` is the
+  obvious check and is WRONG — VS Code deliberately leaves that server running after a client
+  disconnects so reconnects are fast, so it would latch the sandbox awake forever. Likewise VNC
+  is matched by owning process (`Xvnc`), NOT by port: the profile sets
+  `network.websocket_port: auto`, so 8444 is observed behaviour, not a contract.
+- **Both fail idle** (a missing/erroring `ss` reports no session). Deliberate: a reaped desktop
+  costs one `km resume`, whereas a signal that can never go negative silently disables idle
+  teardown fleet-wide and leaks instances. Every negative path is unit-tested for this reason.
+- **Signal 7 matches BOTH `(("sshd",` and `(("sshd-session",`** — OpenSSH 9.8+ split the session
+  process out and renamed it. Matching only the first would silently stop firing on an AMI bump.
+  The box runs 9.6 today, so the second form is forward-compat and covered by a test.
+- Signals 6 and 7 are kept **independent** (each runs its own `ss`; ~4ms/60s tick) so a future
+  `km doctor` can report WHICH session type is holding a sandbox awake. A cross-independence test
+  pins that they never trigger each other.
+- **Consequence:** an open browser tab or VS Code window now pins a sandbox alive indefinitely —
+  same tradeoff as leaving a `km shell` open. `spec.lifecycle.ttl` is unaffected and is now the
+  real backstop against forgotten sessions.
+- **Pure `cmd/km-presence` sidecar change.** No SandboxProfile schema change, no TF/DDB/Lambda/IAM
+  change, no userdata change (the km-presence.service unit already runs `User=root`, which signal
+  6/7 need for `ss -p` to resolve process names).
+- **Deploy = `make build` + `km init --sidecars`** (rebuilds + uploads the `km-presence` sidecar;
+  NOT `--dry-run=false`). Existing sandboxes keep the five-signal daemon until
+  `km destroy && km create` — the binary is fetched at boot. Interim mitigation on a live box:
+  raise `idleTimeout`, `km extend <id> --idle <dur>`, or keep a `km shell` open.
+- See `docs/desktop.md` § Idle timeout and desktop sessions and `docs/vscode.md` § Idle timeout
+  and Remote-SSH sessions.
+
 **Phase 126 (2026-08-22) — Cross-account capacity borrowing: launch sandboxes into a linked capacity account (code-complete; live UAT pending):**
 - A SandboxProfile can launch its EC2 box into a *different*, pre-linked AWS account to
   borrow that account's vCPU quota, while the one km control plane — state, DynamoDB, budget,
@@ -380,6 +422,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 
 | You want to… | Look at |
 |---|---|
+| Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the seven `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
 | Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
 | Cross-account capacity borrowing — `km account add/register/list/rm`, `spec.runtime.launchAccount`, the two-credential enrollment sequence, the launcher-role security model, capacity/teardown/doctor cross-account wiring, deploy surface | `docs/cross-account-capacity-borrowing.md` (Phase 126) |
 | Private-subnet sandboxes + per-AZ NAT gateways — `network.nat_gateway` / `spec.network.privateSubnet` toggles, cost, the one-time route-table split, reversal, guards, deploy surface | `docs/private-subnet-nat.md` (Phase 125) |

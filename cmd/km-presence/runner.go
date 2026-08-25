@@ -118,12 +118,79 @@ func checkAgentProcess(r commandRunner) bool {
 	return len(bytes.TrimSpace(out)) > 0
 }
 
+// checkVNCClients returns true when at least one VNC viewer is attached to the
+// KasmVNC session (spec.runtime.desktop). Signal 6.
+//
+// KasmVNC runs as a systemd service, not a login session, so an attached viewer
+// writes no utmp record and is invisible to checkLoginShells — a desktop
+// sandbox with a user actively working in it otherwise reads as idle on all
+// five original signals and gets reaped by the idle timer.
+//
+// Detection is by owning process rather than port: the profile sets
+// network.websocket_port: auto, so the listener port is not fixed (it resolves
+// to 8444 in practice, but that is not a contract). Xvnc holds the server side
+// of every viewer socket, so an established socket owned by Xvnc means a viewer
+// is attached. With no viewer, Xvnc owns no established socket at all.
+//
+// Runs as root (km-presence.service User=root), so ss -p can resolve process
+// names for sockets owned by the sandbox user.
+//
+// Fails idle: a missing or erroring ss returns false. Idle detection reaping a
+// live desktop is a recoverable annoyance (km resume); a signal that can never
+// go negative would silently disable idle teardown on every desktop sandbox and
+// leak instances indefinitely.
+func checkVNCClients(r commandRunner) bool {
+	out, err := r.Output("ss", "-tnHp", "state", "established")
+	if err != nil {
+		// ss absent or non-zero exit == no evidence of a viewer.
+		return false
+	}
+	// Anchor on the ss users:(("<name>", field so a process merely containing
+	// the token (XvncHelper, notXvnc) does not count as an attached viewer.
+	return bytes.Contains(out, []byte(`(("Xvnc",`))
+}
+
+// checkSSHSessions returns true when at least one SSH session is established.
+// Signal 7 — covers VS Code Remote-SSH (km vscode start) and any direct SSH
+// through the SSM tunnel.
+//
+// Signal 1 (who / utmp) does NOT cover this. sshd writes a utmp record only for
+// sessions that allocate a PTY, and VS Code Remote-SSH runs vscode-server over a
+// non-PTY exec channel (pgrep shows it as "sshd: sandbox@notty"). Measured on a
+// live sandbox: a non-PTY session reports who=0 while an interactive one reports
+// who=1. Without this signal, editing files in VS Code is invisible and the idle
+// timer reaps the box — but opening VS Code's integrated terminal allocates a PTY
+// and makes it visible, so the bug presents intermittently.
+//
+// Detected via the live socket rather than the vscode-server process on purpose:
+// VS Code deliberately leaves vscode-server running after a client disconnects so
+// reconnects are fast, so pgrep'ing it would latch the sandbox awake indefinitely.
+// The SSH connection itself drops on disconnect and is the honest liveness signal.
+//
+// Both process names are matched: OpenSSH <=9.7 owns session sockets as "sshd",
+// while 9.8+ split the session process out and renamed it "sshd-session". The
+// listener socket is also owned by sshd but is excluded by `state established`.
+//
+// Fails idle for the same reason as signal 6 (see checkVNCClients): a signal that
+// can never go negative would silently disable idle teardown fleet-wide.
+//
+// Runs its own ss rather than sharing signal 6's output, keeping every signal
+// independently testable; the extra ~4ms per 60s tick is not worth the coupling.
+func checkSSHSessions(r commandRunner) bool {
+	out, err := r.Output("ss", "-tnHp", "state", "established")
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(out, []byte(`(("sshd",`)) ||
+		bytes.Contains(out, []byte(`(("sshd-session",`))
+}
+
 // =============================================================================
 // Daemon helpers
 // =============================================================================
 
 // tick runs one iteration of the presence loop. Returns (signalsActive, emitted).
-// signalsActive is true when any of the five signals is positive; emitted is true
+// signalsActive is true when any of the seven signals is positive; emitted is true
 // when a heartbeat event was written to the audit pipe.
 // The presence stamp at presenceStampPath is ALWAYS touched at end of tick,
 // even if no signal is active or emit fails.
@@ -133,8 +200,10 @@ func tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath
 	s3 := checkInboundEmail(mailDir, presenceStampPath)
 	s4 := checkInboundSlack(slackStampPath, presenceStampPath)
 	s5 := checkAgentProcess(r)
+	s6 := checkVNCClients(r)
+	s7 := checkSSHSessions(r)
 
-	active := s1 || s2 || s3 || s4 || s5
+	active := s1 || s2 || s3 || s4 || s5 || s6 || s7
 
 	emitted := false
 	if active {
