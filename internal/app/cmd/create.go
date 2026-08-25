@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -175,6 +176,222 @@ func natServedAZs(availabilityZones, natGatewayIDs []string) []string {
 	return served
 }
 
+// assertLaunchAccountEmitted fails closed when a launch account was resolved for
+// this create but the compiled service.hcl does not actually carry the locals the
+// sandbox terragrunt template needs to build its cross-account provider.
+//
+// This exists because the dormancy mechanism is structurally FAIL-OPEN. The
+// template reads:
+//
+//	launch_account    = try(local.svc_config.locals.launch_account, "")
+//	assume_role_block = local.launch_account != "" ? "...assume_role..." : ""
+//
+// `try(..., "")` cannot distinguish "no launch account was requested" from "a
+// launch account was requested but went missing somewhere in the pipeline". Both
+// evaluate to the empty string, and the empty string means *use the home
+// account's credentials*. For a feature whose entire purpose is placing a
+// $10/hr GPU instance in one specific account, silently building it in the wrong
+// account is worse than any error — it looks like success, and the operator only
+// discovers it by auditing resources by hand.
+//
+// Live UAT (sb-8d5820ce) hit exactly this: `--launch-account` was dropped from the
+// uploaded profile, the Lambda re-compiled without it, and every resource landed
+// in the home account while `km create` and `km destroy` both reported success.
+//
+// Both create paths call this, so the create-handler Lambda — which runs
+// `km create` internally — inherits the same guard.
+func assertLaunchAccountEmitted(serviceHCL string, target *LaunchTarget) error {
+	if target == nil || target.LinkName == "" {
+		return nil
+	}
+	want := fmt.Sprintf("launch_account       = %q", target.LinkName)
+	if strings.Contains(serviceHCL, want) {
+		return nil
+	}
+	// Accept any whitespace alignment the emitter might use.
+	if regexp.MustCompile(`launch_account\s*=\s*"` + regexp.QuoteMeta(target.LinkName) + `"`).MatchString(serviceHCL) {
+		return nil
+	}
+	return fmt.Errorf(
+		"internal error: launch account %q was resolved for this sandbox but the compiled "+
+			"service.hcl does not declare it — refusing to continue.\n\n"+
+			"Continuing would build this sandbox in the HOME account instead of %s, because the "+
+			"sandbox terragrunt template treats a missing launch_account local as \"no cross-account "+
+			"launch requested\" and falls back to home credentials.\n\n"+
+			"This is a bug in km, not a misconfiguration. Please report it with the profile used.",
+		target.LinkName, target.AccountID)
+}
+
+// applyLaunchAccountNetwork overwrites the placement-relevant fields of a
+// compiler.NetworkConfig from a resolved LaunchTarget: subnets (both the public
+// list and the resolved sandbox-subnet list — a linked account's subnets are
+// always public, T-126-33), availability zones, and the three service.hcl
+// launch-account locals plan 02 wired in. Shared by runCreate and
+// runCreateRemote so the link-to-network mapping cannot drift between the two
+// call sites (T-126-31: an unwired remote path would silently launch into the
+// home account with a link-shaped profile).
+func applyLaunchAccountNetwork(network *compiler.NetworkConfig, target *LaunchTarget) {
+	network.VPCID = target.VPCID
+	network.PublicSubnets = target.SubnetIDs
+	network.SandboxSubnets = target.SubnetIDs
+	network.AvailabilityZones = target.AvailabilityZones
+	network.LaunchAccount = target.LinkName
+	network.LauncherRoleARN = target.LauncherRoleARN
+	network.LauncherExternalID = target.ExternalID
+	// Reuse the linked account's pre-provisioned security group and instance
+	// profile instead of creating per-sandbox ones. Not an optimisation — the
+	// launcher role holds neither ec2:CreateSecurityGroup nor iam:CreateRole, so
+	// creating them is unauthorised and the apply fails outright.
+	network.ExistingSecurityGroupID = target.SecurityGroupID
+	network.ExistingInstanceProfile = instanceProfileNameFromRoleARN(target.BoxRoleARN)
+}
+
+// instanceProfileNameFromRoleARN derives the box instance-profile name from the
+// box role ARN. infra/modules/gpu-launcher-account names the two identically
+// ("${resource_prefix}-gpu-box"), so the profile name is the role ARN's final
+// path segment — which avoids threading a fourth field through the link record,
+// the handoff fragment, `km account register` and km-config.yaml just to carry a
+// value that is already determined.
+//
+// Returns "" for an empty or malformed ARN, which leaves the ec2spot module
+// creating its own profile — the pre-126 behaviour, and the safe direction to
+// fail for a same-account sandbox.
+func instanceProfileNameFromRoleARN(roleARN string) string {
+	if roleARN == "" {
+		return ""
+	}
+	idx := strings.LastIndex(roleARN, "/")
+	if idx < 0 || idx == len(roleARN)-1 {
+		return ""
+	}
+	return roleARN[idx+1:]
+}
+
+// ec2SubnetDescriber is the minimal EC2 interface hydrateLaunchAccountVPCID
+// needs. Narrowed for testability (a stub in tests, *ec2svc.Client in
+// production), following this package's established narrow-interface
+// convention (see doctor.go's EC2DescribeAPI).
+type ec2SubnetDescriber interface {
+	DescribeSubnets(ctx context.Context, params *ec2svc.DescribeSubnetsInput, optFns ...func(*ec2svc.Options)) (*ec2svc.DescribeSubnetsOutput, error)
+}
+
+// resolveLaunchTargetVPCID looks up the VPC id that owns a link's first subnet.
+// The launch_accounts link record carries subnet ids but no VPC id (config
+// schema doesn't have one, and neither does any output of the
+// gpu-launcher-account enrollment module) — without resolving it here,
+// infra/modules/ec2spot/v1.3.0 receives an empty vpc_id, self-provisions a
+// brand-new, disconnected VPC (its create_vpc = vpc_id == "" branch), and then
+// tries to place the instance's ENI into a subnet from a DIFFERENT vpc (the
+// link's real one) — AWS rejects that at apply time ("subnet belongs to a
+// different network"). All of a link's subnets are provisioned together by
+// the same enrollment run, so the first subnet's VPC is authoritative for all
+// of them.
+func resolveLaunchTargetVPCID(ctx context.Context, client ec2SubnetDescriber, target *LaunchTarget) (string, error) {
+	if len(target.SubnetIDs) == 0 {
+		return "", fmt.Errorf("launch_accounts.%s has no subnet_ids to resolve a VPC from", target.LinkName)
+	}
+	out, err := client.DescribeSubnets(ctx, &ec2svc.DescribeSubnetsInput{
+		SubnetIds: []string{target.SubnetIDs[0]},
+	})
+	if err != nil {
+		return "", fmt.Errorf("describe subnet %s for launch_accounts.%s: %w", target.SubnetIDs[0], target.LinkName, err)
+	}
+	if len(out.Subnets) == 0 || out.Subnets[0].VpcId == nil || *out.Subnets[0].VpcId == "" {
+		return "", fmt.Errorf("subnet %s for launch_accounts.%s has no VPC id in the DescribeSubnets response", target.SubnetIDs[0], target.LinkName)
+	}
+	return *out.Subnets[0].VpcId, nil
+}
+
+// hydrateLaunchAccountVPCID resolves and sets target.VPCID in place, using the
+// launcher-role-assumed config (via buildCapacityAWSConfig — same fail-closed
+// contract, T-126-29: never falls back to a home-account lookup). A no-op for
+// a home create (target == nil). Called once per create, right after
+// ResolveLaunchTarget, in both runCreate and runCreateRemote.
+func hydrateLaunchAccountVPCID(ctx context.Context, base aws.Config, target *LaunchTarget) error {
+	if target == nil {
+		return nil
+	}
+	assumedCfg, err := buildCapacityAWSConfig(ctx, base, target)
+	if err != nil {
+		return err
+	}
+	vpcID, err := resolveLaunchTargetVPCID(ctx, ec2svc.NewFromConfig(assumedCfg, func(o *ec2svc.Options) { o.Region = target.Region }), target)
+	if err != nil {
+		return fmt.Errorf("resolve VPC id for launch_accounts.%s: %w", target.LinkName, err)
+	}
+	target.VPCID = vpcID
+	return nil
+}
+
+// resolveLaunchRegion returns the effective region for a create — the linked
+// target's region when a target is in effect, the profile's own region
+// otherwise — plus a non-empty warning string when a linked launch overrides a
+// conflicting profile region (empty warning = nothing to report). Pure and
+// table-testable: the account carries its region (this plan's "Decisions
+// recorded"), so a conflict is a warning, never an error.
+func resolveLaunchRegion(profileRegion string, target *LaunchTarget) (region string, warning string) {
+	if target == nil {
+		return profileRegion, ""
+	}
+	if profileRegion != "" && profileRegion != target.Region {
+		warning = fmt.Sprintf(
+			"profile region %q differs from launch_accounts.%s's region %q — the account carries its region; using %q",
+			profileRegion, target.LinkName, target.Region, target.Region,
+		)
+	}
+	return target.Region, warning
+}
+
+// launchAccountCapacityNamespace returns the DynamoCapacityStore account
+// namespace for a resolved launch target: "" (home, unnamespaced) when target
+// is nil, the linked account id otherwise. Extracted so the home-account-stays-
+// empty invariant (pkg/capacity.DynamoCapacityStore's doc comment) is
+// table-testable without an AWS session.
+func launchAccountCapacityNamespace(target *LaunchTarget) string {
+	if target == nil {
+		return ""
+	}
+	return target.AccountID
+}
+
+// resolveLaunchNATServedAZs returns the NAT-served-AZ filter for capacity.RankAZs:
+// always nil for a linked launch (T-126-33 — the linked account's network has no
+// NAT gateway concept at all, so a filter derived from it would drop every
+// zone), otherwise the Phase 125 home-account behavior unchanged.
+func resolveLaunchNATServedAZs(target *LaunchTarget, wantsPrivate bool, availabilityZones, natGatewayIDs []string) []string {
+	if target != nil {
+		return nil
+	}
+	if !wantsPrivate {
+		return nil
+	}
+	return natServedAZs(availabilityZones, natGatewayIDs)
+}
+
+// buildCapacityAWSConfig returns the AWS config the capacity gate's EC2-offerings
+// and Service-Quotas clients are built from: base unchanged for a home launch
+// (target == nil), or the launcher-role-assumed config for a linked one.
+//
+// FAIL-CLOSED (T-126-29, the single most dangerous silent-wrong-answer in this
+// phase): on an assume-role failure this returns a non-nil error and a zero
+// aws.Config — there is deliberately no fallback branch that continues with
+// base/home credentials. A caller that ignores the error and uses the returned
+// config anyway would silently report the home account's quota under the
+// linked account's name.
+func buildCapacityAWSConfig(ctx context.Context, base aws.Config, target *LaunchTarget) (aws.Config, error) {
+	if target == nil {
+		return base, nil
+	}
+	assumedCfg, err := awspkg.AssumeRoleConfig(ctx, base, target.LauncherRoleARN, target.ExternalID, target.Region)
+	if err != nil {
+		return aws.Config{}, fmt.Errorf(
+			"assume launcher role %s for launch_accounts.%s: %w — run `km doctor` to check the link",
+			target.LauncherRoleARN, target.LinkName, err,
+		)
+	}
+	return assumedCfg, nil
+}
+
 // networkPlacementLabel returns the exact "private"/"public" literal that
 // SandboxMetadata.NetworkPlacement, the km init NAT-disable guard
 // (natDisableGuard), and the km doctor checks (Plan 07) all compare against.
@@ -259,6 +476,10 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var wait bool
 	// Phase 124: --wait-for-capacity outer backoff (operator-only; never forwarded to Lambda subprocess)
 	var waitForCapacity string
+	// Phase 126: --launch-account overrides spec.runtime.launchAccount. An
+	// explicitly empty value ("--launch-account=") forces the home account even
+	// when the profile names a link — see ResolveLaunchTarget.
+	var launchAccountFlag string
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -302,6 +523,14 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 
 			// wait is passed through to doStep16PromptPush below (Plan 86-04).
 
+			// Phase 126: nil means "flag not supplied" (defer to the profile);
+			// Changed("launch-account") distinguishes that from an explicitly empty
+			// override, which forces the home account (see ResolveLaunchTarget).
+			var launchAccountOverride *string
+			if cmd.Flags().Changed("launch-account") {
+				launchAccountOverride = &launchAccountFlag
+			}
+
 			// Auto-detect remote vs local based on substrate.
 			// EC2/ECS default to --remote (no local terraform needed).
 			// Docker defaults to --local (runs on operator's machine).
@@ -334,7 +563,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 				// Step 1–15 run inside the Lambda via runCreateRemote.
 				// Step 16 (prompt queue push) runs OPERATOR-side after Lambda
 				// returns — RESEARCH.md Pitfall #1: Lambda is untouched.
-				sandboxID, remoteErr := runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride)
+				sandboxID, remoteErr := runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, launchAccountOverride)
 				if remoteErr != nil {
 					return remoteErr
 				}
@@ -351,7 +580,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			}
 
 			// Local path: runCreate handles Steps 1–15. Step 16 runs after it returns.
-			if err := runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, waitForCapacity); err != nil {
+			if err := runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, waitForCapacity, launchAccountOverride); err != nil {
 				return err
 			}
 			// Phase 86 Step 16: operator-side prompt queue push (local path).
@@ -412,6 +641,12 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		"Re-sweep all AZs on a backoff until capacity is available or the deadline elapses (e.g. --wait-for-capacity=30m). "+
 			"Bare --wait-for-capacity uses the default 30m. Iterate-class errors retry; fail-fast errors (quota/auth/invalid) exit immediately.")
 	cmd.Flag("wait-for-capacity").NoOptDefVal = "30m"
+	// Phase 126: --launch-account overrides spec.runtime.launchAccount for this
+	// create. An explicitly empty value ("--launch-account=") forces the home
+	// account even when the profile names a link.
+	cmd.Flags().StringVar(&launchAccountFlag, "launch-account", "",
+		"Override spec.runtime.launchAccount — launch into this registered launch_accounts link instead. "+
+			"An explicitly empty value forces the home account even when the profile names a link.")
 
 	return cmd
 }
@@ -461,7 +696,7 @@ func uploadSopsBundleIfPresent(ctx context.Context, s3c S3Putter, artifactBucket
 }
 
 // runCreate executes the full create workflow.
-func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, waitForCapacity string, clonedFromOverride ...string) error {
+func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, waitForCapacity string, launchAccountOverride *string, clonedFromOverride ...string) error {
 	createStart := time.Now()
 	ctx := context.Background()
 
@@ -610,6 +845,20 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// its env vars under it (grant-independent decrypt; survives role recreation).
 	exportPlatformKMSKeyARN(ctx, awsCfg, cfg)
 
+	// Phase 126: resolve the launch-account link once, early — after profile
+	// resolution and AWS credentials are validated (the external-id read needs a
+	// real SSM client), and before any terragrunt artifact is written or uploaded.
+	// Nil when no link is in effect: a profile naming no launchAccount (and no
+	// --launch-account override) takes this exact path with zero config lookup and
+	// zero SSM read (ResolveLaunchTarget's own dormancy guarantee).
+	launchTarget, err := ResolveLaunchTarget(ctx, cfg, resolvedProfile, launchAccountOverride, &productionSSMParamStore{client: ssm.NewFromConfig(awsCfg)})
+	if err != nil {
+		return err
+	}
+	if hydrateErr := hydrateLaunchAccountVPCID(ctx, awsCfg, launchTarget); hydrateErr != nil {
+		return hydrateErr
+	}
+
 	// Step 5c: Enforce sandbox limit before any provisioning.
 	if cfg.StateBucket != "" {
 		s3Client := s3.NewFromConfig(awsCfg)
@@ -671,7 +920,13 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// For docker substrate, skip LoadNetworkOutputs — there are no Terragrunt network outputs.
 	// Build a minimal NetworkConfig from km-config.yaml fields instead.
 	repoRoot := findRepoRoot()
-	region := resolvedProfile.Spec.Runtime.Region
+	// Phase 126: a launch target carries its own region (this plan's "Decisions
+	// recorded" section) — a conflicting profile region is not wrong, it is simply
+	// overridden, so this is a warning rather than a validation error.
+	region, regionWarning := resolveLaunchRegion(resolvedProfile.Spec.Runtime.Region, launchTarget)
+	if regionWarning != "" {
+		fmt.Fprintf(os.Stderr, "  [warn] %s\n", regionWarning)
+	}
 	regionLabel := compiler.RegionLabel(region)
 	artifactsBucket := cfg.ArtifactsBucket
 	if artifactsBucket == "" {
@@ -683,6 +938,22 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		network = &compiler.NetworkConfig{
 			EmailDomain:     cfg.GetEmailDomain(),
 			ArtifactsBucket: artifactsBucket,
+		}
+	} else if launchTarget != nil {
+		// Phase 126: source placement from the link record instead of the home
+		// account's network outputs — no LoadNetworkOutputs call, no home NAT-
+		// gateway guard needed here (the launchAccount+privateSubnet mutex in
+		// pkg/profile.ValidateSemantic, plan 01, already makes a private-subnet
+		// linked profile unreachable by the time we get here).
+		network = &compiler.NetworkConfig{
+			RegionLabel:     regionLabel,
+			EmailDomain:     cfg.GetEmailDomain(),
+			ArtifactsBucket: artifactsBucket,
+		}
+		applyLaunchAccountNetwork(network, launchTarget)
+
+		if guardErr := checkLaunchAccountEFSGuard(resolvedProfile.Spec.Runtime.MountEFS, launchTarget.EFSID); guardErr != nil {
+			return guardErr
 		}
 	} else {
 		networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
@@ -891,22 +1162,39 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		if rankInstanceType == "" {
 			rankInstanceType = "t3.medium"
 		}
-		ec2OfferingsClient := ec2svc.NewFromConfig(awsCfg, func(o *ec2svc.Options) {
+
+		// Phase 126: the quota gate must read the LINKED account's headroom, never
+		// the home account's — a failed assume-role aborts the create rather than
+		// silently falling back to the home config (T-126-29). buildCapacityAWSConfig
+		// returns base unchanged for a home launch (target == nil) or the launcher-
+		// role-assumed config for a linked one; on assume failure it returns an
+		// error and NO config — there is no branch below that falls back to awsCfg.
+		capacityCfg, cfgErr := buildCapacityAWSConfig(ctx, awsCfg, launchTarget)
+		if cfgErr != nil {
+			return cfgErr
+		}
+		ec2OfferingsClient := ec2svc.NewFromConfig(capacityCfg, func(o *ec2svc.Options) {
 			o.Region = region
 		})
-		sqClient := sqsvc.NewFromConfig(awsCfg, func(o *sqsvc.Options) {
+		sqClient := sqsvc.NewFromConfig(capacityCfg, func(o *sqsvc.Options) {
 			o.Region = region
 		})
+		// Capacity writes always stay home — DynamoDB client is never built from
+		// the assumed-role config, only the account NAMESPACE (below) changes.
 		ddbForCapacity := dynamodbpkg.NewFromConfig(awsCfg)
-		capacityStore = capacity.NewDynamoCapacityStore(ddbForCapacity, cfg.GetCapacityTableName())
+		// Phase 126: "" (home account, unnamespaced); a linked launch namespaces
+		// its rows by the link's account id so home and linked sticky-AZ history
+		// never collide in the shared table.
+		capacityStore = capacity.NewDynamoCapacityStore(ddbForCapacity, cfg.GetCapacityTableName(), launchAccountCapacityNamespace(launchTarget))
 
 		// Phase 125: nil for a public sandbox (RankAZs applies no NAT filter —
 		// byte-identical to Phase 124). For a private sandbox, the AZ list actually
 		// served by a NAT gateway, so the sweep never rotates into a NAT-less AZ.
-		var natAZs []string
-		if resolvedProfile.Spec.Network.PrivateSubnet {
-			natAZs = natServedAZs(network.AvailabilityZones, network.NATGatewayIDs)
-		}
+		// Phase 126: always nil for a linked launch — the linked account's network
+		// is lean by design and has no NAT gateway concept at all (this plan's
+		// "Decisions recorded"); a NAT filter derived from a NAT-less network would
+		// drop every zone (T-126-33).
+		natAZs := resolveLaunchNATServedAZs(launchTarget, resolvedProfile.Spec.Network.PrivateSubnet, network.AvailabilityZones, network.NATGatewayIDs)
 
 		ranked, rankErr := capacity.RankAZs(ctx, rankInstanceType, region,
 			resolvedProfile.Spec.Runtime.AZPreference,
@@ -1030,6 +1318,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			artifacts, compileErr = compiler.Compile(resolvedProfile, sandboxID, onDemand, network, amiBDMDevices)
 			if compileErr != nil {
 				return fmt.Errorf("failed to compile profile: %w", compileErr)
+			}
+			if guardErr := assertLaunchAccountEmitted(artifacts.ServiceHCL, launchTarget); guardErr != nil {
+				return guardErr
 			}
 
 			// Step 8: Create sandbox directory
@@ -1247,7 +1538,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			SandboxID:      sandboxID,
 			ProfileName:    resolvedProfile.Metadata.Name,
 			Substrate:      substrateLabel,
-			Region:         resolvedProfile.Spec.Runtime.Region,
+			Region:         region,
 			CreatedAt:      now,
 			TTLExpiry:      ttlExpiry,
 			IdleTimeout:    resolvedProfile.Spec.Lifecycle.IdleTimeout,
@@ -1261,6 +1552,12 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			// Phase 63 — Slack metadata. Populated from Step 6c resolution.
 			SlackChannelID:  slackChannelID,
 			SlackPerSandbox: slackPerSandbox,
+		}
+		// Phase 126: record which account holds the instance — empty for a home
+		// create, the link name for a linked one. km destroy/doctor/the ttl-handler
+		// (plan 08) all key off this to know which account to reach into.
+		if launchTarget != nil {
+			meta.LaunchAccount = launchTarget.LinkName
 		}
 		// SlackArchiveOnDestroy: persist *bool from profile so km destroy (Plan 63-09) is
 		// self-contained and does not need to re-read the original profile YAML at teardown time.
@@ -2429,7 +2726,7 @@ func runDockerComposeUp(ctx context.Context, sandboxID, composeFilePath string, 
 //
 // The create-handler Lambda downloads the artifacts, runs km create as a subprocess,
 // and sends notifications on success/failure.
-func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, clonedFromOverride ...string) (string, error) {
+func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, launchAccountOverride *string, clonedFromOverride ...string) (string, error) {
 	ctx := context.Background()
 
 	// Step 1: Read profile file
@@ -2497,6 +2794,20 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		return "", fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
 	}
 
+	// Phase 126: resolve the launch-account link, exactly as the local path does
+	// (see runCreate) — early, before any artifact is uploaded or dispatched.
+	// This IS a second, easy-to-miss network-resolution site (126-RESEARCH.md §
+	// "Create-flow changes" step 2): leaving it unwired would make --remote
+	// silently launch into the home account with a link-shaped profile
+	// (T-126-31).
+	launchTarget, err := ResolveLaunchTarget(ctx, cfg, resolvedProfile, launchAccountOverride, &productionSSMParamStore{client: ssm.NewFromConfig(awsCfg)})
+	if err != nil {
+		return "", err
+	}
+	if hydrateErr := hydrateLaunchAccountVPCID(ctx, awsCfg, launchTarget); hydrateErr != nil {
+		return "", hydrateErr
+	}
+
 	// Step 5c: Enforce sandbox limit before dispatching remote create.
 	if cfg.StateBucket != "" {
 		s3Client := s3.NewFromConfig(awsCfg)
@@ -2519,35 +2830,69 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 
 	// Step 6: Load network config for compilation
 	repoRoot := findRepoRoot()
-	region := resolvedProfile.Spec.Runtime.Region
+	// Phase 126: same region resolution as the local path — the account carries
+	// its region; a conflicting profile region is overridden with a warning.
+	region, regionWarning := resolveLaunchRegion(resolvedProfile.Spec.Runtime.Region, launchTarget)
+	if regionWarning != "" {
+		fmt.Fprintf(os.Stderr, "  [warn] %s\n", regionWarning)
+	}
 	regionLabel := compiler.RegionLabel(region)
 	// LoadNetworkOutputs → fetchAndCacheOutputs reads KM_RESOURCE_PREFIX
 	// (init.go:891) to build the S3 state-bucket path. On non-default-prefix
 	// installs this otherwise defaults to "km" and queries the wrong bucket.
 	ExportTerragruntEnvVars(cfg)
-	networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
-	if err != nil {
-		return "", fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
-	}
 	remoteArtifactsBucket := cfg.ArtifactsBucket
 	if remoteArtifactsBucket == "" {
 		remoteArtifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
 	}
-	network := &compiler.NetworkConfig{
-		VPCID:             networkOutputs.VPCID,
-		PublicSubnets:     networkOutputs.PublicSubnets,
-		AvailabilityZones: networkOutputs.AvailabilityZones,
-		RegionLabel:       regionLabel,
-		EmailDomain:       cfg.GetEmailDomain(),
-		ArtifactsBucket:   remoteArtifactsBucket,
-		PrivateSubnets:    networkOutputs.PrivateSubnets,
-		NATGatewayIDs:     networkOutputs.NATGatewayIDs,
-	}
+	var network *compiler.NetworkConfig
+	if launchTarget != nil {
+		// Phase 126: source placement from the link record instead of the home
+		// account's network outputs — same mapping as the local path
+		// (applyLaunchAccountNetwork), factored into one function so the two
+		// call sites cannot drift (T-126-31).
+		network = &compiler.NetworkConfig{
+			RegionLabel:     regionLabel,
+			EmailDomain:     cfg.GetEmailDomain(),
+			ArtifactsBucket: remoteArtifactsBucket,
+		}
+		applyLaunchAccountNetwork(network, launchTarget)
 
-	// Phase 125: same fail-fast guard as the local create path — before any
-	// artifact is uploaded to S3 or dispatched to the create-handler Lambda.
-	if guardErr := checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.NATGatewayIDs); guardErr != nil {
-		return "", guardErr
+		// Persist the RESOLVED link name back onto the profile before it is
+		// serialized to .km-profile.yaml (REQ-126-LAUNCH). `--launch-account`
+		// is a CLI override that otherwise lives only in launchTarget, and the
+		// create-handler Lambda re-compiles from the uploaded profile — so
+		// without this write-back the override is silently dropped on the
+		// remote path and the sandbox is built in the HOME account. Found by
+		// live UAT (sb-8d5820ce): service.hcl was correct locally, the
+		// uploaded profile had no spec.runtime.launchAccount, and every
+		// resource landed in the home account.
+		resolvedProfile.Spec.Runtime.LaunchAccount = launchTarget.LinkName
+
+		if guardErr := checkLaunchAccountEFSGuard(resolvedProfile.Spec.Runtime.MountEFS, launchTarget.EFSID); guardErr != nil {
+			return "", guardErr
+		}
+	} else {
+		networkOutputs, loadErr := LoadNetworkOutputs(repoRoot, regionLabel)
+		if loadErr != nil {
+			return "", fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, loadErr, region)
+		}
+		network = &compiler.NetworkConfig{
+			VPCID:             networkOutputs.VPCID,
+			PublicSubnets:     networkOutputs.PublicSubnets,
+			AvailabilityZones: networkOutputs.AvailabilityZones,
+			RegionLabel:       regionLabel,
+			EmailDomain:       cfg.GetEmailDomain(),
+			ArtifactsBucket:   remoteArtifactsBucket,
+			PrivateSubnets:    networkOutputs.PrivateSubnets,
+			NATGatewayIDs:     networkOutputs.NATGatewayIDs,
+		}
+
+		// Phase 125: same fail-fast guard as the local create path — before any
+		// artifact is uploaded to S3 or dispatched to the create-handler Lambda.
+		if guardErr := checkPrivateSubnetGuard(resolvedProfile.Spec.Network.PrivateSubnet, networkOutputs.NATGatewayIDs); guardErr != nil {
+			return "", guardErr
+		}
 	}
 
 	// Apply --ttl and --idle overrides (after profile resolution, before compilation).
@@ -2633,6 +2978,9 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network, remoteAmiBDMDevices)
 	if err != nil {
 		return "", fmt.Errorf("failed to compile profile: %w", err)
+	}
+	if err := assertLaunchAccountEmitted(artifacts.ServiceHCL, launchTarget); err != nil {
+		return "", err
 	}
 
 	// Determine artifact bucket
@@ -2754,7 +3102,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		SandboxID:   sandboxID,
 		ProfileName: resolvedProfile.Metadata.Name,
 		Substrate:   remoteSubstrateLabel,
-		Region:      resolvedProfile.Spec.Runtime.Region,
+		Region:      region,
 		Status:      "starting",
 		CreatedAt:   time.Now().UTC(),
 		IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
@@ -2768,6 +3116,12 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	}
 	if len(clonedFromOverride) > 0 && clonedFromOverride[0] != "" {
 		startingMeta.ClonedFrom = clonedFromOverride[0]
+	}
+	// Phase 126: record which account holds the instance on the "starting" row
+	// too — km destroy/doctor must see this even if the create-handler Lambda
+	// never gets to overwrite this row (plan 08's cold-clone fallback).
+	if launchTarget != nil {
+		startingMeta.LaunchAccount = launchTarget.LinkName
 	}
 	if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, startingMeta); writeErr != nil {
 		fmt.Fprintf(os.Stderr, "  [warn] failed to write provisioning metadata: %v\n", writeErr)
@@ -3087,18 +3441,32 @@ func checkSandboxLimit(ctx context.Context, s3Client awspkg.S3ListAPI, bucket st
 //     resolved profile has extends cleared (profile.Resolve / TestResolveExtendsCleared)
 //     and every base merged in, so it is self-contained.
 //  2. ttl/idle overrides — the Lambda must observe the overridden lifecycle values.
+//  3. a launch account is in force — `--launch-account` is a CLI override written
+//     back onto resolvedProfile.Spec.Runtime.LaunchAccount, so it exists ONLY in the
+//     marshaled form. The raw bytes are whatever the operator's file said, which for a
+//     flag-supplied link is nothing at all. Uploading raw here drops the override, the
+//     Lambda re-compiles without it, and the sandbox is built in the HOME account
+//     (REQ-126-LAUNCH; found by live UAT).
 //
 // resolvedProfile already carries all mutations (extends merge, ttl/idle, --no-bedrock
 // strip applied upstream), so marshaling it is the complete, correct picture. A monolithic,
 // override-free, bedrock-default profile keeps the raw-bytes path to preserve
 // comments/formatting (profileYAMLForUpload also applies the --no-bedrock string edits).
 func selectRemoteProfileYAML(extendsSet bool, resolvedProfile *profile.SandboxProfile, raw []byte, noBedrock bool, ttlOverride, idleOverride string) (string, error) {
-	if extendsSet || ttlOverride != "" || idleOverride != "" {
+	launchAccountSet := resolvedProfile != nil && resolvedProfile.Spec.Runtime.LaunchAccount != ""
+	if extendsSet || ttlOverride != "" || idleOverride != "" || launchAccountSet {
 		mergedYAML, err := yaml.Marshal(resolvedProfile)
 		if err != nil {
 			if extendsSet {
 				// No safe fallback for extends — raw bytes would fail in the Lambda.
 				return "", fmt.Errorf("failed to marshal resolved (flattened) profile for remote upload: %w", err)
+			}
+			if launchAccountSet {
+				// No safe fallback for a launch account either: falling back to raw
+				// silently relocates the sandbox to the home account, which looks
+				// like success. Fail closed instead.
+				return "", fmt.Errorf("failed to marshal profile carrying launchAccount %q for remote upload: %w",
+					resolvedProfile.Spec.Runtime.LaunchAccount, err)
 			}
 			log.Warn().Err(err).Msg("failed to marshal mutated profile for remote upload — using raw")
 			return profileYAMLForUpload(resolvedProfile, raw, noBedrock), nil

@@ -144,8 +144,9 @@ func TestApplyLifecycleOverrides_RunCreateRemoteSignature(t *testing.T) {
 	}
 	s := string(src)
 
-	// Verify runCreateRemote signature has ttlOverride, idleOverride, budget overrides, and clonedFromOverride
-	if !strings.Contains(s, "runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, clonedFromOverride ...string)") {
-		t.Error("runCreateRemote signature missing ttlOverride, idleOverride, or clonedFromOverride parameters")
+	// Verify runCreateRemote signature has ttlOverride, idleOverride, budget overrides,
+	// the Phase 126 launchAccountOverride, and clonedFromOverride.
+	if !strings.Contains(s, "runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, launchAccountOverride *string, clonedFromOverride ...string)") {
+		t.Error("runCreateRemote signature missing ttlOverride, idleOverride, launchAccountOverride, or clonedFromOverride parameters")
 	}
 }

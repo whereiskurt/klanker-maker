@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	sqsvcpkg "github.com/aws/aws-sdk-go-v2/service/servicequotas"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -86,6 +87,7 @@ func ComputeCapacityVerdict(offered, isGPU bool, quotaHeadroom float64, quotaAva
 func newCapacityCmd(cfg *config.Config) *cobra.Command {
 	var typeFlag string
 	var regionFlag string
+	var launchAccountFlag string
 
 	cmd := &cobra.Command{
 		Use:   "capacity [profile.yaml]",
@@ -98,21 +100,28 @@ Note: "available" is never shown — capacity is probabilistic, not guaranteed.
 Examples:
   km capacity profiles/gpu-qwen-12x.yaml      # resolve type from profile
   km capacity --type g6e.12xlarge
-  km capacity --type g6e.12xlarge --region us-west-2`,
+  km capacity --type g6e.12xlarge --region us-west-2
+  km capacity --type g6e.12xlarge --launch-account mgmt-gpu   # report on a linked account`,
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCapacity(cmd.Context(), cfg, args, typeFlag, regionFlag)
+			return runCapacity(cmd.Context(), cfg, args, typeFlag, regionFlag, launchAccountFlag)
 		},
 	}
 
 	cmd.Flags().StringVar(&typeFlag, "type", "", "EC2 instance type (mutually exclusive with profile path)")
 	cmd.Flags().StringVar(&regionFlag, "region", "", "AWS region (default: primary region from km-config.yaml)")
+	// Phase 126: report against a linked account instead of home. Empty (the
+	// default) means home — there is no "force home" override here the way
+	// `km create --launch-account=` has one, since there is no profile to defer
+	// to in the first place.
+	cmd.Flags().StringVar(&launchAccountFlag, "launch-account", "",
+		"Report on this registered launch_accounts link instead of the home account")
 
 	return cmd
 }
 
-func runCapacity(ctx context.Context, cfg *config.Config, args []string, typeFlag, regionFlag string) error {
+func runCapacity(ctx context.Context, cfg *config.Config, args []string, typeFlag, regionFlag, launchAccountFlag string) error {
 	// Resolve instance type from flag or profile argument.
 	instanceType, region, err := resolveCapacityTarget(cfg, args, typeFlag, regionFlag)
 	if err != nil {
@@ -128,7 +137,33 @@ func runCapacity(ctx context.Context, cfg *config.Config, args []string, typeFla
 		region = awsCfg.Region
 	}
 
-	ec2Client := ec2.NewFromConfig(awsCfg, func(o *ec2.Options) {
+	// Phase 126: resolve the launch-account link (if any) BEFORE building any
+	// AWS client — the account being reported on must be known before ANY
+	// client is constructed, so a failed resolve/assume never produces a
+	// report at all (T-126-34/T-126-29: never answer with the wrong account's
+	// numbers under the link's name).
+	launchTarget, err := ResolveLaunchTarget(ctx, cfg, &profile.SandboxProfile{}, &launchAccountFlag, &productionSSMParamStore{client: ssm.NewFromConfig(awsCfg)})
+	if err != nil {
+		return err
+	}
+	if launchTarget != nil {
+		if regionFlag != "" && regionFlag != launchTarget.Region {
+			fmt.Fprintf(os.Stderr, "  [warn] --region %q differs from launch_accounts.%s's region %q — using %q\n",
+				regionFlag, launchTarget.LinkName, launchTarget.Region, launchTarget.Region)
+		}
+		region = launchTarget.Region
+	}
+
+	// buildCapacityAWSConfig returns awsCfg unchanged for a home report, or the
+	// launcher-role-assumed config for a linked one — FAIL-CLOSED: an assume
+	// failure aborts here, before any client is built from a half-resolved
+	// config.
+	capacityCfg, cfgErr := buildCapacityAWSConfig(ctx, awsCfg, launchTarget)
+	if cfgErr != nil {
+		return cfgErr
+	}
+
+	ec2Client := ec2.NewFromConfig(capacityCfg, func(o *ec2.Options) {
 		o.Region = region
 	})
 
@@ -156,7 +191,7 @@ func runCapacity(ctx context.Context, cfg *config.Config, args []string, typeFla
 	var quotaHeadroom float64
 	var quotaAvail bool
 	if isGPU {
-		sqClient := sqsvcpkg.NewFromConfig(awsCfg, func(o *sqsvcpkg.Options) {
+		sqClient := sqsvcpkg.NewFromConfig(capacityCfg, func(o *sqsvcpkg.Options) {
 			o.Region = region
 		})
 		headroom, qErr := capacity.GetGPUVCPUQuota(ctx, sqClient)
@@ -168,9 +203,11 @@ func runCapacity(ctx context.Context, cfg *config.Config, args []string, typeFla
 		}
 	}
 
-	// Capacity store lookups.
+	// Capacity store lookups. The DynamoDB client always stays on the home
+	// config — capacity writes/reads stay home; only the account NAMESPACE
+	// changes for a linked report.
 	ddbClient := dynamodb.NewFromConfig(awsCfg)
-	store := capacity.NewDynamoCapacityStore(ddbClient, cfg.GetCapacityTableName())
+	store := capacity.NewDynamoCapacityStore(ddbClient, cfg.GetCapacityTableName(), launchAccountCapacityNamespace(launchTarget))
 
 	// Build per-AZ report rows.
 	var rows []CapacityAZReport
@@ -195,9 +232,21 @@ func runCapacity(ctx context.Context, cfg *config.Config, args []string, typeFla
 		return rows[i].AZ < rows[j].AZ
 	})
 
-	// Render table.
-	printCapacityTable(os.Stdout, instanceType, region, rows)
+	// Render table. The header always names the account being reported on
+	// (T-126-34) — "home" or "{link} ({accountID})" — so a reader can never
+	// confuse a linked report for a home one.
+	printCapacityTable(os.Stdout, instanceType, region, launchAccountReportLabel(launchTarget), rows)
 	return nil
+}
+
+// launchAccountReportLabel returns the account label the capacity report
+// header names: "home" for a home report (nil target), or "{link} ({accountID})"
+// for a linked one.
+func launchAccountReportLabel(target *LaunchTarget) string {
+	if target == nil {
+		return "home"
+	}
+	return fmt.Sprintf("%s (%s)", target.LinkName, target.AccountID)
 }
 
 // resolveCapacityTarget resolves instanceType and region from CLI args + flags.
@@ -273,8 +322,11 @@ func describeRegionAZs(ctx context.Context, client *ec2.Client, region string) (
 }
 
 // printCapacityTable renders the per-AZ capacity report as a tab-aligned table.
-func printCapacityTable(w interface{ Write([]byte) (int, error) }, instanceType, region string, rows []CapacityAZReport) {
-	fmt.Fprintf(w, "Capacity report: %s  region: %s\n\n", instanceType, region)
+// accountLabel names the account the report describes (T-126-34): "home" or
+// "{link} ({accountID})" — always present, never omitted, so a linked report
+// can never be misread as a home one.
+func printCapacityTable(w interface{ Write([]byte) (int, error) }, instanceType, region, accountLabel string, rows []CapacityAZReport) {
+	fmt.Fprintf(w, "Capacity report: %s  region: %s  account: %s\n\n", instanceType, region, accountLabel)
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "AZ\tOFFERED\tQUOTA HEADROOM\tLAST ICE\tLAST SUCCESS\tVERDICT")

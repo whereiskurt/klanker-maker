@@ -3,8 +3,8 @@
 package terragrunt
 
 import (
-	"bytes"
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -123,6 +123,27 @@ func (r *Runner) BuildPlanWithOutputCommand(ctx context.Context, sandboxDir, pla
 // is consistent with BuildPlanWithOutputCommand.
 func (r *Runner) BuildShowPlanJSONCommand(ctx context.Context, sandboxDir, planFile string) *exec.Cmd {
 	return r.buildCommand(ctx, sandboxDir, "show", "-json", planFile)
+}
+
+// InitNoBackend runs `terragrunt init -backend=false` inside sandboxDir,
+// skipping remote-state initialization entirely. Added for Phase 126's
+// `km account add --dry-run` path (internal/app/cmd/account.go): the
+// generated enrollment unit's S3 backend does not exist yet on a dry run
+// (creating it would make --dry-run provision real resources), and a normal
+// init/plan against a backend block naming a nonexistent bucket hard-fails
+// with NoSuchBucket rather than degrading gracefully. Pair with Validate for
+// a real (if partial) validation of the rendered configuration.
+func (r *Runner) InitNoBackend(ctx context.Context, sandboxDir string) error {
+	cmd := r.buildCommand(ctx, sandboxDir, "init", "-backend=false")
+	return r.runCommand(ctx, cmd)
+}
+
+// Validate runs `terragrunt validate` inside sandboxDir — syntax/type
+// validation of the rendered configuration, touching no backend or provider
+// state. Paired with InitNoBackend on the dry-run validation path.
+func (r *Runner) Validate(ctx context.Context, sandboxDir string) error {
+	cmd := r.buildCommand(ctx, sandboxDir, "validate")
+	return r.runCommand(ctx, cmd)
 }
 
 // Reconfigure runs `terragrunt init -reconfigure` inside sandboxDir to refresh

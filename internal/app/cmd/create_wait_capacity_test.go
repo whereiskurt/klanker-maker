@@ -100,7 +100,7 @@ func TestNewCreateCmd_WaitForCapacitySourceInvariants(t *testing.T) {
 		{"fail-fast short-circuit returns immediately", "Fail-fast class (Quota/Auth/Invalid): never benefits from waiting"},
 		{"ctx cancellation during wait", "ctx.Done()"},
 		{"wait deadline before-check", "waitCapDeadline.IsZero()"},
-		{"waitForCapacity passed to runCreate", "waitForCapacity); err != nil"},
+		{"waitForCapacity passed to runCreate", "waitForCapacity, launchAccountOverride); err != nil"},
 	}
 
 	for _, r := range required {

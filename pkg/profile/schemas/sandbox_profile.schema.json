@@ -322,6 +322,10 @@
               "items": { "type": "string", "minLength": 1 },
               "description": "Preferred AZ order for this profile (e.g. [\"us-east-1c\", \"us-east-1b\"]). Phase 124: merged ahead of capacity-aware ranking; does not add AZs not offered by the instance type. EC2 substrate only.",
               "examples": [["us-east-1c", "us-east-1b"]]
+            },
+            "launchAccount": {
+              "type": "string",
+              "description": "Names a cross-account capacity-borrowing link declared in km-config.yaml launch_accounts.<name> (Phase 126). Empty (the default, omit this field) means the home application account, byte-identical to Phase 125. When set, subnet/security-group/region come from the link record; a conflicting spec.runtime.region is ignored with a warning. Mutually exclusive with spec.network.privateSubnet, which has no cross-account equivalent."
             }
           }
         },

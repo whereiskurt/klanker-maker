@@ -22,3 +22,12 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+# Phase 126 — cross-account capacity borrowing (REQ-126-REGISTER).
+# Additive with an empty default: an install with no links emits no extra
+# bucket-policy statement and its policy is byte-identical to pre-126.
+variable "launch_accounts_json" {
+  description = "JSON object (KM_LAUNCH_ACCOUNTS) of registered cross-account capacity-borrowing links, keyed by link name. Each entry's box_role_arn gets a read-only (GetObject + ListBucket, never PutObject) statement on the artifacts bucket policy. Declared HERE because this module owns that bucket policy declaratively — only one aws_s3_bucket_policy can exist per bucket, so without this every km init erased the grant km account register wrote imperatively."
+  type        = string
+  default     = ""
+}

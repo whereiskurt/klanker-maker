@@ -14,6 +14,16 @@
 
 data "aws_caller_identity" "current" {}
 
+# Cross-account capacity-borrowing links (Phase 126). Decoded from the same
+# KM_LAUNCH_ACCOUNTS payload the ttl-handler and create-handler modules consume,
+# so the artifacts-bucket read grant below cannot drift from the link records.
+# jsondecode() rejects an empty string, so the dormant default short-circuits
+# to {} first — an install with no links emits no extra bucket-policy statement
+# and its policy is byte-identical to pre-126.
+locals {
+  launch_accounts = var.launch_accounts_json != "" ? jsondecode(var.launch_accounts_json) : {}
+}
+
 # ============================================================
 # Receipt Rules (prefix-namespaced, attached to shared rule set)
 # ============================================================
@@ -126,6 +136,46 @@ data "aws_iam_policy_document" "artifacts_bucket" {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
       values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+
+  # Cross-account capacity borrowing (Phase 126, REQ-126-REGISTER).
+  #
+  # A linked account's box role needs read access to this bucket to fetch its
+  # profile, sidecars and staged model weights at boot. `km account register`
+  # ALSO writes this statement imperatively via PutBucketPolicy — but this file
+  # owns the bucket policy declaratively, and the comment at the top of this
+  # block is the reason why that mattered: only ONE aws_s3_bucket_policy can
+  # exist per bucket, so every `km init` reconciled the policy and ERASED the
+  # imperative grant. A cross-account box created after any apply then could not
+  # read the home bucket at all, and `km doctor`'s remedy ("re-run
+  # km account register") was a loop the next init undid.
+  #
+  # Emitting the same Sid and the same statement here makes the two writers
+  # agree instead of fight: an apply now converges on exactly what register
+  # wrote, rather than dropping it. register's imperative write is deliberately
+  # KEPT — it covers the window between enrolling a link and the next init.
+  #
+  # Read-shaped only, matching register: GetObject + ListBucket, never
+  # PutObject. The no-cross-account-write invariant on the home bucket is
+  # unchanged.
+  dynamic "statement" {
+    for_each = local.launch_accounts
+
+    content {
+      sid    = "${var.resource_prefix}-account-link-${statement.key}-read"
+      effect = "Allow"
+
+      principals {
+        type        = "AWS"
+        identifiers = [statement.value.box_role_arn]
+      }
+
+      actions = ["s3:GetObject", "s3:ListBucket"]
+      resources = [
+        "arn:aws:s3:::${var.artifact_bucket_name}",
+        "arn:aws:s3:::${var.artifact_bucket_name}/*",
+      ]
     }
   }
 }

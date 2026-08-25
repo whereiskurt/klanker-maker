@@ -50,6 +50,102 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - See `docs/desktop.md` § Idle timeout and desktop sessions and `docs/vscode.md` § Idle timeout
   and Remote-SSH sessions.
 
+**Phase 126 (2026-08-22) — Cross-account capacity borrowing: launch sandboxes into a linked capacity account (live-verified 2026-08-24, except vLLM serving):**
+- A SandboxProfile can launch its EC2 box into a *different*, pre-linked AWS account to
+  borrow that account's vCPU quota, while the one km control plane — state, DynamoDB, budget,
+  `km list`, every bridge — stays home. Dormant by default: absent `spec.runtime.launchAccount`
+  ⇒ byte-identical to Phase 125. No `apiVersion` bump. Motivating fact: a GPU vCPU quota
+  (`L-DB2E81BA`) can be far larger in a second account than in the account km actually runs
+  in. Nothing about the mechanism is GPU-specific — the launcher role's `--instance-types`
+  allowlist is the only thing that scopes a given link to GPU families.
+- **Enrollment is two commands, two credential sets.** `km account add <name> --aws-profile
+  <target-admin> --trust <home-account-id> --instance-types ... [--provision-network
+  --az-count N] [--dry-run=false]` runs real Terraform against the TARGET account (its own
+  admin creds), provisioning a bounded launcher role (trusted by three home-side principals —
+  operator/local-create, `*-create-handler`, `*-ttl-handler` — each `sts:ExternalId`-gated), a
+  permissions-boundaried box role, a results bucket, and optionally one subnet **per AZ**
+  (never a single subnet — that collapses the Phase 124 AZ sweep to one attempt) + EFS. It
+  writes an owner-only handoff fragment to `~/.km/account-links/<name>.link.yaml`. `km account
+  register <name> --from-fragment <path> --aws-profile <home>` then runs with HOME creds:
+  writes the `km-config.yaml` link entry, the external id as an SSM SecureString, and exactly
+  one read-only (`s3:GetObject`/`s3:ListBucket`, never `PutObject`) grant on the home
+  artifacts bucket for the box role. `km account list` / `km account rm [--target-aws-profile]
+  [--purge-backend]` round it out.
+- **The enrollment unit's Terraform state lives IN THE TARGET ACCOUNT** — `km account add`
+  creates an S3 bucket (`tf-{prefix}-linkstate-{target-acct}-{regionLabel}`) + DynamoDB lock
+  table via the AWS API before the first terragrunt init, shared per (prefix, account, region)
+  and keyed per link. There is no local Terraform state anywhere in this project.
+- **The load-bearing terragrunt fix:** the sandbox template's `include "root"` needed
+  `merge_strategy = "deep"` — without it, a child `generate "provider"` block hard-errors
+  every sandbox render (`Detected generate blocks with the same name: [provider]`), not just
+  cross-account ones. The child block reproduces root's full generated output (incl. both
+  `required_providers` pins, which deep-merge would otherwise drop) plus a conditionally
+  interpolated `assume_role` stanza, proven byte-identical to root's own output in the
+  dormant case against the real pinned terragrunt v0.99.1 binary.
+- **A genuine apply-time bug found and fixed along the way:** the link record carries subnet
+  ids but no VPC id anywhere. Without resolving it, the EC2 module would self-provision a
+  disconnected VPC and then try to place the ENI in a subnet from the link's real, different
+  VPC — a hard `terraform apply` failure. Fixed via one `DescribeSubnets` call against the
+  assumed-role config, resolved once per launch before any artifact is compiled.
+  **Known residual, non-blocking gap:** the link's pre-provisioned `SecurityGroupID` goes
+  unused — the EC2 module always self-creates its own per-sandbox SG regardless of account,
+  matching home-launch behavior (there is no "reuse an existing SG" input anywhere today).
+- **The capacity/quota gate reads the LINKED account**, via a second, fail-closed assumed-role
+  AWS config — a failed assume aborts the create/report rather than silently falling back to
+  the home account's headroom. The `{prefix}-capacity` DynamoDB table stays in the home
+  account for every launch; only the row key is namespaced by account id for a linked launch
+  (home stays permanently un-namespaced — success rows carry no TTL, so "namespacing home for
+  symmetry" would silently orphan months of sticky-AZ history).
+- **Both teardown paths are account-aware.** `km destroy` (including its cold-clone fallback)
+  reads the sandbox's DynamoDB row for its `launch_account` BEFORE the home-account tag scan,
+  which can never see a resource in a different account. The expiry Lambda renders a
+  conditional `assume_role` provider block sourced from the link's own region (never its own
+  cold-start env vars, which are Lambda-instance-wide). Both fail closed — hard error — on an
+  unknown link or a failed external-id read, never a silent fall-through to a home-account
+  provider that would report success while the linked instance kept billing.
+- **`km doctor` gains four read-only checks**, all silently skipped with zero AWS calls when
+  no `launch_accounts` are configured: link structurally well-formed; launcher role actually
+  assumable (forces real credential resolution, not just config construction); artifacts
+  grant present and not widened beyond the exact read-only pair; no orphaned linked-account
+  EC2 instances (a leaked box `km list` cannot see, billing silently).
+- **Security model:** the target account is exempt from Service Control Policies, so the
+  launcher role's own IAM policy is the ENTIRE containment boundary — no second layer. The
+  external id is the confused-deputy protection. The box role is capped by a permissions
+  boundary. Every cross-account data path is read-only in both directions (box→home artifacts:
+  read-only; home→box results: read-only; box→its own results bucket: read-write, same
+  account only). **Operator-safety note:** enrolling an org **management** account as the
+  target is possible but discouraged — SCPs never apply there, so this feature's usual "SCP is
+  a second layer" assumption doesn't hold; prefer a dedicated member account.
+- **Deploy surface (three independent paths — do not conflate):** `km account add/register/
+  list/rm` + the profile field + local create-flow wiring are pure operator-binary changes
+  (`make build`). `spec.runtime.launchAccount` reaching a **remote** `km create` additionally
+  needs `make build-lambdas` + `km init --dry-run=false` (the create-handler's bundled
+  `toolchain/km` must be refreshed). The expiry Lambda's cross-account teardown path
+  (`KM_LAUNCH_ACCOUNTS` env + the `sts:AssumeRole`/`ssm:GetParameter`+`kms:Decrypt` IAM
+  grants) needs the same `make build-lambdas` + `km init --dry-run=false`. The target
+  account's own roles/network/bucket are provisioned by `km account add` running terraform
+  directly against that account — **never** by `km init`, which never touches the target
+  account at all (same standalone shape as `km cluster add`). `--sidecars` is not sufficient
+  for any of the above — nothing in this phase touches a sandbox-side helper binary.
+- **Live UAT 2026-08-24 (`126-UAT.md`):** cross-account create AND teardown proven; `km capacity`
+  reads the target (768 vCPU vs 64 home); `km doctor`'s four checks green incl. the artifacts
+  grant surviving `km init`; containment matrix 8/9 (Finding L1: `ec2:RunInstances` is not
+  tag-gated, so an untagged box is un-reapable AND invisible to the orphan check). **vLLM serving
+  a token is still unproven** — every allowlisted GPU shape probed `InsufficientInstanceCapacity`
+  in every us-east-1 AZ (Finding L4), incl. the FP8 single-GPU fallback; ca-central-1 has no L40S
+  at all and its L4s are dry; us-west-2/us-east-2 are quota-walled at 0 (requests pending).
+- **Two Phase 124 defects found here, not Phase 126 bugs — they bite home launches too:**
+  **L3 (root cause)** `rankScore` (`pkg/capacity/rankaz.go:129`) checks `LastSuccessAt` before the
+  fresh-ICE branch and returns unconditionally; success rows carry no TTL, so an AZ that ever
+  succeeded out-ranks every other AZ forever however often it later ICEs — and `km capacity`'s
+  verdict disagrees with the ranker, showing the AZ as `recently-dry` while the launch path still
+  picks it. **L2** terraform retries ICE internally, so km never sees the error, the sweep cannot
+  rotate, and the Lambda dies at 900s leaving the stale lock the next run reports.
+  **L5** a create killed mid-apply leaks its 300GB volume: `km destroy` reports success (the
+  volume never reached state) and `km doctor` stays green (its EBS check is scoped to *untagged*
+  volumes).
+- See `docs/cross-account-capacity-borrowing.md` for the full operator runbook.
+
 **Egress deny lists + runtime narrowing (2026-08-21):**
 - **`spec.network.egress.deniedDNSSuffixes` / `deniedHosts`** block destinations outright, ahead of
   the allowlist. A deny beats every allow — including the `*` wildcard, the GitHub repo-filter
@@ -345,6 +441,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 |---|---|
 | Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the seven `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
 | Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
+| Cross-account capacity borrowing — `km account add/register/list/rm`, `spec.runtime.launchAccount`, the two-credential enrollment sequence, the launcher-role security model, capacity/teardown/doctor cross-account wiring, deploy surface | `docs/cross-account-capacity-borrowing.md` (Phase 126) |
 | Private-subnet sandboxes + per-AZ NAT gateways — `network.nat_gateway` / `spec.network.privateSubnet` toggles, cost, the one-time route-table split, reversal, guards, deploy surface | `docs/private-subnet-nat.md` (Phase 125) |
 | Sizing the private topology to cut the NAT bill — `network.private_subnet_count` (1–4, absent = all 4), the AZ-rotation tradeoff it buys, and the subnet destroys on lowering it | `docs/private-subnet-nat.md` § Paying for fewer AZs |
 | AZ failover + capacity feasibility — `km create` classify-and-retry sweep, GPU quota wall (`L-DB2E81BA`), `km capacity` verdicts, `--wait-for-capacity`, `{prefix}-capacity` DDB table, deploy-surface order | `docs/operational-gotchas.md` § AZ failover + capacity feasibility (Phase 124) |
@@ -459,6 +556,10 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role
+- `km account add <name> --aws-profile <target-admin> --trust <home-account-id> --instance-types ...` — enroll a target AWS account as a capacity-borrowing link (target-account admin creds; `--provision-network --az-count N`, `--provision-efs`, `--enable-bedrock`, `--dry-run` defaults true)
+- `km account register <name> --from-fragment <path> --aws-profile <home>` — register a link into the home account (home creds; writes `km-config.yaml` entry + SSM external-id + one read-only artifacts-bucket grant)
+- `km account list` — list configured cross-account capacity links (never prints the external id)
+- `km account rm <name> [--target-aws-profile <profile>] [--purge-backend]` — remove a link (home-only by default; `--target-aws-profile` also destroys the target-account footprint; `--purge-backend` deletes the shared state bucket/lock table)
 - `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy, `--plan` to preview with destroy-class safety gate, `--dry-run=false` to actually apply, `--only <module>` for a scoped single-module apply; sugar: `--github` / `--slack` / `--h1` / `--email` (tier-1, env+IAM, no confirmation); `--only ses` (tier-2, destroy-class gated))
 - `km bootstrap --shared-ses` — provision the shared SES rule set (idempotent; `--plan` previews with destroy-class safety gate)
 - `km bootstrap --shared-secrets-key` — provision the shared KMS key for SOPS secret injection (one-time per install; `--plan` previews with destroy-class gate; see `docs/sandbox-secrets.md`)

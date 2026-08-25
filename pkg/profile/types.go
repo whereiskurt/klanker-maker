@@ -502,6 +502,14 @@ type RuntimeSpec struct {
 	// instance type are silently dropped. EC2 substrate only. When absent, capacity-aware
 	// ranking (last-success sticky, ICE-deprioritize, alphabetical) applies.
 	AZPreference []string `yaml:"azPreference,omitempty" json:"azPreference,omitempty"`
+	// LaunchAccount names a cross-account capacity-borrowing link declared in
+	// km-config.yaml launch_accounts.<name> (Phase 126). Empty (the default) means
+	// the home application account — byte-identical to Phase 125. When set, the
+	// sandbox's subnet, security group and region are taken from the link record;
+	// a conflicting spec.runtime.region is ignored with a warning. Mutually
+	// exclusive with spec.network.privateSubnet, because a linked launch account
+	// has no NAT-gateway concept.
+	LaunchAccount string `yaml:"launchAccount,omitempty" json:"launchAccount,omitempty"`
 }
 
 // ExecutionSpec controls the shell environment within the sandbox.

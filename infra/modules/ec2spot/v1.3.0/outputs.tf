@@ -13,8 +13,8 @@ output "ec2spot_instances" {
 }
 
 output "ec2spot_security_group_id" {
-  description = "Security group ID for EC2 spot instances"
-  value       = try(aws_security_group.ec2spot[0].id, "")
+  description = "Security group ID actually attached to the EC2 instances — the per-sandbox group this module created, or the pre-provisioned link group when launching cross-account (Phase 126)."
+  value       = local.effective_security_group_id
 }
 
 output "ec2_ondemand_instances" {
@@ -32,8 +32,8 @@ output "ec2_ondemand_instances" {
 }
 
 output "iam_instance_profile_name" {
-  description = "IAM instance profile name for EC2 instances"
-  value       = try(aws_iam_instance_profile.ec2spot[0].name, "")
+  description = "IAM instance profile actually attached to the EC2 instances — the per-sandbox profile this module created, or the pre-provisioned link box profile when launching cross-account (Phase 126)."
+  value       = local.effective_instance_profile
 }
 
 output "iam_role_arn" {

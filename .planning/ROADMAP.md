@@ -213,7 +213,6 @@ Plans:
 - [ ] 124-05-PLAN.md — Wave 3: `km create --wait-for-capacity[=30m]` opt-in outer backoff (never forwarded to the Lambda subprocess) + `km doctor` capacity-table check + GPU-family quota=0 WARN.
 - [ ] 124-06-PLAN.md — Wave 4 (live UAT, G-quota gated): full `go test ./...` green + 20/20 profiles + deploy (make build BEFORE km init; make build-lambdas) + docs + G1 4-subnets / G2 km capacity accuracy / G3-G5 GPU 1a→1c failover + quota-0 fail-fast + sticky (quota-deferred like Phase 122).
 
-
 ### Phase 125: Per-profile private-subnet sandboxes with per-AZ NAT gateways (additive, reversible)
 
 **Goal:** Let an operator run public-subnet and private-subnet sandboxes side by
@@ -288,3 +287,103 @@ Plans:
 - [x] 125-07-PLAN.md — `km doctor`: NAT-idle and private-without-NAT WARNs
 - [x] 125-08-PLAN.md — `km create`/`budget`: single-point placement resolution, sweep retarget, NAT-aware `RankAZs`, fail-fast
 - [x] 125-09-PLAN.md — operator doc, full-suite gate, and the eight-step live UAT (adds a ttl-handler auto-destroy step that exercises the v1.0.0-pinned destroy stub against a v1.3.0-created sandbox)
+
+### Phase 126: Cross-account capacity borrowing — launch sandboxes into a linked capacity account (GPU-motivated)
+
+**Goal:** Let a SandboxProfile launch its EC2 box into a *different* AWS account to borrow
+that account's vCPU quota, while the single km control plane stays home. Motivating fact:
+`L-DB2E81BA` ("Running On-Demand G and VT instances") in us-east-1 is **768 vCPU in the org
+management account (B) vs 64 in the application account (A)** — 64 fits exactly one
+`g6e.12xlarge`, and a `g6e.48xlarge` (192 vCPU) is impossible in A. The mechanism is a
+pre-provisioned, permissions-boundaried **launcher role** in B that A assumes via a generated
+terragrunt provider `assume_role` block (the proven SCP-stack pattern), plus a B-local results
+bucket. State, DynamoDB, budget, `km list` and every bridge stay in A. Nothing is GPU-specific
+— the launcher's `--instance-types` allowlist is the only thing scoping it to GPU families.
+Dormant by default: absent `spec.runtime.launchAccount` ⇒ byte-identical to Phase 125.
+
+**Explicitly rejected (do not resurface as a shortcut):** a second km install in B. It buys an
+entire second control plane (tables, Lambdas, bridges, SES, doctor surface) and a second pane
+of glass when the actual want is just the quota. Also verified non-viable: `km create
+--aws-profile <mgmt>` alone — `--aws-profile` sets credentials for the terragrunt *state
+backend* as well as the provider, and `tf-km-state-use1` allows only `arn:aws:iam::A:root`, so
+it 403s before reaching EC2; B's box could also not read A's artifacts bucket for sidecars.
+
+**Requirements**: REQ-126-CFG, REQ-126-ENROLL, REQ-126-REGISTER, REQ-126-LAUNCH, REQ-126-CAPACITY, REQ-126-TEARDOWN, REQ-126-DOCTOR, REQ-126-UAT
+
+(phase-local synthetic IDs, derived from the design spec + its 2026-08-22 re-verification):
+REQ-126-CFG (`launch_accounts` block in km-config.yaml **incl. the v2→v merge-list entry** —
+without it the whole block is silently dropped; `RuntimeSpec.LaunchAccount` field + JSON schema
+entry, which is `additionalProperties:false`; `km validate` rejects an unknown link name and
+rejects `launchAccount` + `spec.network.privateSubnet` together — C5; no apiVersion bump),
+REQ-126-ENROLL (`km account add`, run with **B** admin creds: launcher role + box role +
+permissions boundary + `{prefix}-results-{B}` bucket (bucket-owner-enforced; B box RW / A read)
+
++ optional `--provision-efs`. Trust policy names **all three** A-side principals up front —
+
+operator SSO, `*-create-handler`, `*-ttl-handler` — because retrofitting needs B admin creds
+again (C2). `--provision-network` provisions **one subnet per AZ** and the link stores a subnet
+**list**, not a single id: a single subnet collapses `maxAttempts` to 1 and disables the Phase
+124 AZ sweep exactly where GPU ICE is worst (C5)),
+REQ-126-REGISTER (`km account register` / `list` / `rm`, run with **A** creds: writes the link
+record; appends the one home-side grant — `s3:GetObject` **only**, no PutObject — for B's box
+role on the artifacts bucket; `rm` removes its statement),
+REQ-126-LAUNCH (the sandbox template gains a conditional `generate "provider"` override keyed
+off a `launch_account` local the compiler writes into `service.hcl` — there is **no** per-sandbox
+provider template today; `terragrunt.hcl` is copied verbatim by `CreateSandboxDir` and inherits
+its provider from `include "root"`, and templating it would break the Phase-125 verbatim-copy
+invariant (C1). Network resolution sources subnets/SG/region from the link at **both**
+`create.go:688-709` and the second copy in `runCreateRemote` at `:2528-2552`. Local and remote
+land together),
+REQ-126-CAPACITY (first net-new `stscreds.AssumeRoleProvider` helper in `pkg/aws` — none exists
+in the repo today; a second assumed-role `awsCfg` so `RankAZs` and `km capacity` gate on **B's**
+`L-DB2E81BA`. Capacity rows are namespaced per account **inside the store constructor**
+(`NewDynamoCapacityStore(client, table, accountNS)`), NOT by rewriting the `instanceType`
+argument — that same argument feeds `DescribeInstanceTypeOfferings`/`IsGPUFamily`, so a
+namespaced string breaks the EC2 lookup (C4). The store stays home in A),
+REQ-126-TEARDOWN (**not optional** — a $10.49/hr box in an account `km list` does not watch
+never auto-expires. `km destroy` assumes the launcher, **including the cold-clone fallback at
+`destroy.go:258-267`** whose synthesized `minimalHCL` carries five hardcoded locals and no
+launch account (C3); ttl-handler cross-account auto-reap needs `assume_role` in the `main.tf`
+it renders at `cmd/ttl-handler/main.go:1196-1232` plus the Wave-2 trust entry; `km account rm`),
+REQ-126-DOCTOR (link reachable, launcher assumable, artifacts grant present, no orphaned
+B instances; `--ignore-prefix` semantics unaffected),
+REQ-126-UAT (live: `km capacity <gpu-profile>` reads B's 768-vCPU headroom not A's 64;
+`km create` local **and** remote land a GPU box in B reachable via `km shell` / `km model start`;
+`km destroy` reaps it; a TTL expiry reaps it unattended; `simulate-principal-policy` confirms the
+launcher can do nothing but the bounded GPU launch).
+
+**Design spec:** `docs/superpowers/specs/2026-06-29-cross-account-gpu-launch-design.md`
+(Q1–Q4 resolved; Q1 amended to three principals and Q3 amended per C4. The § Re-verification
+2026-08-22 section carries the corrected line offsets and corrections C1–C5.)
+
+**Depends on:** Phase 125 (`SandboxSubnets` placement resolution at `create.go:874` and the
+NAT-aware `RankAZs` signature are the integration points) and Phase 124 (the AZ sweep and
+`{prefix}-capacity` store this phase namespaces per account). Phase 122's GPU profiles are the
+motivating payload but not a code dependency.
+
+**Deploy class:** `make build` for the operator binary (`km account`, profile field, create
+flow) + `make build-lambdas` + `km init --dry-run=false` for the `launchAccount` schema field to
+reach remote create via the create-handler's bundled `toolchain/km`, and for the ttl-handler
+teardown path. B-side roles/network are provisioned by `km account add` (terragrunt against B),
+**not** by `km init` — standalone, like `km cluster add`. No new home-account TF module, no new
+DynamoDB table.
+
+**Unfinished from Phase 122, to confirm on the first box that launches here:** the vLLM serving
+path was never exercised on hardware. Two things resolvable only on a live GPU box — whether
+`vllm/vllm-openai:latest` resolves to ≥ v0.27.1, and whether `qwen3_xml` actually parses that
+chat template's tool calls.
+
+**Plans:** 10/10 plans complete
+
+Plans:
+
+- [x] 126-01-PLAN.md — Wave 1: `launch_accounts` config block + merge-list entry + getters; `spec.runtime.launchAccount` field + JSON schema; profile-only `launchAccount`+`privateSubnet` gate in `ValidateSemantic` and a config-aware unknown-link gate wired into `km validate`.
+- [x] 126-02-PLAN.md — Wave 1: the load-bearing terragrunt change — `merge_strategy = "deep"` on the sandbox template's `include "root"` plus a conditional `generate "provider"` that reproduces root's FULL contents (incl. the `required_providers` pins deep-merge would otherwise drop) + compiler emits the three `service.hcl` locals only when set + a two-layer regression guard (always-on structural test; `terragrunt render` dormancy byte-identity test).
+- [x] 126-03-PLAN.md — Wave 1: fail-closed `pkg/aws.AssumeRoleConfig` (first `stscreds` use in the repo) + `SandboxMetadata.LaunchAccount` marshal/unmarshal round trip + `NewDynamoCapacityStore(client, table, accountNS)` with the home account deliberately un-namespaced.
+- [x] 126-04-PLAN.md — Wave 1: new `infra/modules/gpu-launcher-account/v1.0.0` — launcher role (3 trusted A-side principals, ExternalId-conditioned) + bounded permission policy + box role + permissions boundary + bucket-owner-enforced results bucket + optional one-subnet-per-AZ network + optional EFS.
+- [x] 126-05-PLAN.md — Wave 2: `km account add` (B admin creds) — standalone local-state terragrunt unit outside the repo, ExternalId minting, three trusted principals, protected link fragment.
+- [x] 126-06-PLAN.md — Wave 2: create path — `ResolveLaunchTarget` + EFS/region guards; network from the link and second assumed-role `awsCfg` for the quota gate at BOTH `create.go` copies; namespaced capacity store; `launch_account` on the sandbox row; `km capacity --launch-account`.
+- [x] 126-07-PLAN.md — Wave 3: `km account register` / `list` / `rm` (A creds) — config entry + ExternalId to SSM SecureString + the one read-only artifacts bucket-policy grant (Go read-modify-write; the bucket has no TF-owned policy), removed by Sid on `rm`.
+- [x] 126-08-PLAN.md — Wave 3: teardown — `km destroy` reads the sandbox row BEFORE the A-scoped tag scan (which can never see a B-hosted box) and carries the locals into the cold-clone `minimalHCL`; ttl-handler renders a conditional `assume_role` against the link's region; `KM_LAUNCH_ACCOUNTS` env + scoped `sts:AssumeRole` IAM grant.
+- [x] 126-09-PLAN.md — Wave 4: four read-only `km doctor` checks — link well-formed, launcher assumable (forced credential resolution), artifacts grant present and not write-widened, orphaned B instances vs the home inventory.
+- [x] 126-10-PLAN.md — Wave 5: operator runbook + CLAUDE.md/skill/ROADMAP updates; the four-command full-suite gate (the default `make test` target excludes `internal/app/cmd`, `cmd/ttl-handler`, `pkg/compiler`); live UAT incl. the 8-row `simulate-principal-policy` containment matrix.

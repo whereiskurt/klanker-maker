@@ -84,3 +84,16 @@ variable "identities_table_name" {
   type        = string
   default     = "km-identities"
 }
+
+# Phase 126 (REQ-126-TEARDOWN): cross-account capacity-borrowing teardown.
+# launch_accounts_json is the single source of truth — the launcher role ARN
+# list the sts:AssumeRole grant below needs is DERIVED from it in main.tf
+# (jsondecode), rather than threaded as a second env-var-sourced list variable.
+# Empty (default) is the dormant state: no links configured, byte-identical to
+# Phase 125's teardown IAM/env surface except for the always-present (but
+# empty-valued) KM_LAUNCH_ACCOUNTS entry itself.
+variable "launch_accounts_json" {
+  description = "JSON object (KM_LAUNCH_ACCOUNTS) of registered cross-account capacity-borrowing links, keyed by link name — {\"<name>\": {\"launcher_role_arn\":..., \"external_id_ssm\":..., \"region\":...}}. Empty string = no links configured (dormant)."
+  type        = string
+  default     = ""
+}

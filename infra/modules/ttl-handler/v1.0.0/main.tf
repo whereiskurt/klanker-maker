@@ -1,4 +1,14 @@
 data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+# Phase 126 (REQ-126-TEARDOWN): derive the launcher role ARN list from the
+# same launch_accounts_json the Lambda environment carries — single source of
+# truth, no second env-var-sourced list variable. jsondecode("") would error,
+# so an empty string (the dormant default) short-circuits to {} first.
+locals {
+  launch_accounts                   = var.launch_accounts_json != "" ? jsondecode(var.launch_accounts_json) : {}
+  launch_account_launcher_role_arns = [for name, link in local.launch_accounts : link.launcher_role_arn]
+}
 
 # ============================================================
 # IAM role for the TTL handler Lambda
@@ -312,6 +322,72 @@ resource "aws_iam_role_policy" "terraform_destroy" {
   })
 }
 
+# Policy: assume the launcher role in a linked account to tear down a
+# cross-account sandbox (Phase 126, REQ-126-TEARDOWN). Scoped to the specific
+# launcher role ARNs derived from launch_accounts_json — never a wildcard
+# resource (T-126-43: Elevation of Privilege). Gated: emits NO statement at
+# all when no links are configured, so a dormant install's policy surface is
+# unchanged beyond the one-time additive env var landing.
+resource "aws_iam_role_policy" "launch_account_assume_role" {
+  count = length(local.launch_account_launcher_role_arns) > 0 ? 1 : 0
+
+  name = "${var.resource_prefix}-ttl-handler-launch-account-assume-role"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "LaunchAccountAssumeRole"
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = local.launch_account_launcher_role_arns
+      },
+    ]
+  })
+}
+
+# Policy: read + decrypt the per-link external-id SecureString parameters this
+# handler's teardown path needs to assume the launcher role above (Phase 126,
+# REQ-126-TEARDOWN). Scoped to the launch-accounts parameter path prefix, not
+# the whole parameter store. The KMS grant mirrors ec2spot's
+# ec2spot_github_token precedent: these SecureStrings are written by
+# `km account register` with no explicit KeyId (the default alias/aws/ssm
+# managed key), so the grant is scoped to "any key SSM used" via the
+# kms:ViaService condition rather than a specific key ARN. Gated identically
+# to the assume-role policy above — same non-empty-links condition.
+resource "aws_iam_role_policy" "launch_account_external_id" {
+  count = length(local.launch_account_launcher_role_arns) > 0 ? 1 : 0
+
+  name = "${var.resource_prefix}-ttl-handler-launch-account-external-id"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SSMReadLaunchAccountExternalID"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/launch-accounts/*",
+        ]
+      },
+      {
+        Sid      = "KMSDecryptLaunchAccountExternalID"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = ["arn:aws:kms:*:${data.aws_caller_identity.current.account_id}:key/*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "ssm.${data.aws_region.current.name}.amazonaws.com"
+          }
+        }
+      },
+    ]
+  })
+}
+
 # ============================================================
 # Lambda function: TTL handler (Go, provided.al2023, arm64)
 # ============================================================
@@ -363,6 +439,11 @@ resource "aws_lambda_function" "ttl_handler" {
       # km-identities table — TTL handler deletes the sandbox row during teardown
       # so a reused alias does not inherit a stale pubkey via the alias-index GSI.
       KM_IDENTITIES_TABLE = var.identities_table_name
+      # Phase 126 (REQ-126-TEARDOWN): JSON-encoded launch_accounts link map,
+      # parsed once at cold start (parseLaunchAccountsEnv). Empty string (the
+      # default) is the dormant state — every teardown is byte-identical to
+      # Phase 125's.
+      KM_LAUNCH_ACCOUNTS = var.launch_accounts_json
     }
   }
 

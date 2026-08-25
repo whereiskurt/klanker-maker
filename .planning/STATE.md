@@ -2,17 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 113-01 (starting)
-status: in-progress
-stopped_at: Completed 124-07-PLAN.md
-last_updated: "2026-06-29T03:53:22.352Z"
-last_activity: 2026-06-29
+current_phase: 126
+current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
+current_plan: 10
+status: verifying
+stopped_at: "Phase 126 checkpoint reached: live cross-account UAT (126-10-PLAN.md Task 3) awaiting human execution"
+last_updated: "2026-08-23T02:09:50.729Z"
+last_activity: 2026-08-22
+last_activity_desc: Phase 126 execution started
 progress:
-  total_phases: 8
-  completed_phases: 6
-  total_plans: 48
-  completed_plans: 43
-  percent: 91
+  total_phases: 10
+  completed_phases: 8
+  total_plans: 67
+  completed_plans: 62
+  percent: 80
 ---
 
 # Project State
@@ -22,16 +25,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-21)
 
 **Core value:** A sandbox is a declarative policy object that compiles into a controlled, auditable execution environment
-**Current focus:** Phase 113 — Sandbox self-awareness (on-box profile + capability/network/privilege self-census in klanker:sandbox)
+**Current focus:** Phase 126 — cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
 
 ## Current Position
 
-Phase: 113 (sandbox-self-awareness) — 3 plans (113-01 → 113-03); execution starting
-Plan: 113-01 — userdata writes rendered profile to /opt/km/.km-profile.yaml; threads ProfileYAML through template-data struct
-Total Plans in Phase: 3 (113-01 → 113-03)
-Current Plan: 113-01 (starting)
-Status: in-progress
-Last activity: 2026-06-29
+Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
+Plan: 10 of 10
+Total Plans in Phase: 10
+Current Plan: 10
+Status: Phase complete — ready for verification
+Last activity: 2026-08-22 — Phase 126 execution started
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -49,6 +52,7 @@ Progress: [█████████░] 91%
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0
 - Average duration: —
 - Total execution time: 0 hours
@@ -60,6 +64,7 @@ Progress: [█████████░] 91%
 | - | - | - | - |
 
 **Recent Trend:**
+
 - Last 5 plans: —
 - Trend: —
 
@@ -617,6 +622,16 @@ Progress: [█████████░] 91%
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P04 | 853 | 3 tasks | 6 files |
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P06 | 1040s | 1 tasks | 3 files |
 | Phase 124-platform-wide-az-failover-and-capacity-feasibility-for-ec2-launches P07 | 4 | 3 tasks | 8 files |
+| Phase 126 P01 | 25min | 3 tasks | 10 files |
+| Phase 126 P02 | 25min | 3 tasks | 5 files |
+| Phase 126 P03 | 1h | 3 tasks | 10 files |
+| Phase 126 P04 | 40min | 3 tasks | 5 files |
+| Phase 126 P05 | 90min | 3 tasks | 4 files |
+| Phase 126 P06 | 24min | 3 tasks | 8 files |
+| Phase 126 P07 | 65min | 2 tasks | 3 files |
+| Phase 126 P08 | 55min | 3 tasks | 9 files |
+| Phase 126 P09 | 50min | 2 tasks | 3 files |
+| Phase 126 P10 | 50min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -1770,6 +1785,26 @@ Recent decisions affecting current work:
 - [Phase 124-07]: RecordICE fires on ClassICE only to keep the capacity signal precise
 - [Phase 124-07]: bestEffortRecordCapacity uses 5s bounded context so slow DDB never delays create
 - [Phase 124-07]: capacity_table_name defaults empty for back-compat with pre-Phase-124 installs
+- [Phase 126-01]: launch_accounts is a new top-level km-config.yaml key with its own merge-list entry (not piggybacked on github.commands' parent-entry pattern)
+- [Phase 126-01]: config-aware launchAccount validation (unknown-link check) lives in internal/app/cmd, not pkg/profile.ValidateSemantic, to avoid pkg/profile importing internal/app/config
+- [Phase 126-02]: Replaced the planned %{if}/%{endif} heredoc control sequence with a conditional local + plain interpolation to achieve dormant byte-identity of the generated provider.tf
+- [Phase 126-02]: Generated provider.tf region expression reads local.site_vars.locals.region.full (root's own expression), not local.svc_config.locals.region_full, so dormant render is provably identical to root's own output
+- [Phase 126]: AssumeRoleConfig's STS-client construction is a second, exported package-level var (NewAssumeRoleSTSClient), not a parameter on AssumeRoleConfig itself — Keeps the public signature exactly as specified while giving external _test packages a seam to inject a stub STS client and exercise the real Retrieve/cache/ExternalId logic
+- [Phase 126]: Home account's capacity-store namespace stays permanently empty (bare pre-Phase-126 key), never namespaced for symmetry — Success rows carry no TTL and persist indefinitely; namespacing home would orphan every accumulated sticky-AZ record with no recovery path (126-RESEARCH.md Pitfall 5)
+- [Phase 126]: gpu-launcher-account/v1.0.0 module authored and validated as a single interconnected unit; all 3 tasks landed in one commit since the box role references the results bucket resource and the outputs reference resources from both — Per-task terraform validate would fail on an intermediate commit missing a referenced resource
+- [Phase ?]: km account add uses real terraform (not a command-printing wizard) so km account rm has real state to destroy against
+- [Phase ?]: Generated enrollment unit is standalone on both provider and backend (no root include, own S3 backend in the target account) — no local Terraform state anywhere in this project
+- [Phase 126]: Operator's own trust principal is derived by re-homing the account-B caller's role name into account A (AWS SSO identical-permission-set pattern); --trust-principal overrides, --trust-principal-pattern is the escape hatch
+- [Phase 126]: km account add dry-run validates via terragrunt init -backend=false + validate, never a backend-attached plan, because the rendered unit's S3 backend does not exist yet on a dry run
+- [Phase 126]: ResolveLaunchTarget gained an SSMParamStore parameter beyond the plan's literal 4-arg signature (mirrors 126-03's AssumeRoleConfig seam pattern)
+- [Phase 126]: Found and fixed during execution: linked launch_accounts links carry no VPC id anywhere in the schema; without resolving it via DescribeSubnets, ec2spot would self-provision a disconnected VPC and hard-fail at apply time placing the ENI into a subnet from a different VPC
+- [Phase 126]: km account register/list/rm implemented; grant Sid is prefix-scoped (multi-instance safe); rm's default no-profile path prints a self-contained terragrunt destroy command (not a second km account rm call) since config removal is unconditional
+- [Phase ?]: Ttl-handler's launcher-role-ARN IAM list is derived in Terraform (jsondecode) from the single KM_LAUNCH_ACCOUNTS JSON blob rather than a second env-threaded list variable
+- [Phase ?]: km destroy and ttl-handler both fail-open on a metadata-read failure (proceed as home-account) but fail-closed on an unknown link or failed external-id read (hard error, never a silent home-account destroy attempt)
+- [Phase ?]: Home-account teardown is asserted byte-identical to Phase 125 on both km destroy's cold-clone service.hcl and the ttl-handler's rendered main.tf via embedded-literal tests
+- [Phase ?]: checkLaunchAccountAssumable forces credential resolution via Credentials.Retrieve(ctx), not just config construction, so a broken trust policy cannot report healthy (T-126-50)
+- [Phase 126]: checkLaunchAccountOrphanInstances treats an unreachable link as its own WARN, never collapsed into a clean 'no orphans found' result (T-126-47)
+- [Phase 126]: Phase 126 pre-flight gate green (7 commands incl. the 3 excluded packages); live cross-account UAT checkpointed pending human execution with real two-account credentials + GPU quota — docs/cross-account-capacity-borrowing.md is the operator runbook; 126-UAT.md carries the green pre-flight record and the pending 8-row containment matrix + 18-step live procedure
 
 ### Roadmap Evolution
 
@@ -1821,6 +1856,7 @@ Recent decisions affecting current work:
 ## Accumulated Context
 
 ### Roadmap Evolution
+
 - Phase 22 added: Remote Sandbox Dispatch — km create/destroy/stop/extend --remote via Lambda
 - Phase 23 added: Email-Driven Operations — operator inbox, email-to-create, safe phrase auth, EventBridge
 - Phase-24 added: Credential Rotation — km roll creds for platform and sandbox secrets (since renumbered; no standalone 24-* dir)
@@ -1921,6 +1957,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-19
-Stopped at: Phase 125 EXECUTED — all 9 plans complete, live eight-step UAT run against real AWS (6 PASS, 2 NOT EXERCISED with reasons). Three defects found by live UAT that the green test suite missed, all fixed: km env omitting KM_NAT_GATEWAY_ENABLED (7b2b6af6), checkNATIdle filtering on a never-written DDB status (fa43cf4f), checkPrivateSubnetGuard testing a never-empty slice (d92dbc93). Install returned to public-only; NAT/EIPs released, private subnets retained as routeless islands. Verification: PASSED 9/9 after a fourth fix (a54a2800) — the verifier caught natDisableGuard carrying the same never-written-status bug, failing OPEN so an operator could tear NAT out from under a live private sandbox; the live UAT missed it because teardown ran after the only private sandbox was already destroyed.
-Resume file: None
+Last session: 2026-08-23T02:09:50.716Z
+Stopped at: Phase 126 checkpoint reached: live cross-account UAT (126-10-PLAN.md Task 3) awaiting human execution
+Resume file: .planning/phases/126-cross-account-capacity-borrowing-launch-sandboxes-into-a-lin/126-UAT.md

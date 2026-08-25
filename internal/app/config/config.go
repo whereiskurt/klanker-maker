@@ -162,6 +162,41 @@ type ClusterConfig struct {
 	RoleARN         string `mapstructure:"role_arn"          yaml:"role_arn"`
 }
 
+// LaunchAccountConfig represents a single registered cross-account capacity-borrowing
+// link (Phase 126): a target AWS account + region that `km create` can launch a
+// sandbox into when the home application account is capacity-walled. Populated from
+// the km-config.yaml `launch_accounts:` map, keyed by an operator-chosen link name
+// (e.g. "mgmt-gpu"), and managed via `km account add/rm`.
+//
+// SubnetIDs and AvailabilityZones are index-parallel: subnet[i] lives in AZ[i]. The
+// Phase 124 AZ sweep (plan 06) depends on this pairing to rotate launch attempts
+// across the link's AZs the same way it does for the home account.
+//
+// StateBucket, LockTable and StateKey record where the enrollment unit's Terraform
+// state lives IN THE TARGET ACCOUNT — there is no local state anywhere in this
+// project — so `km account rm` can reach that state from any machine without
+// depending on a unit directory surviving on one operator's laptop. They are
+// consumed only by the account commands, never by `km create`.
+//
+// ExternalIDSSM is an SSM SecureString *path*, never the secret itself — see
+// threat T-126-01. There is deliberately no plaintext ExternalID field on this type.
+type LaunchAccountConfig struct {
+	AccountID         string   `mapstructure:"account_id"         yaml:"account_id"`
+	LauncherRoleARN   string   `mapstructure:"launcher_role_arn"  yaml:"launcher_role_arn"`
+	BoxRoleARN        string   `mapstructure:"box_role_arn"       yaml:"box_role_arn"`
+	ExternalIDSSM     string   `mapstructure:"external_id_ssm"    yaml:"external_id_ssm"`
+	Region            string   `mapstructure:"region"             yaml:"region"`
+	SubnetIDs         []string `mapstructure:"subnet_ids"         yaml:"subnet_ids,omitempty"`
+	AvailabilityZones []string `mapstructure:"availability_zones" yaml:"availability_zones,omitempty"`
+	SecurityGroupID   string   `mapstructure:"security_group_id"  yaml:"security_group_id"`
+	ResultsBucket     string   `mapstructure:"results_bucket"     yaml:"results_bucket"`
+	EFSID             string   `mapstructure:"efs_id"             yaml:"efs_id,omitempty"`
+	InstanceTypes     []string `mapstructure:"instance_types"     yaml:"instance_types,omitempty"`
+	StateBucket       string   `mapstructure:"state_bucket"       yaml:"state_bucket"`
+	LockTable         string   `mapstructure:"lock_table"         yaml:"lock_table"`
+	StateKey          string   `mapstructure:"state_key"          yaml:"state_key"`
+}
+
 // GithubRepoEntry maps a GitHub repository (by match pattern) to a km alias,
 // a SandboxProfile, and an optional network allowlist. Used by the Phase 97
 // bridge Lambda to resolve which sandbox to dispatch a PR comment to.
@@ -786,6 +821,16 @@ type Config struct {
 	// silently ignored (project_config_key_merge_list footgun).
 	Limits LimitsConfig `mapstructure:"limits" yaml:"limits,omitempty"`
 
+	// LaunchAccounts holds the registered cross-account capacity-borrowing links
+	// (Phase 126), keyed by operator-chosen link name. Maps to km-config.yaml key
+	// launch_accounts. Absent key → non-nil, zero-length map (no error, dormant —
+	// every profile without spec.runtime.launchAccount launches into the home
+	// application account exactly as before). Managed via `km account add/rm`.
+	// CRITICAL: "launch_accounts" must be in the v2→v merge-list in Load() or this
+	// block is silently ignored (project_config_key_merge_list footgun) — it is a
+	// NEW top-level key and does not piggyback on any parent's merge-list entry.
+	LaunchAccounts map[string]LaunchAccountConfig `mapstructure:"launch_accounts" yaml:"launch_accounts,omitempty"`
+
 	// YAMLDefaults holds the raw km-config.yaml values for env-bound keys,
 	// snapshotted during Load() BEFORE viper's AutomaticEnv binds env vars into
 	// the cfg fields. Used by ExportTerragruntEnvVars to detect drift between
@@ -872,6 +917,7 @@ func Load() (*Config, error) {
 	v.SetDefault("resource_prefix", "km")
 	v.SetDefault("email_subdomain", "sandboxes")
 	v.SetDefault("clusters", []interface{}{})
+	v.SetDefault("launch_accounts", map[string]interface{}{})
 
 	// Primary config file: ~/.km/config.yaml
 	v.SetConfigName("config")
@@ -1011,6 +1057,13 @@ func Load() (*Config, error) {
 			// atomically by v.UnmarshalKey("limits", &cfg.Limits) below — do NOT add
 			// sibling "limits.*" entries (mirrors the github, h1, and checks precedent).
 			"limits",
+			// Phase 126: cross-account capacity-borrowing launch-account links. CRITICAL:
+			// without this entry the entire launch_accounts: block is silently dropped
+			// regardless of km-config.yaml content (project_config_key_merge_list
+			// footgun). This is a NEW top-level key — it does not piggyback on any
+			// parent's merge-list entry (unlike github.commands). Decoded atomically by
+			// v.UnmarshalKey("launch_accounts", &cfg.LaunchAccounts) below.
+			"launch_accounts",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -1207,6 +1260,43 @@ func Load() (*Config, error) {
 	if err := v.UnmarshalKey("limits", &cfg.Limits); err != nil {
 		// non-fatal: absent limits: block → zero value → dormant (no counting)
 		return nil, fmt.Errorf("unmarshal limits: %w", err)
+	}
+
+	// Phase 126: launch_accounts is a structured map (keyed by link name). Use
+	// UnmarshalKey — same pattern as clusters/github/h1/checks/limits — because
+	// each entry is a sub-object and viper's scalar getters can't decode it.
+	// Absent key => non-nil, zero-length map (SetDefault above) => dormant (no
+	// error, every profile without spec.runtime.launchAccount is unaffected).
+	// The merge-list entry "launch_accounts" above is the precondition; without
+	// it this unmarshal sees an empty map (project_config_key_merge_list).
+	//
+	// KM_LAUNCH_ACCOUNTS is WRITE-ONLY: config → env → terragrunt. It is never a
+	// config source. ExportTerragruntEnvVars derives it FROM this map and emits a
+	// deliberately minimal JSON payload — launcher_role_arn, external_id_ssm and
+	// region only — for the ttl-handler Lambda. It is not a round-trip of
+	// LaunchAccountConfig and carries neither account_id, nor the subnet list, nor
+	// the box role.
+	//
+	// viper's AutomaticEnv nonetheless binds that string over this map-typed key,
+	// which broke config.Load() outright as soon as the variable existed — and it
+	// exists in-process the moment `km init` runs:
+	//
+	//   unmarshal launch_accounts: '' expected a map, got 'string'
+	//
+	// Reading the env value back would be worse than the crash: it would yield
+	// half-populated links whose missing account_id and subnets silently relocate
+	// a cross-account sandbox. So take the map from the yaml layer (v2) directly,
+	// bypassing the env binding entirely, whenever the merged view has been
+	// shadowed by the string form.
+	if _, shadowedByEnv := v.Get("launch_accounts").(string); shadowedByEnv {
+		cfg.LaunchAccounts = map[string]LaunchAccountConfig{}
+		if v2.IsSet("launch_accounts") {
+			if err := v2.UnmarshalKey("launch_accounts", &cfg.LaunchAccounts); err != nil {
+				return nil, fmt.Errorf("unmarshal launch_accounts from km-config.yaml: %w", err)
+			}
+		}
+	} else if err := v.UnmarshalKey("launch_accounts", &cfg.LaunchAccounts); err != nil {
+		return nil, fmt.Errorf("unmarshal launch_accounts: %w", err)
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
@@ -1615,6 +1705,25 @@ func (c *Config) GetChecksTableName() string {
 // absent pointer fields mean "no install default for that action" (unlimited).
 func (c *Config) GetLimitsConfig() LimitsConfig {
 	return c.Limits
+}
+
+// GetLaunchAccounts returns the full set of registered cross-account
+// capacity-borrowing links (Phase 126), keyed by link name. Non-nil, empty map
+// when launch_accounts: is absent from km-config.yaml (dormant).
+func (c *Config) GetLaunchAccounts() map[string]LaunchAccountConfig {
+	if c.LaunchAccounts == nil {
+		return map[string]LaunchAccountConfig{}
+	}
+	return c.LaunchAccounts
+}
+
+// GetLaunchAccount looks up a single named cross-account capacity-borrowing link
+// (Phase 126). ok is false when the name is absent from launch_accounts: —
+// callers (ValidateLaunchAccountLink, `km create`) treat that as a hard error,
+// never a silent fallback to the home application account.
+func (c *Config) GetLaunchAccount(name string) (LaunchAccountConfig, bool) {
+	link, ok := c.LaunchAccounts[name]
+	return link, ok
 }
 
 // awsProfileExists checks whether a named AWS profile is defined in

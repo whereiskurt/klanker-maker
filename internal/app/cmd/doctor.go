@@ -34,10 +34,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
+	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	"github.com/aws/aws-sdk-go-v2/service/ses"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
-	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
@@ -300,6 +300,10 @@ type DoctorConfigProvider interface {
 	// GetNATGatewayEnabled returns the Phase 125 network.nat_gateway install-level
 	// toggle. False when the key is absent (Phase 124 install; NAT never touched).
 	GetNATGatewayEnabled() bool
+	// GetLaunchAccounts returns the Phase 126 launch_accounts: cross-account
+	// capacity-borrowing links, keyed by link name. Non-nil, empty map when
+	// launch_accounts: is absent from km-config.yaml (dormant).
+	GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -369,6 +373,24 @@ func (a *appConfigAdapter) GetCapacityTableName() string {
 func (a *appConfigAdapter) GetNATGatewayEnabled() bool {
 	return a.cfg.GetNATGatewayEnabled()
 }
+func (a *appConfigAdapter) GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig {
+	return a.cfg.GetLaunchAccounts()
+}
+
+// LaunchAccountAssumeRoleFunc builds a per-link assumed-role aws.Config from
+// a launcher role ARN + external id + region. The seam DoctorDeps.LaunchAccountAssumeRole
+// is typed against (Plan 09) — production wraps pkg/aws.AssumeRoleConfig with
+// this install's own base config; tests substitute a stub so no live STS call
+// is made. Deliberately takes no base aws.Config parameter: the base is
+// captured by the closure that constructs the production value, keeping this
+// signature test-friendly (a stub only needs to answer roleARN/externalID/region).
+type LaunchAccountAssumeRoleFunc func(ctx context.Context, roleARN, externalID, region string) (awssdk.Config, error)
+
+// LaunchAccountEC2ClientFunc builds the read-only EC2InstanceAPI
+// checkLaunchAccountOrphanInstances uses to describe instances in a linked
+// account, from that link's assumed-role aws.Config. Production wraps
+// ec2.NewFromConfig; tests inject a stub factory.
+type LaunchAccountEC2ClientFunc func(cfg awssdk.Config) EC2InstanceAPI
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
@@ -611,6 +633,40 @@ type DoctorDeps struct {
 	// "Running On-Demand G and VT instances" quota (L-DB2E81BA).
 	// Nil causes the GPU quota check to return CheckSkipped.
 	ServiceQuotasClient capacity.ServiceQuotasAPI
+
+	// Phase 126 Plan 09 — cross-account link doctor checks (REQ-126-DOCTOR).
+	// All four checks (checkLaunchAccountLinks, checkLaunchAccountAssumable,
+	// checkLaunchAccountArtifactsGrant, checkLaunchAccountOrphanInstances) are
+	// strictly read-only and are kept out of every deletion/sweep code path in
+	// this file — this repo has a recorded incident of doctor's non-dry-run
+	// sweep deleting in-use platform roles, and these checks reach across an
+	// account boundary, where a mistaken delete would be even harder to undo.
+	//
+	// LaunchAccountSSMClient reads each link's external-id SecureString
+	// parameter (LaunchAccountConfig.ExternalIDSSM) for checkLaunchAccountAssumable
+	// and checkLaunchAccountOrphanInstances. Reuses the narrow SSMReadAPI. Nil
+	// causes both checks to skip.
+	LaunchAccountSSMClient SSMReadAPI
+	// LaunchAccountAssumeRole builds a per-link assumed-role aws.Config from a
+	// launcher role ARN + external id + region. Production wraps
+	// pkg/aws.AssumeRoleConfig with this install's own AWS config as the base
+	// (the "home" credentials); tests inject a stub so no live STS AssumeRole
+	// call is made. Nil causes checkLaunchAccountAssumable and
+	// checkLaunchAccountOrphanInstances to skip.
+	LaunchAccountAssumeRole LaunchAccountAssumeRoleFunc
+	// LaunchAccountEC2ClientFactory builds the read-only EC2InstanceAPI used by
+	// checkLaunchAccountOrphanInstances from a per-link assumed-role config.
+	// Production wraps ec2.NewFromConfig; tests inject a stub factory
+	// returning a canned stub client. Nil causes checkLaunchAccountOrphanInstances
+	// to skip.
+	LaunchAccountEC2ClientFactory LaunchAccountEC2ClientFunc
+	// LaunchAccountArtifactsPolicyClient reads (GetBucketPolicy only — this
+	// check never calls PutBucketPolicy/DeleteBucketPolicy) the home artifacts
+	// bucket's policy for checkLaunchAccountArtifactsGrant. Reuses
+	// ArtifactsPolicyS3API (account_register.go) so the grant statement is
+	// parsed exactly the way km account register/rm parse it
+	// (getArtifactsPolicyDocument). Nil causes the check to skip.
+	LaunchAccountArtifactsPolicyClient ArtifactsPolicyS3API
 }
 
 // =============================================================================
@@ -4673,6 +4729,45 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkPrivateWithoutNAT(natEnabled, metas)
 	})
 
+	// Phase 126 Plan 09 — cross-account link doctor checks (REQ-126-DOCTOR).
+	// launchAccounts is read once here (pure config, no AWS call); each
+	// closure re-checks len(launchAccounts)==0 internally so every check
+	// still reports its own SKIPPED result (not a shared early-return) when
+	// no links are configured. Error→Warn downgrade mirrors every other
+	// registration in this function.
+	launchAccounts := cfg.GetLaunchAccounts()
+	checks = append(checks, func(_ context.Context) CheckResult {
+		return checkLaunchAccountLinks(launchAccounts)
+	})
+	launchAccountSSM := deps.LaunchAccountSSMClient
+	launchAccountAssumeRole := deps.LaunchAccountAssumeRole
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkLaunchAccountAssumable(ctx, launchAccounts, launchAccountSSM, launchAccountAssumeRole)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+	launchAccountArtifactsPolicy := deps.LaunchAccountArtifactsPolicyClient
+	launchAccountArtifactsBucket := cfg.GetArtifactsBucket()
+	launchAccountPrefix := cfg.GetResourcePrefix()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkLaunchAccountArtifactsGrant(ctx, launchAccounts, launchAccountArtifactsPolicy, launchAccountArtifactsBucket, launchAccountPrefix)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+	launchAccountEC2Factory := deps.LaunchAccountEC2ClientFactory
+	launchAccountLister := deps.Lister
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkLaunchAccountOrphanInstances(ctx, launchAccounts, launchAccountSSM, launchAccountAssumeRole, launchAccountEC2Factory, launchAccountLister)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	return checks
 }
 
@@ -5065,6 +5160,24 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 		slackClientForDoctor := slackpkg.NewClient(awssdk.ToString(botToken.Parameter.Value), nil)
 		deps.SlackDeadChannelChecker = &slackClientChannelChecker{client: slackClientForDoctor}
 	}
+
+	// Phase 126 Plan 09 — cross-account link doctor checks. base is this
+	// install's own ("home") aws.Config; LaunchAccountAssumeRole assumes each
+	// link's launcher role FROM it, mirroring buildCapacityAWSConfig in
+	// create.go. LaunchAccountEC2ClientFactory builds the read-only EC2 client
+	// checkLaunchAccountOrphanInstances uses against a per-link assumed
+	// config. LaunchAccountArtifactsPolicyClient reuses the same
+	// ArtifactsPolicyS3API constructor `km account register` uses so the
+	// grant statement is parsed identically.
+	deps.LaunchAccountSSMClient = ssm.NewFromConfig(awsCfg)
+	launchAccountBaseCfg := awsCfg
+	deps.LaunchAccountAssumeRole = func(innerCtx context.Context, roleARN, externalID, region string) (awssdk.Config, error) {
+		return kmaws.AssumeRoleConfig(innerCtx, launchAccountBaseCfg, roleARN, externalID, region)
+	}
+	deps.LaunchAccountEC2ClientFactory = func(cfg awssdk.Config) EC2InstanceAPI {
+		return ec2.NewFromConfig(cfg)
+	}
+	deps.LaunchAccountArtifactsPolicyClient = NewArtifactsPolicyS3Client(awsCfg)
 
 	return deps
 }
@@ -5504,4 +5617,461 @@ func anyProfileMentionOnly(searchDirs []string) bool {
 		}
 	}
 	return false
+}
+
+// =============================================================================
+// Phase 126 Plan 09 — cross-account link doctor checks (REQ-126-DOCTOR)
+// =============================================================================
+//
+// Enrollment (`km account add` + `km account register`) is a multi-step,
+// two-credential process; these four checks are what tells an operator a
+// half-finished enrollment is why their `km create` is failing, and the
+// orphan-instance check is the only automated way a costly linked-account
+// instance becomes visible from the home control plane. All four are strictly
+// read-only — none writes, deletes, or terminates anything, and none appears
+// in any deletion/sweep code path in this file.
+
+// sortedLaunchAccountLinkNames returns the configured link names in sorted
+// order, so every aggregate check's output (and its unit tests) is
+// deterministic regardless of Go's randomized map iteration order.
+func sortedLaunchAccountLinkNames(links map[string]appcfg.LaunchAccountConfig) []string {
+	names := make([]string, 0, len(links))
+	for n := range links {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// resolveLaunchAccountAssumedConfig reads a link's external id from SSM and
+// builds the launcher-role-assumed aws.Config for its target account.
+// Shared by checkLaunchAccountAssumable and checkLaunchAccountOrphanInstances
+// so both checks read the external id and construct the assumed config
+// identically. paramErr and assumeErr are mutually exclusive and distinct
+// (T-126-50 / Test 7): a missing/misreadable SSM parameter is a different
+// operator fix (re-run enrollment / check the secret) than a launcher role
+// that can't be assumed (check the trust policy) — collapsing them would hide
+// which one to fix.
+func resolveLaunchAccountAssumedConfig(ctx context.Context, link appcfg.LaunchAccountConfig, ssmClient SSMReadAPI, assumeRole LaunchAccountAssumeRoleFunc) (cfg awssdk.Config, paramErr error, assumeErr error) {
+	out, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           awssdk.String(link.ExternalIDSSM),
+		WithDecryption: awssdk.Bool(true),
+	})
+	if err != nil {
+		return awssdk.Config{}, fmt.Errorf("read external id parameter %q: %w", link.ExternalIDSSM, err), nil
+	}
+	externalID := ""
+	if out.Parameter != nil && out.Parameter.Value != nil {
+		externalID = awssdk.ToString(out.Parameter.Value)
+	}
+	assumedCfg, err := assumeRole(ctx, link.LauncherRoleARN, externalID, link.Region)
+	if err != nil {
+		return awssdk.Config{}, nil, fmt.Errorf("assume launcher role %s: %w", link.LauncherRoleARN, err)
+	}
+	return assumedCfg, nil, nil
+}
+
+// checkLaunchAccountLinks validates every configured launch_accounts link is
+// well-formed enough for the create-path AZ sweep (Plan 06) and the other
+// three doctor checks below to trust it. Pure — no AWS call, no dependency
+// on any DoctorDeps field — so it can run (and skip) with zero live
+// credentials.
+//
+// Aggregate result: SKIPPED when no links are configured, OK when every link
+// passes every check, WARN naming each malformed link and its specific
+// defect(s) otherwise. A single-subnet link is a separate, always-additive
+// WARN (not a hard defect) because the AZ-failover sweep still works with one
+// subnet — it just collapses to a single attempt, so a launch-time ICE has
+// nowhere to retry.
+func checkLaunchAccountLinks(links map[string]appcfg.LaunchAccountConfig) CheckResult {
+	name := "Launch Account Links"
+	if len(links) == 0 {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "no launch_accounts configured"}
+	}
+
+	var issues []string
+	for _, n := range sortedLaunchAccountLinkNames(links) {
+		link := links[n]
+		var defects []string
+		if link.LauncherRoleARN == "" {
+			defects = append(defects, "missing launcher_role_arn")
+		}
+		if link.Region == "" {
+			defects = append(defects, "missing region")
+		}
+		if len(link.SubnetIDs) == 0 {
+			defects = append(defects, "missing subnet_ids")
+		}
+		if len(link.SubnetIDs) != len(link.AvailabilityZones) {
+			defects = append(defects, fmt.Sprintf(
+				"subnet_ids (%d) and availability_zones (%d) length mismatch — the AZ-failover sweep pairs them by index",
+				len(link.SubnetIDs), len(link.AvailabilityZones)))
+		}
+		if link.ExternalIDSSM == "" {
+			defects = append(defects, "missing external_id_ssm")
+		}
+		if link.BoxRoleARN == "" {
+			defects = append(defects, "missing box_role_arn")
+		}
+		if link.ResultsBucket == "" {
+			defects = append(defects, "missing results_bucket")
+		}
+		if len(link.SubnetIDs) == 1 {
+			defects = append(defects, "only one subnet configured — the AZ-failover sweep collapses to a single attempt")
+		}
+		if len(defects) > 0 {
+			issues = append(issues, fmt.Sprintf("%s: %s", n, strings.Join(defects, "; ")))
+		}
+	}
+
+	if len(issues) > 0 {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%d launch_accounts link(s) with issues: %s", len(issues), strings.Join(issues, " | ")),
+			Remediation: "Edit km-config.yaml launch_accounts.<name> to fill in the missing fields, or re-run `km account register <name>` from a fresh `km account add` fragment",
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("%d launch_accounts link(s) well-formed", len(links)),
+	}
+}
+
+// checkLaunchAccountAssumable verifies, for every configured link, that the
+// launcher role can actually be assumed — a link can be perfectly
+// well-formed per checkLaunchAccountLinks and still be unusable if the trust
+// policy in the target account was never fixed up, or the external id secret
+// was rotated on one side only.
+//
+// Forces credential resolution with assumedCfg.Credentials.Retrieve(ctx)
+// rather than merely constructing the config: pkg/aws.AssumeRoleConfig
+// returns a config wrapping a *lazy*, cached credentials provider that never
+// contacts STS until something reads it, so without this call a broken trust
+// policy would report healthy (T-126-50).
+//
+// Aggregate result: SKIPPED when no links are configured, or when the SSM
+// client / assume-role seam is unavailable (no live credentials at all — a
+// different posture than "checked and failed"). Never OK when any link
+// fails; a failed external-id parameter read is reported as a distinct
+// finding from a failed assume (Test 7) so an operator can tell a missing
+// secret from a broken trust policy.
+func checkLaunchAccountAssumable(ctx context.Context, links map[string]appcfg.LaunchAccountConfig, ssmClient SSMReadAPI, assumeRole LaunchAccountAssumeRoleFunc) CheckResult {
+	name := "Launch Account Assumable"
+	if len(links) == 0 {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "no launch_accounts configured"}
+	}
+	if ssmClient == nil || assumeRole == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "AWS credentials unavailable — cannot verify launcher assumability"}
+	}
+
+	var ok []string
+	var paramFailures []string
+	var assumeFailures []string
+	for _, n := range sortedLaunchAccountLinkNames(links) {
+		link := links[n]
+		assumedCfg, paramErr, assumeErr := resolveLaunchAccountAssumedConfig(ctx, link, ssmClient, assumeRole)
+		if paramErr != nil {
+			paramFailures = append(paramFailures, fmt.Sprintf("%s: %v", n, paramErr))
+			continue
+		}
+		if assumeErr != nil {
+			assumeFailures = append(assumeFailures, fmt.Sprintf(
+				"%s (launcher %s): %v — re-run `km account register %s` to repair the link", n, link.LauncherRoleARN, assumeErr, n))
+			continue
+		}
+		if assumedCfg.Credentials == nil {
+			assumeFailures = append(assumeFailures, fmt.Sprintf(
+				"%s (launcher %s): assumed config carries no credentials provider — re-run `km account register %s` to repair the link", n, link.LauncherRoleARN, n))
+			continue
+		}
+		if _, err := assumedCfg.Credentials.Retrieve(ctx); err != nil {
+			assumeFailures = append(assumeFailures, fmt.Sprintf(
+				"%s (launcher %s): could not assume role: %v — re-run `km account register %s` to repair the link", n, link.LauncherRoleARN, err, n))
+			continue
+		}
+		ok = append(ok, fmt.Sprintf("%s (account %s)", n, link.AccountID))
+	}
+
+	if len(paramFailures) > 0 || len(assumeFailures) > 0 {
+		var parts []string
+		if len(paramFailures) > 0 {
+			parts = append(parts, fmt.Sprintf("external-id read failed for %d link(s): %s", len(paramFailures), strings.Join(paramFailures, "; ")))
+		}
+		if len(assumeFailures) > 0 {
+			parts = append(parts, fmt.Sprintf("assume failed for %d link(s): %s", len(assumeFailures), strings.Join(assumeFailures, "; ")))
+		}
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     strings.Join(parts, "; "),
+			Remediation: "Verify each link's launcher role trust policy and external id secret; `km account register <name>` re-registers a broken link",
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("%d launch account link(s) assumable: %s", len(ok), strings.Join(ok, ", ")),
+	}
+}
+
+// launchAccountGrantActionStrings normalizes an artifactsPolicyStatement's
+// Action field (json.Unmarshal into interface{} — a single string or a
+// list, per IAM policy JSON grammar) into a plain []string, so
+// launchAccountGrantIsReadOnly can inspect it uniformly.
+func launchAccountGrantActionStrings(action interface{}) []string {
+	switch v := action.(type) {
+	case string:
+		return []string{v}
+	case []string:
+		return v
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, a := range v {
+			if s, ok := a.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// launchAccountGrantIsReadOnly reports whether stmt's Action list contains
+// nothing beyond the two actions UpsertArtifactsReadGrant ever writes
+// (account_register.go): s3:GetObject and s3:ListBucket. Any other action —
+// a write verb, a wildcard, or anything else — is a widened grant and a
+// finding (T-126-48), not silently accepted.
+func launchAccountGrantIsReadOnly(stmt artifactsPolicyStatement) bool {
+	for _, a := range launchAccountGrantActionStrings(stmt.Action) {
+		if a != "s3:GetObject" && a != "s3:ListBucket" {
+			return false
+		}
+	}
+	return true
+}
+
+// checkLaunchAccountArtifactsGrant verifies, for every configured link, that
+// the home artifacts bucket carries that link's read-only grant statement
+// (the one `km account register` writes) and that the statement has not been
+// widened to include a write action. Reads the bucket policy exactly once
+// (not once per link) via getArtifactsPolicyDocument — the same parser
+// `km account register`/`km account rm` use — and derives each link's
+// expected Sid through the shared artifactsGrantSid helper (account_register.go)
+// rather than an inline literal, so register/rm/doctor can never disagree on
+// what a link's grant statement is called.
+//
+// A bucket with no policy attached at all is treated as "every link missing"
+// (getArtifactsPolicyDocument's own NoSuchBucketPolicy handling), not as an
+// error — an install that has never registered a link legitimately has no
+// bucket policy yet.
+func checkLaunchAccountArtifactsGrant(ctx context.Context, links map[string]appcfg.LaunchAccountConfig, s3Client ArtifactsPolicyS3API, bucket, prefix string) CheckResult {
+	name := "Launch Account Artifacts Grant"
+	if len(links) == 0 {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "no launch_accounts configured"}
+	}
+	if s3Client == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "artifacts bucket policy client not available"}
+	}
+
+	doc, err := getArtifactsPolicyDocument(ctx, s3Client, bucket)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not read artifacts bucket policy for %s: %v", bucket, err)}
+	}
+	bySid := make(map[string]artifactsPolicyStatement, len(doc.Statement))
+	for _, s := range doc.Statement {
+		bySid[s.Sid] = s
+	}
+
+	var okLinks, missing, widened []string
+	for _, n := range sortedLaunchAccountLinkNames(links) {
+		sid := artifactsGrantSid(prefix, n)
+		stmt, present := bySid[sid]
+		switch {
+		case !present:
+			missing = append(missing, n)
+		case !launchAccountGrantIsReadOnly(stmt):
+			widened = append(widened, n)
+		default:
+			okLinks = append(okLinks, n)
+		}
+	}
+
+	if len(missing) > 0 || len(widened) > 0 {
+		var parts []string
+		if len(missing) > 0 {
+			parts = append(parts, fmt.Sprintf("missing grant for %s", strings.Join(missing, ", ")))
+		}
+		if len(widened) > 0 {
+			parts = append(parts, fmt.Sprintf("grant for %s contains a write-shaped action — expected only s3:GetObject and s3:ListBucket", strings.Join(widened, ", ")))
+		}
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     strings.Join(parts, "; "),
+			Remediation: "Run `km account register <name>` to add a missing grant; manually review and narrow a widened statement on the artifacts bucket policy",
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("%d launch account artifacts grant(s) present and read-only", len(okLinks)),
+	}
+}
+
+// checkLaunchAccountOrphanInstances is the only automated way an EC2
+// instance running in a linked account becomes visible from the home control
+// plane (T-126-47): a cross-account launch can succeed on the target side
+// while some later step (a crashed poller, a lost network partition, an
+// operator killing `km create` mid-flight) never writes — or later loses —
+// the home account's DynamoDB row for it, and nothing in the home account's
+// own inventory would ever surface that instance again.
+//
+// For each configured link, assumes the launcher role, describes
+// non-terminated instances filtered on the FIXED tag key "km:sandbox-id"
+// (never a prefix-derived key — km tags every sandbox resource under that
+// exact literal namespace regardless of resource_prefix, so a prefix-derived
+// filter would silently match nothing), and reports any instance whose
+// sandbox id has no corresponding row in the home account's sandbox
+// inventory (lister, same as checkOrphanedEC2 uses for the home-account
+// case).
+//
+// A link that can't be reached (external-id read failure, assume failure,
+// or a DescribeInstances error) is reported as "could not check", distinctly
+// from "no orphans found" (Test 8) — the entire point of this check is
+// defeated if an unreachable link silently reads as clean.
+func checkLaunchAccountOrphanInstances(ctx context.Context, links map[string]appcfg.LaunchAccountConfig, ssmClient SSMReadAPI, assumeRole LaunchAccountAssumeRoleFunc, ec2Factory LaunchAccountEC2ClientFunc, lister SandboxLister) CheckResult {
+	name := "Launch Account Orphan Instances"
+	if len(links) == 0 {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "no launch_accounts configured"}
+	}
+	if ssmClient == nil || assumeRole == nil || ec2Factory == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "AWS credentials unavailable — cannot check linked-account instances"}
+	}
+	if lister == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "sandbox lister not available (state bucket not configured)"}
+	}
+
+	records, err := lister.ListSandboxes(ctx, false)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list home sandbox inventory: %v", err)}
+	}
+	known := make(map[string]bool, len(records))
+	for _, r := range records {
+		known[r.SandboxID] = true
+	}
+
+	type orphanInstance struct {
+		link, instanceID, sandboxID, state string
+	}
+	var orphans []orphanInstance
+	var unreachable []string
+
+	for _, n := range sortedLaunchAccountLinkNames(links) {
+		link := links[n]
+		assumedCfg, paramErr, assumeErr := resolveLaunchAccountAssumedConfig(ctx, link, ssmClient, assumeRole)
+		if paramErr != nil {
+			unreachable = append(unreachable, fmt.Sprintf("%s: %v", n, paramErr))
+			continue
+		}
+		if assumeErr != nil {
+			unreachable = append(unreachable, fmt.Sprintf("%s: %v", n, assumeErr))
+			continue
+		}
+		ec2Client := ec2Factory(assumedCfg)
+		if ec2Client == nil {
+			unreachable = append(unreachable, fmt.Sprintf("%s: no EC2 client available", n))
+			continue
+		}
+
+		var instances []ec2types.Instance
+		var nextToken *string
+		var describeErr error
+		for {
+			out, dErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+				Filters: []ec2types.Filter{
+					{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{"*"}},
+					{Name: awssdk.String("instance-state-name"), Values: []string{
+						"running", "stopped", "stopping", "pending",
+					}},
+				},
+				NextToken: nextToken,
+			})
+			if dErr != nil {
+				describeErr = dErr
+				break
+			}
+			for _, res := range out.Reservations {
+				instances = append(instances, res.Instances...)
+			}
+			if out.NextToken == nil {
+				break
+			}
+			nextToken = out.NextToken
+		}
+		if describeErr != nil {
+			unreachable = append(unreachable, fmt.Sprintf("%s: could not describe instances: %v", n, describeErr))
+			continue
+		}
+
+		for _, inst := range instances {
+			var sandboxID string
+			for _, tag := range inst.Tags {
+				if awssdk.ToString(tag.Key) == "km:sandbox-id" {
+					sandboxID = awssdk.ToString(tag.Value)
+					break
+				}
+			}
+			if sandboxID == "" || known[sandboxID] {
+				continue
+			}
+			orphans = append(orphans, orphanInstance{
+				link:       n,
+				instanceID: awssdk.ToString(inst.InstanceId),
+				sandboxID:  sandboxID,
+				state:      string(inst.State.Name),
+			})
+		}
+	}
+
+	var details []string
+	for _, o := range orphans {
+		details = append(details, fmt.Sprintf("%s: instance %s sandbox %s state=%s", o.link, o.instanceID, o.sandboxID, o.state))
+	}
+
+	switch {
+	case len(orphans) > 0 && len(unreachable) > 0:
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%d orphaned instance(s) found; %d link(s) could not be checked: %s", len(orphans), len(unreachable), strings.Join(unreachable, "; ")),
+			Remediation: "Run `km destroy <sandbox-id> --remote --yes` for each orphan named above",
+			Details:     details,
+		}
+	case len(orphans) > 0:
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%d orphaned instance(s) in linked account(s) with no matching home sandbox record", len(orphans)),
+			Remediation: "Run `km destroy <sandbox-id> --remote --yes` for each orphan named above",
+			Details:     details,
+		}
+	case len(unreachable) > 0:
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("could not check %d link(s) for orphaned instances: %s", len(unreachable), strings.Join(unreachable, "; ")),
+			Remediation: "Run `km doctor` again once each link's launcher role is assumable (see the Launch Account Assumable check)",
+		}
+	default:
+		return CheckResult{
+			Name:    name,
+			Status:  CheckOK,
+			Message: fmt.Sprintf("no orphaned instances found across %d linked account(s)", len(links)),
+		}
+	}
 }

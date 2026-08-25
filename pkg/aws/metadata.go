@@ -121,4 +121,21 @@ type SandboxMetadata struct {
 	// this attribute alone, so a dropped field lets the operator tear NAT out
 	// from under a live private box without warning.
 	NetworkPlacement string `json:"network_placement,omitempty"`
+
+	// Phase 126 — cross-account capacity borrowing.
+	// LaunchAccount names the `launch_accounts.<name>` link (km-config.yaml)
+	// the sandbox was launched into, fixed for the sandbox's entire lifetime
+	// (placement is a launch-time decision, not a runtime toggle — same
+	// discipline as NetworkPlacement above). Empty means the home application
+	// account, which is also what a pre-126 row unmarshals to.
+	//
+	// MUST round-trip through marshal/unmarshal: every read-modify-write path
+	// (resume.go, extend.go, the ttl-handler Lambda) PutItems the whole row —
+	// dropping this field on any one of those writes strands a running
+	// linked-account instance: `km destroy` and the ttl-handler both read
+	// LaunchAccount to know which account's launcher role to assume before
+	// they can even find the instance, let alone reap it. A stripped field
+	// leaves a running GPU instance billing in account B with nothing in
+	// account A able to reach it.
+	LaunchAccount string `json:"launch_account,omitempty"`
 }

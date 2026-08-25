@@ -144,6 +144,12 @@ type TTLHandler struct {
 	// is an injectable seam so unit tests can exercise the nil-TeardownFunc branch
 	// without making real AWS/IMDS calls. If nil, defaults to sdkOnlyTeardown.
 	SDKTeardownFunc func(ctx context.Context, h *TTLHandler, sandboxID string) error
+	// LaunchAccounts is the parsed KM_LAUNCH_ACCOUNTS map — the Lambda-side mirror
+	// of km-config.yaml's launch_accounts block, keyed by link name (Phase 126,
+	// REQ-126-TEARDOWN). Parsed once at cold start in main(); nil/empty means no
+	// links are configured, the dormant state — every teardown behaves exactly as
+	// it did before this phase.
+	LaunchAccounts map[string]launchAccountLink
 }
 
 // getEmailDomain returns the sandbox email domain from the KM_EMAIL_DOMAIN env var.
@@ -231,6 +237,25 @@ func resourcePrefix() string {
 		return v
 	}
 	return "km"
+}
+
+// parseLaunchAccountsEnv parses KM_LAUNCH_ACCOUNTS — a JSON object keyed by
+// link name — once at cold start (Phase 126, REQ-126-TEARDOWN). Absent or
+// invalid JSON returns nil, the dormant state: every teardown behaves exactly
+// as it did before this phase (buildDestroyTerraformInputs never looks the map
+// up when launchAccountName is empty). Mirrors the KM_GITHUB_EVENTS /
+// KM_SLACK_PEER_BRIDGES JSON-blob-in-a-Lambda-env-var precedent.
+func parseLaunchAccountsEnv() map[string]launchAccountLink {
+	raw := os.Getenv("KM_LAUNCH_ACCOUNTS")
+	if raw == "" {
+		return nil
+	}
+	var links map[string]launchAccountLink
+	if err := json.Unmarshal([]byte(raw), &links); err != nil {
+		log.Warn().Err(err).Msg("failed to parse KM_LAUNCH_ACCOUNTS; cross-account teardown dormant")
+		return nil
+	}
+	return links
 }
 
 // HandleTTLEvent is the Lambda handler method. It is called by lambdaruntime.Start in main().
@@ -1157,6 +1182,182 @@ func downloadProfileFromS3(ctx context.Context, client S3GetAPI, bucket, sandbox
 	return io.ReadAll(resp.Body)
 }
 
+// launchAccountLink is the Lambda-side mirror of config.LaunchAccountConfig's
+// destroy-relevant fields — only what terraformDestroy needs to render a
+// cross-account assume_role provider block. Parsed from the KM_LAUNCH_ACCOUNTS
+// environment variable (a JSON object keyed by link name, mirroring the
+// existing JSON-blob-in-a-Lambda-env-var precedent used by KM_GITHUB_EVENTS /
+// KM_SLACK_PEER_BRIDGES) once at cold start, Phase 126 (REQ-126-TEARDOWN).
+type launchAccountLink struct {
+	LauncherRoleARN string `json:"launcher_role_arn"`
+	ExternalIDSSM   string `json:"external_id_ssm"`
+	Region          string `json:"region"`
+}
+
+// destroyTerraformInputs bundles the explicit inputs renderDestroyMainTF depends
+// on, so it is a pure function testable without a Lambda runtime or any AWS/SSM
+// call (Phase 126 plan 08's acceptance criteria: "the rendering function is
+// pure — it takes no handler pointer and performs no AWS call").
+type destroyTerraformInputs struct {
+	StateBucket string
+	StateKey    string
+	LockTable   string
+	Region      string
+	RegionLabel string
+	SandboxID   string
+	// ModuleLabel replaces the pre-Phase-126 hardcoded "km" literal with the
+	// resource-prefix helper (Task 2's second, independent fix) — a no-op on a
+	// default-prefix install, a correctness fix on any other one.
+	ModuleLabel string
+	// LauncherRoleARN / ExternalID are set only for a linked teardown; both empty
+	// renders the plain provider block, byte-identical to Phase 125.
+	LauncherRoleARN string
+	ExternalID      string
+}
+
+// renderDestroyMainTF renders the minimal main.tf terraformDestroy writes to
+// its scratch work directory. Pure: no handler pointer, no AWS call — every one
+// of Task 2's six behaviors is exercised against this function's output alone.
+func renderDestroyMainTF(in destroyTerraformInputs) string {
+	assumeRoleBlock := ""
+	if in.LauncherRoleARN != "" {
+		assumeRoleBlock = fmt.Sprintf(`
+  assume_role {
+    role_arn    = %q
+    external_id = %q
+  }`, in.LauncherRoleARN, in.ExternalID)
+	}
+
+	return fmt.Sprintf(`
+terraform {
+  required_version = ">= 1.6.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+  backend "s3" {
+    bucket         = %q
+    key            = %q
+    region         = %q
+    encrypt        = true
+    dynamodb_table = %q
+  }
+}
+
+provider "aws" {
+  region = %q%s
+}
+
+module "sandbox" {
+  source       = "./module"
+  km_label     = %q
+  region_label = %q
+  region_full  = %q
+  sandbox_id   = %q
+  vpc_id       = "destroy-placeholder"
+  public_subnets     = []
+  availability_zones = []
+  ec2spots           = []
+}
+`, in.StateBucket, in.StateKey, in.Region,
+		in.LockTable, in.Region, assumeRoleBlock,
+		in.ModuleLabel, in.RegionLabel, in.Region, in.SandboxID)
+}
+
+// ttlExternalIDReader abstracts the SSM read for a link's external id, so
+// buildDestroyTerraformInputs is testable with a stub instead of a real SSM
+// client — mirrors the SSMParamStore.Get seam convention used throughout
+// internal/app/cmd.
+type ttlExternalIDReader func(ctx context.Context, ssmPath string) (string, error)
+
+// buildDestroyTerraformInputs resolves the region, region label, state key, and
+// (when linked) the assume-role inputs for a teardown's rendered configuration,
+// from the sandbox's launch account name and the parsed KM_LAUNCH_ACCOUNTS link
+// map.
+//
+// launchAccountName == "" (a home-account sandbox, or an unreadable metadata
+// row — both fall through to this case): dormant. Home region/label are used
+// unchanged and readExternalID is never called — Test 1's byte-identity
+// assertion depends on this path performing no extra work.
+//
+// launchAccountName set but absent from links: a hard error naming the link
+// and KM_LAUNCH_ACCOUNTS (Test 5) — the Lambda's environment is missing a link
+// the sandbox's own row claims exists.
+//
+// readExternalID failing (Test 4): also a hard error, wrapping the underlying
+// failure. In both error cases, rendering a configuration with an empty
+// external id (or a home-account provider) would fail confusingly at apply
+// time or, worse, silently report success while the linked instance kept
+// running and billing (T-126-42) — so this function returns the zero value on
+// any error, never a partially-populated one.
+func buildDestroyTerraformInputs(
+	ctx context.Context,
+	launchAccountName string,
+	links map[string]launchAccountLink,
+	homeRegion, homeRegionLabel, moduleLabel, stateBucket, statePrefix, sandboxID string,
+	readExternalID ttlExternalIDReader,
+) (destroyTerraformInputs, error) {
+	in := destroyTerraformInputs{
+		StateBucket: stateBucket,
+		Region:      homeRegion,
+		RegionLabel: homeRegionLabel,
+		ModuleLabel: moduleLabel,
+		SandboxID:   sandboxID,
+	}
+
+	if launchAccountName != "" {
+		link, ok := links[launchAccountName]
+		if !ok {
+			return destroyTerraformInputs{}, fmt.Errorf(
+				"sandbox's launch_account %q is not present in KM_LAUNCH_ACCOUNTS — the Lambda's environment is missing this link (re-run km init after registering it)",
+				launchAccountName)
+		}
+		externalID, err := readExternalID(ctx, link.ExternalIDSSM)
+		if err != nil {
+			return destroyTerraformInputs{}, fmt.Errorf(
+				"read external id for launch_account %q from %s: %w", launchAccountName, link.ExternalIDSSM, err)
+		}
+		in.Region = link.Region
+		in.RegionLabel = compiler.RegionLabel(link.Region)
+		in.LauncherRoleARN = link.LauncherRoleARN
+		in.ExternalID = externalID
+	}
+
+	// State key: {prefix}/{regionLabel}/sandboxes/<sandbox-id>/terraform.tfstate.
+	// The backend bucket is ALWAYS the home account's (state never crosses the
+	// account boundary — only the provider does, per Pattern 1); the regionLabel
+	// component matches exactly what the create path wrote it under
+	// (create.go: regionLabel := compiler.RegionLabel(region), where region comes
+	// from resolveLaunchRegion(profile, launchTarget) — the same link-first
+	// precedence this function follows).
+	in.StateKey = fmt.Sprintf("%s/%s/sandboxes/%s/terraform.tfstate", statePrefix, in.RegionLabel, sandboxID)
+	in.LockTable = statePrefix + "-locks-" + in.RegionLabel
+
+	return in, nil
+}
+
+// readSSMParameter fetches and decrypts a single SSM parameter. The production
+// ttlExternalIDReader closure in terraformDestroy wraps this; tests call
+// buildDestroyTerraformInputs directly with a stub reader instead.
+func readSSMParameter(ctx context.Context, client *ssmpkg.Client, name string) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("no SSM client configured")
+	}
+	out, err := client.GetParameter(ctx, &ssmpkg.GetParameterInput{
+		Name:           awssdk.String(name),
+		WithDecryption: awssdk.Bool(true),
+	})
+	if err != nil {
+		return "", err
+	}
+	if out.Parameter == nil || out.Parameter.Value == nil {
+		return "", fmt.Errorf("parameter %s has no value", name)
+	}
+	return *out.Parameter.Value, nil
+}
+
 // terraformDestroy runs `terraform destroy -auto-approve` against the sandbox's
 // S3-backed state. The terraform binary is bundled alongside bootstrap in the Lambda zip.
 func terraformDestroy(ctx context.Context, h *TTLHandler, sandboxID string) error {
@@ -1186,48 +1387,43 @@ func terraformDestroy(ctx context.Context, h *TTLHandler, sandboxID string) erro
 	// TODO: Read substrate from metadata.json to handle ECS sandboxes.
 	moduleSource := "ec2spot"
 
-	// State key: tf-km/use1/sandboxes/<sandbox-id>/terraform.tfstate
-	stateKey := fmt.Sprintf("%s/%s/sandboxes/%s/terraform.tfstate", statePrefix, regionLabel, sandboxID)
+	// Phase 126 (REQ-126-TEARDOWN): resolve the sandbox's launch account, if any,
+	// from its DynamoDB row. h.Region/h.RegionLabel/h.StatePrefix are Lambda-
+	// instance-wide (cold-start env vars) — a linked sandbox's region must come
+	// from the LINK record instead (126-RESEARCH.md Pattern 5, final paragraph),
+	// not from these instance fields. A metadata-read failure (or no DynamoClient
+	// injected, as in most existing tests) falls through to the unmodified home
+	// path — a metadata outage must not block a home-account destroy, mirroring
+	// destroy.go's identical fail-open choice for the operator-side path.
+	launchAccountName := ""
+	if h.DynamoClient != nil {
+		if meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, sandboxID); metaErr == nil {
+			if meta != nil {
+				launchAccountName = meta.LaunchAccount
+			}
+		} else {
+			log.Warn().Err(metaErr).Str("sandbox_id", sandboxID).
+				Msg("failed to read sandbox metadata for launch-account resolution — proceeding as home-account destroy")
+		}
+	}
+
+	tfInputs, tfErr := buildDestroyTerraformInputs(ctx, launchAccountName, h.LaunchAccounts,
+		region, regionLabel, resourcePrefix(), h.StateBucket, statePrefix, sandboxID,
+		func(rctx context.Context, ssmPath string) (string, error) {
+			return readSSMParameter(rctx, h.SSMClient, ssmPath)
+		})
+	if tfErr != nil {
+		// Test 5 (unknown link) / Test 4 (external-id read failure): an unknown
+		// link or a failed external-id read is a hard error for THIS teardown — a
+		// silent home-account destroy attempt would report success while the
+		// linked instance kept running and billing (T-126-42).
+		return fmt.Errorf("resolve launch account for sandbox %s teardown: %w", sandboxID, tfErr)
+	}
 
 	// Write a minimal main.tf that references the same module and backend.
 	// terraform destroy only needs the module source and state — it reads
 	// resource addresses from state and destroys them.
-	mainTF := fmt.Sprintf(`
-terraform {
-  required_version = ">= 1.6.0"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = ">= 5.0"
-    }
-  }
-  backend "s3" {
-    bucket         = %q
-    key            = %q
-    region         = %q
-    encrypt        = true
-    dynamodb_table = %q
-  }
-}
-
-provider "aws" {
-  region = %q
-}
-
-module "sandbox" {
-  source       = "./module"
-  km_label     = "km"
-  region_label = %q
-  region_full  = %q
-  sandbox_id   = %q
-  vpc_id       = "destroy-placeholder"
-  public_subnets     = []
-  availability_zones = []
-  ec2spots           = []
-}
-`, h.StateBucket, stateKey, region,
-		statePrefix+"-locks-"+regionLabel, region,
-		regionLabel, region, sandboxID)
+	mainTF := renderDestroyMainTF(tfInputs)
 
 	if err := os.WriteFile(filepath.Join(workDir, "main.tf"), []byte(mainTF), 0o644); err != nil {
 		return fmt.Errorf("write main.tf: %w", err)
@@ -1687,9 +1883,10 @@ func main() {
 		OperatorEmail:    os.Getenv("KM_OPERATOR_EMAIL"),
 		Domain:           domain,
 		// BudgetClient reuses the existing DynamoDB client — no second client construction.
-		BudgetClient: dynamoClient,
-		BudgetTable:  budgetTbl,
-		TeardownFunc: nil, // set below
+		BudgetClient:   dynamoClient,
+		BudgetTable:    budgetTbl,
+		TeardownFunc:   nil, // set below
+		LaunchAccounts: parseLaunchAccountsEnv(),
 	}
 
 	// Use terraform-based teardown if terraform binary is bundled.

@@ -658,12 +658,13 @@ func (c *testConfig) GetGithubPeerBridges() []string  { return nil }
 func (c *testConfig) GetGithubEvents() []appcfg.GithubEventRule {
 	return nil
 }
-func (c *testConfig) GetConfigFilePath() string         { return "" }
-func (c *testConfig) GetSlackChannelsTableName() string { return "km-slack-channels" }
-func (c *testConfig) GetChecksTableName() string        { return "km-checks" }
-func (c *testConfig) GetChecksTriggers() []appcfg.CheckTrigger { return nil }
-func (c *testConfig) GetCapacityTableName() string { return "km-capacity" }
-func (c *testConfig) GetNATGatewayEnabled() bool    { return false }
+func (c *testConfig) GetConfigFilePath() string                                { return "" }
+func (c *testConfig) GetSlackChannelsTableName() string                        { return "km-slack-channels" }
+func (c *testConfig) GetChecksTableName() string                               { return "km-checks" }
+func (c *testConfig) GetChecksTriggers() []appcfg.CheckTrigger                 { return nil }
+func (c *testConfig) GetCapacityTableName() string                             { return "km-capacity" }
+func (c *testConfig) GetNATGatewayEnabled() bool                               { return false }
+func (c *testConfig) GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig { return nil }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -1013,12 +1014,13 @@ func (c *testDoctorConfig) GetGithubPeerBridges() []string  { return nil }
 func (c *testDoctorConfig) GetGithubEvents() []appcfg.GithubEventRule {
 	return nil
 }
-func (c *testDoctorConfig) GetConfigFilePath() string         { return "" }
-func (c *testDoctorConfig) GetSlackChannelsTableName() string { return "km-slack-channels" }
-func (c *testDoctorConfig) GetChecksTableName() string        { return "km-checks" }
-func (c *testDoctorConfig) GetChecksTriggers() []appcfg.CheckTrigger { return nil }
-func (c *testDoctorConfig) GetCapacityTableName() string { return "km-capacity" }
-func (c *testDoctorConfig) GetNATGatewayEnabled() bool    { return false }
+func (c *testDoctorConfig) GetConfigFilePath() string                                { return "" }
+func (c *testDoctorConfig) GetSlackChannelsTableName() string                        { return "km-slack-channels" }
+func (c *testDoctorConfig) GetChecksTableName() string                               { return "km-checks" }
+func (c *testDoctorConfig) GetChecksTriggers() []appcfg.CheckTrigger                 { return nil }
+func (c *testDoctorConfig) GetCapacityTableName() string                             { return "km-capacity" }
+func (c *testDoctorConfig) GetNATGatewayEnabled() bool                               { return false }
+func (c *testDoctorConfig) GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig { return nil }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{
@@ -2471,8 +2473,8 @@ func TestCheckGitHubEventsValid(t *testing.T) {
 	t.Run("rule with malformed glob in match returns WARN", func(t *testing.T) {
 		rules := []appcfg.GithubEventRule{
 			{
-				On:    "repository",
-				Match: "myorg/[", // malformed bracket expression
+				On:     "repository",
+				Match:  "myorg/[", // malformed bracket expression
 				Prompt: "new repo {{repo}}",
 			},
 		}

@@ -39,4 +39,10 @@ inputs = {
   email_domain         = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
   artifact_bucket_name = get_env("KM_ARTIFACTS_BUCKET", "")
   resource_prefix      = get_env("KM_RESOURCE_PREFIX", "km")
+
+  # Phase 126 (REQ-126-REGISTER): emits the per-link read grant on the artifacts
+  # bucket policy declaratively. This module owns that policy, so without this an
+  # apply erased the grant `km account register` wrote imperatively. Empty =
+  # dormant, no extra statement.
+  launch_accounts_json = get_env("KM_LAUNCH_ACCOUNTS", "")
 }

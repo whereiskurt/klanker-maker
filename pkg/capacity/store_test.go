@@ -50,7 +50,7 @@ func TestCapacityStore_RecordICE(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeCapacityDDB{}
-	store := capacity.NewDynamoCapacityStore(fake, testTable)
+	store := capacity.NewDynamoCapacityStore(fake, testTable, "")
 
 	before := time.Now().Unix()
 	if err := store.RecordICE(context.Background(), "g6e.12xlarge", "us-east-1a"); err != nil {
@@ -96,7 +96,7 @@ func TestCapacityStore_RecordSuccess(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeCapacityDDB{}
-	store := capacity.NewDynamoCapacityStore(fake, testTable)
+	store := capacity.NewDynamoCapacityStore(fake, testTable, "")
 
 	before := time.Now().Unix()
 	if err := store.RecordSuccess(context.Background(), "g6e.12xlarge", "us-east-1c"); err != nil {
@@ -128,7 +128,7 @@ func TestCapacityStore_Get(t *testing.T) {
 	t.Run("nil timestamps when item absent", func(t *testing.T) {
 		t.Parallel()
 		fake := &fakeCapacityDDB{}
-		store := capacity.NewDynamoCapacityStore(fake, testTable)
+		store := capacity.NewDynamoCapacityStore(fake, testTable, "")
 
 		entry, err := store.Get(context.Background(), "g6e.12xlarge", "us-east-1a")
 		if err != nil {
@@ -166,7 +166,7 @@ func TestCapacityStore_Get(t *testing.T) {
 				},
 			},
 		}
-		store := capacity.NewDynamoCapacityStore(fake, testTable)
+		store := capacity.NewDynamoCapacityStore(fake, testTable, "")
 
 		entry, err := store.Get(context.Background(), "g6e.12xlarge", "us-east-1c")
 		if err != nil {
@@ -189,7 +189,7 @@ func TestCapacityStore_Get(t *testing.T) {
 	t.Run("GetItem error propagated", func(t *testing.T) {
 		t.Parallel()
 		fake := &fakeCapacityDDB{getErr: fmt.Errorf("ddb unavailable")}
-		store := capacity.NewDynamoCapacityStore(fake, testTable)
+		store := capacity.NewDynamoCapacityStore(fake, testTable, "")
 		_, err := store.Get(context.Background(), "t3.medium", "us-east-1a")
 		if err == nil {
 			t.Fatal("expected error, got nil")
@@ -202,6 +202,110 @@ func TestCapacityStore_ICETTLSeconds(t *testing.T) {
 	if capacity.ICETTLSeconds != 2700 {
 		t.Errorf("ICETTLSeconds = %d, want 2700", capacity.ICETTLSeconds)
 	}
+}
+
+// TestCapacityStore_AccountNamespace_EmptyProducesBareKey verifies a store
+// constructed with an empty account namespace produces exactly the same
+// DynamoDB key the pre-Phase-126 code produced — the guard against a later
+// refactor silently namespacing the home account (see the struct doc comment
+// in store.go for why that must never happen: success rows have no TTL and
+// persist indefinitely, so namespacing home for symmetry would orphan every
+// accumulated sticky-AZ record with no way to recover it).
+func TestCapacityStore_AccountNamespace_EmptyProducesBareKey(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeCapacityDDB{}
+	store := capacity.NewDynamoCapacityStore(fake, testTable, "")
+
+	if err := store.RecordSuccess(context.Background(), "g6e.12xlarge", "us-east-1a"); err != nil {
+		t.Fatalf("RecordSuccess: %v", err)
+	}
+	if len(fake.updateInputs) != 1 {
+		t.Fatalf("expected 1 UpdateItem call, got %d", len(fake.updateInputs))
+	}
+	if v := attrS(fake.updateInputs[0].Key, "instanceType"); v != "g6e.12xlarge" {
+		t.Errorf("instanceType hash key = %q, want bare %q (empty accountNS must not namespace)", v, "g6e.12xlarge")
+	}
+}
+
+// TestCapacityStore_AccountNamespace_NonEmptyPrefixesKey verifies a store
+// constructed with a non-empty account namespace produces a hash-key value
+// of "{accountNS}#{instanceType}"; the range key (az) is unchanged.
+func TestCapacityStore_AccountNamespace_NonEmptyPrefixesKey(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeCapacityDDB{}
+	store := capacity.NewDynamoCapacityStore(fake, testTable, "gpu-partner")
+
+	if err := store.RecordSuccess(context.Background(), "g6e.12xlarge", "us-east-1a"); err != nil {
+		t.Fatalf("RecordSuccess: %v", err)
+	}
+	if len(fake.updateInputs) != 1 {
+		t.Fatalf("expected 1 UpdateItem call, got %d", len(fake.updateInputs))
+	}
+	if v := attrS(fake.updateInputs[0].Key, "instanceType"); v != "gpu-partner#g6e.12xlarge" {
+		t.Errorf("instanceType hash key = %q, want %q", v, "gpu-partner#g6e.12xlarge")
+	}
+	if v := attrS(fake.updateInputs[0].Key, "az"); v != "us-east-1a" {
+		t.Errorf("az range key = %q, want %q (namespacing must not touch az)", v, "us-east-1a")
+	}
+}
+
+// TestCapacityStore_AccountNamespace_AllMethodsRouteThroughNamespacedKey
+// exercises RecordICE, RecordSuccess, and Get against a stub DDB client and
+// asserts the key each one sends carries the namespace — proving all three
+// CapacityStore methods route through the namespaced itemKey, not just one.
+func TestCapacityStore_AccountNamespace_AllMethodsRouteThroughNamespacedKey(t *testing.T) {
+	t.Parallel()
+
+	const wantKey = "gpu-partner#g6e.12xlarge"
+
+	t.Run("RecordICE", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeCapacityDDB{}
+		store := capacity.NewDynamoCapacityStore(fake, testTable, "gpu-partner")
+		if err := store.RecordICE(context.Background(), "g6e.12xlarge", "us-east-1b"); err != nil {
+			t.Fatalf("RecordICE: %v", err)
+		}
+		if v := attrS(fake.updateInputs[0].Key, "instanceType"); v != wantKey {
+			t.Errorf("instanceType hash key = %q, want %q", v, wantKey)
+		}
+	})
+
+	t.Run("RecordSuccess", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeCapacityDDB{}
+		store := capacity.NewDynamoCapacityStore(fake, testTable, "gpu-partner")
+		if err := store.RecordSuccess(context.Background(), "g6e.12xlarge", "us-east-1b"); err != nil {
+			t.Fatalf("RecordSuccess: %v", err)
+		}
+		if v := attrS(fake.updateInputs[0].Key, "instanceType"); v != wantKey {
+			t.Errorf("instanceType hash key = %q, want %q", v, wantKey)
+		}
+	})
+
+	t.Run("Get", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeCapacityDDB{}
+		store := capacity.NewDynamoCapacityStore(fake, testTable, "gpu-partner")
+		if _, err := store.Get(context.Background(), "g6e.12xlarge", "us-east-1b"); err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if len(fake.getInputs) != 1 {
+			t.Fatalf("expected 1 GetItem call, got %d", len(fake.getInputs))
+		}
+		if v := attrS(fake.getInputs[0].Key, "instanceType"); v != wantKey {
+			t.Errorf("instanceType hash key = %q, want %q", v, wantKey)
+		}
+	})
+}
+
+// TestCapacityStore_SatisfiesCapacityStoreInterface is a compile-time
+// assertion that *DynamoCapacityStore still satisfies CapacityStore after
+// the constructor's third parameter was added — the interface itself
+// (RecordICE/RecordSuccess/Get signatures) must stay unchanged.
+func TestCapacityStore_SatisfiesCapacityStoreInterface(t *testing.T) {
+	var _ capacity.CapacityStore = capacity.NewDynamoCapacityStore(&fakeCapacityDDB{}, testTable, "")
 }
 
 // --- helpers ---
