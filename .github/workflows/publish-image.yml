@@ -8,10 +8,21 @@
 # mislabeled image. Keying on `release: published` means this runs only once you
 # publish the draft from the GH UI, when the assets are actually public.
 #
-# ONE-TIME MANUAL STEP after the first successful run: GHCR packages default to
-# private even on a public repo. Open the package settings and set visibility to
-# Public, or `docker pull` fails with an auth error for everyone else.
-# GITHUB_TOKEN cannot change package visibility, so this cannot be automated here.
+# Package visibility: the package this publishes inherits the visibility of this
+# repository, so on a public repo it is publicly pullable with no manual step.
+# Confirmed for v0.7.1 by an anonymous (unauthenticated) manifest fetch:
+#
+#   tok=$(curl -s "https://ghcr.io/token?scope=repository:<owner>/<repo>/km:pull&service=ghcr.io" \
+#         | jq -r .token)
+#   curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $tok" \
+#     -H 'Accept: application/vnd.oci.image.index.v1+json' \
+#     https://ghcr.io/v2/<owner>/<repo>/km/manifests/<tag>
+#
+# 200 means anonymously pullable. Anything else does not: 401/403 for a private
+# package, and 404 where GHCR masks a private package as absent — so do not read
+# a 404 as "never published". If a future package ever does land private, fix it
+# in the package settings UI; GITHUB_TOKEN cannot change package visibility, so
+# it cannot be automated here.
 
 name: publish-image
 
