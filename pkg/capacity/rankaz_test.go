@@ -265,6 +265,103 @@ func TestRankAZs_ICEStickySuccess(t *testing.T) {
 	}
 }
 
+// TestRankAZs_FreshICEOutranksStaleSuccess pins the ordering for an AZ carrying BOTH a
+// last-success and a fresh ICE — the case TestRankAZs_ICEStickySuccess does not reach,
+// because there each AZ has only one of the two attributes.
+//
+// This is the real-world shape: an AZ succeeds, its success row is written with NO TTL and
+// so persists forever, and the AZ later goes capacity-dry. If stickiness is evaluated before
+// freshness, that AZ scores maximum and is selected on every subsequent launch no matter how
+// many times it ICEs — the sticky-AZ feedback loop becomes inert in exactly the situation it
+// exists to handle. A fresh ICE is newer and more specific evidence than an old success and
+// must win.
+//
+// Observed live 2026-08-24: 481723467561#g6e.12xlarge / us-east-1a held both attributes and
+// was chosen for three consecutive creates, each burning the create-handler's full 900s
+// budget against an AZ AWS was actively refusing.
+func TestRankAZs_FreshICEOutranksStaleSuccess(t *testing.T) {
+	t.Parallel()
+
+	ec2c := &fakeEC2Offerings{offered: []string{"us-east-1a", "us-east-1b", "us-east-1c"}}
+	sqc := &fakeServiceQuotas{value: 96}
+	store := &fakeCapacityStore{entries: map[string]*capacity.CapacityEntry{}}
+
+	now := time.Now()
+	staleSuccess := now.Add(-10 * time.Hour)
+	freshICE := now.Add(-5 * time.Minute) // within the 45-min window
+
+	// 1a: succeeded long ago AND is dry right now. 1b/1c: no history at all.
+	store.entries["g6e.12xlarge/us-east-1a"] = &capacity.CapacityEntry{
+		InstanceType:  "g6e.12xlarge",
+		AZ:            "us-east-1a",
+		LastSuccessAt: &staleSuccess,
+		LastICEAt:     &freshICE,
+	}
+
+	allAZs := []string{"us-east-1a", "us-east-1b", "us-east-1c"}
+	ranked, err := capacity.RankAZs(context.Background(), "g6e.12xlarge", "us-east-1",
+		nil, store, ec2c, sqc, allAZs, nil)
+	if err != nil {
+		t.Fatalf("RankAZs returned error: %v", err)
+	}
+
+	iA := indexAZ(ranked, "us-east-1a")
+	if iA == -1 {
+		t.Fatalf("expected 1a present in ranked list, got %v", ranked)
+	}
+	if iA != len(ranked)-1 {
+		t.Errorf("an AZ with a fresh ICE must rank LAST even though it also carries a "+
+			"last-success; got 1a at index %d in %v", iA, ranked)
+	}
+	for _, az := range []string{"us-east-1b", "us-east-1c"} {
+		if i := indexAZ(ranked, az); i > iA {
+			t.Errorf("untried %s (no history) must outrank capacity-dry 1a; got %v", az, ranked)
+		}
+	}
+}
+
+// TestRankAZs_VerdictAgreesWithRanking guards the second half of the defect: km capacity's
+// verdict logic and rankScore are separate implementations, and when they disagree the
+// operator-visible one is the wrong one. With both attributes present the report said
+// "recently-dry" while the ranker still selected the AZ first, so the diagnostic actively
+// pointed away from the cause.
+//
+// ComputeCapacityVerdict lives in internal/app/cmd and cannot be imported here, so this
+// asserts the ranking half of the contract it must satisfy: fresh ICE dominates, which is
+// the same precedence ComputeCapacityVerdict already applies.
+func TestRankAZs_VerdictAgreesWithRanking(t *testing.T) {
+	t.Parallel()
+
+	ec2c := &fakeEC2Offerings{offered: []string{"us-east-1a", "us-east-1b"}}
+	sqc := &fakeServiceQuotas{value: 96}
+	store := &fakeCapacityStore{entries: map[string]*capacity.CapacityEntry{}}
+
+	now := time.Now()
+	success := now.Add(-2 * time.Hour)
+	freshICE := now.Add(-1 * time.Minute)
+	staleICE := now.Add(-90 * time.Minute) // outside the window: must NOT demote
+
+	// 1a: fresh ICE + success -> verdict recently-dry -> must rank last.
+	store.entries["g6e.12xlarge/us-east-1a"] = &capacity.CapacityEntry{
+		InstanceType: "g6e.12xlarge", AZ: "us-east-1a",
+		LastSuccessAt: &success, LastICEAt: &freshICE,
+	}
+	// 1b: EXPIRED ICE + success -> verdict likely -> stickiness still applies.
+	store.entries["g6e.12xlarge/us-east-1b"] = &capacity.CapacityEntry{
+		InstanceType: "g6e.12xlarge", AZ: "us-east-1b",
+		LastSuccessAt: &success, LastICEAt: &staleICE,
+	}
+
+	ranked, err := capacity.RankAZs(context.Background(), "g6e.12xlarge", "us-east-1",
+		nil, store, ec2c, sqc, []string{"us-east-1a", "us-east-1b"}, nil)
+	if err != nil {
+		t.Fatalf("RankAZs returned error: %v", err)
+	}
+	if indexAZ(ranked, "us-east-1b") >= indexAZ(ranked, "us-east-1a") {
+		t.Errorf("1b (success, EXPIRED ice) must outrank 1a (success, FRESH ice); got %v", ranked)
+	}
+}
+
 // TestRankAZs covers two general cases: non-GPU skips quota, offerings error falls back to allAZs.
 func TestRankAZs(t *testing.T) {
 	t.Parallel()

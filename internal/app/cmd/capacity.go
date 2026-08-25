@@ -58,6 +58,14 @@ const freshICEWindow = time.Duration(capacity.ICETTLSeconds) * time.Second
 //	unknown       — offered, quota OK, entry is nil (store unavailable)
 //
 // NEVER returns "available".
+//
+// PRECEDENCE MUST MATCH capacity.rankScore (pkg/capacity/rankaz.go): fresh ICE is checked
+// BEFORE last-success in both. These are two separate implementations of the same judgement
+// — this one is what the operator SEES, rankScore is what the create path ACTS on — so when
+// they disagree the visible diagnostic is the misleading one. They did disagree: this
+// function checked fresh ICE first (correct) while rankScore checked last-success first, so
+// `km capacity` printed "recently-dry" for an AZ the sweep then selected first, three creates
+// in a row. If you change the ordering here, change it there too, and vice versa.
 func ComputeCapacityVerdict(offered, isGPU bool, quotaHeadroom float64, quotaAvail bool, entry *capacity.CapacityEntry) string {
 	if !offered {
 		return VerdictNotOffered
