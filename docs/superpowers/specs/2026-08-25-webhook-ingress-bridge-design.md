@@ -128,9 +128,10 @@ Wiz ──POST /wiz──▶ km-webhook-bridge  (Function URL, auth_type NONE at
 ### Deliberately NOT built: a threads table
 
 GitHub and H1 each carry one because they reply into a conversation. Wiz is
-one-way — there is nothing to reply to and no continuity to persist. This drops
-a DynamoDB table, its Terraform module, and a `regionalModules()` entry. The
-agent reports out via `km-slack` instead.
+one-way — **confirmed by the operator, 2026-08-25** — so there is nothing to
+reply to and no continuity to persist. This drops a DynamoDB table, its
+Terraform module, and a `regionalModules()` entry. The agent reports out via
+`km-slack` instead.
 
 ## Config surface
 
@@ -452,7 +453,9 @@ Verify against the real Wiz tenant during UAT, not before:
 
 - True batching / tumbling windows (`group_by` covers the practical case).
 - A threads table or any reply-back channel to Wiz.
-- mTLS / client-certificate auth (impossible on a Lambda Function URL).
+- mTLS / client-certificate auth. Impossible on a Lambda Function URL, and
+  **confirmed never required** by the operator (2026-08-25) — so the Function URL
+  stays the endpoint and no ALB/API Gateway fronting is contemplated.
 - Vulnerability-finding normalization (falls through the `field_paths` escape
   hatch).
 - Authoring a `klanker:triage` skill.
