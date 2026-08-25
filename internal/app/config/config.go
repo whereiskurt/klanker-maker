@@ -595,6 +595,97 @@ type ActionLimitConfig struct {
 	OnBreach string `mapstructure:"onBreach" yaml:"onBreach,omitempty"`
 }
 
+// WebhookAuth declares how a webhook source authenticates to the bridge.
+// All fields carry mapstructure tags — untagged fields are silently ignored by
+// viper's UnmarshalKey (project_config_key_merge_list pitfall 1).
+type WebhookAuth struct {
+	// Type is "bearer" (constant-time compare of a shared token) or "hmac"
+	// (HMAC-SHA256 over the raw body). Wiz offers no signature, so Wiz uses bearer.
+	Type string `mapstructure:"type" yaml:"type" json:"type"`
+
+	// Header is the HTTP header carrying the credential. Defaults to
+	// "Authorization" when empty.
+	Header string `mapstructure:"header" yaml:"header,omitempty" json:"header,omitempty"`
+
+	// SecretPath is the SSM SecureString parameter holding the token or HMAC key.
+	// Required — a source with an empty SecretPath fails closed on every request.
+	SecretPath string `mapstructure:"secret_path" yaml:"secret_path" json:"secret_path"`
+}
+
+// WebhookRule maps a matched payload to a sandbox dispatch. The key names are
+// lifted verbatim from checks.triggers (Phase 116) so operators learn one
+// vocabulary for the pull ingress and the push ingress.
+type WebhookRule struct {
+	// Match is a field -> allowed-values map evaluated against the parsed
+	// envelope. All named fields must match (AND); within a field any value
+	// matches (OR). A field the envelope does not carry is a NON-match, never a
+	// wildcard — a typo'd path must dispatch nothing, not everything.
+	// An empty/absent Match matches every payload.
+	Match map[string][]string `mapstructure:"match" yaml:"match,omitempty" json:"match,omitempty"`
+
+	// Alias is the target sandbox alias (km create --alias).
+	Alias string `mapstructure:"alias" yaml:"alias" json:"alias"`
+
+	// Profile is the SandboxProfile used for cold-create when the alias is absent.
+	Profile string `mapstructure:"profile" yaml:"profile,omitempty" json:"profile,omitempty"`
+
+	// OnAbsent is "cold-create" (default) or "skip".
+	OnAbsent string `mapstructure:"on_absent" yaml:"on_absent,omitempty" json:"on_absent,omitempty"`
+
+	// CooldownSeconds suppresses repeat dispatch of the same GroupBy key within
+	// the window. 0 = no cooldown.
+	CooldownSeconds int `mapstructure:"cooldown_seconds" yaml:"cooldown_seconds,omitempty" json:"cooldown_seconds,omitempty"`
+
+	// GroupBy is a {{field}} template expanded against the envelope to form the
+	// cooldown key. This is the coalescing lever: group on an entity id and the
+	// first alert of a burst wins.
+	GroupBy string `mapstructure:"group_by" yaml:"group_by,omitempty" json:"group_by,omitempty"`
+
+	// Prompt is the agent's first turn. Supports @file loading and {{field}}
+	// expansion against the envelope, including {{raw}}.
+	Prompt string `mapstructure:"prompt" yaml:"prompt" json:"prompt"`
+}
+
+// WebhookSource is one named ingress. Name is the URL path segment, so
+// POST /{name} routes here.
+type WebhookSource struct {
+	Name string      `mapstructure:"name" yaml:"name" json:"name"`
+	Auth WebhookAuth `mapstructure:"auth" yaml:"auth" json:"auth"`
+
+	// ReplayTTLSeconds bounds the replay-nonce window. 0 => DefaultReplayTTLSeconds.
+	ReplayTTLSeconds int `mapstructure:"replay_ttl_seconds" yaml:"replay_ttl_seconds,omitempty" json:"replay_ttl_seconds,omitempty"`
+
+	// FieldPaths is the escape hatch used ONLY when the payload carries no
+	// km_schema. Keys: "id" (doubles as the replay key), "type", "severity",
+	// "group". Values are dotted JSON paths with an optional leading "$.".
+	FieldPaths map[string]string `mapstructure:"field_paths" yaml:"field_paths,omitempty" json:"field_paths,omitempty"`
+
+	Rules []WebhookRule `mapstructure:"rules" yaml:"rules,omitempty" json:"rules,omitempty"`
+}
+
+// WebhookRateLimit is the install-wide storm breaker, shared across ALL sources:
+// one fleet of sandboxes and one AI budget, so every source draws the same
+// allowance. Counted AFTER the replay and cooldown gates, so suppressed
+// duplicates cost nothing.
+type WebhookRateLimit struct {
+	MaxDispatches int `mapstructure:"max_dispatches" yaml:"max_dispatches" json:"max_dispatches"`
+	WindowSeconds int `mapstructure:"window_seconds" yaml:"window_seconds" json:"window_seconds"`
+}
+
+// WebhooksConfig maps to km-config.yaml key `webhooks`.
+// CRITICAL: "webhooks" must be in the v2->v merge-list in Load() or this block is
+// silently dropped (project_config_key_merge_list). It is a NEW top-level key and
+// does not piggyback on any parent's entry. Decoded atomically by
+// v.UnmarshalKey("webhooks", &cfg.Webhooks).
+type WebhooksConfig struct {
+	RateLimit *WebhookRateLimit `mapstructure:"rate_limit" yaml:"rate_limit,omitempty" json:"rate_limit,omitempty"`
+	Sources   []WebhookSource   `mapstructure:"sources" yaml:"sources,omitempty" json:"sources,omitempty"`
+}
+
+// DefaultReplayTTLSeconds is the replay-nonce window when a source omits
+// replay_ttl_seconds.
+const DefaultReplayTTLSeconds = 900
+
 // Config holds all configuration values for the km CLI.
 type Config struct {
 	// ProfileSearchPaths is the ordered list of directories to search for profiles.
@@ -831,6 +922,10 @@ type Config struct {
 	// NEW top-level key and does not piggyback on any parent's merge-list entry.
 	LaunchAccounts map[string]LaunchAccountConfig `mapstructure:"launch_accounts" yaml:"launch_accounts,omitempty"`
 
+	// Webhooks is the Phase 127 generic webhook ingress block (km-config.yaml
+	// key `webhooks`). Absent => zero value => dormant.
+	Webhooks WebhooksConfig `mapstructure:"webhooks" yaml:"webhooks,omitempty"`
+
 	// YAMLDefaults holds the raw km-config.yaml values for env-bound keys,
 	// snapshotted during Load() BEFORE viper's AutomaticEnv binds env vars into
 	// the cfg fields. Used by ExportTerragruntEnvVars to detect drift between
@@ -1064,6 +1159,14 @@ func Load() (*Config, error) {
 			// parent's merge-list entry (unlike github.commands). Decoded atomically by
 			// v.UnmarshalKey("launch_accounts", &cfg.LaunchAccounts) below.
 			"launch_accounts",
+			// Phase 127: webhooks block (sources list-of-objects + rate_limit).
+			// CRITICAL: without this entry the entire webhooks: block is silently
+			// dropped regardless of km-config.yaml content
+			// (project_config_key_merge_list footgun). NEW top-level key — it does
+			// not piggyback on any parent's entry. Decoded atomically by
+			// v.UnmarshalKey("webhooks", &cfg.Webhooks) below — do NOT add sibling
+			// "webhooks.*" entries (mirrors the github, h1, and checks precedent).
+			"webhooks",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -1297,6 +1400,10 @@ func Load() (*Config, error) {
 		}
 	} else if err := v.UnmarshalKey("launch_accounts", &cfg.LaunchAccounts); err != nil {
 		return nil, fmt.Errorf("unmarshal launch_accounts: %w", err)
+	}
+
+	if err := v.UnmarshalKey("webhooks", &cfg.Webhooks); err != nil {
+		return nil, fmt.Errorf("decode webhooks config: %w", err)
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
