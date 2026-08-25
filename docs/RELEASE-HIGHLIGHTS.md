@@ -13,73 +13,119 @@
 -->
 ## ✨ Major additions highlighted
 
-This release is about **getting km into your hands and keeping sandboxes alive while you use
-them** — a container distribution that needs nothing but Docker, and a fix for interactive
-sandboxes being reaped as idle out from under you.
+This release is about **one thing: running sandboxes on GPU capacity your main account doesn't
+have.** A sandbox profile can now launch its EC2 box into a *different*, pre-linked AWS account
+and borrow that account's vCPU quota — while the single km control plane stays exactly where it
+is.
 
-### 🐳 Run km from a container — nothing to install but Docker
+### 🏦 Cross-account capacity borrowing
 
-```bash
-docker run --rm -it \
-  -v "$HOME/.aws:/root/.aws" \
-  -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
-  ghcr.io/whereiskurt/klanker-maker/km:latest
+GPU quota is per-account and per-region, and `L-DB2E81BA` ("Running On-Demand G and VT
+instances") **defaults to 0** in every account you have never asked about. So the quota you need
+is often sitting in a *different* account from the one km runs in. Measured on a real link
+during this release's UAT:
+
+```
+$ km capacity profiles/gpu-qwen38-oblit-12x.yaml --launch-account gpuman
+Capacity report: g6e.12xlarge  region: us-east-1  account: gpuman (481723467561)
+us-east-1a  yes  768 vCPU  ...
+
+$ km capacity profiles/gpu-qwen38-oblit-12x.yaml
+Capacity report: g6e.12xlarge  region: us-east-1  account: home
+us-east-1a  yes   64 vCPU  ...
 ```
 
-Multi-arch (amd64 + arm64), published to GHCR on every release. It lands you in a shell at
-`/klanker-maker` with `km`, your config, and the whole profile library in place — so `./km create
-profiles/spot.yaml --remote` just works. Append a command instead to run one-shot:
-`docker run ... km ./km list` exits with km's own exit code and prints nothing extra, so it pipes
-cleanly into `jq`.
+Same profile, same region — **12x the headroom**, because the gate reads the *linked* account.
 
-- **Bundles what km shells out to but never shipped**: `aws` CLI v2, `session-manager-plugin`,
-  `sops`, plus git/jq/ssh. That was previously a manual per-operator install.
-- **Credentials are never baked in.** `~/.aws` is mounted read-write at runtime, so the SSO token
-  cache is shared with the host — if you're logged in on the host, you're logged in in the
-  container. The startup banner reports whether each mount actually landed.
-- **Scoped to `--remote` sandbox work**: create, list, status, shell, agent, logs, otel, destroy,
-  doctor, capacity, validate — all verified live end to end. Platform provisioning (`km init`,
-  `km bootstrap`, `--local` create/destroy) stays on a native install; it needs the `infra/live/`
-  terragrunt tree no release archive carries. `terraform`/`terragrunt` are deliberately left out of
-  the image for the same reason (and 152 MB lighter for it).
-- **Prefer to build it yourself?** Every release archive now carries the Dockerfile, entrypoint,
-  profile library, and `km-config.example.yaml` at their repo-relative paths — extract the tarball
-  and `docker build -f containers/operator/Dockerfile .` in place, no clone required.
+**Only the box moves.** State, DynamoDB, budget, `km list`, `km destroy`, and every bridge stay
+in the home account. A linked sandbox is an ordinary sandbox that happens to bill someone else's
+quota.
 
-Details: `containers/operator/README.md`.
+**Dormant by default.** Absent `spec.runtime.launchAccount` (or `--launch-account`), behaviour is
+byte-identical to v0.7.x. No `apiVersion` bump, no profile migration, no change to existing
+sandboxes.
 
-### 🖥️ Sandboxes no longer reaped while you're working in them
+**Enrollment is two commands with two different credential sets** — this is deliberate, and the
+order matters:
 
-A sandbox someone was actively using through **KasmVNC or VS Code Remote-SSH** could be torn down by
-`spec.lifecycle.idleTimeout`, with an empty CloudWatch audit stream as the only trace.
+```bash
+# 1. TARGET-account admin creds — provisions the bounded launcher role, a
+#    permissions-boundaried box role, a results bucket, and one subnet PER AZ.
+km account add gpuman --aws-profile <target-admin> --trust <home-account-id> \
+    --instance-types g6e.12xlarge,g6e.4xlarge --provision-network --az-count 4 --dry-run=false
 
-The root cause was **utmp, not the timer**: `sshd` writes a utmp record only for **PTY** sessions.
-KasmVNC runs as a systemd service and never logs in, and VS Code Remote-SSH runs `vscode-server`
-over a **non-PTY** exec channel — so a connected user looked idle on all five liveness signals.
-The VS Code case was intermittent in the worst way: opening the integrated terminal allocates a PTY
-and makes the session visible again, so survival depended on whether an unrelated UI panel was open.
+# 2. HOME creds — writes the km-config.yaml link, the external id as an SSM
+#    SecureString, and exactly one read-only grant on the home artifacts bucket.
+km account register gpuman --from-fragment ~/.km/account-links/gpuman.link.yaml \
+    --aws-profile <home>
+```
 
-`km-presence` now ORs **seven** signals, adding *KasmVNC viewer attached* and *SSH session
-established*. Both detect the **live socket, never the process** — `pgrep vscode-server` is the
-obvious check and is wrong, since VS Code deliberately leaves that server running after a client
-disconnects and would latch the sandbox awake forever.
+Then `km account list` / `km account rm` round it out. The enrollment unit's **Terraform state
+lives in the target account** — there is no local state anywhere in this project.
 
-⚠️ **Consequence:** an open browser tab or VS Code window now pins a sandbox alive indefinitely, the
-same tradeoff as leaving a `km shell` open. `spec.lifecycle.ttl` is unaffected and is now the real
-backstop against forgotten sessions.
+### 🔐 The launcher role is the entire containment boundary
 
-See `docs/desktop.md` § Idle timeout and `docs/vscode.md` § Idle timeout.
+A linked target account is typically **exempt from your SCPs**, so unlike every other km IAM
+path there is no second layer behind it. That role's policy was verified live with
+`aws iam simulate-principal-policy`, each denial paired with a positive or negative control so a
+deny caused by a malformed simulation can't be mistaken for a deny caused by policy:
 
-### 🎮 70B-class models on a single GPU — FP8 on one L40S
+- `RunInstances` is confined to an **explicit instance-type allowlist** and to the link's own
+  subnets — a foreign subnet is denied, the link's own subnet is allowed.
+- `iam:PassRole` is scoped to the **single** box role; passing any other role to EC2 is denied.
+- No `iam:CreateRole`/`PutRolePolicy`/`CreateUser` — the launcher cannot self-escalate.
+- Lifecycle actions (`TerminateInstances`, `StopInstances`, …) are gated on
+  `aws:ResourceTag/km:managed-by`.
+- No `organizations:*`, and no S3 beyond the one explicit read-only grant.
+- The external id (an SSM SecureString) is the confused-deputy protection.
 
-4-GPU `g6e` shapes have been capacity-walled, while single-GPU shapes stayed available. **FP8
-quantization halves the weights** enough to fit Qwen3.8-27B-OBLITERATED onto **one L40S**
-(`g6e.4xlarge`), turning a blocked deploy into a routine one — plus an S3-staged BF16 variant for
-where the capacity exists.
+Every cross-account data path is read-only in both directions. **Enrolling an org *management*
+account as the target is possible but discouraged** — SCPs never apply there, so the usual "SCP
+is a second layer" assumption doesn't hold. Prefer a dedicated member account.
+
+### 🩺 `km doctor` gains four cross-account checks
+
+Link well-formed · launcher role **actually assumable** (forces real credential resolution, not
+just config construction) · artifacts grant present **and not widened** beyond the exact
+read-only pair · **no orphaned linked-account instances** — a leaked box `km list` cannot see,
+billing silently.
+
+All four are **silently skipped with zero AWS calls** when no `launch_accounts` are configured.
+
+### 🧹 Teardown is account-aware and fails closed
+
+`km destroy` (including its cold-clone fallback) reads the sandbox's `launch_account` **before**
+the home-account tag scan, which could never see a resource in another account. The expiry
+Lambda renders a conditional `assume_role` provider sourced from the link's own region. Both
+**hard-error** on an unknown link or an unreadable external id rather than silently falling
+through to a home-account provider that would report success while the linked instance kept
+billing.
+
+### ⚠️ Known limitations — read before enrolling
+
+- **A linked box gets a smaller IAM role.** It runs with the 4-grant shared box role, *not* the
+  12-grant per-sandbox role. **Budget metering, GitHub token minting, Slack/GitHub inbound,
+  transcript upload, and SOPS secret injection do not work on a linked sandbox.** This is not
+  fixable by widening IAM — SSM Parameter Store and DynamoDB have no resource policies — so
+  treat linked sandboxes as compute, not as full-featured agent boxes.
+- **The link's pre-provisioned security group is unused.** The EC2 module always self-creates a
+  per-sandbox SG, matching home-launch behaviour.
+- **A link is region-locked.** Every `RunInstances` resource ARN in the launcher policy is
+  pinned to the enrolled region; another region needs its own `km account add` *and* its own
+  quota increase.
+- **Two pre-existing capacity-sweep defects are worth knowing about**, since this feature is
+  usually reached while chasing scarce GPU capacity. Neither is new in this release and both
+  affect home-account launches identically: an AZ that has ever succeeded currently out-ranks
+  every other AZ even after it goes capacity-dry (the sticky-AZ score ignores a fresh
+  insufficient-capacity signal, and `km capacity` reports the AZ as `recently-dry` while the
+  launch path still selects it); and terraform retries insufficient-capacity errors internally,
+  so a remote create can consume its full Lambda budget on one dry AZ, time out, and leave a
+  state lock plus an unattached data volume behind. If a GPU create fails with `Error acquiring
+  the state lock`, that timeout is the cause — clearing the lock alone will not help.
+
+Full operator runbook: `docs/cross-account-capacity-borrowing.md`.
 
 ### 🔧 Also in this release
 
-- **codex can run bash tools on the GPU DLAMI again** — the image was missing `bubblewrap`, which
-  codex requires for sandboxed tool execution.
-- Single-GPU FP8 deployment notes, including the six distinct failure modes it surfaced
-  (`docs/gpu-model-serving.md`).
+- The GHCR package-visibility note from the v0.7.1 container work was corrected — no manual
+  step is needed to make the published image public.

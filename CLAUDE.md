@@ -50,7 +50,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - See `docs/desktop.md` § Idle timeout and desktop sessions and `docs/vscode.md` § Idle timeout
   and Remote-SSH sessions.
 
-**Phase 126 (2026-08-22) — Cross-account capacity borrowing: launch sandboxes into a linked capacity account (code-complete; live UAT pending):**
+**Phase 126 (2026-08-22) — Cross-account capacity borrowing: launch sandboxes into a linked capacity account (live-verified 2026-08-24, except vLLM serving):**
 - A SandboxProfile can launch its EC2 box into a *different*, pre-linked AWS account to
   borrow that account's vCPU quota, while the one km control plane — state, DynamoDB, budget,
   `km list`, every bridge — stays home. Dormant by default: absent `spec.runtime.launchAccount`
@@ -127,6 +127,23 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   directly against that account — **never** by `km init`, which never touches the target
   account at all (same standalone shape as `km cluster add`). `--sidecars` is not sufficient
   for any of the above — nothing in this phase touches a sandbox-side helper binary.
+- **Live UAT 2026-08-24 (`126-UAT.md`):** cross-account create AND teardown proven; `km capacity`
+  reads the target (768 vCPU vs 64 home); `km doctor`'s four checks green incl. the artifacts
+  grant surviving `km init`; containment matrix 8/9 (Finding L1: `ec2:RunInstances` is not
+  tag-gated, so an untagged box is un-reapable AND invisible to the orphan check). **vLLM serving
+  a token is still unproven** — every allowlisted GPU shape probed `InsufficientInstanceCapacity`
+  in every us-east-1 AZ (Finding L4), incl. the FP8 single-GPU fallback; ca-central-1 has no L40S
+  at all and its L4s are dry; us-west-2/us-east-2 are quota-walled at 0 (requests pending).
+- **Two Phase 124 defects found here, not Phase 126 bugs — they bite home launches too:**
+  **L3 (root cause)** `rankScore` (`pkg/capacity/rankaz.go:129`) checks `LastSuccessAt` before the
+  fresh-ICE branch and returns unconditionally; success rows carry no TTL, so an AZ that ever
+  succeeded out-ranks every other AZ forever however often it later ICEs — and `km capacity`'s
+  verdict disagrees with the ranker, showing the AZ as `recently-dry` while the launch path still
+  picks it. **L2** terraform retries ICE internally, so km never sees the error, the sweep cannot
+  rotate, and the Lambda dies at 900s leaving the stale lock the next run reports.
+  **L5** a create killed mid-apply leaks its 300GB volume: `km destroy` reports success (the
+  volume never reached state) and `km doctor` stays green (its EBS check is scoped to *untagged*
+  volumes).
 - See `docs/cross-account-capacity-borrowing.md` for the full operator runbook.
 
 **Egress deny lists + runtime narrowing (2026-08-21):**
