@@ -130,7 +130,13 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - **Live UAT 2026-08-24 (`126-UAT.md`):** cross-account create AND teardown proven; `km capacity`
   reads the target (768 vCPU vs 64 home); `km doctor`'s four checks green incl. the artifacts
   grant surviving `km init`; containment matrix 8/9 (Finding L1: `ec2:RunInstances` is not
-  tag-gated, so an untagged box is un-reapable AND invisible to the orphan check). **vLLM serving
+  tag-gated, so an untagged box is un-reapable AND invisible to the orphan check — **mitigated
+  2026-08-25 by detection**, because tag-gating it is IMPOSSIBLE: for the `instance/*` resource
+  of a `RunInstances` call AWS populates only `ec2:AvailabilityZone` and `ec2:InstanceType`, so
+  an `aws:RequestTag` condition there is unsatisfiable and breaks every launch — see the
+  `LaunchOnlyGpuBoxes` comment and commit `0d362066`. **`simulate-principal-policy` will
+  evaluate a key AWS never populates at call time, so a simulator verdict proves what the
+  policy SAYS, not what AWS can ENFORCE.**). **vLLM serving
   a token is still unproven** — every allowlisted GPU shape probed `InsufficientInstanceCapacity`
   in every us-east-1 AZ (Finding L4), incl. the FP8 single-GPU fallback; ca-central-1 has no L40S
   at all and its L4s are dry; us-west-2/us-east-2 are quota-walled at 0 (requests pending).
@@ -145,9 +151,12 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   only success-ONLY and ICE-ONLY AZs, never one holding both — which is how a green suite hid
   this. Any new ranking rule needs the both-attributes case. **L2** terraform retries ICE internally, so km never sees the error, the sweep cannot
   rotate, and the Lambda dies at 900s leaving the stale lock the next run reports.
-  **L5** a create killed mid-apply leaks its 300GB volume: `km destroy` reports success (the
-  volume never reached state) and `km doctor` stays green (its EBS check is scoped to *untagged*
-  volumes).
+  **L5 — FIXED 2026-08-25** a create killed mid-apply leaks its 300GB volume: `km destroy`
+  reports success (the volume never reached state) and `km doctor` stayed green (its EBS check
+  is scoped to *untagged* volumes, and these are correctly tagged). New
+  `checkLaunchAccountOrphanVolumes` reports unattached volumes in a linked account that home
+  does not know about, read-only by construction (`LaunchAccountVolumeAPI` has no
+  `DeleteVolume`).
 - See `docs/cross-account-capacity-borrowing.md` for the full operator runbook.
 
 **Egress deny lists + runtime narrowing (2026-08-21):**

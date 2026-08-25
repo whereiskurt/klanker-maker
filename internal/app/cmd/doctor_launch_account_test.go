@@ -506,26 +506,43 @@ func TestDoctorLaunchAccountOrphanInstances_MatchedInstance_OK(t *testing.T) {
 	}
 }
 
-func TestDoctorLaunchAccountOrphanInstances_FiltersOnFixedTagKey(t *testing.T) {
-	ec2Stub := &recordingEC2Stub{}
-	launchAccountOrphanFixture(t, ec2Stub, nil)
+// TestDoctorLaunchAccountOrphanInstances_UsesFixedTagKey preserves the invariant this test
+// has always guarded — the sandbox-id tag key is the fixed literal "km:sandbox-id" and is
+// NEVER prefix-derived (e.g. "rg:sandbox-id"); km tags every sandbox resource under the "km:"
+// namespace regardless of resource_prefix.
+//
+// The MECHANISM changed, so the assertion had to. This previously asserted the presence of a
+// `tag:km:sandbox-id` filter on DescribeInstances — but that filter is exactly what made the
+// check blind to untagged orphans (Finding L1), so it was removed and classification moved
+// into code. Asserting a server-side filter that must no longer exist would have codified the
+// defect, so the invariant is now exercised end-to-end instead: an instance tagged under a
+// PREFIX-DERIVED key must not be mistaken for a km-managed sandbox.
+func TestDoctorLaunchAccountOrphanInstances_UsesFixedTagKey(t *testing.T) {
+	// "rg:sandbox-id" is the prefix-derived form that must never be honoured. Its value
+	// names a sandbox home DOES know about, so if the reader ever accepted that key the
+	// instance would be silently treated as legitimate and vanish from the report.
+	ec2Stub := &recordingEC2Stub{instances: []ec2types.Instance{
+		makeEC2Instance("i-wrongns", map[string]string{"rg:sandbox-id": "km-known1"}),
+	}}
+	r := launchAccountOrphanFixture(t, ec2Stub, []kmaws.SandboxRecord{{SandboxID: "km-known1"}})
+	if r.Status != CheckWarn {
+		t.Fatalf("an instance tagged under a prefix-derived key must NOT be accepted as a "+
+			"known sandbox; expected WARN, got %s: %s", r.Status, r.Message)
+	}
+	joined := strings.Join(r.Details, " ")
+	if !strings.Contains(joined, "i-wrongns") || !strings.Contains(joined, "<untagged>") {
+		t.Errorf("expected i-wrongns reported as <untagged> (its km: tag is absent), got %v", r.Details)
+	}
+
+	// And the server-side filter must not reintroduce a tag predicate of any kind.
 	if ec2Stub.lastInput == nil {
 		t.Fatal("expected DescribeInstances to have been called")
 	}
-	found := false
 	for _, f := range ec2Stub.lastInput.Filters {
-		if aws.ToString(f.Name) == "tag:km:sandbox-id" {
-			found = true
+		if strings.HasPrefix(aws.ToString(f.Name), "tag:") {
+			t.Errorf("DescribeInstances must not filter on any tag key (found %q) — every "+
+				"instance is enumerated and classified in code", aws.ToString(f.Name))
 		}
-		// The filter must never be prefix-derived (e.g. "tag:rg:sandbox-id") —
-		// km tags every sandbox resource under the fixed "km:" namespace
-		// regardless of resource_prefix.
-		if strings.HasPrefix(aws.ToString(f.Name), "tag:") && aws.ToString(f.Name) != "tag:km:sandbox-id" && aws.ToString(f.Name) != "instance-state-name" {
-			t.Errorf("unexpected tag filter %q — the sandbox-id tag filter must be the literal \"tag:km:sandbox-id\"", aws.ToString(f.Name))
-		}
-	}
-	if !found {
-		t.Error(`expected a filter on the exact literal "tag:km:sandbox-id"`)
 	}
 }
 
@@ -613,5 +630,216 @@ func TestDoctorLaunchAccountChecks_EndToEnd_NoLinksAllSkipped(t *testing.T) {
 			t.Errorf("expected %q to be SKIPPED on a link-free config, got %s: %s", w, r.Status, r.Message)
 		}
 		t.Logf("%s: %s — %s", r.Status, r.Name, r.Message)
+	}
+}
+
+// =============================================================================
+// Finding L1 — untagged instances must not be invisible
+// =============================================================================
+
+// TestDoctorLaunchAccountOrphanInstances_UntaggedInstance_Warn covers the blind spot that
+// made this check unable to catch the leak it exists for.
+//
+// The DescribeInstances call used to filter on `tag:km:sandbox-id = *`, and the classifier
+// then skipped anything whose sandbox id was empty. An instance carrying no km tags matched
+// neither, so it was invisible here — while ALSO being un-terminable by the launcher role,
+// whose LifecycleTaggedOnly statement requires aws:ResourceTag/km:managed-by. Un-reapable
+// and unseen: a GPU instance billing indefinitely, findable only with target-account admin
+// credentials.
+//
+// This cannot be prevented at the IAM layer: AWS populates no aws:RequestTag/* keys for the
+// instance/* resource of a RunInstances call, so a tag-gated condition there is
+// unsatisfiable and breaks every launch (see LaunchOnlyGpuBoxes in
+// infra/modules/gpu-launcher-account). Detection is the mitigation, so it has to work.
+func TestDoctorLaunchAccountOrphanInstances_UntaggedInstance_Warn(t *testing.T) {
+	ec2Stub := &recordingEC2Stub{instances: []ec2types.Instance{
+		makeEC2Instance("i-untagged1", map[string]string{}), // no km tags at all
+	}}
+	r := launchAccountOrphanFixture(t, ec2Stub, nil)
+	if r.Status != CheckWarn {
+		t.Fatalf("an untagged linked-account instance must WARN, got %s: %s", r.Status, r.Message)
+	}
+	joined := strings.Join(r.Details, " ")
+	if !strings.Contains(joined, "i-untagged1") {
+		t.Errorf("expected the untagged instance id in details, got %v", r.Details)
+	}
+	if !strings.Contains(joined, "<untagged>") {
+		t.Errorf("an untagged orphan should be labelled <untagged> so the operator knows "+
+			"`km destroy <sandbox-id>` cannot reap it; got %v", r.Details)
+	}
+}
+
+// TestDoctorLaunchAccountOrphanInstances_DoesNotFilterOnSandboxTag guards the mechanism
+// rather than the symptom: if a future edit reinstates the `tag:km:sandbox-id` filter, the
+// untagged case silently stops being reachable and the test above would keep passing only
+// by accident of the stub ignoring filters.
+func TestDoctorLaunchAccountOrphanInstances_DoesNotFilterOnSandboxTag(t *testing.T) {
+	ec2Stub := &recordingEC2Stub{}
+	_ = launchAccountOrphanFixture(t, ec2Stub, nil)
+	if ec2Stub.lastInput == nil {
+		t.Fatalf("expected DescribeInstances to be called")
+	}
+	for _, f := range ec2Stub.lastInput.Filters {
+		if aws.ToString(f.Name) == "tag:km:sandbox-id" {
+			t.Errorf("DescribeInstances must NOT filter on tag:km:sandbox-id — that filter " +
+				"is what hid untagged orphans; filter every instance and classify in code")
+		}
+	}
+}
+
+// TestDoctorLaunchAccountOrphanInstances_KnownSandboxStillIgnored pins the boundary the L1
+// fix must not overshoot: dropping the tag filter must not turn legitimate, home-known
+// sandboxes into orphans.
+func TestDoctorLaunchAccountOrphanInstances_KnownSandboxStillIgnored(t *testing.T) {
+	ec2Stub := &recordingEC2Stub{instances: []ec2types.Instance{
+		makeEC2Instance("i-known1", map[string]string{"km:sandbox-id": "km-known1"}),
+	}}
+	r := launchAccountOrphanFixture(t, ec2Stub, []kmaws.SandboxRecord{{SandboxID: "km-known1"}})
+	if r.Status != CheckOK {
+		t.Fatalf("an instance whose sandbox id IS known to home must not be an orphan, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// =============================================================================
+// Finding L5 — checkLaunchAccountOrphanVolumes
+// =============================================================================
+
+// recordingVolumeStub implements LaunchAccountVolumeAPI, records the last input, and counts
+// calls so dormancy can be asserted.
+type recordingVolumeStub struct {
+	calls     int
+	lastInput *ec2.DescribeVolumesInput
+	volumes   []ec2types.Volume
+	err       error
+}
+
+func (s *recordingVolumeStub) DescribeVolumes(_ context.Context, params *ec2.DescribeVolumesInput, _ ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error) {
+	s.calls++
+	s.lastInput = params
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &ec2.DescribeVolumesOutput{Volumes: s.volumes}, nil
+}
+
+var _ LaunchAccountVolumeAPI = (*recordingVolumeStub)(nil)
+
+func makeLinkedVolume(volumeID string, sizeGiB int32, tags map[string]string) ec2types.Volume {
+	vtags := make([]ec2types.Tag, 0, len(tags))
+	for k, v := range tags {
+		k, v := k, v
+		vtags = append(vtags, ec2types.Tag{Key: aws.String(k), Value: aws.String(v)})
+	}
+	return ec2types.Volume{VolumeId: aws.String(volumeID), Size: aws.Int32(sizeGiB), Tags: vtags}
+}
+
+func launchAccountVolumeFixture(t *testing.T, volStub *recordingVolumeStub, known []kmaws.SandboxRecord) CheckResult {
+	t.Helper()
+	link := wellFormedLaunchLink()
+	links := map[string]appcfg.LaunchAccountConfig{"gpu-east": link}
+	ssmStub := &countingSSMReadStub{outputs: map[string]*ssm.GetParameterOutput{
+		link.ExternalIDSSM: externalIDParam("ext-id-123"),
+	}}
+	assumeStub := &countingAssumeRoleStub{fn: func(context.Context, string, string, string) (aws.Config, error) {
+		return aws.Config{Credentials: trackedCredentialsProvider(new(int), nil)}, nil
+	}}
+	lister := &mockSandboxLister{records: known}
+	return checkLaunchAccountOrphanVolumes(context.Background(), links, ssmStub, assumeStub.call,
+		func(aws.Config) LaunchAccountVolumeAPI { return volStub }, lister)
+}
+
+// Dormant by default: no launch_accounts configured must cost ZERO AWS calls.
+func TestDoctorLaunchAccountOrphanVolumes_NoLinks_SkippedNoAWSCalls(t *testing.T) {
+	ssmStub := &countingSSMReadStub{}
+	assumeStub := &countingAssumeRoleStub{fn: func(context.Context, string, string, string) (aws.Config, error) {
+		return aws.Config{}, nil
+	}}
+	volStub := &recordingVolumeStub{}
+	r := checkLaunchAccountOrphanVolumes(context.Background(), nil, ssmStub, assumeStub.call,
+		func(aws.Config) LaunchAccountVolumeAPI { return volStub }, &mockSandboxLister{})
+	if r.Status != CheckSkipped {
+		t.Fatalf("expected CheckSkipped, got %s: %s", r.Status, r.Message)
+	}
+	if ssmStub.calls != 0 || assumeStub.calls != 0 || volStub.calls != 0 {
+		t.Errorf("expected zero AWS calls, got ssm=%d assume=%d ec2=%d", ssmStub.calls, assumeStub.calls, volStub.calls)
+	}
+}
+
+// The exact incident: a create is killed mid-apply, so the volume exists in AWS but never
+// reached terraform state. km destroy reports success and deletes nothing; the volume is
+// correctly tagged, so the home-account UNTAGGED-volume check cannot see it either.
+func TestDoctorLaunchAccountOrphanVolumes_DestroyedSandboxLeak_Warn(t *testing.T) {
+	volStub := &recordingVolumeStub{volumes: []ec2types.Volume{
+		makeLinkedVolume("vol-leak1", 300, map[string]string{"km:sandbox-id": "sb-gone", "km:managed-by": "klankermaker"}),
+	}}
+	r := launchAccountVolumeFixture(t, volStub, nil) // home no longer knows sb-gone
+	if r.Status != CheckWarn {
+		t.Fatalf("an unattached volume for a sandbox home does not know must WARN, got %s: %s", r.Status, r.Message)
+	}
+	if !strings.Contains(strings.Join(r.Details, " "), "vol-leak1") {
+		t.Errorf("expected the leaked volume id in details, got %v", r.Details)
+	}
+	if !strings.Contains(r.Message, "300GiB") {
+		t.Errorf("expected the wasted capacity surfaced in the message (it is the cost signal), got %q", r.Message)
+	}
+}
+
+func TestDoctorLaunchAccountOrphanVolumes_Untagged_Warn(t *testing.T) {
+	volStub := &recordingVolumeStub{volumes: []ec2types.Volume{
+		makeLinkedVolume("vol-untagged1", 100, map[string]string{}),
+	}}
+	r := launchAccountVolumeFixture(t, volStub, nil)
+	if r.Status != CheckWarn {
+		t.Fatalf("an untagged unattached volume must WARN, got %s: %s", r.Status, r.Message)
+	}
+	if !strings.Contains(strings.Join(r.Details, " "), "<untagged>") {
+		t.Errorf("expected <untagged> label in details, got %v", r.Details)
+	}
+}
+
+// Boundary: a volume belonging to a sandbox home still knows about may be mid-create or
+// mid-teardown and must NOT be reported, or the check becomes noise and gets ignored.
+func TestDoctorLaunchAccountOrphanVolumes_KnownSandbox_OK(t *testing.T) {
+	volStub := &recordingVolumeStub{volumes: []ec2types.Volume{
+		makeLinkedVolume("vol-live1", 300, map[string]string{"km:sandbox-id": "sb-live"}),
+	}}
+	r := launchAccountVolumeFixture(t, volStub, []kmaws.SandboxRecord{{SandboxID: "sb-live"}})
+	if r.Status != CheckOK {
+		t.Fatalf("a volume for a live, home-known sandbox must not be an orphan, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// Only UNATTACHED volumes are candidates — an attached one belongs to a running instance
+// and is the orphan-INSTANCE check's business.
+func TestDoctorLaunchAccountOrphanVolumes_FiltersToAvailableOnly(t *testing.T) {
+	volStub := &recordingVolumeStub{}
+	_ = launchAccountVolumeFixture(t, volStub, nil)
+	if volStub.lastInput == nil {
+		t.Fatalf("expected DescribeVolumes to be called")
+	}
+	var found bool
+	for _, f := range volStub.lastInput.Filters {
+		if aws.ToString(f.Name) == "status" {
+			found = true
+			if len(f.Values) != 1 || f.Values[0] != "available" {
+				t.Errorf("expected status filter [available], got %v", f.Values)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("DescribeVolumes must filter status=available; got filters %v", volStub.lastInput.Filters)
+	}
+}
+
+// The check is read-only by construction: LaunchAccountVolumeAPI exposes DescribeVolumes and
+// nothing else, so no future edit can reach DeleteVolume across an account boundary without
+// deliberately widening the interface.
+func TestDoctorLaunchAccountOrphanVolumes_InterfaceIsReadOnly(t *testing.T) {
+	var api LaunchAccountVolumeAPI = &recordingVolumeStub{}
+	if _, ok := api.(interface {
+		DeleteVolume(context.Context, *ec2.DeleteVolumeInput, ...func(*ec2.Options)) (*ec2.DeleteVolumeOutput, error)
+	}); ok {
+		t.Errorf("LaunchAccountVolumeAPI must not expose DeleteVolume — cross-account " +
+			"reaping is an operator action, not a health check's")
 	}
 }
