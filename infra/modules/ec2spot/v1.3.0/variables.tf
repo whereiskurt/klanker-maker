@@ -183,6 +183,12 @@ variable "spot_create_timeout" {
   default     = "3m"
 }
 
+variable "ondemand_create_timeout" {
+  type        = string
+  description = "On-demand launch timeout. Keep <=3m so a 4-AZ sweep fits the Lambda 900s budget. Without it the AWS provider retries InsufficientInstanceCapacity internally for its 10m default, km never sees the error, and the AZ sweep cannot rotate."
+  default     = "3m"
+}
+
 # ---------------------------------------------------------------------------
 # Cross-account capacity borrowing (Phase 126, REQ-126-LAUNCH)
 # ---------------------------------------------------------------------------
