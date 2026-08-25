@@ -152,3 +152,105 @@ func TestDecompress_Gzip(t *testing.T) {
 		t.Errorf("passthrough: got %q err %v", got, err)
 	}
 }
+
+// TestParseEnvelope_CanonicalV1_NumericEntityValue ensures that numeric entity
+// values are stringified, not silently dropped. Regression test for canonical
+// struct unmarshal all-or-nothing failure.
+func TestParseEnvelope_CanonicalV1_NumericEntityValue(t *testing.T) {
+	body := `{
+  "km_schema": "v1",
+  "source": "test",
+  "delivery_key": "key1",
+  "type": "issue",
+  "id": "id1",
+  "severity": "HIGH",
+  "status": "OPEN",
+  "title": "Test",
+  "entity": {"numeric_value": 42, "port": 8080, "name": "thing"},
+  "url": "https://example.com"
+}`
+	env, err := ParseEnvelope([]byte(body), config.WebhookSource{Name: "test"})
+	if err != nil {
+		t.Fatalf("ParseEnvelope: %v", err)
+	}
+	if env.Schema != "v1" {
+		t.Errorf("Schema: got %q, want v1", env.Schema)
+	}
+	if env.Type != "issue" {
+		t.Errorf("Type: got %q, want issue", env.Type)
+	}
+	if env.Severity != "HIGH" {
+		t.Errorf("Severity: got %q, want HIGH", env.Severity)
+	}
+	if env.Entity["numeric_value"] != "42" {
+		t.Errorf("Entity[numeric_value]: got %q, want 42", env.Entity["numeric_value"])
+	}
+	if env.Entity["port"] != "8080" {
+		t.Errorf("Entity[port]: got %q, want 8080", env.Entity["port"])
+	}
+	if env.Entity["name"] != "thing" {
+		t.Errorf("Entity[name]: got %q, want thing", env.Entity["name"])
+	}
+}
+
+// TestParseEnvelope_CanonicalV1_NumericID ensures that numeric id values are
+// stringified in the canonical path.
+func TestParseEnvelope_CanonicalV1_NumericID(t *testing.T) {
+	body := `{
+  "km_schema": "v1",
+  "delivery_key": "dk1",
+  "type": "issue",
+  "id": 12345,
+  "severity": "CRITICAL",
+  "status": "OPEN",
+  "title": "Test",
+  "entity": {},
+  "url": "https://example.com"
+}`
+	env, err := ParseEnvelope([]byte(body), config.WebhookSource{Name: "test"})
+	if err != nil {
+		t.Fatalf("ParseEnvelope: %v", err)
+	}
+	if env.Schema != "v1" {
+		t.Errorf("Schema: got %q, want v1", env.Schema)
+	}
+	if env.ID != "12345" {
+		t.Errorf("ID: got %q, want 12345", env.ID)
+	}
+	if env.Type != "issue" {
+		t.Errorf("Type: got %q, want issue", env.Type)
+	}
+}
+
+// TestParseEnvelope_CanonicalV1_NestedEntityValue ensures that nested object
+// entity values are skipped without failing the parse.
+func TestParseEnvelope_CanonicalV1_NestedEntityValue(t *testing.T) {
+	body := `{
+  "km_schema": "v1",
+  "delivery_key": "dk1",
+  "type": "issue",
+  "id": "id1",
+  "severity": "MEDIUM",
+  "status": "OPEN",
+  "title": "Test",
+  "entity": {"simple": "value", "nested": {"inner": "object"}, "valid": "ok"},
+  "url": "https://example.com"
+}`
+	env, err := ParseEnvelope([]byte(body), config.WebhookSource{Name: "test"})
+	if err != nil {
+		t.Fatalf("ParseEnvelope: %v", err)
+	}
+	if env.Schema != "v1" {
+		t.Errorf("Schema: got %q, want v1", env.Schema)
+	}
+	if env.Entity["simple"] != "value" {
+		t.Errorf("Entity[simple]: got %q, want value", env.Entity["simple"])
+	}
+	if env.Entity["valid"] != "ok" {
+		t.Errorf("Entity[valid]: got %q, want ok", env.Entity["valid"])
+	}
+	// nested should be skipped
+	if _, ok := env.Entity["nested"]; ok {
+		t.Errorf("Entity[nested] should be skipped, but exists with value %q", env.Entity["nested"])
+	}
+}

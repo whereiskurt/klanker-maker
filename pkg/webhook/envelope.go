@@ -45,18 +45,19 @@ type Envelope struct {
 	extra map[string]string
 }
 
-// canonical mirrors the km_schema v1 template shipped in docs/webhook-templates/.
-type canonical struct {
-	Schema      string            `json:"km_schema"`
-	Source      string            `json:"source"`
-	DeliveryKey string            `json:"delivery_key"`
-	Type        string            `json:"type"`
-	ID          string            `json:"id"`
-	Severity    string            `json:"severity"`
-	Status      string            `json:"status"`
-	Title       string            `json:"title"`
-	Entity      map[string]string `json:"entity"`
-	URL         string            `json:"url"`
+// stringifyScalar converts a JSON scalar to its string form, returning ok=false for
+// non-scalars (objects, arrays, null).
+func stringifyScalar(v any) (string, bool) {
+	switch val := v.(type) {
+	case string:
+		return val, true
+	case float64:
+		return fmt.Sprintf("%v", val), true
+	case bool:
+		return fmt.Sprintf("%v", val), true
+	default:
+		return "", false
+	}
 }
 
 // Decompress transparently gunzips a body when contentEncoding is "gzip".
@@ -100,23 +101,50 @@ func ParseEnvelope(body []byte, src config.WebhookSource) (*Envelope, error) {
 		extra:  map[string]string{},
 	}
 
-	var c canonical
-	if err := json.Unmarshal(body, &c); err == nil && c.Schema == "v1" {
-		env.Schema = c.Schema
-		env.DeliveryKey = c.DeliveryKey
-		env.Type = c.Type
-		env.ID = c.ID
-		env.Severity = c.Severity
-		env.Status = c.Status
-		env.Title = c.Title
-		env.URL = c.URL
-		if c.Entity != nil {
-			env.Entity = c.Entity
+	// Check for canonical km_schema v1 directly from generic map.
+	// This allows field-by-field degradation: numeric values stringify instead
+	// of failing the entire parse. Reuse stringifyScalar for consistency.
+	if schema, ok := generic["km_schema"]; ok {
+		if schemaStr, ok := stringifyScalar(schema); ok && schemaStr == "v1" {
+			env.Schema = "v1"
+			if dk, ok := stringifyScalar(generic["delivery_key"]); ok {
+				env.DeliveryKey = dk
+			}
+			if typ, ok := stringifyScalar(generic["type"]); ok {
+				env.Type = typ
+			}
+			if id, ok := stringifyScalar(generic["id"]); ok {
+				env.ID = id
+			}
+			if sev, ok := stringifyScalar(generic["severity"]); ok {
+				env.Severity = sev
+			}
+			if status, ok := stringifyScalar(generic["status"]); ok {
+				env.Status = status
+			}
+			if title, ok := stringifyScalar(generic["title"]); ok {
+				env.Title = title
+			}
+			if url, ok := stringifyScalar(generic["url"]); ok {
+				env.URL = url
+			}
+			if src, ok := stringifyScalar(generic["source"]); ok {
+				env.Source = src
+			}
+			// Entity: extract map and stringify scalar values, skip non-scalars.
+			if entityVal, ok := generic["entity"]; ok {
+				if entityMap, ok := entityVal.(map[string]any); ok {
+					for k, v := range entityMap {
+						if s, ok := stringifyScalar(v); ok {
+							env.Entity[k] = s
+						}
+					}
+				}
+			}
 		}
-		if c.Source != "" {
-			env.Source = c.Source
-		}
-	} else if len(src.FieldPaths) > 0 {
+	}
+
+	if env.Schema == "" && len(src.FieldPaths) > 0 {
 		for key, path := range src.FieldPaths {
 			val, ok := lookupPath(generic, path)
 			if !ok {
