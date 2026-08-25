@@ -392,6 +392,23 @@ type LaunchAccountAssumeRoleFunc func(ctx context.Context, roleARN, externalID, 
 // ec2.NewFromConfig; tests inject a stub factory.
 type LaunchAccountEC2ClientFunc func(cfg awssdk.Config) EC2InstanceAPI
 
+// LaunchAccountVolumeAPI covers EC2 DescribeVolumes for orphaned-volume
+// detection in a linked account. Deliberately NOT the existing EC2VolumeAPI in
+// doctor_ebs.go: that one also carries DeleteVolume/DescribeSnapshots/
+// DescribeImages because the home-account EBS check can delete. This check is
+// strictly read-only and runs against a CROSS-ACCOUNT assumed role, so it takes
+// the narrowest possible interface — a stub cannot accidentally be handed a
+// delete capability it should never have.
+type LaunchAccountVolumeAPI interface {
+	DescribeVolumes(ctx context.Context, params *ec2.DescribeVolumesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error)
+}
+
+// LaunchAccountEC2VolumeClientFunc builds the read-only LaunchAccountVolumeAPI
+// checkLaunchAccountOrphanVolumes uses to describe volumes in a linked account,
+// from that link's assumed-role aws.Config. Production wraps ec2.NewFromConfig;
+// tests inject a stub factory.
+type LaunchAccountEC2VolumeClientFunc func(cfg awssdk.Config) LaunchAccountVolumeAPI
+
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
 type DoctorDeps struct {
@@ -660,6 +677,10 @@ type DoctorDeps struct {
 	// returning a canned stub client. Nil causes checkLaunchAccountOrphanInstances
 	// to skip.
 	LaunchAccountEC2ClientFactory LaunchAccountEC2ClientFunc
+	// LaunchAccountEC2VolumeClientFactory builds the read-only EC2VolumeAPI used
+	// by checkLaunchAccountOrphanVolumes from a per-link assumed-role config.
+	// Nil causes checkLaunchAccountOrphanVolumes to skip.
+	LaunchAccountEC2VolumeClientFactory LaunchAccountEC2VolumeClientFunc
 	// LaunchAccountArtifactsPolicyClient reads (GetBucketPolicy only — this
 	// check never calls PutBucketPolicy/DeleteBucketPolicy) the home artifacts
 	// bucket's policy for checkLaunchAccountArtifactsGrant. Reuses
@@ -4767,6 +4788,14 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		}
 		return r
 	})
+	launchAccountVolFactory := deps.LaunchAccountEC2VolumeClientFactory
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkLaunchAccountOrphanVolumes(ctx, launchAccounts, launchAccountSSM, launchAccountAssumeRole, launchAccountVolFactory, launchAccountLister)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
 
 	return checks
 }
@@ -5175,6 +5204,9 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 		return kmaws.AssumeRoleConfig(innerCtx, launchAccountBaseCfg, roleARN, externalID, region)
 	}
 	deps.LaunchAccountEC2ClientFactory = func(cfg awssdk.Config) EC2InstanceAPI {
+		return ec2.NewFromConfig(cfg)
+	}
+	deps.LaunchAccountEC2VolumeClientFactory = func(cfg awssdk.Config) LaunchAccountVolumeAPI {
 		return ec2.NewFromConfig(cfg)
 	}
 	deps.LaunchAccountArtifactsPolicyClient = NewArtifactsPolicyS3Client(awsCfg)
@@ -5944,6 +5976,169 @@ func checkLaunchAccountArtifactsGrant(ctx context.Context, links map[string]appc
 // or a DescribeInstances error) is reported as "could not check", distinctly
 // from "no orphans found" (Test 8) — the entire point of this check is
 // defeated if an unreachable link silently reads as clean.
+// checkLaunchAccountOrphanVolumes warns on unattached EBS volumes left behind in a
+// linked account.
+//
+// Why this check exists, and why the home-account EBS check does not cover it:
+// checkOrphanedEBSVolumes (doctor_ebs.go) is scoped to volumes km can see in the HOME
+// account, and its companion untagged-volume check looks specifically for UNTAGGED
+// volumes. A linked-account volume that is correctly tagged is invisible to both — so
+// `km doctor` reported healthy while 900GB of orphaned gp3 sat in the target account.
+//
+// How the leak happens: a create is killed mid-apply (the create-handler Lambda has a
+// 900s ceiling, and a capacity-dry AZ can consume all of it), so terraform never
+// persists the state write. The aws_ebs_volume was already created; the state that
+// would record it was not. `km destroy` operates on state, so it destroys nothing and
+// still exits 0 — success is reported, the volume keeps billing. Observed four times
+// in one session; ~$72/month had it gone unnoticed.
+//
+// Read-only by construction: this takes LaunchAccountVolumeAPI, which has no
+// DeleteVolume. Reaping is left to the operator with target-account credentials —
+// deleting cross-account storage on a health check's say-so is not a call km should
+// make automatically.
+func checkLaunchAccountOrphanVolumes(ctx context.Context, links map[string]appcfg.LaunchAccountConfig, ssmClient SSMReadAPI, assumeRole LaunchAccountAssumeRoleFunc, volFactory LaunchAccountEC2VolumeClientFunc, lister SandboxLister) CheckResult {
+	name := "Launch Account Orphan Volumes"
+	if len(links) == 0 {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "no launch_accounts configured"}
+	}
+	if ssmClient == nil || assumeRole == nil || volFactory == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "AWS credentials unavailable — cannot check linked-account volumes"}
+	}
+	if lister == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "sandbox lister not available (state bucket not configured)"}
+	}
+
+	records, err := lister.ListSandboxes(ctx, false)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list home sandbox inventory: %v", err)}
+	}
+	known := make(map[string]bool, len(records))
+	for _, r := range records {
+		known[r.SandboxID] = true
+	}
+
+	type orphanVolume struct {
+		link, volumeID, sandboxID string
+		sizeGiB                   int32
+	}
+	var orphans []orphanVolume
+	var unreachable []string
+
+	for _, n := range sortedLaunchAccountLinkNames(links) {
+		link := links[n]
+		assumedCfg, paramErr, assumeErr := resolveLaunchAccountAssumedConfig(ctx, link, ssmClient, assumeRole)
+		if paramErr != nil {
+			unreachable = append(unreachable, fmt.Sprintf("%s: %v", n, paramErr))
+			continue
+		}
+		if assumeErr != nil {
+			unreachable = append(unreachable, fmt.Sprintf("%s: %v", n, assumeErr))
+			continue
+		}
+		volClient := volFactory(assumedCfg)
+		if volClient == nil {
+			unreachable = append(unreachable, fmt.Sprintf("%s: no EC2 client available", n))
+			continue
+		}
+
+		// status=available means UNATTACHED. An attached volume belongs to a running
+		// instance and is that instance's problem (the orphan-instance check covers it),
+		// so only unattached volumes are candidates here.
+		var volumes []ec2types.Volume
+		var nextToken *string
+		var describeErr error
+		for {
+			out, dErr := volClient.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
+				Filters: []ec2types.Filter{
+					{Name: awssdk.String("status"), Values: []string{"available"}},
+				},
+				NextToken: nextToken,
+			})
+			if dErr != nil {
+				describeErr = dErr
+				break
+			}
+			volumes = append(volumes, out.Volumes...)
+			if out.NextToken == nil {
+				break
+			}
+			nextToken = out.NextToken
+		}
+		if describeErr != nil {
+			unreachable = append(unreachable, fmt.Sprintf("%s: could not describe volumes: %v", n, describeErr))
+			continue
+		}
+
+		for _, v := range volumes {
+			var sandboxID string
+			for _, tag := range v.Tags {
+				if awssdk.ToString(tag.Key) == "km:sandbox-id" {
+					sandboxID = awssdk.ToString(tag.Value)
+					break
+				}
+			}
+			// Unattached AND belonging to a sandbox home still knows about is not yet an
+			// orphan — it may be mid-create or mid-teardown. Everything else is: a
+			// sandbox id home has never heard of (the destroyed-sandbox leak), or no km
+			// tag at all.
+			if sandboxID != "" && known[sandboxID] {
+				continue
+			}
+			reported := sandboxID
+			if reported == "" {
+				reported = "<untagged>"
+			}
+			orphans = append(orphans, orphanVolume{
+				link:      n,
+				volumeID:  awssdk.ToString(v.VolumeId),
+				sandboxID: reported,
+				sizeGiB:   awssdk.ToInt32(v.Size),
+			})
+		}
+	}
+
+	var details []string
+	var totalGiB int32
+	for _, o := range orphans {
+		totalGiB += o.sizeGiB
+		details = append(details, fmt.Sprintf("%s: volume %s sandbox %s size=%dGiB", o.link, o.volumeID, o.sandboxID, o.sizeGiB))
+	}
+
+	remediation := "Verify each volume is genuinely unused, then delete it with target-account credentials: `aws ec2 delete-volume --volume-id <id> --region <region> --profile <target-admin>`. km cannot reap these — they are absent from terraform state, which is why `km destroy` reported success."
+
+	switch {
+	case len(orphans) > 0 && len(unreachable) > 0:
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%d unattached volume(s) (%dGiB) with no matching home sandbox record; %d link(s) could not be checked: %s", len(orphans), totalGiB, len(unreachable), strings.Join(unreachable, "; ")),
+			Remediation: remediation,
+			Details:     details,
+		}
+	case len(orphans) > 0:
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%d unattached volume(s) (%dGiB) in linked account(s) with no matching home sandbox record — these bill until deleted", len(orphans), totalGiB),
+			Remediation: remediation,
+			Details:     details,
+		}
+	case len(unreachable) > 0:
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("could not check %d link(s) for orphaned volumes: %s", len(unreachable), strings.Join(unreachable, "; ")),
+			Remediation: "Run `km doctor` again once each link's launcher role is assumable (see the Launch Account Assumable check)",
+		}
+	default:
+		return CheckResult{
+			Name:    name,
+			Status:  CheckOK,
+			Message: fmt.Sprintf("no orphaned volumes found across %d linked account(s)", len(links)),
+		}
+	}
+}
+
 func checkLaunchAccountOrphanInstances(ctx context.Context, links map[string]appcfg.LaunchAccountConfig, ssmClient SSMReadAPI, assumeRole LaunchAccountAssumeRoleFunc, ec2Factory LaunchAccountEC2ClientFunc, lister SandboxLister) CheckResult {
 	name := "Launch Account Orphan Instances"
 	if len(links) == 0 {
@@ -5992,9 +6187,26 @@ func checkLaunchAccountOrphanInstances(ctx context.Context, links map[string]app
 		var nextToken *string
 		var describeErr error
 		for {
+			// DELIBERATELY NOT filtered on `tag:km:sandbox-id`. That filter used to be
+			// here and it is exactly what made this check blind to the leak it exists to
+			// catch: an instance carrying no km tags does not match it, so an UNTAGGED
+			// box in the linked account was invisible here — while also being
+			// un-terminable by the launcher role, whose LifecycleTaggedOnly statement
+			// gates terminate/stop on aws:ResourceTag/km:managed-by. Un-reapable and
+			// unseen is the worst pair: a GPU instance billing indefinitely, findable
+			// only with target-account admin credentials.
+			//
+			// It cannot be prevented at the IAM layer either: AWS populates NO
+			// aws:RequestTag/* keys for the instance/* resource of a RunInstances call
+			// (see the comment on LaunchOnlyGpuBoxes in
+			// infra/modules/gpu-launcher-account), so a tag-gated RunInstances condition
+			// is unsatisfiable and breaks every launch. Detection here is the mitigation.
+			//
+			// A linked account is dedicated to km capacity borrowing, so enumerating
+			// every instance is correct: anything home does not know about is an orphan,
+			// tagged or not.
 			out, dErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 				Filters: []ec2types.Filter{
-					{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{"*"}},
 					{Name: awssdk.String("instance-state-name"), Values: []string{
 						"running", "stopped", "stopping", "pending",
 					}},
@@ -6026,13 +6238,20 @@ func checkLaunchAccountOrphanInstances(ctx context.Context, links map[string]app
 					break
 				}
 			}
-			if sandboxID == "" || known[sandboxID] {
+			// An instance whose sandbox id IS known to home is legitimate. Everything
+			// else is an orphan — including (especially) an untagged one, which the old
+			// `sandboxID == ""` skip silently ignored.
+			if sandboxID != "" && known[sandboxID] {
 				continue
+			}
+			reported := sandboxID
+			if reported == "" {
+				reported = "<untagged>"
 			}
 			orphans = append(orphans, orphanInstance{
 				link:       n,
 				instanceID: awssdk.ToString(inst.InstanceId),
-				sandboxID:  sandboxID,
+				sandboxID:  reported,
 				state:      string(inst.State.Name),
 			})
 		}
@@ -6049,7 +6268,7 @@ func checkLaunchAccountOrphanInstances(ctx context.Context, links map[string]app
 			Name:        name,
 			Status:      CheckWarn,
 			Message:     fmt.Sprintf("%d orphaned instance(s) found; %d link(s) could not be checked: %s", len(orphans), len(unreachable), strings.Join(unreachable, "; ")),
-			Remediation: "Run `km destroy <sandbox-id> --remote --yes` for each orphan named above",
+			Remediation: "Run `km destroy <sandbox-id> --remote --yes` for each orphan named above. An orphan shown as <untagged> has no sandbox id and CANNOT be reaped that way (nor by the launcher role, whose lifecycle grants require the km:managed-by tag) — terminate it directly with target-account credentials.",
 			Details:     details,
 		}
 	case len(orphans) > 0:
@@ -6057,7 +6276,7 @@ func checkLaunchAccountOrphanInstances(ctx context.Context, links map[string]app
 			Name:        name,
 			Status:      CheckWarn,
 			Message:     fmt.Sprintf("%d orphaned instance(s) in linked account(s) with no matching home sandbox record", len(orphans)),
-			Remediation: "Run `km destroy <sandbox-id> --remote --yes` for each orphan named above",
+			Remediation: "Run `km destroy <sandbox-id> --remote --yes` for each orphan named above. An orphan shown as <untagged> has no sandbox id and CANNOT be reaped that way (nor by the launcher role, whose lifecycle grants require the km:managed-by tag) — terminate it directly with target-account credentials.",
 			Details:     details,
 		}
 	case len(unreachable) > 0:
