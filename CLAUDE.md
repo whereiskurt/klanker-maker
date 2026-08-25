@@ -135,11 +135,15 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   in every us-east-1 AZ (Finding L4), incl. the FP8 single-GPU fallback; ca-central-1 has no L40S
   at all and its L4s are dry; us-west-2/us-east-2 are quota-walled at 0 (requests pending).
 - **Two Phase 124 defects found here, not Phase 126 bugs — they bite home launches too:**
-  **L3 (root cause)** `rankScore` (`pkg/capacity/rankaz.go:129`) checks `LastSuccessAt` before the
-  fresh-ICE branch and returns unconditionally; success rows carry no TTL, so an AZ that ever
-  succeeded out-ranks every other AZ forever however often it later ICEs — and `km capacity`'s
-  verdict disagrees with the ranker, showing the AZ as `recently-dry` while the launch path still
-  picks it. **L2** terraform retries ICE internally, so km never sees the error, the sweep cannot
+  **L3 (root cause) — FIXED 2026-08-25** `rankScore` (`pkg/capacity/rankaz.go`) checked
+  `LastSuccessAt` before the fresh-ICE branch and returned unconditionally; success rows carry no
+  TTL, so an AZ that ever succeeded out-ranked every other AZ forever however often it later ICEd
+  — and `km capacity` disagreed with the ranker, showing the AZ as `recently-dry` while the launch
+  path still picked it. **Freshness is now evaluated before stickiness** (an EXPIRED ICE still
+  lets stickiness apply), `ComputeCapacityVerdict` carries a cross-reference so the two cannot
+  drift, and two regression tests pin it. NOTE: the pre-fix `TestRankAZs_ICEStickySuccess` gave
+  only success-ONLY and ICE-ONLY AZs, never one holding both — which is how a green suite hid
+  this. Any new ranking rule needs the both-attributes case. **L2** terraform retries ICE internally, so km never sees the error, the sweep cannot
   rotate, and the Lambda dies at 900s leaving the stale lock the next run reports.
   **L5** a create killed mid-apply leaks its 300GB volume: `km destroy` reports success (the
   volume never reached state) and `km doctor` stays green (its EBS check is scoped to *untagged*

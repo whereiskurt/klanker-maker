@@ -126,16 +126,33 @@ func GetGPUVCPUQuota(ctx context.Context, client ServiceQuotasAPI) (float64, err
 //	-1 — has a fresh ICE (within freshICEWindow = 45 min; deprioritize)
 //
 // Store errors are treated as score=0 (unknown).
+//
+// FRESHNESS IS EVALUATED BEFORE STICKINESS, and the order is load-bearing. An AZ can hold
+// BOTH attributes at once: success rows are written with no TTL and persist forever, so an
+// AZ that worked once and has since gone capacity-dry carries a last-success and a fresh ICE
+// together. Checking last-success first returned 2 (the maximum) for precisely that AZ, which
+// pinned every subsequent launch to it however many times it ICEd — leaving the sticky-AZ
+// feedback loop inert in the one situation it exists for, and burning a full create-handler
+// timeout per attempt because terraform retries ICE internally rather than returning it.
+//
+// A fresh ICE is newer and more specific evidence than an old success, so it wins. This also
+// keeps rankScore consistent with ComputeCapacityVerdict (internal/app/cmd/capacity.go), which
+// already checks fresh ICE first — when the two disagreed, `km capacity` reported an AZ as
+// "recently-dry" while the launch path still selected it first, so the operator-visible
+// diagnostic pointed away from the cause.
+//
+// An EXPIRED ICE must NOT demote: outside freshICEWindow the signal is stale and stickiness
+// legitimately applies again.
 func rankScore(ctx context.Context, store CapacityStore, instanceType, az string) int {
 	entry, err := store.Get(ctx, instanceType, az)
 	if err != nil || entry == nil {
 		return 0
 	}
-	if entry.LastSuccessAt != nil {
-		return 2
-	}
 	if entry.LastICEAt != nil && time.Since(*entry.LastICEAt) < freshICEWindow {
 		return -1
+	}
+	if entry.LastSuccessAt != nil {
+		return 2
 	}
 	return 0
 }
