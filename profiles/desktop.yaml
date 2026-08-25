@@ -33,6 +33,7 @@ spec:
       mode: full
       browsers:
         - firefox
+        - chrome
       geometry: 1920x1080
 
   execution:
