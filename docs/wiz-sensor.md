@@ -180,7 +180,26 @@ still works, it just isn't automatic. How often this actually bites depends
 on the connector's sync cadence for this account, which is one of the open
 items below.
 
-## 7. Troubleshooting
+## 7. Relationship to the other Wiz integrations
+
+As of v0.8.3 there are three Wiz integrations in km. They are independent,
+composable, and easy to confuse — they point in three different directions.
+
+| Direction | Mechanism | What it does |
+|---|---|---|
+| km **pulls** from Wiz | `checks.triggers` (Phase 116), `profiles/checks/wiz-intel/` | A scheduled Lambda polls the Wiz API; a predicate on the result dispatches a sandbox agent. |
+| Wiz **pushes** to km | `webhooks:` (Phase 127), `docs/webhook-ingress.md` | A Wiz Automation Rule POSTs an Issue or Threat payload to `km-webhook-bridge`, which dispatches a sandbox agent to triage it. |
+| A sandbox **reports to** Wiz | this document | The Wiz Runtime Sensor runs on the sandbox and reports process, file, and network activity to your Wiz tenant. |
+
+The first two decide **when to spin up an agent** in response to something Wiz
+already knows. This one is the reverse: it makes what the agent *does* visible to
+Wiz in the first place. Running all three closes the loop — Wiz observes the
+sandbox, and the sandbox reacts to what Wiz observes elsewhere.
+
+They share no code and no configuration. Enabling one neither requires nor
+affects the others.
+
+## 8. Troubleshooting
 
 **The sensor never installs at all.** A likely cause is a missing `.wiz.io`
 DNS allowlist entry (see §2) — `profiles/base/security/wiz.yaml` ships one,
@@ -232,7 +251,7 @@ finished booting" may be the same underlying failure. Check `km list` /
 `km status <id>` for a stuck/failed create before assuming the sensor alone
 is at fault.
 
-## 8. Open items
+## 9. Open items
 
 Two questions from the design spec (§10) are still unanswered and are not
 blocking this fragment's existence, but do matter before wider rollout:
