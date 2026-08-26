@@ -106,7 +106,10 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 	// Compile security configuration
 	sgRules := compileSGRules(p)
 	iamPolicy := compileIAMPolicy(p)
-	secretPaths := compileSecrets(p)
+	secretPaths, err := compileSecrets(p)
+	if err != nil {
+		return nil, fmt.Errorf("compile secrets: %w", err)
+	}
 
 	// Generate user-data.sh first — it gets embedded into service.hcl.
 	// ArtifactsBucket from NetworkConfig; falls back to env for backward compat.
@@ -182,7 +185,7 @@ exec /tmp/km-userdata.sh
 	userDataB64 := base64.StdEncoding.EncodeToString([]byte(userData))
 
 	// Generate service.hcl (includes user-data inline in ec2spots[].user_data_base64)
-	svcHCL, err := generateEC2ServiceHCL(p, sandboxID, useSpot, sgRules, iamPolicy, userDataB64, network, amiBDMDeviceNames)
+	svcHCL, err := generateEC2ServiceHCL(p, sandboxID, useSpot, sgRules, iamPolicy, userDataB64, network, amiBDMDeviceNames, secretPaths)
 	if err != nil {
 		return nil, fmt.Errorf("generate EC2 service.hcl: %w", err)
 	}
@@ -227,7 +230,10 @@ func compileECS(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 	// Compile security configuration (same rules apply to ECS, different enforcement path)
 	sgRules := compileSGRules(p)
 	iamPolicy := compileIAMPolicy(p)
-	secretPaths := compileSecrets(p)
+	secretPaths, err := compileSecrets(p)
+	if err != nil {
+		return nil, fmt.Errorf("compile secrets: %w", err)
+	}
 
 	// Generate service.hcl (ECS-specific template; no user-data.sh for ECS)
 	svcHCL, err := generateECSServiceHCL(p, sandboxID, useSpot, sgRules, network)

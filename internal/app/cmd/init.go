@@ -108,6 +108,20 @@ var PublishOperatorIdentityHook func(ctx context.Context) error
 // test/default zero value) skips the check entirely.
 var InitNATDisableGuardHook func(ctx context.Context) error
 
+// PublishWebhookBridgeURLHook, when non-nil, is invoked by RunInitWithRunner and
+// RunInitScopedWithRunner IMMEDIATELY AFTER the lambda-webhook-bridge module
+// applies successfully, with the module's function_url output. runInit /
+// runInitScoped bind it (closed over cfg + awsCfg) to write the URL to SSM
+// {prefix}config/webhooks/bridge-url — mirroring {prefix}config/github/bridge-url
+// (checkGitHubBridgeURL). Unlike GitHub/Slack/H1, the generic webhook bridge has
+// no `km webhooks init` CLI verb by design (config-only feature), so `km init`
+// itself is the ONLY path that can ever record this value; without this hook an
+// operator would have no way to learn the URL to paste into a source's
+// integration (e.g. Wiz), and a later `km doctor` check
+// (`{prefix}config/webhooks/bridge-url`) would WARN forever. Nil (the test/
+// default zero value) skips the publish entirely.
+var PublishWebhookBridgeURLHook func(ctx context.Context, functionURL string) error
+
 // RunInitPlanFunc is the package-level entry point for km init --plan, exported as a
 // var so cmd_test can override it with a mock to verify routing without needing real
 // AWS credentials / a real terragrunt binary. The default implementation is runInitPlan.
@@ -131,6 +145,9 @@ var BuildLambdaZipsFunc = buildLambdaZips
 // and the email handler — all have bounded, non-destructive apply semantics.
 var scopedCheapAllowlist = []string{
 	"lambda-github-bridge", "lambda-slack-bridge", "lambda-h1-bridge", "email-handler",
+	// Phase 127: generic webhook ingress bridge — same bounded, non-destructive
+	// apply semantics as the other bridge Lambdas.
+	"lambda-webhook-bridge",
 }
 
 // scopedGatedAllowlist is the Tier-2 set of modules that km init --only may target
@@ -152,16 +169,17 @@ func isScopedGated(name string) bool {
 // name and validates it against the combined scoped allowlist.
 //
 // Rules:
-//   - At most one of {onlyVal != "", github, slack, h1, email} may be set; >1 → error.
+//   - At most one of {onlyVal != "", github, slack, h1, email, webhooks} may be
+//     set; >1 → error.
 //   - None set → ("", nil): no scoped request; caller falls through to normal init.
 //   - Sugar alias bools map to: github→lambda-github-bridge, slack→lambda-slack-bridge,
-//     h1→lambda-h1-bridge, email→email-handler.
+//     h1→lambda-h1-bridge, email→email-handler, webhooks→lambda-webhook-bridge.
 //   - onlyVal is used verbatim as the candidate module name.
 //   - Candidate must be in scopedCheapAllowlist ∪ scopedGatedAllowlist; otherwise error
 //     listing the allowed set.
 //
 // Exported so cmd_test (external test package) can call it directly in unit tests.
-func ResolveScopedModule(onlyVal string, github, slack, h1, email bool) (string, error) {
+func ResolveScopedModule(onlyVal string, github, slack, h1, email, webhooks bool) (string, error) {
 	// Count how many entry points are set.
 	setCount := 0
 	if onlyVal != "" {
@@ -179,8 +197,11 @@ func ResolveScopedModule(onlyVal string, github, slack, h1, email bool) (string,
 	if email {
 		setCount++
 	}
+	if webhooks {
+		setCount++
+	}
 	if setCount > 1 {
-		return "", fmt.Errorf("at most one of --only/--github/--slack/--h1/--email may be set")
+		return "", fmt.Errorf("at most one of --only/--github/--slack/--h1/--email/--webhooks may be set")
 	}
 	if setCount == 0 {
 		return "", nil
@@ -197,6 +218,8 @@ func ResolveScopedModule(onlyVal string, github, slack, h1, email bool) (string,
 		candidate = "lambda-h1-bridge"
 	case email:
 		candidate = "email-handler"
+	case webhooks:
+		candidate = "lambda-webhook-bridge"
 	}
 
 	// Validate candidate against the combined allowlist.
@@ -352,6 +375,23 @@ func RunInitScopedWithRunner(runner InitRunner, repoRoot, region, module string,
 		}
 	}
 
+	// lambda-webhook-bridge post-apply: publish the Function URL to SSM
+	// {prefix}config/webhooks/bridge-url (see RunInitWithRunner's identical
+	// block for why `km init` — scoped or full — is the only writer of this
+	// value; the feature has no dedicated CLI verb by design).
+	if module == "lambda-webhook-bridge" && PublishWebhookBridgeURLHook != nil {
+		outputMap, outErr := runner.Output(ctx, target.dir)
+		if outErr == nil {
+			if urlVal, ok := outputMap["function_url"]; ok {
+				functionURL := fmt.Sprintf("%v", extractValue(urlVal))
+				fmt.Printf("  Webhook bridge URL: %s\n", functionURL)
+				if pubErr := PublishWebhookBridgeURLHook(ctx, functionURL); pubErr != nil {
+					fmt.Printf("  Warning: could not publish webhook bridge URL to SSM: %v\n", pubErr)
+				}
+			}
+		}
+	}
+
 	fmt.Println()
 	fmt.Printf("Scoped init complete for %s.\n", module)
 	fmt.Printf("Note: this refreshed env+IAM only. For a stale code zip: make build-lambdas && km init --lambdas\n")
@@ -403,11 +443,30 @@ func runInitScoped(cfg *config.Config, awsProfile, region string, verbose bool, 
 		}
 	}
 
+	// Phase 127: bind the webhook bridge URL publisher for the scoped `--webhooks`
+	// fast path too — closed over cfg + awsCfg so RunInitScopedWithRunner can
+	// invoke it after a scoped lambda-webhook-bridge apply. Cleared on return.
+	PublishWebhookBridgeURLHook = func(hookCtx context.Context, functionURL string) error {
+		return publishWebhookBridgeURLToSSM(hookCtx, ssm.NewFromConfig(awsCfg), cfg, functionURL)
+	}
+	defer func() { PublishWebhookBridgeURLHook = nil }()
+
 	repoRoot := findRepoRoot()
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
 
 	return RunInitScopedWithRunner(runner, repoRoot, region, module, dryRun, acceptDestroys)
+}
+
+// publishWebhookBridgeURLToSSM writes the km-webhook-bridge Function URL to SSM
+// {prefix}config/webhooks/bridge-url, mirroring {prefix}config/github/bridge-url
+// (checkGitHubBridgeURL in doctor.go). Overwrite is unconditional (true): a
+// Lambda replacement mints a new Function URL, and unlike the GitHub/Slack/H1
+// bridges — where a human re-runs `km github init --bridge-url` /
+// `km slack init` after redeploy — nothing else will ever refresh this value.
+func publishWebhookBridgeURLToSSM(ctx context.Context, ssmClient SSMWriteAPI, cfg *config.Config, functionURL string) error {
+	paramName := cfg.GetSsmPrefix() + "config/webhooks/bridge-url"
+	return putSSMParam(ctx, ssmClient, paramName, functionURL, ssmtypes.ParameterTypeString, "", true)
 }
 
 // defaultSESPreflight is the real implementation: loads AWS config and checks
@@ -503,7 +562,7 @@ func defaultModuleTimeout(name string) time.Duration {
 		// unknown_sender (incident 2026-06-14). Give them network-grade headroom.
 		// NOTE: when adding a GSI to any other populated dynamodb-* module, add it here.
 		return 10 * time.Minute
-	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge", "lambda-github-bridge", "lambda-h1-bridge":
+	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge", "lambda-github-bridge", "lambda-h1-bridge", "lambda-webhook-bridge":
 		return 5 * time.Minute
 	default:
 		return 3 * time.Minute
@@ -687,6 +746,19 @@ func regionalModules(regionDir string) []regionalModule {
 			// dispatch. Ordered AFTER lambda-github-bridge + all shared deps, BEFORE ses.
 			name:    "lambda-h1-bridge",
 			dir:     filepath.Join(regionDir, "lambda-h1-bridge"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
+			// Phase 127: generic webhook ingress bridge Lambda with Function URL
+			// (auth=NONE; per-source bearer/HMAC auth + nonce replay provide
+			// application-layer auth). Depends on dynamodb-sandboxes (alias-index
+			// GSI) and dynamodb-slack-nonces (shared nonce table, "webhook-delivery:"
+			// key namespace) — no dedicated threads table (a webhook source is
+			// one-way; see pkg/webhook/bridge/interfaces.go). artifacts bucket
+			// needed for cold-create EventBridge dispatch. Ordered AFTER
+			// lambda-h1-bridge + all shared deps, BEFORE ses.
+			name:    "lambda-webhook-bridge",
+			dir:     filepath.Join(regionDir, "lambda-webhook-bridge"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
@@ -886,6 +958,157 @@ func PreStageH1Profiles(ctx context.Context, targets []H1ProgramConfig, artifact
 	return nil
 }
 
+// PreStageWebhookProfiles uploads one profile YAML per unique profile slug to S3
+// so the create-handler can fetch it during a cold-create triggered by the
+// generic webhook bridge (Phase 127). Webhook analog of PreStageGitHubProfiles /
+// PreStageH1Profiles.
+//
+// The profile universe is every rule.Profile across every source's rules,
+// deduped by slug. A rule whose OnAbsent is "skip" never cold-creates (the
+// bridge only warm-enqueues or no-ops for it), so staging a profile for it
+// would be pure S3 churn with nothing ever reading the key — those rules are
+// excluded. A rule with an empty Profile has nothing to stage either (it either
+// always resolves to a live alias, or "skip" applies) and is silently skipped.
+//
+// For each unique, staged slug:
+//   - uploads {artifactBucket}/webhook-profiles/{slug}/.km-profile.yaml
+//
+// Profile YAML is read from disk at profiles/{slug}.yaml relative to the
+// process working directory (km always runs from the repo root). Missing files
+// are uploaded as empty bytes rather than returning an error — the operator is
+// warned so they can stage the file manually (readFileOrEmpty).
+//
+// Called from runInit after the env-export block, gated on cfg.Webhooks.Sources
+// being non-empty so it is dormant for installs without a webhooks: block.
+func PreStageWebhookProfiles(ctx context.Context, sources []config.WebhookSource, artifactBucket string, uploader S3ProfileUploader) error {
+	if len(sources) == 0 {
+		return nil
+	}
+
+	uploaded := make(map[string]bool)
+	for _, src := range sources {
+		for _, rule := range src.Rules {
+			if strings.EqualFold(rule.OnAbsent, "skip") {
+				continue // never cold-creates; nothing would ever read the staged profile
+			}
+			if rule.Profile == "" {
+				continue // nothing to stage — resolves to an existing alias, or on_absent handles it
+			}
+			slug := githubProfileSlug(rule.Profile)
+			if uploaded[slug] {
+				continue // dedup by slug
+			}
+			uploaded[slug] = true
+
+			profileKey := "webhook-profiles/" + slug + "/.km-profile.yaml"
+			profileData := readFileOrEmpty("profiles/" + slug + ".yaml")
+			if err := uploader.PutObject(ctx, artifactBucket, profileKey, profileData); err != nil {
+				return fmt.Errorf("km init: pre-stage webhook profile %s: %w", slug, err)
+			}
+		}
+	}
+	return nil
+}
+
+// ErrWebhookSecretNotFound is the sentinel a SSMSecretClient.GetParameterValue
+// implementation MUST return (wrapped, so errors.Is still matches) when — and
+// only when — the parameter genuinely does not exist. Every other read failure
+// (throttling, permissions, network) must be returned as-is so
+// mintWebhookSecretIfAbsent can tell "safe to mint" apart from "read broke" —
+// see the mintWebhookSecretIfAbsent doc comment for why that distinction is
+// load-bearing.
+var ErrWebhookSecretNotFound = errors.New("webhook: ssm parameter not found")
+
+// SSMSecretClient is the narrow SSM interface used by mintWebhookSecretIfAbsent
+// to check for and write a SecureString parameter without pulling the raw AWS
+// SDK request/response shapes into test files.
+type SSMSecretClient interface {
+	// GetParameterValue returns the decrypted parameter value. On failure it
+	// returns ErrWebhookSecretNotFound (wrapped) when the parameter does not
+	// exist, or the underlying error unchanged for any other failure.
+	GetParameterValue(ctx context.Context, name string) (string, error)
+	// PutSecureString writes a SecureString parameter. Callers only invoke this
+	// when the parameter is confirmed absent, so this is always a fresh create,
+	// never an overwrite.
+	PutSecureString(ctx context.Context, name, value string) error
+}
+
+// ssmSecretClientAdapter wraps *ssm.Client to satisfy SSMSecretClient using the
+// real AWS SDK.
+type ssmSecretClientAdapter struct {
+	inner *ssm.Client
+}
+
+func (a *ssmSecretClientAdapter) GetParameterValue(ctx context.Context, name string) (string, error) {
+	out, err := a.inner.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String(name),
+		WithDecryption: aws.Bool(true),
+	})
+	if err != nil {
+		// ParameterNotFound is expected on first init — not an error (mirrors the
+		// comment at the KM_GITHUB_COMMANDS SSM read above). Translate the typed
+		// SDK error into our sentinel so callers can distinguish it from a genuine
+		// read failure (throttling, auth, network) without depending on the raw
+		// ssmtypes shape.
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return "", fmt.Errorf("%w: %s", ErrWebhookSecretNotFound, name)
+		}
+		return "", err
+	}
+	if out.Parameter == nil || out.Parameter.Value == nil {
+		return "", fmt.Errorf("ssm parameter %s: empty value", name)
+	}
+	return *out.Parameter.Value, nil
+}
+
+func (a *ssmSecretClientAdapter) PutSecureString(ctx context.Context, name, value string) error {
+	_, err := a.inner.PutParameter(ctx, &ssm.PutParameterInput{
+		Name:      aws.String(name),
+		Value:     aws.String(value),
+		Type:      ssmtypes.ParameterTypeSecureString,
+		Overwrite: aws.Bool(false), // never overwrite — mintWebhookSecretIfAbsent already gated on absence
+	})
+	return err
+}
+
+// mintWebhookSecretIfAbsent writes a fresh 32-byte random token to the SSM
+// SecureString at path when — and only when — the parameter does not yet exist.
+//
+// Idempotent by design: an existing parameter is NEVER overwritten, so
+// re-running `km init` cannot rotate a token out from under a live webhook
+// integration (e.g. Wiz). Deliberate rotation is an explicit
+// `aws ssm put-parameter --overwrite` plus a re-paste into the third party's UI.
+//
+// The absence check is deliberately narrow: only ErrWebhookSecretNotFound means
+// "safe to mint". Any OTHER read error (throttling, a permissions blip, a
+// network fault) is returned to the caller instead of falling through to a
+// mint — a transient GetParameter failure must never be treated as "the
+// parameter doesn't exist" and silently overwrite a live token out from under
+// a configured integration.
+//
+// Returns minted=true and the token ONLY on first creation, so the caller can
+// print it once for the operator to paste into the integration's Authorization
+// header.
+func mintWebhookSecretIfAbsent(ctx context.Context, ssm SSMSecretClient, path string) (bool, string, error) {
+	_, err := ssm.GetParameterValue(ctx, path)
+	if err == nil {
+		return false, "", nil // parameter exists — never overwrite
+	}
+	if !errors.Is(err, ErrWebhookSecretNotFound) {
+		return false, "", fmt.Errorf("mint webhook secret: check %s: %w", path, err)
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return false, "", fmt.Errorf("mint webhook secret: %w", err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(buf)
+	if err := ssm.PutSecureString(ctx, path, token); err != nil {
+		return false, "", fmt.Errorf("mint webhook secret: write %s: %w", path, err)
+	}
+	return true, token, nil
+}
+
 // h1ProgramConfigsFromCfg flattens cfg.H1.Programs[].Targets into the flat
 // []H1ProgramConfig list PreStageH1Profiles consumes, applying the H1Config.DefaultProfile
 // fallback for targets that omit a profile (mirrors the bridge's resolve fallback).
@@ -945,7 +1168,7 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 	var plan bool
 	var acceptDestroys bool
 	var onlyModule string
-	var githubFlag, slackFlag, h1Flag, emailFlag bool
+	var githubFlag, slackFlag, h1Flag, emailFlag, webhooksFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -956,12 +1179,12 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 				awsProfile = "klanker-application"
 			}
 			// Phase 105: resolve scoped module flags before any other dispatch.
-			scopedModule, scopedErr := ResolveScopedModule(onlyModule, githubFlag, slackFlag, h1Flag, emailFlag)
+			scopedModule, scopedErr := ResolveScopedModule(onlyModule, githubFlag, slackFlag, h1Flag, emailFlag, webhooksFlag)
 			if scopedErr != nil {
 				return scopedErr
 			}
 			if scopedModule != "" && (plan || sidecarsOnly || lambdasOnly) {
-				return fmt.Errorf("--only/--github/--slack/--h1/--email cannot be combined with --plan, --sidecars, or --lambdas")
+				return fmt.Errorf("--only/--github/--slack/--h1/--email/--webhooks cannot be combined with --plan, --sidecars, or --lambdas")
 			}
 			// Phase 84.2: --plan always wins over --dry-run / sidecars / lambdas (Decision 1).
 			if plan && (sidecarsOnly || lambdasOnly) {
@@ -1018,6 +1241,8 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 		"Scoped apply of lambda-h1-bridge (sugar for --only lambda-h1-bridge)")
 	cmd.Flags().BoolVar(&emailFlag, "email", false,
 		"Scoped apply of email-handler (sugar for --only email-handler)")
+	cmd.Flags().BoolVar(&webhooksFlag, "webhooks", false,
+		"Scoped apply of lambda-webhook-bridge (sugar for --only lambda-webhook-bridge)")
 
 	return cmd
 }
@@ -1158,6 +1383,22 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		cfg.H1.Programs = resolvedH1
 	}
 
+	// Phase 127 follow-up: hard-fail on a missing webhook rule @file BEFORE
+	// exporting/deploying (parity with the h1 event / github command @file hard
+	// errors above). Resolved in place so the export below marshals inlined
+	// rule prompts into KM_WEBHOOK_SOURCES.
+	if len(cfg.Webhooks.Sources) > 0 {
+		configDir := "."
+		if cfg.ConfigFilePath != "" {
+			configDir = filepath.Dir(cfg.ConfigFilePath)
+		}
+		resolvedWebhooks, rerr := ResolveWebhookPrompts(cfg.Webhooks.Sources, configDir)
+		if rerr != nil {
+			return fmt.Errorf("km init: webhook rule prompt: %w", rerr)
+		}
+		cfg.Webhooks.Sources = resolvedWebhooks
+	}
+
 	// Export config values as env vars for Terragrunt's site.hcl get_env() calls
 	// and for the envReqs checks in regionalModules.
 	ExportTerragruntEnvVars(cfg)
@@ -1198,6 +1439,44 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	if cfg.ArtifactsBucket != "" {
 		if err := ensureArtifactsBucketExists(ctx, cfg, os.Stderr, nil); err != nil {
 			return err
+		}
+	}
+
+	// Phase 127: mint a bearer token per configured webhook source, ONCE.
+	// mintWebhookSecretIfAbsent never overwrites an existing SSM parameter, so a
+	// re-run of `km init` cannot rotate a token out from under a live third-party
+	// integration (Wiz et al.). The token is printed only on first creation —
+	// this is the only place it is ever shown in plaintext.
+	if len(cfg.Webhooks.Sources) > 0 {
+		secretClient := &ssmSecretClientAdapter{inner: ssm.NewFromConfig(awsCfg)}
+		for _, src := range cfg.Webhooks.Sources {
+			if src.Auth.SecretPath == "" {
+				continue // no secret path configured for this source — nothing to mint
+			}
+			minted, token, mintErr := mintWebhookSecretIfAbsent(ctx, secretClient, src.Auth.SecretPath)
+			if mintErr != nil {
+				fmt.Printf("  ⚠ webhook source %q: %v\n", src.Name, mintErr)
+				continue
+			}
+			if minted {
+				fmt.Println()
+				fmt.Printf("  Minted webhook token for source %q.\n", src.Name)
+				fmt.Printf("  Paste this into the %s integration's Authorization header — it is shown ONCE:\n\n", src.Name)
+				fmt.Printf("      Bearer %s\n\n", token)
+				fmt.Printf("  Stored at SSM %s\n", src.Auth.SecretPath)
+			}
+		}
+	}
+
+	// Phase 127: pre-stage a profile YAML per unique cold-create profile slug
+	// across all webhooks.sources[].rules[] so an on_absent:cold-create dispatch
+	// can actually provision a box (the bridge's EventBridgeAdapter only ever
+	// points the create-handler at s3://{artifacts}/webhook-profiles/{slug}/...;
+	// nothing else uploads it). Dormant when no sources are configured.
+	if len(cfg.Webhooks.Sources) > 0 && cfg.ArtifactsBucket != "" {
+		uploader := &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}
+		if err := PreStageWebhookProfiles(ctx, cfg.Webhooks.Sources, cfg.ArtifactsBucket, uploader); err != nil {
+			return fmt.Errorf("km init: webhook profiles: %w", err)
 		}
 	}
 
@@ -1373,6 +1652,15 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		return checkNATDisableGuardBeforeApply(hookCtx, cfg, awsCfg, repoRoot, region)
 	}
 	defer func() { InitNATDisableGuardHook = nil }()
+
+	// Phase 127: bind the webhook bridge URL publisher, closed over cfg + awsCfg,
+	// so RunInitWithRunner's module loop can invoke it the instant
+	// lambda-webhook-bridge applies. Cleared on return so a subsequent
+	// in-process init re-binds it to its own cfg/awsCfg.
+	PublishWebhookBridgeURLHook = func(hookCtx context.Context, functionURL string) error {
+		return publishWebhookBridgeURLToSSM(hookCtx, ssm.NewFromConfig(awsCfg), cfg, functionURL)
+	}
+	defer func() { PublishWebhookBridgeURLHook = nil }()
 
 	if err := RunInitWithRunner(runner, repoRoot, region); err != nil {
 		return err
@@ -1921,6 +2209,50 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 		}
 	}
 
+	// Phase 127: KM_WEBHOOK_SOURCES — JSON-encoded webhook source routing.
+	// Consumed by infra/live/use1/lambda-webhook-bridge/terragrunt.hcl
+	// get_env("KM_WEBHOOK_SOURCES") and parsed by cmd/km-webhook-bridge.
+	// Gate on len>0: an absent webhooks: block leaves the var unset (dormant).
+	// rate_limit travels INSIDE this one JSON envelope — there is deliberately no
+	// separate KM_WEBHOOK_RATE_LIMIT env var (parseSourcesEnv is the only reader
+	// and only ever looks at this key).
+	// env-block change => needs a full `km init --dry-run=false`, NOT --sidecars.
+	if len(cfg.Webhooks.Sources) > 0 {
+		// Inline @file rule prompts before marshaling — the bridge Lambda has no
+		// filesystem (mirrors command-prompt and H1 event-prompt inlining).
+		// Best-effort here so the void exporter never crashes a non-init caller;
+		// runInit additionally hard-fails on a missing @file before deploy
+		// (parity with commands / h1 events).
+		exportSources := cfg.Webhooks.Sources
+		webhookConfigDir := "."
+		if cfg.ConfigFilePath != "" {
+			webhookConfigDir = filepath.Dir(cfg.ConfigFilePath)
+		}
+		if resolved, rerr := ResolveWebhookPrompts(cfg.Webhooks.Sources, webhookConfigDir); rerr != nil {
+			fmt.Fprintf(os.Stderr, "WARN: webhook rule @file prompt unresolved; exporting literal: %v\n", rerr)
+		} else {
+			exportSources = resolved
+		}
+		type webhookExportPayload struct {
+			Sources   []config.WebhookSource   `json:"sources"`
+			RateLimit *config.WebhookRateLimit `json:"rate_limit,omitempty"`
+		}
+		payload := webhookExportPayload{
+			Sources:   exportSources,
+			RateLimit: cfg.Webhooks.RateLimit,
+		}
+		if jsonBytes, err := json.Marshal(payload); err == nil {
+			yamlWebhooks := string(jsonBytes)
+			if envVal := os.Getenv("KM_WEBHOOK_SOURCES"); envVal != "" && envVal != yamlWebhooks {
+				fmt.Fprintf(os.Stderr,
+					"WARN: KM_WEBHOOK_SOURCES=%s (env) overrides km-config.yaml webhooks=%s\n",
+					envVal, yamlWebhooks)
+			} else if envVal == "" {
+				os.Setenv("KM_WEBHOOK_SOURCES", yamlWebhooks) //nolint:errcheck
+			}
+		}
+	}
+
 	// Phase 125: KM_NAT_GATEWAY_ENABLED — install-level toggle for whether the
 	// per-AZ NAT gateway infrastructure exists. Consumed by
 	// infra/live/use1/network/terragrunt.hcl
@@ -2073,6 +2405,53 @@ func ResolveH1EventPrompts(programs []config.H1ProgramEntry, configDir string) (
 			ev[name] = entry
 		}
 		out[i].Events = ev
+	}
+	return out, nil
+}
+
+// ResolveWebhookPrompts returns a copy of the webhook source list with each
+// rule's Prompt field resolved through the same @file convention used for
+// command and H1 event prompts (ResolveCommandPrompts / ResolveH1EventPrompts):
+//
+//   - "@@literal"   → "@literal"  (strip one @, no file read)
+//   - "@relative/p" → contents of the first hit on the command-prompt search
+//     path (configDir, then configDir/profiles) — a bare "@p.txt" resolves to
+//     profiles/p.txt; "@profiles/p.txt" still works.
+//   - (other text)  → unchanged
+//   - @file missing → hard error (callers surface to km init exit)
+//
+// Rule prompts MUST be inlined here because they travel in the KM_WEBHOOK_SOURCES
+// env var to a filesystem-less Lambda — exactly like command and H1 event prompts
+// are inlined. Only the Rules slices are copied; all other WebhookSource fields
+// are shared with the input (the input slice's entries are not mutated). configDir
+// must be filepath.Dir(cfg.ConfigFilePath), not the shell CWD.
+func ResolveWebhookPrompts(sources []config.WebhookSource, configDir string) ([]config.WebhookSource, error) {
+	out := make([]config.WebhookSource, len(sources))
+	copy(out, sources)
+	for i := range out {
+		if len(out[i].Rules) == 0 {
+			continue
+		}
+		rules := make([]config.WebhookRule, len(out[i].Rules))
+		copy(rules, out[i].Rules)
+		for j := range rules {
+			switch {
+			case strings.HasPrefix(rules[j].Prompt, "@@"):
+				rules[j].Prompt = rules[j].Prompt[1:]
+			case strings.HasPrefix(rules[j].Prompt, "@"):
+				relPath := rules[j].Prompt[1:]
+				absPath, _, ferr := resolveCommandPromptFile(configDir, relPath)
+				if ferr != nil {
+					return nil, fmt.Errorf("webhook source %q rule[%d] prompt @%s: %w", out[i].Name, j, relPath, ferr)
+				}
+				data, rerr := os.ReadFile(absPath)
+				if rerr != nil {
+					return nil, fmt.Errorf("webhook source %q rule[%d] prompt @%s: %w", out[i].Name, j, relPath, rerr)
+				}
+				rules[j].Prompt = string(data)
+			}
+		}
+		out[i].Rules = rules
 	}
 	return out, nil
 }
@@ -2655,6 +3034,26 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 				}
 			}
 		}
+
+		// After lambda-webhook-bridge module: publish the Function URL to SSM
+		// {prefix}config/webhooks/bridge-url. Unlike the GitHub/Slack/H1 bridges
+		// (which require a separate `km github init` / `km slack init` / `km h1
+		// init` to record their URL), the generic webhook bridge has no CLI verb
+		// by design — `km init` is the ONLY path that can ever write this value.
+		// Best-effort: a publish failure never aborts init (see
+		// PublishWebhookBridgeURLHook doc comment).
+		if mod.name == "lambda-webhook-bridge" && PublishWebhookBridgeURLHook != nil {
+			outputMap, outErr := runner.Output(ctx, mod.dir)
+			if outErr == nil {
+				if urlVal, ok := outputMap["function_url"]; ok {
+					functionURL := fmt.Sprintf("%v", extractValue(urlVal))
+					fmt.Printf("  Webhook bridge URL: %s\n", functionURL)
+					if pubErr := PublishWebhookBridgeURLHook(ctx, functionURL); pubErr != nil {
+						fmt.Printf("  Warning: could not publish webhook bridge URL to SSM: %v\n", pubErr)
+					}
+				}
+			}
+		}
 	}
 
 	fmt.Println()
@@ -3163,6 +3562,11 @@ func lambdaBuilds() []lambdaBuild {
 		// auto-triage events + @-handle comment keywords. Missing here ⇒ zip never built
 		// (memory project_km_init_skips_existing_lambda_zips).
 		{name: "km-h1-bridge", srcDir: "cmd/km-h1-bridge"},
+		// Phase 127: generic webhook ingress bridge Lambda — verifies per-source
+		// auth (bearer/HMAC), matches operator-declared rules, dispatches to a
+		// sandbox alias. Missing here ⇒ zip never built (memory
+		// project_km_init_skips_existing_lambda_zips).
+		{name: "km-webhook-bridge", srcDir: "cmd/km-webhook-bridge"},
 		// Phase 121 (plan 09): quota-alerter Lambda — DDB-Stream triggered, sends exactly
 		// one SES operator alert per (sandbox, action, window) breach. Missing here ⇒ zip
 		// never built ⇒ filebase64sha256 fails at apply time (same footgun as Phase 97).

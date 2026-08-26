@@ -45,10 +45,14 @@ func phase92IAMFixture(t *testing.T) *profile.SandboxProfile {
 	}
 	// Inject a representative allowedSecretPaths so the SSM-allowlist serialization
 	// is covered by the byte-identity contract (restricted-dev.yaml itself does
-	// not set this field).
+	// not set this field). Uses the {{prefix}} token (required by compileSecrets
+	// since the wiz-sensor prefix-interpolation feature) with KM_RESOURCE_PREFIX
+	// pinned to "sandbox" so the interpolated output stays byte-identical to the
+	// frozen pre-Phase-92 golden below ("/sandbox/shared/...").
+	t.Setenv("KM_RESOURCE_PREFIX", "sandbox")
 	p.Spec.IAM.AllowedSecretPaths = []string{
-		"/sandbox/shared/db-password",
-		"/sandbox/shared/api-key",
+		"{{prefix}}/shared/db-password",
+		"{{prefix}}/shared/api-key",
 	}
 	return p
 }
@@ -64,7 +68,8 @@ func phase92IAMFixture(t *testing.T) *profile.SandboxProfile {
 // Wave 1's IdentitySpec -> IAMSpec rename MUST leave compileIAMPolicy /
 // compileSecrets output byte-identical, so this fragment is a precise, low-noise
 // guard (no subnet/AMI churn from the full EC2 service HCL).
-func emitCombinedIAMHCLForTest(p *profile.SandboxProfile) string {
+func emitCombinedIAMHCLForTest(t *testing.T, p *profile.SandboxProfile) string {
+	t.Helper()
 	pol := compileIAMPolicy(p)
 
 	quoted := make([]string, len(pol.AllowedRegions))
@@ -73,7 +78,11 @@ func emitCombinedIAMHCLForTest(p *profile.SandboxProfile) string {
 	}
 	allowedRegions := strings.Join(quoted, ", ")
 
-	secretPaths := strings.Join(compileSecrets(p), ",")
+	paths, err := compileSecrets(p)
+	if err != nil {
+		t.Fatalf("compileSecrets: %v", err)
+	}
+	secretPaths := strings.Join(paths, ",")
 
 	var sb strings.Builder
 	sb.WriteString("iam_session_policy = {\n")
@@ -94,7 +103,7 @@ func TestCapturePre92IAMHCL(t *testing.T) {
 	if os.Getenv("CAPTURE_PRE92_IAM_BASELINE") != "1" {
 		t.Skip("set CAPTURE_PRE92_IAM_BASELINE=1 to (re)capture the pre-Phase-92 IAM HCL baseline")
 	}
-	got := emitCombinedIAMHCLForTest(phase92IAMFixture(t))
+	got := emitCombinedIAMHCLForTest(t, phase92IAMFixture(t))
 	out := goldenPath92(t, phase92IAMHCLGolden)
 	if err := os.WriteFile(out, []byte(got), 0o644); err != nil {
 		t.Fatalf("write golden %s: %v", out, err)
@@ -119,7 +128,7 @@ func TestIAMHCLPhase92ByteIdentity(t *testing.T) {
 		t.Fatalf("read golden %s: %v (Wave 0 baseline capture was not committed)", golden, err)
 	}
 
-	got := emitCombinedIAMHCLForTest(phase92IAMFixture(t))
+	got := emitCombinedIAMHCLForTest(t, phase92IAMFixture(t))
 
 	if got != string(want) {
 		t.Errorf("IAM HCL output drifted from pre-Phase-92 baseline:\n%s",

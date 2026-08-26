@@ -553,6 +553,11 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	// (mirrors the eBPF enforcement rule style above).
 	errs = append(errs, validateLimits(p)...)
 
+	// Wiz sensor phase: allowedSecretPaths entries are compiled into the
+	// sandbox role's ssm:GetParameter grant, so the prefix-relative rule is a
+	// security guard — see pkg/profile/secretpath.go.
+	errs = append(errs, ValidateSecretPaths(p.Spec.IAM.AllowedSecretPaths)...)
+
 	// Phase 126: spec.runtime.launchAccount and spec.network.privateSubnet are
 	// mutually exclusive — a linked cross-account launch has no NAT-gateway
 	// concept, so private-subnet placement is unsupported there. This check

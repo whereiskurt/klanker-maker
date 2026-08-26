@@ -35,10 +35,6 @@ spec:
   secrets:
     sopsFile: ./secrets/llama-hf.enc.yaml
 
-  iam:
-    allowedSecretPaths:
-      - /sandbox/*/secrets   # unions with fragment's entry; list-union dedupes
-
   execution:
     # Two initCommandsAppend lines:
     # 1. Write vllm.env with FP16 flags (FP16 at TP=8: 144GB weights fit 384GB; llama3_json parser)

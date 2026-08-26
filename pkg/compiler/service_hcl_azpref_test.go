@@ -23,7 +23,7 @@ func TestEC2ServiceHCL_AZPreferenceAbsent(t *testing.T) {
 		AllowedRegions:     []string{"us-east-1"},
 	}
 
-	baseline, err := generateEC2ServiceHCL(p, "test-sb-baseline", true, nil, iamPolicy, "", net, nil)
+	baseline, err := generateEC2ServiceHCL(p, "test-sb-baseline", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL (baseline): %v", err)
 	}
@@ -31,7 +31,7 @@ func TestEC2ServiceHCL_AZPreferenceAbsent(t *testing.T) {
 	// Same profile with azPreference explicitly set to nil (should be identical output).
 	pWithNil := baseEC2Profile()
 	pWithNil.Spec.Runtime.AZPreference = nil
-	withNil, err := generateEC2ServiceHCL(pWithNil, "test-sb-baseline", true, nil, iamPolicy, "", net, nil)
+	withNil, err := generateEC2ServiceHCL(pWithNil, "test-sb-baseline", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL (nil azPreference): %v", err)
 	}
@@ -43,7 +43,7 @@ func TestEC2ServiceHCL_AZPreferenceAbsent(t *testing.T) {
 	// Same profile with azPreference set to an empty slice.
 	pWithEmpty := baseEC2Profile()
 	pWithEmpty.Spec.Runtime.AZPreference = []string{}
-	withEmpty, err := generateEC2ServiceHCL(pWithEmpty, "test-sb-baseline", true, nil, iamPolicy, "", net, nil)
+	withEmpty, err := generateEC2ServiceHCL(pWithEmpty, "test-sb-baseline", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL (empty azPreference): %v", err)
 	}
@@ -69,7 +69,7 @@ func TestEC2ServiceHCL_AZPreferenceDoesNotAppearInHCL(t *testing.T) {
 	// Note: we pass the network as-is (not reordered) — pre-compile AZ reordering
 	// happens in create.go, not in the compiler. This test just confirms the field
 	// does not leak into the HCL template output.
-	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil)
+	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL: %v", err)
 	}

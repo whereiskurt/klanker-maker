@@ -427,21 +427,21 @@ func TestRunInitPlan_VerboseStreamsPlan(t *testing.T) {
 // TestRunInitPlan_ModuleOrder verifies that modules are planned in the order
 // returned by RegionalModules() — same ordering contract as RunInitWithRunner.
 //
-// Expected order (as of Phase 124 — 27 modules; 26 + dynamodb-capacity (Phase 124)):
+// Expected order (as of Phase 127 — 28 modules; 27 + lambda-webhook-bridge (Phase 127)):
 // network, efs, dynamodb-budget, dynamodb-identities, dynamodb-sandboxes,
 // dynamodb-capacity, dynamodb-schedules, ssm-session-doc, s3-replication, create-handler,
 // ttl-handler, email-handler, dynamodb-slack-nonces, dynamodb-slack-threads,
 // dynamodb-slack-channels, dynamodb-slack-stream-messages, dynamodb-github-threads,
 // sqs-inbound-dlq, lambda-slack-bridge, lambda-github-bridge, dynamodb-h1-threads,
-// lambda-h1-bridge, dynamodb-checks, check-runner-role,
+// lambda-h1-bridge, lambda-webhook-bridge, dynamodb-checks, check-runner-role,
 // dynamodb-action-quota, lambda-quota-alerter, ses
-// 26 + dynamodb-capacity (Phase 124)
+// 27 + lambda-webhook-bridge (Phase 127)
 func TestRunInitPlan_ModuleOrder(t *testing.T) {
 	repoRoot := t.TempDir()
 	mods := cmd.RegionalModules(repoRoot)
 
-	if len(mods) != 27 {
-		t.Errorf("len(mods) = %d, want 27", len(mods))
+	if len(mods) != 28 {
+		t.Errorf("len(mods) = %d, want 28", len(mods))
 	}
 	if len(mods) == 0 {
 		t.Fatal("RegionalModules returned empty list")

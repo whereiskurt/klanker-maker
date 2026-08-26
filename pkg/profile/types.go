@@ -179,6 +179,27 @@ type NotificationSpec struct {
 	// km-h1-inbound-poller userdata heredoc does NOT render (dormant invariant —
 	// guarded by the Wave-0 TestUserdataH1ByteIdentity golden).
 	H1 *NotificationH1Spec `json:"h1,omitempty" yaml:"h1,omitempty"`
+	// Webhook configures the generic webhook inbound queue (Phase 127).
+	// When nil (absent), no per-sandbox webhook-inbound queue is provisioned
+	// (dormant invariant).
+	Webhook *NotificationWebhookSpec `json:"webhook,omitempty" yaml:"webhook,omitempty"`
+}
+
+// NotificationWebhookSpec configures the per-sandbox generic webhook inbound queue.
+// Phase 127: per-sandbox FIFO queue provisioned by km create when enabled=true.
+// Mirrors NotificationGitHubSpec / NotificationH1Spec.
+type NotificationWebhookSpec struct {
+	// Inbound configures the per-sandbox generic webhook inbound FIFO queue.
+	Inbound *NotificationWebhookInboundSpec `json:"inbound,omitempty" yaml:"inbound,omitempty"`
+}
+
+// NotificationWebhookInboundSpec gates provisioning of the per-sandbox
+// webhook-inbound FIFO queue at km create. Mirrors NotificationGitHubInboundSpec.
+type NotificationWebhookInboundSpec struct {
+	// Enabled provisions the per-sandbox webhook-inbound FIFO queue at km create.
+	// nil = default false (dormant — zero SQS/DDB/SSM artifacts).
+	// &true = provision queue; &false = explicit disable (same as nil in practice).
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
 // NotificationH1Spec configures HackerOne comment-trigger inbound dispatch.
@@ -570,7 +591,7 @@ type ExecutionSpec struct {
 // SourceAccessSpec controls access to source code repositories.
 type SourceAccessSpec struct {
 	// Mode is the access mode: allowlist (default).
-	Mode   string       `yaml:"mode"`
+	Mode   string        `yaml:"mode"`
 	GitHub *GitHubAccess `yaml:"github,omitempty"`
 }
 
@@ -771,7 +792,7 @@ type ObservabilitySpec struct {
 	CommandLog      LogDestination       `yaml:"commandLog"`
 	NetworkLog      LogDestination       `yaml:"networkLog"`
 	ClaudeTelemetry *ClaudeTelemetrySpec `yaml:"claudeTelemetry,omitempty"`
-	TlsCapture      *TlsCaptureSpec     `yaml:"tlsCapture,omitempty"`
+	TlsCapture      *TlsCaptureSpec      `yaml:"tlsCapture,omitempty"`
 	// LearnMode enables traffic observation recording on the eBPF enforcer.
 	// When true, the enforcer records all DNS queries and TLS connections
 	// so km shell --learn can generate a SandboxProfile from observed traffic.
