@@ -44,8 +44,10 @@ func TestAuthenticate_Bearer(t *testing.T) {
 	// The critical negative: an empty configured secret must NEVER authenticate.
 	// A naive constant-time compare of "" vs "" succeeds, which would leave the
 	// endpoint wide open whenever SSM returned an empty parameter.
+	// Test: a header that trims to empty (e.g. "Bearer ") with an empty secret.
+	// Only the guard-less compare of "" against "" would pass this.
 	t.Run("empty configured secret fails closed", func(t *testing.T) {
-		hdrs := map[string]string{"authorization": ""}
+		hdrs := map[string]string{"authorization": "Bearer "}
 		if !errors.Is(Authenticate(auth, "", hdrs, body), ErrUnauthorized) {
 			t.Fatal("empty secret must fail closed")
 		}
@@ -91,9 +93,14 @@ func TestAuthenticate_HMAC(t *testing.T) {
 	})
 
 	t.Run("empty secret fails closed", func(t *testing.T) {
-		hdrs := map[string]string{"x-signature": sig}
+		// Compute a signature using the empty key, as an attacker would forge.
+		// Only the guard-less compare of "" against "" would pass this.
+		emptyKeyMac := hmac.New(sha256.New, []byte(""))
+		emptyKeyMac.Write(body)
+		forged := hex.EncodeToString(emptyKeyMac.Sum(nil))
+		hdrs := map[string]string{"x-signature": forged}
 		if !errors.Is(Authenticate(auth, "", hdrs, body), ErrUnauthorized) {
-			t.Fatal("empty secret must fail closed")
+			t.Fatal("empty secret must fail closed against a forged empty-key signature")
 		}
 	})
 }
