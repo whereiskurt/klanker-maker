@@ -5,17 +5,17 @@ milestone_name: milestone
 current_phase: 127
 current_phase_name: declarative-mitm-intercepts-profile-declared-host-to-action-
 current_plan: 5
-status: executing
-stopped_at: Completed 127-04-PLAN.md
-last_updated: "2026-08-26T06:24:14.461Z"
+status: verifying
+stopped_at: Completed 127-05-PLAN.md
+last_updated: "2026-08-26T06:36:34.417Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 127 execution started
 progress:
   total_phases: 11
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 72
-  completed_plans: 66
-  percent: 73
+  completed_plans: 67
+  percent: 82
 ---
 
 # Project State
@@ -33,7 +33,7 @@ Phase: 127 (declarative-mitm-intercepts-profile-declared-host-to-action-) — EX
 Plan: 5 of 5
 Total Plans in Phase: 5
 Current Plan: 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-08-26 — Phase 127 execution started
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
@@ -636,6 +636,7 @@ Progress: [█████████░] 91%
 | Phase 127 P02 | 15min | 3 tasks | 6 files |
 | Phase 127 P03 | 22min | 3 tasks | 2 files |
 | Phase 127 P04 | 25min | 2 tasks | 2 files |
+| Phase 127 P05 | 25min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1816,6 +1817,8 @@ Recent decisions affecting current work:
 - [Phase ?]: buildL7ProxyHosts refactored to a seen-map + add() closure so intercept hosts append last and never duplicate an existing group
 - [Phase 127]: MITM validate: name/duplicate checks run against the full uncollapsed intercept list; hosts/action/redirect/status checks and all three overlap warnings run only against EnabledIntercepts, so a disable-only override is exempt
 - [Phase 127]: MITM validate warnings mirror sidecar host-matching semantics locally (bedrock prefix/suffix, allowedDNSSuffixes leading-dot/exact/wildcard) rather than importing sidecars/http-proxy, avoiding a pkg/profile -> sidecars dependency
+- [Phase 127-05]: CLAUDE.md phase block titled Phase 129 (not 127) to avoid colliding with origin/main's existing Phase 127/128 blocks; .planning/ phase directory and filenames stay 127-*
+- [Phase 127-05]: profiles/mitm-demo.yaml composes base/network/safenetwork (wildcard allowedDNSSuffixes) instead of base/network/locked so it validates with zero warnings without a bespoke DNS suffix
 
 ### Roadmap Evolution
 
@@ -1969,6 +1972,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-26T06:24:14.448Z
-Stopped at: Completed 127-04-PLAN.md
+Last session: 2026-08-26T06:36:34.404Z
+Stopped at: Completed 127-05-PLAN.md
 Resume file: None

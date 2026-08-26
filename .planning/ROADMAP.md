@@ -457,7 +457,7 @@ drop-in this mirrors), and the 2026-08-21 egress deny lists (whose deny gate at
 `proxy.go:237` stays ahead of every intercept, and which owns blocking -- this
 phase deliberately ships **no `block` action**).
 
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 **Wave 1**
@@ -472,4 +472,4 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 127-05-PLAN.md — `profiles/base/mitm-rickroll.yaml`, demo leaf + inventory gate, `docs/mitm-intercepts.md`, CLAUDE.md, 6-step live UAT (wave 3)
+- [x] 127-05-PLAN.md — `profiles/base/mitm-rickroll.yaml`, demo leaf + inventory gate, `docs/mitm-intercepts.md`, CLAUDE.md, 6-step live UAT (wave 3)
