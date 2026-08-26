@@ -958,6 +958,128 @@ func PreStageH1Profiles(ctx context.Context, targets []H1ProgramConfig, artifact
 	return nil
 }
 
+// PreStageWebhookProfiles uploads one profile YAML per unique profile slug to S3
+// so the create-handler can fetch it during a cold-create triggered by the
+// generic webhook bridge (Phase 127). Webhook analog of PreStageGitHubProfiles /
+// PreStageH1Profiles.
+//
+// The profile universe is every rule.Profile across every source's rules,
+// deduped by slug. A rule whose OnAbsent is "skip" never cold-creates (the
+// bridge only warm-enqueues or no-ops for it), so staging a profile for it
+// would be pure S3 churn with nothing ever reading the key — those rules are
+// excluded. A rule with an empty Profile has nothing to stage either (it either
+// always resolves to a live alias, or "skip" applies) and is silently skipped.
+//
+// For each unique, staged slug:
+//   - uploads {artifactBucket}/webhook-profiles/{slug}/.km-profile.yaml
+//
+// Profile YAML is read from disk at profiles/{slug}.yaml relative to the
+// process working directory (km always runs from the repo root). Missing files
+// are uploaded as empty bytes rather than returning an error — the operator is
+// warned so they can stage the file manually (readFileOrEmpty).
+//
+// Called from runInit after the env-export block, gated on cfg.Webhooks.Sources
+// being non-empty so it is dormant for installs without a webhooks: block.
+func PreStageWebhookProfiles(ctx context.Context, sources []config.WebhookSource, artifactBucket string, uploader S3ProfileUploader) error {
+	if len(sources) == 0 {
+		return nil
+	}
+
+	uploaded := make(map[string]bool)
+	for _, src := range sources {
+		for _, rule := range src.Rules {
+			if rule.OnAbsent == "skip" {
+				continue // never cold-creates; nothing would ever read the staged profile
+			}
+			if rule.Profile == "" {
+				continue // nothing to stage — resolves to an existing alias, or on_absent handles it
+			}
+			slug := githubProfileSlug(rule.Profile)
+			if uploaded[slug] {
+				continue // dedup by slug
+			}
+			uploaded[slug] = true
+
+			profileKey := "webhook-profiles/" + slug + "/.km-profile.yaml"
+			profileData := readFileOrEmpty("profiles/" + slug + ".yaml")
+			if err := uploader.PutObject(ctx, artifactBucket, profileKey, profileData); err != nil {
+				return fmt.Errorf("km init: pre-stage webhook profile %s: %w", slug, err)
+			}
+		}
+	}
+	return nil
+}
+
+// SSMSecretClient is the narrow SSM interface used by mintWebhookSecretIfAbsent
+// to check for and write a SecureString parameter without pulling the raw AWS
+// SDK request/response shapes into test files.
+type SSMSecretClient interface {
+	// GetParameterValue returns the decrypted parameter value, or a non-nil
+	// error when the parameter does not exist (or on any other read failure —
+	// mintWebhookSecretIfAbsent treats any error identically: safe to mint).
+	GetParameterValue(ctx context.Context, name string) (string, error)
+	// PutSecureString writes a SecureString parameter. Callers only invoke this
+	// when the parameter is confirmed absent, so this is always a fresh create,
+	// never an overwrite.
+	PutSecureString(ctx context.Context, name, value string) error
+}
+
+// ssmSecretClientAdapter wraps *ssm.Client to satisfy SSMSecretClient using the
+// real AWS SDK.
+type ssmSecretClientAdapter struct {
+	inner *ssm.Client
+}
+
+func (a *ssmSecretClientAdapter) GetParameterValue(ctx context.Context, name string) (string, error) {
+	out, err := a.inner.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String(name),
+		WithDecryption: aws.Bool(true),
+	})
+	if err != nil {
+		return "", err
+	}
+	if out.Parameter == nil || out.Parameter.Value == nil {
+		return "", fmt.Errorf("ssm parameter %s: empty value", name)
+	}
+	return *out.Parameter.Value, nil
+}
+
+func (a *ssmSecretClientAdapter) PutSecureString(ctx context.Context, name, value string) error {
+	_, err := a.inner.PutParameter(ctx, &ssm.PutParameterInput{
+		Name:      aws.String(name),
+		Value:     aws.String(value),
+		Type:      ssmtypes.ParameterTypeSecureString,
+		Overwrite: aws.Bool(false), // never overwrite — mintWebhookSecretIfAbsent already gated on absence
+	})
+	return err
+}
+
+// mintWebhookSecretIfAbsent writes a fresh 32-byte random token to the SSM
+// SecureString at path when — and only when — the parameter does not yet exist.
+//
+// Idempotent by design: an existing parameter is NEVER overwritten, so
+// re-running `km init` cannot rotate a token out from under a live webhook
+// integration (e.g. Wiz). Deliberate rotation is an explicit
+// `aws ssm put-parameter --overwrite` plus a re-paste into the third party's UI.
+//
+// Returns minted=true and the token ONLY on first creation, so the caller can
+// print it once for the operator to paste into the integration's Authorization
+// header.
+func mintWebhookSecretIfAbsent(ctx context.Context, ssm SSMSecretClient, path string) (bool, string, error) {
+	if _, err := ssm.GetParameterValue(ctx, path); err == nil {
+		return false, "", nil
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return false, "", fmt.Errorf("mint webhook secret: %w", err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(buf)
+	if err := ssm.PutSecureString(ctx, path, token); err != nil {
+		return false, "", fmt.Errorf("mint webhook secret: write %s: %w", path, err)
+	}
+	return true, token, nil
+}
+
 // h1ProgramConfigsFromCfg flattens cfg.H1.Programs[].Targets into the flat
 // []H1ProgramConfig list PreStageH1Profiles consumes, applying the H1Config.DefaultProfile
 // fallback for targets that omit a profile (mirrors the bridge's resolve fallback).
@@ -1272,6 +1394,44 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	if cfg.ArtifactsBucket != "" {
 		if err := ensureArtifactsBucketExists(ctx, cfg, os.Stderr, nil); err != nil {
 			return err
+		}
+	}
+
+	// Phase 127: mint a bearer token per configured webhook source, ONCE.
+	// mintWebhookSecretIfAbsent never overwrites an existing SSM parameter, so a
+	// re-run of `km init` cannot rotate a token out from under a live third-party
+	// integration (Wiz et al.). The token is printed only on first creation —
+	// this is the only place it is ever shown in plaintext.
+	if len(cfg.Webhooks.Sources) > 0 {
+		secretClient := &ssmSecretClientAdapter{inner: ssm.NewFromConfig(awsCfg)}
+		for _, src := range cfg.Webhooks.Sources {
+			if src.Auth.SecretPath == "" {
+				continue // no secret path configured for this source — nothing to mint
+			}
+			minted, token, mintErr := mintWebhookSecretIfAbsent(ctx, secretClient, src.Auth.SecretPath)
+			if mintErr != nil {
+				fmt.Printf("  ⚠ webhook source %q: %v\n", src.Name, mintErr)
+				continue
+			}
+			if minted {
+				fmt.Println()
+				fmt.Printf("  Minted webhook token for source %q.\n", src.Name)
+				fmt.Printf("  Paste this into the %s integration's Authorization header — it is shown ONCE:\n\n", src.Name)
+				fmt.Printf("      Bearer %s\n\n", token)
+				fmt.Printf("  Stored at SSM %s\n", src.Auth.SecretPath)
+			}
+		}
+	}
+
+	// Phase 127: pre-stage a profile YAML per unique cold-create profile slug
+	// across all webhooks.sources[].rules[] so an on_absent:cold-create dispatch
+	// can actually provision a box (the bridge's EventBridgeAdapter only ever
+	// points the create-handler at s3://{artifacts}/webhook-profiles/{slug}/...;
+	// nothing else uploads it). Dormant when no sources are configured.
+	if len(cfg.Webhooks.Sources) > 0 && cfg.ArtifactsBucket != "" {
+		uploader := &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}
+		if err := PreStageWebhookProfiles(ctx, cfg.Webhooks.Sources, cfg.ArtifactsBucket, uploader); err != nil {
+			return fmt.Errorf("km init: webhook profiles: %w", err)
 		}
 	}
 
@@ -2001,6 +2161,35 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			fmt.Fprintf(os.Stderr, "WARN: KM_H1_BOT_HANDLE=%s (env) overrides km-config.yaml h1.bot_handle=%s\n", envVal, cfg.H1.BotHandle)
 		} else if envVal == "" {
 			os.Setenv("KM_H1_BOT_HANDLE", cfg.H1.BotHandle) //nolint:errcheck
+		}
+	}
+
+	// Phase 127: KM_WEBHOOK_SOURCES — JSON-encoded webhook source routing.
+	// Consumed by infra/live/use1/lambda-webhook-bridge/terragrunt.hcl
+	// get_env("KM_WEBHOOK_SOURCES") and parsed by cmd/km-webhook-bridge.
+	// Gate on len>0: an absent webhooks: block leaves the var unset (dormant).
+	// rate_limit travels INSIDE this one JSON envelope — there is deliberately no
+	// separate KM_WEBHOOK_RATE_LIMIT env var (parseSourcesEnv is the only reader
+	// and only ever looks at this key).
+	// env-block change => needs a full `km init --dry-run=false`, NOT --sidecars.
+	if len(cfg.Webhooks.Sources) > 0 {
+		type webhookExportPayload struct {
+			Sources   []config.WebhookSource   `json:"sources"`
+			RateLimit *config.WebhookRateLimit `json:"rate_limit,omitempty"`
+		}
+		payload := webhookExportPayload{
+			Sources:   cfg.Webhooks.Sources,
+			RateLimit: cfg.Webhooks.RateLimit,
+		}
+		if jsonBytes, err := json.Marshal(payload); err == nil {
+			yamlWebhooks := string(jsonBytes)
+			if envVal := os.Getenv("KM_WEBHOOK_SOURCES"); envVal != "" && envVal != yamlWebhooks {
+				fmt.Fprintf(os.Stderr,
+					"WARN: KM_WEBHOOK_SOURCES=%s (env) overrides km-config.yaml webhooks=%s\n",
+					envVal, yamlWebhooks)
+			} else if envVal == "" {
+				os.Setenv("KM_WEBHOOK_SOURCES", yamlWebhooks) //nolint:errcheck
+			}
 		}
 	}
 
