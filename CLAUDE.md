@@ -8,6 +8,48 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Wake-up re-credential + `km create` positional alias (2026-08-26):**
+- **`km resume` now forces a GitHub installation-token re-mint** instead of waiting up to 45
+  minutes for the per-sandbox refresher's next tick. `awspkg.ForceGitHubTokenRefresh` reads the
+  refresher's own EventBridge schedule (`{prefix}-github-token-{id}`), takes its `Target.Input`
+  **verbatim**, and hands it to `{prefix}-github-token-refresher-{id}` via a synchronous
+  `RequestResponse` invoke. Wired into BOTH resume paths: `runResume` (local) and the ttl-handler's
+  `handleResume` (`km resume --remote`, `km at … resume`).
+- **Reading the payload back off the schedule is load-bearing, not convenience.** It carries
+  `installation_id`, the per-sandbox KMS key ARN, `allowed_repos` and the *compiled* permissions
+  map — all decided at create time. Rebuilding it here is exactly the duplication that (per
+  `pkg/github/token.go` `TokenRefreshEvent`) kept this feature silently broken for its entire
+  lifetime once already.
+- **The real value is surfacing, not re-minting.** The 45-minute schedule is never stopped by
+  pause/stop — only destroy removes it — so a healthy install already has a ≤45-min-old token at
+  wake-up, and the on-box helpers (`km-git-askpass`, `km-git-credential-helper`, `km-github`) read
+  SSM at call time and never cache. The failure mode this catches is a refresher that has been
+  erroring on **every** tick: today those errors reach only CloudWatch and the operator meets them
+  later as a git 401. The synchronous invoke turns that into an error printed at the moment the box
+  is woken, naming the log group.
+- **Best-effort by construction.** Both call sites are non-fatal (the instance is already starting;
+  failing the command afterwards would leave a running box and a red exit code) and bounded at 30s.
+  A sandbox with no `sourceAccess.github` has no schedule — `ErrNoGitHubRefresher` is **silent**,
+  not a warning, so the line that matters doesn't get trained out of operators.
+- **Known gap (deliberate, not an oversight):** the Phase 109/114 bridge auto-resume path calls
+  `EC2Resumer.StartSandbox` directly in four packages and does NOT go through `handleResume`, so a
+  Slack/GitHub @-mention that wakes a box is not covered yet. Deferred until the surfaced errors
+  show whether it's needed.
+- **`km create <profile.yaml> [alias]`** — the alias may now be a second positional instead of
+  `--alias`. Whichever argument ends in `.yaml`/`.yml` is the profile, so order is irrelevant.
+  Ambiguity is always an error, never a guess: two YAML-looking args, zero YAML-looking args, or a
+  positional alias combined with `--alias` all fail with a message naming the conflict — silent
+  precedence between two alias sources would create the sandbox under a name nobody typed. The
+  one-positional form is deliberately extension-agnostic so every path shape that worked before
+  still works.
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.** NOT `--sidecars`:
+  the ttl-handler role gains a new `GitHubTokenRefreshOnResume` statement
+  (`lambda:InvokeFunction` on `{prefix}-github-token-refresher-*`), which needs a full terragrunt
+  apply. The matching `scheduler:GetSchedule` was already granted by `SchedulerCleanup`, and the
+  operator policy already holds `lambda:*` + `scheduler:GetSchedule` on `{prefix}-*`, so local
+  `km resume` needs no IAM change. No SandboxProfile schema change, no userdata change, **no
+  sandbox recreate** — this is entirely control-plane.
+
 **Phase 129 (2026-08-26) — Declarative MITM intercepts: profile-declared host→action rules replace the hardcoded rickroll (complete):**
 - `spec.network.mitm.intercepts` replaces the compiled-in, unconditional `google.com` → Rickroll
   easter egg (`sidecars/http-proxy/httpproxy/proxy.go`, deleted) with a declarative list of named
@@ -702,7 +744,7 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 ## CLI
 
 - `km validate <profile.yaml>` — validate a SandboxProfile
-- `km create <profile.yaml>` — provision a sandbox (`--no-bedrock`, `--docker`, `--alias`, `--on-demand`, `--prompt <text-or-@file>` repeatable, `--wait`)
+- `km create <profile.yaml> [alias]` — provision a sandbox (`--no-bedrock`, `--docker`, `--alias`, `--on-demand`, `--prompt <text-or-@file>` repeatable, `--wait`). The alias may be a second positional instead of `--alias`; whichever argument ends in `.yaml`/`.yml` is the profile, so order does not matter.
 - `km clone <source> [new-alias]` — duplicate one or more running sandboxes from the source's stored profile (`--count`, `--alias`, `--no-copy` to skip the `$HOME` copy, `--ai`/`--compute`/`--ttl`/`--idle`/`--on-demand`/`--no-bedrock` overrides)
 - `km destroy <sandbox-id>` — teardown a sandbox (`--remote` by default, `--yes` to skip confirmation; `km kill` is an alias)
 - `km pause <sandbox-id>` — hibernate/pause an EC2 or Docker instance (preserves infra)

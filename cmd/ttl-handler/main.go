@@ -455,6 +455,33 @@ func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 // handleResume starts a stopped EC2 instance, updates DynamoDB status to
 // "running", and recreates the TTL schedule based on the profile's TTL duration
 // (counting from now). This ensures resumed sandboxes don't run indefinitely.
+// refreshGitHubTokenOnResume re-mints a waking sandbox's GitHub installation
+// token by invoking its per-sandbox refresher Lambda directly. Best-effort: the
+// outcome is logged and never propagated, since the instance has already been
+// started by the time this runs.
+//
+// A sandbox with no sourceAccess.github has no refresher schedule; that is an
+// info line, not a warning.
+func refreshGitHubTokenOnResume(ctx context.Context, awsCfg awssdk.Config, sandboxID string) {
+	rCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	err := awspkg.ForceGitHubTokenRefresh(rCtx,
+		scheduler.NewFromConfig(awsCfg),
+		lambdapkg.NewFromConfig(awsCfg),
+		resourcePrefix(), sandboxID)
+
+	switch {
+	case err == nil:
+		log.Info().Str("sandbox_id", sandboxID).Msg("github token refreshed on resume")
+	case errors.Is(err, awspkg.ErrNoGitHubRefresher):
+		log.Info().Str("sandbox_id", sandboxID).Msg("no github-token refresher for sandbox; skipping token refresh")
+	default:
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).
+			Msg("github token refresh failed on resume (non-fatal) — git operations in this sandbox may 401")
+	}
+}
+
 func (h *TTLHandler) handleResume(ctx context.Context, event TTLEvent) error {
 	log.Info().Str("sandbox_id", event.SandboxID).Msg("resume event received")
 
@@ -508,6 +535,13 @@ func (h *TTLHandler) handleResume(ctx context.Context, event TTLEvent) error {
 			log.Warn().Err(statusErr).Str("sandbox_id", event.SandboxID).Msg("failed to update DynamoDB status (non-fatal)")
 		}
 	}
+
+	// Wake-up re-credential (mirrors runResume in internal/app/cmd/resume.go):
+	// force a GitHub installation-token re-mint rather than waiting for the
+	// refresher's next 45-minute tick. Non-fatal — the instance is already
+	// starting — but logged, so a refresher that has been failing silently on
+	// every tick shows up here instead of as a git 401 inside the sandbox.
+	refreshGitHubTokenOnResume(ctx, awsCfg, event.SandboxID)
 
 	// Recreate TTL schedule from the profile's TTL duration, counting from now.
 	// This ensures resumed sandboxes don't run indefinitely without a TTL.

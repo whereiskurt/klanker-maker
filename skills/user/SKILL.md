@@ -90,8 +90,20 @@ Always validate custom profiles before creating sandboxes.
 ### Common Create Flags
 
 ```bash
-km create <profile.yaml> [flags]
+km create <profile.yaml> [alias] [flags]
 ```
+
+The alias can be a second positional argument instead of `--alias`. Whichever
+argument ends in `.yaml`/`.yml` is the profile, so these three are equivalent:
+
+```bash
+km create profiles/learn.yaml --alias my-sandbox
+km create profiles/learn.yaml my-sandbox
+km create my-sandbox profiles/learn.yaml
+```
+
+Passing both a positional alias and `--alias` is an error rather than a silent
+precedence rule.
 
 | Flag | Description |
 |------|-------------|
