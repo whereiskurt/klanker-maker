@@ -12,7 +12,8 @@
 This is the **push** counterpart to the Phase 116 **pull** ingress
 (`checks.triggers`, which polls an API on a schedule). Same destination vocabulary
 (`alias` / `profile` / `on_absent` / `cooldown_seconds` / `prompt`, including
-`@file` prompt loading) — different direction. If you already run a
+`@file` prompt loading — see [§4](#4-km-configyaml) for the exact syntax) —
+different direction. If you already run a
 `checks.triggers` entry against Wiz (see `profiles/checks/wiz-intel/`), this is
 not a replacement for it; it is the same idea run in reverse, and the two can
 coexist.
@@ -139,8 +140,28 @@ webhooks:
           on_absent: cold-create    # cold-create | skip
           cooldown_seconds: 900
           group_by: "{{entity.cloud_id}}"
-          prompt: "@file profiles/prompts/wiz.triage.prompt.txt"
+          prompt: "@profiles/prompts/wiz.triage.prompt.txt"
 ```
+
+### `@file` Prompt References
+
+`rules[].prompt` accepts inline text or a bare `@path` reference — **no space** after
+the `@` (that space-separated `@file path` form is not the convention anywhere in km).
+The file is read at `km init` time on the operator's workstation and its contents
+inlined into `KM_WEBHOOK_SOURCES` before the bridge Lambda ever sees it — the Lambda
+never reads the filesystem.
+
+**Search path** (resolved against the `km-config.yaml` directory, **not** the shell CWD):
+
+1. `<config-dir>/<path>` — explicit form, e.g. `@profiles/prompts/wiz.triage.prompt.txt`
+2. `<config-dir>/profiles/<path>` — fallback, so a bare `@wiz.triage.prompt.txt` resolves
+   to `profiles/wiz.triage.prompt.txt` without spelling out the prefix
+
+**Rules:**
+- `@file` → inlined at `km init` time; missing on the whole search path = hard `km init`
+  error + `km doctor` WARN (the WARN lists every path searched)
+- `@@text` → escaped literal `@text` (no file read)
+- Inline text (no `@` prefix) → used as-is
 
 Key-by-key:
 
@@ -157,7 +178,7 @@ Key-by-key:
 | `rules[].alias` / `profile` | Same semantics as `checks.triggers`: target sandbox alias, and the profile used for cold-create. |
 | `rules[].on_absent` | `cold-create` (default) or `skip`. |
 | `rules[].cooldown_seconds` / `group_by` | See [§5](#5-storm-control). |
-| `rules[].prompt` | The agent's first turn. Supports `@file` and `{{field}}` expansion, including `{{raw}}` for the full envelope. |
+| `rules[].prompt` | The agent's first turn. Supports `@file` (see above) and `{{field}}` expansion, including `{{raw}}` for the full envelope. |
 
 ## 5. Storm control
 
@@ -299,7 +320,9 @@ Also check:
 - **`km doctor`'s webhook group** (silently skipped entirely when `webhooks:`
   is absent) also checks: each source is structurally valid; each
   `auth.secret_path` resolves in SSM; the Function URL is recorded in SSM;
-  each rule's `profile` file exists on disk.
+  each rule's `profile` file exists on disk; each rule's `@file` prompt (§4)
+  resolves on the search path (`@@`-escaped and inline prompts are never
+  filesystem-checked).
 
 ## 10. Limits
 

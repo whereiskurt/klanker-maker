@@ -7,7 +7,13 @@
 #   - All keys are snake_case (viper lowercases config keys at load time).
 #   - Operator yaml keys: on_absent, cooldown_seconds, group_by, secret_path,
 #     replay_ttl_seconds, field_paths, max_dispatches, window_seconds.
-#   - `prompt` accepts inline text or @file (resolved relative to km-config.yaml).
+#   - `prompt` accepts inline text or a bare `@path` reference (no space after the
+#     `@` — this is the same convention as github.commands / h1 event prompts, NOT
+#     the space-separated "@file path" form). `@path` is searched relative to the
+#     km-config.yaml directory, then that directory's profiles/ subdir — so a bare
+#     `@wiz.triage.prompt.txt` resolves to profiles/wiz.triage.prompt.txt without
+#     spelling out the prefix. `@@literal` escapes to a literal `@`-prefixed string
+#     with no file read. A missing @file is a hard `km init` error.
 #   - `name` is the URL PATH SEGMENT: this source is reached at POST <fn-url>/wiz.
 #     It must contain no / ? # % space or colon — km doctor enforces this.
 #   - Absent this whole block, the bridge deploys but drops everything, `km doctor`
@@ -91,7 +97,7 @@ webhooks:
 
           # The agent's first turn. Supports {{severity}}, {{title}},
           # {{entity.name}}, {{url}}, {{raw}} and friends.
-          prompt: "@file profiles/prompts/wiz.triage.prompt.txt"
+          prompt: "@profiles/prompts/wiz.triage.prompt.txt"
 
         # A second, narrower rule showing on_absent: skip — this one only ever
         # dispatches to an existing box and never provisions one.
