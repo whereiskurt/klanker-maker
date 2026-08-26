@@ -8,6 +8,72 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 127 (2026-08-25) — Generic webhook ingress bridge, Wiz first source (complete):**
+- A third-party SaaS POSTs a payload to a new km-owned Lambda (`km-webhook-bridge`,
+  Function URL), which authenticates it, drops replays, matches operator-declared rules, and
+  dispatches a prompt to a named sandbox alias — warm via a per-sandbox SQS FIFO queue, cold via
+  EventBridge `SandboxCreate`. First source: **Wiz** — an Automation Rule fires on an Issue or
+  Threat and the `ir-bot` sandbox runs `/triage` against the payload. This is the **push**
+  counterpart to the existing Phase 116 **pull** ingress (`checks.triggers`); the two share the
+  identical `alias`/`profile`/`on_absent`/`cooldown_seconds`/`prompt` vocabulary by design, so an
+  operator learns one dialect for both directions.
+- **Dormant by default.** Absent `webhooks:` in `km-config.yaml` ⇒ `KM_WEBHOOK_SOURCES` unset ⇒
+  the bridge drops everything and `km doctor` skips the whole group with zero AWS calls.
+- **No CLI verb, by explicit decision.** Configuration is `km-config.yaml` only — the opposite of
+  `km slack`/`km github`/`km h1`, which exist because of App manifests, OAuth, and token rotation.
+  A webhook has a URL and a shared secret; neither needs a verb.
+- **Wiz payloads are ours to define, not Wiz's.** Wiz Automation Rules author their own request
+  body as an operator-editable Mustache template, so km publishes a canonical
+  `docs/webhook-templates/wiz.{issue,threat}.v1.json` contract for the operator to paste in,
+  rather than reverse-engineering a fixed Wiz schema. A wrong leaf variable is fixed by editing
+  the pasted template against Wiz's own variable picker, never by a Go patch.
+- **Wiz offers no HMAC/signature and no delivery-id header** — confirmed against several
+  third-party integration guides. The template-injected
+  `"delivery_key": "{{issue.id}}:{{triggerType}}:{{issue.updatedAt}}"` is the deliberate
+  replacement for a missing delivery id; the bearer token minted into SSM is therefore the
+  **entire** auth boundary. Wiz also offers a client-certificate option that is unusable here — a
+  Lambda Function URL cannot terminate mTLS — and the operator has confirmed mTLS is never
+  required, so no ALB/API Gateway fronting is planned.
+- **Four storm-control layers, cheapest first:** replay nonce (keyed on `delivery_key`) → cooldown
+  (`group_by`, the coalescing lever — first alert of a burst wins, the rest suppressed for the
+  window; this is dedup-by-grouping, NOT true batching, which stays out of scope) → an
+  install-wide rate ceiling shared across every configured source (counted only AFTER replay and
+  cooldown, so suppressed duplicates cost nothing) → the Phase 121 per-sandbox action-quota gate
+  (`onBreach: freeze`). The first three fail OPEN on a store error (never strand a real alert on a
+  transient DynamoDB blip); the quota gate is the one layer that actually stops runaway spend when
+  it trips, and it is **warm-path only** — a cold-create dispatch has no sandbox yet to have a
+  usage history against, so it is quota-ungated by construction, not an oversight.
+- **The `{{...}}` non-collision:** Wiz renders its own Mustache variables before sending; km then
+  expands its own `{{severity}}`/`{{entity.name}}`/`{{raw}}` syntax against the already-rendered
+  envelope when building the agent prompt. The two never see each other's raw tokens despite
+  looking identical — worth stating explicitly, or it costs someone an hour of confused staring.
+- **No threads table, no reply-back leg, no `km-webhook` sandbox-side helper** — unlike GitHub/H1,
+  a webhook source is one-way by design (confirmed with the operator, 2026-08-25): nothing to
+  reply to, no conversation to persist. The agent reports out via `km-slack` instead if needed.
+- **`km init` mints the bearer token once and never overwrites it.** The absence check is narrow
+  (only a genuine "parameter not found" counts as safe-to-mint; any other SSM read error is
+  surfaced, never treated as absence) so a transient read failure can't silently overwrite a live
+  token out from under a configured Wiz integration. Deliberate rotation is an explicit
+  `aws ssm put-parameter --overwrite` plus a Wiz-side paste — see `docs/webhook-ingress.md` § Token
+  rotation.
+- **Deploy surface, order load-bearing:** `make build` FIRST (the binary carries the new
+  `regionalModules()` entries — `lambda-webhook-bridge` plus a `webhook-inbound` variant of the
+  shared inbound DLQ; a stale binary silently skips them, `km doctor` stays green while nothing was
+  provisioned) → `make build-lambdas` (new bridge zip, and refreshes the create-handler for the new
+  `notification.webhook.inbound` profile field + poller userdata) → `km init --dry-run=false`
+  (**not** `--sidecars` — Lambda/Function URL/IAM/DLQ/env block all need a full terragrunt apply; a
+  scoped `km init --webhooks` sugar alias covers a fast env+IAM-only refresh once the module
+  already exists). Existing `ir-bot` needs **one** `km destroy && km create` to gain the
+  per-sandbox queue and the `km-webhook-inbound-poller`.
+- **Reused, not rebuilt:** the shared nonces table + `CheckAndStore`, the `alias-index` GSI, the
+  Phase 99.1 shared inbound DLQ pattern, the EventBridge cold-create path, `WireActionQuota`, and
+  the Phase 109 self-heal (a terminal `ErrNoResumableInstance` deletes the stale DynamoDB row and
+  falls through to cold-create, so an `ir-bot` terminated out from under km doesn't shadow creation
+  forever).
+- See `docs/webhook-ingress.md` for the full operator runbook (Wiz setup, Automation Rule wiring,
+  the full `webhooks:` config surface, storm control, deploy surface, token rotation,
+  troubleshooting, and known limits).
+
 **Sandbox liveness: VNC + SSH presence signals (2026-08-23):**
 - `km-presence` gained **signal 6 (KasmVNC viewer attached)** and **signal 7 (SSH session
   established)**, closing a gap where an interactively-used sandbox was reaped by
@@ -459,6 +525,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 
 | You want to… | Look at |
 |---|---|
+| Push webhook ingress — `webhooks:` block, Wiz Automation Rule setup, canonical km payload template, storm control (replay/cooldown/group_by/rate ceiling), deploy surface | `docs/webhook-ingress.md` |
 | Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the seven `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
 | Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
 | Cross-account capacity borrowing — `km account add/register/list/rm`, `spec.runtime.launchAccount`, the two-credential enrollment sequence, the launcher-role security model, capacity/teardown/doctor cross-account wiring, deploy surface | `docs/cross-account-capacity-borrowing.md` (Phase 126) |

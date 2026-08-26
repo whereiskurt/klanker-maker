@@ -1,0 +1,111 @@
+# docs/webhook-templates/webhooks.example.yaml
+#
+# EXAMPLE km-config.yaml snippet — paste into your km-config.yaml at the top
+# level to wire a Wiz webhook to a sandbox agent.
+#
+# Notes:
+#   - All keys are snake_case (viper lowercases config keys at load time).
+#   - Operator yaml keys: on_absent, cooldown_seconds, group_by, secret_path,
+#     replay_ttl_seconds, field_paths, max_dispatches, window_seconds.
+#   - `prompt` accepts inline text or a bare `@path` reference (no space after the
+#     `@` — this is the same convention as github.commands / h1 event prompts, NOT
+#     the space-separated "@file path" form). `@path` is searched relative to the
+#     km-config.yaml directory, then that directory's profiles/ subdir — so a bare
+#     `@wiz.triage.prompt.txt` resolves to profiles/wiz.triage.prompt.txt without
+#     spelling out the prefix. `@@literal` escapes to a literal `@`-prefixed string
+#     with no file read. A missing @file is a hard `km init` error.
+#   - `name` is the URL PATH SEGMENT: this source is reached at POST <fn-url>/wiz.
+#     It must contain no / ? # % space or colon — km doctor enforces this.
+#   - Absent this whole block, the bridge deploys but drops everything, `km doctor`
+#     stays silent, and no AWS calls are made. Dormant by default.
+#
+# Deploy steps (order is load-bearing):
+#   1. make build              # FIRST — a stale binary silently skips the new modules
+#   2. make build-lambdas
+#   3. km init --dry-run=false # NOT --sidecars; prints the minted bearer token ONCE
+#   4. km destroy <ir-bot> && km create profiles/ir-bot.yaml   # gain queue + poller
+#
+# Then in Wiz: Settings → Integrations → Add Integration → SIEM & Automation
+# Tools → Webhook. URL = the Function URL + /wiz, Authentication = Token (Bearer)
+# with the token km init printed. Paste wiz.issue.v1.json (this directory) into
+# the Automation Rule's request body.
+#
+# Full runbook: docs/webhook-ingress.md
+
+webhooks:
+  # Install-wide storm breaker, shared across ALL sources: one fleet of sandboxes
+  # and one AI budget, so every source draws down the same allowance. Counted only
+  # AFTER the replay and cooldown gates, so suppressed duplicates cost nothing.
+  # Omit the block entirely to run without a ceiling.
+  rate_limit:
+    max_dispatches: 20
+    window_seconds: 600
+
+  sources:
+    - name: wiz
+      # bearer is what Wiz actually offers (it has no HMAC and no request
+      # signature). `hmac` exists for future sources that do sign.
+      auth:
+        type: bearer
+        header: Authorization
+        secret_path: /km/config/webhooks/wiz/token
+
+      # Replay-nonce window. The canonical template supplies a delivery_key of
+      # {{issue.id}}:{{triggerType}}:{{issue.updatedAt}}, so a Wiz retry dedupes
+      # cleanly. Default 900s when omitted.
+      replay_ttl_seconds: 900
+
+      # ESCAPE HATCH — only consulted when a payload carries no km_schema, i.e.
+      # when you are NOT using the shipped template. Leave commented out for Wiz.
+      # field_paths:
+      #   id: "$.id"
+      #   type: "$.objectType"
+      #   severity: "$.severity"
+      #   group: "$.entity.cloud_id"
+
+      rules:
+        # First match wins, in declaration order. All named match fields must
+        # match (AND); any listed value within a field matches (OR); an absent
+        # field is a NON-match, never a wildcard — so a typo'd field name
+        # dispatches nothing rather than everything.
+        - match:
+            type: [issue, threat]
+            severity: [CRITICAL, HIGH]
+
+          # Target sandbox. Warm path: resolves the alias and enqueues to its
+          # FIFO queue (strictly serial per box). Absent: see on_absent.
+          alias: ir-bot
+
+          # Used for cold-create. `km init` pre-stages this profile to
+          # s3://{artifacts}/webhook-profiles/{slug}/.km-profile.yaml so the
+          # create-handler can fetch it.
+          profile: ir-bot
+
+          # cold-create (default) provisions a new sandbox; skip logs and drops.
+          on_absent: cold-create
+
+          # Suppress repeat dispatch of the same group_by key within the window.
+          # This is the COALESCING lever, not a batcher: the first alert of a
+          # burst wins and the rest are suppressed. 0 or omitted = no cooldown.
+          cooldown_seconds: 900
+
+          # Expanded against the parsed envelope to form the cooldown key. Group
+          # on an entity id so fifty findings on one host collapse to one turn.
+          # A variable that does not resolve falls back to per-delivery
+          # uniqueness rather than collapsing unrelated alerts.
+          group_by: "{{entity.cloud_id}}"
+
+          # The agent's first turn. Supports {{severity}}, {{title}},
+          # {{entity.name}}, {{url}}, {{raw}} and friends.
+          prompt: "@profiles/prompts/wiz.triage.prompt.txt"
+
+        # A second, narrower rule showing on_absent: skip — this one only ever
+        # dispatches to an existing box and never provisions one.
+        # - match:
+        #     type: [vulnerability]
+        #     severity: [CRITICAL]
+        #   alias: ir-bot
+        #   on_absent: skip
+        #   cooldown_seconds: 3600
+        #   group_by: "{{entity.cloud_id}}"
+        #   prompt: "Triage this Wiz vulnerability finding.\n\n{{raw}}"

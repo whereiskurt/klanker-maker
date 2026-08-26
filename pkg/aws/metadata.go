@@ -56,6 +56,18 @@ type SandboxMetadata struct {
 	// dormant on the next lifecycle write (project_sandboxmetadata_lossy_roundtrip footgun).
 	GithubInboundQueueURL string `json:"github_inbound_queue_url,omitempty"`
 
+	// Phase 127 — generic webhook ingress bridge.
+	// WebhookInboundQueueURL is the SQS FIFO queue URL for inbound generic webhook
+	// events (notification.webhook.inbound). Empty when
+	// notification.webhook.inbound.enabled was false/absent at create time
+	// (dormant invariant). Populated by provisionWebhookInboundQueue; read by the
+	// webhook poller.
+	// MUST round-trip through marshal/unmarshal: every read-modify-write path
+	// (resume.go, extend.go, ttl-handler) PutItems the whole row — dropping this
+	// field reverts the sandbox to dormant on the next lifecycle write
+	// (project_sandboxmetadata_lossy_roundtrip footgun).
+	WebhookInboundQueueURL string `json:"webhook_inbound_queue_url,omitempty"`
+
 	// Phase 91.5 — per-sandbox Slack inbound overrides. Written at km create by
 	// create_slack_inbound.go ONLY when the profile sets the field explicitly;
 	// read by the bridge's FetchByChannel. Tri-state via *bool: nil = "fall back

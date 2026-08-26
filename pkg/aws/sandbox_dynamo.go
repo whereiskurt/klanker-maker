@@ -146,30 +146,31 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		status = "running" // backward compat: old metadata without status field
 	}
 	return SandboxRecord{
-		SandboxID:             meta.SandboxID,
-		Profile:               meta.ProfileName,
-		Substrate:             meta.Substrate,
-		Region:                meta.Region,
-		Status:                status,
-		CreatedAt:             meta.CreatedAt,
-		TTLExpiry:             meta.TTLExpiry,
-		TTLRemaining:          computeTTLRemaining(meta.TTLExpiry),
-		IdleTimeout:           meta.IdleTimeout,
-		Alias:                 meta.Alias,
-		ClonedFrom:            meta.ClonedFrom,
-		Locked:                meta.Locked,
-		TeardownPolicy:        meta.TeardownPolicy,
-		LaunchAccount:         meta.LaunchAccount,
-		SlackChannelID:        meta.SlackChannelID,
-		SlackInboundQueueURL:  meta.SlackInboundQueueURL,
-		GithubInboundQueueURL: meta.GithubInboundQueueURL,
-		FailureReason:         meta.FailureReason,
-		FailedAt:              meta.FailedAt,
-		ActionLimits:          meta.ActionLimits,
-		ActionFrozen:          meta.ActionFrozen,
-		FrozenReason:          meta.FrozenReason,
-		FrozenAt:              meta.FrozenAt,
-		FrozenBy:              meta.FrozenBy,
+		SandboxID:              meta.SandboxID,
+		Profile:                meta.ProfileName,
+		Substrate:              meta.Substrate,
+		Region:                 meta.Region,
+		Status:                 status,
+		CreatedAt:              meta.CreatedAt,
+		TTLExpiry:              meta.TTLExpiry,
+		TTLRemaining:           computeTTLRemaining(meta.TTLExpiry),
+		IdleTimeout:            meta.IdleTimeout,
+		Alias:                  meta.Alias,
+		ClonedFrom:             meta.ClonedFrom,
+		Locked:                 meta.Locked,
+		TeardownPolicy:         meta.TeardownPolicy,
+		LaunchAccount:          meta.LaunchAccount,
+		SlackChannelID:         meta.SlackChannelID,
+		SlackInboundQueueURL:   meta.SlackInboundQueueURL,
+		GithubInboundQueueURL:  meta.GithubInboundQueueURL,
+		WebhookInboundQueueURL: meta.WebhookInboundQueueURL,
+		FailureReason:          meta.FailureReason,
+		FailedAt:               meta.FailedAt,
+		ActionLimits:           meta.ActionLimits,
+		ActionFrozen:           meta.ActionFrozen,
+		FrozenReason:           meta.FrozenReason,
+		FrozenAt:               meta.FrozenAt,
+		FrozenBy:               meta.FrozenBy,
 	}
 }
 
@@ -392,6 +393,19 @@ func unmarshalGitHubFields(item map[string]dynamodbtypes.AttributeValue, meta *S
 	}
 }
 
+// unmarshalWebhookFields reads Phase 127 generic webhook inbound fields from a raw
+// DynamoDB item into SandboxMetadata. Called by ReadSandboxMetadataDynamo,
+// ListAllSandboxesByDynamo, and ListAllSandboxMetadataDynamo after
+// toSandboxMetadata() + unmarshalSlackFields()/unmarshalGitHubFields(). Mirrors
+// unmarshalGitHubFields.
+func unmarshalWebhookFields(item map[string]dynamodbtypes.AttributeValue, meta *SandboxMetadata) {
+	if v, ok := item["webhook_inbound_queue_url"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			meta.WebhookInboundQueueURL = sv.Value
+		}
+	}
+}
+
 // unmarshalFrozenFields reads Phase 121 action-quota / freeze-quarantine fields from
 // a raw DynamoDB item into SandboxMetadata. Called by ReadSandboxMetadataDynamo and
 // ListAllSandboxesByDynamo (and ListAllSandboxMetadataDynamo) after toSandboxMetadata().
@@ -570,6 +584,14 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 		item["github_inbound_queue_url"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.GithubInboundQueueURL}
 	}
 
+	// Phase 127 — generic webhook inbound metadata. Symmetric with
+	// unmarshalWebhookFields. Must be emitted here or read-modify-write paths
+	// (resume/extend/ttl-handler) silently strip the queue URL on the next
+	// full-row PutItem (the project_sandboxmetadata_lossy_roundtrip footgun).
+	if meta.WebhookInboundQueueURL != "" {
+		item["webhook_inbound_queue_url"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.WebhookInboundQueueURL}
+	}
+
 	// Phase 77 — failure discoverability. Only written when failure_reason is
 	// non-empty (i.e. sandbox failed). Symmetric with unmarshalFailureFields.
 	if meta.FailureReason != "" {
@@ -656,6 +678,7 @@ func ReadSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI, t
 
 	unmarshalSlackFields(out.Item, meta)
 	unmarshalGitHubFields(out.Item, meta)
+	unmarshalWebhookFields(out.Item, meta)
 	unmarshalFailureFields(out.Item, meta)
 	unmarshalFrozenFields(out.Item, meta)
 	unmarshalNetworkFields(out.Item, meta)
@@ -725,6 +748,7 @@ func ListAllSandboxesByDynamo(ctx context.Context, client SandboxMetadataAPI, ta
 			}
 			unmarshalSlackFields(item, meta)
 			unmarshalGitHubFields(item, meta)
+			unmarshalWebhookFields(item, meta)
 			unmarshalFailureFields(item, meta)
 			unmarshalFrozenFields(item, meta)
 			unmarshalNetworkFields(item, meta)
@@ -772,6 +796,7 @@ func ListAllSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI
 			}
 			unmarshalSlackFields(item, meta)
 			unmarshalGitHubFields(item, meta)
+			unmarshalWebhookFields(item, meta)
 			unmarshalFailureFields(item, meta)
 			unmarshalFrozenFields(item, meta)
 			unmarshalNetworkFields(item, meta)

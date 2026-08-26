@@ -71,6 +71,12 @@ type SandboxRecord struct {
 	// Empty when notification.github.inbound.enabled was false/absent at create time.
 	GithubInboundQueueURL string `json:"github_inbound_queue_url,omitempty"`
 
+	// Phase 127 — generic webhook ingress bridge.
+	// WebhookInboundQueueURL is the SQS FIFO queue URL for inbound generic webhook
+	// events. Empty when notification.webhook.inbound.enabled was false/absent at
+	// create time.
+	WebhookInboundQueueURL string `json:"webhook_inbound_queue_url,omitempty"`
+
 	// Phase 77 — failure discoverability.
 	FailureReason string     `json:"failure_reason,omitempty"`
 	FailedAt      *time.Time `json:"failed_at,omitempty"`

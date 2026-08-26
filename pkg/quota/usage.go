@@ -39,6 +39,7 @@ var allActions = []Action{
 	ActionEmailSend,
 	ActionSlackPost,
 	ActionH1Comment,
+	ActionWebhookDispatch,
 }
 
 // AllActionsOrder returns the canonical, deterministic action iteration order.

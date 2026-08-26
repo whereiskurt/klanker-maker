@@ -1,0 +1,20 @@
+{
+  "km_schema": "v1",
+  "source": "wiz",
+  "delivery_key": "{{issue.id}}:{{triggerType}}:{{issue.updatedAt}}",
+  "type": "threat",
+  "id": "{{issue.id}}",
+  "severity": "{{issue.severity}}",
+  "status": "{{issue.status}}",
+  "title": "{{issue.enrichedMainDetection.rule.name}}",
+  "trigger": { "type": "{{triggerType}}", "rule": "{{ruleName}}" },
+  "entity": {
+    "type": "{{issue.entitySnapshot.type}}",
+    "name": "{{#issue.enrichedThreatResources}}{{name}} {{/issue.enrichedThreatResources}}{{^issue.enrichedThreatResources}}N/A{{/issue.enrichedThreatResources}}",
+    "cloud_platform": "{{issue.entitySnapshot.cloudPlatform}}",
+    "cloud_id": "{{issue.entitySnapshot.externalId}}"
+  },
+  "actors": "{{#issue.enrichedThreatActors}}{{name}}, {{/issue.enrichedThreatActors}}",
+  "detections": "{{#issue.enrichedDetections}}{{rule.name}}, {{/issue.enrichedDetections}}",
+  "url": "https://{{wizDomain}}/threats#~(issue~'{{issue.id}})"
+}
