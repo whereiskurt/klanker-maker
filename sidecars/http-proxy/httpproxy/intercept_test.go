@@ -1,12 +1,17 @@
 package httpproxy_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	httpproxy "github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
@@ -273,5 +278,195 @@ func TestInterceptResponse_RespondDefaultsContentType(t *testing.T) {
 	resp := httpproxy.InterceptResponse(req, ic)
 	if ct := resp.Header.Get("Content-Type"); ct != "text/plain" {
 		t.Errorf("Content-Type = %q, want text/plain default", ct)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end precedence tests (Task 2) — these assert on the actual response
+// the client receives, not on registration order, because registration order
+// is exactly the thing that could silently change.
+// ---------------------------------------------------------------------------
+
+// startInterceptProxy builds a proxy with the given intercepts plus whatever
+// extra options the caller wants, dialing every outbound connection to
+// targetAddr — mirroring startDenyProxy in deny_test.go.
+func startInterceptProxy(t *testing.T, targetAddr string, allowed []string, ics []httpproxy.Intercept, opts ...httpproxy.ProxyOption) string {
+	t.Helper()
+	opts = append(opts, httpproxy.WithIntercepts(ics))
+	proxy := httpproxy.NewProxy(allowed, "sandbox-intercept-test", opts...)
+	proxy.Tr = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, targetAddr)
+		},
+	}
+	s := httptest.NewServer(proxy)
+	t.Cleanup(s.Close)
+	u, _ := url.Parse(s.URL)
+	return u.Host
+}
+
+func TestHTTPProxy_InterceptFiresForHostAbsentFromAllowlist(t *testing.T) {
+	target := denyTestTarget(t)
+	ics := []httpproxy.Intercept{
+		{Name: "rickroll", Hosts: []string{".google.com"}, Redirect: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+	}
+	// allowed does NOT include google.com — the intercept must still fire,
+	// preserving today's built-in google.com behaviour.
+	proxyAddr := startInterceptProxy(t, target, []string{"other.example.com"}, ics)
+	client := proxyClient(t, proxyAddr)
+	// The redirect target (youtube.com) is not in the allowlist either; the
+	// default client would otherwise transparently follow the 301 and fail
+	// there instead of letting us inspect the intercept's own response.
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	resp, err := client.Get("http://google.com/")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMovedPermanently {
+		t.Errorf("status = %d, want 301 (intercept must fire for a host absent from ALLOWED_HOSTS)", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" {
+		t.Errorf("Location = %q, want the rickroll target", loc)
+	}
+}
+
+func TestHTTPProxy_DenyBeatsIntercept(t *testing.T) {
+	target := denyTestTarget(t)
+	ics := []httpproxy.Intercept{
+		{Name: "chaos", Hosts: []string{"evil.example.com"}, Redirect: "https://safe.example/"},
+	}
+	proxyAddr := startInterceptProxy(t, target, []string{"*"}, ics, httpproxy.WithDeniedHosts([]string{"evil.example.com"}))
+	client := proxyClient(t, proxyAddr)
+
+	resp, err := client.Get("http://evil.example.com/")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 — the deny gate must beat a declared intercept", resp.StatusCode)
+	}
+}
+
+func TestHTTPProxy_GitHubFilterBeatsIntercept(t *testing.T) {
+	target := denyTestTarget(t)
+	ics := []httpproxy.Intercept{
+		{Name: "github-chaos", Hosts: []string{"api.github.com"}, Respond: &httpproxy.Respond{Status: 200, Body: "intercepted"}},
+	}
+	proxyAddr := startInterceptProxy(t, target, nil, ics, httpproxy.WithGitHubRepoFilter([]string{"owner/repo"}))
+	client := proxyClient(t, proxyAddr)
+
+	// api.github.com/repos/other/blocked is NOT in the allowed repo list.
+	resp, err := client.Get("http://api.github.com/repos/other/blocked")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body := readAllBody(t, resp)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 from the GitHub repo filter (not the intercept), body=%q", resp.StatusCode, body)
+	}
+	if body == "intercepted" {
+		t.Error("the intercept answered instead of the GitHub repo filter")
+	}
+}
+
+func TestHTTPProxy_AnthropicMeteringBeatsIntercept(t *testing.T) {
+	// Mock upstream Anthropic server returning a valid non-streaming usage body.
+	anthropicServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50}}`))
+	}))
+	t.Cleanup(anthropicServer.Close)
+	anthropicAddr, _ := url.Parse(anthropicServer.URL)
+
+	stub := &captureModelIDStub{}
+	ics := []httpproxy.Intercept{
+		{Name: "anthropic-chaos", Hosts: []string{"api.anthropic.com"}, Respond: &httpproxy.Respond{Status: 200, Body: "intercepted"}},
+	}
+
+	proxy := httpproxy.NewProxy(
+		// api.anthropic.com must be in the allowlist too, mirroring how the
+		// compiler actually wires a budget-enforced profile
+		// (spec.execution.useBedrock adds api.anthropic.com to ALLOWED_HOSTS
+		// alongside enabling budget enforcement) — without it, the general
+		// plain-HTTP handler at the bottom of NewProxy would 403 the request
+		// before it ever reaches the metering path, which would make this
+		// test pass for the wrong reason.
+		[]string{"api.anthropic.com"},
+		"sandbox-intercept-test",
+		httpproxy.WithBudgetEnforcement(stub, "km-budgets", nil, nil),
+		httpproxy.WithIntercepts(ics),
+	)
+	proxy.Tr = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, anthropicAddr.Host)
+		},
+	}
+	_, proxyAddr := startProxyServer(t, proxy)
+	client := proxyClient(t, proxyAddr)
+
+	resp, err := client.Post("http://api.anthropic.com/v1/messages", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("POST to api.anthropic.com failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body := readAllBody(t, resp)
+	if body == "intercepted" {
+		t.Fatal("the intercept answered instead of the Anthropic metering handler")
+	}
+
+	// The metering reader fires its EOF callback in a goroutine; give it a
+	// brief moment (mirrors TestHTTPProxy_OpenAIMetered's own margin).
+	time.Sleep(100 * time.Millisecond)
+
+	const wantSK = "BUDGET#ai#claude-sonnet-4-6"
+	if stub.capturedSK != wantSK {
+		t.Errorf("DynamoDB SK = %q, want %q (metering handler must own this request, not the intercept)", stub.capturedSK, wantSK)
+	}
+}
+
+func TestHTTPProxy_NoInterceptsGoogleNotRedirected(t *testing.T) {
+	target := denyTestTarget(t)
+	// No intercepts configured. allowed includes google.com so the test can
+	// distinguish "handled by the general allowlist path" (200) from "blocked".
+	proxyAddr := startInterceptProxy(t, target, []string{"google.com"}, nil)
+	client := proxyClient(t, proxyAddr)
+
+	resp, err := client.Get("http://google.com/")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusMovedPermanently {
+		t.Error("with no intercepts configured, google.com must not be redirected")
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 (handled by the general allowlist path)", resp.StatusCode)
+	}
+}
+
+func TestHTTPProxy_FirstDeclaredInterceptWins(t *testing.T) {
+	target := denyTestTarget(t)
+	ics := []httpproxy.Intercept{
+		{Name: "first", Hosts: []string{"api.example.com"}, Respond: &httpproxy.Respond{Status: 200, Body: "first-wins"}},
+		{Name: "second", Hosts: []string{"api.example.com"}, Respond: &httpproxy.Respond{Status: 200, Body: "second-wins"}},
+	}
+	proxyAddr := startInterceptProxy(t, target, []string{"api.example.com"}, ics)
+	client := proxyClient(t, proxyAddr)
+
+	resp, err := client.Get("http://api.example.com/")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body := readAllBody(t, resp)
+	if body != "first-wins" {
+		t.Errorf("body = %q, want %q (first declared rule must win)", body, "first-wins")
 	}
 }
