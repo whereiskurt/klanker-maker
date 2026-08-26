@@ -457,12 +457,12 @@ drop-in this mirrors), and the 2026-08-21 egress deny lists (whose deny gate at
 `proxy.go:237` stays ahead of every intercept, and which owns blocking -- this
 phase deliberately ships **no `block` action**).
 
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 127-01-PLAN.md — profile schema, Go types, and the by-name last-wins collapse that makes `enabled: false` reachable through `extends:` (wave 1)
+- [x] 127-01-PLAN.md — profile schema, Go types, and the by-name last-wins collapse that makes `enabled: false` reachable through `extends:` (wave 1)
 - [ ] 127-02-PLAN.md — sidecar intercept engine: matcher, base64 loader, handler registration in place of the hardcoded block, transparent-path coverage (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
