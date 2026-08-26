@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 127
 current_phase_name: declarative-mitm-intercepts-profile-declared-host-to-action-
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 127-01-PLAN.md
-last_updated: "2026-08-26T05:27:34.701Z"
+stopped_at: Completed 127-02-PLAN.md
+last_updated: "2026-08-26T05:51:22.036Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 127 execution started
 progress:
   total_phases: 11
   completed_phases: 8
   total_plans: 72
-  completed_plans: 63
+  completed_plans: 64
   percent: 73
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 127 (declarative-mitm-intercepts-profile-declared-host-to-action-) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Total Plans in Phase: 5
-Current Plan: 2
+Current Plan: 3
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 127 execution started
 
@@ -633,6 +633,7 @@ Progress: [█████████░] 91%
 | Phase 126 P09 | 50min | 2 tasks | 3 files |
 | Phase 126 P10 | 50min | 2 tasks | 8 files |
 | Phase 127 P01 | 2min | 3 tasks | 6 files |
+| Phase 127 P02 | 15min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1807,6 +1808,8 @@ Recent decisions affecting current work:
 - [Phase 126]: checkLaunchAccountOrphanInstances treats an unreachable link as its own WARN, never collapsed into a clean 'no orphans found' result (T-126-47)
 - [Phase 126]: Phase 126 pre-flight gate green (7 commands incl. the 3 excluded packages); live cross-account UAT checkpointed pending human execution with real two-account credentials + GPU quota — docs/cross-account-capacity-borrowing.md is the operator runbook; 126-UAT.md carries the green pre-flight record and the pending 8-row containment matrix + 18-step live procedure
 - [Phase 127]: MITM intercept collapse wired into fromMap (not resolveMap) for by-name last-wins override — Single point every Resolve() output passes through, matching the plan's stated integration point
+- [Phase ?]: Extended registerInterceptHandlers with an isPlatformOwnedHost guard (meteringEnabled/githubEnabled) so an intercept cannot shadow live Bedrock/Anthropic/OpenAI metering or the GitHub repo filter via goproxy's fallthrough dispatch
+- [Phase ?]: Applied the same anti-shadow guard on the transparent (eBPF/both) listener path via a new matchInterceptForRequest helper, and added an internal (package httpproxy) test file to exercise it directly since no BPF-map fixture exists for a full network test
 
 ### Roadmap Evolution
 
@@ -1960,6 +1963,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-26T05:27:34.687Z
-Stopped at: Completed 127-01-PLAN.md
+Last session: 2026-08-26T05:51:22.021Z
+Stopped at: Completed 127-02-PLAN.md
 Resume file: None
