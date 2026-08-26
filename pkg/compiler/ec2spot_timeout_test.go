@@ -13,8 +13,9 @@ import (
 // It pointed at v1.2.0 from Phase 125 (which bumped the live pin to v1.3.0) until 2026-08-25,
 // so every assertion below was being made against a module no sandbox used: the tests passed
 // while the live module went unchecked, and a change to v1.3.0 could not fail them.
-// TestEC2SpotModuleDir_TracksLivePin now guards that drift directly.
-const ec2spotModuleDir = "../../infra/modules/ec2spot/v1.3.0"
+// TestEC2SpotModuleDir_TracksLivePin now guards that drift directly — and did its job again
+// when the live pin moved v1.3.0 -> v1.4.0 (secret_paths IAM grant), same day.
+const ec2spotModuleDir = "../../infra/modules/ec2spot/v1.4.0"
 
 // sandboxTemplatePath is the terragrunt template carrying the authoritative pin.
 const sandboxTemplatePath = "../../infra/templates/sandbox/terragrunt.hcl"
@@ -61,7 +62,7 @@ func TestEC2SpotModuleDir_TracksLivePin(t *testing.T) {
 	if nl := strings.Index(line, "\n"); nl >= 0 {
 		line = line[:nl]
 	}
-	// line looks like: ec2spot = "v1.3.0"
+	// line looks like: ec2spot = "v1.4.0"
 	open := strings.Index(line, `"`)
 	close := strings.LastIndex(line, `"`)
 	if open < 0 || close <= open {
