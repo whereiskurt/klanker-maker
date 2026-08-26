@@ -178,3 +178,7 @@ None - no external service configuration required. This plan is code-only (Go ty
 ---
 *Phase: 127-declarative-mitm-intercepts-profile-declared-host-to-action-*
 *Completed: 2026-08-26*
+
+## Self-Check: PASSED
+
+All created files verified present on disk (pkg/profile/mitm.go, mitm_test.go, mitm_schema_test.go, three testdata fixtures, this SUMMARY.md). All four task/summary commit hashes (82e258c1, 3e3e4316, 4d9d450a, 7f8c1c88) verified present in git log.
