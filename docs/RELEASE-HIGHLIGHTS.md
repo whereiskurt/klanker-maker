@@ -13,119 +13,85 @@
 -->
 ## ✨ Major additions highlighted
 
-This release is about **one thing: running sandboxes on GPU capacity your main account doesn't
-have.** A sandbox profile can now launch its EC2 box into a *different*, pre-linked AWS account
-and borrow that account's vCPU quota — while the single km control plane stays exactly where it
-is.
+This release is about **letting the outside world wake a sandbox.** Until now every inbound path
+was a conversation — a GitHub comment, a Slack mention, a HackerOne report. This one is a
+machine: a security platform fires an alert at a webhook, and a sandbox agent picks it up and
+starts working.
 
-### 🏦 Cross-account capacity borrowing
+### 🔔 Generic webhook ingress bridge — Wiz first source
 
-GPU quota is per-account and per-region, and `L-DB2E81BA` ("Running On-Demand G and VT
-instances") **defaults to 0** in every account you have never asked about. So the quota you need
-is often sitting in a *different* account from the one km runs in. Measured on a real link
-during this release's UAT:
+A third-party SaaS POSTs to a new km-owned Lambda behind a Function URL. The bridge
+authenticates the request, drops replays, matches it against operator-declared rules, and
+dispatches a prompt to a sandbox — **warm** via that sandbox's SQS FIFO queue, or **cold** by
+creating one. The first source is Wiz: an Automation Rule fires on an Issue or a Threat
+Detection, and an `ir-bot` sandbox runs `/triage` against the payload.
 
-```
-$ km capacity profiles/gpu-qwen38-oblit-12x.yaml --launch-account gpuman
-Capacity report: g6e.12xlarge  region: us-east-1  account: gpuman (481723467561)
-us-east-1a  yes  768 vCPU  ...
-
-$ km capacity profiles/gpu-qwen38-oblit-12x.yaml
-Capacity report: g6e.12xlarge  region: us-east-1  account: home
-us-east-1a  yes   64 vCPU  ...
-```
-
-Same profile, same region — **12x the headroom**, because the gate reads the *linked* account.
-
-**Only the box moves.** State, DynamoDB, budget, `km list`, `km destroy`, and every bridge stay
-in the home account. A linked sandbox is an ordinary sandbox that happens to bill someone else's
-quota.
-
-**Dormant by default.** Absent `spec.runtime.launchAccount` (or `--launch-account`), behaviour is
-byte-identical to v0.7.x. No `apiVersion` bump, no profile migration, no change to existing
-sandboxes.
-
-**Enrollment is two commands with two different credential sets** — this is deliberate, and the
-order matters:
-
-```bash
-# 1. TARGET-account admin creds — provisions the bounded launcher role, a
-#    permissions-boundaried box role, a results bucket, and one subnet PER AZ.
-km account add gpuman --aws-profile <target-admin> --trust <home-account-id> \
-    --instance-types g6e.12xlarge,g6e.4xlarge --provision-network --az-count 4 --dry-run=false
-
-# 2. HOME creds — writes the km-config.yaml link, the external id as an SSM
-#    SecureString, and exactly one read-only grant on the home artifacts bucket.
-km account register gpuman --from-fragment ~/.km/account-links/gpuman.link.yaml \
-    --aws-profile <home>
+```yaml
+webhooks:
+  rate_limit:
+    max_dispatches: 20
+    window_seconds: 600
+  sources:
+    - name: wiz                    # ← the URL path segment: POST /wiz
+      auth:
+        type: bearer
+        secret_path: /km/config/webhooks/wiz/token
+      rules:
+        - match:
+            type: [issue, threat]
+            severity: [CRITICAL, HIGH]
+          alias: ir-bot
+          profile: ir-bot
+          on_absent: cold-create
+          cooldown_seconds: 900
+          group_by: "{{entity.cloud_id}}"
+          prompt: "@file profiles/prompts/wiz.triage.prompt.txt"
 ```
 
-Then `km account list` / `km account rm` round it out. The enrollment unit's **Terraform state
-lives in the target account** — there is no local state anywhere in this project.
+**It is generic, not Wiz-shaped.** One Lambda, one queue, one poller, one profile field serve
+N named sources; the source is resolved from the URL path, so adding a second one is a config
+entry rather than another bridge. **No CLI verb, by design** — a webhook has a URL and a shared
+secret, and neither needs a command.
 
-### 🔐 The launcher role is the entire containment boundary
+**km publishes the payload contract instead of reverse-engineering one.** Wiz webhook bodies are
+operator-authored Mustache templates, so this release ships the template you paste into your
+tenant (`docs/webhook-templates/`) and the bridge parses what it asked for. That also buys a
+real idempotency key — `{{issue.id}}:{{triggerType}}:{{issue.updatedAt}}` — which matters
+because Wiz sends no signature and no delivery-id header, making that key the load-bearing
+replay defence rather than a nicety.
 
-A linked target account is typically **exempt from your SCPs**, so unlike every other km IAM
-path there is no second layer behind it. That role's policy was verified live with
-`aws iam simulate-principal-policy`, each denial paired with a positive or negative control so a
-deny caused by a malformed simulation can't be mistaken for a deny caused by policy:
+**Four layers stand between an alert storm and an overloaded sandbox:** a replay nonce, a
+per-group cooldown, an install-wide rate ceiling, and the Phase 121 action quota with
+`onBreach: freeze`. The first three fail **open** — a transient DynamoDB fault must never strand
+a real alert — while authentication and unparseable payloads fail **closed**. `group_by`
+coalesces rather than batches: the first alert of a burst wins and the rest are suppressed for
+the window.
 
-- `RunInstances` is confined to an **explicit instance-type allowlist** and to the link's own
-  subnets — a foreign subnet is denied, the link's own subnet is allowed.
-- `iam:PassRole` is scoped to the **single** box role; passing any other role to EC2 is denied.
-- No `iam:CreateRole`/`PutRolePolicy`/`CreateUser` — the launcher cannot self-escalate.
-- Lifecycle actions (`TerminateInstances`, `StopInstances`, …) are gated on
-  `aws:ResourceTag/km:managed-by`.
-- No `organizations:*`, and no S3 beyond the one explicit read-only grant.
-- The external id (an SSM SecureString) is the confused-deputy protection.
+**Dormant by default.** No `webhooks:` block means no environment variables, no doctor output,
+no AWS calls, and byte-identical sandbox userdata.
 
-Every cross-account data path is read-only in both directions. **Enrolling an org *management*
-account as the target is possible but discouraged** — SCPs never apply there, so the usual "SCP
-is a second layer" assumption doesn't hold. Prefer a dedicated member account.
+Deploy order is load-bearing — `make build` **first** (the binary carries the new module
+entries; a stale one skips them silently while `km doctor` stays green), then
+`make build-lambdas`, then `km init --dry-run=false` (**not** `--sidecars`), then one
+`km destroy && km create` on the target sandbox. Full runbook: `docs/webhook-ingress.md`.
 
-### 🩺 `km doctor` gains four cross-account checks
+> **Status:** code-complete and unit-tested end to end; **live UAT against a real Wiz tenant is
+> still pending.** Four things are deliberately left to verify there: whether your tenant sends
+> a delivery-id header, whether the generic webhook gzip-compresses bodies, the exact
+> `entitySnapshot` leaf names in your variable picker, and whether `/triage` exists on the
+> target box. None change the architecture.
 
-Link well-formed · launcher role **actually assumable** (forces real credential resolution, not
-just config construction) · artifacts grant present **and not widened** beyond the exact
-read-only pair · **no orphaned linked-account instances** — a leaked box `km list` cannot see,
-billing silently.
+### 🔁 AZ sweep fixes that were quietly costing launches
 
-All four are **silently skipped with zero AWS calls** when no `launch_accounts` are configured.
+Three capacity and teardown fixes also land here, all found the hard way:
 
-### 🧹 Teardown is account-aware and fails closed
-
-`km destroy` (including its cold-clone fallback) reads the sandbox's `launch_account` **before**
-the home-account tag scan, which could never see a resource in another account. The expiry
-Lambda renders a conditional `assume_role` provider sourced from the link's own region. Both
-**hard-error** on an unknown link or an unreadable external id rather than silently falling
-through to a home-account provider that would report success while the linked instance kept
-billing.
-
-### ⚠️ Known limitations — read before enrolling
-
-- **A linked box gets a smaller IAM role.** It runs with the 4-grant shared box role, *not* the
-  12-grant per-sandbox role. **Budget metering, GitHub token minting, Slack/GitHub inbound,
-  transcript upload, and SOPS secret injection do not work on a linked sandbox.** This is not
-  fixable by widening IAM — SSM Parameter Store and DynamoDB have no resource policies — so
-  treat linked sandboxes as compute, not as full-featured agent boxes.
-- **The link's pre-provisioned security group is unused.** The EC2 module always self-creates a
-  per-sandbox SG, matching home-launch behaviour.
-- **A link is region-locked.** Every `RunInstances` resource ARN in the launcher policy is
-  pinned to the enrolled region; another region needs its own `km account add` *and* its own
-  quota increase.
-- **Two pre-existing capacity-sweep defects are worth knowing about**, since this feature is
-  usually reached while chasing scarce GPU capacity. Neither is new in this release and both
-  affect home-account launches identically: an AZ that has ever succeeded currently out-ranks
-  every other AZ even after it goes capacity-dry (the sticky-AZ score ignores a fresh
-  insufficient-capacity signal, and `km capacity` reports the AZ as `recently-dry` while the
-  launch path still selects it); and terraform retries insufficient-capacity errors internally,
-  so a remote create can consume its full Lambda budget on one dry AZ, time out, and leave a
-  state lock plus an unattached data volume behind. If a GPU create fails with `Error acquiring
-  the state lock`, that timeout is the cause — clearing the lock alone will not help.
-
-Full operator runbook: `docs/cross-account-capacity-borrowing.md`.
-
-### 🔧 Also in this release
-
-- The GHCR package-visibility note from the v0.7.1 container work was corrected — no manual
-  step is needed to make the published image public.
+- **A fresh ICE now outranks a stale success.** `rankScore` checked `LastSuccessAt` before the
+  fresh-ICE branch and returned unconditionally — and success rows carry no TTL, so an AZ that
+  ever succeeded out-ranked every other AZ *forever*, however often it later hit
+  `InsufficientInstanceCapacity`. `km capacity` disagreed with the ranker while the launch path
+  kept picking the dead AZ.
+- **The on-demand launch waiter is bounded.** Terraform retried ICE internally, so km never saw
+  the error, the sweep could not rotate, and the Lambda died at 900s leaving a stale lock.
+- **`km doctor` sees untagged linked-account orphans and leaked volumes** — a create killed
+  mid-apply leaks its 300GB volume, and `km destroy` reported success because the volume never
+  reached state.
