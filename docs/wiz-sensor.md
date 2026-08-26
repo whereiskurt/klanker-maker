@@ -27,7 +27,19 @@ without filling in the version pin below.
 Nothing here is fleet-mandatory. A profile that does not `extends:
 base/security/wiz` is unaffected.
 
-## 2. Prerequisite: create the two SSM parameters — BEFORE any profile extends the fragment
+## 2. Prerequisite: DNS allowlist + create the two SSM parameters — BEFORE any profile extends the fragment
+
+**DNS allowlist (already handled, read this anyway).** Root traffic bypasses
+the iptables DNAT and the eBPF cgroup, but NOT DNS resolution. On `ebpf`/`both`
+enforcement (e.g. `base/network/locked`, which `profiles/wiz-demo.yaml`
+inherits), `userdata.go:4737` routes ALL DNS — root's included — through the
+enforcer's resolver at `127.0.0.1`, and the resolver returns NXDOMAIN for
+anything not in `spec.network.egress.allowedDNSSuffixes`, with no uid or
+cgroup exemption. `profiles/base/security/wiz.yaml` already adds a `.wiz.io`
+suffix entry to cover the installer, package hosts, enrollment, and telemetry
+endpoints, so you don't need to add this yourself — but be aware it's there
+if you're composing your own fragment from scratch, or if you're on
+`proxy`-only enforcement (where DNS isn't rewritten, so this doesn't apply).
 
 **This ordering is not a nicety. Get it wrong and every sandbox that extends
 the fragment fails to boot.**
@@ -169,6 +181,23 @@ on the connector's sync cadence for this account, which is one of the open
 items below.
 
 ## 7. Troubleshooting
+
+**The sensor never installs at all.** A likely cause is a missing `.wiz.io`
+DNS allowlist entry (see §2) — `profiles/base/security/wiz.yaml` ships one,
+so this usually means a custom fragment or a stale `extends:` resolution
+dropped it. The symptom is misleading: `initCommandsAppend` runs under
+`set -e` inside `km-init.sh`, so the very first line —
+`curl -fsSL https://downloads.wiz.io/... -o /tmp/wiz_install.sh` — fails to
+resolve, aborts the rest of `km-init.sh`, and `userdata.go:4941` reports it
+as `No init script found in S3 (skipped)`. That message looks like the init
+script never made it to S3, not like a blocked DNS lookup — if you see it,
+check DNS resolution before you go chasing an S3 upload problem:
+
+```bash
+km shell <sandbox-id>
+systemctl status km-ebpf-enforcer   # confirm enforcement mode
+getent hosts downloads.wiz.io       # NXDOMAIN here = missing allowlist entry
+```
 
 **Is the sensor running and hardened?**
 

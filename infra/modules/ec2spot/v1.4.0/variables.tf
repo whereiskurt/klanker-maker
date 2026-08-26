@@ -219,8 +219,11 @@ variable "existing_instance_profile_name" {
 # always inside this install's own namespace.
 #
 # Before v1.4.0 this profile field rendered an SSM fetch loop into user-data but
-# was never plumbed into the role, so every fetch returned AccessDenied and the
-# loop warned and continued. This variable closes that gap.
+# was never plumbed into the role, so every fetch returned AccessDenied. The
+# fetch is a bare assignment inside the userdata script's `set -euo pipefail`
+# scope, so the denied call did not warn and continue — it ABORTED THE BOOT
+# before the loop's own "if [ $? -eq 0 ]" success/warn branch was ever reached.
+# This variable closes that gap.
 variable "secret_paths" {
   type        = list(string)
   description = "Absolute SSM parameter paths the sandbox role may read at boot, from spec.iam.allowedSecretPaths. Empty = grant nothing (default)."

@@ -59,6 +59,12 @@ func TestValidateSecretPaths(t *testing.T) {
 			wantErr: true,
 			wantSub: "must start with",
 		},
+		{
+			name:    "a second occurrence of the valid token is rejected",
+			paths:   []string{"{{prefix}}/a/{{prefix}}/b"},
+			wantErr: true,
+			wantSub: "more than once",
+		},
 	}
 
 	for _, tc := range tests {
@@ -129,6 +135,30 @@ func TestInterpolateSecretPaths(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "KM_RESOURCE_PREFIX") {
 			t.Errorf("error should name the env var, got: %v", err)
+		}
+	})
+
+	t.Run("a second token occurrence never survives interpolation", func(t *testing.T) {
+		// ValidateSecretPaths rejects this shape (see TestValidateSecretPaths),
+		// but this is defence in depth for cmd/create-handler's remote-create
+		// path, which never calls ValidateSecretPaths. Regardless of validation,
+		// InterpolateSecretPaths itself must never hand back a string that still
+		// contains the token — a strings.Replace(..., 1) would leave the second
+		// occurrence as a literal "{{prefix}}" baked into the IAM ARN.
+		got, err := profile.InterpolateSecretPaths(
+			[]string{"{{prefix}}/a/{{prefix}}/b"}, "km")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("got %d results, want 1", len(got))
+		}
+		if strings.Contains(got[0], profile.SecretPathPrefixToken) {
+			t.Errorf("got %q, still contains the unexpanded token %q", got[0], profile.SecretPathPrefixToken)
+		}
+		want := "/km/a//km/b"
+		if got[0] != want {
+			t.Errorf("got %q, want %q", got[0], want)
 		}
 	})
 

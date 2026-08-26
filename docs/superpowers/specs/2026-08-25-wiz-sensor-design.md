@@ -43,11 +43,25 @@ pkg/compiler/userdata.go:178    # root processes are never enrolled into the san
 A root systemd unit is neither DNAT'd into the MITM proxy nor subject to the eBPF
 cgroup allowlist. This is the same mechanism by which km's own sidecars reach AWS.
 
-**Consequences:** the fragment needs **no** `spec.network` changes — no `.wiz.io`
-allowlist entry, no CA trust work — and there is **no cert-pinning risk**. Even
-if the sensor were proxied, MITM is selective: only bedrock / anthropic / openai /
-github / google hosts get `MitmConnect`; everything else is a plain `OkConnect`
-tunnel (`sidecars/http-proxy/httpproxy/proxy.go:751-753`).
+**Consequences:** the fragment needs no `allowedHosts` entry, no CA trust work,
+and there is no cert-pinning risk. Even if the sensor were proxied, MITM is
+selective: only bedrock / anthropic / openai / github / google hosts get
+`MitmConnect`; everything else is a plain `OkConnect` tunnel
+(`sidecars/http-proxy/httpproxy/proxy.go:751-753`).
+
+*(Corrected 2026-08-26. This section previously claimed the fragment needs
+**no** `spec.network` change at all — that is wrong for DNS.)* Root bypasses
+the iptables DNAT and the eBPF cgroup, but **not** DNS resolution. On
+`ebpf`/`both` profiles, `userdata.go:4737` rewrites `/etc/resolv.conf` to
+`nameserver 127.0.0.1` system-wide (no uid exemption), and
+`pkg/ebpf/resolver/resolver.go:272-276` returns NXDOMAIN for any
+non-allowlisted name with no uid or cgroup check either. So on
+`profiles/wiz-demo.yaml`, which inherits `base/network/locked`
+(`enforcement: both`), root's `curl https://downloads.wiz.io/...` fails to
+resolve unless the fragment adds a `.wiz.io` entry to
+`spec.network.egress.allowedDNSSuffixes` — which it now does. The
+connections themselves still go out unproxied as root; only the name lookup
+needs the allowlist entry.
 
 `initCommands` run at userdata §4930 — *after* enforcement comes up, but as root,
 so the install-time download is likewise unconstrained.
@@ -204,6 +218,10 @@ metadata:
   name: base-security-wiz
   abstract: true
 spec:
+  network:
+    egress:
+      allowedDNSSuffixes:           # DNS is not bypassed by root — see §3.1 correction
+        - ".wiz.io"
   iam:
     allowedSecretPaths:            # list -> unions cleanly under Phase 117 merge
       - "{{prefix}}/wiz/wiz-api-client-id"
@@ -225,7 +243,7 @@ every new sandbox immediately. Pin it, and treat the bump as a normal profile ch
 
 | Omitted | Why |
 |---|---|
-| `spec.network` | Root bypasses DNAT and the cgroup (§3.1). Also, the installer honours its own `WIZ_HTTP_PROXY_URL`, not `HTTPS_PROXY`, so nothing routes through km's proxy by accident |
+| `spec.network.egress.allowedHosts` | Root bypasses DNAT and the cgroup (§3.1). Also, the installer honours its own `WIZ_HTTP_PROXY_URL`, not `HTTPS_PROXY`, so nothing routes through km's proxy by accident. `allowedDNSSuffixes` is NOT omitted — see the §3.1 correction: DNS is not bypassed by root, so the fragment adds a `.wiz.io` suffix entry |
 | `spec.secrets` | Scalar — would clobber the GPU profiles (§3.3) |
 | `spec.runtime` | Phase 117 bool zero-value trap — mixed-bool blocks stay in the leaf |
 | Arch guard | The installer supports `x86_64`, `aarch64`, `s390x`, so both km AMI families are covered |

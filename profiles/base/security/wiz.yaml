@@ -6,11 +6,28 @@ metadata:
 
 # Wiz Runtime Sensor — opt-in runtime visibility for EC2 sandboxes.
 #
+# Root traffic bypasses the iptables DNAT (userdata.go uid-0 RETURN) and the
+# eBPF cgroup — the installer's downloads and the sensor's own runtime egress
+# to the Wiz tenant are never subject to the allowlist or MITM'd, so no
+# allowedHosts entry, no CA trust work, no cert-pinning risk.
+#
+# DNS is the ONE exception, and it is NOT bypassed by root. On ebpf/both
+# profiles (this fragment is only meaningful composed with one — see
+# base/network/locked in profiles/wiz-demo.yaml), userdata.go:4737 rewrites
+# /etc/resolv.conf to "nameserver 127.0.0.1" for the whole box, and
+# pkg/ebpf/resolver/resolver.go:272-276 returns NXDOMAIN for any
+# non-allowlisted name with no uid or cgroup check — root's queries are
+# resolved by the same enforcer as everyone else's. Without an allowlist
+# entry, root's `curl https://downloads.wiz.io/...` fails to resolve, the
+# installer never runs, and the sensor's own telemetry egress to the Wiz
+# tenant is blocked too. Hence the egress.allowedDNSSuffixes entry below,
+# despite root bypassing the DNAT and cgroup.
+#
 # Deliberately absent:
-#   spec.network  — root traffic bypasses both the iptables DNAT (userdata.go
-#                   uid-0 RETURN) and the eBPF cgroup, and the installer honours
-#                   its own WIZ_HTTP_PROXY_URL rather than HTTPS_PROXY. No
-#                   allowlist entry, no CA trust, no cert-pinning risk.
+#   spec.network.egress.allowedHosts — not needed; DNS is the only enforcement
+#                   layer root cannot bypass (see above). allowedDNSSuffixes
+#                   below covers name resolution; the connections themselves
+#                   go straight out as root.
 #   spec.secrets  — sopsFile is a SCALAR: setting it here would clobber any leaf
 #                   that declares its own bundle. Its output also lands in
 #                   /etc/sandbox-secrets.env (0440 root:sandbox), readable by the
@@ -21,6 +38,17 @@ metadata:
 # stop, mask, or unpick any of this. The real control is privileged: false; see
 # docs/wiz-sensor.md.
 spec:
+  network:
+    egress:
+      # ".wiz.io" is a bare suffix, so it covers every Wiz hostname this
+      # fragment touches in one entry: downloads.wiz.io (installer),
+      # dpkg.wiz.io / rpm.wiz.io (packages), auth.app.wiz.io (enrollment),
+      # and api.<region>.app.wiz.io (telemetry). Lists union under Phase 117
+      # inheritance, so this composes with a leaf's own allowlist (e.g.
+      # base/network/locked) rather than replacing it.
+      allowedDNSSuffixes:
+        - ".wiz.io"
+
   iam:
     # A list, so it unions cleanly with a leaf's own entries under Phase 117 merge.
     # Names are chosen so userdata's basename|upper|'-'->'_' derivation yields

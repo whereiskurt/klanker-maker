@@ -33,7 +33,8 @@ func ValidateSecretPaths(paths []string) []ValidationError {
 		// Reject any token that is not exactly SecretPathPrefixToken, wherever
 		// it appears. Checked first so "{{prefix2}}/x" reports the precise
 		// cause rather than the generic leading-segment error.
-		for _, tok := range secretPathTokenRe.FindAllString(p, -1) {
+		matches := secretPathTokenRe.FindAllString(p, -1)
+		for _, tok := range matches {
 			if tok != SecretPathPrefixToken {
 				errs = append(errs, ValidationError{
 					Path: "spec.iam.allowedSecretPaths",
@@ -42,6 +43,25 @@ func ValidateSecretPaths(paths []string) []ValidationError {
 						p, tok, SecretPathPrefixToken),
 				})
 			}
+		}
+
+		// Reject a SECOND occurrence of the token even when both are the
+		// valid SecretPathPrefixToken. InterpolateSecretPaths expands only
+		// the token's leading-segment occurrence; a path like
+		// "{{prefix}}/a/{{prefix}}/b" would otherwise pass validation with
+		// zero errors and then compile to "/km/a/{{prefix}}/b" — a literal
+		// unexpanded token baked into the IAM ARN and the userdata fetch,
+		// i.e. an SSM parameter name that doesn't exist, i.e. an aborted
+		// boot (see InterpolateSecretPaths' set -euo pipefail note). The
+		// token may appear only once, as the leading segment.
+		if len(matches) > 1 {
+			errs = append(errs, ValidationError{
+				Path: "spec.iam.allowedSecretPaths",
+				Message: fmt.Sprintf(
+					"%q contains %q more than once — the token may appear only "+
+						"once, as the leading segment",
+					p, SecretPathPrefixToken),
+			})
 		}
 
 		if !strings.HasPrefix(p, SecretPathPrefixToken+"/") {
@@ -98,7 +118,14 @@ func InterpolateSecretPaths(paths []string, resourcePrefix string) ([]string, er
 					"would grant the sandbox role access to another install's SSM namespace",
 				p)
 		}
-		out = append(out, strings.Replace(p, SecretPathPrefixToken, "/"+resourcePrefix, 1))
+		// ReplaceAll, not Replace(..., 1): defence in depth. ValidateSecretPaths
+		// already rejects a path with more than one occurrence of the token, but
+		// this is the only barrier on cmd/create-handler's remote-create path,
+		// which never calls ValidateSecretPaths. A single-occurrence Replace
+		// would leave a second, unvalidated occurrence as a literal "{{prefix}}"
+		// substring in the compiled IAM ARN and userdata fetch — ReplaceAll
+		// guarantees the token can never survive interpolation either way.
+		out = append(out, strings.ReplaceAll(p, SecretPathPrefixToken, "/"+resourcePrefix))
 	}
 	return out, nil
 }
