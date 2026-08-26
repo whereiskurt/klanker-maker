@@ -100,6 +100,42 @@ func RenderShim(sockPath string) string {
 		"  --unix-socket " + sockPath + " http://localhost" + TokenPath + "\n"
 }
 
+// SOCKSRemoteCommand returns the login shell for the socks mode.
+//
+// setProxyEnv is OFF by default, and that default is a considered choice rather
+// than caution. Exporting a blanket proxy sends EVERYTHING the shell does
+// through the operator's workstation — including calls to Bedrock, Anthropic
+// and OpenAI, which km meters by MITM-ing them in its own http-proxy. Routed
+// through SOCKS those never reach that proxy, so **AI spend silently stops
+// being metered** and `km status` quietly under-reports. Printing the export
+// line and letting the operator scope it to the command that needs it keeps
+// that from happening by accident.
+//
+// When it IS set, NO_PROXY must carry 169.254.169.254: the instance metadata
+// service is how the box gets its IAM role credentials, and sending link-local
+// IMDS traffic through a SOCKS proxy on the operator's laptop breaks every AWS
+// call the sandbox makes.
+func SOCKSRemoteCommand(port int, setProxyEnv bool) string {
+	if !setProxyEnv {
+		return "bash -l"
+	}
+	p := fmt.Sprintf("socks5h://127.0.0.1:%d", port)
+	return "env" +
+		" ALL_PROXY=" + p +
+		" HTTPS_PROXY=" + p +
+		" HTTP_PROXY=" + p +
+		" NO_PROXY=169.254.169.254,localhost,127.0.0.1" +
+		" bash -l"
+}
+
+// SOCKSProxyURL is the value an operator exports on the box to use the tunnel.
+// socks5h (rather than socks5) resolves names AT the proxy — i.e. on the
+// operator's workstation, over their VPN — which is the same client-side
+// resolution property that makes the k8s mode work.
+func SOCKSProxyURL(port int) string {
+	return fmt.Sprintf("socks5h://127.0.0.1:%d", port)
+}
+
 // SSHOpts describes one ssh invocation.
 type SSHOpts struct {
 	// KeyPath is the per-sandbox private key (~/.km/keys/<id>).
@@ -114,7 +150,14 @@ type SSHOpts struct {
 	// Target supplies the real cluster host and port, dialled operator-side.
 	Target *Target
 	// BrokerSocket is the laptop-side socket the box socket forwards to.
+	// Empty means no broker forward — the socks mode has no broker.
 	BrokerSocket string
+	// SOCKSPort, when non-zero, adds a destination-less `-R <port>`, which
+	// makes the ssh CLIENT act as a SOCKS 4/5 proxy for connections arriving
+	// from the sandbox. Note this is -R, not -D: -D is the forward direction
+	// (a local proxy egressing via the remote), which is the opposite of what
+	// a sandbox needs.
+	SOCKSPort int
 	// RemoteCommand is run instead of the default shell. For the provisioning
 	// invocation it is the setup script; for the interactive one it is the
 	// login shell wrapped in `env KUBECONFIG=...`, which is how the box's
@@ -162,7 +205,13 @@ func BuildSSHArgs(o SSHOpts) []string {
 		if o.Target != nil {
 			args = append(args, "-R", fmt.Sprintf("%d:%s:%d", o.BindPort, o.Target.ServerHost, o.Target.ServerPort))
 		}
-		args = append(args, "-R", fmt.Sprintf("%s:%s", BoxSocketPath, o.BrokerSocket))
+		if o.BrokerSocket != "" {
+			args = append(args, "-R", fmt.Sprintf("%s:%s", BoxSocketPath, o.BrokerSocket))
+		}
+		if o.SOCKSPort > 0 {
+			// Destination-less -R: ssh itself becomes the SOCKS proxy.
+			args = append(args, "-R", strconv.Itoa(o.SOCKSPort))
+		}
 	} else {
 		args = append(args, "-T")
 	}

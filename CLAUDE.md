@@ -79,13 +79,23 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   differ only in what they carry and what they provision on the box. Modes are subcommands
   rather than mutually-exclusive `--k8s`/`--socks` booleans specifically so a second mode
   does not produce one help page that is the union of two unrelated option sets with no way
-  to tell which flag applies where. **The likely next mode is `socks`:** `ssh -R <port>`
-  **with no destination** makes the ssh CLIENT a SOCKS 4/5 proxy, so the box would get a
-  proxy egressing via the operator's machine — needing no broker, nothing written on the
-  box, and no new machinery. Note it is `-R` with no destination, NOT `-D` (which is the
-  forward direction). It is also a **far bigger hole** than `k8s`: two sockets to one
-  cluster versus arbitrary network access to everything the VPN reaches, so it deserves its
-  own decision rather than arriving as a convenience flag.
+  to tell which flag applies where. Two modes ship: `k8s` and `socks`.
+- **`km tunnel socks <id>`** gives the box a SOCKS5 proxy on loopback egressing via the
+  operator's workstation. `ssh -R <port>` **with NO destination** makes the ssh CLIENT a
+  SOCKS 4/5 proxy — it is `-R` with no destination, **NOT `-D`**, which is the forward
+  direction (a local proxy egressing via the remote) and the opposite of what a sandbox
+  needs. No broker, nothing written on the box. `socks5h` (resolve-at-proxy) is the correct
+  scheme: names resolve operator-side over the VPN, the same property that makes `k8s` work.
+  **A far wider path than `k8s` by design** — two sockets to one cluster versus arbitrary
+  access to everything the VPN reaches — accepted deliberately by the operator (2026-08-26);
+  do not re-litigate. It dies with the shell like every other mode.
+- **`--set-proxy-env` is OFF by default and that is a considered choice, not caution:** km
+  meters Bedrock/Anthropic/OpenAI spend by MITM-ing those hosts in its own http-proxy, and
+  traffic sent through SOCKS never reaches it, so **AI spend silently stops being metered**
+  and `km status` under-reports. When the flag IS set, `NO_PROXY` must carry
+  **`169.254.169.254`** — IMDS is how the box gets its IAM role credentials, and proxying
+  link-local metadata through the operator's laptop breaks every AWS call the sandbox makes.
+  Both are pinned by tests.
 - **The deploy surface is `make build` ALONE** — no profile field, no sidecar, no userdata
   change, no Lambda rebuild, no `km init`, and **no `km destroy && km create`**. It works on
   sandboxes already running. Three facts make that true and are worth knowing before anyone
@@ -873,6 +883,7 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km desktop restart <sandbox-id>` — force a server-side restart of the KasmVNC session (Xvnc + WM + browser, like logging out of XFCE and back in) for a frozen/wedged desktop or stuck input; drops the live session (`--yes`)
 - `km tunnel` — parent verb for carrying a network path from the operator's workstation into a sandbox. A **family**, not one command: every mode shares the SSM+SSH transport and differs only in what it forwards and what it provisions on the box
 - `km tunnel k8s <sandbox-id> --context <kube-context>` — interactive sandbox shell carrying a reverse tunnel to a Kubernetes cluster only the operator's workstation can reach; credentials are minted locally by the operator's own exec plugin and proxied over a unix socket, so no VPN/SSO/AWS credential reaches the box (`--dry-run`, `--print-ssh`, `--verbose`, `--local-port`, `--bind-port`, `--kubeconfig`). Dies with the shell — no daemon mode by design
+- `km tunnel socks <sandbox-id>` — interactive sandbox shell with a SOCKS5 proxy on the box's loopback (`--bind-port`, default 1080) egressing via the operator's workstation, so the box reaches whatever the VPN reaches. No broker, nothing written on the box. `--set-proxy-env` pre-sets ALL_PROXY/HTTPS_PROXY/HTTP_PROXY (off by default — it stops km metering AI spend). Wider than `k8s` by design; dies with the shell
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role
