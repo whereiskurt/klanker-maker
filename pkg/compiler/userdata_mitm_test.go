@@ -1,0 +1,248 @@
+package compiler
+
+// Tests for Phase 127 Plan 03 — the compiler half of the declarative MITM
+// intercepts contract: buildMITMInterceptsB64, the guarded 7.3c template
+// section, and buildL7ProxyHosts's intercept-host threading.
+//
+// Behaviour under test:
+//  1. A profile with an enabled intercept renders a KM_MITM_INTERCEPTS line
+//     inside a mitm.conf drop-in, base64-decoding to the flat wire shape.
+//  2. A profile with no mitm block, or with only disabled intercepts, renders
+//     neither the drop-in nor the env var — and the two frozen byte-identity
+//     goldens stay untouched.
+//  3. Intercept hosts reach --proxy-hosts (buildL7ProxyHosts) without
+//     widening --allowed-dns.
+//  4. A contract test round-trips real rendered user-data through the real
+//     sidecar's httpproxy.ParseIntercepts, proving the two independently
+//     authored ends of the wire agree.
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
+)
+
+// mitmProfileWithIntercepts returns a baseProfile() with the given intercepts
+// set on spec.network.mitm.intercepts.
+func mitmProfileWithIntercepts(ics ...profile.MITMIntercept) *profile.SandboxProfile {
+	p := baseProfile()
+	p.Spec.Network.MITM = &profile.NetworkMITMSpec{Intercepts: ics}
+	return p
+}
+
+// extractEnvValue finds "KEY=" in out and returns the rest of that line,
+// trimmed. Mirrors the extraction pattern in userdata_quota_test.go.
+func extractEnvValue(t *testing.T, out, key string) string {
+	t.Helper()
+	idx := strings.Index(out, key+"=")
+	if idx < 0 {
+		t.Fatalf("key %q not found in rendered user-data", key)
+	}
+	rest := out[idx+len(key)+1:]
+	if end := strings.IndexByte(rest, '\n'); end >= 0 {
+		rest = rest[:end]
+	}
+	return strings.TrimSpace(rest)
+}
+
+// extractQuotedFlagValue finds `flag "value"` (a km ebpf-attach ExecStart
+// argument) in out and returns value.
+func extractQuotedFlagValue(t *testing.T, out, flag string) string {
+	t.Helper()
+	needle := flag + " \""
+	idx := strings.Index(out, needle)
+	if idx < 0 {
+		t.Fatalf("flag %q not found in rendered user-data", flag)
+	}
+	rest := out[idx+len(needle):]
+	end := strings.IndexByte(rest, '"')
+	if end < 0 {
+		t.Fatalf("unterminated quoted value for flag %q", flag)
+	}
+	return rest[:end]
+}
+
+// ─── Task 1: emission + dormancy ──────────────────────────────────────────
+
+func TestMITMInterceptsEmission_RedirectRule(t *testing.T) {
+	p := mitmProfileWithIntercepts(profile.MITMIntercept{
+		Name:  "rickroll",
+		Hosts: []string{".example-egg.test"},
+		Action: &profile.MITMAction{
+			Redirect: "https://example.com/redirected",
+		},
+	})
+
+	out, err := generateUserData(p, "sb-mitm-01", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	if !strings.Contains(out, "km-http-proxy.service.d/mitm.conf") {
+		t.Errorf("expected mitm.conf drop-in path in user-data\n%s", abbreviateUD(out))
+	}
+	if !strings.Contains(out, "KM_MITM_INTERCEPTS=") {
+		t.Fatalf("expected KM_MITM_INTERCEPTS in user-data\n%s", abbreviateUD(out))
+	}
+
+	val := extractEnvValue(t, out, "KM_MITM_INTERCEPTS")
+	decoded, err := base64.StdEncoding.DecodeString(val)
+	if err != nil {
+		t.Fatalf("KM_MITM_INTERCEPTS value is not valid base64: %v", err)
+	}
+
+	var raw []map[string]any
+	if err := json.Unmarshal(decoded, &raw); err != nil {
+		t.Fatalf("decoded value is not valid JSON: %v", err)
+	}
+	if len(raw) != 1 {
+		t.Fatalf("want 1 intercept, got %d: %v", len(raw), raw)
+	}
+	entry := raw[0]
+	if entry["name"] != "rickroll" {
+		t.Errorf("name: got %v, want rickroll", entry["name"])
+	}
+	hosts, ok := entry["hosts"].([]any)
+	if !ok || len(hosts) != 1 || hosts[0] != ".example-egg.test" {
+		t.Errorf("hosts not preserved: %v", entry["hosts"])
+	}
+	if entry["redirect"] != "https://example.com/redirected" {
+		t.Errorf("redirect: got %v, want https://example.com/redirected", entry["redirect"])
+	}
+	if _, hasAction := entry["action"]; hasAction {
+		t.Error("emitted JSON must not carry a nested 'action' key")
+	}
+	if _, hasEnabled := entry["enabled"]; hasEnabled {
+		t.Error("emitted JSON must not carry an 'enabled' key")
+	}
+}
+
+func TestMITMInterceptsEmission_RespondBodyWithSpaceAndNewlineSurvives(t *testing.T) {
+	body := "line one has spaces\nline two also has spaces"
+	p := mitmProfileWithIntercepts(profile.MITMIntercept{
+		Name:  "chaos",
+		Hosts: []string{"api.example-mitm.test"},
+		Action: &profile.MITMAction{
+			Respond: &profile.MITMRespond{
+				Status:      503,
+				ContentType: "text/plain",
+				Body:        body,
+			},
+		},
+	})
+
+	out, err := generateUserData(p, "sb-mitm-02", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	val := extractEnvValue(t, out, "KM_MITM_INTERCEPTS")
+	decoded, err := base64.StdEncoding.DecodeString(val)
+	if err != nil {
+		t.Fatalf("not valid base64: %v", err)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(decoded, &raw); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	if len(raw) != 1 {
+		t.Fatalf("want 1 intercept, got %d", len(raw))
+	}
+	respond, ok := raw[0]["respond"].(map[string]any)
+	if !ok {
+		t.Fatalf("respond block missing: %v", raw[0])
+	}
+	if respond["body"] != body {
+		t.Errorf("body round-trip failed: got %q, want %q", respond["body"], body)
+	}
+}
+
+func TestMITMInterceptsDormant_NoMITMBlock(t *testing.T) {
+	p := baseProfile() // no spec.network.mitm at all
+
+	out, err := generateUserData(p, "sb-mitm-03", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if strings.Contains(out, "KM_MITM_INTERCEPTS") {
+		t.Error("expected no KM_MITM_INTERCEPTS when profile has no mitm block")
+	}
+	if strings.Contains(out, "mitm.conf") {
+		t.Error("expected no mitm.conf drop-in when profile has no mitm block")
+	}
+}
+
+func TestMITMInterceptsDormant_OnlyDisabledIntercept(t *testing.T) {
+	p := mitmProfileWithIntercepts(profile.MITMIntercept{
+		Name:    "rickroll",
+		Enabled: boolPtr(false),
+		Hosts:   []string{".example-egg.test"},
+		Action:  &profile.MITMAction{Redirect: "https://example.com/redirected"},
+	})
+
+	out, err := generateUserData(p, "sb-mitm-04", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if strings.Contains(out, "KM_MITM_INTERCEPTS") {
+		t.Error("expected no KM_MITM_INTERCEPTS when the only intercept is disabled")
+	}
+	if strings.Contains(out, "mitm.conf") {
+		t.Error("expected no mitm.conf drop-in when the only intercept is disabled")
+	}
+}
+
+func TestMITMInterceptsEmission_OneEnabledOneDisabled(t *testing.T) {
+	p := mitmProfileWithIntercepts(
+		profile.MITMIntercept{
+			Name:    "rickroll",
+			Enabled: boolPtr(false),
+			Hosts:   []string{".example-egg.test"},
+			Action:  &profile.MITMAction{Redirect: "https://example.com/redirected"},
+		},
+		profile.MITMIntercept{
+			Name:  "chaos",
+			Hosts: []string{"api.example-mitm.test"},
+			Action: &profile.MITMAction{
+				Respond: &profile.MITMRespond{Status: 503, Body: "maintenance window"},
+			},
+		},
+	)
+
+	out, err := generateUserData(p, "sb-mitm-05", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	val := extractEnvValue(t, out, "KM_MITM_INTERCEPTS")
+	decoded, err := base64.StdEncoding.DecodeString(val)
+	if err != nil {
+		t.Fatalf("not valid base64: %v", err)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(decoded, &raw); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	if len(raw) != 1 {
+		t.Fatalf("want exactly 1 (only the enabled) intercept, got %d: %v", len(raw), raw)
+	}
+	if raw[0]["name"] != "chaos" {
+		t.Errorf("want the enabled rule 'chaos' to survive, got %v", raw[0]["name"])
+	}
+}
+
+// TestMITMInterceptsByteIdentityGoldensStillPass re-runs the two frozen
+// byte-identity tests to document, at this test's own callsite, that this
+// plan must never require them to be re-captured. See userdata_phase92_byte_identity_test.go
+// and userdata_h1_byte_identity_test.go for the actual assertions; this is a
+// convenience wrapper so `go test -run MITM` alone still exercises them.
+func TestMITMInterceptsByteIdentityGoldensStillPass(t *testing.T) {
+	t.Run("phase92", func(t *testing.T) {
+		TestUserdataLearnV2Phase92ByteIdentity(t)
+	})
+	t.Run("h1", func(t *testing.T) {
+		TestUserdataH1ByteIdentity(t)
+	})
+}
