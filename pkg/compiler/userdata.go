@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -5096,6 +5097,30 @@ systemctl restart km-http-proxy
 echo "[km-bootstrap] km-http-proxy restarted with action quota config (table: {{ .QuotaTable }})"
 {{- end }}
 
+{{- if .MITMInterceptsB64 }}
+# ============================================================
+# 7.3c. Declarative MITM intercepts (Phase 127 — proxy drop-in)
+# ============================================================
+# The proxy reads KM_MITM_INTERCEPTS to answer operator-declared host->action
+# rules (redirect/respond) instead of the real upstream. Emitted only when at
+# least one enabled intercept survives compilation (dormant by default).
+#
+# Base64, not raw JSON: systemd splits an unquoted Environment=KEY=value on
+# whitespace. The KM_ACTION_LIMITS precedent above survives only because a
+# marshalled limits map never contains a space; a respond.body will. The
+# heredoc delimiter is single-quoted as a second layer, so nothing a rule
+# contains is expanded by the boot shell.
+mkdir -p /etc/systemd/system/km-http-proxy.service.d
+cat > /etc/systemd/system/km-http-proxy.service.d/mitm.conf << 'MITMDROPIN'
+[Service]
+Environment=KM_MITM_INTERCEPTS={{ .MITMInterceptsB64 }}
+MITMDROPIN
+
+systemctl daemon-reload
+systemctl restart km-http-proxy
+echo "[km-bootstrap] km-http-proxy restarted with MITM intercept config"
+{{- end }}
+
 {{- if .Rsync }}
 # ============================================================
 # 7.4. Rsync restore (from S3)
@@ -5271,7 +5296,7 @@ type userDataParams struct {
 	// RuntimeDenyFile is the absolute path of that file. Held in a field rather
 	// than inlined into the template so the compiler, the helper's default, and
 	// the proxies cannot drift apart.
-	RuntimeDenyFile string
+	RuntimeDenyFile    string
 	GitHubAllowedRepos string // comma-separated GitHub repos from profile.sourceAccess.github.allowedRepos
 	KMArtifactsBucket  string // from config env var KM_ARTIFACTS_BUCKET
 	// Filesystem enforcement (section 2.5)
@@ -5299,6 +5324,12 @@ type userDataParams struct {
 	// BOTH are empty when no limits are configured (dormant — byte-identical to pre-Phase-121).
 	QuotaTable       string // "{prefix}-action-quota" when ActionLimitsJSON non-empty
 	ActionLimitsJSON string // JSON-encoded resolved quota.Limits; empty → dormant
+	// MITMInterceptsB64 is base64(JSON([]wireIntercept)) built from the profile's
+	// enabled spec.network.mitm.intercepts (Phase 127 Plan 03). Empty means dormant:
+	// no drop-in is written and KM_MITM_INTERCEPTS is never set. The wire shape is
+	// FLAT (name/hosts/redirect or name/hosts/respond) — see buildMITMInterceptsB64
+	// and sidecars/http-proxy/httpproxy/intercept.go, the other end of this contract.
+	MITMInterceptsB64 string
 	// Idle timeout (minutes) — passed to audit-log sidecar for SandboxIdle event detection
 	IdleTimeoutMinutes int
 	// IdleAction: "hibernate" when TTL=0 (sandbox hibernates on idle and re-arms),
@@ -5791,24 +5822,111 @@ func mergeNotifyHookIntoSettings(configFiles map[string]string) (map[string]stri
 	return configFiles, nil
 }
 
+// mitmWireIntercept is the compiler's copy of the FLAT wire shape the
+// http-proxy sidecar decodes (sidecars/http-proxy/httpproxy/intercept.go's
+// Intercept/Respond types). It is defined locally here rather than importing
+// the sidecar package into non-test compiler code — the two ends are kept
+// honest by a contract test (userdata_mitm_test.go) that decodes real
+// rendered user-data with the sidecar's own httpproxy.ParseIntercepts.
+//
+// There is deliberately no "enabled" field: EnabledIntercepts has already
+// dropped disabled rules before this type is ever populated, so a disabled
+// rule never reaches the box in any form.
+type mitmWireIntercept struct {
+	Name     string           `json:"name"`
+	Hosts    []string         `json:"hosts"`
+	Redirect string           `json:"redirect,omitempty"`
+	Respond  *mitmWireRespond `json:"respond,omitempty"`
+}
+
+// mitmWireRespond mirrors sidecars/http-proxy/httpproxy/intercept.go's Respond.
+type mitmWireRespond struct {
+	Status      int    `json:"status"`
+	ContentType string `json:"contentType,omitempty"`
+	Body        string `json:"body"`
+}
+
+// buildMITMInterceptsB64 resolves the profile's enabled MITM intercepts
+// (profile.EnabledIntercepts — the same by-name-collapse, disabled-drop
+// accessor plan 01 shipped) into base64(JSON([]mitmWireIntercept)), the value
+// the 7.3c template section writes into the mitm.conf drop-in.
+//
+// Returns "" (dormant — no drop-in, no KM_MITM_INTERCEPTS) when there are no
+// enabled intercepts, or when marshalling fails. A marshal failure is not
+// expected in practice (every field is a plain string/int), but on the
+// off-chance it happens, the empty string is the safe direction: dormant
+// matches the sidecar's own fail-toward-zero-intercepts rule rather than
+// shipping a half-formed rule set to the box.
+func buildMITMInterceptsB64(p *profile.SandboxProfile) string {
+	enabled := profile.EnabledIntercepts(profile.ProfileIntercepts(p))
+	if len(enabled) == 0 {
+		return ""
+	}
+	wire := make([]mitmWireIntercept, 0, len(enabled))
+	for _, ic := range enabled {
+		w := mitmWireIntercept{
+			Name:  ic.Name,
+			Hosts: ic.Hosts,
+		}
+		if ic.Action != nil {
+			w.Redirect = ic.Action.Redirect
+			if ic.Action.Respond != nil {
+				w.Respond = &mitmWireRespond{
+					Status:      ic.Action.Respond.Status,
+					ContentType: ic.Action.Respond.ContentType,
+					Body:        ic.Action.Respond.Body,
+				}
+			}
+		}
+		wire = append(wire, w)
+	}
+	b, err := json.Marshal(wire)
+	if err != nil {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
 // buildL7ProxyHosts returns a comma-separated list of domain suffixes that require
 // L7 proxy interception (connect4 DNAT rewrite) based on the profile configuration.
 // Only domains that the profile actually accesses are included:
 //   - GitHub domains when profile has sourceAccess.github configured
 //   - Bedrock/Anthropic domains when profile has useBedrock: true
+//   - OpenAI when spec.agent.default is "codex"
+//   - Every host declared by an enabled spec.network.mitm.intercepts rule
+//     (Phase 127 Plan 03), appended last
 //
 // The returned string is passed to km ebpf-attach --proxy-hosts in "ebpf" and
 // "both" enforcement modes so the resolver marks resolved IPs for proxy redirect.
+//
+// Deliberately NOT done: intercept hosts are not added to allowedDNSSuffixes.
+// Under enforcement: ebpf the enforcer's resolver still NXDOMAINs a host
+// outside the DNS allowlist, so a rule for an unresolvable host silently
+// never fires. That is a km validate warning (plan 04), not a silent
+// expansion of egress policy — declaring an intercept must never widen what
+// a sandbox can resolve.
 func buildL7ProxyHosts(p *profile.SandboxProfile) string {
 	var hosts []string
+	seen := make(map[string]bool)
+	add := func(h string) {
+		if seen[h] {
+			return
+		}
+		seen[h] = true
+		hosts = append(hosts, h)
+	}
 	if p.Spec.SourceAccess.GitHub != nil {
-		hosts = append(hosts, "github.com", "api.github.com", "raw.githubusercontent.com", "codeload.githubusercontent.com")
+		add("github.com")
+		add("api.github.com")
+		add("raw.githubusercontent.com")
+		add("codeload.githubusercontent.com")
 	}
 	if enableBedrock(p) {
 		// .amazonaws.com covers Bedrock endpoints (bedrock-runtime.us-east-1.amazonaws.com etc.)
 		// This is broader than strictly necessary, but non-Bedrock traffic passes through
 		// the proxy transparently without MITM inspection.
-		hosts = append(hosts, ".amazonaws.com", "api.anthropic.com")
+		add(".amazonaws.com")
+		add("api.anthropic.com")
 	}
 	// Phase 88 (OAI-BUDGET-07): Codex agent profiles route to api.openai.com.
 	// Adding it here triggers connect4 DNAT redirect in enforcement: ebpf | both modes,
@@ -5816,10 +5934,19 @@ func buildL7ProxyHosts(p *profile.SandboxProfile) string {
 	// Researcher recommendation: gate on Agent == "codex". Non-codex profiles that hit
 	// OpenAI directly (raw OpenAI SDK in a Claude sandbox) need an explicit profile flag
 	// — deferred to a follow-up phase. See 88-RESEARCH.md § Open Questions #2.
-	// NOTE: host order is GitHub, Bedrock/Anthropic, OpenAI — preserved for test contracts.
+	// NOTE: host order is GitHub, Bedrock/Anthropic, OpenAI, then MITM intercept
+	// hosts last — preserved for test contracts.
 	// Phase 92 (Wave 4): read spec.agent.default via agentDefault (was p.Spec.CLI.Agent).
 	if agentDefault(p) == "codex" {
-		hosts = append(hosts, "api.openai.com")
+		add("api.openai.com")
+	}
+	// Phase 127 Plan 03: enabled intercept hosts, appended last so the order
+	// contract above holds. Reuses profile.EnabledIntercepts so the same
+	// by-name collapse and disabled-drop rules apply here as everywhere else.
+	for _, ic := range profile.EnabledIntercepts(profile.ProfileIntercepts(p)) {
+		for _, h := range ic.Hosts {
+			add(h)
+		}
 	}
 	return strings.Join(hosts, ",")
 }
@@ -5906,6 +6033,9 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		// Both are empty when no limits are configured (dormant).
 		QuotaTable:       quotaTable,
 		ActionLimitsJSON: actionLimitsJSON,
+		// Declarative MITM intercepts (Phase 127 Plan 03). Empty when the
+		// profile declares no mitm block or every declared rule is disabled.
+		MITMInterceptsB64: buildMITMInterceptsB64(p),
 		// Idle timeout — converted from duration string to minutes for the sidecar.
 		IdleTimeoutMinutes: parseIdleTimeoutMinutes(p.Spec.Lifecycle.IdleTimeout),
 		// IdleAction is "hibernate" when TTL=0 (empty string sentinel) and idle timeout is set.

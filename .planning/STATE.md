@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 126
-current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
-current_plan: 10
+current_phase: 127
+current_phase_name: declarative-mitm-intercepts-profile-declared-host-to-action-
+current_plan: 5
 status: verifying
-stopped_at: "Phase 126 checkpoint reached: live cross-account UAT (126-10-PLAN.md Task 3) awaiting human execution"
-last_updated: "2026-08-23T02:09:50.729Z"
-last_activity: 2026-08-22
-last_activity_desc: Phase 126 execution started
+stopped_at: Completed 127-05-PLAN.md
+last_updated: "2026-08-26T06:36:34.417Z"
+last_activity: 2026-08-26
+last_activity_desc: Phase 127 execution started
 progress:
-  total_phases: 10
-  completed_phases: 8
-  total_plans: 67
-  completed_plans: 62
-  percent: 80
+  total_phases: 11
+  completed_phases: 9
+  total_plans: 72
+  completed_plans: 67
+  percent: 82
 ---
 
 # Project State
@@ -25,16 +25,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-21)
 
 **Core value:** A sandbox is a declarative policy object that compiles into a controlled, auditable execution environment
-**Current focus:** Phase 126 — cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
+**Current focus:** Phase 127 — declarative-mitm-intercepts-profile-declared-host-to-action-
 
 ## Current Position
 
-Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
-Plan: 10 of 10
-Total Plans in Phase: 10
-Current Plan: 10
+Phase: 127 (declarative-mitm-intercepts-profile-declared-host-to-action-) — EXECUTING
+Plan: 5 of 5
+Total Plans in Phase: 5
+Current Plan: 5
 Status: Phase complete — ready for verification
-Last activity: 2026-08-22 — Phase 126 execution started
+Last activity: 2026-08-26 — Phase 127 execution started
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.
 
@@ -632,6 +632,11 @@ Progress: [█████████░] 91%
 | Phase 126 P08 | 55min | 3 tasks | 9 files |
 | Phase 126 P09 | 50min | 2 tasks | 3 files |
 | Phase 126 P10 | 50min | 2 tasks | 8 files |
+| Phase 127 P01 | 2min | 3 tasks | 6 files |
+| Phase 127 P02 | 15min | 3 tasks | 6 files |
+| Phase 127 P03 | 22min | 3 tasks | 2 files |
+| Phase 127 P04 | 25min | 2 tasks | 2 files |
+| Phase 127 P05 | 25min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1805,6 +1810,15 @@ Recent decisions affecting current work:
 - [Phase ?]: checkLaunchAccountAssumable forces credential resolution via Credentials.Retrieve(ctx), not just config construction, so a broken trust policy cannot report healthy (T-126-50)
 - [Phase 126]: checkLaunchAccountOrphanInstances treats an unreachable link as its own WARN, never collapsed into a clean 'no orphans found' result (T-126-47)
 - [Phase 126]: Phase 126 pre-flight gate green (7 commands incl. the 3 excluded packages); live cross-account UAT checkpointed pending human execution with real two-account credentials + GPU quota — docs/cross-account-capacity-borrowing.md is the operator runbook; 126-UAT.md carries the green pre-flight record and the pending 8-row containment matrix + 18-step live procedure
+- [Phase 127]: MITM intercept collapse wired into fromMap (not resolveMap) for by-name last-wins override — Single point every Resolve() output passes through, matching the plan's stated integration point
+- [Phase ?]: Extended registerInterceptHandlers with an isPlatformOwnedHost guard (meteringEnabled/githubEnabled) so an intercept cannot shadow live Bedrock/Anthropic/OpenAI metering or the GitHub repo filter via goproxy's fallthrough dispatch
+- [Phase ?]: Applied the same anti-shadow guard on the transparent (eBPF/both) listener path via a new matchInterceptForRequest helper, and added an internal (package httpproxy) test file to exercise it directly since no BPF-map fixture exists for a full network test
+- [Phase ?]: MITM wire structs (mitmWireIntercept/mitmWireRespond) kept as a local compiler mirror of the sidecar's Intercept/Respond, not an import; a contract test keeps them honest
+- [Phase ?]: buildL7ProxyHosts refactored to a seen-map + add() closure so intercept hosts append last and never duplicate an existing group
+- [Phase 127]: MITM validate: name/duplicate checks run against the full uncollapsed intercept list; hosts/action/redirect/status checks and all three overlap warnings run only against EnabledIntercepts, so a disable-only override is exempt
+- [Phase 127]: MITM validate warnings mirror sidecar host-matching semantics locally (bedrock prefix/suffix, allowedDNSSuffixes leading-dot/exact/wildcard) rather than importing sidecars/http-proxy, avoiding a pkg/profile -> sidecars dependency
+- [Phase 127-05]: CLAUDE.md phase block titled Phase 129 (not 127) to avoid colliding with origin/main's existing Phase 127/128 blocks; .planning/ phase directory and filenames stay 127-*
+- [Phase 127-05]: profiles/mitm-demo.yaml composes base/network/safenetwork (wildcard allowedDNSSuffixes) instead of base/network/locked so it validates with zero warnings without a bespoke DNS suffix
 
 ### Roadmap Evolution
 
@@ -1827,6 +1841,7 @@ Recent decisions affecting current work:
 - Phase 124 added: Platform-wide AZ failover + capacity feasibility for EC2 launches. Root cause = `ec2spot/v1.2.0/main.tf:124-125` pins single instances to `effective_azs[0]` (=`us-east-1a`), which is GPU-capacity-dry while `us-east-1c` has capacity; spot `wait_for_fulfillment=true` (line 604) then loops forever. Fix = orchestrated AZ sweep inside `km create` (Lambda cold-create inherits it via the `km create` subprocess): capacity-aware AZ order → bounded apply → classify (ICE/spot-price/timeout iterate; regional quota `L-DB2E81BA`=0 / auth / invalid fail-fast) → taint+retry. New `{prefix}-capacity` DDB table (TTL'd ICE memory + last-success per instance type) backs both `rankAZs` and a new honest `km capacity` feasibility report (never false "available" — no live on-demand capacity API). Adds `spec.runtime.azPreference` (additive, no apiVersion bump) + `km create --wait-for-capacity[=30m]` opt-in backoff. EBS `additionalVolume` co-located with chosen AZ. Retires the `spot-multi-az` pending todo. Out of scope: multi-region failover, capacity prediction, Lambda auto-requeue, EC2 Fleet rewrite. Design spec: `docs/superpowers/specs/2026-06-28-az-failover-capacity-feasibility-design.md`. NOTE: 123 (setup wizard) is the highest prior integer, so 124 is the clean next integer; no code dependency on 123.
 - Phase 125 added: Per-profile private-subnet sandboxes with per-AZ NAT gateways (additive, reversible). Operator decisions locked up front for an autonomous run: (1) per-profile placement toggle `spec.network.privateSubnet`, NOT install-wide — public and private sandboxes coexist in one VPC; (2) one NAT+EIP per AZ, not a single shared NAT, because Phase 124's sweep rotates across all 4 AZs and a single NAT would add cross-AZ transfer to every byte plus a single-AZ egress SPOF; (3) install-level `network.nat_gateway` is independently flippable so NAT (~$132/mo for 4 AZs + $0.045/GB) can be torn down whenever no private sandboxes run; (4) dormant by default. TF is ~80% pre-built: `infra/modules/network/v1.0.0` already ships private subnets, EIP, NAT, and the NAT route gated on `var.nat_gateway.enabled` — the work is the Go plumbing that threads subnet IDs (NetworkOutputs only carries PublicSubnets today) plus network v1.1.0 (single private RT -> one per AZ) and ec2spot v1.3.0 (`public_subnets` -> `sandbox_subnets`, new `associate_public_ip`). Verified during scoping: aws_route_table / aws_nat_gateway / aws_eip are NOT in ProtectedTypes, so the RT restructure does not trip the destroy-class gate; EFS needs no change (one mount target per AZ already serves that AZ's private subnet); SSM is outbound-only so shell/vscode/desktop are unaffected. Highest-risk unknown: ttl-handler's destroy-placeholder main.tf (cmd/ttl-handler/main.go:1215) hardcodes var names AND pins the module path to v1.0.0 — resolve before the ec2spot rename lands. Out of scope: VPC endpoints, IPv6/egress-only IGW, cross-region. Design spec: `docs/superpowers/specs/2026-08-19-private-subnet-nat-design.md`. NOTE: 124 is the highest prior phase in both ROADMAP.md and CLAUDE.md, so 125 is the clean next integer.
 - Phase 125 executed (2026-08-19): shipped network module v1.1.0 (per-AZ NAT/EIP/route tables), ec2spot v1.3.0 (`sandbox_subnets` + `associate_public_ip`), a per-substrate module version pin (REQ-125-SUBPIN — also fixed a pre-existing break where the shared `/v1.2.0` literal pointed ECS at a nonexistent dir), both dormant toggles, `network_placement` DDB round-trip, single-point placement resolution before the Phase 124 AZ sweep, a create-time fail-fast guard, and two `km doctor` checks. **The live UAT earned its keep**: three defects survived 41 green test packages and were only caught against real AWS — (1) `km env` omitted `KM_NAT_GATEWAY_ENABLED` so `eval $(km env)` would plan with NAT off; (2) `checkNATIdle` filtered on a DDB `status` attribute `km create` never writes (`km list` derives it from live EC2), so it said 'safe to disable' while a private sandbox was live on that NAT; (3) `checkPrivateSubnetGuard` tested `len(privateSubnets) > 0`, which is ALWAYS true because private subnets survive as routeless islands — the guard was dead code and `km create` provisioned an egress-less, SSM-unreachable box. Lesson: a unit test over a pure helper cannot catch a caller passing the wrong argument; assert the wiring. Also proven live rather than accepted on analysis: the ttl-handler's frozen `ec2spot/v1.0.0` destroy stub cleanly destroys a v1.3.0-created sandbox (T-125-32 stays `mitigate`).
+- Phase 127 added: Declarative MITM intercepts — extract the hardcoded `google.com` -> Rickroll handler (`sidecars/http-proxy/httpproxy/proxy.go:725-746`, the only host-matched proxy behaviour with zero configuration behind it) into a `spec.network.mitm.intercepts` profile block of named host -> action rules (`redirect` | `respond`). Four decisions locked before planning: (1) a declarative rule list, not a boolean, so the block is reusable for API stubbing and canned-error chaos testing; (2) **opt-in, off by default** — the egg stops firing fleet-wide on the next `km create`, the one deliberate departure from the repo's "dormant => byte-identical" rule; (3) operator rules register AFTER the Bedrock/Anthropic/OpenAI metering handlers and the GitHub repo filter but BEFORE the general allowlist, so a profile author can never disable budget metering or repo filtering by declaring an intercept; (4) **no `block` action** — `spec.network.egress.deniedHosts` already blocks with strictly stronger semantics (ahead of everything, broader subdomain matching, runtime-appendable), and a weaker second way to block would be a footgun. Two things surfaced during design and folded in: today's `^(www\.)?google\.com` is unanchored at the end so `google.com.evil.example` is currently intercepted too (the `IsHostAllowed`-semantics matcher fixes it, pinned by a negative test), and Phase 117's list-union merge means a leaf cannot shrink a base's list — hence merge-by-`name`-last-wins, which is the only thing that makes `enabled: false` on an inherited rule reachable. Design spec: `docs/superpowers/specs/2026-08-25-mitm-intercepts-design.md`. NOTE: 126 is the highest prior phase in both ROADMAP.md and CLAUDE.md, so 127 is the clean next integer; no code dependency on 126.
 
 ### Pending Todos
 
@@ -1957,6 +1972,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-23T02:09:50.716Z
-Stopped at: Phase 126 checkpoint reached: live cross-account UAT (126-10-PLAN.md Task 3) awaiting human execution
-Resume file: .planning/phases/126-cross-account-capacity-borrowing-launch-sandboxes-into-a-lin/126-UAT.md
+Last session: 2026-08-26T06:36:34.404Z
+Stopped at: Completed 127-05-PLAN.md
+Resume file: None

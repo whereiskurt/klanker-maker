@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # scripts/validate-all-profiles.sh — Phase 92 hard gate (updated Phase 122 Plan 02).
 #
-# Validates every concrete leaf profile in the 21-entry Profile Inventory using
+# Validates every concrete leaf profile in the 27-entry Profile Inventory using
 # `km validate`. Exits non-zero on any failure. Single source of truth for the
-# inventory (5 composed leaves + 8 pkg/profile/builtins entries + 7 GPU leaves +
-# 1 Phase 125 private-subnet demo leaf + 1 Wiz Sensor demo leaf).
+# inventory: 5 composed leaves (learner/desktop/github/h1/spot) + 1 Phase 125
+# private-subnet demo leaf + 1 egress-deny-lists demo leaf + 1 Wiz Sensor demo
+# leaf + 1 Phase 127 MITM intercepts demo leaf + 8 pkg/profile/builtins entries
+# + 10 GPU leaves (7 serving profiles + 3 Qwen3.8-oblit variants).
 #
 # profiles/base/** is intentionally EXCLUDED (recursive): abstract base fragments
 # live there (including the new profiles/base/os/ and profiles/base/gpu/ subdirs)
@@ -46,6 +48,7 @@ PROFILES=(
   profiles/private-subnet.yaml  # Phase 125
   profiles/deny-layered.yaml    # egress deny lists
   profiles/wiz-demo.yaml        # Wiz Runtime Sensor demo (base/security/wiz)
+  profiles/mitm-demo.yaml       # Phase 127/129 MITM intercepts demo (base/mitm-rickroll)
   pkg/profile/builtins/ao.yaml
   pkg/profile/builtins/codex.yaml
   pkg/profile/builtins/goose.yaml

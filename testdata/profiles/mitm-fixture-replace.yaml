@@ -1,0 +1,20 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: mitm-fixture-replace
+extends:
+  - base/mitm-fixture-base
+
+spec:
+  lifecycle:
+    ttl: "1h"
+  network:
+    mitm:
+      intercepts:
+        - name: fixture-egg
+          hosts: ["leaf-only.example.com"]
+          action:
+            respond:
+              status: 503
+              contentType: text/plain
+              body: "replaced by leaf"

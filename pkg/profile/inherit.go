@@ -295,6 +295,18 @@ func fromMap(m map[string]any) (*SandboxProfile, error) {
 		return nil, fmt.Errorf("unmarshaling merged profile: %w", err)
 	}
 	p.Extends = nil
+	// Collapse spec.network.mitm.intercepts by name (last-wins, whole-entry)
+	// now that the extends: chain has been fully merged (Phase 127). This is
+	// the single wiring point that makes `enabled: false` on a leaf able to
+	// switch off a rule inherited from a base fragment — deepMerge/concatDedup
+	// unions lists, so without this step both the base's and the leaf's
+	// same-named entries would survive as two separate list entries. It also
+	// means the merged bytes km validate inspects can never contain a
+	// duplicate name, so plan 04 can safely treat any duplicate name it finds
+	// as a same-file typo rather than a legitimate override.
+	if p.Spec.Network.MITM != nil {
+		p.Spec.Network.MITM.Intercepts = CollapseIntercepts(p.Spec.Network.MITM.Intercepts)
+	}
 	return &p, nil
 }
 

@@ -620,6 +620,81 @@ type NetworkSpec struct {
 	// make it momentarily unsatisfiable. false (the default) is byte-identical
 	// to Phase 124 (public subnet, public IPv4).
 	PrivateSubnet bool `yaml:"privateSubnet,omitempty"`
+	// MITM declares operator-authored host-to-action intercept rules for the
+	// http-proxy sidecar (Phase 127). Omitting the field means the profile
+	// declares no rules at all — nil, not an empty list — so every accessor in
+	// pkg/profile/mitm.go treats a nil MITM identically to a nil profile.
+	MITM *NetworkMITMSpec `yaml:"mitm,omitempty"`
+}
+
+// NetworkMITMSpec is the declarative host-to-action intercept configuration
+// for the http-proxy sidecar (Phase 127). It replaces the hardcoded
+// google.com -> Rickroll handler with a profile-declared rule list, so a
+// profile author decides what fires instead of it being baked into the
+// sidecar binary.
+type NetworkMITMSpec struct {
+	// Intercepts is the ordered rule list. The sidecar matches first-match, so
+	// order is significant. Resolving a profile through extends: collapses this
+	// list by name (last-wins, whole-entry) — see CollapseIntercepts in
+	// pkg/profile/mitm.go — which is what makes enabled:false on a leaf able to
+	// switch off a rule the leaf otherwise inherits.
+	Intercepts []MITMIntercept `yaml:"intercepts,omitempty"`
+}
+
+// MITMIntercept is one named host -> action rule. Two entries sharing a name
+// within a single file (not across an extends: chain) is a km validate error
+// (plan 04) — it can only be a typo. The same name recurring across the
+// extends: DAG is the intended override path.
+type MITMIntercept struct {
+	// Name identifies the rule for override/disable purposes. Schema-enforced
+	// to a greppable charset (^[a-z0-9][a-z0-9-]*$); it never reaches a shell or
+	// a filesystem path, so the pattern is about legibility, not injection.
+	Name string `yaml:"name"`
+	// Enabled is a *bool (not bool) so a leaf can express "disable the rule I
+	// inherited" as a distinct, serialisable state. nil means enabled (the
+	// default); an explicit pointer to false must still survive
+	// goyaml.Marshal, which a non-pointer omitempty bool could never do — the
+	// zero value and "explicitly false" would be indistinguishable on the
+	// wire. See InterceptEnabled for the read side of this contract.
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// Hosts is the set of hostnames this rule matches, using the same
+	// case-insensitive / port-stripped / leading-dot-for-subdomains semantics
+	// as spec.network.egress.allowedHosts (IsHostAllowed). Deliberately NOT
+	// required by the JSON schema (only "name" is) because a disable-only
+	// override — name + enabled:false — legitimately carries no hosts; the
+	// "hosts required for an enabled rule" constraint is semantic and enforced
+	// in plan 04 against the effective (post-collapse, enabled-only) rule set.
+	Hosts []string `yaml:"hosts,omitempty"`
+	// Action is exactly one of redirect or respond. Also not schema-required
+	// for the same disable-only-override reason as Hosts.
+	Action *MITMAction `yaml:"action,omitempty"`
+}
+
+// MITMAction is the two-and-only-two intercept actions available to a
+// profile author. There is deliberately no "block" action:
+// spec.network.egress.deniedHosts already blocks with strictly stronger
+// semantics (it runs ahead of every carve-out, matches subdomains more
+// broadly, and is runtime-appendable via km-netpolicy) — a second, weaker way
+// to block egress would be a footgun, not a feature.
+type MITMAction struct {
+	// Redirect issues a 301 to this absolute http(s) URL.
+	Redirect string `yaml:"redirect,omitempty"`
+	// Respond returns a canned status/body instead of proxying the request.
+	Respond *MITMRespond `yaml:"respond,omitempty"`
+}
+
+// MITMRespond is a canned HTTP response served in place of the real upstream.
+type MITMRespond struct {
+	// Status is the HTTP status code returned (100-599, enforced in plan 04).
+	Status int `yaml:"status,omitempty"`
+	// ContentType defaults to text/plain when empty (enforced at compile time,
+	// not here — this struct only carries what the operator wrote).
+	ContentType string `yaml:"contentType,omitempty"`
+	// Body is the literal response body. It is transported to the box as
+	// base64 inside a systemd Environment= drop-in (Phase 127 design doc)
+	// specifically so a body containing spaces or newlines survives —
+	// unquoted Environment= splits on whitespace.
+	Body string `yaml:"body,omitempty"`
 }
 
 // EgressSpec defines what outbound network traffic is permitted.

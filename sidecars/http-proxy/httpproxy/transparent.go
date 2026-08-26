@@ -47,6 +47,9 @@ type TransparentListener struct {
 	// Budget enforcement for AI traffic metering (set via SetBudgetEnforcement)
 	budget *budgetEnforcementOptions
 
+	// Operator intercepts (Phase 127; set via SetIntercepts)
+	intercepts []Intercept
+
 	portToSock *ebpf.Map // src_port_to_sock
 	sockToIP   *ebpf.Map // sock_to_original_ip
 	sockToPort *ebpf.Map // sock_to_original_port
@@ -71,6 +74,29 @@ func (tl *TransparentListener) SetBudgetEnforcement(client aws.BudgetAPI, tableN
 		cache:          NewBudgetCache(),
 		onBudgetUpdate: onBudgetUpdate,
 	}
+}
+
+// SetIntercepts configures operator-declared MITM intercepts (Phase 127) for
+// transparent (BPF-redirected) connections. DNAT'd traffic under
+// enforcement: ebpf / both never reaches the goproxy handler chain — it is
+// relayed by relayWithInspection instead — so an intercept registered only
+// via registerInterceptHandlers in NewProxy would silently never fire on
+// exactly the enforcement modes this threading exists for.
+func (tl *TransparentListener) SetIntercepts(ics []Intercept) {
+	tl.intercepts = ics
+}
+
+// matchInterceptForRequest returns the Intercept that should answer req, or
+// nil when none should. It applies the same isPlatformOwnedHost guard that
+// registerInterceptHandlers uses in NewProxy, so relayWithInspection and the
+// goproxy path make this decision identically: req.Host is only checked
+// against tl.intercepts when it is not currently owned by a live GitHub
+// repo-filter or AI-metering handler.
+func (tl *TransparentListener) matchInterceptForRequest(req *http.Request) *Intercept {
+	if isPlatformOwnedHost(req.Host, tl.budget != nil, len(tl.githubRepos) > 0) {
+		return nil
+	}
+	return MatchIntercept(req.Host, tl.intercepts)
 }
 
 // NewTransparentListener creates a listener that handles both explicit proxy
@@ -341,6 +367,42 @@ func (tl *TransparentListener) relayWithInspection(client, dest net.Conn, origHo
 				blocked.Body.Close()
 				return
 			}
+		}
+
+		// Operator intercepts (Phase 127): DNAT'd connections under
+		// enforcement: ebpf and both never reach the goproxy handler chain
+		// that registerInterceptHandlers registers in NewProxy, so this
+		// branch is the only place an intercept can fire for a transparently
+		// redirected connection. It is checked AFTER the GitHub repo-filter
+		// branch and the budget pre-flight branch above, and matchInterceptForRequest
+		// re-applies the same isPlatformOwnedHost guard those handlers use in
+		// NewProxy: a "falls through" platform decision here (an allowed
+		// repo, or an AI budget that is not yet exhausted) does not, by
+		// itself, stop a later intercept match from shadowing the real dial +
+		// response that GitHub allowance / AI metering still needs below.
+		//
+		// One behavioural asymmetry versus the explicit proxy path: this
+		// branch runs after dest has already been dialed and TLS-handshaked
+		// (see handleConn above), so an intercept for a host that does not
+		// resolve or does not accept connections cannot fire here, whereas
+		// on the goproxy CONNECT path it can.
+		if ic := tl.matchInterceptForRequest(req); ic != nil {
+			action := "respond"
+			if ic.Redirect != "" {
+				action = "redirect"
+			}
+			log.Info().
+				Str("sandbox_id", tl.sandboxID).
+				Str("event_type", "mitm_intercept").
+				Str("intercept", ic.Name).
+				Str("host", req.Host).
+				Str("action", action).
+				Str("mode", "transparent").
+				Msg("")
+			icResp := InterceptResponse(req, ic)
+			_ = icResp.Write(client)
+			icResp.Body.Close()
+			return
 		}
 
 		// Forward the request to the real destination

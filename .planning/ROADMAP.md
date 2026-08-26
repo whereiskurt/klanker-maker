@@ -387,3 +387,89 @@ Plans:
 - [x] 126-08-PLAN.md — Wave 3: teardown — `km destroy` reads the sandbox row BEFORE the A-scoped tag scan (which can never see a B-hosted box) and carries the locals into the cold-clone `minimalHCL`; ttl-handler renders a conditional `assume_role` against the link's region; `KM_LAUNCH_ACCOUNTS` env + scoped `sts:AssumeRole` IAM grant.
 - [x] 126-09-PLAN.md — Wave 4: four read-only `km doctor` checks — link well-formed, launcher assumable (forced credential resolution), artifacts grant present and not write-widened, orphaned B instances vs the home inventory.
 - [x] 126-10-PLAN.md — Wave 5: operator runbook + CLAUDE.md/skill/ROADMAP updates; the four-command full-suite gate (the default `make test` target excludes `internal/app/cmd`, `cmd/ttl-handler`, `pkg/compiler`); live UAT incl. the 8-row `simulate-principal-policy` containment matrix.
+
+### Phase 127: Declarative MITM intercepts — profile-declared host-to-action rules replacing the hardcoded rickroll
+
+**Goal:** Replace the hardcoded `google.com` -> Rickroll handler in the http-proxy
+sidecar (`sidecars/http-proxy/httpproxy/proxy.go:725-746`) with a declarative
+profile block, `spec.network.mitm.intercepts`: a list of named host -> action rules
+(`redirect` | `respond`) an operator can author, disable by name, and inherit
+through `extends:`. The egg becomes one such rule rather than compiled-in
+behaviour. Deliberately **opt-in and off by default** -- a profile that says
+nothing about `mitm:` intercepts nothing, so the Rickroll stops firing fleet-wide
+on the next `km create`. This is the one place the phase departs from the repo's
+usual "dormant => byte-identical" rule, and it is an accepted, documented
+behaviour change. Operator rules are registered *after* the Bedrock/Anthropic/
+OpenAI metering handlers and the GitHub repo filter but *before* the general
+allowlist, so a profile author can never disable budget metering or repo filtering
+by declaring an intercept for those hosts. Design spec (locked decisions, full
+rationale, 6-step live UAT): `docs/superpowers/specs/2026-08-25-mitm-intercepts-design.md`.
+
+**Requirements** (phase-local synthetic IDs, derived from the design spec):
+REQ-127-SCHEMA (`spec.network.mitm.intercepts[]` = `name` + `enabled` (*bool,
+default true) + `hosts` + `action` with exactly one of `redirect` / `respond`
+{status, contentType, body}; Go types in `pkg/profile` + JSON schema with
+`additionalProperties: false`; purely additive, **no `apiVersion` bump**),
+REQ-127-MATCH (host matching reuses `IsHostAllowed` semantics at
+`proxy.go:153` -- case-insensitive, port-stripped, leading `.` matches apex AND
+subdomains -- NOT regex; this also fixes a live bug, since today's unanchored
+`^(www\.)?google\.com` intercepts `google.com.evil.example` too, and a unit test
+pins the negative),
+REQ-127-ORDER (registration point is exactly where the google block sits today:
+after the GitHub filter at `proxy.go:687`/`:699`, before the general CONNECT
+handler at `proxy.go:753`; a precedence test proves an intercept declaring
+`api.anthropic.com` does NOT shadow the metering handler),
+REQ-127-OVERRIDE (merge intercepts by `name`, last-wins, so a leaf can disable an
+inherited rule -- Phase 117 unions lists, so without this an inherited rule is
+unreachable and `enabled: false` would be dead weight; disabled rules are dropped
+at compile time and never reach the box),
+REQ-127-ENV (compiler emits base64-encoded JSON into a **conditional** drop-in
+`/etc/systemd/system/km-http-proxy.service.d/mitm.conf`; base64 is load-bearing --
+systemd splits an unquoted `Environment=` on whitespace, and the `KM_ACTION_LIMITS`
+precedent at `userdata.go:4891-4901` survives only because marshalled maps have no
+spaces, which a `respond.body` will; sidecar fails toward ZERO intercepts on a
+decode/parse error and still starts),
+REQ-127-EBPF (`buildL7ProxyHosts` at `userdata.go:5588` gains the intercept hosts
+so `connect4` DNATs them under `enforcement: ebpf`/`both`; DNS is deliberately NOT
+widened -- a rule for a host outside `allowedDNSSuffixes` silently never fires and
+`km validate` warns instead of the feature quietly expanding egress policy),
+REQ-127-VALIDATE (errors: empty `hosts`, zero-or-two actions, unparseable
+`redirect`, `status` outside 100-599, malformed/conflicting duplicate `name` in one
+file. Warns: host overlaps a platform-reserved host (platform wins, rule dead);
+host also denied by `deniedHosts`/`deniedDNSSuffixes` (deny wins, rule dead); host
+not DNS-reachable under `enforcement: ebpf`),
+REQ-127-DEFAULTOFF (ship `profiles/base/mitm-rickroll.yaml` as an abstract
+fragment so the egg stays discoverable behind one `extends:` line and doubles as
+the worked override-by-name example; `docs/mitm-intercepts.md` + a CLAUDE.md
+"Where to look" row),
+REQ-127-DEPLOY (**`make build` + `make build-lambdas` + `km init --dry-run=false`**
+-- all three, because the sidecar binary, the profile schema field the
+create-handler's bundled `toolchain/km` validates, and the userdata drop-in land
+together. `--sidecars` alone is not merely insufficient but actively harmful
+mid-rollout: the new binary has no `KM_MITM_INTERCEPTS` to read, so it drops the
+Rickroll on a live box while the profile still cannot declare it back. No TF/DDB/
+IAM/Lambda-bridge/SES change; userdata goldens untouched in the dormant case).
+
+**Depends on:** nothing functionally -- sequential number only, no code dependency
+on Phase 126. Integration points are older: Phase 117 (the `extends:` list-union
+merge that forces override-by-name), Phase 121 (the `KM_ACTION_LIMITS` proxy
+drop-in this mirrors), and the 2026-08-21 egress deny lists (whose deny gate at
+`proxy.go:237` stays ahead of every intercept, and which owns blocking -- this
+phase deliberately ships **no `block` action**).
+
+**Plans:** 5/5 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 127-01-PLAN.md — profile schema, Go types, and the by-name last-wins collapse that makes `enabled: false` reachable through `extends:` (wave 1)
+- [x] 127-02-PLAN.md — sidecar intercept engine: matcher, base64 loader, handler registration in place of the hardcoded block, transparent-path coverage (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 127-03-PLAN.md — compiler: conditional `mitm.conf` drop-in, `buildL7ProxyHosts` threading, compiler-to-sidecar contract test (wave 2)
+- [x] 127-04-PLAN.md — `km validate`: five intercept errors and three dead-rule warnings (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 127-05-PLAN.md — `profiles/base/mitm-rickroll.yaml`, demo leaf + inventory gate, `docs/mitm-intercepts.md`, CLAUDE.md, 6-step live UAT (wave 3)

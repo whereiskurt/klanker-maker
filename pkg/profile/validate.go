@@ -3,6 +3,7 @@ package profile
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 	jschema "github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 )
 
 // ValidationError represents a single validation failure with a JSON path and message.
@@ -517,7 +519,7 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		}
 	}
 
-		// Phase 93 (Wave 2) DSK-03: Desktop semantic validation.
+	// Phase 93 (Wave 2) DSK-03: Desktop semantic validation.
 	// Guarded by IsDesktopEnabled — all rules are no-ops when desktop is disabled.
 	errs = append(errs, validateDesktop(p)...)
 
@@ -569,6 +571,242 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 			Path:    "spec.runtime.launchAccount",
 			Message: "spec.runtime.launchAccount and spec.network.privateSubnet are mutually exclusive: a linked launch account has no NAT-gateway concept, so private-subnet placement is unsupported there — drop one of the two fields",
 		})
+	}
+
+	// Phase 127 Plan 04: spec.network.mitm.intercepts semantic validation —
+	// the five locked errors and three locked warnings. A no-op when the
+	// profile declares no mitm block at all.
+	errs = append(errs, validateMITMIntercepts(p)...)
+
+	return errs
+}
+
+// mitmNamePattern mirrors the JSON schema's name pattern for MITM
+// intercepts (^[a-z0-9][a-z0-9-]*$). Duplicated here — not derived from the
+// schema — because ValidateSemantic needs a plain regexp value at runtime,
+// matching the belt-and-suspenders convention Rule 2/Rule 4 above already
+// establish for constraints the schema also enforces.
+var mitmNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// mitmReservedHosts lists platform-owned hosts an intercept can never win
+// against: a live platform handler (Bedrock/Anthropic/OpenAI metering, the
+// GitHub repo filter) is registered ahead of any operator intercept and
+// always answers first — see isPlatformOwnedHost in
+// sidecars/http-proxy/httpproxy/intercept.go, the runtime enforcement of
+// exactly this guarantee. Ordered, not a map, matching Rule 0's "same
+// output every run" convention. Each entry's source file is noted next to
+// it so a future change to that sidecar's regex has a visible counterpart
+// here. The bedrock-runtime family (any region) is matched separately by
+// isBedrockRuntimeHost, since it is a prefix/suffix pattern, not an exact
+// host.
+var mitmReservedHosts = []string{
+	"api.anthropic.com",              // sidecars/http-proxy/httpproxy/proxy.go anthropicHostRegex
+	"api.openai.com",                 // sidecars/http-proxy/httpproxy/openai.go openaiHostRegex
+	"github.com",                     // sidecars/http-proxy/httpproxy/github.go githubHostsRegex
+	"api.github.com",                 // sidecars/http-proxy/httpproxy/github.go githubHostsRegex
+	"raw.githubusercontent.com",      // sidecars/http-proxy/httpproxy/github.go githubHostsRegex
+	"codeload.githubusercontent.com", // sidecars/http-proxy/httpproxy/github.go githubHostsRegex
+}
+
+// isBedrockRuntimeHost reports whether host is a bedrock-runtime endpoint in
+// any AWS region, matched by prefix and suffix (not a regex — pkg/profile
+// must not import sidecars/http-proxy, so this is a hand-maintained mirror
+// of bedrockHostRegex in sidecars/http-proxy/httpproxy/proxy.go). Requires a
+// non-empty region segment between the prefix and suffix, matching the
+// original regex's ".+" requirement — "bedrock-runtime.amazonaws.com" (no
+// region) does not match.
+func isBedrockRuntimeHost(host string) bool {
+	const prefix = "bedrock-runtime."
+	const suffix = ".amazonaws.com"
+	if !strings.HasPrefix(host, prefix) || !strings.HasSuffix(host, suffix) {
+		return false
+	}
+	if len(host) < len(prefix)+len(suffix) {
+		return false
+	}
+	region := host[len(prefix) : len(host)-len(suffix)]
+	return region != ""
+}
+
+// isMITMReservedHost reports whether host (already normalised via
+// mitmBareHost) overlaps a platform-reserved host.
+func isMITMReservedHost(host string) bool {
+	return slices.Contains(mitmReservedHosts, host) || isBedrockRuntimeHost(host)
+}
+
+// mitmBareHost lower-cases h and strips a leading "." — a leading dot in an
+// intercept's hosts entry means "apex + subdomains" (the same convention as
+// allowedHosts/allowedDNSSuffixes); the bare form is what the
+// reserved-host, denied-host, and DNS-coverage checks compare against.
+func mitmBareHost(h string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(h)), ".")
+}
+
+// hostCoveredByDNSSuffixes reports whether host is covered by suffixes using
+// the same leading-dot / exact / "*" semantics as
+// spec.network.egress.allowedDNSSuffixes (IsHostAllowed in
+// sidecars/http-proxy/httpproxy/proxy.go — mirrored in miniature here
+// rather than imported, since pkg/profile must not import a sidecar
+// package). host is expected to already be normalised via mitmBareHost.
+func hostCoveredByDNSSuffixes(host string, suffixes []string) bool {
+	for _, s := range suffixes {
+		s = strings.ToLower(s)
+		if s == "*" {
+			return true
+		}
+		if after, ok := strings.CutPrefix(s, "."); ok {
+			if host == after || strings.HasSuffix(host, s) {
+				return true
+			}
+		} else if host == s {
+			return true
+		}
+	}
+	return false
+}
+
+// mitmPath returns the operator-facing path for the intercept at index i
+// with the given name: spec.network.mitm.intercepts[<name>] when the name
+// can identify the entry, spec.network.mitm.intercepts[<index>] when it
+// can't — an empty or malformed name is exactly the case where the name
+// cannot identify the entry, which is also the condition the name-pattern
+// error below fires on, so a malformed-name entry's own error and every
+// other error on that entry point at consistent paths.
+func mitmPath(name string, i int) string {
+	if name == "" || !mitmNamePattern.MatchString(name) {
+		return fmt.Sprintf("spec.network.mitm.intercepts[%d]", i)
+	}
+	return fmt.Sprintf("spec.network.mitm.intercepts[%s]", name)
+}
+
+// validateMITMIntercepts enforces the Phase 127 Plan 04 locked errors and
+// warnings for spec.network.mitm.intercepts. A no-op when the profile
+// declares no mitm block (nil/empty ProfileIntercepts).
+//
+// Name and duplicate checks run against the FULL, uncollapsed list — a
+// malformed name must be caught whether or not the rule is enabled, and
+// DuplicateInterceptNames has nothing left to look at after a by-name
+// collapse. Hosts/action/redirect/status checks run only against
+// EnabledIntercepts (collapsed, enabled-only) — a disabled override entry
+// (name + enabled:false) legitimately carries neither hosts nor action, and
+// holding it to these rules would make the phase's headline disable path
+// unusable.
+func validateMITMIntercepts(p *SandboxProfile) []ValidationError {
+	all := ProfileIntercepts(p)
+	if len(all) == 0 {
+		return nil
+	}
+
+	var errs []ValidationError
+
+	// --- Name + duplicate checks: full, uncollapsed list ---
+	for i, ic := range all {
+		if ic.Name == "" || !mitmNamePattern.MatchString(ic.Name) {
+			errs = append(errs, ValidationError{
+				Path:    fmt.Sprintf("spec.network.mitm.intercepts[%d]", i),
+				Message: fmt.Sprintf("name %q must be non-empty and match ^[a-z0-9][a-z0-9-]*$", ic.Name),
+			})
+		}
+	}
+	for _, name := range DuplicateInterceptNames(all) {
+		errs = append(errs, ValidationError{
+			Path: fmt.Sprintf("spec.network.mitm.intercepts[%s]", name),
+			Message: fmt.Sprintf(
+				"two intercepts named %q have different hosts/action in this file — that can only be a typo; restating the same name in a leaf that extends a fragment, to override or disable it, is the supported path and is not flagged",
+				name),
+		})
+	}
+
+	// --- Hosts/action/redirect/status + overlap warnings: enabled, collapsed list only ---
+	deniedList := append(append([]string{}, p.Spec.Network.Egress.DeniedHosts...), p.Spec.Network.Egress.DeniedDNSSuffixes...)
+	ebpfActive := p.Spec.Network.Enforcement == "ebpf" || p.Spec.Network.Enforcement == "both"
+	allowedDNS := p.Spec.Network.Egress.AllowedDNSSuffixes
+
+	for i, ic := range EnabledIntercepts(all) {
+		path := mitmPath(ic.Name, i)
+
+		if len(ic.Hosts) == 0 {
+			errs = append(errs, ValidationError{
+				Path:    path + ".hosts",
+				Message: "an enabled intercept must declare at least one host in hosts",
+			})
+		}
+
+		switch {
+		case ic.Action == nil:
+			errs = append(errs, ValidationError{
+				Path:    path + ".action",
+				Message: "an enabled intercept must declare exactly one action: redirect or respond",
+			})
+		case ic.Action.Redirect != "" && ic.Action.Respond != nil:
+			errs = append(errs, ValidationError{
+				Path:    path + ".action",
+				Message: "action must declare exactly one of redirect or respond, not both",
+			})
+		case ic.Action.Redirect == "" && ic.Action.Respond == nil:
+			errs = append(errs, ValidationError{
+				Path:    path + ".action",
+				Message: "action must declare exactly one of redirect or respond",
+			})
+		case ic.Action.Redirect != "":
+			u, err := url.Parse(ic.Action.Redirect)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				errs = append(errs, ValidationError{
+					Path:    path + ".action.redirect",
+					Message: fmt.Sprintf("redirect %q must be an absolute URL with an http or https scheme", ic.Action.Redirect),
+				})
+			}
+		case ic.Action.Respond != nil:
+			status := ic.Action.Respond.Status
+			if status < 100 || status > 599 {
+				errs = append(errs, ValidationError{
+					Path:    path + ".action.respond.status",
+					Message: fmt.Sprintf("respond.status %d must be between 100 and 599", status),
+				})
+			}
+		}
+
+		// --- Warnings: the rule is legal, but is dead at runtime ---
+		var reservedHits, deniedHits, dnsHits []string
+		for _, h := range ic.Hosts {
+			bare := mitmBareHost(h)
+			if isMITMReservedHost(bare) {
+				reservedHits = append(reservedHits, h)
+			}
+			if len(deniedList) > 0 && netpolicy.Match(h, deniedList) {
+				deniedHits = append(deniedHits, h)
+			}
+			if ebpfActive && !hostCoveredByDNSSuffixes(bare, allowedDNS) {
+				dnsHits = append(dnsHits, h)
+			}
+		}
+		if len(reservedHits) > 0 {
+			errs = append(errs, ValidationError{
+				Path: path + ".hosts",
+				Message: fmt.Sprintf(
+					"host(s) %s are platform-reserved (Anthropic/OpenAI/Bedrock metering or the GitHub repo filter) — the platform handler is registered ahead of any intercept and always wins, so this rule will never fire; remove it or target a different host",
+					strings.Join(reservedHits, ", ")),
+				IsWarning: true,
+			})
+		}
+		if len(deniedHits) > 0 {
+			errs = append(errs, ValidationError{
+				Path: path + ".hosts",
+				Message: fmt.Sprintf(
+					"host(s) %s are also matched by spec.network.egress.deniedHosts/deniedDNSSuffixes — the deny gate answers first, so this rule will never fire",
+					strings.Join(deniedHits, ", ")),
+				IsWarning: true,
+			})
+		}
+		if len(dnsHits) > 0 {
+			errs = append(errs, ValidationError{
+				Path: path + ".hosts",
+				Message: fmt.Sprintf(
+					"host(s) %s are not covered by spec.network.egress.allowedDNSSuffixes under enforcement: %s — the enforcer's own resolver will never resolve them, so this rule will never fire; add the host to allowedDNSSuffixes or switch enforcement to proxy",
+					strings.Join(dnsHits, ", "), p.Spec.Network.Enforcement),
+				IsWarning: true,
+			})
+		}
 	}
 
 	return errs
