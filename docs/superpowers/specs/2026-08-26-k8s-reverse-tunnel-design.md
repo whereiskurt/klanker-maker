@@ -160,8 +160,20 @@ regardless.
 
 ## Interface
 
+`km tunnel` is a **family**. Every mode shares the transport (SSM forward to sshd,
+`-R` forwards inside the SSH session) and differs only in what it carries and what it
+provisions on the box. Modes are subcommands, not mutually-exclusive `--k8s` / `--socks`
+booleans: a flag-based design yields one help page that is the union of two unrelated
+option sets, with nothing indicating that `--context` is meaningless under `--socks`.
+
+The likely second mode is `socks`. `ssh -R <port>` **with no destination** makes the ssh
+client act as a SOCKS 4/5 proxy for connections from the remote side, so the box would
+get a proxy egressing via the operator's machine — no broker, nothing written on the box,
+no new machinery. It is deliberately out of scope here, because it is a far bigger hole:
+two sockets to one cluster versus arbitrary network access to everything the VPN reaches.
+
 ```
-km tunnel <sandbox-id> --context <kube-context> [flags]
+km tunnel k8s <sandbox-id> --context <kube-context> [flags]
 
   --context string       kube context to tunnel (required)
   --kubeconfig string    override $KUBECONFIG / ~/.kube/config

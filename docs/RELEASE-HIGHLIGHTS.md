@@ -20,7 +20,7 @@ never touch them.
 ### 🔌 `km tunnel` — kubectl in a sandbox, against a cluster only your laptop can reach
 
 ```bash
-km tunnel my-sandbox --context k8s1
+km tunnel k8s my-sandbox --context k8s1
 ```
 
 You land in a shell on the sandbox. `kubectl get ns` works. Exit the shell and the access
