@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
 
 // mitmProfileWithIntercepts returns a baseProfile() with the given intercepts
@@ -349,5 +350,98 @@ func TestMITMIntercept_DoesNotWidenAllowedDNS(t *testing.T) {
 	}
 	if strings.Contains(dnsWith, "api.example-mitm.test") {
 		t.Error("intercept host must not appear in --allowed-dns")
+	}
+}
+
+// ─── Task 3: compiler-to-sidecar contract ─────────────────────────────────
+
+// TestMITMWireContract_CompilerAndSidecarAgree renders real user-data for a
+// profile declaring one redirect rule and one respond rule, extracts the
+// KM_MITM_INTERCEPTS value, and decodes it with the REAL sidecar parser
+// (httpproxy.ParseIntercepts) — the single test that keeps the two
+// independently-authored ends of the wire contract from drifting. A field
+// rename on either side fails HERE, in CI, rather than at boot on a live
+// sandbox.
+func TestMITMWireContract_CompilerAndSidecarAgree(t *testing.T) {
+	respondBody := "maintenance window\nplease check back later"
+	p := mitmProfileWithIntercepts(
+		profile.MITMIntercept{
+			Name:  "rickroll",
+			Hosts: []string{".example-egg.test"},
+			Action: &profile.MITMAction{
+				Redirect: "https://example.com/redirected",
+			},
+		},
+		profile.MITMIntercept{
+			Name:  "chaos",
+			Hosts: []string{"api.example-mitm.test"},
+			Action: &profile.MITMAction{
+				Respond: &profile.MITMRespond{
+					Status:      503,
+					ContentType: "text/plain",
+					Body:        respondBody,
+				},
+			},
+		},
+	)
+
+	out, err := generateUserData(p, "sb-mitm-contract", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	val := extractEnvValue(t, out, "KM_MITM_INTERCEPTS")
+
+	parsed, err := httpproxy.ParseIntercepts(val)
+	if err != nil {
+		t.Fatalf("httpproxy.ParseIntercepts failed on compiler-rendered value: %v", err)
+	}
+	if len(parsed) != 2 {
+		t.Fatalf("want 2 parsed intercepts, got %d: %+v", len(parsed), parsed)
+	}
+
+	byName := make(map[string]httpproxy.Intercept, 2)
+	for _, ic := range parsed {
+		byName[ic.Name] = ic
+	}
+
+	rickroll, ok := byName["rickroll"]
+	if !ok {
+		t.Fatalf("rickroll intercept missing from parsed result: %+v", parsed)
+	}
+	if rickroll.Redirect != "https://example.com/redirected" {
+		t.Errorf("rickroll.Redirect: got %q, want https://example.com/redirected", rickroll.Redirect)
+	}
+	if rickroll.Respond != nil {
+		t.Errorf("rickroll.Respond should be nil, got %+v", rickroll.Respond)
+	}
+	if !httpproxy.MatchesHost(".example-egg.test", rickroll.Hosts) {
+		t.Errorf("MatchesHost failed for rickroll's own declared host: %v", rickroll.Hosts)
+	}
+	if !httpproxy.MatchesHost("sub.example-egg.test", rickroll.Hosts) {
+		t.Errorf("MatchesHost failed for a subdomain of rickroll's leading-dot host: %v", rickroll.Hosts)
+	}
+
+	chaos, ok := byName["chaos"]
+	if !ok {
+		t.Fatalf("chaos intercept missing from parsed result: %+v", parsed)
+	}
+	if chaos.Redirect != "" {
+		t.Errorf("chaos.Redirect should be empty, got %q", chaos.Redirect)
+	}
+	if chaos.Respond == nil {
+		t.Fatalf("chaos.Respond should be non-nil")
+	}
+	if chaos.Respond.Status != 503 {
+		t.Errorf("chaos.Respond.Status: got %d, want 503", chaos.Respond.Status)
+	}
+	if chaos.Respond.ContentType != "text/plain" {
+		t.Errorf("chaos.Respond.ContentType: got %q, want text/plain", chaos.Respond.ContentType)
+	}
+	if chaos.Respond.Body != respondBody {
+		t.Errorf("chaos.Respond.Body round-trip failed: got %q, want %q", chaos.Respond.Body, respondBody)
+	}
+	if !httpproxy.MatchesHost("api.example-mitm.test", chaos.Hosts) {
+		t.Errorf("MatchesHost failed for chaos's own declared host: %v", chaos.Hosts)
 	}
 }
