@@ -58,3 +58,39 @@ func ValidateSecretPaths(paths []string) []ValidationError {
 
 	return errs
 }
+
+// InterpolateSecretPaths expands SecretPathPrefixToken to "/" + resourcePrefix.
+//
+// "{{prefix}}/wiz/wiz-api-client-id" with prefix "km" becomes
+// "/km/wiz/wiz-api-client-id".
+//
+// FAIL LOUD: when any path carries the token and resourcePrefix is empty, this
+// returns an error rather than defaulting. Other call sites in this codebase
+// default an empty KM_RESOURCE_PREFIX to "km"; doing that here would silently
+// render an IAM policy pointing at a DIFFERENT install's SSM namespace on any
+// non-default install. An error at compile time is the only safe outcome.
+func InterpolateSecretPaths(paths []string, resourcePrefix string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if !strings.Contains(p, SecretPathPrefixToken) {
+			// Should be unreachable: ValidateSecretPaths rejects these. Kept as
+			// a defence in depth so an un-validated path can never reach IAM.
+			return nil, fmt.Errorf(
+				"allowedSecretPaths entry %q does not start with %s — refusing to compile",
+				p, SecretPathPrefixToken)
+		}
+		if resourcePrefix == "" {
+			return nil, fmt.Errorf(
+				"allowedSecretPaths entry %q needs the install's resource prefix, but "+
+					"KM_RESOURCE_PREFIX is unset — refusing to default to \"km\", which "+
+					"would grant the sandbox role access to another install's SSM namespace",
+				p)
+		}
+		out = append(out, strings.Replace(p, SecretPathPrefixToken, "/"+resourcePrefix, 1))
+	}
+	return out, nil
+}

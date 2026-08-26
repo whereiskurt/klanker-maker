@@ -84,3 +84,51 @@ func TestValidateSecretPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestInterpolateSecretPaths(t *testing.T) {
+	t.Run("token expands to a leading-slash prefix segment", func(t *testing.T) {
+		got, err := profile.InterpolateSecretPaths(
+			[]string{"{{prefix}}/wiz/wiz-api-client-id"}, "km")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := "/km/wiz/wiz-api-client-id"
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("got %q, want [%q]", got, want)
+		}
+	})
+
+	t.Run("non-default prefix", func(t *testing.T) {
+		got, err := profile.InterpolateSecretPaths(
+			[]string{"{{prefix}}/wiz/wiz-api-client-secret"}, "km2")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := "/km2/wiz/wiz-api-client-secret"
+		if got[0] != want {
+			t.Errorf("got %q, want %q", got[0], want)
+		}
+	})
+
+	t.Run("empty prefix with a token present is an ERROR, never a default", func(t *testing.T) {
+		_, err := profile.InterpolateSecretPaths(
+			[]string{"{{prefix}}/wiz/wiz-api-client-id"}, "")
+		if err == nil {
+			t.Fatal("expected an error when resourcePrefix is empty, got nil — " +
+				"defaulting would render an IAM policy for the wrong install")
+		}
+		if !strings.Contains(err.Error(), "KM_RESOURCE_PREFIX") {
+			t.Errorf("error should name the env var, got: %v", err)
+		}
+	})
+
+	t.Run("empty path list with empty prefix is fine", func(t *testing.T) {
+		got, err := profile.InterpolateSecretPaths(nil, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+}

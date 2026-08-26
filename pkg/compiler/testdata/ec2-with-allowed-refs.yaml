@@ -43,7 +43,7 @@ spec:
     allowedRegions:
       - us-east-1
     allowedSecretPaths:
-      - "/km/sandboxes/my-sandbox/api-key"
+      - "{{prefix}}/sandboxes/my-sandbox/api-key"
 
   sidecars:
     dnsProxy:

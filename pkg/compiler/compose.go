@@ -45,7 +45,10 @@ func DockerSubnet(sandboxID string) (subnet, dnsProxyIP, httpProxyIP string) {
 // Credential isolation: only km-cred-refresh has AWS_ACCESS_KEY_ID/SECRET/SESSION.
 // All other containers use AWS_SHARED_CREDENTIALS_FILE pointing to /creds/sandbox or /creds/sidecar.
 func compileDocker(p *profile.SandboxProfile, sandboxID string, network *NetworkConfig) (*CompiledArtifacts, error) {
-	secretPaths := compileSecrets(p)
+	secretPaths, err := compileSecrets(p)
+	if err != nil {
+		return nil, fmt.Errorf("compile secrets: %w", err)
+	}
 	iamPolicy := compileIAMPolicy(p)
 
 	composeYAML, err := generateDockerCompose(p, sandboxID, network, secretPaths)
