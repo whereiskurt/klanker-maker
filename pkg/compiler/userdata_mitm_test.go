@@ -246,3 +246,108 @@ func TestMITMInterceptsByteIdentityGoldensStillPass(t *testing.T) {
 		TestUserdataH1ByteIdentity(t)
 	})
 }
+
+// ─── Task 2: buildL7ProxyHosts threading ──────────────────────────────────
+
+func TestBuildL7ProxyHosts_IntersectHostPresent(t *testing.T) {
+	p := mitmProfileWithIntercepts(profile.MITMIntercept{
+		Name:  "chaos",
+		Hosts: []string{"api.example-mitm.test"},
+		Action: &profile.MITMAction{
+			Respond: &profile.MITMRespond{Status: 503, Body: "maintenance window"},
+		},
+	})
+	got := buildL7ProxyHosts(p)
+	if !strings.Contains(got, "api.example-mitm.test") {
+		t.Errorf("expected intercept host in --proxy-hosts value, got %q", got)
+	}
+}
+
+func TestBuildL7ProxyHosts_DisabledInterceptHostAbsent(t *testing.T) {
+	p := mitmProfileWithIntercepts(profile.MITMIntercept{
+		Name:    "chaos",
+		Enabled: boolPtr(false),
+		Hosts:   []string{"api.example-mitm.test"},
+		Action: &profile.MITMAction{
+			Respond: &profile.MITMRespond{Status: 503, Body: "maintenance window"},
+		},
+	})
+	got := buildL7ProxyHosts(p)
+	if strings.Contains(got, "api.example-mitm.test") {
+		t.Errorf("disabled intercept host must not appear in --proxy-hosts, got %q", got)
+	}
+}
+
+func TestBuildL7ProxyHosts_OrderIsGithubBedrockOpenAIThenIntercepts(t *testing.T) {
+	p := mitmProfileWithIntercepts(profile.MITMIntercept{
+		Name:  "chaos",
+		Hosts: []string{"api.example-mitm.test"},
+		Action: &profile.MITMAction{
+			Respond: &profile.MITMRespond{Status: 503, Body: "maintenance window"},
+		},
+	})
+	p.Spec.SourceAccess.GitHub = &profile.GitHubAccess{AllowedRepos: []string{"org/repo"}}
+	p.Spec.Execution.UseBedrock = true
+
+	got := buildL7ProxyHosts(p)
+	ghIdx := strings.Index(got, "github.com")
+	bedrockIdx := strings.Index(got, "api.anthropic.com")
+	interceptIdx := strings.Index(got, "api.example-mitm.test")
+	if ghIdx < 0 || bedrockIdx < 0 || interceptIdx < 0 {
+		t.Fatalf("expected all three groups present, got %q", got)
+	}
+	if !(ghIdx < bedrockIdx && bedrockIdx < interceptIdx) {
+		t.Errorf("expected order github < bedrock/anthropic < intercepts, got %q", got)
+	}
+}
+
+func TestBuildL7ProxyHosts_DuplicateHostNotEmittedTwice(t *testing.T) {
+	p := mitmProfileWithIntercepts(profile.MITMIntercept{
+		Name:  "shadow-anthropic",
+		Hosts: []string{"api.anthropic.com"},
+		Action: &profile.MITMAction{
+			Respond: &profile.MITMRespond{Status: 200, Body: "ok"},
+		},
+	})
+	p.Spec.Execution.UseBedrock = true
+
+	got := buildL7ProxyHosts(p)
+	count := strings.Count(got, "api.anthropic.com")
+	if count != 1 {
+		t.Errorf("expected api.anthropic.com exactly once, got %d occurrences in %q", count, got)
+	}
+}
+
+func TestMITMIntercept_DoesNotWidenAllowedDNS(t *testing.T) {
+	// --allowed-dns is only rendered on the km ebpf-attach ExecStart line,
+	// which itself is guarded on enforcement: ebpf|both — set it explicitly
+	// so the flag is present to compare.
+	without := baseProfile()
+	without.Spec.Network.Enforcement = "ebpf"
+	withIntercept := mitmProfileWithIntercepts(profile.MITMIntercept{
+		Name:  "chaos",
+		Hosts: []string{"api.example-mitm.test"},
+		Action: &profile.MITMAction{
+			Respond: &profile.MITMRespond{Status: 503, Body: "maintenance window"},
+		},
+	})
+	withIntercept.Spec.Network.Enforcement = "ebpf"
+
+	outWithout, err := generateUserData(without, "sb-mitm-dns-01", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData (without) failed: %v", err)
+	}
+	outWith, err := generateUserData(withIntercept, "sb-mitm-dns-02", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData (with) failed: %v", err)
+	}
+
+	dnsWithout := extractQuotedFlagValue(t, outWithout, "--allowed-dns")
+	dnsWith := extractQuotedFlagValue(t, outWith, "--allowed-dns")
+	if dnsWithout != dnsWith {
+		t.Errorf("--allowed-dns changed when declaring an intercept: without=%q with=%q", dnsWithout, dnsWith)
+	}
+	if strings.Contains(dnsWith, "api.example-mitm.test") {
+		t.Error("intercept host must not appear in --allowed-dns")
+	}
+}

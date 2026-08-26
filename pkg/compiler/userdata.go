@@ -5892,19 +5892,41 @@ func buildMITMInterceptsB64(p *profile.SandboxProfile) string {
 // Only domains that the profile actually accesses are included:
 //   - GitHub domains when profile has sourceAccess.github configured
 //   - Bedrock/Anthropic domains when profile has useBedrock: true
+//   - OpenAI when spec.agent.default is "codex"
+//   - Every host declared by an enabled spec.network.mitm.intercepts rule
+//     (Phase 127 Plan 03), appended last
 //
 // The returned string is passed to km ebpf-attach --proxy-hosts in "ebpf" and
 // "both" enforcement modes so the resolver marks resolved IPs for proxy redirect.
+//
+// Deliberately NOT done: intercept hosts are not added to allowedDNSSuffixes.
+// Under enforcement: ebpf the enforcer's resolver still NXDOMAINs a host
+// outside the DNS allowlist, so a rule for an unresolvable host silently
+// never fires. That is a km validate warning (plan 04), not a silent
+// expansion of egress policy — declaring an intercept must never widen what
+// a sandbox can resolve.
 func buildL7ProxyHosts(p *profile.SandboxProfile) string {
 	var hosts []string
+	seen := make(map[string]bool)
+	add := func(h string) {
+		if seen[h] {
+			return
+		}
+		seen[h] = true
+		hosts = append(hosts, h)
+	}
 	if p.Spec.SourceAccess.GitHub != nil {
-		hosts = append(hosts, "github.com", "api.github.com", "raw.githubusercontent.com", "codeload.githubusercontent.com")
+		add("github.com")
+		add("api.github.com")
+		add("raw.githubusercontent.com")
+		add("codeload.githubusercontent.com")
 	}
 	if enableBedrock(p) {
 		// .amazonaws.com covers Bedrock endpoints (bedrock-runtime.us-east-1.amazonaws.com etc.)
 		// This is broader than strictly necessary, but non-Bedrock traffic passes through
 		// the proxy transparently without MITM inspection.
-		hosts = append(hosts, ".amazonaws.com", "api.anthropic.com")
+		add(".amazonaws.com")
+		add("api.anthropic.com")
 	}
 	// Phase 88 (OAI-BUDGET-07): Codex agent profiles route to api.openai.com.
 	// Adding it here triggers connect4 DNAT redirect in enforcement: ebpf | both modes,
@@ -5912,10 +5934,19 @@ func buildL7ProxyHosts(p *profile.SandboxProfile) string {
 	// Researcher recommendation: gate on Agent == "codex". Non-codex profiles that hit
 	// OpenAI directly (raw OpenAI SDK in a Claude sandbox) need an explicit profile flag
 	// — deferred to a follow-up phase. See 88-RESEARCH.md § Open Questions #2.
-	// NOTE: host order is GitHub, Bedrock/Anthropic, OpenAI — preserved for test contracts.
+	// NOTE: host order is GitHub, Bedrock/Anthropic, OpenAI, then MITM intercept
+	// hosts last — preserved for test contracts.
 	// Phase 92 (Wave 4): read spec.agent.default via agentDefault (was p.Spec.CLI.Agent).
 	if agentDefault(p) == "codex" {
-		hosts = append(hosts, "api.openai.com")
+		add("api.openai.com")
+	}
+	// Phase 127 Plan 03: enabled intercept hosts, appended last so the order
+	// contract above holds. Reuses profile.EnabledIntercepts so the same
+	// by-name collapse and disabled-drop rules apply here as everywhere else.
+	for _, ic := range profile.EnabledIntercepts(profile.ProfileIntercepts(p)) {
+		for _, h := range ic.Hosts {
+			add(h)
+		}
 	}
 	return strings.Join(hosts, ",")
 }
