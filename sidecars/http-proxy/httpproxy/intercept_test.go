@@ -118,7 +118,7 @@ func encodeIntercepts(t *testing.T, jsonBody string) string {
 
 func TestParseIntercepts_RoundTripRedirectAndRespond(t *testing.T) {
 	body := `[
-		{"name":"rickroll","hosts":[".google.com"],"redirect":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+		{"name":"rickroll","hosts":[".google.com"],"redirect":"https://example.com/redirected"},
 		{"name":"chaos","hosts":["api.example.com"],"respond":{"status":503,"contentType":"text/plain","body":"maintenance window"}}
 	]`
 	ics, err := httpproxy.ParseIntercepts(encodeIntercepts(t, body))
@@ -128,7 +128,7 @@ func TestParseIntercepts_RoundTripRedirectAndRespond(t *testing.T) {
 	if len(ics) != 2 {
 		t.Fatalf("got %d intercepts, want 2", len(ics))
 	}
-	if ics[0].Name != "rickroll" || ics[0].Redirect != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" {
+	if ics[0].Name != "rickroll" || ics[0].Redirect != "https://example.com/redirected" {
 		t.Errorf("intercept 0 = %+v, redirect fields did not round-trip", ics[0])
 	}
 	if len(ics[0].Hosts) != 1 || ics[0].Hosts[0] != ".google.com" {
@@ -231,7 +231,7 @@ func TestParseIntercepts_DropsUnsafeEntriesKeepsWellFormed(t *testing.T) {
 
 func TestInterceptResponse_Redirect(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://google.com/", nil)
-	ic := &httpproxy.Intercept{Name: "rickroll", Hosts: []string{".google.com"}, Redirect: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+	ic := &httpproxy.Intercept{Name: "rickroll", Hosts: []string{".google.com"}, Redirect: "https://example.com/redirected"}
 	resp := httpproxy.InterceptResponse(req, ic)
 	if resp.StatusCode != http.StatusMovedPermanently {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMovedPermanently)
@@ -308,7 +308,7 @@ func startInterceptProxy(t *testing.T, targetAddr string, allowed []string, ics 
 func TestHTTPProxy_InterceptFiresForHostAbsentFromAllowlist(t *testing.T) {
 	target := denyTestTarget(t)
 	ics := []httpproxy.Intercept{
-		{Name: "rickroll", Hosts: []string{".google.com"}, Redirect: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+		{Name: "rickroll", Hosts: []string{".google.com"}, Redirect: "https://example.com/redirected"},
 	}
 	// allowed does NOT include google.com — the intercept must still fire,
 	// preserving today's built-in google.com behaviour.
@@ -329,7 +329,7 @@ func TestHTTPProxy_InterceptFiresForHostAbsentFromAllowlist(t *testing.T) {
 	if resp.StatusCode != http.StatusMovedPermanently {
 		t.Errorf("status = %d, want 301 (intercept must fire for a host absent from ALLOWED_HOSTS)", resp.StatusCode)
 	}
-	if loc := resp.Header.Get("Location"); loc != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" {
+	if loc := resp.Header.Get("Location"); loc != "https://example.com/redirected" {
 		t.Errorf("Location = %q, want the rickroll target", loc)
 	}
 }
