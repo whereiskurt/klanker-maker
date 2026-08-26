@@ -22,7 +22,7 @@ package cmd_test
 //
 // Production symbols introduced in Wave 1 (Plan 02):
 //
-//   cmd.ResolveScopedModule(onlyVal string, github, slack, h1, email bool) (string, error)
+//   cmd.ResolveScopedModule(onlyVal string, github, slack, h1, email, webhooks bool) (string, error)
 //   cmd.runInitScopedFunc  (package-level stub var; Plan 03 replaces body)
 //   cmd.scopedCheapAllowlist  []string  (unexported; Tier 1)
 //   cmd.scopedGatedAllowlist  []string  (unexported; Tier 2)
@@ -54,7 +54,7 @@ func makeMinimalInitConfig() *config.Config {
 // the expected module name and does not error.
 //
 // Wave 1 contract (ResolveScopedModule):
-//   - cmd.ResolveScopedModule("lambda-github-bridge", false, false, false, false) → ("lambda-github-bridge", nil)
+//   - cmd.ResolveScopedModule("lambda-github-bridge", false, false, false, false, false) → ("lambda-github-bridge", nil)
 //   - result must be in the Tier-1 allowlist
 //   - "ses" (Tier-2) also resolves without error
 //   - empty onlyVal with all false → ("", nil) (no scoped request, not an error)
@@ -66,6 +66,7 @@ func TestScopedModuleResolution(t *testing.T) {
 		slack     bool
 		h1        bool
 		email     bool
+		webhooks  bool
 		wantMod   string
 		wantError bool
 	}{
@@ -90,6 +91,11 @@ func TestScopedModuleResolution(t *testing.T) {
 			wantMod: "email-handler",
 		},
 		{
+			name:    "lambda-webhook-bridge via --only",
+			onlyVal: "lambda-webhook-bridge",
+			wantMod: "lambda-webhook-bridge",
+		},
+		{
 			name:    "ses (tier-2) via --only",
 			onlyVal: "ses",
 			wantMod: "ses",
@@ -103,7 +109,7 @@ func TestScopedModuleResolution(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := cmd.ResolveScopedModule(tc.onlyVal, tc.github, tc.slack, tc.h1, tc.email)
+			got, err := cmd.ResolveScopedModule(tc.onlyVal, tc.github, tc.slack, tc.h1, tc.email, tc.webhooks)
 			if tc.wantError {
 				if err == nil {
 					t.Fatalf("expected error, got nil (module=%q)", got)
@@ -124,7 +130,7 @@ func TestScopedModuleResolution(t *testing.T) {
 // error that names the allowed set.
 //
 // Wave 1 contract (ResolveScopedModule):
-//   - cmd.ResolveScopedModule("unknown-module", false, false, false, false) → ("", err)
+//   - cmd.ResolveScopedModule("unknown-module", false, false, false, false, false) → ("", err)
 //   - err.Error() contains each Tier-1 module name and "ses" (Tier-2)
 func TestScopedModuleRejection(t *testing.T) {
 	invalidModules := []string{
@@ -141,12 +147,13 @@ func TestScopedModuleRejection(t *testing.T) {
 		"lambda-slack-bridge",
 		"lambda-h1-bridge",
 		"email-handler",
+		"lambda-webhook-bridge",
 		"ses",
 	}
 
 	for _, mod := range invalidModules {
 		t.Run(mod, func(t *testing.T) {
-			got, err := cmd.ResolveScopedModule(mod, false, false, false, false)
+			got, err := cmd.ResolveScopedModule(mod, false, false, false, false, false)
 			if err == nil {
 				t.Fatalf("expected error for %q, got nil (module=%q)", mod, got)
 			}
@@ -168,28 +175,31 @@ func TestScopedModuleRejection(t *testing.T) {
 //
 // Wave 1 contract (ResolveScopedModule):
 //
-//	--github → "lambda-github-bridge"
-//	--slack  → "lambda-slack-bridge"
-//	--h1     → "lambda-h1-bridge"
-//	--email  → "email-handler"
+//	--github   → "lambda-github-bridge"
+//	--slack    → "lambda-slack-bridge"
+//	--h1       → "lambda-h1-bridge"
+//	--email    → "email-handler"
+//	--webhooks → "lambda-webhook-bridge"
 func TestScopedAliases(t *testing.T) {
 	cases := []struct {
-		alias   string
-		github  bool
-		slack   bool
-		h1      bool
-		email   bool
-		wantMod string
+		alias    string
+		github   bool
+		slack    bool
+		h1       bool
+		email    bool
+		webhooks bool
+		wantMod  string
 	}{
 		{alias: "--github", github: true, wantMod: "lambda-github-bridge"},
 		{alias: "--slack", slack: true, wantMod: "lambda-slack-bridge"},
 		{alias: "--h1", h1: true, wantMod: "lambda-h1-bridge"},
 		{alias: "--email", email: true, wantMod: "email-handler"},
+		{alias: "--webhooks", webhooks: true, wantMod: "lambda-webhook-bridge"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.alias, func(t *testing.T) {
-			got, err := cmd.ResolveScopedModule("", tc.github, tc.slack, tc.h1, tc.email)
+			got, err := cmd.ResolveScopedModule("", tc.github, tc.slack, tc.h1, tc.email, tc.webhooks)
 			if err != nil {
 				t.Fatalf("unexpected error for %s: %v", tc.alias, err)
 			}
@@ -215,7 +225,7 @@ func TestScopedAliases(t *testing.T) {
 //	"km init --only X --github"   → error containing "at most one"
 func TestScopedMutualExclusion(t *testing.T) {
 	t.Run("two alias flags via ResolveScopedModule", func(t *testing.T) {
-		_, err := cmd.ResolveScopedModule("", true, true, false, false) // --github + --slack
+		_, err := cmd.ResolveScopedModule("", true, true, false, false, false) // --github + --slack
 		if err == nil {
 			t.Fatal("expected error for github+slack, got nil")
 		}
@@ -225,7 +235,7 @@ func TestScopedMutualExclusion(t *testing.T) {
 	})
 
 	t.Run("--only and alias both set via ResolveScopedModule", func(t *testing.T) {
-		_, err := cmd.ResolveScopedModule("lambda-github-bridge", true, false, false, false) // --only + --github
+		_, err := cmd.ResolveScopedModule("lambda-github-bridge", true, false, false, false, false) // --only + --github
 		if err == nil {
 			t.Fatal("expected error for --only + --github, got nil")
 		}

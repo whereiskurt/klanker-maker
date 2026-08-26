@@ -108,6 +108,20 @@ var PublishOperatorIdentityHook func(ctx context.Context) error
 // test/default zero value) skips the check entirely.
 var InitNATDisableGuardHook func(ctx context.Context) error
 
+// PublishWebhookBridgeURLHook, when non-nil, is invoked by RunInitWithRunner and
+// RunInitScopedWithRunner IMMEDIATELY AFTER the lambda-webhook-bridge module
+// applies successfully, with the module's function_url output. runInit /
+// runInitScoped bind it (closed over cfg + awsCfg) to write the URL to SSM
+// {prefix}config/webhooks/bridge-url — mirroring {prefix}config/github/bridge-url
+// (checkGitHubBridgeURL). Unlike GitHub/Slack/H1, the generic webhook bridge has
+// no `km webhooks init` CLI verb by design (config-only feature), so `km init`
+// itself is the ONLY path that can ever record this value; without this hook an
+// operator would have no way to learn the URL to paste into a source's
+// integration (e.g. Wiz), and a later `km doctor` check
+// (`{prefix}config/webhooks/bridge-url`) would WARN forever. Nil (the test/
+// default zero value) skips the publish entirely.
+var PublishWebhookBridgeURLHook func(ctx context.Context, functionURL string) error
+
 // RunInitPlanFunc is the package-level entry point for km init --plan, exported as a
 // var so cmd_test can override it with a mock to verify routing without needing real
 // AWS credentials / a real terragrunt binary. The default implementation is runInitPlan.
@@ -131,6 +145,9 @@ var BuildLambdaZipsFunc = buildLambdaZips
 // and the email handler — all have bounded, non-destructive apply semantics.
 var scopedCheapAllowlist = []string{
 	"lambda-github-bridge", "lambda-slack-bridge", "lambda-h1-bridge", "email-handler",
+	// Phase 127: generic webhook ingress bridge — same bounded, non-destructive
+	// apply semantics as the other bridge Lambdas.
+	"lambda-webhook-bridge",
 }
 
 // scopedGatedAllowlist is the Tier-2 set of modules that km init --only may target
@@ -152,16 +169,17 @@ func isScopedGated(name string) bool {
 // name and validates it against the combined scoped allowlist.
 //
 // Rules:
-//   - At most one of {onlyVal != "", github, slack, h1, email} may be set; >1 → error.
+//   - At most one of {onlyVal != "", github, slack, h1, email, webhooks} may be
+//     set; >1 → error.
 //   - None set → ("", nil): no scoped request; caller falls through to normal init.
 //   - Sugar alias bools map to: github→lambda-github-bridge, slack→lambda-slack-bridge,
-//     h1→lambda-h1-bridge, email→email-handler.
+//     h1→lambda-h1-bridge, email→email-handler, webhooks→lambda-webhook-bridge.
 //   - onlyVal is used verbatim as the candidate module name.
 //   - Candidate must be in scopedCheapAllowlist ∪ scopedGatedAllowlist; otherwise error
 //     listing the allowed set.
 //
 // Exported so cmd_test (external test package) can call it directly in unit tests.
-func ResolveScopedModule(onlyVal string, github, slack, h1, email bool) (string, error) {
+func ResolveScopedModule(onlyVal string, github, slack, h1, email, webhooks bool) (string, error) {
 	// Count how many entry points are set.
 	setCount := 0
 	if onlyVal != "" {
@@ -179,8 +197,11 @@ func ResolveScopedModule(onlyVal string, github, slack, h1, email bool) (string,
 	if email {
 		setCount++
 	}
+	if webhooks {
+		setCount++
+	}
 	if setCount > 1 {
-		return "", fmt.Errorf("at most one of --only/--github/--slack/--h1/--email may be set")
+		return "", fmt.Errorf("at most one of --only/--github/--slack/--h1/--email/--webhooks may be set")
 	}
 	if setCount == 0 {
 		return "", nil
@@ -197,6 +218,8 @@ func ResolveScopedModule(onlyVal string, github, slack, h1, email bool) (string,
 		candidate = "lambda-h1-bridge"
 	case email:
 		candidate = "email-handler"
+	case webhooks:
+		candidate = "lambda-webhook-bridge"
 	}
 
 	// Validate candidate against the combined allowlist.
@@ -352,6 +375,23 @@ func RunInitScopedWithRunner(runner InitRunner, repoRoot, region, module string,
 		}
 	}
 
+	// lambda-webhook-bridge post-apply: publish the Function URL to SSM
+	// {prefix}config/webhooks/bridge-url (see RunInitWithRunner's identical
+	// block for why `km init` — scoped or full — is the only writer of this
+	// value; the feature has no dedicated CLI verb by design).
+	if module == "lambda-webhook-bridge" && PublishWebhookBridgeURLHook != nil {
+		outputMap, outErr := runner.Output(ctx, target.dir)
+		if outErr == nil {
+			if urlVal, ok := outputMap["function_url"]; ok {
+				functionURL := fmt.Sprintf("%v", extractValue(urlVal))
+				fmt.Printf("  Webhook bridge URL: %s\n", functionURL)
+				if pubErr := PublishWebhookBridgeURLHook(ctx, functionURL); pubErr != nil {
+					fmt.Printf("  Warning: could not publish webhook bridge URL to SSM: %v\n", pubErr)
+				}
+			}
+		}
+	}
+
 	fmt.Println()
 	fmt.Printf("Scoped init complete for %s.\n", module)
 	fmt.Printf("Note: this refreshed env+IAM only. For a stale code zip: make build-lambdas && km init --lambdas\n")
@@ -403,11 +443,30 @@ func runInitScoped(cfg *config.Config, awsProfile, region string, verbose bool, 
 		}
 	}
 
+	// Phase 127: bind the webhook bridge URL publisher for the scoped `--webhooks`
+	// fast path too — closed over cfg + awsCfg so RunInitScopedWithRunner can
+	// invoke it after a scoped lambda-webhook-bridge apply. Cleared on return.
+	PublishWebhookBridgeURLHook = func(hookCtx context.Context, functionURL string) error {
+		return publishWebhookBridgeURLToSSM(hookCtx, ssm.NewFromConfig(awsCfg), cfg, functionURL)
+	}
+	defer func() { PublishWebhookBridgeURLHook = nil }()
+
 	repoRoot := findRepoRoot()
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
 
 	return RunInitScopedWithRunner(runner, repoRoot, region, module, dryRun, acceptDestroys)
+}
+
+// publishWebhookBridgeURLToSSM writes the km-webhook-bridge Function URL to SSM
+// {prefix}config/webhooks/bridge-url, mirroring {prefix}config/github/bridge-url
+// (checkGitHubBridgeURL in doctor.go). Overwrite is unconditional (true): a
+// Lambda replacement mints a new Function URL, and unlike the GitHub/Slack/H1
+// bridges — where a human re-runs `km github init --bridge-url` /
+// `km slack init` after redeploy — nothing else will ever refresh this value.
+func publishWebhookBridgeURLToSSM(ctx context.Context, ssmClient SSMWriteAPI, cfg *config.Config, functionURL string) error {
+	paramName := cfg.GetSsmPrefix() + "config/webhooks/bridge-url"
+	return putSSMParam(ctx, ssmClient, paramName, functionURL, ssmtypes.ParameterTypeString, "", true)
 }
 
 // defaultSESPreflight is the real implementation: loads AWS config and checks
@@ -503,7 +562,7 @@ func defaultModuleTimeout(name string) time.Duration {
 		// unknown_sender (incident 2026-06-14). Give them network-grade headroom.
 		// NOTE: when adding a GSI to any other populated dynamodb-* module, add it here.
 		return 10 * time.Minute
-	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge", "lambda-github-bridge", "lambda-h1-bridge":
+	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge", "lambda-github-bridge", "lambda-h1-bridge", "lambda-webhook-bridge":
 		return 5 * time.Minute
 	default:
 		return 3 * time.Minute
@@ -687,6 +746,19 @@ func regionalModules(regionDir string) []regionalModule {
 			// dispatch. Ordered AFTER lambda-github-bridge + all shared deps, BEFORE ses.
 			name:    "lambda-h1-bridge",
 			dir:     filepath.Join(regionDir, "lambda-h1-bridge"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
+			// Phase 127: generic webhook ingress bridge Lambda with Function URL
+			// (auth=NONE; per-source bearer/HMAC auth + nonce replay provide
+			// application-layer auth). Depends on dynamodb-sandboxes (alias-index
+			// GSI) and dynamodb-slack-nonces (shared nonce table, "webhook-delivery:"
+			// key namespace) — no dedicated threads table (a webhook source is
+			// one-way; see pkg/webhook/bridge/interfaces.go). artifacts bucket
+			// needed for cold-create EventBridge dispatch. Ordered AFTER
+			// lambda-h1-bridge + all shared deps, BEFORE ses.
+			name:    "lambda-webhook-bridge",
+			dir:     filepath.Join(regionDir, "lambda-webhook-bridge"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
@@ -945,7 +1017,7 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 	var plan bool
 	var acceptDestroys bool
 	var onlyModule string
-	var githubFlag, slackFlag, h1Flag, emailFlag bool
+	var githubFlag, slackFlag, h1Flag, emailFlag, webhooksFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -956,12 +1028,12 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 				awsProfile = "klanker-application"
 			}
 			// Phase 105: resolve scoped module flags before any other dispatch.
-			scopedModule, scopedErr := ResolveScopedModule(onlyModule, githubFlag, slackFlag, h1Flag, emailFlag)
+			scopedModule, scopedErr := ResolveScopedModule(onlyModule, githubFlag, slackFlag, h1Flag, emailFlag, webhooksFlag)
 			if scopedErr != nil {
 				return scopedErr
 			}
 			if scopedModule != "" && (plan || sidecarsOnly || lambdasOnly) {
-				return fmt.Errorf("--only/--github/--slack/--h1/--email cannot be combined with --plan, --sidecars, or --lambdas")
+				return fmt.Errorf("--only/--github/--slack/--h1/--email/--webhooks cannot be combined with --plan, --sidecars, or --lambdas")
 			}
 			// Phase 84.2: --plan always wins over --dry-run / sidecars / lambdas (Decision 1).
 			if plan && (sidecarsOnly || lambdasOnly) {
@@ -1018,6 +1090,8 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 		"Scoped apply of lambda-h1-bridge (sugar for --only lambda-h1-bridge)")
 	cmd.Flags().BoolVar(&emailFlag, "email", false,
 		"Scoped apply of email-handler (sugar for --only email-handler)")
+	cmd.Flags().BoolVar(&webhooksFlag, "webhooks", false,
+		"Scoped apply of lambda-webhook-bridge (sugar for --only lambda-webhook-bridge)")
 
 	return cmd
 }
@@ -1373,6 +1447,15 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		return checkNATDisableGuardBeforeApply(hookCtx, cfg, awsCfg, repoRoot, region)
 	}
 	defer func() { InitNATDisableGuardHook = nil }()
+
+	// Phase 127: bind the webhook bridge URL publisher, closed over cfg + awsCfg,
+	// so RunInitWithRunner's module loop can invoke it the instant
+	// lambda-webhook-bridge applies. Cleared on return so a subsequent
+	// in-process init re-binds it to its own cfg/awsCfg.
+	PublishWebhookBridgeURLHook = func(hookCtx context.Context, functionURL string) error {
+		return publishWebhookBridgeURLToSSM(hookCtx, ssm.NewFromConfig(awsCfg), cfg, functionURL)
+	}
+	defer func() { PublishWebhookBridgeURLHook = nil }()
 
 	if err := RunInitWithRunner(runner, repoRoot, region); err != nil {
 		return err
@@ -2655,6 +2738,26 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 				}
 			}
 		}
+
+		// After lambda-webhook-bridge module: publish the Function URL to SSM
+		// {prefix}config/webhooks/bridge-url. Unlike the GitHub/Slack/H1 bridges
+		// (which require a separate `km github init` / `km slack init` / `km h1
+		// init` to record their URL), the generic webhook bridge has no CLI verb
+		// by design — `km init` is the ONLY path that can ever write this value.
+		// Best-effort: a publish failure never aborts init (see
+		// PublishWebhookBridgeURLHook doc comment).
+		if mod.name == "lambda-webhook-bridge" && PublishWebhookBridgeURLHook != nil {
+			outputMap, outErr := runner.Output(ctx, mod.dir)
+			if outErr == nil {
+				if urlVal, ok := outputMap["function_url"]; ok {
+					functionURL := fmt.Sprintf("%v", extractValue(urlVal))
+					fmt.Printf("  Webhook bridge URL: %s\n", functionURL)
+					if pubErr := PublishWebhookBridgeURLHook(ctx, functionURL); pubErr != nil {
+						fmt.Printf("  Warning: could not publish webhook bridge URL to SSM: %v\n", pubErr)
+					}
+				}
+			}
+		}
 	}
 
 	fmt.Println()
@@ -3163,6 +3266,11 @@ func lambdaBuilds() []lambdaBuild {
 		// auto-triage events + @-handle comment keywords. Missing here ⇒ zip never built
 		// (memory project_km_init_skips_existing_lambda_zips).
 		{name: "km-h1-bridge", srcDir: "cmd/km-h1-bridge"},
+		// Phase 127: generic webhook ingress bridge Lambda — verifies per-source
+		// auth (bearer/HMAC), matches operator-declared rules, dispatches to a
+		// sandbox alias. Missing here ⇒ zip never built (memory
+		// project_km_init_skips_existing_lambda_zips).
+		{name: "km-webhook-bridge", srcDir: "cmd/km-webhook-bridge"},
 		// Phase 121 (plan 09): quota-alerter Lambda — DDB-Stream triggered, sends exactly
 		// one SES operator alert per (sandbox, action, window) breach. Missing here ⇒ zip
 		// never built ⇒ filebase64sha256 fails at apply time (same footgun as Phase 97).
