@@ -68,12 +68,36 @@ and reaches the Docker (`compose.go:131`) and ECS (`service_hcl.go:263`) substra
 never the ec2spot IAM policy.
 
 **So today, on the only substrate in real use, declaring a path yields
-`AccessDenied`, and the loop warns and continues** (`WARNING: failed to fetch
-secret`). A sensor would boot with no credential and silently never enroll.
+`AccessDenied` — and that ABORTS THE BOOT.**
 
-This is a latent platform bug independent of Wiz: a documented profile field that
-no-ops on EC2, failing soft behind a logger. Same shape as the ttl-handler
-teardown IAM drift.
+*(Corrected 2026-08-26. This section previously said the loop "warns and
+continues". It does not.)* The bootstrap runs under `set -euo pipefail`
+(`userdata.go:36`) and the fetch loop sits at line 495, inside that scope.
+`SECRET_VALUE=$(aws ssm get-parameter …)` is a standalone assignment, so a
+non-zero exit terminates the script **before** the `if [ $? -eq 0 ]` guard is
+ever reached — that guard is dead code on the failure path. The repo already
+records this empirically at `profiles/base/gpu/serve.yaml:214`: *"a
+bad/non-existent path makes the boot's `aws ssm get-parameter` fail under
+`set -e` and BRICKS the boot (validated on the CPU rehearsal)."*
+
+This is a latent platform bug independent of Wiz, and a more severe one than a
+silent no-op: a documented profile field that **bricks any EC2 sandbox
+declaring it**. Two shipped profiles — `gpu-llama-12x.yaml` and
+`gpu-llama-48x.yaml` — carry an absolute `allowedSecretPaths` entry that no
+`ec2spot` version has ever granted; they are removed as part of the
+implementation.
+
+Two consequences for this design:
+
+1. The `ec2spot/v1.4.0` grant in §4 Part 1 is a **boot fix**, not merely a
+   feature enabler.
+2. **Creating the SSM parameters is a hard prerequisite**, not a setup nicety.
+   An operator who extends the Wiz fragment before creating them bricks every
+   sandbox that uses it. Boot-abort is a defensible fail-closed posture for a
+   security control, so this design keeps it rather than softening shared boot
+   semantics — but the operator runbook must state the ordering explicitly and
+   give a verification command. Revisit if the footgun proves worse than the
+   fail-closed property is worth.
 
 ### 3.3 `spec.secrets.sopsFile` is a scalar, and its output is agent-readable
 
