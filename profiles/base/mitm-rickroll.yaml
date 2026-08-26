@@ -1,0 +1,23 @@
+# The built-in google.com -> Rickroll easter egg used to be compiled
+# unconditionally into the http-proxy sidecar (sidecars/http-proxy/httpproxy/
+# proxy.go, deleted in Phase 127 Plan 02). spec.network.mitm.intercepts is now
+# opt-in and off by default, so the behaviour stops firing fleet-wide on the
+# next `km create` unless a profile extends this fragment. This file is the
+# ONLY place it survives in the repo.
+#
+# `extends: [base/mitm-rickroll]` reproduces the old redirect exactly. See
+# profiles/mitm-demo.yaml for the worked example, including the off-switch.
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-mitm-rickroll
+  abstract: true
+
+spec:
+  network:
+    mitm:
+      intercepts:
+        - name: rickroll
+          hosts: [".google.com"]
+          action:
+            redirect: https://www.youtube.com/watch?v=dQw4w9WgXcQ

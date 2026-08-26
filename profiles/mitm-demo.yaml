@@ -1,0 +1,69 @@
+# Demo profile for spec.network.mitm.intercepts (Phase 127/129). This is the
+# worked example docs/mitm-intercepts.md points at: it inherits the built-in
+# Rickroll easter egg via the one-line `extends:` entry below (proving the
+# migration path works with one line), and adds a second intercept of its
+# own — a canned `respond` rule exercising the systemd/base64 transport a
+# redirect alone would not (a respond body has spaces, which is exactly what
+# breaks an unquoted systemd Environment= line without base64).
+#
+# See the commented-out block at the bottom for the off-switch: restating
+# `rickroll` with `enabled: false` turns the inherited rule off without
+# touching this leaf's own `maintenance` rule.
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: mitm-demo
+  labels:
+    tier: development
+    tool: mitm-intercepts-demo
+  prefix: mitm
+
+extends:
+  - base/os/redhat
+  - base/network/safenetwork
+  - base/platform
+  - base/mitm-rickroll
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "20m"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+    spot: true
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: true
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  network:
+    mitm:
+      intercepts:
+        - name: maintenance
+          hosts: ["api.example.com"]
+          action:
+            respond:
+              status: 503
+              contentType: text/plain
+              body: "maintenance window in progress"
+
+        # The off-switch this demo exists to show. Uncommenting this entry
+        # overrides the inherited `rickroll` rule by name (last-wins,
+        # whole-entry) and disables it, leaving `maintenance` untouched.
+        # No `hosts`/`action` are needed on a disable-only override — there
+        # is nothing left to inherit them from once the rule is off.
+        # - name: rickroll
+        #   enabled: false
