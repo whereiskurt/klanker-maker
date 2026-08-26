@@ -70,10 +70,22 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   sandbox recreate** — this is entirely control-plane.
 
 **Phase 130 (2026-08-26) — `km tunnel`: reverse-tunnelled kubectl into a sandbox, against a cluster only the operator's laptop can reach (code-complete; live UAT pending):**
-- `km tunnel <sandbox-id> --context <ctx>` drops the operator into an interactive sandbox
+- `km tunnel k8s <sandbox-id> --context <ctx>` drops the operator into an interactive sandbox
   shell where `kubectl` works against a cluster reachable only from their own workstation
   (OpenVPN route on the laptop, VPN credential cannot leave it). **No VPN credential, SSO
   refresh token, or AWS credential ever reaches the sandbox.**
+- **`km tunnel` is a FAMILY, and the subcommand split is deliberate.** The reusable part is
+  the transport (SSM forward to sshd + `-R` reverse forwards inside the SSH session); modes
+  differ only in what they carry and what they provision on the box. Modes are subcommands
+  rather than mutually-exclusive `--k8s`/`--socks` booleans specifically so a second mode
+  does not produce one help page that is the union of two unrelated option sets with no way
+  to tell which flag applies where. **The likely next mode is `socks`:** `ssh -R <port>`
+  **with no destination** makes the ssh CLIENT a SOCKS 4/5 proxy, so the box would get a
+  proxy egressing via the operator's machine — needing no broker, nothing written on the
+  box, and no new machinery. Note it is `-R` with no destination, NOT `-D` (which is the
+  forward direction). It is also a **far bigger hole** than `k8s`: two sockets to one
+  cluster versus arbitrary network access to everything the VPN reaches, so it deserves its
+  own decision rather than arriving as a convenience flag.
 - **The deploy surface is `make build` ALONE** — no profile field, no sidecar, no userdata
   change, no Lambda rebuild, no `km init`, and **no `km destroy && km create`**. It works on
   sandboxes already running. Three facts make that true and are worth knowing before anyone
@@ -859,7 +871,8 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km desktop status <sandbox-id>` — check KasmVNC unit state on the sandbox
 - `km desktop rekey <sandbox-id>` — rotate the per-sandbox KasmVNC password on a running sandbox (no restart / no session interruption; `--force`, `--yes`)
 - `km desktop restart <sandbox-id>` — force a server-side restart of the KasmVNC session (Xvnc + WM + browser, like logging out of XFCE and back in) for a frozen/wedged desktop or stuck input; drops the live session (`--yes`)
-- `km tunnel <sandbox-id> --context <kube-context>` — interactive sandbox shell carrying a reverse tunnel to a Kubernetes cluster only the operator's workstation can reach; credentials are minted locally by the operator's own exec plugin and proxied over a unix socket, so no VPN/SSO/AWS credential reaches the box (`--dry-run`, `--print-ssh`, `--verbose`, `--local-port`, `--bind-port`, `--kubeconfig`). Dies with the shell — no daemon mode by design
+- `km tunnel` — parent verb for carrying a network path from the operator's workstation into a sandbox. A **family**, not one command: every mode shares the SSM+SSH transport and differs only in what it forwards and what it provisions on the box
+- `km tunnel k8s <sandbox-id> --context <kube-context>` — interactive sandbox shell carrying a reverse tunnel to a Kubernetes cluster only the operator's workstation can reach; credentials are minted locally by the operator's own exec plugin and proxied over a unix socket, so no VPN/SSO/AWS credential reaches the box (`--dry-run`, `--print-ssh`, `--verbose`, `--local-port`, `--bind-port`, `--kubeconfig`). Dies with the shell — no daemon mode by design
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role

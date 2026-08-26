@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/kubetunnel"
@@ -58,7 +59,7 @@ users:
 
 func TestTunnelCmd_RequiresContext(t *testing.T) {
 	cmd := newTunnelCmdInternal(&config.Config{}, failingFetcher{t}, nil)
-	cmd.SetArgs([]string{"sb-1"})
+	cmd.SetArgs([]string{"k8s", "sb-1"})
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
 
@@ -81,7 +82,7 @@ func TestTunnelCmd_DryRunTouchesNoAWS(t *testing.T) {
 	}
 
 	cmd := newTunnelCmdInternal(&config.Config{}, failingFetcher{t}, execFn)
-	cmd.SetArgs([]string{"sb-1", "--context", "k8s1", "--kubeconfig", kubeconfig, "--dry-run"})
+	cmd.SetArgs([]string{"k8s", "sb-1", "--context", "k8s1", "--kubeconfig", kubeconfig, "--dry-run"})
 	cmd.SetOut(out)
 	cmd.SetErr(out)
 
@@ -109,7 +110,7 @@ func TestTunnelCmd_DryRunSurfacesBadContext(t *testing.T) {
 	kubeconfig := writeKubeconfig(t)
 
 	cmd := newTunnelCmdInternal(&config.Config{}, failingFetcher{t}, nil)
-	cmd.SetArgs([]string{"sb-1", "--context", "typo", "--kubeconfig", kubeconfig, "--dry-run"})
+	cmd.SetArgs([]string{"k8s", "sb-1", "--context", "typo", "--kubeconfig", kubeconfig, "--dry-run"})
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
 
@@ -136,7 +137,7 @@ func TestTunnelCmd_LocalPortInUseFailsBeforeAWS(t *testing.T) {
 
 	cmd := newTunnelCmdInternal(&config.Config{}, failingFetcher{t}, nil)
 	cmd.SetArgs([]string{
-		"sb-1", "--context", "k8s1", "--kubeconfig", kubeconfig,
+		"k8s", "sb-1", "--context", "k8s1", "--kubeconfig", kubeconfig,
 		"--local-port", strconv.Itoa(port),
 	})
 	cmd.SetOut(&bytes.Buffer{})
@@ -155,15 +156,41 @@ func TestTunnelCmd_Registered(t *testing.T) {
 	// A verb that builds but is never added to root is invisible; this is the
 	// cheapest guard against that.
 	root := NewRootCmd(&config.Config{})
-	var found bool
+	var tunnel *cobra.Command
 	for _, c := range root.Commands() {
 		if c.Name() == "tunnel" {
-			found = true
+			tunnel = c
 			break
 		}
 	}
-	if !found {
-		t.Error("km tunnel is not registered on the root command")
+	if tunnel == nil {
+		t.Fatal("km tunnel is not registered on the root command")
+	}
+
+	// tunnel is a family, not a single command: modes are subcommands so a
+	// second one does not have to arrive as a mutually-exclusive boolean.
+	var haveK8s bool
+	for _, c := range tunnel.Commands() {
+		if c.Name() == "k8s" {
+			haveK8s = true
+			break
+		}
+	}
+	if !haveK8s {
+		t.Error("km tunnel k8s is not registered under km tunnel")
+	}
+}
+
+func TestTunnelCmd_BareParentIsNotRunnable(t *testing.T) {
+	// `km tunnel <id>` must not silently do something. Naming the mode is what
+	// keeps room for `km tunnel socks` without a breaking change later.
+	cmd := newTunnelCmdInternal(&config.Config{}, failingFetcher{t}, nil)
+	cmd.SetArgs([]string{"sb-1"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+
+	if err := cmd.Execute(); err == nil {
+		t.Error("bare `km tunnel <id>` should not run a mode; expected an error")
 	}
 }
 

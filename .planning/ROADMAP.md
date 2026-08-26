@@ -480,7 +480,7 @@ Plans:
 
 **Goal:** An operator whose Kubernetes cluster is reachable only from their own
 workstation (OpenVPN route on the laptop, VPN credential cannot leave it) can
-`km tunnel <sandbox-id> --context <ctx>` and land in an interactive sandbox shell where
+`km tunnel k8s <sandbox-id> --context <ctx>` and land in an interactive sandbox shell where
 `kubectl` works against that cluster — while **no VPN credential, SSO refresh token, or
 AWS credential ever reaches the sandbox**.
 

@@ -31,17 +31,50 @@ type tunnelOpts struct {
 	verbose     bool
 }
 
-// NewTunnelCmd returns the `km tunnel` command (Phase 130).
+// NewTunnelCmd returns the `km tunnel` parent command (Phase 130).
 func NewTunnelCmd(cfg *config.Config) *cobra.Command {
 	return newTunnelCmdInternal(cfg, nil, nil)
 }
 
+// newTunnelCmdInternal is the dependency-injectable constructor for km tunnel.
+//
+// `tunnel` is a FAMILY, not a single command. Every member shares the same
+// transport — an SSM port-forward to sshd with reverse forwards riding inside
+// the SSH session — and differs only in what it carries and what it has to set
+// up on the box. Today that is `k8s`. The obvious next member is `socks`
+// (`ssh -R <port>` with no destination makes the ssh CLIENT a SOCKS 4/5 proxy,
+// so the sandbox gets a proxy that egresses via the operator's machine).
+//
+// The subcommand split exists precisely so a second mode does not have to
+// arrive as a mutually-exclusive boolean flag, with help text that is the union
+// of two unrelated option sets and no way to tell which flag belongs to which.
 func newTunnelCmdInternal(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc) *cobra.Command {
+	parent := &cobra.Command{
+		Use:   "tunnel",
+		Short: "Carry a network path from your workstation into a sandbox",
+		Long: `Carry a network path from your workstation into a sandbox.
+
+Each mode reverse-forwards something over the SSM+SSH transport km already uses
+for km vscode, so the sandbox reaches a destination only THIS machine can reach —
+without ever holding the credential that makes that reachability possible.
+
+Available:
+  k8s     kubectl against a cluster only your workstation can reach
+
+Every mode dies with the shell it opens. That lifetime is the real control: while
+a tunnel is up, km's egress enforcement does not see the traffic crossing it.`,
+		SilenceUsage: true,
+	}
+	parent.AddCommand(newTunnelK8sCmd(cfg, fetcher, execFn))
+	return parent
+}
+
+func newTunnelK8sCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc) *cobra.Command {
 	var o tunnelOpts
 
 	cmd := &cobra.Command{
-		Use:   "tunnel <sandbox-id> --context <kube-context>",
-		Short: "Open a sandbox shell carrying a reverse tunnel to an operator-only Kubernetes cluster",
+		Use:   "k8s <sandbox-id> --context <kube-context>",
+		Short: "Open a sandbox shell with kubectl working against an operator-only cluster",
 		Long: `Open an interactive shell on a sandbox with kubectl working against a cluster
 that is only reachable from THIS workstation.
 
@@ -57,9 +90,9 @@ cluster as you, and km's egress enforcement does not see that traffic.`,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
 			if o.contextName == "" {
-				return fmt.Errorf("--context is required: name the kube context to tunnel (km tunnel %s --context <ctx>)", args[0])
+				return fmt.Errorf("--context is required: name the kube context to tunnel (km tunnel k8s %s --context <ctx>)", args[0])
 			}
-			return runTunnel(c.Context(), cfg, fetcher, execFn, args[0], o)
+			return runTunnelK8s(c.Context(), cfg, fetcher, execFn, args[0], o)
 		},
 	}
 
@@ -76,9 +109,14 @@ cluster as you, and km's egress enforcement does not see that traffic.`,
 	return cmd
 }
 
-// runTunnel orchestrates the five legs. Order matters and failures unwind what
-// has already been started.
-func runTunnel(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, idArg string, o tunnelOpts) error {
+// runTunnelK8s orchestrates the five legs of the k8s mode. Order matters and
+// failures unwind what has already been started.
+//
+// Legs 2, 3 and 6 (port pre-bind, SSM forward, interactive SSH) are generic
+// transport that a future `km tunnel socks` would share; legs 1, 4 and 5
+// (kubeconfig resolution, credential broker, box provisioning) are what makes
+// this mode Kubernetes-specific.
+func runTunnelK8s(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, idArg string, o tunnelOpts) error {
 	// 1. Resolve the operator's kubeconfig FIRST. It needs no AWS, no network
 	//    and no sandbox, so a typo in --context costs a second rather than a
 	//    round trip through Session Manager.
@@ -322,7 +360,7 @@ func printTunnelDryRun(w io.Writer, idArg string, t *kubetunnel.Target, boxKubec
 		RemoteCommand: kubetunnel.InteractiveRemoteCommand(),
 	})
 
-	fmt.Fprintf(w, "km tunnel --dry-run (nothing was connected)\n\n")
+	fmt.Fprintf(w, "km tunnel k8s --dry-run (nothing was connected)\n\n")
 	fmt.Fprintf(w, "Resolved context:   %s\n", t.Context)
 	fmt.Fprintf(w, "Cluster address:    %s:%d   (dialled from THIS machine, over your VPN)\n", t.ServerHost, t.ServerPort)
 	fmt.Fprintf(w, "TLS server name:    %s\n", t.TLSServerName)

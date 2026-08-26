@@ -1,6 +1,12 @@
-# `km tunnel` — kubectl in a sandbox, against a cluster only your laptop can reach
+# `km tunnel k8s` — kubectl in a sandbox, against a cluster only your laptop can reach
 
 **Phase 130 · v0.8.6 · code-complete, live UAT pending**
+
+> **`km tunnel` is a family, not a single command.** Every mode shares one transport —
+> an SSM port-forward to sshd, with reverse forwards riding inside the SSH session — and
+> differs only in what it carries and what it sets up on the box. Today there is one
+> mode, `k8s`. See [The tunnel family](#the-tunnel-family) for why it is a subcommand
+> rather than a `--k8s` flag, and what is likely to join it.
 
 You have a Kubernetes cluster that is reachable only from your own workstation: the
 OpenVPN route lives there, and the VPN credential cannot leave it. You want to work in
@@ -11,11 +17,60 @@ inside the box.
 refresh token, or any AWS credential.
 
 ```bash
-km tunnel my-sandbox --context k8s1
+km tunnel k8s my-sandbox --context k8s1
 ```
 
 You land in a shell on the sandbox. `kubectl get ns` works. Exit the shell and the
 access is gone.
+
+---
+
+## The tunnel family
+
+`km tunnel` names a transport, not a destination. The reusable part is:
+
+- an SSM port-forward from your laptop to the sandbox's `sshd`, and
+- an SSH session on top of it carrying `-R` reverse forwards.
+
+What varies by mode is **what those forwards carry** and **what has to be written on the
+box** to make them usable. That split is why modes are subcommands rather than
+mutually-exclusive `--k8s` / `--socks` booleans: a flag-based design gives you one help
+page that is the union of two unrelated option sets, with nothing to tell you that
+`--context` is meaningless under `--socks`. `km tunnel k8s --help` shows exactly the
+seven flags that apply to it.
+
+### `k8s` — today
+
+Forwards the Kubernetes API plus a credential-broker socket, and writes a kubeconfig and
+a shim on the box. The rest of this document describes it.
+
+### `socks` — the likely next mode, not yet built
+
+`ssh -R <port>` **with no destination** makes the ssh *client* act as a SOCKS 4/5 proxy
+for connections arriving from the remote side. So the sandbox would get a SOCKS proxy on
+loopback that egresses via your workstation:
+
+```bash
+# not implemented yet
+km tunnel socks my-sandbox --bind-port 1080
+# then, on the box:  HTTPS_PROXY=socks5h://127.0.0.1:1080
+```
+
+Two things worth stating before anyone builds it.
+
+It needs **no new machinery** — the transport, the port pre-bind, the teardown, and the
+diagnostic flags are all already here, and it needs no broker and nothing written on the
+box. It is a genuinely small addition.
+
+But it is a **far bigger hole** than `k8s`. The k8s mode forwards exactly two sockets to
+exactly one cluster; a reverse SOCKS proxy gives anything on that box arbitrary network
+access through your machine, to everything your VPN can reach. That does not merely slip
+past km's egress enforcement, it makes the enforcement irrelevant for as long as the
+tunnel is open. `socks5h` (resolve-at-proxy) is also the right form, for the same reason
+`-R host:port` works today: names resolve on your side, over your VPN.
+
+None of which is an argument against building it — just an argument that it deserves its
+own decision, and probably louder warnings than this mode carries.
 
 ---
 
