@@ -4,9 +4,9 @@
 
 > **`km tunnel` is a family, not a single command.** Every mode shares one transport —
 > an SSM port-forward to sshd, with reverse forwards riding inside the SSH session — and
-> differs only in what it carries and what it sets up on the box. Today there is one
-> mode, `k8s`. See [The tunnel family](#the-tunnel-family) for why it is a subcommand
-> rather than a `--k8s` flag, and what is likely to join it.
+> differs only in what it carries and what it sets up on the box. There are two:
+> **`k8s`** (this document) and **`socks`**, a general proxy to whatever your VPN reaches.
+> See [The tunnel family](#the-tunnel-family).
 
 You have a Kubernetes cluster that is reachable only from your own workstation: the
 OpenVPN route lives there, and the VPN credential cannot leave it. You want to work in
@@ -44,33 +44,55 @@ seven flags that apply to it.
 Forwards the Kubernetes API plus a credential-broker socket, and writes a kubeconfig and
 a shim on the box. The rest of this document describes it.
 
-### `socks` — the likely next mode, not yet built
-
-`ssh -R <port>` **with no destination** makes the ssh *client* act as a SOCKS 4/5 proxy
-for connections arriving from the remote side. So the sandbox would get a SOCKS proxy on
-loopback that egresses via your workstation:
+### `socks` — a general path to whatever your VPN reaches
 
 ```bash
-# not implemented yet
-km tunnel socks my-sandbox --bind-port 1080
-# then, on the box:  HTTPS_PROXY=socks5h://127.0.0.1:1080
+km tunnel socks my-sandbox
+# on the box:  export ALL_PROXY=socks5h://127.0.0.1:1080
 ```
 
-Two things worth stating before anyone builds it.
+`ssh -R <port>` **with no destination** makes the ssh *client* act as a SOCKS 4/5 proxy
+for connections arriving from the remote side. So the sandbox gets a SOCKS5 proxy on its
+loopback that egresses via your workstation. Note it is `-R`, not `-D` — `-D` is the
+forward direction (a local proxy egressing via the remote), which is the opposite of what
+a sandbox needs.
 
-It needs **no new machinery** — the transport, the port pre-bind, the teardown, and the
-diagnostic flags are all already here, and it needs no broker and nothing written on the
-box. It is a genuinely small addition.
+Nothing is written on the box and there is no credential broker: ssh itself is the proxy.
+`socks5h` rather than `socks5` matters — the `h` resolves names **at** the proxy, i.e. on
+your machine over your VPN, which is the same client-side-resolution property that makes
+the `k8s` mode work.
 
-But it is a **far bigger hole** than `k8s`. The k8s mode forwards exactly two sockets to
-exactly one cluster; a reverse SOCKS proxy gives anything on that box arbitrary network
-access through your machine, to everything your VPN can reach. That does not merely slip
-past km's egress enforcement, it makes the enforcement irrelevant for as long as the
-tunnel is open. `socks5h` (resolve-at-proxy) is also the right form, for the same reason
-`-R host:port` works today: names resolve on your side, over your VPN.
+**This is a wide path, by design.** `k8s` forwards two sockets to one cluster; `socks`
+lets anything on the box reach anything your workstation can. For as long as it is open,
+km's egress enforcement is not a factor for traffic taking it. That is the point of the
+mode, and it is why it dies with the shell like every other one.
 
-None of which is an argument against building it — just an argument that it deserves its
-own decision, and probably louder warnings than this mode carries.
+#### `--set-proxy-env` and AI-spend metering
+
+By default the proxy is available but **not** wired into the shell's environment — the
+banner prints the export line so you can scope it to the command that needs it.
+`--set-proxy-env` starts the shell with `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` already
+set.
+
+The reason it is not the default is worth knowing: km meters Bedrock, Anthropic and
+OpenAI spend by MITM-ing those endpoints in its own http-proxy. Traffic sent through
+SOCKS never reaches that proxy, so **AI spend silently stops being metered** and
+`km status` under-reports. That is fine when you know it; it is a nasty surprise when you
+don't.
+
+`--set-proxy-env` always sets `NO_PROXY=169.254.169.254,localhost,127.0.0.1`. The IMDS
+exclusion is load-bearing rather than tidy: link-local `169.254.169.254` is how the box
+obtains its IAM role credentials, and routing that through a proxy on your laptop breaks
+every AWS call the sandbox makes.
+
+#### socks flags
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--bind-port` | `1080` | Sandbox loopback port for the SOCKS proxy |
+| `--local-port` | `2223` | Laptop port for the SSM forward to sshd |
+| `--set-proxy-env` | off | Start the shell with the proxy env already set |
+| `--dry-run` / `--print-ssh` / `--verbose` | off | Same escape hatches as `k8s` |
 
 ---
 

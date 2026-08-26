@@ -60,12 +60,17 @@ without ever holding the credential that makes that reachability possible.
 
 Available:
   k8s     kubectl against a cluster only your workstation can reach
+  socks   a SOCKS5 proxy on the box that egresses via your workstation
+
+They differ a lot in width. k8s forwards two sockets to one cluster; socks lets
+anything on the box reach anything your workstation can.
 
 Every mode dies with the shell it opens. That lifetime is the real control: while
 a tunnel is up, km's egress enforcement does not see the traffic crossing it.`,
 		SilenceUsage: true,
 	}
 	parent.AddCommand(newTunnelK8sCmd(cfg, fetcher, execFn))
+	parent.AddCommand(newTunnelSocksCmd(cfg, fetcher, execFn))
 	return parent
 }
 

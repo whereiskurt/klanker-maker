@@ -54,4 +54,25 @@ talking to your cluster as you. The control is the lifetime — it dies with you
 there is deliberately no daemon mode, no `-N`, and no flag to leave it running for an
 unattended agent.
 
+### 🧦 `km tunnel socks` — the same trick, pointed at everything else
+
+```bash
+km tunnel socks my-sandbox
+# on the box:  export ALL_PROXY=socks5h://127.0.0.1:1080
+```
+
+Same transport, no cluster. The box gets a SOCKS5 proxy on loopback that egresses through
+your workstation, so it reaches whatever your VPN reaches. Nothing is written on the box
+and there's no broker — `ssh -R <port>` with no destination makes ssh itself the proxy.
+
+This one is deliberately wide. `k8s` forwards two sockets to one cluster; `socks` lets
+anything on the box reach anything you can. That's the point of it, and it's why it dies
+with your shell like everything else here.
+
+One thing worth knowing before you reach for `--set-proxy-env`: km meters Bedrock,
+Anthropic and OpenAI spend by intercepting those endpoints in its own proxy, and traffic
+sent through SOCKS never gets there. Blanket-proxy the shell and **AI spend quietly stops
+being metered**. That's why it's opt-in rather than the default, and why the banner prints
+the export line instead — so you can scope it to the command that actually needs it.
+
 Live UAT is pending. See `docs/k8s-reverse-tunnel.md` for the full runbook.
