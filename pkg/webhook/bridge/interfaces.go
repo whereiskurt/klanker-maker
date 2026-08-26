@@ -55,3 +55,18 @@ type StatusWriter interface {
 type ColdCreator interface {
 	ColdCreate(ctx context.Context, alias, profile, prompt string) error
 }
+
+// ActionLimitsFetcher resolves the per-sandbox action-limits JSON map (Task 9A,
+// Phase 121 follow-up). Returns the resolved limits JSON (quota.Limits
+// serialized) or empty string = dormant. Mirrors
+// pkg/h1/bridge.H1ActionLimitsFetcher / pkg/slack/bridge's equivalent.
+type ActionLimitsFetcher interface {
+	FetchLimits(ctx context.Context, sandboxID string) (string, error)
+}
+
+// Freezer latches action_frozen=true on the sandbox row (auto-on-breach
+// freeze, Task 9A). nil ⇒ dormant (no auto-freeze). Mirrors
+// pkg/h1/bridge.Freezer.
+type Freezer interface {
+	FreezeSandbox(ctx context.Context, sandboxID, reason, by string) error
+}

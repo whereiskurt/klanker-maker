@@ -34,6 +34,9 @@ const (
 	ActionEmailSend     Action = "email_send"
 	ActionSlackPost     Action = "slack_post"
 	ActionH1Comment     Action = "h1_comment"
+	// ActionWebhookDispatch (Task 9A) meters warm SQS enqueue dispatches from the
+	// generic webhook ingress bridge (pkg/webhook/bridge).
+	ActionWebhookDispatch Action = "webhook_dispatch"
 )
 
 // OnBreach is the per-limit breach policy. Default warn (dormant).

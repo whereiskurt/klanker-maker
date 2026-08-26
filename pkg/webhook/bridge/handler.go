@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/pkg/quota"
 	"github.com/whereiskurt/klanker-maker/pkg/webhook"
 )
 
@@ -50,6 +52,19 @@ type Handler struct {
 	Cold     ColdCreator
 	Nonces   webhook.NonceStore
 	Rates    webhook.RateCounter
+
+	// Task 9A (Phase 121 follow-up) — action-quota enforcement on warm dispatch.
+	// All three are optional: nil Quota, nil Limits, or an empty QuotaTable
+	// leaves the gate dormant (byte-identical to pre-Task-9A dispatch). See
+	// checkQuota for the gate itself and its placement in dispatch().
+	Quota      quota.QuotaAPI      // DDB client for the action-quota table
+	QuotaTable string              // e.g. "km-action-quota" (from KM_QUOTA_TABLE env var)
+	Limits     ActionLimitsFetcher // resolves per-sandbox action-limits JSON
+
+	// Freezer latches action_frozen on a BreachFreeze trip. nil ⇒ the action is
+	// still blocked, but the sandbox is not auto-quarantined for subsequent
+	// dispatches (matching pkg/h1/bridge's GAP-2 semantics).
+	Freezer Freezer
 
 	// Now returns the current unix time; injected for deterministic tests.
 	Now func() int64
@@ -150,6 +165,9 @@ func (h *Handler) dispatch(ctx context.Context, source string, rule *config.Webh
 
 	sandboxID, status, rerr := h.Resolver.ResolveByAliasWithStatus(ctx, rule.Alias)
 	if rerr != nil || status == "" {
+		// Cold-create path: no sandbox exists yet, so there is no per-sandbox
+		// usage history to gate against. The quota check below is deliberately
+		// NOT applied here — it is ungated by construction, not an oversight.
 		return h.coldPath(ctx, rule, env, prompt, "absent")
 	}
 
@@ -170,6 +188,13 @@ func (h *Handler) dispatch(ctx context.Context, source string, rule *config.Webh
 			slog.WarnContext(ctx, "webhook_resume_transient_error",
 				"sandbox_id", sandboxID, "error", serr.Error())
 		}
+	}
+
+	// Task 9A (Phase 121 follow-up) — action-quota gate, in the same position
+	// H1 applies it relative to its own enqueue: after the sandbox id is known
+	// (running, or just resumed) and immediately before the SQS Send below.
+	if resp, blocked := h.checkQuota(ctx, source, sandboxID); blocked {
+		return resp
 	}
 
 	queueURL, qerr := h.Resolver.QueueURL(ctx, sandboxID)
@@ -215,6 +240,77 @@ func (h *Handler) coldPath(ctx context.Context, rule *config.WebhookRule,
 	slog.InfoContext(ctx, "webhook_cold_created",
 		"alias", rule.Alias, "profile", rule.Profile, "reason", reason, "id", env.ID)
 	return ok("cold_created")
+}
+
+// checkQuota applies the Task 9A action-quota gate before a warm enqueue.
+// Returns (resp, true) when dispatch must stop; (zero Response, false) means
+// proceed to enqueue — covering the not-tripped, warn, and dormant cases alike.
+//
+// Dormant unless Quota, Limits, and QuotaTable are all wired (nil/empty ⇒
+// always (zero, false), byte-identical to pre-Task-9A dispatch).
+//
+// Fails OPEN on any store error — a Record failure or a limits-fetch failure
+// both log a warning and let dispatch proceed, matching the cooldown and rate
+// ceiling gates above: a transient DynamoDB fault must never strand a real
+// alert.
+func (h *Handler) checkQuota(ctx context.Context, source, sandboxID string) (Response, bool) {
+	if h.Quota == nil || h.Limits == nil || h.QuotaTable == "" {
+		return Response{}, false
+	}
+
+	limitsJSON, lerr := h.Limits.FetchLimits(ctx, sandboxID)
+	if lerr != nil {
+		slog.WarnContext(ctx, "webhook_quota_limits_fetch_failed",
+			"sandbox_id", sandboxID, "error", lerr.Error())
+		return Response{}, false
+	}
+	if limitsJSON == "" {
+		return Response{}, false
+	}
+
+	var limits quota.Limits
+	if jerr := json.Unmarshal([]byte(limitsJSON), &limits); jerr != nil {
+		slog.WarnContext(ctx, "webhook_quota_limits_parse_failed",
+			"sandbox_id", sandboxID, "error", jerr.Error())
+		return Response{}, false
+	}
+	actionLimit, hasLimit := limits[quota.ActionWebhookDispatch]
+	if !hasLimit {
+		return Response{}, false
+	}
+
+	d, rerr := quota.Record(ctx, h.Quota, h.QuotaTable, sandboxID, quota.ActionWebhookDispatch, actionLimit)
+	if rerr != nil {
+		slog.WarnContext(ctx, "webhook_quota_record_failed",
+			"sandbox_id", sandboxID, "error", rerr.Error())
+		return Response{}, false
+	}
+	if !d.Tripped {
+		return Response{}, false
+	}
+
+	switch d.OnBreach {
+	case quota.BreachBlock:
+		slog.WarnContext(ctx, "webhook_quota_blocked",
+			"source", source, "sandbox_id", sandboxID, "window", d.WorstWindow)
+		return ok("quota_blocked"), true
+	case quota.BreachFreeze:
+		if h.Freezer != nil {
+			by := fmt.Sprintf("auto:%s:%s", quota.ActionWebhookDispatch, d.WorstWindow)
+			reason := fmt.Sprintf("quota exceeded: %s (%s window)", quota.ActionWebhookDispatch, d.WorstWindow)
+			if ferr := h.Freezer.FreezeSandbox(ctx, sandboxID, reason, by); ferr != nil {
+				slog.WarnContext(ctx, "webhook_quota_freeze_failed",
+					"sandbox_id", sandboxID, "error", ferr.Error())
+			}
+		}
+		slog.WarnContext(ctx, "webhook_quota_frozen",
+			"source", source, "sandbox_id", sandboxID, "window", d.WorstWindow)
+		return ok("quota_frozen"), true
+	default: // quota.BreachWarn (and any unset/unknown policy)
+		slog.WarnContext(ctx, "webhook_quota_warn",
+			"source", source, "sandbox_id", sandboxID, "window", d.WorstWindow)
+		return Response{}, false
+	}
 }
 
 func isStopped(status string) bool {

@@ -62,6 +62,8 @@ var (
 	_ ColdCreator         = (*EventBridgeAdapter)(nil)
 	_ Resumer             = (*EC2Resumer)(nil)
 	_ StatusWriter        = (*DynamoSandboxStatusWriter)(nil)
+	_ ActionLimitsFetcher = (*DDBActionLimitsFetcher)(nil)
+	_ Freezer             = (*DynamoFreezer)(nil)
 )
 
 // ============================================================
@@ -554,4 +556,89 @@ func (w *DynamoSandboxStatusWriter) DeleteSandboxRow(ctx context.Context, sandbo
 		return fmt.Errorf("webhook-bridge: delete stale sandbox row %s: %w", sandboxID, err)
 	}
 	return nil
+}
+
+// ============================================================
+// DDBActionLimitsFetcher — per-sandbox action_limits resolver (Task 9A)
+// ============================================================
+
+// webhookGetItemAPI is the minimal GetItem surface DDBActionLimitsFetcher
+// needs. *dynamodb.Client satisfies it.
+type webhookGetItemAPI interface {
+	GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
+}
+
+// DDBActionLimitsFetcher implements bridge.ActionLimitsFetcher by reading the
+// action_limits JSON string from the km-sandboxes row (GetItem keyed by
+// sandbox_id). Wired into Handler.Limits in cmd/km-webhook-bridge/main.go. An
+// absent row or absent action_limits attr returns "" (dormant — the quota gate
+// then no-ops). Mirrors pkg/h1/bridge.DDBActionLimitsFetcher.
+type DDBActionLimitsFetcher struct {
+	Client    webhookGetItemAPI // *dynamodb.Client satisfies this
+	TableName string            // e.g. "km-sandboxes"
+}
+
+// FetchLimits returns the action_limits JSON for sandboxID, or "" when the row
+// or attr is absent. Only a GetItem transport error is surfaced.
+func (f *DDBActionLimitsFetcher) FetchLimits(ctx context.Context, sandboxID string) (string, error) {
+	out, err := f.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: awssdk.String(f.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		ProjectionExpression: awssdk.String("action_limits"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("webhook-bridge: action_limits lookup for %s: %w", sandboxID, err)
+	}
+	if out == nil || out.Item == nil {
+		return "", nil
+	}
+	if v, ok := out.Item["action_limits"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		return v.Value, nil
+	}
+	return "", nil
+}
+
+// ============================================================
+// DynamoFreezer — auto-freeze adapter (Task 9A)
+// ============================================================
+
+// DynamoFreezer implements bridge.Freezer by calling kmaws.FreezeSandboxDynamo
+// on the km-sandboxes table. Wired into Handler.Freezer in
+// cmd/km-webhook-bridge/main.go. Mirrors pkg/h1/bridge.DynamoFreezer.
+type DynamoFreezer struct {
+	Client DynamoUpdateItemClient // *dynamodb.Client satisfies this
+	Table  string                 // e.g. "km-sandboxes"
+}
+
+// webhookUpdateOnlyMetaClient adapts DynamoUpdateItemClient to
+// kmaws.SandboxMetadataAPI. Only UpdateItem is exercised by
+// FreezeSandboxDynamo; the remaining methods panic to make any accidental
+// call loud.
+type webhookUpdateOnlyMetaClient struct{ c DynamoUpdateItemClient }
+
+func (a webhookUpdateOnlyMetaClient) UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	return a.c.UpdateItem(ctx, in, opts...)
+}
+func (a webhookUpdateOnlyMetaClient) GetItem(_ context.Context, _ *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	panic("webhookUpdateOnlyMetaClient: GetItem not implemented")
+}
+func (a webhookUpdateOnlyMetaClient) PutItem(_ context.Context, _ *dynamodb.PutItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
+	panic("webhookUpdateOnlyMetaClient: PutItem not implemented")
+}
+func (a webhookUpdateOnlyMetaClient) DeleteItem(_ context.Context, _ *dynamodb.DeleteItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error) {
+	panic("webhookUpdateOnlyMetaClient: DeleteItem not implemented")
+}
+func (a webhookUpdateOnlyMetaClient) Scan(_ context.Context, _ *dynamodb.ScanInput, _ ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	panic("webhookUpdateOnlyMetaClient: Scan not implemented")
+}
+func (a webhookUpdateOnlyMetaClient) Query(_ context.Context, _ *dynamodb.QueryInput, _ ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	panic("webhookUpdateOnlyMetaClient: Query not implemented")
+}
+
+// FreezeSandbox latches action_frozen=true on the sandbox's km-sandboxes row.
+// by should be "auto:<action>:<window>" for auto-on-breach freezes.
+func (f *DynamoFreezer) FreezeSandbox(ctx context.Context, sandboxID, reason, by string) error {
+	return kmaws.FreezeSandboxDynamo(ctx, webhookUpdateOnlyMetaClient{f.Client}, f.Table, sandboxID, reason, by)
 }

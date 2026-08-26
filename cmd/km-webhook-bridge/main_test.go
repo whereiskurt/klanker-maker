@@ -113,7 +113,14 @@ func TestHandlerFieldsAllWired(t *testing.T) {
 	// name — catches a NEW field added to Handler in the future that this test
 	// (and the wiring in init()) was never updated for. Sources/RateLimit are
 	// legitimate data fields (not dependencies) and are allowed to be zero-value.
-	allowedZero := map[string]bool{"Sources": true, "RateLimit": true}
+	// Quota/Limits/Freezer are Task 9A optional dependencies: dormant (nil)
+	// unless KM_QUOTA_TABLE is set on the Lambda env, which it is not in this
+	// test process — see TestWireActionQuota_* in main_quota_test.go for the
+	// wired-when-set half of this contract.
+	allowedZero := map[string]bool{
+		"Sources": true, "RateLimit": true,
+		"Quota": true, "Limits": true, "Freezer": true,
+	}
 	v := reflect.ValueOf(*handler)
 	tp := v.Type()
 	for i := 0; i < tp.NumField(); i++ {

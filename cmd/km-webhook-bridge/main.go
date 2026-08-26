@@ -23,11 +23,13 @@
 //	KM_ARTIFACTS_BUCKET    — S3 artifacts bucket for the cold-create event
 //	KM_ARTIFACTS_PREFIX    — S3 artifacts prefix
 //
-// Action-quota / auto-freeze enforcement (Phase 121, wired into the GitHub/H1/
-// Slack bridges) is deliberately NOT wired here — pkg/webhook/bridge.Handler has
-// no Quota/Limits/Freezer fields to set. Tracked as separate follow-up work by
-// controller ruling (see task-9-report.md); do not add KM_QUOTA_TABLE handling
-// here without that follow-up landing first.
+//	KM_QUOTA_TABLE         — {prefix}-action-quota (Task 9A); empty ⇒ quota gate dormant
+//
+// Action-quota / auto-freeze enforcement (Phase 121, already wired into the
+// GitHub/H1/Slack bridges) is wired here too (Task 9A) via WireActionQuota,
+// gated on KM_QUOTA_TABLE. It only applies to the WARM dispatch path (a
+// resolved sandbox id) — the cold-create path has no sandbox yet and hence no
+// usage history to gate against, so it is ungated by construction.
 package main
 
 import (
@@ -193,6 +195,11 @@ func init() {
 		Now:       func() int64 { return time.Now().Unix() },
 	}
 
+	// Task 9A (Phase 121 follow-up) — wire action-quota + auto-freeze
+	// enforcement (dormant unless KM_QUOTA_TABLE is set on the Lambda env by
+	// the TF module).
+	WireActionQuota(handler, ddbClient, sandboxesTable)
+
 	slog.Info("km-webhook-bridge: cold start",
 		"KM_RESOURCE_PREFIX", prefix,
 		"KM_SANDBOX_TABLE_NAME", sandboxesTable,
@@ -200,6 +207,27 @@ func init() {
 		"KM_ARTIFACTS_BUCKET", artifactsBucket,
 		"source_count", len(sources),
 	)
+}
+
+// WireActionQuota wires the Task 9A action-quota + auto-freeze fields onto the
+// Handler from env. Gated on KM_QUOTA_TABLE: empty ⇒ dormant (Quota/Limits/
+// Freezer stay nil ⇒ the webhook_dispatch quota check no-ops, byte-identical
+// to the pre-Task-9A bridge). When set, the per-sandbox limits come from the
+// km-sandboxes action_limits attr (DDBActionLimitsFetcher) and a BreachFreeze
+// latches action_frozen via DynamoFreezer. Returns true when wired. Mirrors
+// cmd/km-h1-bridge/main.go's WireActionQuota.
+func WireActionQuota(h *bridge.Handler, ddb *dynamodb.Client, sandboxesTable string) bool {
+	quotaTable := os.Getenv("KM_QUOTA_TABLE")
+	if quotaTable == "" {
+		return false
+	}
+	h.Quota = ddb
+	h.QuotaTable = quotaTable
+	h.Limits = &bridge.DDBActionLimitsFetcher{Client: ddb, TableName: sandboxesTable}
+	h.Freezer = &bridge.DynamoFreezer{Client: ddb, Table: sandboxesTable}
+	slog.Info("km-webhook-bridge: action-quota enforcement wired",
+		"quota_table", quotaTable, "sandboxes_table", sandboxesTable)
+	return true
 }
 
 func handleRequest(ctx context.Context, req events.LambdaFunctionURLRequest) (
