@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -170,6 +172,66 @@ func TestCheckWebhookSources_ZeroMaxDispatchesFlagged(t *testing.T) {
 	}
 	if !found {
 		t.Error("max_dispatches: 0 must be flagged")
+	}
+}
+
+// TestCheckWebhookSources_MissingAtFilePrompt mirrors checkGitHubCommandsValid's
+// @file check: a rule prompt naming a nonexistent file must WARN with the
+// searched candidate paths.
+func TestCheckWebhookSources_MissingAtFilePrompt(t *testing.T) {
+	wh := appcfg.WebhooksConfig{Sources: []appcfg.WebhookSource{{
+		Name:  "wiz",
+		Auth:  appcfg.WebhookAuth{Type: "bearer", SecretPath: "/p"},
+		Rules: []appcfg.WebhookRule{{Alias: "a", Prompt: "@nope.prompt.txt", OnAbsent: "skip"}},
+	}}}
+	var found bool
+	for _, r := range checkWebhookSources(wh, ".") {
+		if r.Status != CheckOK && strings.Contains(r.Message, "@file") && strings.Contains(r.Message, "not found") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("missing @file prompt must be WARNed with searched candidates")
+	}
+}
+
+// TestCheckWebhookSources_ResolvableAtFilePromptIsSilent proves a resolvable
+// @file (found via the configDir/profiles fallback, same search path as
+// ResolveWebhookPrompts) produces no @file-related WARN.
+func TestCheckWebhookSources_ResolvableAtFilePromptIsSilent(t *testing.T) {
+	configDir := t.TempDir()
+	promptsDir := filepath.Join(configDir, "profiles")
+	if err := os.MkdirAll(promptsDir, 0o750); err != nil {
+		t.Fatalf("setup: mkdir profiles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptsDir, "wiz.triage.prompt.txt"), []byte("triage"), 0o600); err != nil {
+		t.Fatalf("setup: write prompt file: %v", err)
+	}
+
+	wh := appcfg.WebhooksConfig{Sources: []appcfg.WebhookSource{{
+		Name:  "wiz",
+		Auth:  appcfg.WebhookAuth{Type: "bearer", SecretPath: "/p"},
+		Rules: []appcfg.WebhookRule{{Alias: "a", Prompt: "@wiz.triage.prompt.txt", OnAbsent: "skip"}},
+	}}}
+	for _, r := range checkWebhookSources(wh, configDir) {
+		if strings.Contains(r.Message, "@file") {
+			t.Errorf("resolvable @file prompt must not be flagged, got: %s", r.Message)
+		}
+	}
+}
+
+// TestCheckWebhookSources_EscapedAtPromptIsSilent proves the "@@" literal
+// escape never triggers a filesystem check.
+func TestCheckWebhookSources_EscapedAtPromptIsSilent(t *testing.T) {
+	wh := appcfg.WebhooksConfig{Sources: []appcfg.WebhookSource{{
+		Name:  "wiz",
+		Auth:  appcfg.WebhookAuth{Type: "bearer", SecretPath: "/p"},
+		Rules: []appcfg.WebhookRule{{Alias: "a", Prompt: "@@literal", OnAbsent: "skip"}},
+	}}}
+	for _, r := range checkWebhookSources(wh, ".") {
+		if strings.Contains(r.Message, "@file") {
+			t.Errorf("@@ escape must not be flagged as a missing @file, got: %s", r.Message)
+		}
 	}
 }
 

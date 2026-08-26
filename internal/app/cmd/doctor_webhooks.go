@@ -125,6 +125,22 @@ func checkWebhookRule(sourceLabel string, i int, r appcfg.WebhookRule, configDir
 		results = append(results, CheckResult{Name: label, Status: CheckWarn, Message: "rule has no prompt; the agent turn would be empty"})
 	}
 
+	// @file prompt — check existence on the command-prompt search path (configDir,
+	// then configDir/profiles), mirroring checkGitHubCommandsValid's identical
+	// check so a bare "@x.txt" found at profiles/x.txt is not falsely flagged
+	// missing. "@@" is the literal-escape convention (ResolveWebhookPrompts) and
+	// never touches the filesystem.
+	if strings.HasPrefix(r.Prompt, "@") && !strings.HasPrefix(r.Prompt, "@@") {
+		path := strings.TrimPrefix(r.Prompt, "@")
+		if _, candidates, ferr := resolveCommandPromptFile(configDir, path); ferr != nil {
+			results = append(results, CheckResult{
+				Name:    label,
+				Status:  CheckWarn,
+				Message: fmt.Sprintf("prompt @file %q not found (searched: %s)", path, strings.Join(candidates, ", ")),
+			})
+		}
+	}
+
 	skip := strings.EqualFold(r.OnAbsent, "skip")
 	if !skip && r.Profile == "" {
 		results = append(results, CheckResult{

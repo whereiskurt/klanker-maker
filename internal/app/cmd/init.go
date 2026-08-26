@@ -1383,6 +1383,22 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		cfg.H1.Programs = resolvedH1
 	}
 
+	// Phase 127 follow-up: hard-fail on a missing webhook rule @file BEFORE
+	// exporting/deploying (parity with the h1 event / github command @file hard
+	// errors above). Resolved in place so the export below marshals inlined
+	// rule prompts into KM_WEBHOOK_SOURCES.
+	if len(cfg.Webhooks.Sources) > 0 {
+		configDir := "."
+		if cfg.ConfigFilePath != "" {
+			configDir = filepath.Dir(cfg.ConfigFilePath)
+		}
+		resolvedWebhooks, rerr := ResolveWebhookPrompts(cfg.Webhooks.Sources, configDir)
+		if rerr != nil {
+			return fmt.Errorf("km init: webhook rule prompt: %w", rerr)
+		}
+		cfg.Webhooks.Sources = resolvedWebhooks
+	}
+
 	// Export config values as env vars for Terragrunt's site.hcl get_env() calls
 	// and for the envReqs checks in regionalModules.
 	ExportTerragruntEnvVars(cfg)
@@ -2202,12 +2218,27 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 	// and only ever looks at this key).
 	// env-block change => needs a full `km init --dry-run=false`, NOT --sidecars.
 	if len(cfg.Webhooks.Sources) > 0 {
+		// Inline @file rule prompts before marshaling — the bridge Lambda has no
+		// filesystem (mirrors command-prompt and H1 event-prompt inlining).
+		// Best-effort here so the void exporter never crashes a non-init caller;
+		// runInit additionally hard-fails on a missing @file before deploy
+		// (parity with commands / h1 events).
+		exportSources := cfg.Webhooks.Sources
+		webhookConfigDir := "."
+		if cfg.ConfigFilePath != "" {
+			webhookConfigDir = filepath.Dir(cfg.ConfigFilePath)
+		}
+		if resolved, rerr := ResolveWebhookPrompts(cfg.Webhooks.Sources, webhookConfigDir); rerr != nil {
+			fmt.Fprintf(os.Stderr, "WARN: webhook rule @file prompt unresolved; exporting literal: %v\n", rerr)
+		} else {
+			exportSources = resolved
+		}
 		type webhookExportPayload struct {
 			Sources   []config.WebhookSource   `json:"sources"`
 			RateLimit *config.WebhookRateLimit `json:"rate_limit,omitempty"`
 		}
 		payload := webhookExportPayload{
-			Sources:   cfg.Webhooks.Sources,
+			Sources:   exportSources,
 			RateLimit: cfg.Webhooks.RateLimit,
 		}
 		if jsonBytes, err := json.Marshal(payload); err == nil {
@@ -2374,6 +2405,53 @@ func ResolveH1EventPrompts(programs []config.H1ProgramEntry, configDir string) (
 			ev[name] = entry
 		}
 		out[i].Events = ev
+	}
+	return out, nil
+}
+
+// ResolveWebhookPrompts returns a copy of the webhook source list with each
+// rule's Prompt field resolved through the same @file convention used for
+// command and H1 event prompts (ResolveCommandPrompts / ResolveH1EventPrompts):
+//
+//   - "@@literal"   → "@literal"  (strip one @, no file read)
+//   - "@relative/p" → contents of the first hit on the command-prompt search
+//     path (configDir, then configDir/profiles) — a bare "@p.txt" resolves to
+//     profiles/p.txt; "@profiles/p.txt" still works.
+//   - (other text)  → unchanged
+//   - @file missing → hard error (callers surface to km init exit)
+//
+// Rule prompts MUST be inlined here because they travel in the KM_WEBHOOK_SOURCES
+// env var to a filesystem-less Lambda — exactly like command and H1 event prompts
+// are inlined. Only the Rules slices are copied; all other WebhookSource fields
+// are shared with the input (the input slice's entries are not mutated). configDir
+// must be filepath.Dir(cfg.ConfigFilePath), not the shell CWD.
+func ResolveWebhookPrompts(sources []config.WebhookSource, configDir string) ([]config.WebhookSource, error) {
+	out := make([]config.WebhookSource, len(sources))
+	copy(out, sources)
+	for i := range out {
+		if len(out[i].Rules) == 0 {
+			continue
+		}
+		rules := make([]config.WebhookRule, len(out[i].Rules))
+		copy(rules, out[i].Rules)
+		for j := range rules {
+			switch {
+			case strings.HasPrefix(rules[j].Prompt, "@@"):
+				rules[j].Prompt = rules[j].Prompt[1:]
+			case strings.HasPrefix(rules[j].Prompt, "@"):
+				relPath := rules[j].Prompt[1:]
+				absPath, _, ferr := resolveCommandPromptFile(configDir, relPath)
+				if ferr != nil {
+					return nil, fmt.Errorf("webhook source %q rule[%d] prompt @%s: %w", out[i].Name, j, relPath, ferr)
+				}
+				data, rerr := os.ReadFile(absPath)
+				if rerr != nil {
+					return nil, fmt.Errorf("webhook source %q rule[%d] prompt @%s: %w", out[i].Name, j, relPath, rerr)
+				}
+				rules[j].Prompt = string(data)
+			}
+		}
+		out[i].Rules = rules
 	}
 	return out, nil
 }
