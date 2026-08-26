@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 127
 current_phase_name: declarative-mitm-intercepts-profile-declared-host-to-action-
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 127-02-PLAN.md
-last_updated: "2026-08-26T05:51:22.036Z"
+stopped_at: Completed 127-03-PLAN.md
+last_updated: "2026-08-26T06:09:14.386Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 127 execution started
 progress:
   total_phases: 11
   completed_phases: 8
   total_plans: 72
-  completed_plans: 64
+  completed_plans: 65
   percent: 73
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 127 (declarative-mitm-intercepts-profile-declared-host-to-action-) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Total Plans in Phase: 5
-Current Plan: 3
+Current Plan: 4
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 127 execution started
 
@@ -634,6 +634,7 @@ Progress: [█████████░] 91%
 | Phase 126 P10 | 50min | 2 tasks | 8 files |
 | Phase 127 P01 | 2min | 3 tasks | 6 files |
 | Phase 127 P02 | 15min | 3 tasks | 6 files |
+| Phase 127 P03 | 22min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1810,6 +1811,8 @@ Recent decisions affecting current work:
 - [Phase 127]: MITM intercept collapse wired into fromMap (not resolveMap) for by-name last-wins override — Single point every Resolve() output passes through, matching the plan's stated integration point
 - [Phase ?]: Extended registerInterceptHandlers with an isPlatformOwnedHost guard (meteringEnabled/githubEnabled) so an intercept cannot shadow live Bedrock/Anthropic/OpenAI metering or the GitHub repo filter via goproxy's fallthrough dispatch
 - [Phase ?]: Applied the same anti-shadow guard on the transparent (eBPF/both) listener path via a new matchInterceptForRequest helper, and added an internal (package httpproxy) test file to exercise it directly since no BPF-map fixture exists for a full network test
+- [Phase ?]: MITM wire structs (mitmWireIntercept/mitmWireRespond) kept as a local compiler mirror of the sidecar's Intercept/Respond, not an import; a contract test keeps them honest
+- [Phase ?]: buildL7ProxyHosts refactored to a seen-map + add() closure so intercept hosts append last and never duplicate an existing group
 
 ### Roadmap Evolution
 
@@ -1963,6 +1966,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-26T05:51:22.021Z
-Stopped at: Completed 127-02-PLAN.md
+Last session: 2026-08-26T06:09:14.371Z
+Stopped at: Completed 127-03-PLAN.md
 Resume file: None
