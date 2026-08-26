@@ -665,6 +665,7 @@ func (c *testConfig) GetChecksTriggers() []appcfg.CheckTrigger                 {
 func (c *testConfig) GetCapacityTableName() string                             { return "km-capacity" }
 func (c *testConfig) GetNATGatewayEnabled() bool                               { return false }
 func (c *testConfig) GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig { return nil }
+func (c *testConfig) GetWebhooks() appcfg.WebhooksConfig                       { return appcfg.WebhooksConfig{} }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -1021,6 +1022,7 @@ func (c *testDoctorConfig) GetChecksTriggers() []appcfg.CheckTrigger            
 func (c *testDoctorConfig) GetCapacityTableName() string                             { return "km-capacity" }
 func (c *testDoctorConfig) GetNATGatewayEnabled() bool                               { return false }
 func (c *testDoctorConfig) GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig { return nil }
+func (c *testDoctorConfig) GetWebhooks() appcfg.WebhooksConfig                       { return appcfg.WebhooksConfig{} }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{

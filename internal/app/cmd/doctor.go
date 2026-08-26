@@ -304,6 +304,10 @@ type DoctorConfigProvider interface {
 	// capacity-borrowing links, keyed by link name. Non-nil, empty map when
 	// launch_accounts: is absent from km-config.yaml (dormant).
 	GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig
+	// GetWebhooks returns the Phase 127 webhooks: generic ingress bridge
+	// config. Zero-value (nil Sources) when webhooks: is absent from
+	// km-config.yaml (dormant).
+	GetWebhooks() appcfg.WebhooksConfig
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -375,6 +379,9 @@ func (a *appConfigAdapter) GetNATGatewayEnabled() bool {
 }
 func (a *appConfigAdapter) GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig {
 	return a.cfg.GetLaunchAccounts()
+}
+func (a *appConfigAdapter) GetWebhooks() appcfg.WebhooksConfig {
+	return a.cfg.Webhooks
 }
 
 // LaunchAccountAssumeRoleFunc builds a per-link assumed-role aws.Config from
@@ -4749,6 +4756,46 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		}
 		return checkPrivateWithoutNAT(natEnabled, metas)
 	})
+
+	// Phase 127 Task 12 — generic webhook ingress bridge doctor checks.
+	// webhookCfg is read once here (pure config, no AWS call). The structural
+	// results are computed eagerly (checkWebhookSources takes no ctx/client)
+	// and unwrapped into one closure per result — mirrors the per-region VPC
+	// check loop above. The AWS-touching probes (checkWebhookSecretExists /
+	// checkWebhookBridgeURL / checkWebhookDLQDepth — the same three primitives
+	// checkWebhookSourcesAWS composes, unit-tested via that aggregate) are
+	// registered individually rather than through the aggregate, since the
+	// aggregate needs ctx and re-invoking it once per result would repeat every
+	// AWS call N times. Both loops are conditioned on len(webhookCfg.Sources),
+	// so a dormant install (no webhooks: block) registers zero checks and
+	// makes zero AWS calls.
+	webhookCfg := cfg.GetWebhooks()
+	webhookConfigDir := "."
+	if p := cfg.GetConfigFilePath(); p != "" {
+		webhookConfigDir = filepath.Dir(p)
+	}
+	for _, r := range checkWebhookSources(webhookCfg, webhookConfigDir) {
+		r := r
+		checks = append(checks, func(_ context.Context) CheckResult { return r })
+	}
+	if len(webhookCfg.Sources) > 0 {
+		webhookSSM := ssmClient
+		webhookSQS := deps.InboundDLQSQS
+		webhookPrefix := cfg.GetResourcePrefix()
+		webhookSSMPrefix := cfg.GetSsmPrefix()
+		for _, src := range webhookCfg.Sources {
+			src := src
+			checks = append(checks, func(ctx context.Context) CheckResult {
+				return checkWebhookSecretExists(ctx, src, webhookSSM)
+			})
+		}
+		checks = append(checks, func(ctx context.Context) CheckResult {
+			return checkWebhookBridgeURL(ctx, webhookSSM, webhookSSMPrefix)
+		})
+		checks = append(checks, func(ctx context.Context) CheckResult {
+			return checkWebhookDLQDepth(ctx, webhookSQS, webhookPrefix)
+		})
+	}
 
 	// Phase 126 Plan 09 — cross-account link doctor checks (REQ-126-DOCTOR).
 	// launchAccounts is read once here (pure config, no AWS call); each
