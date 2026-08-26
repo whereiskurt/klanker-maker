@@ -8,6 +8,49 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 129 (2026-08-26) — Declarative MITM intercepts: profile-declared host→action rules replace the hardcoded rickroll (complete):**
+- `spec.network.mitm.intercepts` replaces the compiled-in, unconditional `google.com` → Rickroll
+  easter egg (`sidecars/http-proxy/httpproxy/proxy.go`, deleted) with a declarative list of named
+  host→action rules an operator authors: `redirect` (301 + `Location`) or `respond` (canned
+  status/body/contentType). **Opt-in, off by default** — this is the one place the repo departs
+  from its usual "dormant ⇒ byte-identical" rule; a profile with no `mitm:` block gets zero
+  interception, and the Rickroll stops firing fleet-wide on the next `km create`. Accepted and
+  deliberate. `apiVersion` stays unbumped (purely additive).
+- **Migration path:** the egg survives as `profiles/base/mitm-rickroll.yaml`, an abstract fragment
+  any profile opts into with one `extends:` line. `profiles/mitm-demo.yaml` is the worked
+  example — it extends the fragment, adds its own `respond` rule, and shows the off-switch
+  (`- name: rickroll` / `enabled: false`) commented out.
+- **Precedence (unconditional, cannot be overridden by a profile):** deny gate →
+  Bedrock/Anthropic/OpenAI metering + GitHub repo filter → operator intercepts → general
+  allowlist. An intercept naming a metering/GitHub host is silently dead (`km validate` WARNs);
+  an intercept for a host absent from the allowlist still fires — the useful case for a canned
+  error on a host the sandbox can't otherwise reach. No `block` action: `deniedHosts` already
+  blocks with strictly stronger semantics (ahead of everything, broader subdomain match,
+  runtime-appendable via `km-netpolicy`) — a second, weaker way to block would be a footgun.
+- **Inheritance resolves by name, last-wins, whole-entry** (not a field merge) — Phase 117 unions
+  lists, so without whole-entry override a leaf could never turn an inherited rule off.
+- **Matcher narrowing is a bug fix.** The deleted regex (`^(www\.)?google\.com`) was unanchored at
+  the end, so `google.com.evil.example` was also Rickrolled. The new matcher reuses
+  `IsHostAllowed` semantics (case-insensitive, port-stripped, leading-dot subdomain match, no
+  regex, no `*`) and rejects the lookalike; pinned by a unit test.
+- **Transport is base64 JSON** in a conditional `/etc/systemd/system/km-http-proxy.service.d/mitm.conf`
+  drop-in (`KM_MITM_INTERCEPTS`) — load-bearing, since an unquoted systemd `Environment=` splits on
+  whitespace and a `respond.body` has spaces. The sidecar fails toward **zero intercepts** on a
+  decode/parse error, never a partial rule set. Under `enforcement: ebpf`/`both`, intercept hosts
+  are threaded into `--proxy-hosts` but DNS is deliberately NOT widened — a host outside
+  `allowedDNSSuffixes` never resolves and the rule silently never fires (`km validate` warns).
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.** All three, because
+  three things land together: the sidecar binary, the profile schema field the create-handler's
+  bundled `toolchain/km` validates, and the userdata drop-in the create-handler zip renders.
+  **`km init --sidecars` alone is actively harmful mid-rollout** — the new sidecar binary has no
+  rule set to read yet, so a sidecar-only refresh drops the Rickroll on a live box while the
+  profile still cannot declare it back until the full sequence completes. No Terraform module,
+  DynamoDB table, IAM policy, Lambda bridge, or SES resource changes; userdata goldens are
+  untouched in the dormant case. Existing sandboxes keep today's behaviour until
+  `km destroy && km create`.
+- See `docs/mitm-intercepts.md` for the full operator runbook and
+  `docs/superpowers/specs/2026-08-25-mitm-intercepts-design.md` for the design.
+
 **Phase 128 (2026-08-26) — Wiz Runtime Sensor on EC2 sandboxes + `iam.allowedSecretPaths` made real (complete; live UAT pending):**
 - Opt-in `profiles/base/security/wiz.yaml` fragment installs the **Wiz Runtime Sensor** as a root
   systemd daemon, so an autonomous agent's process/file/network activity is visible in the
@@ -585,6 +628,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Push webhook ingress — `webhooks:` block, Wiz Automation Rule setup, canonical km payload template, storm control (replay/cooldown/group_by/rate ceiling), deploy surface | `docs/webhook-ingress.md` |
 | Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the seven `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
 | Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
+| Declarative MITM intercepts — `spec.network.mitm.intercepts`, `redirect`/`respond` actions, precedence (deny → metering/GitHub → intercepts → allowlist), by-name last-wins override, the `profiles/base/mitm-rickroll.yaml` migration fragment, deploy surface | `docs/mitm-intercepts.md` (Phase 129) |
 | Cross-account capacity borrowing — `km account add/register/list/rm`, `spec.runtime.launchAccount`, the two-credential enrollment sequence, the launcher-role security model, capacity/teardown/doctor cross-account wiring, deploy surface | `docs/cross-account-capacity-borrowing.md` (Phase 126) |
 | Private-subnet sandboxes + per-AZ NAT gateways — `network.nat_gateway` / `spec.network.privateSubnet` toggles, cost, the one-time route-table split, reversal, guards, deploy surface | `docs/private-subnet-nat.md` (Phase 125) |
 | Sizing the private topology to cut the NAT bill — `network.private_subnet_count` (1–4, absent = all 4), the AZ-rotation tradeoff it buys, and the subnet destroys on lowering it | `docs/private-subnet-nat.md` § Paying for fewer AZs |
