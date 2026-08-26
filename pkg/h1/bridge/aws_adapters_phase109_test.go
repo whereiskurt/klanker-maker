@@ -44,6 +44,12 @@ func (f *fakeEC2Client) DescribeInstances(_ context.Context, params *ec2.Describ
 
 func (f *fakeEC2Client) StartInstances(_ context.Context, params *ec2.StartInstancesInput, _ ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
 	f.startCalled = true
+	// startErr was declared but never honoured, so the field was inert and a
+	// failing StartInstances could not be exercised at all. No existing test set
+	// it, so wiring it up changes no current behaviour.
+	if f.startErr != nil {
+		return nil, f.startErr
+	}
 	return &ec2.StartInstancesOutput{}, nil
 }
 

@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -103,6 +105,86 @@ func ForceGitHubTokenRefresh(ctx context.Context, sched ScheduleGetter, invoker 
 		return fmt.Errorf("%s failed: %s", functionName, lambdaErrorDetail(invokeOut.Payload))
 	}
 	return nil
+}
+
+// ============================================================
+// GitHubTokenRefresher — injectable form for the bridge resume paths
+// ============================================================
+
+// GitHubTokenRefresher re-mints a sandbox's GitHub installation token.
+//
+// The bridges' EC2Resumer holds one of these so an autonomous wake-up (a Slack
+// or GitHub @-mention that starts a stopped box) gets the same fresh token the
+// operator-driven `km resume` path does. A nil refresher is a no-op.
+type GitHubTokenRefresher interface {
+	RefreshGitHubToken(ctx context.Context, sandboxID string) error
+}
+
+// DefaultGitHubRefreshTimeout bounds a single refresh so a wedged refresher can
+// never hold up a resume — or, in a Lambda bridge, eat the webhook ack window.
+const DefaultGitHubRefreshTimeout = 20 * time.Second
+
+// ScheduledGitHubTokenRefresher is the real GitHubTokenRefresher: it drives
+// ForceGitHubTokenRefresh against the sandbox's own refresher schedule.
+type ScheduledGitHubTokenRefresher struct {
+	Schedules      ScheduleGetter
+	Lambdas        LambdaInvoker
+	ResourcePrefix string
+	// Timeout defaults to DefaultGitHubRefreshTimeout when zero.
+	Timeout time.Duration
+}
+
+// NewGitHubTokenRefresher builds a ScheduledGitHubTokenRefresher from an AWS
+// config, for the bridge Lambdas' wiring blocks.
+func NewGitHubTokenRefresher(cfg awssdk.Config, resourcePrefix string) *ScheduledGitHubTokenRefresher {
+	return &ScheduledGitHubTokenRefresher{
+		Schedules:      scheduler.NewFromConfig(cfg),
+		Lambdas:        lambda.NewFromConfig(cfg),
+		ResourcePrefix: resourcePrefix,
+	}
+}
+
+// RefreshGitHubToken implements GitHubTokenRefresher.
+func (r *ScheduledGitHubTokenRefresher) RefreshGitHubToken(ctx context.Context, sandboxID string) error {
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = DefaultGitHubRefreshTimeout
+	}
+	rCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return ForceGitHubTokenRefresh(rCtx, r.Schedules, r.Lambdas, r.ResourcePrefix, sandboxID)
+}
+
+// BestEffortRefreshGitHubToken runs a refresh and reports the outcome to slog,
+// swallowing every error. It is the single helper the four bridge EC2Resumers
+// call after a successful StartInstances.
+//
+// Swallowing is load-bearing, not laziness. The bridges branch on StartSandbox's
+// error: a returned error means "resume failed", which either strands the turn
+// or — on the Phase 109 terminal path — deletes the sandbox's DynamoDB row and
+// cold-creates a replacement. Letting a token-refresh failure surface there
+// would destroy a perfectly healthy running sandbox over an expired credential.
+// The instance has already been started by this point; the only correct
+// response to a refresh failure is to log it.
+//
+// A nil refresher, or an empty sandbox ID, is a silent no-op.
+func BestEffortRefreshGitHubToken(ctx context.Context, refresher GitHubTokenRefresher, sandboxID, logPrefix string) {
+	if refresher == nil || sandboxID == "" {
+		return
+	}
+	err := refresher.RefreshGitHubToken(ctx, sandboxID)
+	switch {
+	case err == nil:
+		slog.Info(logPrefix+": github token refreshed on auto-resume", slog.String("sandbox_id", sandboxID))
+	case errors.Is(err, ErrNoGitHubRefresher):
+		// Profile has no sourceAccess.github — nothing to refresh. Not a warning:
+		// it would fire on every auto-resume of every non-GitHub sandbox.
+	default:
+		slog.Warn(logPrefix+": github token refresh failed on auto-resume (non-fatal) — git operations in this sandbox may 401",
+			slog.String("sandbox_id", sandboxID),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 // lambdaErrorDetail extracts the errorMessage from a Lambda error payload,

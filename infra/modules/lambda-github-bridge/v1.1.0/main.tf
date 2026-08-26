@@ -233,6 +233,25 @@ resource "aws_iam_role_policy" "ec2_resume" {
             "aws:ResourceTag/km:resource-prefix" = var.resource_prefix
           }
         }
+      },
+      # Wake-up re-credential: after starting a stopped sandbox the resumer
+      # invokes that sandbox's own github-token refresher, so the agent's first
+      # git call does not race a token the refresher has been failing to renew.
+      # GetSchedule reads the refresher's target payload (installation id, KMS
+      # key, allowed repos, compiled permissions); InvokeFunction runs it.
+      # Both are scoped to THIS install's prefix — a bridge must never refresh a
+      # sibling install's sandbox.
+      {
+        Sid      = "GitHubTokenScheduleRead"
+        Effect   = "Allow"
+        Action   = ["scheduler:GetSchedule"]
+        Resource = "arn:aws:scheduler:*:${data.aws_caller_identity.current.account_id}:schedule/default/${var.resource_prefix}-github-token-*"
+      },
+      {
+        Sid      = "GitHubTokenRefreshOnResume"
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.resource_prefix}-github-token-refresher-*"
       }
     ]
   })

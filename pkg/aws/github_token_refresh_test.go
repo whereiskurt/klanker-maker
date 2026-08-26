@@ -181,3 +181,65 @@ func TestGitHubTokenResourceNames_HonourResourcePrefix(t *testing.T) {
 		t.Errorf("function name = %q", got)
 	}
 }
+
+type recordingRefresher struct {
+	err   error
+	calls []string
+}
+
+func (r *recordingRefresher) RefreshGitHubToken(_ context.Context, sandboxID string) error {
+	r.calls = append(r.calls, sandboxID)
+	return r.err
+}
+
+// TestBestEffortRefreshGitHubToken_NeverPropagates pins the contract the four
+// bridge resumers depend on. A returned error would be read by the bridges as
+// "resume failed", which on the Phase 109 terminal path deletes the sandbox's
+// DynamoDB row and cold-creates a replacement — destroying a healthy running
+// sandbox over an expired credential.
+func TestBestEffortRefreshGitHubToken_NeverPropagates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"success", nil},
+		{"no refresher schedule", ErrNoGitHubRefresher},
+		{"hard failure", errors.New("AccessDenied")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &recordingRefresher{err: tc.err}
+			// Signature returns nothing: there is no error path to mishandle.
+			BestEffortRefreshGitHubToken(context.Background(), rec, "sb-1", "test-bridge")
+			if len(rec.calls) != 1 || rec.calls[0] != "sb-1" {
+				t.Fatalf("refresher calls = %v, want [sb-1]", rec.calls)
+			}
+		})
+	}
+}
+
+func TestBestEffortRefreshGitHubToken_NoOps(t *testing.T) {
+	// Nil refresher: a bridge deployed before its wiring lands must not panic.
+	BestEffortRefreshGitHubToken(context.Background(), nil, "sb-1", "test-bridge")
+
+	rec := &recordingRefresher{}
+	BestEffortRefreshGitHubToken(context.Background(), rec, "", "test-bridge")
+	if len(rec.calls) != 0 {
+		t.Fatalf("refresher called with empty sandbox id: %v", rec.calls)
+	}
+}
+
+func TestScheduledGitHubTokenRefresher_UsesForceRefresh(t *testing.T) {
+	sched := &stubScheduleGetter{out: scheduleWithInput(samplePayload)}
+	inv := &stubLambdaInvoker{out: &lambda.InvokeOutput{StatusCode: 200}}
+
+	r := &ScheduledGitHubTokenRefresher{Schedules: sched, Lambdas: inv, ResourcePrefix: "kph"}
+	if err := r.RefreshGitHubToken(context.Background(), "sb-9"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sched.gotName != "kph-github-token-sb-9" {
+		t.Errorf("schedule name = %q, want kph-github-token-sb-9", sched.gotName)
+	}
+	if inv.gotFn != "kph-github-token-refresher-sb-9" {
+		t.Errorf("function = %q, want kph-github-token-refresher-sb-9", inv.gotFn)
+	}
+}

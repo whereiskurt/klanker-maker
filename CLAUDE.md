@@ -31,10 +31,28 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   failing the command afterwards would leave a running box and a red exit code) and bounded at 30s.
   A sandbox with no `sourceAccess.github` has no schedule — `ErrNoGitHubRefresher` is **silent**,
   not a warning, so the line that matters doesn't get trained out of operators.
-- **Known gap (deliberate, not an oversight):** the Phase 109/114 bridge auto-resume path calls
-  `EC2Resumer.StartSandbox` directly in four packages and does NOT go through `handleResume`, so a
-  Slack/GitHub @-mention that wakes a box is not covered yet. Deferred until the surfaced errors
-  show whether it's needed.
+- **Autonomous wake-ups are covered too.** The Phase 109/114 bridge auto-resume path calls
+  `EC2Resumer.StartSandbox` directly and never routes through `handleResume`, so all four
+  resumers (`pkg/{github,slack,h1,webhook}/bridge`) gained an optional
+  `TokenRefresher awspkg.GitHubTokenRefresher` field, invoked immediately after a successful
+  `StartInstances` via `awspkg.BestEffortRefreshGitHubToken`. Wired unconditionally in the four
+  bridge `main.go`s with `awspkg.NewGitHubTokenRefresher(cfg, prefix)`; **nil is a no-op**, so a
+  bridge running older wiring resumes exactly as before.
+- **The refresh result is SWALLOWED inside `StartSandbox`, and that is load-bearing.** The
+  bridges branch on `StartSandbox`'s error, and on the Phase 109 terminal path a failure
+  **deletes the sandbox's DynamoDB row and cold-creates a replacement**. Letting a token-refresh
+  failure surface there would destroy a healthy running sandbox over an expired credential. The
+  instance is already started by that point; the only correct response is to log. Pinned by a
+  test in each of the four packages, plus `TestBestEffortRefreshGitHubToken_NeverPropagates`
+  (the helper returns nothing, so there is no error path to mishandle).
+- **No refresh happens unless a box actually started** — not on `StartInstances` failure, and not
+  on the `ErrNoResumableInstance` orphan path that falls through to cold-create. Also tested per
+  package.
+- **Bridge IAM:** each of the four bridge modules' `ec2_resume` policy gains
+  `GitHubTokenScheduleRead` (`scheduler:GetSchedule` on
+  `schedule/default/{prefix}-github-token-*`) and `GitHubTokenRefreshOnResume`
+  (`lambda:InvokeFunction` on `{prefix}-github-token-refresher-*`), both prefix-scoped so a
+  bridge can never refresh a sibling install's sandbox.
 - **`km create <profile.yaml> [alias]`** — the alias may now be a second positional instead of
   `--alias`. Whichever argument ends in `.yaml`/`.yml` is the profile, so order is irrelevant.
   Ambiguity is always an error, never a guess: two YAML-looking args, zero YAML-looking args, or a
@@ -43,11 +61,12 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   one-positional form is deliberately extension-agnostic so every path shape that worked before
   still works.
 - **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.** NOT `--sidecars`:
-  the ttl-handler role gains a new `GitHubTokenRefreshOnResume` statement
-  (`lambda:InvokeFunction` on `{prefix}-github-token-refresher-*`), which needs a full terragrunt
-  apply. The matching `scheduler:GetSchedule` was already granted by `SchedulerCleanup`, and the
-  operator policy already holds `lambda:*` + `scheduler:GetSchedule` on `{prefix}-*`, so local
-  `km resume` needs no IAM change. No SandboxProfile schema change, no userdata change, **no
+  five Lambda roles gain new IAM statements (ttl-handler plus the four bridges), and an env/IAM
+  change needs a full terragrunt apply. The ttl-handler's matching `scheduler:GetSchedule` was
+  already granted by `SchedulerCleanup`; the operator policy already holds `lambda:*` +
+  `scheduler:GetSchedule` on `{prefix}-*`, so local `km resume` needs no IAM change. **Order
+  matters**: `make build-lambdas` before `km init`, or the bridges deploy with the new IAM but
+  the old code and no refresh happens. No SandboxProfile schema change, no userdata change, **no
   sandbox recreate** — this is entirely control-plane.
 
 **Phase 129 (2026-08-26) — Declarative MITM intercepts: profile-declared host→action rules replace the hardcoded rickroll (complete):**

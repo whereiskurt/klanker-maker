@@ -43,6 +43,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	pkgslack "github.com/whereiskurt/klanker-maker/pkg/slack"
 	"github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 )
@@ -69,6 +70,10 @@ var (
 	initToken      *bridge.SSMBotTokenFetcher
 	initHTTPClient *http.Client
 	initNonces     *bridge.DynamoNonceStore
+	// initTokenRefresher re-mints a GitHub installation token when an @-mention
+	// auto-resumes a stopped sandbox. Built in init() because the AWS config is
+	// local there; consumed by wireEventsHandler.
+	initTokenRefresher *awspkg.ScheduledGitHubTokenRefresher
 )
 
 func init() {
@@ -82,6 +87,7 @@ func init() {
 	initDDB = dynamodb.NewFromConfig(cfg)
 	initSSMC = ssm.NewFromConfig(cfg)
 	initEC2Client = ec2.NewFromConfig(cfg)
+	initTokenRefresher = awspkg.NewGitHubTokenRefresher(cfg, resourcePrefix())
 
 	// Defaults derive from KM_RESOURCE_PREFIX so a non-default install
 	// (resource_prefix=kph) gets prefix-correct fallbacks (kph-identities,
@@ -357,6 +363,11 @@ func wireEventsHandler() {
 	eventsHandler.Resumer = &bridge.EC2Resumer{
 		Client:         initEC2Client,
 		ResourcePrefix: prefix, // INERT — sandboxIDTagKey() hardcodes km:sandbox-id (Phase-109 fix). Kept for documentation.
+		// Wake-up re-credential: an @-mention that auto-resumes a stopped box gets
+		// the same fresh GitHub token `km resume` mints. Unconditional — a sandbox
+		// without sourceAccess.github has no refresher schedule and the call is a
+		// silent no-op.
+		TokenRefresher: initTokenRefresher,
 	}
 	eventsHandler.StatusWriter = &bridge.DynamoSandboxStatusWriter{
 		Client:    initDDB,

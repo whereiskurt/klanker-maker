@@ -406,6 +406,10 @@ type EC2Resumer struct {
 	Client          EC2StartAPI
 	SandboxIDTagKey string // default "km:sandbox-id" when empty
 	ResourcePrefix  string // INERT: retained for wiring compat, no longer read (see sandboxIDTagKey)
+	// TokenRefresher re-mints the sandbox's GitHub installation token after a
+	// successful start, so an autonomous wake-up gets the same fresh credential
+	// the operator-driven `km resume` path does. Nil disables the refresh.
+	TokenRefresher kmaws.GitHubTokenRefresher
 }
 
 func (r *EC2Resumer) sandboxIDTagKey() string {
@@ -509,6 +513,11 @@ doStart:
 	if _, err := r.Client.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: instanceIDs}); err != nil {
 		return fmt.Errorf("h1-bridge: EC2Resumer.StartInstances for %s: %w", sandboxID, err)
 	}
+
+	// Wake-up re-credential. Best-effort by construction: the instance is already
+	// started, and a returned error here would be read as "resume failed".
+	// See BestEffortRefreshGitHubToken.
+	kmaws.BestEffortRefreshGitHubToken(ctx, r.TokenRefresher, sandboxID, "h1-bridge")
 	return nil
 }
 
