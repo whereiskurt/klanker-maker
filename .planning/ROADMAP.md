@@ -473,3 +473,62 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 127-05-PLAN.md — `profiles/base/mitm-rickroll.yaml`, demo leaf + inventory gate, `docs/mitm-intercepts.md`, CLAUDE.md, 6-step live UAT (wave 3)
+
+---
+
+### Phase 130: `km tunnel` — reverse-tunnelled kubectl access to an operator-only cluster
+
+**Goal:** An operator whose Kubernetes cluster is reachable only from their own
+workstation (OpenVPN route on the laptop, VPN credential cannot leave it) can
+`km tunnel <sandbox-id> --context <ctx>` and land in an interactive sandbox shell where
+`kubectl` works against that cluster — while **no VPN credential, SSO refresh token, or
+AWS credential ever reaches the sandbox**.
+
+SSM has no reverse-forward primitive, so `-R` rides inside SSH which rides inside the
+existing SSM port-forward. `ssh -R` resolves and dials its target client-side, so the
+cluster hostname goes over the laptop's VPN and the sandbox needs no route, no DNS, and
+never touches km's NXDOMAIN-by-default resolver.
+
+Credentials proxy Kubernetes' own **ExecCredential protocol** rather than reimplementing
+OIDC on either side: the box kubeconfig runs a `curl --unix-socket` shim, and a laptop
+broker runs the operator's *existing* exec plugin (`kubelogin`) and returns its stdout
+verbatim. Cluster auth is self-managed OIDC federated to AWS Identity Center — not EKS.
+
+**Deploy surface is `make build` alone.** `IsVSCodeEnabled` defaults to true so every
+sandbox already has sshd and a keypair; userdata never writes an `sshd_config` so stock
+forwarding defaults apply; and the box-side kubeconfig and shim are written at connect
+time over SSH. No profile field, no sidecar, no userdata change, no Lambda rebuild, no
+`km init`, **no sandbox recreate** — it works on boxes already running.
+
+**Deliberately not built:** any `-N` / detached / daemon mode. The tunnel dies with the
+shell, and that lifetime — not a policy field — is the honest control. A reverse tunnel
+bypasses km's egress enforcement by construction; an earlier draft's
+`spec.network.reverseTunnel` field was dropped because it would have implied an
+authorization control that does not exist.
+
+**Constraint shaping the phase:** none of this is testable on the development machine
+(no VPN, no cluster, no kubectl), and every debug cycle costs a tagged release. So
+`--dry-run` / `--print-ssh` / `--verbose` are permanent interface, the broker is
+deliberately dumb, and the live UAT is written as part of the phase rather than after.
+
+Ships in **v0.8.6**. Design spec:
+`docs/superpowers/specs/2026-08-26-k8s-reverse-tunnel-design.md`.
+
+**Requirements**: REQ-130-RESOLVE, REQ-130-BROKER, REQ-130-CLI, REQ-130-ARGV,
+REQ-130-DIAG, REQ-130-DOCS, REQ-130-UAT
+
+**Plans:** 0/4 plans complete
+
+Plans:
+**Wave 1**
+
+- [ ] 130-01-PLAN.md — `pkg/kubetunnel` kubeconfig parsing + context resolution (multi-file `$KUBECONFIG`, SNI fallback, explicit port), hand-rolled on yaml.v3 with no client-go (wave 1)
+- [ ] 130-02-PLAN.md — the laptop-side credential broker: unix-socket server running the operator's exec plugin, stdout verbatim, stderr surfaced, every mint logged (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 130-03-PLAN.md — pure renderers (box kubeconfig, `km-kubetoken` shim, ssh argv with the two silent-failure options pinned) + the `km tunnel` Cobra verb and its five-leg orchestration (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 130-04-PLAN.md — `docs/k8s-reverse-tunnel.md` runbook, 7-step live UAT, CLAUDE.md block, v0.8.6 release highlights (wave 3)
