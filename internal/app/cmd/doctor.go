@@ -2495,6 +2495,46 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 // Platform roles ({prefix}-create-handler, {prefix}-ttl-*, {prefix}-org-admin) are skipped.
 // clusterRoleNames is the set of role names registered via `km cluster add` (Phase 80 cross-account
 // IRSA) — any role in this set is protected regardless of platformPrefixes.
+
+// platformRolePrefixes returns the role-name prefixes that the stale-role sweep
+// must never delete, for a given "{resource_prefix}-" rolePrefix.
+//
+// EVERY long-lived platform role belongs here. Omitting one does not fail any
+// build or test - it silently turns `km doctor --dry-run=false` into a command
+// that DELETES A LIVE PLATFORM ROLE, because the sweep's only other protection
+// is "does an active sandbox id appear in the role name", which a platform role
+// never satisfies. Three roles were omitted this way (check-runner from Phase
+// 116, quota-alerter from Phase 121, webhook-bridge from Phase 127) and were
+// deletable by a routine cleanup pass until 2026-08-26.
+//
+// Note the sweep is gated on `dryRun` alone - there is no `--delete-roles`
+// opt-in - so ANY `--dry-run=false` invocation reaches it, including one run
+// solely for `--delete-ssh`.
+//
+// Deliberately NOT listed: {prefix}-gpu-launcher and {prefix}-gpu-box (Phase
+// 126). Those live in a LINKED TARGET account; this sweep only ever lists roles
+// in the home account, so they are unreachable here.
+//
+// Per-sandbox roles (budget-enforcer-{id}, github-token-refresher-{id}, ...) are
+// also absent on purpose: they carry a sandbox id and are protected by the
+// active-sandbox check, and SHOULD be swept once that sandbox is gone.
+//
+// Guarded by TestPlatformRolePrefixes_CoversEveryInfraRole.
+func platformRolePrefixes(rolePrefix string) []string {
+	return []string{
+		rolePrefix + "create-handler", rolePrefix + "ttl-", rolePrefix + "org-admin", rolePrefix + "email-create-handler",
+		rolePrefix + "slack-bridge",
+		rolePrefix + "github-bridge",  // GitHub comment-trigger bridge Lambda (Phase 97)
+		rolePrefix + "h1-bridge",      // HackerOne webhook bridge Lambda (Phase 103)
+		rolePrefix + "webhook-bridge", // Generic webhook ingress bridge Lambda (Phase 127)
+		rolePrefix + "email-handler", rolePrefix + "ecs-spot-handler",
+		rolePrefix + "cluster-",        // Phase 80 cross-account IRSA roles
+		rolePrefix + "s3-replication-", // Phase 84.4 - prefix-parameterized via v2.0.0
+		rolePrefix + "check-runner",    // Serverless km check runner exec role (Phase 116)
+		rolePrefix + "quota-alerter",   // Action-quota alerter Lambda (Phase 121)
+	}
+}
+
 func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister SandboxLister, dryRun bool, resourcePrefix string, clusterRoleNames map[string]bool) CheckResult {
 	name := "Stale IAM Roles"
 	if iamClient == nil {
@@ -2546,15 +2586,7 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 	// "s3-replication-" is now prefix-parameterized via infra/modules/s3-replication/v2.0.0
 	// (Phase 84.4 Plan 04). The role name is "${resource_prefix}-s3-replication-${bucket}",
 	// so rolePrefix covers it correctly for any install.
-	platformPrefixes := []string{
-		rolePrefix + "create-handler", rolePrefix + "ttl-", rolePrefix + "org-admin", rolePrefix + "email-create-handler",
-		rolePrefix + "slack-bridge",
-		rolePrefix + "github-bridge", // GitHub comment-trigger bridge Lambda (Phase 97)
-		rolePrefix + "h1-bridge",     // HackerOne webhook bridge Lambda (Phase 103)
-		rolePrefix + "email-handler", rolePrefix + "ecs-spot-handler",
-		rolePrefix + "cluster-",        // Phase 80 cross-account IRSA roles
-		rolePrefix + "s3-replication-", // Phase 84.4 — prefix-parameterized via v2.0.0
-	}
+	platformPrefixes := platformRolePrefixes(rolePrefix)
 
 	var staleRoles []string
 	for _, r := range roles {
