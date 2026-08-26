@@ -512,6 +512,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Cut a release (goreleaser + GH Actions, tag-driven) | `docs/release.md` |
 | SOPS / SSM allowlist via `iam.allowedSecretPaths` | `docs/sandbox-secrets.md` (Phase 89, renamed `identity:`→`iam:` in Phase 92) |
 | Composable multi-parent profile inheritance — `extends:` list, deep-merge, `profiles/base/` fragments, `initCommandsAppend`, v1 narrowing limitation | `OPERATOR-GUIDE.md` § Composable inheritance |
+| Wiz Runtime Sensor on a sandbox — opt-in `base/security/wiz` fragment, the prefix-relative SSM-path rule, why it is not tamper-proof, deploy surface | `docs/wiz-sensor.md` |
 
 ## Sandbox-side helper binaries (`/opt/km/bin`)
 

@@ -4,7 +4,7 @@
 # Validates every concrete leaf profile in the 21-entry Profile Inventory using
 # `km validate`. Exits non-zero on any failure. Single source of truth for the
 # inventory (5 composed leaves + 8 pkg/profile/builtins entries + 7 GPU leaves +
-# 1 Phase 125 private-subnet demo leaf).
+# 1 Phase 125 private-subnet demo leaf + 1 Wiz Sensor demo leaf).
 #
 # profiles/base/** is intentionally EXCLUDED (recursive): abstract base fragments
 # live there (including the new profiles/base/os/ and profiles/base/gpu/ subdirs)
@@ -45,6 +45,7 @@ PROFILES=(
   profiles/spot.yaml
   profiles/private-subnet.yaml  # Phase 125
   profiles/deny-layered.yaml    # egress deny lists
+  profiles/wiz-demo.yaml        # Wiz Runtime Sensor demo (base/security/wiz)
   pkg/profile/builtins/ao.yaml
   pkg/profile/builtins/codex.yaml
   pkg/profile/builtins/goose.yaml
