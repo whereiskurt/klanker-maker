@@ -213,3 +213,9 @@ awaiting the orchestrator/operator to run it against real AWS.
 ---
 *Phase: 127-declarative-mitm-intercepts-profile-declared-host-to-action-*
 *Completed: 2026-08-26*
+
+## Self-Check: PASSED
+
+All created files verified present on disk (profiles/base/mitm-rickroll.yaml,
+profiles/mitm-demo.yaml, docs/mitm-intercepts.md, 127-UAT.md, this SUMMARY.md). All four task
+commit hashes (87269d1e, 9f4ae61e, 5eaa57d8, a29936b7) verified present in git log.
