@@ -23,7 +23,9 @@
 #   1. make build              # FIRST — a stale binary silently skips the new modules
 #   2. make build-lambdas
 #   3. km init --dry-run=false # NOT --sidecars; prints the minted bearer token ONCE
-#   4. km destroy <ir-bot> && km create profiles/ir-bot.yaml   # gain queue + poller
+#   4. km destroy <ir-bot> && km create <your-profile>.yaml    # gain queue + poller
+#      The target sandbox's profile needs spec.notification.webhook.inbound.enabled:
+#      true — an existing box keeps its baked-in userdata until it is recreated.
 #
 # Then in Wiz: Settings → Integrations → Add Integration → SIEM & Automation
 # Tools → Webhook. URL = the Function URL + /wiz, Authentication = Token (Bearer)
@@ -76,13 +78,27 @@ webhooks:
           # FIFO queue (strictly serial per box). Absent: see on_absent.
           alias: ir-bot
 
-          # Used for cold-create. `km init` pre-stages this profile to
-          # s3://{artifacts}/webhook-profiles/{slug}/.km-profile.yaml so the
-          # create-handler can fetch it.
-          profile: ir-bot
+          # What to do when the alias resolves to NOTHING at all.
+          #   skip         — log and drop. Warm-path only; no profile needed.
+          #   cold-create  — provision a fresh sandbox from `profile` (below).
+          #
+          # `skip` is the safe default to start with, and it is NOT the same as
+          # "only works when the box is running": a STOPPED or paused ir-bot
+          # still resolves, and the bridge resumes it and enqueues normally.
+          # on_absent only fires when the alias does not exist.
+          on_absent: skip
 
-          # cold-create (default) provisions a new sandbox; skip logs and drops.
-          on_absent: cold-create
+          # Required ONLY for on_absent: cold-create — uncomment both this and
+          # the on_absent change together. `km init` pre-stages the named profile
+          # to s3://{artifacts}/webhook-profiles/{slug}/.km-profile.yaml so the
+          # create-handler can fetch it at cold-create time.
+          #
+          # The file must exist at profiles/{slug}.yaml BEFORE that km init runs:
+          # a missing file is pre-staged as EMPTY with only a warning, and the
+          # failure then surfaces much later, when a cold dispatch actually fires.
+          # The profile also needs spec.notification.webhook.inbound.enabled: true
+          # so the new box comes up with a queue and a poller.
+          # profile: ir-bot
 
           # Suppress repeat dispatch of the same group_by key within the window.
           # This is the COALESCING lever, not a batcher: the first alert of a
