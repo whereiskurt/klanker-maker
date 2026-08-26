@@ -13,85 +13,76 @@
 -->
 ## ✨ Major additions highlighted
 
-This release is about **letting the outside world wake a sandbox.** Until now every inbound path
-was a conversation — a GitHub comment, a Slack mention, a HackerOne report. This one is a
-machine: a security platform fires an alert at a webhook, and a sandbox agent picks it up and
-starts working.
+v0.8.2 let the outside world **wake** a sandbox. This release lets it **watch** one.
 
-### 🔔 Generic webhook ingress bridge — Wiz first source
+A Wiz Automation Rule can already fire an alert at a webhook and start an agent working. What
+was missing was the other direction: nothing reported what that agent actually *did* once it was
+running. This release closes the loop.
 
-A third-party SaaS POSTs to a new km-owned Lambda behind a Function URL. The bridge
-authenticates the request, drops replays, matches it against operator-declared rules, and
-dispatches a prompt to a sandbox — **warm** via that sandbox's SQS FIFO queue, or **cold** by
-creating one. The first source is Wiz: an Automation Rule fires on an Issue or a Threat
-Detection, and an `ir-bot` sandbox runs `/triage` against the payload.
+### 🛡️ Wiz Runtime Sensor on EC2 sandboxes
+
+A new opt-in profile fragment installs the Wiz Runtime Sensor as a root systemd daemon, so an
+autonomous agent's process, file, and network activity shows up in your Wiz tenant.
 
 ```yaml
-webhooks:
-  rate_limit:
-    max_dispatches: 20
-    window_seconds: 600
-  sources:
-    - name: wiz                    # ← the URL path segment: POST /wiz
-      auth:
-        type: bearer
-        secret_path: /km/config/webhooks/wiz/token
-      rules:
-        - match:
-            type: [issue, threat]
-            severity: [CRITICAL, HIGH]
-          alias: ir-bot
-          profile: ir-bot
-          on_absent: cold-create
-          cooldown_seconds: 900
-          group_by: "{{entity.cloud_id}}"
-          prompt: "@file profiles/prompts/wiz.triage.prompt.txt"
+extends:
+  - base/platform
+  - base/os/debian
+  - base/network/locked
+  - base/security/wiz      # <- that's the whole opt-in
 ```
 
-**It is generic, not Wiz-shaped.** One Lambda, one queue, one poller, one profile field serve
-N named sources; the source is resolved from the URL path, so adding a second one is a config
-entry rather than another bridge. **No CLI verb, by design** — a webhook has a URL and a shared
-secret, and neither needs a command.
+Dormant by default: a profile that doesn't extend it is byte-identical to v0.8.2.
 
-**km publishes the payload contract instead of reverse-engineering one.** Wiz webhook bodies are
-operator-authored Mustache templates, so this release ships the template you paste into your
-tenant (`docs/webhook-templates/`) and the bridge parses what it asked for. That also buys a
-real idempotency key — `{{issue.id}}:{{triggerType}}:{{issue.updatedAt}}` — which matters
-because Wiz sends no signature and no delivery-id header, making that key the load-bearing
-replay defence rather than a nicety.
+**It is deliberately not tamper-proof, and the runbook says so.** On `privileged: true` the agent
+has sudo and can stop any daemon. On-box hardening is a systemd drop-in plus `chattr +i` — a
+speed bump, not a control. The real control is `privileged: false`, and detection belongs off-box
+in your Wiz tenant.
 
-**Four layers stand between an alert storm and an overloaded sandbox:** a replay nonce, a
-per-group cooldown, an install-wide rate ceiling, and the Phase 121 action quota with
-`onBreach: freeze`. The first three fail **open** — a transient DynamoDB fault must never strand
-a real alert — while authentication and unparseable payloads fail **closed**. `group_by`
-coalesces rather than batches: the first alert of a burst wins and the rest are suppressed for
-the window.
+There are now three Wiz integrations pointing in three directions — km **pulls** from Wiz
+(`checks.triggers`), Wiz **pushes** to km (`webhooks:`), and a sandbox **reports to** Wiz (this
+one). They share no code or config; `docs/wiz-sensor.md` § 7 tells them apart.
 
-**Dormant by default.** No `webhooks:` block means no environment variables, no doctor output,
-no AWS calls, and byte-identical sandbox userdata.
+### 🔐 `iam.allowedSecretPaths` now actually works — and never did before
 
-Deploy order is load-bearing — `make build` **first** (the binary carries the new module
-entries; a stale one skips them silently while `km doctor` stays green), then
-`make build-lambdas`, then `km init --dry-run=false` (**not** `--sidecars`), then one
-`km destroy && km create` on the target sandbox. Full runbook: `docs/webhook-ingress.md`.
+Shipping the sensor meant getting a credential onto the box, which surfaced a latent platform
+bug worth its own headline.
 
-> **Status:** code-complete and unit-tested end to end; **live UAT against a real Wiz tenant is
-> still pending.** Four things are deliberately left to verify there: whether your tenant sends
-> a delivery-id header, whether the generic webhook gzip-compresses bodies, the exact
-> `entitySnapshot` leaf names in your variable picker, and whether `/triage` exists on the
-> target box. None change the architecture.
+`iam.allowedSecretPaths` is a documented SandboxProfile field. It rendered an
+`aws ssm get-parameter` loop into EC2 user-data — but was **never plumbed into the sandbox role's
+IAM**. And it did not degrade quietly: the bootstrap runs under `set -euo pipefail` and the fetch
+is a standalone assignment, so the denied call **aborted the boot** before reaching the guard
+that was supposed to tolerate it. That guard was dead code.
 
-### 🔁 AZ sweep fixes that were quietly costing launches
+New `ec2spot/v1.4.0` grants `ssm:GetParameter` on exactly the declared paths. Two shipped
+profiles that declared a path no module version ever granted have been cleaned up.
 
-Three capacity and teardown fixes also land here, all found the hard way:
+### 🧭 `{{prefix}}` paths — a security guard, not ergonomics
 
-- **A fresh ICE now outranks a stale success.** `rankScore` checked `LastSuccessAt` before the
-  fresh-ICE branch and returned unconditionally — and success rows carry no TTL, so an AZ that
-  ever succeeded out-ranked every other AZ *forever*, however often it later hit
-  `InsufficientInstanceCapacity`. `km capacity` disagreed with the ranker while the launch path
-  kept picking the dead AZ.
-- **The on-demand launch waiter is bounded.** Terraform retried ICE internally, so km never saw
-  the error, the sweep could not rotate, and the Lambda died at 900s leaving a stale lock.
-- **`km doctor` sees untagged linked-account orphans and leaked volumes** — a create killed
-  mid-apply leaks its 300GB volume, and `km destroy` reported success because the volume never
-  reached state.
+Secret paths are now written prefix-relative:
+
+```yaml
+iam:
+  allowedSecretPaths:
+    - "{{prefix}}/wiz/wiz-api-client-id"
+    - "{{prefix}}/wiz/wiz-api-client-secret"
+```
+
+These paths compile straight into the sandbox role's IAM grant, so the token is what makes it
+*structurally impossible* for a profile to reach another install's SSM namespace — an absolute
+path or a stray `/*` can't be expressed. Validation is shape-only, so `km validate` still works
+with no configured install, and expansion **fails loud**: an unset `KM_RESOURCE_PREFIX` is an
+error, never a silent default to `km`.
+
+---
+
+**Upgrading:** `make build` → `make build-lambdas` → `km init --dry-run=false` (not `--sidecars`
+— the new IAM statement needs a full apply). Existing sandboxes keep their current role until
+`km destroy && km create`.
+
+**If you enable the sensor:** create the two SSM parameters **before** any profile extends the
+fragment, and make sure `.wiz.io` is DNS-allowlisted. Both are covered in `docs/wiz-sensor.md`
+§ 2 — get the ordering wrong and sandboxes using the fragment won't boot.
+
+**Not yet proven:** live UAT is outstanding, most notably Wiz-sensor/km-eBPF coexistence. Treat
+the sensor as ready to try, not as battle-tested.

@@ -8,6 +8,63 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 128 (2026-08-26) — Wiz Runtime Sensor on EC2 sandboxes + `iam.allowedSecretPaths` made real (complete; live UAT pending):**
+- Opt-in `profiles/base/security/wiz.yaml` fragment installs the **Wiz Runtime Sensor** as a root
+  systemd daemon, so an autonomous agent's process/file/network activity is visible in the
+  operator's Wiz tenant. **Dormant by default** — a profile that does not `extends:` it is
+  byte-identical to Phase 127. Composes via Phase 117 inheritance; lists union.
+- **The enabling fix: `iam.allowedSecretPaths` never worked on EC2.** It rendered an
+  `aws ssm get-parameter` loop into userdata (`userdata.go:495`) but was NEVER plumbed into the
+  ec2spot role — which granted `ssm:GetParameter` on two hardcoded resources only. **It does not
+  degrade: the bootstrap runs under `set -euo pipefail` (`userdata.go:36`) and the fetch is a
+  standalone assignment, so a denied call ABORTS THE BOOT** before the `if [ $? -eq 0 ]` guard,
+  which is dead code on the failure path. `profiles/base/gpu/serve.yaml:214` had already recorded
+  this empirically. Two shipped profiles (`gpu-llama-{12x,48x}`) declared a path no module version
+  ever granted; both are stripped.
+- **`{{prefix}}` token is a SECURITY GUARD, not ergonomics.** Every `allowedSecretPaths` entry must
+  start with `{{prefix}}/`; anything else is a hard `km validate` error. Requiring prefix-relative
+  paths makes it structurally impossible for a profile to grant the sandbox role SSM access outside
+  its own install's namespace. Validation is **shape-only** (works with no configured install);
+  expansion happens at compile time and **fails loud** — an unset `KM_RESOURCE_PREFIX` errors rather
+  than defaulting to `km`, which on a non-default install would render IAM against a SIBLING
+  install's namespace. **`cmd/create-handler` never calls `profile.Validate`**, so on the remote
+  path the compiler-side `HasPrefix` guard in `InterpolateSecretPaths` is the ONLY barrier — it is
+  deliberately exactly as strict as the validator.
+- **`infra/modules/ec2spot/v1.4.0`** (new immutable dir): additive `secret_paths` var (`list(string)`,
+  default `[]`) + a count-gated `aws_iam_role_policy` granting `ssm:GetParameter` on exactly those
+  paths. Empty list creates NO resource. Pin bumped in `locals.substrate_module_versions`. The
+  compiler emits `secret_paths` into `module_inputs` **only when non-empty**.
+- **DNS is the exception to the root-bypass rule — the trap that nearly shipped.** Root bypasses the
+  iptables DNAT (`userdata.go:4532`, uid-0 RETURN) and the eBPF cgroup, so the fragment needs no
+  `allowedHosts` — **but DNS is neither uid- nor cgroup-scoped.** `userdata.go:4737` rewrites
+  `/etc/resolv.conf` to `127.0.0.1` and the resolver NXDOMAINs non-allowlisted names for everyone,
+  root included. The fragment therefore declares `allowedDNSSuffixes: [".wiz.io"]`. Symptom when
+  missing is **misleading**: `km-init.sh` is `set -e`, so a blocked lookup aborts the remaining
+  initCommands and userdata reports `No init script found in S3 (skipped)`.
+- **Credential naming is load-bearing, not cosmetic.** userdata derives an env var as
+  `basename | upper | '-'→'_'`, so `{{prefix}}/wiz/wiz-api-client-id` yields exactly
+  `WIZ_API_CLIENT_ID` — the name Wiz's installer reads. No glue between fetch and install, and the
+  credential never lands in `/etc/sandbox-secrets.env` (`0440 root:sandbox`), which the monitored
+  agent could read. Use a **`SENSOR`**-type Wiz service account, not a general API client.
+- **NOT tamper-proof, deliberately.** On `privileged: true` the agent has sudo and can stop, mask, or
+  `chattr -i` anything. L0 hardening is a systemd drop-in (`Restart=always`) plus `chattr +i` — the
+  installer owns `wiz-sensor.service`, so km adds an override, which also survives package upgrades.
+  **The real control is `privileged: false`**; detection belongs off-box in the Wiz tenant.
+- **Three Wiz integrations now exist and point in three directions** — km pulls (`checks.triggers`,
+  Phase 116), Wiz pushes (`webhooks:`, Phase 127), and a sandbox reports to Wiz (this phase). They
+  share no code or config. See `docs/wiz-sensor.md` § 7.
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`** (NOT `--sidecars` — no
+  sidecar binary changed, and the new IAM statement needs a full terragrunt apply). Existing
+  sandboxes keep the old role until `km destroy && km create`. **Prerequisite ordering is
+  load-bearing:** create the two SSM parameters BEFORE any profile extends the fragment, or every
+  sandbox using it fails to boot.
+- **Residual risk (accepted):** live UAT is not covered — above all Wiz-sensor/km-eBPF coexistence
+  (km loads cgroup BPF + SSL uprobes; the sensor loads its own kprobes), which no code review
+  settles. Two tenant unknowns remain open: `WIZ_DOMAIN`/region, and the connector's inventory sync
+  cadence, which bounds whether a short-lived sandbox is ever tag-correlated.
+- See `docs/wiz-sensor.md` for the operator runbook and
+  `docs/superpowers/specs/2026-08-25-wiz-sensor-design.md` for the design.
+
 **Phase 127 (2026-08-25) — Generic webhook ingress bridge, Wiz first source (complete):**
 - A third-party SaaS POSTs a payload to a new km-owned Lambda (`km-webhook-bridge`,
   Function URL), which authenticates it, drops replays, matches operator-declared rules, and
