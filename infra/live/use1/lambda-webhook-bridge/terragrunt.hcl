@@ -86,11 +86,9 @@ inputs = {
 
   # Generic webhook ingress configuration — populated by km-config.yaml `webhooks:`
   # via ExportTerragruntEnvVars (KM_WEBHOOK_SOURCES). Empty string = bridge dormant
-  # (every request silent-drops). KM_WEBHOOK_RATE_LIMIT is reserved for a future
-  # standalone env var — rate_limit currently travels embedded inside
-  # KM_WEBHOOK_SOURCES (see webhook_rate_limit_json's variable doc comment).
-  webhook_sources_json    = get_env("KM_WEBHOOK_SOURCES", "")
-  webhook_rate_limit_json = get_env("KM_WEBHOOK_RATE_LIMIT", "")
+  # (every request silent-drops). rate_limit travels embedded in this same JSON
+  # payload — there is deliberately no separate rate-limit variable/env var.
+  webhook_sources_json = get_env("KM_WEBHOOK_SOURCES", "")
 
   tags = {
     "km:component" = "webhook-bridge"

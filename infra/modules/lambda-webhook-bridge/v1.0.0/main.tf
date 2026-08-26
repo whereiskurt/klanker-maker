@@ -17,9 +17,13 @@ locals {
 #     variables (api_username_path/api_token_path/h1_api_base_url/commands_path) —
 #     per-source auth secrets live under /{prefix}/config/webhooks/* instead of a
 #     single fixed param.
-#   - RENAMED: h1_programs_json -> webhook_sources_json (KM_WEBHOOK_SOURCES).
-#   - ADDED: webhook_rate_limit_json (currently unused — see its variable doc
-#     comment; rate_limit travels embedded inside webhook_sources_json today).
+#   - RENAMED: h1_programs_json -> webhook_sources_json (KM_WEBHOOK_SOURCES). This
+#     single payload carries BOTH the source list and the rate_limit block — there
+#     is deliberately no separate rate-limit variable/env var; splitting one out
+#     was considered and rejected (see webhook_sources_json's variable doc
+#     comment) because cmd/km-webhook-bridge's parseSourcesEnv reads rate_limit
+#     from this same JSON, and a second, always-empty variable would advertise a
+#     knob that silently does nothing.
 #   - KEPT: the Function URL (auth_type = "NONE" — auth is in-Lambda, per source),
 #     the nonces-table IAM (PutItem for replay dedup, UpdateItem for the storm
 #     rate-counter — the H1 module only needed PutItem since H1 has no rate

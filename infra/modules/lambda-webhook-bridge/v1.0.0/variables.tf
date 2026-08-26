@@ -48,13 +48,7 @@ variable "nonces_table_arn" {
 # ============================================================
 
 variable "webhook_sources_json" {
-  description = "JSON-serialized webhook source + rate-limit config (KM_WEBHOOK_SOURCES). Shape: {sources:[{name,auth{type,header,secret_path},replay_ttl_seconds,field_paths,rules[{match,alias,profile,on_absent,cooldown_seconds,group_by,prompt}]}], rate_limit:{max_dispatches,window_seconds}}. Empty string = bridge dormant (every request silent-drops)."
-  type        = string
-  default     = ""
-}
-
-variable "webhook_rate_limit_json" {
-  description = "Reserved for a future standalone KM_WEBHOOK_RATE_LIMIT env var. Currently unused: rate_limit travels embedded inside webhook_sources_json (cmd/km-webhook-bridge reads it from there, not from a separate env var). Kept as a forward-compatible placeholder input so a later change can split it out without a module signature change."
+  description = "JSON-serialized webhook source + rate-limit config (KM_WEBHOOK_SOURCES). Shape: {sources:[{name,auth{type,header,secret_path},replay_ttl_seconds,field_paths,rules[{match,alias,profile,on_absent,cooldown_seconds,group_by,prompt}]}], rate_limit:{max_dispatches,window_seconds}}. Empty string = bridge dormant (every request silent-drops). NOTE: rate_limit travels embedded in this single payload — there is deliberately no separate rate-limit variable/env var (cmd/km-webhook-bridge's parseSourcesEnv reads it from here)."
   type        = string
   default     = ""
 }
