@@ -58,8 +58,13 @@ func checkWebhookSources(wh appcfg.WebhooksConfig, configDir string) []CheckResu
 		switch {
 		case src.Name == "":
 			issues = append(issues, "source has an empty name; it can never be routed")
-		case strings.ContainsAny(src.Name, "/?#% "):
-			issues = append(issues, "name is not URL-path-safe; it is the POST path segment, so it must contain no /, ?, #, %, or spaces")
+		case strings.ContainsAny(src.Name, "/?#% :"):
+			// ':' is technically legal in a URL path segment per RFC 3986 — it is
+			// rejected here for a different reason: pkg/webhook.CooldownKey builds
+			// "wh-cd:{source}:{ruleIdx}:{group}", so a colon inside source lets two
+			// distinct rules collide onto the identical cooldown key (e.g. source
+			// "wiz:1" ruleIdx 0 group "X" == source "wiz" ruleIdx 1 group "0:X").
+			issues = append(issues, "name is not URL-path-safe; it is both the POST path segment and a delimiter in the cooldown key, so it must contain no /, ?, #, %, spaces, or :")
 		}
 
 		if src.Name != "" {

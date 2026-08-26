@@ -54,6 +54,14 @@ func TestCheckWebhookSources_StructuralValidation(t *testing.T) {
 			wantSub: "path-safe",
 		},
 		{
+			// ':' is legal in a URL path segment (RFC 3986) but is the delimiter in
+			// pkg/webhook.CooldownKey ("wh-cd:{source}:{ruleIdx}:{group}") — a colon
+			// in the name can make two distinct rules collide onto one cooldown key.
+			name:    "name contains colon",
+			src:     appcfg.WebhookSource{Name: "wiz:prod", Auth: appcfg.WebhookAuth{Type: "bearer", SecretPath: "/p"}, Rules: []appcfg.WebhookRule{{Alias: "a", Prompt: "p"}}},
+			wantSub: "path-safe",
+		},
+		{
 			name:    "rule missing alias",
 			src:     appcfg.WebhookSource{Name: "wiz", Auth: appcfg.WebhookAuth{Type: "bearer", SecretPath: "/p"}, Rules: []appcfg.WebhookRule{{Prompt: "p"}}},
 			wantSub: "alias",
