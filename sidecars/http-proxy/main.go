@@ -145,6 +145,32 @@ func main() {
 			Msg("")
 	}
 
+	// Operator MITM intercepts (Phase 127): base64+JSON KM_MITM_INTERCEPTS,
+	// written by a conditional systemd drop-in only when the profile declares
+	// spec.network.mitm.intercepts. A decode/parse failure logs an error and
+	// leaves the sandbox with zero intercepts and working egress — it must
+	// never cost the sandbox its network access. Held in a variable so the
+	// transparent-listener branch below can reuse the same parsed rule set.
+	var mitmIntercepts []httpproxy.Intercept
+	if raw := os.Getenv("KM_MITM_INTERCEPTS"); raw != "" {
+		parsed, err := httpproxy.ParseIntercepts(raw)
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("event_type", "mitm_intercepts_parse_error").
+				Str("sandbox_id", sandboxID).
+				Msg("KM_MITM_INTERCEPTS failed to parse; starting with zero intercepts")
+		} else {
+			mitmIntercepts = parsed
+			proxyOpts = append(proxyOpts, httpproxy.WithIntercepts(mitmIntercepts))
+			log.Info().
+				Str("event_type", "mitm_intercepts_loaded").
+				Str("sandbox_id", sandboxID).
+				Int("rule_count", len(mitmIntercepts)).
+				Msg("")
+		}
+	}
+
 	proxy := httpproxy.NewProxy(allowedHosts, sandboxID, proxyOpts...)
 
 	addr := ":" + port
@@ -172,6 +198,9 @@ func main() {
 		}
 		if budgetEnabled {
 			tl.SetBudgetEnforcement(budgetDynClient, budgetTableName, budgetModelRates, budgetOnUpdate)
+		}
+		if len(mitmIntercepts) > 0 {
+			tl.SetIntercepts(mitmIntercepts)
 		}
 		if err := tl.Serve(); err != nil {
 			log.Fatal().Err(err).Msg("transparent proxy server error")
