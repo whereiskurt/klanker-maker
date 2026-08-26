@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -81,17 +82,24 @@ func TestExportTerragruntEnvVars_NoSeparateRateLimitVar(t *testing.T) {
 	}
 }
 
-var errWebhookParamNotFound = errors.New("parameter not found")
-
+// fakeWebhookSSM mirrors the production ssmSecretClientAdapter contract:
+// GetParameterValue returns ErrWebhookSecretNotFound (wrapped) when the name is
+// absent from `existing`, UNLESS `forcedErr` names an override for that path —
+// which lets a test simulate a genuine read failure (throttling, a permissions
+// blip, a network fault) distinct from "not found".
 type fakeWebhookSSM struct {
-	existing map[string]string
-	puts     map[string]string
+	existing  map[string]string
+	forcedErr map[string]error
+	puts      map[string]string
 }
 
 func (f *fakeWebhookSSM) GetParameterValue(_ context.Context, name string) (string, error) {
+	if err, ok := f.forcedErr[name]; ok {
+		return "", err
+	}
 	v, ok := f.existing[name]
 	if !ok {
-		return "", errWebhookParamNotFound
+		return "", fmt.Errorf("%w: %s", ErrWebhookSecretNotFound, name)
 	}
 	return v, nil
 }
@@ -135,6 +143,27 @@ func TestMintWebhookSecretIfAbsent(t *testing.T) {
 		}
 		if len(s.puts) != 0 {
 			t.Errorf("must not write: %v", s.puts)
+		}
+	})
+
+	// Regression: a transient GetParameter failure (throttling, auth blip,
+	// network fault) is NOT the same thing as "parameter doesn't exist" and must
+	// never fall through to a mint+overwrite. The guard must discriminate on
+	// ErrWebhookSecretNotFound specifically, not "any error".
+	t.Run("a non-not-found read error is returned, never minted over", func(t *testing.T) {
+		s := &fakeWebhookSSM{
+			existing:  map[string]string{"/p": "already-set"},
+			forcedErr: map[string]error{"/p": errors.New("ThrottlingException: rate exceeded")},
+		}
+		minted, token, err := mintWebhookSecretIfAbsent(context.Background(), s, "/p")
+		if err == nil {
+			t.Fatal("expected the non-not-found error to be returned")
+		}
+		if minted || token != "" {
+			t.Fatalf("must not report minted on a read failure, got minted=%v token=%q", minted, token)
+		}
+		if len(s.puts) != 0 {
+			t.Errorf("must not write on a read failure: %v", s.puts)
 		}
 	})
 }
@@ -229,6 +258,23 @@ func TestPreStageWebhookProfiles_SkipsOnAbsentSkip(t *testing.T) {
 	}
 	if !staged["webhook-profiles/webhook-alert/.km-profile.yaml"] {
 		t.Error("default (empty) on_absent rule must be staged (defaults to cold-create)")
+	}
+}
+
+// Regression: the bridge's cold-create path compares on_absent case-insensitively
+// (strings.EqualFold(rule.OnAbsent, "skip"), pkg/webhook/bridge/handler.go).
+// Pre-staging must agree — otherwise "on_absent: Skip" is skipped by the handler
+// but still staged here, leaving an orphaned upload nothing ever reads.
+func TestPreStageWebhookProfiles_SkipIsCaseInsensitive(t *testing.T) {
+	sources := []config.WebhookSource{
+		{Name: "wiz", Rules: []config.WebhookRule{{Profile: "webhook-incident", OnAbsent: "Skip"}}},
+	}
+	m := &mockWebhookS3Uploader{}
+	if err := PreStageWebhookProfiles(context.Background(), sources, "bucket", m); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(m.puts) != 0 {
+		t.Fatalf("on_absent:Skip (mixed case) must not be staged, got %v", m.puts)
 	}
 }
 

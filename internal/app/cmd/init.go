@@ -988,7 +988,7 @@ func PreStageWebhookProfiles(ctx context.Context, sources []config.WebhookSource
 	uploaded := make(map[string]bool)
 	for _, src := range sources {
 		for _, rule := range src.Rules {
-			if rule.OnAbsent == "skip" {
+			if strings.EqualFold(rule.OnAbsent, "skip") {
 				continue // never cold-creates; nothing would ever read the staged profile
 			}
 			if rule.Profile == "" {
@@ -1010,13 +1010,22 @@ func PreStageWebhookProfiles(ctx context.Context, sources []config.WebhookSource
 	return nil
 }
 
+// ErrWebhookSecretNotFound is the sentinel a SSMSecretClient.GetParameterValue
+// implementation MUST return (wrapped, so errors.Is still matches) when — and
+// only when — the parameter genuinely does not exist. Every other read failure
+// (throttling, permissions, network) must be returned as-is so
+// mintWebhookSecretIfAbsent can tell "safe to mint" apart from "read broke" —
+// see the mintWebhookSecretIfAbsent doc comment for why that distinction is
+// load-bearing.
+var ErrWebhookSecretNotFound = errors.New("webhook: ssm parameter not found")
+
 // SSMSecretClient is the narrow SSM interface used by mintWebhookSecretIfAbsent
 // to check for and write a SecureString parameter without pulling the raw AWS
 // SDK request/response shapes into test files.
 type SSMSecretClient interface {
-	// GetParameterValue returns the decrypted parameter value, or a non-nil
-	// error when the parameter does not exist (or on any other read failure —
-	// mintWebhookSecretIfAbsent treats any error identically: safe to mint).
+	// GetParameterValue returns the decrypted parameter value. On failure it
+	// returns ErrWebhookSecretNotFound (wrapped) when the parameter does not
+	// exist, or the underlying error unchanged for any other failure.
 	GetParameterValue(ctx context.Context, name string) (string, error)
 	// PutSecureString writes a SecureString parameter. Callers only invoke this
 	// when the parameter is confirmed absent, so this is always a fresh create,
@@ -1036,6 +1045,15 @@ func (a *ssmSecretClientAdapter) GetParameterValue(ctx context.Context, name str
 		WithDecryption: aws.Bool(true),
 	})
 	if err != nil {
+		// ParameterNotFound is expected on first init — not an error (mirrors the
+		// comment at the KM_GITHUB_COMMANDS SSM read above). Translate the typed
+		// SDK error into our sentinel so callers can distinguish it from a genuine
+		// read failure (throttling, auth, network) without depending on the raw
+		// ssmtypes shape.
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return "", fmt.Errorf("%w: %s", ErrWebhookSecretNotFound, name)
+		}
 		return "", err
 	}
 	if out.Parameter == nil || out.Parameter.Value == nil {
@@ -1062,12 +1080,23 @@ func (a *ssmSecretClientAdapter) PutSecureString(ctx context.Context, name, valu
 // integration (e.g. Wiz). Deliberate rotation is an explicit
 // `aws ssm put-parameter --overwrite` plus a re-paste into the third party's UI.
 //
+// The absence check is deliberately narrow: only ErrWebhookSecretNotFound means
+// "safe to mint". Any OTHER read error (throttling, a permissions blip, a
+// network fault) is returned to the caller instead of falling through to a
+// mint — a transient GetParameter failure must never be treated as "the
+// parameter doesn't exist" and silently overwrite a live token out from under
+// a configured integration.
+//
 // Returns minted=true and the token ONLY on first creation, so the caller can
 // print it once for the operator to paste into the integration's Authorization
 // header.
 func mintWebhookSecretIfAbsent(ctx context.Context, ssm SSMSecretClient, path string) (bool, string, error) {
-	if _, err := ssm.GetParameterValue(ctx, path); err == nil {
-		return false, "", nil
+	_, err := ssm.GetParameterValue(ctx, path)
+	if err == nil {
+		return false, "", nil // parameter exists — never overwrite
+	}
+	if !errors.Is(err, ErrWebhookSecretNotFound) {
+		return false, "", fmt.Errorf("mint webhook secret: check %s: %w", path, err)
 	}
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
