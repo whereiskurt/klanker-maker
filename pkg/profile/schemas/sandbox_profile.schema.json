@@ -472,6 +472,69 @@
             "privateSubnet": {
               "type": "boolean",
               "description": "Place the sandbox ENI in a private subnet behind a per-AZ NAT gateway instead of a public subnet with a public IPv4 (Phase 125). Requires install-level network.nat_gateway: true, checked at km create time (not km validate time, since the profile is never wrong, only the install's current NAT state can make it unsatisfiable). Omitting this field is byte-identical to Phase 124 (public subnet, public IPv4)."
+            },
+            "mitm": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Declarative host-to-action intercept rules for the http-proxy sidecar (Phase 127). Omitting this block means no rules are declared at all.",
+              "properties": {
+                "intercepts": {
+                  "type": "array",
+                  "description": "Ordered rule list, matched first-match by the sidecar. Resolving through extends: collapses this list by name, last-wins, whole-entry.",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name"],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9-]*$",
+                        "description": "Rule identifier used for override/disable via extends:. Greppable charset only; never reaches a shell or filesystem path."
+                      },
+                      "enabled": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Set false on a leaf to switch off a rule inherited via extends:. Default true when omitted."
+                      },
+                      "hosts": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Hostnames this rule matches, using the same case-insensitive/port-stripped/leading-dot-for-subdomains semantics as egress.allowedHosts. Not required by schema: a disable-only override (name + enabled:false) legitimately carries none."
+                      },
+                      "action": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "description": "Exactly one of redirect or respond; enforced semantically at validate time, not by schema, so a disable-only override can omit it entirely.",
+                        "properties": {
+                          "redirect": {
+                            "type": "string",
+                            "description": "Absolute http(s) URL to 301-redirect matching requests to."
+                          },
+                          "respond": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "description": "Canned response served instead of proxying the request.",
+                            "properties": {
+                              "status": {
+                                "type": "integer",
+                                "description": "HTTP status code to return (100-599)."
+                              },
+                              "contentType": {
+                                "type": "string",
+                                "description": "Response Content-Type header. Defaults to text/plain when omitted."
+                              },
+                              "body": {
+                                "type": "string",
+                                "description": "Literal response body."
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         },
