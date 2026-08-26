@@ -457,8 +457,12 @@ drop-in this mirrors), and the 2026-08-21 egress deny lists (whose deny gate at
 `proxy.go:237` stays ahead of every intercept, and which owns blocking -- this
 phase deliberately ships **no `block` action**).
 
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 127 to break down)
+- [ ] 127-01-PLAN.md — profile schema, Go types, and the by-name last-wins collapse that makes `enabled: false` reachable through `extends:` (wave 1)
+- [ ] 127-02-PLAN.md — sidecar intercept engine: matcher, base64 loader, handler registration in place of the hardcoded block, transparent-path coverage (wave 1)
+- [ ] 127-03-PLAN.md — compiler: conditional `mitm.conf` drop-in, `buildL7ProxyHosts` threading, compiler-to-sidecar contract test (wave 2)
+- [ ] 127-04-PLAN.md — `km validate`: five intercept errors and three dead-rule warnings (wave 2)
+- [ ] 127-05-PLAN.md — `profiles/base/mitm-rickroll.yaml`, demo leaf + inventory gate, `docs/mitm-intercepts.md`, CLAUDE.md, 6-step live UAT (wave 3)
