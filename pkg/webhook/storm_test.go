@@ -28,11 +28,13 @@ func (f *fakeNonce) CheckAndStore(_ context.Context, key string, _ int) (bool, e
 }
 
 type fakeRate struct {
-	n   int64
-	err error
+	n       int64
+	err     error
+	callCnt int // Track number of Increment calls
 }
 
 func (f *fakeRate) Increment(_ context.Context, _ string, _ int) (int64, error) {
+	f.callCnt++
 	if f.err != nil {
 		return 0, f.err
 	}
@@ -120,5 +122,55 @@ func TestCheckRate_ErrorFailsOpen(t *testing.T) {
 	limit := &config.WebhookRateLimit{MaxDispatches: 1, WindowSeconds: 600}
 	if !CheckRate(context.Background(), rc, limit, 1000) {
 		t.Error("rate counter error must fail OPEN")
+	}
+}
+
+// A group_by with one variable resolved and one unresolved must NOT collapse
+// distinct payloads. For example, "{{entity.cloud_id}}:{{entity.owner}}" where
+// owner is absent should still keep alerts with different cloud_ids separate.
+func TestCooldownKey_PartiallyUnresolvedTemplateStaysDistinct(t *testing.T) {
+	env1 := envFixture(t)
+	// This template has one variable that resolves (entity.cloud_id) and one that doesn't (entity.owner)
+	key1 := CooldownKey("wiz", 0, "{{entity.cloud_id}}:{{entity.owner}}", env1)
+
+	// Create a second envelope with the same resolved value but different delivery key
+	other, err := ParseEnvelope(
+		[]byte(`{"km_schema":"v1","delivery_key":"iss-3:UPDATED:2026-08-25T11:00:00Z","id":"iss-3","severity":"MEDIUM","entity":{"cloud_id":"arn:aws:s3:::logs","name":"different"}}`),
+		config.WebhookSource{Name: "wiz"})
+	if err != nil {
+		t.Fatalf("ParseEnvelope: %v", err)
+	}
+	key2 := CooldownKey("wiz", 0, "{{entity.cloud_id}}:{{entity.owner}}", other)
+
+	if key1 == key2 {
+		t.Fatalf("partially resolved templates must stay distinct: key1=%q, key2=%q, but they're equal", key1, key2)
+	}
+}
+
+// WindowSeconds: 0 disables the ceiling (fail-open).
+func TestCheckRate_DisabledWhenWindowSecondsIsZero(t *testing.T) {
+	ctx := context.Background()
+	rc := &fakeRate{}
+	limit := &config.WebhookRateLimit{MaxDispatches: 1, WindowSeconds: 0}
+
+	if !CheckRate(ctx, rc, limit, 1000) {
+		t.Error("WindowSeconds: 0 must allow dispatch (ceiling disabled)")
+	}
+	if rc.callCnt != 0 {
+		t.Errorf("counter must NOT be incremented when ceiling is disabled; callCnt=%d", rc.callCnt)
+	}
+}
+
+// Negative WindowSeconds disables the ceiling (fail-open).
+func TestCheckRate_DisabledWhenWindowSecondsIsNegative(t *testing.T) {
+	ctx := context.Background()
+	rc := &fakeRate{}
+	limit := &config.WebhookRateLimit{MaxDispatches: 1, WindowSeconds: -1}
+
+	if !CheckRate(ctx, rc, limit, 1000) {
+		t.Error("negative WindowSeconds must allow dispatch (ceiling disabled)")
+	}
+	if rc.callCnt != 0 {
+		t.Errorf("counter must NOT be incremented when ceiling is disabled; callCnt=%d", rc.callCnt)
 	}
 }

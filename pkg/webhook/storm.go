@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"regexp"
 
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
@@ -42,9 +43,12 @@ func CooldownKey(source string, ruleIdx int, groupBy string, env *Envelope) stri
 		return fmt.Sprintf("wh-cd:%s:%d:%s", source, ruleIdx, env.DeliveryKey)
 	}
 	expanded := ExpandTemplate(groupBy, env)
-	if expanded == groupBy {
-		// Nothing resolved — fall back to per-delivery uniqueness.
-		sum := sha256.Sum256([]byte(groupBy + "\x00" + env.DeliveryKey))
+	// Check for unresolved variables ({{...}} tokens still present in expanded string).
+	// Reuse the same pattern as match.go's templateVar to detect residual templates.
+	unresolvedRe := regexp.MustCompile(`\{\{([a-zA-Z0-9_.]+)\}\}`)
+	if unresolvedRe.MatchString(expanded) {
+		// Any variable unresolved — fall back to per-delivery uniqueness.
+		sum := sha256.Sum256([]byte(expanded + "\x00" + env.DeliveryKey))
 		expanded = "unresolved:" + hex.EncodeToString(sum[:8])
 	}
 	return fmt.Sprintf("wh-cd:%s:%d:%s", source, ruleIdx, expanded)
@@ -68,7 +72,7 @@ func RateKey(nowUnix int64, windowSeconds int) string {
 // Fails OPEN on counter errors — matching the cooldown gate and the existing
 // bridges. A transient DynamoDB error must never strand a real alert.
 func CheckRate(ctx context.Context, rc RateCounter, limit *config.WebhookRateLimit, nowUnix int64) bool {
-	if limit == nil || limit.MaxDispatches <= 0 {
+	if limit == nil || limit.MaxDispatches <= 0 || limit.WindowSeconds <= 0 {
 		return true
 	}
 	key := RateKey(nowUnix, limit.WindowSeconds)
