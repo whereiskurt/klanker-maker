@@ -69,6 +69,60 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   the old code and no refresh happens. No SandboxProfile schema change, no userdata change, **no
   sandbox recreate** — this is entirely control-plane.
 
+**Phase 130 (2026-08-26) — `km tunnel`: reverse-tunnelled kubectl into a sandbox, against a cluster only the operator's laptop can reach (code-complete; live UAT pending):**
+- `km tunnel <sandbox-id> --context <ctx>` drops the operator into an interactive sandbox
+  shell where `kubectl` works against a cluster reachable only from their own workstation
+  (OpenVPN route on the laptop, VPN credential cannot leave it). **No VPN credential, SSO
+  refresh token, or AWS credential ever reaches the sandbox.**
+- **The deploy surface is `make build` ALONE** — no profile field, no sidecar, no userdata
+  change, no Lambda rebuild, no `km init`, and **no `km destroy && km create`**. It works on
+  sandboxes already running. Three facts make that true and are worth knowing before anyone
+  "adds the missing plumbing": `IsVSCodeEnabled` (`pkg/profile/types.go:973`) **defaults to
+  true**, so every box already has sshd and a keypair at `~/.km/keys/<id>`; userdata never
+  writes an `sshd_config`, so stock `AllowTcpForwarding`/`AllowStreamLocalForwarding yes` +
+  `GatewayPorts no` apply and are exactly right; and the box kubeconfig + shim are written
+  at **connect time over SSH**, which is also what lets a different cluster be targeted
+  with no recreate.
+- **SSM has no reverse-forward primitive** (both `AWS-StartPortForwardingSession` variants
+  are strictly local→remote), so `-R` rides inside SSH which rides inside the existing SSM
+  forward. The load-bearing property: **`ssh -R` resolves and dials its target CLIENT-side**,
+  so the cluster hostname goes over the laptop's VPN and the sandbox needs no route, no DNS,
+  and never consults km's NXDOMAIN-by-default resolver.
+- **Credentials proxy Kubernetes' own ExecCredential protocol — neither side reimplements
+  OIDC.** Box kubeconfig runs a `curl --unix-socket` shim; a broker on the laptop runs the
+  operator's *existing* exec plugin (`kubelogin`) and returns its stdout **verbatim**. The
+  broker is deliberately the dumbest component in the phase — no parsing, caching, retry, or
+  rewriting — because the plugin's real behaviour is unverifiable from the dev machine. It
+  also never reads the request body: the box's `KUBERNETES_EXEC_INFO` describes the fake
+  `127.0.0.1` endpoint, so forwarding it would be actively misleading (`provideClusterInfo:
+  true` is unsupported; kubelogin does not need it).
+- **`ExitOnForwardFailure=yes` is the single most important line in the phase.** A failed
+  `-R` bind is only a WARNING by default, so without it the operator gets a perfectly good
+  shell attached to a dead tunnel and an inexplicable `connection refused` from kubectl —
+  and two operators tunnelling to one sandbox is exactly how that happens. Pinned by a test,
+  alongside `StreamLocalBindUnlink=yes` (a stale socket otherwise blocks the rebind).
+- **`interactiveMode` is REQUIRED under `client.authentication.k8s.io/v1`** — kubectl rejects
+  the exec config outright with `interactiveMode must be specified` before the plugin ever
+  runs. Set to `Never`; found during a dry-run, not by a test.
+- **The loopback bind port need not match the cluster's real port** (`-R 16443:k8s1.corp:443`
+  is fine), because the box kubeconfig uses `tls-server-name` rather than an `/etc/hosts`
+  entry. That is the whole reason **no `privileged: true` is ever required** — the rejected
+  `/etc/hosts` alternative would have forced a port match and thus root for a 443 API server.
+- **A reverse tunnel bypasses km's egress enforcement by construction** — the MITM proxy, the
+  eBPF allowlist, and `deniedHosts` never see this traffic. **The honest control is the
+  lifetime: the tunnel dies with the shell**, and there is deliberately NO `-N`, no detached
+  mode, and no daemon. An earlier draft's `spec.network.reverseTunnel` profile field was
+  **dropped** — connect-time provisioning removed its only real job, and keeping it would
+  have implied an authorization control that does not exist (the operator holds the private
+  key and can `ssh -R` by hand regardless).
+- **None of this is testable on the dev machine** (no VPN, no cluster, no kubectl), and every
+  debug cycle costs a tagged release. So `--dry-run` / `--print-ssh` / `--verbose` are
+  **permanent interface, not bring-up scaffolding**, and the 7-step live UAT was written as
+  part of the phase. `k8s.io/client-go` is deliberately NOT a dependency — the kubeconfig
+  structs are hand-rolled on `gopkg.in/yaml.v3`.
+- Ships in **v0.8.6**. See `docs/k8s-reverse-tunnel.md` for the operator runbook and
+  `docs/superpowers/specs/2026-08-26-k8s-reverse-tunnel-design.md` for the design.
+
 **Phase 129 (2026-08-26) — Declarative MITM intercepts: profile-declared host→action rules replace the hardcoded rickroll (complete):**
 - `spec.network.mitm.intercepts` replaces the compiled-in, unconditional `google.com` → Rickroll
   easter egg (`sidecars/http-proxy/httpproxy/proxy.go`, deleted) with a declarative list of named
@@ -690,6 +744,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the seven `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
 | Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
 | Declarative MITM intercepts — `spec.network.mitm.intercepts`, `redirect`/`respond` actions, precedence (deny → metering/GitHub → intercepts → allowlist), by-name last-wins override, the `profiles/base/mitm-rickroll.yaml` migration fragment, deploy surface | `docs/mitm-intercepts.md` (Phase 129) |
+| kubectl in a sandbox against a cluster only your laptop can reach — `km tunnel`, the SSH-inside-SSM reverse forward, the ExecCredential broker, why the deploy surface is `make build` alone, and what the tunnel deliberately does not protect | `docs/k8s-reverse-tunnel.md` (Phase 130) |
 | Cross-account capacity borrowing — `km account add/register/list/rm`, `spec.runtime.launchAccount`, the two-credential enrollment sequence, the launcher-role security model, capacity/teardown/doctor cross-account wiring, deploy surface | `docs/cross-account-capacity-borrowing.md` (Phase 126) |
 | Private-subnet sandboxes + per-AZ NAT gateways — `network.nat_gateway` / `spec.network.privateSubnet` toggles, cost, the one-time route-table split, reversal, guards, deploy surface | `docs/private-subnet-nat.md` (Phase 125) |
 | Sizing the private topology to cut the NAT bill — `network.private_subnet_count` (1–4, absent = all 4), the AZ-rotation tradeoff it buys, and the subnet destroys on lowering it | `docs/private-subnet-nat.md` § Paying for fewer AZs |
@@ -804,6 +859,7 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km desktop status <sandbox-id>` — check KasmVNC unit state on the sandbox
 - `km desktop rekey <sandbox-id>` — rotate the per-sandbox KasmVNC password on a running sandbox (no restart / no session interruption; `--force`, `--yes`)
 - `km desktop restart <sandbox-id>` — force a server-side restart of the KasmVNC session (Xvnc + WM + browser, like logging out of XFCE and back in) for a frozen/wedged desktop or stuck input; drops the live session (`--yes`)
+- `km tunnel <sandbox-id> --context <kube-context>` — interactive sandbox shell carrying a reverse tunnel to a Kubernetes cluster only the operator's workstation can reach; credentials are minted locally by the operator's own exec plugin and proxied over a unix socket, so no VPN/SSO/AWS credential reaches the box (`--dry-run`, `--print-ssh`, `--verbose`, `--local-port`, `--bind-port`, `--kubeconfig`). Dies with the shell — no daemon mode by design
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role

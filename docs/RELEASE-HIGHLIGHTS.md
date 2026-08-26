@@ -13,83 +13,45 @@
 -->
 ## ✨ Major additions highlighted
 
-For a long time, every klanker-maker sandbox quietly rickrolled `google.com`. It was a one-line
-joke compiled into the HTTP proxy, and it was on for everybody, always, with no way to turn it
-off short of editing Go.
+Some clusters you can only reach from your own laptop. The VPN route lives there, the
+credential can't leave, and that's the end of it — which has meant a sandbox agent could
+never touch them.
 
-**This release deletes it.** Nothing is intercepted by default any more.
-
-### 🎭 Declarative MITM intercepts
-
-What replaces it is the thing the easter egg should have been all along: a profile-declared
-host→action surface. If you want an intercept, you say so.
-
-```yaml
-spec:
-  network:
-    mitm:
-      intercepts:
-        - name: maintenance
-          hosts: ["api.example.com"]
-          action:
-            respond:
-              status: 503
-              body: "maintenance window in progress"
-```
-
-Two actions ship: `redirect` and `respond`. Rules are matched by host with allowlist semantics,
-carried to the box as a base64 JSON blob in a systemd drop-in, and read by the proxy at start.
-
-**Dormant by default.** A profile with no `spec.network.mitm` block produces byte-identical
-user-data to v0.8.3 — the drop-in isn't written and the proxy never wires an intercept handler.
-
-### 🔌 The easter egg is now opt-in, in one line
-
-The Rickroll survives as an abstract fragment, so the joke is preserved for anyone who wants it —
-as a choice rather than a default:
-
-```yaml
-extends:
-  - base/mitm-rickroll      # <- that's the whole opt-in
-```
-
-`profiles/mitm-demo.yaml` is the worked example: it inherits the Rickroll through that one line,
-adds a `respond` rule of its own, and ships a commented-out off-switch showing how a child
-profile turns an *inherited* rule back off:
-
-```yaml
-        - name: rickroll
-          enabled: false     # switches off a rule inherited via extends:
-```
-
-That off-switch is load-bearing. Phase 117 merges profile lists by **union**, so without a
-by-name collapse a child could never remove what a base declared — it could only ever add.
-
-### 🛡️ A user intercept cannot shadow platform metering
-
-The one genuinely dangerous shape here is a profile declaring `api.anthropic.com` or
-`bedrock-runtime.*.amazonaws.com` and silently swallowing the traffic that AI budget metering
-depends on — or `github.com`, shadowing the repo filter.
-
-goproxy's handler chain does **not** stop at a handler returning `nil`, so registration order
-alone does not protect those paths. An `isPlatformOwnedHost` guard does, applied identically on
-the goproxy path and the transparent (eBPF) path. Platform-owned hosts always win.
-
-### ⚠️ Deploy surface — `--sidecars` alone is actively harmful here
-
-This release changes `pkg/compiler/userdata.go`, so the create-handler zip that renders user-data
-must be refreshed. Run the full sequence:
+### 🔌 `km tunnel` — kubectl in a sandbox, against a cluster only your laptop can reach
 
 ```bash
-make build
-make build-lambdas
-km init --dry-run=false
+km tunnel my-sandbox --context k8s1
 ```
 
-`km init --sidecars` on its own uploads the new proxy binary but **not** the user-data that feeds
-it — which drops the built-in Rickroll on a live box while leaving profiles unable to declare it
-back until the full sequence completes. See `docs/mitm-intercepts.md` § Deploy surface.
+You land in a shell on the sandbox. `kubectl get ns` works. Exit the shell and the access
+is gone.
 
-Existing sandboxes keep their current behaviour until `km destroy && km create`.
+**Nothing sensitive reaches the box.** Not your VPN credential, not your SSO refresh
+token, not an AWS credential. `ssh -R` dials the cluster from *your* side, over *your*
+VPN — the sandbox never gets a route or even a DNS entry for it.
 
-📖 Full runbook: `docs/mitm-intercepts.md`
+Credentials work by proxying Kubernetes' own ExecCredential protocol rather than
+reimplementing OIDC. The box runs a three-line `curl --unix-socket` shim; a broker on your
+laptop runs **the exec plugin your real kubeconfig already uses** and hands back its output
+untouched. Identity Center, the issuer, the refresh token, and the browser all stay on your
+machine. When a token expires mid-`kubectl`, the SSO tab opens on your laptop and the
+sandbox never prompts for anything.
+
+**It works on sandboxes you already have running.** No profile change, no sidecar, no
+`km init`, no recreate — `make build` and you're done. Every box already has sshd and a
+keypair, and everything the tunnel needs is written at connect time.
+
+**Three flags are permanent interface, not scaffolding.** `--dry-run` resolves your
+kubeconfig and prints exactly what it would do, touching no AWS and opening no connection —
+run it first, with or without the VPN. `--print-ssh` hands you the raw ssh command so you
+can bypass km entirely. `--verbose` announces each leg so a failure localises without a
+debugger.
+
+**And the part worth reading twice:** a reverse tunnel is a hole straight through km's
+egress enforcement. The MITM proxy, the eBPF allowlist, and `deniedHosts` do not see this
+traffic. While the tunnel is up, anything on that box that can reach the forwarded port is
+talking to your cluster as you. The control is the lifetime — it dies with your shell, and
+there is deliberately no daemon mode, no `-N`, and no flag to leave it running for an
+unattended agent.
+
+Live UAT is pending. See `docs/k8s-reverse-tunnel.md` for the full runbook.
