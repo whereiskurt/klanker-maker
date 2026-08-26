@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 127
 current_phase_name: declarative-mitm-intercepts-profile-declared-host-to-action-
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 127-03-PLAN.md
-last_updated: "2026-08-26T06:09:14.386Z"
+stopped_at: Completed 127-04-PLAN.md
+last_updated: "2026-08-26T06:24:14.461Z"
 last_activity: 2026-08-26
 last_activity_desc: Phase 127 execution started
 progress:
   total_phases: 11
   completed_phases: 8
   total_plans: 72
-  completed_plans: 65
+  completed_plans: 66
   percent: 73
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 127 (declarative-mitm-intercepts-profile-declared-host-to-action-) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Total Plans in Phase: 5
-Current Plan: 4
+Current Plan: 5
 Status: Ready to execute
 Last activity: 2026-08-26 — Phase 127 execution started
 
@@ -635,6 +635,7 @@ Progress: [█████████░] 91%
 | Phase 127 P01 | 2min | 3 tasks | 6 files |
 | Phase 127 P02 | 15min | 3 tasks | 6 files |
 | Phase 127 P03 | 22min | 3 tasks | 2 files |
+| Phase 127 P04 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1813,6 +1814,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Applied the same anti-shadow guard on the transparent (eBPF/both) listener path via a new matchInterceptForRequest helper, and added an internal (package httpproxy) test file to exercise it directly since no BPF-map fixture exists for a full network test
 - [Phase ?]: MITM wire structs (mitmWireIntercept/mitmWireRespond) kept as a local compiler mirror of the sidecar's Intercept/Respond, not an import; a contract test keeps them honest
 - [Phase ?]: buildL7ProxyHosts refactored to a seen-map + add() closure so intercept hosts append last and never duplicate an existing group
+- [Phase 127]: MITM validate: name/duplicate checks run against the full uncollapsed intercept list; hosts/action/redirect/status checks and all three overlap warnings run only against EnabledIntercepts, so a disable-only override is exempt
+- [Phase 127]: MITM validate warnings mirror sidecar host-matching semantics locally (bedrock prefix/suffix, allowedDNSSuffixes leading-dot/exact/wildcard) rather than importing sidecars/http-proxy, avoiding a pkg/profile -> sidecars dependency
 
 ### Roadmap Evolution
 
@@ -1966,6 +1969,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-08-26T06:09:14.371Z
-Stopped at: Completed 127-03-PLAN.md
+Last session: 2026-08-26T06:24:14.448Z
+Stopped at: Completed 127-04-PLAN.md
 Resume file: None

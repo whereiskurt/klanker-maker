@@ -457,7 +457,7 @@ drop-in this mirrors), and the 2026-08-21 egress deny lists (whose deny gate at
 `proxy.go:237` stays ahead of every intercept, and which owns blocking -- this
 phase deliberately ships **no `block` action**).
 
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 **Wave 1**
@@ -468,7 +468,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 127-03-PLAN.md — compiler: conditional `mitm.conf` drop-in, `buildL7ProxyHosts` threading, compiler-to-sidecar contract test (wave 2)
-- [ ] 127-04-PLAN.md — `km validate`: five intercept errors and three dead-rule warnings (wave 2)
+- [x] 127-04-PLAN.md — `km validate`: five intercept errors and three dead-rule warnings (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
