@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"regexp"
 
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
@@ -44,9 +43,8 @@ func CooldownKey(source string, ruleIdx int, groupBy string, env *Envelope) stri
 	}
 	expanded := ExpandTemplate(groupBy, env)
 	// Check for unresolved variables ({{...}} tokens still present in expanded string).
-	// Reuse the same pattern as match.go's templateVar to detect residual templates.
-	unresolvedRe := regexp.MustCompile(`\{\{([a-zA-Z0-9_.]+)\}\}`)
-	if unresolvedRe.MatchString(expanded) {
+	// Reuse the package-level templateVar from match.go to stay in sync with ExpandTemplate.
+	if templateVar.MatchString(expanded) {
 		// Any variable unresolved — fall back to per-delivery uniqueness.
 		sum := sha256.Sum256([]byte(expanded + "\x00" + env.DeliveryKey))
 		expanded = "unresolved:" + hex.EncodeToString(sum[:8])
