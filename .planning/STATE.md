@@ -5,9 +5,9 @@ milestone_name: milestone
 current_phase: 126
 current_phase_name: cross-account-capacity-borrowing-launch-sandboxes-into-a-lin
 current_plan: 10
-status: verifying
+status: executing
 stopped_at: "Phase 126 checkpoint reached: live cross-account UAT (126-10-PLAN.md Task 3) awaiting human execution"
-last_updated: "2026-08-23T02:09:50.729Z"
+last_updated: "2026-08-26T03:22:48.962Z"
 last_activity: 2026-08-22
 last_activity_desc: Phase 126 execution started
 progress:
@@ -31,9 +31,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 Phase: 126 (cross-account-capacity-borrowing-launch-sandboxes-into-a-lin) — EXECUTING
 Plan: 10 of 10
-Total Plans in Phase: 10
+Total Plans in Phase: 5
 Current Plan: 10
-Status: Phase complete — ready for verification
+Status: Ready to execute
 Last activity: 2026-08-22 — Phase 126 execution started
 
 NOTE (reconciliation): This block previously pointed at Phase 103 and was very stale. Phases 104-112 all completed (git log + CLAUDE.md are the source of truth). The pre-113 historical detail below is retained verbatim for reference but is NOT the current position.

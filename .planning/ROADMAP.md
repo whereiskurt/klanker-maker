@@ -460,9 +460,16 @@ phase deliberately ships **no `block` action**).
 **Plans:** 5 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 127-01-PLAN.md — profile schema, Go types, and the by-name last-wins collapse that makes `enabled: false` reachable through `extends:` (wave 1)
 - [ ] 127-02-PLAN.md — sidecar intercept engine: matcher, base64 loader, handler registration in place of the hardcoded block, transparent-path coverage (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 127-03-PLAN.md — compiler: conditional `mitm.conf` drop-in, `buildL7ProxyHosts` threading, compiler-to-sidecar contract test (wave 2)
 - [ ] 127-04-PLAN.md — `km validate`: five intercept errors and three dead-rule warnings (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 127-05-PLAN.md — `profiles/base/mitm-rickroll.yaml`, demo leaf + inventory gate, `docs/mitm-intercepts.md`, CLAUDE.md, 6-step live UAT (wave 3)
