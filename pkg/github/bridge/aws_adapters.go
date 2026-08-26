@@ -42,6 +42,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	pkggithub "github.com/whereiskurt/klanker-maker/pkg/github"
 )
 
@@ -491,6 +492,10 @@ type EC2Resumer struct {
 	Client          EC2StartAPI
 	SandboxIDTagKey string // e.g. "km:sandbox-id" (km standard sandbox tag); default when empty
 	ResourcePrefix  string // INERT: retained for wiring compat, no longer read (see sandboxIDTagKey)
+	// TokenRefresher re-mints the sandbox's GitHub installation token after a
+	// successful start, so an autonomous wake-up gets the same fresh credential
+	// the operator-driven `km resume` path does. Nil disables the refresh.
+	TokenRefresher awspkg.GitHubTokenRefresher
 }
 
 func (r *EC2Resumer) sandboxIDTagKey() string {
@@ -622,6 +627,12 @@ doStart:
 	}); err != nil {
 		return fmt.Errorf("github-bridge: EC2Resumer.StartInstances for %s: %w", sandboxID, err)
 	}
+
+	// Wake-up re-credential. Best-effort by construction: the instance is already
+	// started, and a returned error here would be read as "resume failed" — on the
+	// Phase 109 terminal path that deletes the sandbox's DynamoDB row and
+	// cold-creates a replacement. See BestEffortRefreshGitHubToken.
+	awspkg.BestEffortRefreshGitHubToken(ctx, r.TokenRefresher, sandboxID, "github-bridge")
 	return nil
 }
 

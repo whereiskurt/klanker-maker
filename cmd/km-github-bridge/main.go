@@ -54,6 +54,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/github/bridge"
 )
 
@@ -223,6 +224,11 @@ func init() {
 	resumer := &bridge.EC2Resumer{
 		Client:         ec2Client,
 		ResourcePrefix: prefix,
+		// Wake-up re-credential: an @-mention that auto-resumes a stopped box
+		// gets the same fresh GitHub token `km resume` mints. Unconditional —
+		// a sandbox without sourceAccess.github simply has no refresher
+		// schedule and the call is a silent no-op.
+		TokenRefresher: awspkg.NewGitHubTokenRefresher(cfg, prefix),
 	}
 	reactor := &bridge.InstallationReactor{
 		AppClientID:   appClientID,
