@@ -43,11 +43,25 @@ pkg/compiler/userdata.go:178    # root processes are never enrolled into the san
 A root systemd unit is neither DNAT'd into the MITM proxy nor subject to the eBPF
 cgroup allowlist. This is the same mechanism by which km's own sidecars reach AWS.
 
-**Consequences:** the fragment needs **no** `spec.network` changes — no `.wiz.io`
-allowlist entry, no CA trust work — and there is **no cert-pinning risk**. Even
-if the sensor were proxied, MITM is selective: only bedrock / anthropic / openai /
-github / google hosts get `MitmConnect`; everything else is a plain `OkConnect`
-tunnel (`sidecars/http-proxy/httpproxy/proxy.go:751-753`).
+**Consequences:** the fragment needs no `allowedHosts` entry, no CA trust work,
+and there is no cert-pinning risk. Even if the sensor were proxied, MITM is
+selective: only bedrock / anthropic / openai / github / google hosts get
+`MitmConnect`; everything else is a plain `OkConnect` tunnel
+(`sidecars/http-proxy/httpproxy/proxy.go:751-753`).
+
+*(Corrected 2026-08-26. This section previously claimed the fragment needs
+**no** `spec.network` change at all — that is wrong for DNS.)* Root bypasses
+the iptables DNAT and the eBPF cgroup, but **not** DNS resolution. On
+`ebpf`/`both` profiles, `userdata.go:4737` rewrites `/etc/resolv.conf` to
+`nameserver 127.0.0.1` system-wide (no uid exemption), and
+`pkg/ebpf/resolver/resolver.go:272-276` returns NXDOMAIN for any
+non-allowlisted name with no uid or cgroup check either. So on
+`profiles/wiz-demo.yaml`, which inherits `base/network/locked`
+(`enforcement: both`), root's `curl https://downloads.wiz.io/...` fails to
+resolve unless the fragment adds a `.wiz.io` entry to
+`spec.network.egress.allowedDNSSuffixes` — which it now does. The
+connections themselves still go out unproxied as root; only the name lookup
+needs the allowlist entry.
 
 `initCommands` run at userdata §4930 — *after* enforcement comes up, but as root,
 so the install-time download is likewise unconstrained.
@@ -68,12 +82,36 @@ and reaches the Docker (`compose.go:131`) and ECS (`service_hcl.go:263`) substra
 never the ec2spot IAM policy.
 
 **So today, on the only substrate in real use, declaring a path yields
-`AccessDenied`, and the loop warns and continues** (`WARNING: failed to fetch
-secret`). A sensor would boot with no credential and silently never enroll.
+`AccessDenied` — and that ABORTS THE BOOT.**
 
-This is a latent platform bug independent of Wiz: a documented profile field that
-no-ops on EC2, failing soft behind a logger. Same shape as the ttl-handler
-teardown IAM drift.
+*(Corrected 2026-08-26. This section previously said the loop "warns and
+continues". It does not.)* The bootstrap runs under `set -euo pipefail`
+(`userdata.go:36`) and the fetch loop sits at line 495, inside that scope.
+`SECRET_VALUE=$(aws ssm get-parameter …)` is a standalone assignment, so a
+non-zero exit terminates the script **before** the `if [ $? -eq 0 ]` guard is
+ever reached — that guard is dead code on the failure path. The repo already
+records this empirically at `profiles/base/gpu/serve.yaml:214`: *"a
+bad/non-existent path makes the boot's `aws ssm get-parameter` fail under
+`set -e` and BRICKS the boot (validated on the CPU rehearsal)."*
+
+This is a latent platform bug independent of Wiz, and a more severe one than a
+silent no-op: a documented profile field that **bricks any EC2 sandbox
+declaring it**. Two shipped profiles — `gpu-llama-12x.yaml` and
+`gpu-llama-48x.yaml` — carry an absolute `allowedSecretPaths` entry that no
+`ec2spot` version has ever granted; they are removed as part of the
+implementation.
+
+Two consequences for this design:
+
+1. The `ec2spot/v1.4.0` grant in §4 Part 1 is a **boot fix**, not merely a
+   feature enabler.
+2. **Creating the SSM parameters is a hard prerequisite**, not a setup nicety.
+   An operator who extends the Wiz fragment before creating them bricks every
+   sandbox that uses it. Boot-abort is a defensible fail-closed posture for a
+   security control, so this design keeps it rather than softening shared boot
+   semantics — but the operator runbook must state the ordering explicitly and
+   give a verification command. Revisit if the footgun proves worse than the
+   fail-closed property is worth.
 
 ### 3.3 `spec.secrets.sopsFile` is a scalar, and its output is agent-readable
 
@@ -180,6 +218,10 @@ metadata:
   name: base-security-wiz
   abstract: true
 spec:
+  network:
+    egress:
+      allowedDNSSuffixes:           # DNS is not bypassed by root — see §3.1 correction
+        - ".wiz.io"
   iam:
     allowedSecretPaths:            # list -> unions cleanly under Phase 117 merge
       - "{{prefix}}/wiz/wiz-api-client-id"
@@ -201,7 +243,7 @@ every new sandbox immediately. Pin it, and treat the bump as a normal profile ch
 
 | Omitted | Why |
 |---|---|
-| `spec.network` | Root bypasses DNAT and the cgroup (§3.1). Also, the installer honours its own `WIZ_HTTP_PROXY_URL`, not `HTTPS_PROXY`, so nothing routes through km's proxy by accident |
+| `spec.network.egress.allowedHosts` | Root bypasses DNAT and the cgroup (§3.1). Also, the installer honours its own `WIZ_HTTP_PROXY_URL`, not `HTTPS_PROXY`, so nothing routes through km's proxy by accident. `allowedDNSSuffixes` is NOT omitted — see the §3.1 correction: DNS is not bypassed by root, so the fragment adds a `.wiz.io` suffix entry |
 | `spec.secrets` | Scalar — would clobber the GPU profiles (§3.3) |
 | `spec.runtime` | Phase 117 bool zero-value trap — mixed-bool blocks stay in the leaf |
 | Arch guard | The installer supports `x86_64`, `aarch64`, `s390x`, so both km AMI families are covered |

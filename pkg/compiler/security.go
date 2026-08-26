@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
@@ -63,17 +64,17 @@ func compileIAMPolicy(p *profile.SandboxProfile) *IAMSessionPolicy {
 }
 
 // compileSecrets builds the list of SSM parameter paths to inject at boot.
-// It reads iam.allowedSecretPaths from the profile.
+// It reads iam.allowedSecretPaths from the profile and expands the {{prefix}}
+// token against KM_RESOURCE_PREFIX.
+//
 // Note: The GitHub token is NOT injected via SecretPaths — it is stored per-sandbox
 // at /sandbox/{sandbox-id}/github-token and read at git-operation time by the
 // GIT_ASKPASS credential helper script installed in section 4 of userdata.go.
-func compileSecrets(p *profile.SandboxProfile) []string {
-	var paths []string
-
-	// Add profile-defined secret paths
-	paths = append(paths, p.Spec.IAM.AllowedSecretPaths...)
-
-	return paths
+func compileSecrets(p *profile.SandboxProfile) ([]string, error) {
+	return profile.InterpolateSecretPaths(
+		p.Spec.IAM.AllowedSecretPaths,
+		os.Getenv("KM_RESOURCE_PREFIX"),
+	)
 }
 
 // sgRuleToHCL serializes a single SGRule into an HCL object literal string

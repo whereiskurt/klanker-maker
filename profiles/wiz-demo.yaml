@@ -1,0 +1,45 @@
+# Demo profile: extends base/security/wiz to run the Wiz Runtime Sensor on an
+# EC2 sandbox. See docs/wiz-sensor.md for the SSM-parameter prerequisite,
+# version pin, deploy surface, and threat model.
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: wiz-demo
+  labels:
+    tier: development
+    tool: wiz-sensor-demo
+  prefix: wiz
+
+extends:
+  - base/platform
+  - base/os/debian
+  - base/network/locked
+  - base/security/wiz
+
+spec:
+  # privileged stays FALSE — this is the configuration in which the sensor's
+  # tamper resistance is a real guarantee rather than a speed bump.
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: true
+    privileged: false
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+    spot: true
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "20m"
+    teardownPolicy: destroy

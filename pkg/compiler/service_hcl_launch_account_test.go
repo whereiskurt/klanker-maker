@@ -18,7 +18,7 @@ func TestEC2ServiceHCL_LaunchAccountAbsent(t *testing.T) {
 		AllowedRegions:     []string{"us-east-1"},
 	}
 
-	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil)
+	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestEC2ServiceHCL_LaunchAccountSet(t *testing.T) {
 		AllowedRegions:     []string{"us-east-1"},
 	}
 
-	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil)
+	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestEC2ServiceHCL_LaunchAccountSurvivesSpecialChars(t *testing.T) {
 		AllowedRegions:     []string{"us-east-1"},
 	}
 
-	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil)
+	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestEC2ServiceHCL_LaunchAccountDormantByteIdentical(t *testing.T) {
 	}
 
 	netA := baseEC2Network()
-	outA, err := generateEC2ServiceHCL(p, "test-sb-baseline", true, nil, iamPolicy, "", netA, nil)
+	outA, err := generateEC2ServiceHCL(p, "test-sb-baseline", true, nil, iamPolicy, "", netA, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL (baseline): %v", err)
 	}
@@ -112,7 +112,7 @@ func TestEC2ServiceHCL_LaunchAccountDormantByteIdentical(t *testing.T) {
 	netB.LaunchAccount = ""
 	netB.LauncherRoleARN = ""
 	netB.LauncherExternalID = ""
-	outB, err := generateEC2ServiceHCL(p, "test-sb-baseline", true, nil, iamPolicy, "", netB, nil)
+	outB, err := generateEC2ServiceHCL(p, "test-sb-baseline", true, nil, iamPolicy, "", netB, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL (explicit zero values): %v", err)
 	}

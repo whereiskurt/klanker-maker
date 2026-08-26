@@ -79,7 +79,7 @@ func TestSpotRateEC2NonZero(t *testing.T) {
 		AllowedRegions:     []string{"us-east-1"},
 	}
 
-	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil)
+	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL failed: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestSpotRateEC2ZeroFallback(t *testing.T) {
 		AllowedRegions:     []string{"us-east-1"},
 	}
 
-	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil)
+	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL failed: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestAdditionalSnapshotsHCLRender(t *testing.T) {
 	// Case 1: zero_entries — profile without additionalSnapshots emits additional_snapshots = []
 	t.Run("zero_entries", func(t *testing.T) {
 		p := minimalEC2StorageProfile()
-		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -562,7 +562,7 @@ func TestAdditionalSnapshotsHCLRender(t *testing.T) {
 		p.Spec.Runtime.AdditionalSnapshots = []profile.AdditionalSnapshotSpec{
 			{SnapshotID: "snap-0123abcdef0123456", MountPoint: "/opt/models"},
 		}
-		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -586,7 +586,7 @@ func TestAdditionalSnapshotsHCLRender(t *testing.T) {
 		p.Spec.Runtime.AdditionalSnapshots = []profile.AdditionalSnapshotSpec{
 			{SnapshotID: "snap-aabbccdd11223344", Device: "/dev/sdh", MountPoint: "/data", Encrypted: &boolTrue, Size: 200},
 		}
-		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -609,7 +609,7 @@ func TestAdditionalSnapshotsHCLRender(t *testing.T) {
 			{SnapshotID: "snap-00000000000000002", MountPoint: "/mnt2"}, // auto → /dev/sdf (no additionalVolume, sdf free)
 			{SnapshotID: "snap-00000000000000003", MountPoint: "/mnt3"}, // auto → /dev/sdg (sdf claimed by entry 1)
 		}
-		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -648,7 +648,7 @@ func TestAdditionalSnapshotsHCLRender(t *testing.T) {
 			{SnapshotID: "snap-vol1vol1vol1vol10", MountPoint: "/mnt1"},
 			{SnapshotID: "snap-vol2vol2vol2vol20", MountPoint: "/mnt2"},
 		}
-		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -677,7 +677,7 @@ func TestAdditionalSnapshotsHCLRender(t *testing.T) {
 			{SnapshotID: "snap-bdmbdmbdmbdmbdm01", MountPoint: "/mnt1"},
 		}
 		amiBDM := []string{"/dev/sdf"}
-		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), amiBDM)
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), amiBDM, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -702,7 +702,7 @@ func TestAdditionalSnapshotsHCLRender(t *testing.T) {
 			}
 		}
 		p.Spec.Runtime.AdditionalSnapshots = snaps
-		_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil, nil)
 		if err == nil {
 			t.Fatal("expected pool exhaustion error for 12 snapshots, got nil")
 		}

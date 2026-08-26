@@ -507,6 +507,13 @@ for PATH_KEY in "${!SECRET_PATHS[@]}"; do
     --with-decryption \
     --query "Parameter.Value" \
     --output text 2>&1)
+  # NOTE: the "else" branch below is UNREACHABLE on the failure path. This
+  # script runs under set -euo pipefail, and SECRET_VALUE=$(...) above is a
+  # bare assignment — a non-zero exit from aws ssm get-parameter terminates
+  # the whole boot right there, before this "if [ $? -eq 0 ]" guard is ever
+  # reached. Do not read this as a tolerance/warn-and-continue mechanism; the
+  # fail-closed posture (a denied or missing secret aborts the boot) is
+  # deliberate. See docs/wiz-sensor.md and infra/modules/ec2spot/v1.4.0/variables.tf.
   if [ $? -eq 0 ]; then
     # Derive env var name from last path component, uppercased
     ENV_NAME=$(basename "$PARAM_NAME" | tr '[:lower:]' '[:upper:]' | tr '-' '_')

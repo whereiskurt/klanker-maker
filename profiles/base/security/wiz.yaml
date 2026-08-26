@@ -1,0 +1,77 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-security-wiz
+  abstract: true
+
+# Wiz Runtime Sensor — opt-in runtime visibility for EC2 sandboxes.
+#
+# Root traffic bypasses the iptables DNAT (userdata.go uid-0 RETURN) and the
+# eBPF cgroup — the installer's downloads and the sensor's own runtime egress
+# to the Wiz tenant are never subject to the allowlist or MITM'd, so no
+# allowedHosts entry, no CA trust work, no cert-pinning risk.
+#
+# DNS is the ONE exception, and it is NOT bypassed by root. On ebpf/both
+# profiles (this fragment is only meaningful composed with one — see
+# base/network/locked in profiles/wiz-demo.yaml), userdata.go:4737 rewrites
+# /etc/resolv.conf to "nameserver 127.0.0.1" for the whole box, and
+# pkg/ebpf/resolver/resolver.go:272-276 returns NXDOMAIN for any
+# non-allowlisted name with no uid or cgroup check — root's queries are
+# resolved by the same enforcer as everyone else's. Without an allowlist
+# entry, root's `curl https://downloads.wiz.io/...` fails to resolve, the
+# installer never runs, and the sensor's own telemetry egress to the Wiz
+# tenant is blocked too. Hence the egress.allowedDNSSuffixes entry below,
+# despite root bypassing the DNAT and cgroup.
+#
+# Deliberately absent:
+#   spec.network.egress.allowedHosts — not needed; DNS is the only enforcement
+#                   layer root cannot bypass (see above). allowedDNSSuffixes
+#                   below covers name resolution; the connections themselves
+#                   go straight out as root.
+#   spec.secrets  — sopsFile is a SCALAR: setting it here would clobber any leaf
+#                   that declares its own bundle. Its output also lands in
+#                   /etc/sandbox-secrets.env (0440 root:sandbox), readable by the
+#                   very agent being monitored.
+#   spec.runtime  — Phase 117 bool zero-value trap; mixed-bool blocks stay in leaves.
+#
+# NOT tamper-proof. On spec.execution.privileged: true the agent has sudo and can
+# stop, mask, or unpick any of this. The real control is privileged: false; see
+# docs/wiz-sensor.md.
+spec:
+  network:
+    egress:
+      # ".wiz.io" is a bare suffix, so it covers every Wiz hostname this
+      # fragment touches in one entry: downloads.wiz.io (installer),
+      # dpkg.wiz.io / rpm.wiz.io (packages), auth.app.wiz.io (enrollment),
+      # and api.<region>.app.wiz.io (telemetry). Lists union under Phase 117
+      # inheritance, so this composes with a leaf's own allowlist (e.g.
+      # base/network/locked) rather than replacing it.
+      allowedDNSSuffixes:
+        - ".wiz.io"
+
+  iam:
+    # A list, so it unions cleanly with a leaf's own entries under Phase 117 merge.
+    # Names are chosen so userdata's basename|upper|'-'->'_' derivation yields
+    # exactly WIZ_API_CLIENT_ID / WIZ_API_CLIENT_SECRET — the names the Wiz
+    # installer reads. No glue code between the SSM fetch and the install.
+    allowedSecretPaths:
+      - "{{prefix}}/wiz/wiz-api-client-id"
+      - "{{prefix}}/wiz/wiz-api-client-secret"
+
+  execution:
+    # Appends after the merged initCommands rather than replacing them.
+    initCommandsAppend:
+      # Pin the version. The installer defaults to latest; in a fleet that
+      # recreates constantly, unpinned means a bad upstream release reaches every
+      # new sandbox at once. Bump this like any other profile change.
+      - "curl -fsSL https://downloads.wiz.io/sensor/sensor_install.sh -o /tmp/wiz_install.sh"
+      - "WIZ_SENSOR_VERSION=REPLACE-ME sh /tmp/wiz_install.sh && rm -f /tmp/wiz_install.sh"
+      # The installer creates and enables wiz-sensor.service itself, so km adds
+      # only a drop-in. A drop-in also survives a package upgrade, which a
+      # replaced unit file would not.
+      - "install -d -m 0755 /etc/systemd/system/wiz-sensor.service.d"
+      - "printf '[Service]\\nRestart=always\\nRestartSec=5\\nStartLimitIntervalSec=0\\n' > /etc/systemd/system/wiz-sensor.service.d/10-km-hardening.conf"
+      - "systemctl daemon-reload && systemctl restart wiz-sensor || true"
+      # Immutable so the hardening cannot be edited or deleted. Root can clear
+      # +i; on an unprivileged sandbox it is a kernel guarantee.
+      - "chattr +i /etc/systemd/system/wiz-sensor.service.d/10-km-hardening.conf || true"

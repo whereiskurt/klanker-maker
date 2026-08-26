@@ -1,0 +1,174 @@
+package profile_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
+)
+
+func TestValidateSecretPaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		paths   []string
+		wantErr bool
+		wantSub string // substring expected in the message
+	}{
+		{
+			name:    "prefix-relative path is accepted",
+			paths:   []string{"{{prefix}}/wiz/wiz-api-client-id"},
+			wantErr: false,
+		},
+		{
+			name:    "multiple prefix-relative paths are accepted",
+			paths:   []string{"{{prefix}}/wiz/wiz-api-client-id", "{{prefix}}/wiz/wiz-api-client-secret"},
+			wantErr: false,
+		},
+		{
+			name:    "empty list is accepted",
+			paths:   nil,
+			wantErr: false,
+		},
+		{
+			name:    "absolute path is rejected",
+			paths:   []string{"/km/wiz/wiz-api-client-id"},
+			wantErr: true,
+			wantSub: "must start with",
+		},
+		{
+			name:    "path escaping the install namespace is rejected",
+			paths:   []string{"/*"},
+			wantErr: true,
+			wantSub: "must start with",
+		},
+		{
+			name:    "unknown token is rejected",
+			paths:   []string{"{{prefix2}}/wiz/x"},
+			wantErr: true,
+			wantSub: "unknown token",
+		},
+		{
+			name:    "token in a later segment is rejected",
+			paths:   []string{"{{prefix}}/wiz/{{sandbox}}"},
+			wantErr: true,
+			wantSub: "unknown token",
+		},
+		{
+			name:    "bare token with no trailing slash is rejected",
+			paths:   []string{"{{prefix}}"},
+			wantErr: true,
+			wantSub: "must start with",
+		},
+		{
+			name:    "a second occurrence of the valid token is rejected",
+			paths:   []string{"{{prefix}}/a/{{prefix}}/b"},
+			wantErr: true,
+			wantSub: "more than once",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := profile.ValidateSecretPaths(tc.paths)
+			if tc.wantErr && len(errs) == 0 {
+				t.Fatalf("ValidateSecretPaths(%q) = no errors, want an error", tc.paths)
+			}
+			if !tc.wantErr && len(errs) != 0 {
+				t.Fatalf("ValidateSecretPaths(%q) = %+v, want no errors", tc.paths, errs)
+			}
+			if tc.wantErr {
+				if errs[0].IsWarning {
+					t.Errorf("error must be blocking, not a warning: %+v", errs[0])
+				}
+				if !strings.Contains(errs[0].Message, tc.wantSub) {
+					t.Errorf("message = %q, want substring %q", errs[0].Message, tc.wantSub)
+				}
+				if errs[0].Path != "spec.iam.allowedSecretPaths" {
+					t.Errorf("Path = %q, want %q", errs[0].Path, "spec.iam.allowedSecretPaths")
+				}
+			}
+		})
+	}
+}
+
+func TestInterpolateSecretPaths(t *testing.T) {
+	t.Run("token expands to a leading-slash prefix segment", func(t *testing.T) {
+		got, err := profile.InterpolateSecretPaths(
+			[]string{"{{prefix}}/wiz/wiz-api-client-id"}, "km")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := "/km/wiz/wiz-api-client-id"
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("got %q, want [%q]", got, want)
+		}
+	})
+
+	t.Run("non-default prefix", func(t *testing.T) {
+		got, err := profile.InterpolateSecretPaths(
+			[]string{"{{prefix}}/wiz/wiz-api-client-secret"}, "km2")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := "/km2/wiz/wiz-api-client-secret"
+		if got[0] != want {
+			t.Errorf("got %q, want %q", got[0], want)
+		}
+	})
+
+	t.Run("token not in leading position is a namespace-escape ERROR, never rewritten", func(t *testing.T) {
+		_, err := profile.InterpolateSecretPaths(
+			[]string{"/other-install/{{prefix}}/x"}, "km")
+		if err == nil {
+			t.Fatal("expected an error for a token that is not the leading segment, got nil — " +
+				"strings.Replace would rewrite this to \"/other-install/km/x\", an " +
+				"ssm:GetParameter grant outside this install's namespace")
+		}
+	})
+
+	t.Run("empty prefix with a token present is an ERROR, never a default", func(t *testing.T) {
+		_, err := profile.InterpolateSecretPaths(
+			[]string{"{{prefix}}/wiz/wiz-api-client-id"}, "")
+		if err == nil {
+			t.Fatal("expected an error when resourcePrefix is empty, got nil — " +
+				"defaulting would render an IAM policy for the wrong install")
+		}
+		if !strings.Contains(err.Error(), "KM_RESOURCE_PREFIX") {
+			t.Errorf("error should name the env var, got: %v", err)
+		}
+	})
+
+	t.Run("a second token occurrence never survives interpolation", func(t *testing.T) {
+		// ValidateSecretPaths rejects this shape (see TestValidateSecretPaths),
+		// but this is defence in depth for cmd/create-handler's remote-create
+		// path, which never calls ValidateSecretPaths. Regardless of validation,
+		// InterpolateSecretPaths itself must never hand back a string that still
+		// contains the token — a strings.Replace(..., 1) would leave the second
+		// occurrence as a literal "{{prefix}}" baked into the IAM ARN.
+		got, err := profile.InterpolateSecretPaths(
+			[]string{"{{prefix}}/a/{{prefix}}/b"}, "km")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("got %d results, want 1", len(got))
+		}
+		if strings.Contains(got[0], profile.SecretPathPrefixToken) {
+			t.Errorf("got %q, still contains the unexpanded token %q", got[0], profile.SecretPathPrefixToken)
+		}
+		want := "/km/a//km/b"
+		if got[0] != want {
+			t.Errorf("got %q, want %q", got[0], want)
+		}
+	})
+
+	t.Run("empty path list with empty prefix is fine", func(t *testing.T) {
+		got, err := profile.InterpolateSecretPaths(nil, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+}

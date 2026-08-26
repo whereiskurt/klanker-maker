@@ -31,10 +31,6 @@ spec:
   secrets:
     sopsFile: ./secrets/llama-hf.enc.yaml
 
-  iam:
-    allowedSecretPaths:
-      - /sandbox/*/secrets   # unions with fragment's entry; list-union dedupes
-
   execution:
     # Two initCommandsAppend lines:
     # 1. Write vllm.env with FP8 flags (llama3_json tool-call parser)

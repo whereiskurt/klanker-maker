@@ -11,6 +11,25 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
+// TestMain gives the whole pkg/compiler test binary (both the compiler_test and
+// internal compiler packages, which share one binary) a default KM_RESOURCE_PREFIX
+// of "km". Several testdata fixtures declare iam.allowedSecretPaths using a
+// "{{prefix}}/..." token whose expected-expanded literal in test assertions is
+// "/km/...", matching the default install's prefix; compileSecrets now requires
+// KM_RESOURCE_PREFIX to be set to expand that token at all. Individual tests that
+// need a different (or empty) prefix override it locally with t.Setenv, which
+// reverts to this "km" default when that test ends.
+//
+// CAUTION for future tests: this default can MASK a missing t.Setenv. A new
+// test that compiles a {{prefix}}-tokened profile and forgets to set
+// KM_RESOURCE_PREFIX itself will silently inherit "km" here rather than
+// exercising the fail-loud empty-prefix error path — if you're specifically
+// testing that error, you MUST t.Setenv("KM_RESOURCE_PREFIX", "") yourself.
+func TestMain(m *testing.M) {
+	os.Setenv("KM_RESOURCE_PREFIX", "km")
+	os.Exit(m.Run())
+}
+
 // testNetwork returns a test NetworkConfig for use in compiler tests.
 func testNetwork() *compiler.NetworkConfig {
 	return &compiler.NetworkConfig{

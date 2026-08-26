@@ -15,7 +15,7 @@ func TestEC2ServiceHCL_ExistingSGAndProfileAbsent(t *testing.T) {
 	// ExistingSecurityGroupID / ExistingInstanceProfile left at zero value.
 
 	iamPolicy := &IAMSessionPolicy{MaxSessionDuration: 3600, AllowedRegions: []string{"us-east-1"}}
-	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil)
+	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestEC2ServiceHCL_ExistingSGAndProfileSet(t *testing.T) {
 	net.ExistingInstanceProfile = "km-gpu-box"
 
 	iamPolicy := &IAMSessionPolicy{MaxSessionDuration: 3600, AllowedRegions: []string{"us-east-1"}}
-	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil)
+	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL: %v", err)
 	}
