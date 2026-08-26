@@ -91,6 +91,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewVSCodeCmd(cfg))
 	root.AddCommand(NewDesktopCmd(cfg))
 	root.AddCommand(NewModelCmd(cfg))
+	root.AddCommand(NewTunnelCmd(cfg))
 	root.AddCommand(newCapacityCmd(cfg))
 	root.AddCommand(NewClusterCmd(cfg))
 	root.AddCommand(NewAccountCmd(cfg))
