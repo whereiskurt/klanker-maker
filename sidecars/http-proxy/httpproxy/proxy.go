@@ -57,6 +57,7 @@ type proxyConfig struct {
 	githubRepos []string
 	denier      *netpolicy.Denier
 	httpsOnly   bool
+	intercepts  []Intercept
 }
 
 // WithBudgetEnforcement enables Bedrock MITM interception and DynamoDB spend
