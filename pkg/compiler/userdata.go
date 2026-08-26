@@ -3006,6 +3006,168 @@ H1INBOUND
 chmod +x /opt/km/bin/km-h1-inbound-poller
 echo "[km-bootstrap] km-h1-inbound-poller installed at /opt/km/bin/km-h1-inbound-poller"
 {{- end }}
+{{- if .WebhookInboundEnabled }}
+# Phase 127: km-webhook-inbound-poller — SQS long-poll dispatch to the agent for
+# generic webhook-sourced envelopes (Wiz, PagerDuty, custom senders, ...). ONE-WAY
+# SOURCE: there is no reply-back leg and no km-webhook helper binary — the agent's
+# response stays inside the sandbox (run output / Slack / whatever the profile's
+# other notification channels do). DORMANCY INVARIANT: this whole block renders
+# ONLY when notification.webhook.inbound.enabled is true (guarded by
+# TestUserData_WebhookPollerAbsentWhenDisabled).
+cat > /opt/km/bin/km-webhook-inbound-poller << 'WEBHOOKINBOUND'
+#!/bin/bash
+set -euo pipefail
+# km-webhook-inbound-poller: poll the per-sandbox SQS FIFO queue for inbound
+# generic webhook envelopes and dispatch each as a fresh agent turn. No thread
+# continuity (a webhook trigger has no "conversation" to resume) and no
+# reply-back leg (one-way source).
+# Envelope schema (pkg/webhook/bridge/handler.go QueueEnvelope): {source, type,
+#   id, severity, title, url, prompt, raw}
+
+QUEUE_URL="${KM_WEBHOOK_INBOUND_QUEUE_URL:-}"
+SANDBOX_ID="${KM_SANDBOX_ID:-}"
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+
+# Profile default agent (same env var as the Slack/GitHub/H1 pollers — KM_AGENT).
+AGENT="${KM_AGENT:-claude}"
+# Non-silent agent-presence warning (mirrors the H1/GitHub pollers). The agent CLI
+# is installed by the profile's initCommands, NOT a platform default.
+command -v "$AGENT" >/dev/null 2>&1 || echo "[km-webhook-inbound-poller] WARNING: agent '$AGENT' not on PATH — dispatched turns will NOT run; add the agent install to the profile initCommands (e.g. npm install -g @anthropic-ai/claude-code)" >&2
+
+# Export AWS_REGION so subprocesses (aws CLI) inherit it. The systemd unit's
+# EnvironmentFile=/etc/km/notify.env uses systemd-native format which omits AWS_REGION.
+export AWS_REGION="$REGION"
+
+[ -z "$SANDBOX_ID" ] && echo "[km-webhook-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
+
+# Fall back to SSM Parameter Store when the env var is empty. km create writes
+# /{prefix}/sandbox/{id}/webhook-inbound-queue-url after the SQS FIFO queue is
+# created. The poller starts at boot and may race the create-handler write —
+# retry with backoff for up to ~5 minutes.
+PARAM_NAME="{{ .SsmPrefix }}sandbox/${SANDBOX_ID}/webhook-inbound-queue-url"
+if [ -z "$QUEUE_URL" ]; then
+  echo "[km-webhook-inbound-poller] KM_WEBHOOK_INBOUND_QUEUE_URL empty, reading $PARAM_NAME from SSM"
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    QUEUE_URL=$(aws ssm get-parameter \
+      --name "$PARAM_NAME" \
+      --region "$REGION" \
+      --query 'Parameter.Value' \
+      --output text 2>/dev/null || true)
+    [ -n "$QUEUE_URL" ] && [ "$QUEUE_URL" != "None" ] && break
+    QUEUE_URL=""
+    echo "[km-webhook-inbound-poller] $PARAM_NAME not yet available (attempt $attempt/10), sleeping 30s"
+    sleep 30
+  done
+fi
+[ -z "$QUEUE_URL" ] && echo "[km-webhook-inbound-poller] queue URL unavailable after retries, exiting" && exit 0
+
+echo "[km-webhook-inbound-poller] Starting — queue=$QUEUE_URL region=$REGION"
+
+while true; do
+  MSG=$(aws sqs receive-message \
+    --queue-url "$QUEUE_URL" \
+    --wait-time-seconds 20 \
+    --max-number-of-messages 1 \
+    --region "$REGION" \
+    --output json 2>/dev/null || true)
+
+  BODY=$(echo "$MSG" | jq -r '.Messages[0].Body // empty' 2>/dev/null || true)
+  RECEIPT=$(echo "$MSG" | jq -r '.Messages[0].ReceiptHandle // empty' 2>/dev/null || true)
+
+  [ -z "$BODY" ] && continue
+
+  # Parse envelope fields.
+  SOURCE=$(echo "$BODY" | jq -r '.source // "unknown"')
+  WTYPE=$(echo "$BODY" | jq -r '.type // "event"')
+  EVENT_ID=$(echo "$BODY" | jq -r '.id // empty')
+  SEVERITY=$(echo "$BODY" | jq -r '.severity // empty')
+  TITLE=$(echo "$BODY" | jq -r '.title // empty')
+  EVENT_URL=$(echo "$BODY" | jq -r '.url // empty')
+  PROMPT=$(echo "$BODY" | jq -r '.prompt // empty')
+
+  # Validate envelope. The bridge always expands a prompt before enqueueing; a
+  # missing one is malformed and would strand the run — ack and move on.
+  if [ -z "$PROMPT" ]; then
+    echo "[km-webhook-inbound-poller] WARN: malformed envelope (missing prompt), acking: $BODY"
+    aws sqs delete-message \
+      --queue-url "$QUEUE_URL" \
+      --receipt-handle "$RECEIPT" \
+      --region "$REGION" 2>/dev/null || true
+    continue
+  fi
+
+  RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+  RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
+  mkdir -p "$RUN_DIR"
+  chown sandbox:sandbox "$RUN_DIR" 2>/dev/null || true
+
+  PREAMBLE="[Webhook Trigger] ${SOURCE} / ${WTYPE}
+Id: ${EVENT_ID}
+Severity: ${SEVERITY}
+Title: ${TITLE}
+URL: ${EVENT_URL}
+
+${PROMPT}
+
+Note: this is a ONE-WAY trigger — there is no reply-back channel for this
+source. Do your work in the workspace; use whatever other notification
+channels this sandbox is configured with (e.g. Slack) to report status."
+
+  PROMPT_FILE="$RUN_DIR/webhook-prompt.txt"
+  printf '%s' "$PREAMBLE" > "$PROMPT_FILE"
+  chown sandbox:sandbox "$PROMPT_FILE" 2>/dev/null || true
+
+  echo "[km-webhook-inbound-poller] Dispatching turn — source=$SOURCE type=$WTYPE id=$EVENT_ID run=$RUN_ID"
+
+  # No thread continuity: every webhook trigger is a fresh agent turn — no
+  # session resume, no session lookup/persistence (contrast the Slack/GitHub/H1 pollers).
+  # No codex-missing helpful-error guard either: the other pollers post one via
+  # their reply-back helper, but this source has none — a missing agent binary
+  # simply fails the turn (RUN_EXIT != 0 below) and the message is redelivered,
+  # same as any other failed run.
+  if [ "$AGENT" = "codex" ]; then
+    sudo -u sandbox bash -lc "
+      export HOME=/home/sandbox
+      set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      cd /workspace 2>/dev/null || true
+      codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
+        > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+      echo \$? > '$RUN_DIR/exit_code'
+    " || true
+  else
+    sudo -u sandbox bash -lc "
+      export HOME=/home/sandbox
+      set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      cd /workspace 2>/dev/null || true
+      claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
+        --dangerously-skip-permissions \
+        > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+      echo \$? > '$RUN_DIR/exit_code'
+    " || true
+  fi
+  rm -f "$PROMPT_FILE"
+
+  RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
+
+  if [ "$RUN_EXIT" -eq 0 ]; then
+    # Ack-then-log: delete the message AFTER a successful turn (DeleteMessage only
+    # on success) so a crash can't cause the turn to be silently lost — it is
+    # simply redelivered and re-run.
+    aws sqs delete-message \
+      --queue-url "$QUEUE_URL" \
+      --receipt-handle "$RECEIPT" \
+      --region "$REGION" 2>/dev/null || true
+    echo "[km-webhook-inbound-poller] Turn complete — source=$SOURCE id=$EVENT_ID run=$RUN_ID"
+  else
+    echo "[km-webhook-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
+  fi
+done
+WEBHOOKINBOUND
+chmod +x /opt/km/bin/km-webhook-inbound-poller
+echo "[km-bootstrap] km-webhook-inbound-poller installed at /opt/km/bin/km-webhook-inbound-poller"
+{{- end }}
 
 # km-send: send Ed25519-signed email with optional attachments via SES
 cat > /opt/km/bin/km-send << 'KMSEND'
@@ -3348,6 +3510,28 @@ RestartSec=5
 WantedBy=multi-user.target
 H1INBOUNDUNIT
 echo "[km-bootstrap] km-h1-inbound-poller.service installed"
+{{- end }}
+{{- if .WebhookInboundEnabled }}
+
+cat > /etc/systemd/system/km-webhook-inbound-poller.service << 'WEBHOOKINBOUNDUNIT'
+[Unit]
+Description=Klanker Maker generic webhook inbound poller — dispatches webhook-sourced events to the agent
+After=network.target
+[Service]
+User=root
+# systemd-native format env file (no 'export' prefix) — systemd rejects the
+# shell-keyword prefix used by /etc/profile.d/km-notify-env.sh. Leading '-'
+# tolerates a missing file on first boot / older AMIs.
+EnvironmentFile=-/etc/km/notify.env
+Environment=SANDBOX_ID={{ .SandboxID }}
+Environment=KM_SANDBOX_ID={{ .SandboxID }}
+ExecStart=/opt/km/bin/km-webhook-inbound-poller
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+WEBHOOKINBOUNDUNIT
+echo "[km-bootstrap] km-webhook-inbound-poller.service installed"
 {{- end }}
 cat > /etc/systemd/system/km-presence.service << 'UNIT'
 [Unit]
@@ -4493,15 +4677,15 @@ echo "[km-bootstrap] km-recv installed at /opt/km/bin/km-recv"
 # daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
 # picks up the freshly-written unit before enable/restart so the correct env is used.
 systemctl daemon-reload
-systemctl enable km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}
-systemctl restart km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}
+systemctl enable km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}{{ if .WebhookInboundEnabled }} km-webhook-inbound-poller{{ end }}
+systemctl restart km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}{{ if .WebhookInboundEnabled }} km-webhook-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started (DNS via eBPF enforcer, not km-dns-proxy)"
 {{- else }}
 # daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
 # picks up the freshly-written unit before enable/restart so the correct env is used.
 systemctl daemon-reload
-systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}
-systemctl restart km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}
+systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}{{ if .WebhookInboundEnabled }} km-webhook-inbound-poller{{ end }}
+systemctl restart km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}{{ if .GitHubInboundEnabled }} km-github-inbound-poller{{ end }}{{ if .H1InboundEnabled }} km-h1-inbound-poller{{ end }}{{ if .WebhookInboundEnabled }} km-webhook-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started"
 {{- end }}
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
@@ -5262,6 +5446,15 @@ type userDataParams struct {
 	// (Phase 103 Plan 09). DORMANCY INVARIANT: when false the H1 poller block must
 	// NOT render — guarded by the Wave-0 TestUserdataH1ByteIdentity golden.
 	H1InboundEnabled bool
+	// WebhookInboundEnabled gates conditional emission of the
+	// km-webhook-inbound-poller bash script, its systemd unit, and the
+	// systemctl enable/restart lines. Set from
+	// profile.Spec.Notification.Webhook.Inbound.Enabled (Phase 127). Unlike the
+	// Slack/GitHub/H1 pollers this source is ONE-WAY — there is no reply-back
+	// leg and no km-webhook helper binary to download. DORMANCY INVARIANT: when
+	// false (the default, no notification.webhook block), NONE of the poller
+	// output renders — guarded by TestUserData_WebhookPollerAbsentWhenDisabled.
+	WebhookInboundEnabled bool
 	// ProfileYAML is the rendered SandboxProfile serialized to YAML, written to
 	// /opt/km/.km-profile.yaml during boot so the on-box agent can read its own
 	// declarative configuration without S3 or IAM. Set from yaml.Marshal(p) inside
@@ -5446,7 +5639,7 @@ func notifyConfigured(p *profile.SandboxProfile) bool {
 	if n == nil {
 		return false
 	}
-	return n.Slack != nil || n.Email != nil || n.Github != nil || n.H1 != nil || n.Events != nil
+	return n.Slack != nil || n.Email != nil || n.Github != nil || n.H1 != nil || n.Events != nil || n.Webhook != nil
 }
 
 // slackTranscriptEnabled reports whether notification.slack.transcript.enabled is &true.
@@ -5478,6 +5671,20 @@ func h1InboundEnabled(p *profile.SandboxProfile) bool {
 		return false
 	}
 	in := p.Spec.Notification.H1.Inbound
+	return in != nil && in.Enabled != nil && *in.Enabled
+}
+
+// webhookInboundEnabled reports whether notification.webhook.inbound.enabled is &true.
+// Phase 127: gates the km-webhook-inbound-poller heredoc, systemd unit,
+// KM_WEBHOOK_INBOUND_QUEUE_URL notify.env slot, and the systemctl enable/restart
+// lines. This is the DORMANCY INVARIANT TestUserData_WebhookPollerAbsentWhenDisabled
+// guards: when false (the default, no notification.webhook block), NONE of the
+// webhook poller output renders.
+func webhookInboundEnabled(p *profile.SandboxProfile) bool {
+	if p.Spec.Notification == nil || p.Spec.Notification.Webhook == nil {
+		return false
+	}
+	in := p.Spec.Notification.Webhook.Inbound
 	return in != nil && in.Enabled != nil && *in.Enabled
 }
 
@@ -5898,6 +6105,14 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		if h1InboundEnabled(p) {
 			notifyEnv["KM_H1_INBOUND_QUEUE_URL"] = ""
 		}
+
+		// Phase 127: generic webhook inbound — emit KM_WEBHOOK_INBOUND_QUEUE_URL as
+		// an empty placeholder in the notify.env so the poller always has the env
+		// slot. km create fills the real value via SSM Parameter Store after queue
+		// creation (/{prefix}/sandbox/{id}/webhook-inbound-queue-url).
+		if webhookInboundEnabled(p) {
+			notifyEnv["KM_WEBHOOK_INBOUND_QUEUE_URL"] = ""
+		}
 	}
 
 	// Phase 97 Plan 05: wire GitHubInboundEnabled for template conditionals.
@@ -5916,6 +6131,13 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	// render (TestUserdataH1ByteIdentity golden).
 	if h1InboundEnabled(p) {
 		params.H1InboundEnabled = true
+	}
+
+	// Phase 127: wire WebhookInboundEnabled for template conditionals. Gated
+	// independently of Spec.CLI — webhook-inbound is under
+	// spec.notification.webhook, not spec.cli.
+	if webhookInboundEnabled(p) {
+		params.WebhookInboundEnabled = true
 	}
 
 	// Phase 92 (Wave 5): synthesize the Claude Code settings.json from the typed

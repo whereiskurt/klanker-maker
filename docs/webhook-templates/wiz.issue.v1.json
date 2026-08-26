@@ -1,0 +1,18 @@
+{
+  "km_schema": "v1",
+  "source": "wiz",
+  "delivery_key": "{{issue.id}}:{{triggerType}}:{{issue.updatedAt}}",
+  "type": "issue",
+  "id": "{{issue.id}}",
+  "severity": "{{issue.severity}}",
+  "status": "{{issue.status}}",
+  "title": "{{issue.control.name}}",
+  "trigger": { "type": "{{triggerType}}", "rule": "{{ruleName}}" },
+  "entity": {
+    "type": "{{issue.entitySnapshot.type}}",
+    "name": "{{issue.entitySnapshot.name}}",
+    "cloud_platform": "{{issue.entitySnapshot.cloudPlatform}}",
+    "cloud_id": "{{issue.entitySnapshot.externalId}}"
+  },
+  "url": "https://{{wizDomain}}/issues#~(issue~'{{issue.id}})"
+}

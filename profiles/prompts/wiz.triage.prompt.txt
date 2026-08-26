@@ -1,0 +1,9 @@
+A Wiz {{type}} fired: {{title}}
+Severity: {{severity}}   Status: {{status}}
+Entity: {{entity.name}} ({{entity.type}}, {{entity.cloud_platform}})
+{{url}}
+
+Run the /triage skill with this payload in mind.
+
+Raw payload:
+{{raw}}

@@ -405,6 +405,102 @@ func DeleteH1InboundQueue(ctx context.Context, c SQSClient, queueURL string) err
 	return nil
 }
 
+// WebhookInboundDLQName returns the shared (per-install, not per-sandbox) generic
+// webhook inbound dead-letter queue name. Format:
+// {resource_prefix}-webhook-inbound-dlq.fifo (Phase 127, analog of GitHubInboundDLQName/
+// H1InboundDLQName).
+func WebhookInboundDLQName(resourcePrefix string) string {
+	return fmt.Sprintf("%s-webhook-inbound-dlq.fifo", resourcePrefix)
+}
+
+// WebhookInboundQueueName returns the FIFO queue name for a sandbox's generic
+// webhook inbound queue. Format: {resource_prefix}-webhook-inbound-{sandbox-id}.fifo
+func WebhookInboundQueueName(resourcePrefix, sandboxID string) string {
+	return fmt.Sprintf("%s-webhook-inbound-%s.fifo", resourcePrefix, sandboxID)
+}
+
+// webhookInboundQueueAttrs builds the attribute map for the per-sandbox generic
+// webhook inbound FIFO queue. Mirrors h1InboundQueueAttrs (FIFO,
+// ContentBasedDeduplication=false, 14-day retention, optional RedrivePolicy) and
+// overrides VisibilityTimeout to h1InboundVisibilityTimeout (1800s), NOT the 30s
+// used by the Slack/GitHub inbound queues: a triage turn routinely outruns 30s,
+// and a redelivered in-flight message would run the same triage twice. When
+// dlqARN is empty the RedrivePolicy attribute is omitted (dormancy preserved).
+func webhookInboundQueueAttrs(dlqARN string) (map[string]string, error) {
+	attrs := map[string]string{
+		string(sqstypes.QueueAttributeNameFifoQueue):                 "true",
+		string(sqstypes.QueueAttributeNameContentBasedDeduplication): "false",
+		string(sqstypes.QueueAttributeNameVisibilityTimeout):         h1InboundVisibilityTimeout,
+		string(sqstypes.QueueAttributeNameMessageRetentionPeriod):    "1209600",
+	}
+	if dlqARN != "" {
+		rp, err := redrivePolicyJSON(dlqARN)
+		if err != nil {
+			return nil, err
+		}
+		attrs["RedrivePolicy"] = rp
+	}
+	return attrs, nil
+}
+
+// CreateWebhookInboundQueue creates a per-sandbox generic webhook inbound FIFO
+// queue. Attributes mirror CreateH1InboundQueue (long 1800s visibility — see
+// webhookInboundQueueAttrs). Returns the queue URL on success. Idempotent:
+// QueueNameExists is treated as success via URL lookup.
+//
+// When dlqARN is non-empty a RedrivePolicy attribute (maxReceiveCount=3) is
+// attached so poison envelopes auto-evict to the shared per-install DLQ instead
+// of head-of-line-blocking the FIFO message group
+// (memory project_inbound_poller_fifo_poison_wedge). Empty dlqARN ⇒ no
+// RedrivePolicy.
+func CreateWebhookInboundQueue(ctx context.Context, c SQSClient, queueName, dlqARN string) (string, error) {
+	attrs, err := webhookInboundQueueAttrs(dlqARN)
+	if err != nil {
+		return "", fmt.Errorf("create webhook queue %s: %w", queueName, err)
+	}
+	out, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName:  awssdk.String(queueName),
+		Attributes: attrs,
+	})
+	if err != nil {
+		var existsErr *sqstypes.QueueNameExists
+		if errors.As(err, &existsErr) {
+			list, lerr := c.ListQueues(ctx, &sqs.ListQueuesInput{
+				QueueNamePrefix: awssdk.String(queueName),
+			})
+			if lerr == nil {
+				for _, u := range list.QueueUrls {
+					if strings.HasSuffix(u, "/"+queueName) {
+						return u, nil
+					}
+				}
+			}
+			return "", fmt.Errorf("create webhook queue %s: exists but URL lookup failed: %w", queueName, lerr)
+		}
+		return "", fmt.Errorf("create webhook queue %s: %w", queueName, err)
+	}
+	return awssdk.ToString(out.QueueUrl), nil
+}
+
+// DeleteWebhookInboundQueue is best-effort — returns nil if the queue is already
+// gone. Used by km destroy and rollback paths in km create.
+func DeleteWebhookInboundQueue(ctx context.Context, c SQSClient, queueURL string) error {
+	if queueURL == "" {
+		return nil
+	}
+	_, err := c.DeleteQueue(ctx, &sqs.DeleteQueueInput{
+		QueueUrl: awssdk.String(queueURL),
+	})
+	if err != nil {
+		var notFound *sqstypes.QueueDoesNotExist
+		if errors.As(err, &notFound) {
+			return nil // already gone — treat as success
+		}
+		return fmt.Errorf("delete webhook queue %s: %w", queueURL, err)
+	}
+	return nil
+}
+
 // QueueDepth returns the ApproximateNumberOfMessages for a queue.
 // Used by km status / km doctor to surface queue backlog.
 func QueueDepth(ctx context.Context, c SQSClient, queueURL string) (int64, error) {

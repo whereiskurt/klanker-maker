@@ -1926,6 +1926,64 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 	}
 
+	// Step 11h: Provision per-sandbox generic webhook inbound SQS FIFO queue (Phase 127).
+	// Only runs when notification.webhook.inbound.enabled=true (the dormancy gate — same
+	// posture as the GitHub/H1 blocks above). FATAL: failure rolls back the queue; km create aborts.
+	if inbound := notificationWebhookInbound(resolvedProfile); inbound != nil && inbound.Enabled != nil && *inbound.Enabled {
+		sandboxDynamoClientForWebhook := dynamodbpkg.NewFromConfig(awsCfg)
+		step11hTableName := cfg.GetSandboxTableName()
+
+		sqsRegionForWebhook := resolvedProfile.Spec.Runtime.Region
+		if sqsRegionForWebhook == "" {
+			sqsRegionForWebhook = awsCfg.Region
+		}
+		sqsClientForWebhook, sqsClientWebhookErr := awspkg.NewSQSClient(ctx, sqsRegionForWebhook)
+		if sqsClientWebhookErr != nil {
+			return fmt.Errorf("km create: webhook inbound provisioning (SQS client): %w", sqsClientWebhookErr)
+		}
+
+		ssmClientForWebhook := ssm.NewFromConfig(awsCfg)
+
+		// Derive the shared (per-install) webhook-inbound DLQ ARN so the new
+		// per-sandbox source queue carries a RedrivePolicy (poison-message
+		// auto-eviction after 3 receives). Derive — do NOT call SQS — from region +
+		// account ID + WebhookInboundDLQName(prefix). When either region or account ID
+		// is empty, leave DLQArn empty so provisioning stays dormant (no RedrivePolicy)
+		// rather than fabricating a partial ARN.
+		webhookDLQArn := ""
+		if sqsRegionForWebhook != "" && cfg.ApplicationAccountID != "" {
+			webhookDLQArn = awspkg.DLQArn(sqsRegionForWebhook, cfg.ApplicationAccountID, awspkg.WebhookInboundDLQName(cfg.GetResourcePrefix()))
+		}
+		step11hDeps := webhookInboundDeps{
+			Profile:   resolvedProfile,
+			Cfg:       cfg,
+			SandboxID: sandboxID,
+			SQS:       sqsClientForWebhook,
+			DLQArn:    webhookDLQArn,
+			UpdateSandboxAttr: func(ictx context.Context, sid, attr, val string) error {
+				return awspkg.UpdateSandboxStringAttrDynamo(ictx, sandboxDynamoClientForWebhook, step11hTableName, sid, attr, val)
+			},
+			PutSSMParameter: func(ictx context.Context, name, val string) error {
+				_, err := ssmClientForWebhook.PutParameter(ictx, &ssm.PutParameterInput{
+					Name:      aws.String(name),
+					Value:     aws.String(val),
+					Type:      ssmtypes.ParameterTypeString,
+					Overwrite: aws.Bool(true),
+				})
+				return err
+			},
+		}
+
+		webhookQueueURL, webhookInboundErr := provisionWebhookInboundQueue(ctx, step11hDeps)
+		if webhookInboundErr != nil {
+			return fmt.Errorf("km create: webhook inbound provisioning: %w", webhookInboundErr)
+		}
+		if webhookQueueURL != "" {
+			log.Info().Str("sandbox_id", sandboxID).Str("queue_url", webhookQueueURL).
+				Msg("Webhook inbound queue provisioned")
+		}
+	}
+
 	// Step 12: Create EventBridge TTL schedule if TTL is configured.
 	// Auto-discover Lambda ARN if not explicitly set.
 	// Non-fatal: sandbox is provisioned; operator can re-schedule manually if this fails.
