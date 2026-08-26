@@ -755,6 +755,24 @@
                 }
               }
             },
+            "webhook": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Generic webhook inbound dispatch (Phase 127). When absent, no per-sandbox FIFO queue is provisioned (dormant invariant).",
+              "properties": {
+                "inbound": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Per-sandbox generic webhook inbound FIFO queue configuration.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Provision the per-sandbox webhook-inbound FIFO queue at km create. Default false (absent = dormant, zero SQS/DDB/SSM artifacts)."
+                    }
+                  }
+                }
+              }
+            },
             "slack": {
               "type": "object",
               "additionalProperties": false,

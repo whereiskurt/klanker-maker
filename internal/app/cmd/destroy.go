@@ -95,8 +95,8 @@ func NewDestroyCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) 
 		Use:     "destroy <sandbox-id | #number>",
 		Aliases: []string{"kill"},
 		Short:   "Destroy a provisioned sandbox",
-		Long:  helpText("destroy"),
-		Args: cobra.ExactArgs(1),
+		Long:    helpText("destroy"),
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if ctx == nil {
@@ -527,6 +527,40 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 						SQS:            sqsClientForGH,
 						DeleteSSMParameter: func(dctx context.Context, name string) error {
 							_, derr := ssmClientForGH.DeleteParameter(dctx, &ssm.DeleteParameterInput{
+								Name: aws.String(name),
+							})
+							if derr != nil {
+								var notFound *ssmtypes.ParameterNotFound
+								if errors.As(derr, &notFound) {
+									return nil
+								}
+							}
+							return derr
+						},
+					})
+				}
+			}
+
+			// Phase 127: drain webhook inbound queue BEFORE other teardown steps.
+			// Non-fatal: each step is best-effort; destroy has already succeeded.
+			if existingMeta.WebhookInboundQueueURL != "" {
+				sqsRegionForWebhook := existingMeta.Region
+				if sqsRegionForWebhook == "" {
+					sqsRegionForWebhook = awsCfg.Region
+				}
+				sqsClientForWebhook, sqsWebhookErr := awspkg.NewSQSClient(ctx, sqsRegionForWebhook)
+				if sqsWebhookErr != nil {
+					log.Warn().Err(sqsWebhookErr).Str("sandbox_id", sandboxID).
+						Msg("webhook drain: failed to init SQS client (non-fatal)")
+				} else {
+					ssmClientForWebhook := ssm.NewFromConfig(awsCfg)
+					drainWebhookInbound(ctx, webhookDestroyInboundDeps{
+						SandboxID:      sandboxID,
+						ResourcePrefix: cfg.GetResourcePrefix(),
+						QueueURL:       existingMeta.WebhookInboundQueueURL,
+						SQS:            sqsClientForWebhook,
+						DeleteSSMParameter: func(dctx context.Context, name string) error {
+							_, derr := ssmClientForWebhook.DeleteParameter(dctx, &ssm.DeleteParameterInput{
 								Name: aws.String(name),
 							})
 							if derr != nil {
