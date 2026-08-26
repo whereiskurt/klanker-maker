@@ -68,6 +68,35 @@ func NewResumeCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *
 	return cmd
 }
 
+// githubRefreshTimeout bounds the synchronous refresher invoke so a wedged
+// Lambda can never hold up a resume. The refresher does two SSM reads, one
+// GitHub API call and one SSM write; 30s is generous.
+const githubRefreshTimeout = 30 * time.Second
+
+// refreshGitHubTokenOnResume forces a GitHub installation-token re-mint for a
+// waking sandbox and reports the outcome. It never returns an error: resume has
+// already started the instance by the time it runs, and failing the command
+// afterwards would leave the operator with a running box and a red exit code.
+//
+// A sandbox whose profile has no sourceAccess.github has no refresher schedule;
+// that case is silent, not a warning.
+func refreshGitHubTokenOnResume(ctx context.Context, sched awspkg.ScheduleGetter, invoker awspkg.LambdaInvoker, resourcePrefix, sandboxID string) {
+	rCtx, cancel := context.WithTimeout(ctx, githubRefreshTimeout)
+	defer cancel()
+
+	err := awspkg.ForceGitHubTokenRefresh(rCtx, sched, invoker, resourcePrefix, sandboxID)
+	switch {
+	case err == nil:
+		fmt.Println("  ✓ GitHub token refreshed")
+	case errors.Is(err, awspkg.ErrNoGitHubRefresher):
+		// No sourceAccess.github on this profile — nothing to refresh.
+	default:
+		fmt.Printf(ansiYellow+"  [warn] GitHub token refresh failed: %v"+ansiReset+"\n", err)
+		fmt.Printf(ansiYellow+"         git operations in this sandbox may 401 — check /aws/lambda/%s"+ansiReset+"\n",
+			awspkg.GitHubTokenRefresherFunctionName(resourcePrefix, sandboxID))
+	}
+}
+
 func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error {
 	if cfg.StateBucket == "" {
 		return fmt.Errorf("state bucket not configured")
@@ -134,6 +163,12 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 	if err := awspkg.RecordResumeClose(ctx, dynamoClient, budgetTable, sandboxID, time.Now().UTC()); err != nil {
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to record resume close in budget table (non-fatal)")
 	}
+
+	// Wake-up re-credential: re-mint the GitHub installation token now instead of
+	// waiting for the refresher's next 45-minute tick. Best-effort — never fails
+	// the resume — but always reported, which is the point: a refresher that has
+	// been erroring on every tick is otherwise invisible until git 401s later.
+	refreshGitHubTokenOnResume(ctx, scheduler.NewFromConfig(awsCfg), lambda.NewFromConfig(awsCfg), cfg.GetResourcePrefix(), sandboxID)
 
 	// Update metadata status back to "running" via DynamoDB (with S3 fallback on ResourceNotFoundException).
 	if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, dynamoClient, tableName, sandboxID, "running"); statusErr != nil {

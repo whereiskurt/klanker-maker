@@ -482,11 +482,20 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var launchAccountFlag string
 
 	cmd := &cobra.Command{
-		Use:   "create <profile.yaml>",
+		Use:   "create <profile.yaml> [alias]",
 		Short: "Provision a new sandbox from a profile",
 		Long:  helpText("create"),
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Positional disambiguation: with two positionals the profile is the
+			// one ending in .yaml/.yml and the other is the alias, in either
+			// order. The one-positional form plus --alias is unchanged.
+			profilePath, resolvedAlias, argErr := resolveCreateArgs(args, aliasOverride)
+			if argErr != nil {
+				return argErr
+			}
+			aliasOverride = resolvedAlias
+
 			if awsProfile == "" && os.Getenv("KM_REMOTE_CREATE") == "" {
 				awsProfile = "klanker-terraform"
 			}
@@ -545,7 +554,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 					// Neither flag explicitly set — auto-detect from profile substrate
 					sub := substrateOverride
 					if sub == "" {
-						data, readErr := os.ReadFile(args[0])
+						data, readErr := os.ReadFile(profilePath)
 						if readErr == nil {
 							p, parseErr := profile.Parse(data)
 							if parseErr == nil {
@@ -563,7 +572,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 				// Step 1–15 run inside the Lambda via runCreateRemote.
 				// Step 16 (prompt queue push) runs OPERATOR-side after Lambda
 				// returns — RESEARCH.md Pitfall #1: Lambda is untouched.
-				sandboxID, remoteErr := runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, launchAccountOverride)
+				sandboxID, remoteErr := runCreateRemote(cfg, profilePath, onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, launchAccountOverride)
 				if remoteErr != nil {
 					return remoteErr
 				}
@@ -580,7 +589,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			}
 
 			// Local path: runCreate handles Steps 1–15. Step 16 runs after it returns.
-			if err := runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, waitForCapacity, launchAccountOverride); err != nil {
+			if err := runCreate(cfg, profilePath, onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, waitForCapacity, launchAccountOverride); err != nil {
 				return err
 			}
 			// Phase 86 Step 16: operator-side prompt queue push (local path).

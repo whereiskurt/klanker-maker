@@ -5,11 +5,20 @@ credentials, compile to Terragrunt artifacts, create the sandbox directory,
 and run 'terragrunt apply'. Output is streamed to the terminal in real time.
 
 Usage:
-  km create <profile.yaml> [flags]
+  km create <profile.yaml> [alias] [flags]
+
+The alias may be given as a second positional argument instead of --alias.
+Whichever argument ends in .yaml or .yml is the profile, so the two forms
+below are equivalent and order does not matter.
 
 Examples:
   # Create a sandbox from a profile
   km create profiles/ds-gpu.yaml
+
+  # Name it — these three are equivalent
+  km create profiles/ds-gpu.yaml --alias orc
+  km create profiles/ds-gpu.yaml orc
+  km create orc profiles/ds-gpu.yaml
 
   # Force on-demand instances instead of spot
   km create profiles/ds-gpu.yaml --on-demand

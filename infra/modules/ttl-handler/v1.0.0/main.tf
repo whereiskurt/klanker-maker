@@ -296,6 +296,20 @@ resource "aws_iam_role_policy" "terraform_destroy" {
         ]
       },
       {
+        # Wake-up re-credential: handleResume invokes the per-sandbox
+        # github-token refresher synchronously so a resumed sandbox gets a fresh
+        # installation token immediately instead of waiting up to 45 minutes for
+        # the next scheduled tick. Separate from LambdaCleanup above because this
+        # is a live-path invoke, not teardown — InvokeFunction must not be
+        # implied by a statement whose Sid says "Cleanup".
+        # The matching scheduler:GetSchedule (to read the refresher's own target
+        # payload) is already granted by SchedulerCleanup below.
+        Sid      = "GitHubTokenRefreshOnResume"
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.resource_prefix}-github-token-refresher-*"
+      },
+      {
         Sid    = "SchedulerCleanup"
         Effect = "Allow"
         Action = [
