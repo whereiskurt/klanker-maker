@@ -76,9 +76,17 @@ func InterpolateSecretPaths(paths []string, resourcePrefix string) ([]string, er
 
 	out := make([]string, 0, len(paths))
 	for _, p := range paths {
-		if !strings.Contains(p, SecretPathPrefixToken) {
+		if !strings.HasPrefix(p, SecretPathPrefixToken+"/") {
 			// Should be unreachable: ValidateSecretPaths rejects these. Kept as
 			// a defence in depth so an un-validated path can never reach IAM.
+			//
+			// Deliberately HasPrefix, not Contains: a Contains check accepts the
+			// token anywhere in the string (e.g. "/other-install/{{prefix}}/x"),
+			// which strings.Replace would then rewrite to "/other-install/km/x"
+			// — an ssm:GetParameter grant OUTSIDE this install's namespace. This
+			// must match ValidateSecretPaths' leading-segment requirement exactly,
+			// because cmd/create-handler's remote-create path never calls
+			// ValidateSecretPaths — this guard is the only barrier there.
 			return nil, fmt.Errorf(
 				"allowedSecretPaths entry %q does not start with %s — refusing to compile",
 				p, SecretPathPrefixToken)

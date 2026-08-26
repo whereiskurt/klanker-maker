@@ -110,6 +110,16 @@ func TestInterpolateSecretPaths(t *testing.T) {
 		}
 	})
 
+	t.Run("token not in leading position is a namespace-escape ERROR, never rewritten", func(t *testing.T) {
+		_, err := profile.InterpolateSecretPaths(
+			[]string{"/other-install/{{prefix}}/x"}, "km")
+		if err == nil {
+			t.Fatal("expected an error for a token that is not the leading segment, got nil — " +
+				"strings.Replace would rewrite this to \"/other-install/km/x\", an " +
+				"ssm:GetParameter grant outside this install's namespace")
+		}
+	})
+
 	t.Run("empty prefix with a token present is an ERROR, never a default", func(t *testing.T) {
 		_, err := profile.InterpolateSecretPaths(
 			[]string{"{{prefix}}/wiz/wiz-api-client-id"}, "")
