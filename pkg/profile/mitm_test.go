@@ -256,3 +256,84 @@ func TestProfileIntercepts_NilSafety(t *testing.T) {
 		t.Errorf("nil Intercepts should return nil, got %+v", got)
 	}
 }
+
+// ─── Resolve-level fixture tests (Task 3) ──────────────────────────────────
+//
+// These prove the collapse survives a real extends: chain through Resolve(),
+// not just direct calls to CollapseIntercepts.
+
+func TestResolve_MITMFixtureDisable(t *testing.T) {
+	p, err := Resolve("mitm-fixture-disable", []string{"../../testdata/profiles"})
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	ics := ProfileIntercepts(p)
+	if len(ics) != 1 {
+		t.Fatalf("want exactly 1 intercept named fixture-egg, got %d: %+v", len(ics), ics)
+	}
+	if ics[0].Name != "fixture-egg" {
+		t.Errorf("want name fixture-egg, got %q", ics[0].Name)
+	}
+	if InterceptEnabled(ics[0]) {
+		t.Error("fixture-egg should be disabled")
+	}
+	if got := EnabledIntercepts(ics); len(got) != 0 {
+		t.Errorf("EnabledIntercepts should be empty, got %+v", got)
+	}
+}
+
+func TestResolve_MITMFixtureReplace(t *testing.T) {
+	p, err := Resolve("mitm-fixture-replace", []string{"../../testdata/profiles"})
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	ics := ProfileIntercepts(p)
+	if len(ics) != 1 {
+		t.Fatalf("want exactly 1 intercept named fixture-egg, got %d: %+v", len(ics), ics)
+	}
+	ic := ics[0]
+	if ic.Name != "fixture-egg" {
+		t.Errorf("want name fixture-egg, got %q", ic.Name)
+	}
+	// Exact-set comparison: the base's host must NOT appear, proving the
+	// collapse beat the Phase 117 list union rather than the leaf's host
+	// merely being unioned alongside the base's.
+	wantHosts := []string{"leaf-only.example.com"}
+	if len(ic.Hosts) != len(wantHosts) {
+		t.Fatalf("want hosts %v, got %v", wantHosts, ic.Hosts)
+	}
+	for i, h := range wantHosts {
+		if ic.Hosts[i] != h {
+			t.Errorf("want hosts %v, got %v", wantHosts, ic.Hosts)
+			break
+		}
+	}
+	if ic.Action == nil || ic.Action.Respond == nil {
+		t.Fatalf("want a respond action (the leaf's replacement), got %+v", ic.Action)
+	}
+	if ic.Action.Redirect != "" {
+		t.Errorf("want no redirect (base action must not survive), got %q", ic.Action.Redirect)
+	}
+	if ic.Action.Respond.Status != 503 || ic.Action.Respond.Body != "replaced by leaf" {
+		t.Errorf("respond action not the leaf's: %+v", ic.Action.Respond)
+	}
+}
+
+func TestResolve_MITMFixtureBase_NeverDuplicated(t *testing.T) {
+	for _, name := range []string{"mitm-fixture-disable", "mitm-fixture-replace"} {
+		p, err := Resolve(name, []string{"../../testdata/profiles"})
+		if err != nil {
+			t.Fatalf("resolve %s failed: %v", name, err)
+		}
+		ics := ProfileIntercepts(p)
+		count := 0
+		for _, ic := range ics {
+			if ic.Name == "fixture-egg" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("%s: want fixture-egg exactly once, got %d entries: %+v", name, count, ics)
+		}
+	}
+}

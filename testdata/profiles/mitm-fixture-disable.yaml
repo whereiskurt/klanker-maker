@@ -1,0 +1,15 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: mitm-fixture-disable
+extends:
+  - base/mitm-fixture-base
+
+spec:
+  lifecycle:
+    ttl: "1h"
+  network:
+    mitm:
+      intercepts:
+        - name: fixture-egg
+          enabled: false

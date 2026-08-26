@@ -1,0 +1,14 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-mitm-fixture
+  abstract: true
+
+spec:
+  network:
+    mitm:
+      intercepts:
+        - name: fixture-egg
+          hosts: [".fixture-base.example.com"]
+          action:
+            redirect: https://example.com/base-redirect
