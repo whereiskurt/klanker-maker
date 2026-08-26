@@ -3,6 +3,7 @@ package profile
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -517,7 +518,7 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		}
 	}
 
-		// Phase 93 (Wave 2) DSK-03: Desktop semantic validation.
+	// Phase 93 (Wave 2) DSK-03: Desktop semantic validation.
 	// Guarded by IsDesktopEnabled — all rules are no-ops when desktop is disabled.
 	errs = append(errs, validateDesktop(p)...)
 
@@ -569,6 +570,120 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 			Path:    "spec.runtime.launchAccount",
 			Message: "spec.runtime.launchAccount and spec.network.privateSubnet are mutually exclusive: a linked launch account has no NAT-gateway concept, so private-subnet placement is unsupported there — drop one of the two fields",
 		})
+	}
+
+	// Phase 127 Plan 04: spec.network.mitm.intercepts semantic validation —
+	// the five locked errors (task 2 in this plan adds the three locked
+	// warnings). A no-op when the profile declares no mitm block at all.
+	errs = append(errs, validateMITMIntercepts(p)...)
+
+	return errs
+}
+
+// mitmNamePattern mirrors the JSON schema's name pattern for MITM
+// intercepts (^[a-z0-9][a-z0-9-]*$). Duplicated here — not derived from the
+// schema — because ValidateSemantic needs a plain regexp value at runtime,
+// matching the belt-and-suspenders convention Rule 2/Rule 4 above already
+// establish for constraints the schema also enforces.
+var mitmNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// mitmPath returns the operator-facing path for the intercept at index i
+// with the given name: spec.network.mitm.intercepts[<name>] when the name
+// can identify the entry, spec.network.mitm.intercepts[<index>] when it
+// can't — an empty or malformed name is exactly the case where the name
+// cannot identify the entry, which is also the condition the name-pattern
+// error below fires on, so a malformed-name entry's own error and every
+// other error on that entry point at consistent paths.
+func mitmPath(name string, i int) string {
+	if name == "" || !mitmNamePattern.MatchString(name) {
+		return fmt.Sprintf("spec.network.mitm.intercepts[%d]", i)
+	}
+	return fmt.Sprintf("spec.network.mitm.intercepts[%s]", name)
+}
+
+// validateMITMIntercepts enforces the Phase 127 Plan 04 locked errors for
+// spec.network.mitm.intercepts (the three locked warnings are added by task
+// 2 of this plan). A no-op when the profile declares no mitm block
+// (nil/empty ProfileIntercepts).
+//
+// Name and duplicate checks run against the FULL, uncollapsed list — a
+// malformed name must be caught whether or not the rule is enabled, and
+// DuplicateInterceptNames has nothing left to look at after a by-name
+// collapse. Hosts/action/redirect/status checks run only against
+// EnabledIntercepts (collapsed, enabled-only) — a disabled override entry
+// (name + enabled:false) legitimately carries neither hosts nor action, and
+// holding it to these rules would make the phase's headline disable path
+// unusable.
+func validateMITMIntercepts(p *SandboxProfile) []ValidationError {
+	all := ProfileIntercepts(p)
+	if len(all) == 0 {
+		return nil
+	}
+
+	var errs []ValidationError
+
+	// --- Name + duplicate checks: full, uncollapsed list ---
+	for i, ic := range all {
+		if ic.Name == "" || !mitmNamePattern.MatchString(ic.Name) {
+			errs = append(errs, ValidationError{
+				Path:    fmt.Sprintf("spec.network.mitm.intercepts[%d]", i),
+				Message: fmt.Sprintf("name %q must be non-empty and match ^[a-z0-9][a-z0-9-]*$", ic.Name),
+			})
+		}
+	}
+	for _, name := range DuplicateInterceptNames(all) {
+		errs = append(errs, ValidationError{
+			Path: fmt.Sprintf("spec.network.mitm.intercepts[%s]", name),
+			Message: fmt.Sprintf(
+				"two intercepts named %q have different hosts/action in this file — that can only be a typo; restating the same name in a leaf that extends a fragment, to override or disable it, is the supported path and is not flagged",
+				name),
+		})
+	}
+
+	// --- Hosts/action/redirect/status checks: enabled, collapsed list only ---
+	for i, ic := range EnabledIntercepts(all) {
+		path := mitmPath(ic.Name, i)
+
+		if len(ic.Hosts) == 0 {
+			errs = append(errs, ValidationError{
+				Path:    path + ".hosts",
+				Message: "an enabled intercept must declare at least one host in hosts",
+			})
+		}
+
+		switch {
+		case ic.Action == nil:
+			errs = append(errs, ValidationError{
+				Path:    path + ".action",
+				Message: "an enabled intercept must declare exactly one action: redirect or respond",
+			})
+		case ic.Action.Redirect != "" && ic.Action.Respond != nil:
+			errs = append(errs, ValidationError{
+				Path:    path + ".action",
+				Message: "action must declare exactly one of redirect or respond, not both",
+			})
+		case ic.Action.Redirect == "" && ic.Action.Respond == nil:
+			errs = append(errs, ValidationError{
+				Path:    path + ".action",
+				Message: "action must declare exactly one of redirect or respond",
+			})
+		case ic.Action.Redirect != "":
+			u, err := url.Parse(ic.Action.Redirect)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				errs = append(errs, ValidationError{
+					Path:    path + ".action.redirect",
+					Message: fmt.Sprintf("redirect %q must be an absolute URL with an http or https scheme", ic.Action.Redirect),
+				})
+			}
+		case ic.Action.Respond != nil:
+			status := ic.Action.Respond.Status
+			if status < 100 || status > 599 {
+				errs = append(errs, ValidationError{
+					Path:    path + ".action.respond.status",
+					Message: fmt.Sprintf("respond.status %d must be between 100 and 599", status),
+				})
+			}
+		}
 	}
 
 	return errs
