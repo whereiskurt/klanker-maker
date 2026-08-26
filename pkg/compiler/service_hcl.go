@@ -151,6 +151,12 @@ const ec2ServiceHCLTemplate = `locals {
       max_session_duration = {{ .IAMPolicy.MaxSessionDuration }}
       allowed_regions      = [{{ joinStrings .IAMPolicy.AllowedRegions }}]
     }
+{{- if .SecretPaths }}
+
+    # spec.iam.allowedSecretPaths, prefix token already expanded. Grants the
+    # sandbox role ssm:GetParameter on exactly these paths (ec2spot v1.4.0).
+    secret_paths = [{{ joinStrings .SecretPaths }}]
+{{- end }}
 
     enable_bedrock = {{ .EnableBedrock }}
     associate_public_ip = {{ .AssociatePublicIP }}
@@ -572,6 +578,10 @@ type ec2HCLParams struct {
 	// (Config.GetSlackStreamMessagesTableName()).
 	ArtifactsBucket              string
 	SlackStreamMessagesTableName string
+	// SecretPaths are resolved absolute SSM paths from spec.iam.allowedSecretPaths,
+	// emitted into ec2spot module_inputs ONLY when non-empty so a profile that
+	// declares none renders byte-identically to pre-v1.4.0.
+	SecretPaths []string
 }
 
 // ============================================================
@@ -883,7 +893,11 @@ func validateEC2StorageFields(p *profile.SandboxProfile, useSpot bool) error {
 	return nil
 }
 
-func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string, network *NetworkConfig, amiBDMDeviceNames []string) (string, error) {
+// secretPaths carries the resolved absolute SSM paths from spec.iam.allowedSecretPaths
+// (compileSecrets output, {{prefix}} already expanded). Threaded in from the caller
+// (compileEC2 in compiler.go) rather than re-resolved here — compileSecrets is called
+// once per compile so the two call sites (userdata + module_inputs) can never disagree.
+func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string, network *NetworkConfig, amiBDMDeviceNames []string, secretPaths []string) (string, error) {
 	if err := validateEC2StorageFields(p, useSpot); err != nil {
 		return "", err
 	}
@@ -967,6 +981,7 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		// pickAdditionalVolumeDevice returns "/dev/sdf" when amiBDMDeviceNames is nil/empty.
 		// nil claimed: additionalVolume is always a single entry, no cross-entry dedup needed.
 		AdditionalVolumeDeviceName: pickAdditionalVolumeDevice(amiBDMDeviceNames, nil),
+		SecretPaths:                secretPaths,
 	}
 
 	// Phase 87 — allocate devices for additionalSnapshots entries.

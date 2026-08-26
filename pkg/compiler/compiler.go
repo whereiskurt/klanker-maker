@@ -185,7 +185,7 @@ exec /tmp/km-userdata.sh
 	userDataB64 := base64.StdEncoding.EncodeToString([]byte(userData))
 
 	// Generate service.hcl (includes user-data inline in ec2spots[].user_data_base64)
-	svcHCL, err := generateEC2ServiceHCL(p, sandboxID, useSpot, sgRules, iamPolicy, userDataB64, network, amiBDMDeviceNames)
+	svcHCL, err := generateEC2ServiceHCL(p, sandboxID, useSpot, sgRules, iamPolicy, userDataB64, network, amiBDMDeviceNames, secretPaths)
 	if err != nil {
 		return nil, fmt.Errorf("generate EC2 service.hcl: %w", err)
 	}
