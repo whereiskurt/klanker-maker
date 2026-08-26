@@ -48,6 +48,7 @@
 - Create: `pkg/profile/secretpath.go`
 - Create: `pkg/profile/secretpath_test.go`
 - Modify: `pkg/profile/validate.go` (add call near line 554, beside `validateLimits(p)`)
+- Modify: `profiles/gpu-llama-12x.yaml`, `profiles/gpu-llama-48x.yaml` (remove dead `allowedSecretPaths` — see Step 6)
 
 **Interfaces:**
 - Consumes: `SandboxProfile.Spec.IAM.AllowedSecretPaths []string`, `ValidationError{Path, Message, IsWarning}`
@@ -239,17 +240,36 @@ In `pkg/profile/validate.go`, find the line `errs = append(errs, validateLimits(
 	errs = append(errs, ValidateSecretPaths(p.Spec.IAM.AllowedSecretPaths)...)
 ```
 
-- [ ] **Step 6: Verify no existing profile regresses**
+- [ ] **Step 6: Remove the two dead `allowedSecretPaths` declarations (controller ruling)**
 
 Run: `go test ./pkg/profile/ -timeout 300s`
 
 Expected: PASS.
 
-Then confirm no shipped profile already uses an absolute secret path:
+Two shipped profiles declare an ABSOLUTE path, which your new validator correctly rejects. This was found in pre-flight and already ruled on — do not re-litigate it, just apply it.
 
-Run: `grep -rn "allowedSecretPaths" -A4 profiles/ || echo "none declared"`
+`profiles/gpu-llama-12x.yaml` (line ~34) and `profiles/gpu-llama-48x.yaml` (line ~38) both contain:
 
-Expected: either no matches, or only entries you are about to convert. If a shipped profile declares an absolute path, STOP — converting it is a behaviour change that needs its own review, and it means the field was in use despite never being granted.
+```yaml
+  iam:
+    allowedSecretPaths:
+      - /sandbox/*/secrets   # unions with fragment's entry; list-union dedupes
+```
+
+**Delete the `allowedSecretPaths` key and its list item from BOTH files.** If removing it leaves an empty `iam:` block, remove the `iam:` key too — `base/platform` supplies `iam.roleSessionDuration` and `iam.allowedRegions` by inheritance.
+
+Why this is a deletion and not a conversion:
+- The path is absolute and wildcarded, so it can never satisfy the prefix-relative rule.
+- No `ec2spot` version has EVER granted it — the field was never plumbed into the role (that is the bug this whole plan fixes).
+- Under `set -euo pipefail` (`pkg/compiler/userdata.go:36`) the ungranted fetch **aborts the boot** rather than warning. `profiles/base/gpu/serve.yaml:214` documents this empirically: *"a bad/non-existent path makes the boot's `aws ssm get-parameter` fail under `set -e` and BRICKS the boot (validated on the CPU rehearsal)."*
+- The comment claims it "unions with fragment's entry", but `serve.yaml:214` says the GPU line deliberately does NOT use `allowedSecretPaths` — the referenced entry does not exist.
+- Both profiles already receive their secrets via `spec.secrets.sopsFile: ./secrets/llama-hf.enc.yaml`, which is unaffected.
+
+Then confirm nothing else declares the field:
+
+Run: `grep -rn "allowedSecretPaths" profiles/`
+
+Expected: only the comment at `profiles/base/gpu/serve.yaml:214`. If any OTHER profile declares it, stop and report — that is a new case the ruling did not cover.
 
 - [ ] **Step 7: Run the full profile validation gate**
 
@@ -260,8 +280,12 @@ Expected: exit 0.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add pkg/profile/secretpath.go pkg/profile/secretpath_test.go pkg/profile/validate.go
-git commit -m "feat(profile): require allowedSecretPaths to be prefix-relative"
+git add pkg/profile/secretpath.go pkg/profile/secretpath_test.go pkg/profile/validate.go profiles/gpu-llama-12x.yaml profiles/gpu-llama-48x.yaml
+git commit -m "feat(profile): require allowedSecretPaths to be prefix-relative
+
+Also drops the dead absolute declaration from the two gpu-llama profiles: it
+was never granted by any ec2spot version, and under set -euo pipefail the
+ungranted fetch aborts the boot rather than warning."
 ```
 
 ---
@@ -444,10 +468,10 @@ import (
 func TestCompile_SecretPathsFailLoud(t *testing.T) {
 	t.Setenv("KM_RESOURCE_PREFIX", "")
 
-	p := minimalProfile(t)
+	p := loadTestProfile(t, "ec2-basic.yaml")
 	p.Spec.IAM.AllowedSecretPaths = []string{"{{prefix}}/wiz/wiz-api-client-id"}
 
-	_, err := compiler.Compile(p)
+	_, err := compiler.Compile(p, "sb-wiz01", false, testNetwork(), nil)
 	if err == nil {
 		t.Fatal("Compile() succeeded with an unset KM_RESOURCE_PREFIX; " +
 			"it must fail rather than render IAM for the wrong install")
@@ -461,10 +485,10 @@ func TestCompile_SecretPathsFailLoud(t *testing.T) {
 func TestCompile_SecretPathsResolve(t *testing.T) {
 	t.Setenv("KM_RESOURCE_PREFIX", "km2")
 
-	p := minimalProfile(t)
+	p := loadTestProfile(t, "ec2-basic.yaml")
 	p.Spec.IAM.AllowedSecretPaths = []string{"{{prefix}}/wiz/wiz-api-client-id"}
 
-	got, err := compiler.Compile(p)
+	got, err := compiler.Compile(p, "sb-wiz02", false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -481,7 +505,7 @@ func TestCompile_SecretPathsResolve(t *testing.T) {
 }
 ```
 
-**Note for the implementer:** `minimalProfile(t)` is a helper you must locate or write. Look first in `pkg/compiler/compiler_secrets_test.go` and `pkg/compiler/userdata_secrets_test.go` for an existing minimal-profile builder and reuse it verbatim. If none is reusable, add one to your new test file returning the smallest `*profile.SandboxProfile` that `Compile` accepts — copy the field set from the existing tests rather than inventing one.
+**Note for the implementer:** `loadTestProfile(t, "ec2-basic.yaml")` and `testNetwork()` are EXISTING helpers in the `compiler_test` package — see `pkg/compiler/compiler_secrets_test.go`, which calls `compiler.Compile(p, id, false, testNetwork(), nil)` exactly this way. Do not write your own. The real signature is `Compile(p *profile.SandboxProfile, sandboxID string, onDemand bool, network *NetworkConfig, amiBDMDeviceNames []string) (*CompiledArtifacts, error)`.
 
 - [ ] **Step 8: Run the compiler tests**
 
@@ -665,13 +689,13 @@ import (
 func TestServiceHCL_SecretPathsEmitted(t *testing.T) {
 	t.Setenv("KM_RESOURCE_PREFIX", "km")
 
-	p := minimalProfile(t)
+	p := loadTestProfile(t, "ec2-basic.yaml")
 	p.Spec.IAM.AllowedSecretPaths = []string{
 		"{{prefix}}/wiz/wiz-api-client-id",
 		"{{prefix}}/wiz/wiz-api-client-secret",
 	}
 
-	got, err := compiler.Compile(p)
+	got, err := compiler.Compile(p, "sb-wiz03", false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -688,10 +712,10 @@ func TestServiceHCL_SecretPathsEmitted(t *testing.T) {
 func TestServiceHCL_SecretPathsAbsentWhenUnset(t *testing.T) {
 	t.Setenv("KM_RESOURCE_PREFIX", "km")
 
-	p := minimalProfile(t)
+	p := loadTestProfile(t, "ec2-basic.yaml")
 	p.Spec.IAM.AllowedSecretPaths = nil
 
-	got, err := compiler.Compile(p)
+	got, err := compiler.Compile(p, "sb-wiz04", false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -703,7 +727,7 @@ func TestServiceHCL_SecretPathsAbsentWhenUnset(t *testing.T) {
 }
 ```
 
-**Note for the implementer:** the field holding rendered service.hcl on the `Compile` result may not be named `ServiceHCL`. Check the `CompiledSandbox` struct in `pkg/compiler/compiler.go` and use the real field name. Reuse the same `minimalProfile(t)` helper from Task 2.
+**Note for the implementer:** the result type is `*CompiledArtifacts`; `.ServiceHCL` and `.SecretPaths` are both real fields on it (verified — `pkg/compiler/compiler.go:38-39`). `loadTestProfile` / `testNetwork` are the same existing helpers used in Task 2.
 
 - [ ] **Step 2: Run to verify it fails**
 
