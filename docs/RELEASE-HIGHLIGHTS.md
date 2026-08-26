@@ -13,76 +13,83 @@
 -->
 ## ✨ Major additions highlighted
 
-v0.8.2 let the outside world **wake** a sandbox. This release lets it **watch** one.
+For a long time, every klanker-maker sandbox quietly rickrolled `google.com`. It was a one-line
+joke compiled into the HTTP proxy, and it was on for everybody, always, with no way to turn it
+off short of editing Go.
 
-A Wiz Automation Rule can already fire an alert at a webhook and start an agent working. What
-was missing was the other direction: nothing reported what that agent actually *did* once it was
-running. This release closes the loop.
+**This release deletes it.** Nothing is intercepted by default any more.
 
-### 🛡️ Wiz Runtime Sensor on EC2 sandboxes
+### 🎭 Declarative MITM intercepts
 
-A new opt-in profile fragment installs the Wiz Runtime Sensor as a root systemd daemon, so an
-autonomous agent's process, file, and network activity shows up in your Wiz tenant.
+What replaces it is the thing the easter egg should have been all along: a profile-declared
+host→action surface. If you want an intercept, you say so.
+
+```yaml
+spec:
+  network:
+    mitm:
+      intercepts:
+        - name: maintenance
+          hosts: ["api.example.com"]
+          action:
+            respond:
+              status: 503
+              body: "maintenance window in progress"
+```
+
+Two actions ship: `redirect` and `respond`. Rules are matched by host with allowlist semantics,
+carried to the box as a base64 JSON blob in a systemd drop-in, and read by the proxy at start.
+
+**Dormant by default.** A profile with no `spec.network.mitm` block produces byte-identical
+user-data to v0.8.3 — the drop-in isn't written and the proxy never wires an intercept handler.
+
+### 🔌 The easter egg is now opt-in, in one line
+
+The Rickroll survives as an abstract fragment, so the joke is preserved for anyone who wants it —
+as a choice rather than a default:
 
 ```yaml
 extends:
-  - base/platform
-  - base/os/debian
-  - base/network/locked
-  - base/security/wiz      # <- that's the whole opt-in
+  - base/mitm-rickroll      # <- that's the whole opt-in
 ```
 
-Dormant by default: a profile that doesn't extend it is byte-identical to v0.8.2.
-
-**It is deliberately not tamper-proof, and the runbook says so.** On `privileged: true` the agent
-has sudo and can stop any daemon. On-box hardening is a systemd drop-in plus `chattr +i` — a
-speed bump, not a control. The real control is `privileged: false`, and detection belongs off-box
-in your Wiz tenant.
-
-There are now three Wiz integrations pointing in three directions — km **pulls** from Wiz
-(`checks.triggers`), Wiz **pushes** to km (`webhooks:`), and a sandbox **reports to** Wiz (this
-one). They share no code or config; `docs/wiz-sensor.md` § 7 tells them apart.
-
-### 🔐 `iam.allowedSecretPaths` now actually works — and never did before
-
-Shipping the sensor meant getting a credential onto the box, which surfaced a latent platform
-bug worth its own headline.
-
-`iam.allowedSecretPaths` is a documented SandboxProfile field. It rendered an
-`aws ssm get-parameter` loop into EC2 user-data — but was **never plumbed into the sandbox role's
-IAM**. And it did not degrade quietly: the bootstrap runs under `set -euo pipefail` and the fetch
-is a standalone assignment, so the denied call **aborted the boot** before reaching the guard
-that was supposed to tolerate it. That guard was dead code.
-
-New `ec2spot/v1.4.0` grants `ssm:GetParameter` on exactly the declared paths. Two shipped
-profiles that declared a path no module version ever granted have been cleaned up.
-
-### 🧭 `{{prefix}}` paths — a security guard, not ergonomics
-
-Secret paths are now written prefix-relative:
+`profiles/mitm-demo.yaml` is the worked example: it inherits the Rickroll through that one line,
+adds a `respond` rule of its own, and ships a commented-out off-switch showing how a child
+profile turns an *inherited* rule back off:
 
 ```yaml
-iam:
-  allowedSecretPaths:
-    - "{{prefix}}/wiz/wiz-api-client-id"
-    - "{{prefix}}/wiz/wiz-api-client-secret"
+        - name: rickroll
+          enabled: false     # switches off a rule inherited via extends:
 ```
 
-These paths compile straight into the sandbox role's IAM grant, so the token is what makes it
-*structurally impossible* for a profile to reach another install's SSM namespace — an absolute
-path or a stray `/*` can't be expressed. Validation is shape-only, so `km validate` still works
-with no configured install, and expansion **fails loud**: an unset `KM_RESOURCE_PREFIX` is an
-error, never a silent default to `km`.
+That off-switch is load-bearing. Phase 117 merges profile lists by **union**, so without a
+by-name collapse a child could never remove what a base declared — it could only ever add.
 
----
+### 🛡️ A user intercept cannot shadow platform metering
 
-**Upgrading:** `make build` → `make build-lambdas` → `km init --dry-run=false` (not `--sidecars`
-— the new IAM statement needs a full apply). Existing sandboxes keep their current role until
-`km destroy && km create`.
+The one genuinely dangerous shape here is a profile declaring `api.anthropic.com` or
+`bedrock-runtime.*.amazonaws.com` and silently swallowing the traffic that AI budget metering
+depends on — or `github.com`, shadowing the repo filter.
 
-**If you enable the sensor:** create the two SSM parameters **before** any profile extends the
-fragment, and make sure `.wiz.io` is DNS-allowlisted. Both are covered in `docs/wiz-sensor.md`
-§ 2 — get the ordering wrong and sandboxes using the fragment won't boot.
+goproxy's handler chain does **not** stop at a handler returning `nil`, so registration order
+alone does not protect those paths. An `isPlatformOwnedHost` guard does, applied identically on
+the goproxy path and the transparent (eBPF) path. Platform-owned hosts always win.
 
-**Not yet proven:** live UAT is outstanding, most notably Wiz-sensor/km-eBPF coexistence. Treat
-the sensor as ready to try, not as battle-tested.
+### ⚠️ Deploy surface — `--sidecars` alone is actively harmful here
+
+This release changes `pkg/compiler/userdata.go`, so the create-handler zip that renders user-data
+must be refreshed. Run the full sequence:
+
+```bash
+make build
+make build-lambdas
+km init --dry-run=false
+```
+
+`km init --sidecars` on its own uploads the new proxy binary but **not** the user-data that feeds
+it — which drops the built-in Rickroll on a live box while leaving profiles unable to declare it
+back until the full sequence completes. See `docs/mitm-intercepts.md` § Deploy surface.
+
+Existing sandboxes keep their current behaviour until `km destroy && km create`.
+
+📖 Full runbook: `docs/mitm-intercepts.md`
