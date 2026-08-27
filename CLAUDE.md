@@ -125,7 +125,33 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   alongside `StreamLocalBindUnlink=yes` (a stale socket otherwise blocks the rebind).
 - **`interactiveMode` is REQUIRED under `client.authentication.k8s.io/v1`** — kubectl rejects
   the exec config outright with `interactiveMode must be specified` before the plugin ever
-  runs. Set to `Never`; found during a dry-run, not by a test.
+  runs. Set to `Never` unconditionally (it is also a valid optional field under `v1beta1`
+  since k8s 1.23, so one value is correct for both); found during a dry-run, not by a test.
+- **Two live-UAT bugs, fixed in v0.8.7 — both operator-side RENDERING bugs, nothing on the
+  box, in AWS, or in a Lambda:**
+  - **The exec `apiVersion` must be MIRRORED from the operator's kubeconfig, never chosen.**
+    `RenderBoxKubeconfig` hardcoded `client.authentication.k8s.io/v1`, but the broker
+    deliberately never sets `KUBERNETES_EXEC_INFO`, so the plugin cannot know which version
+    was asked for and emits **its own default** (`v1beta1` for `kubectl oidc-login`).
+    kubectl enforces an **exact** match, so this failed with `plugin returned version
+    client.authentication.k8s.io/v1beta1`. `Resolve` already carried `exec.apiVersion`
+    "verbatim" and the renderer ignored it at the one place it mattered. **Hardcoding
+    `v1beta1` instead is the same bug pointed the other way** — mirror, don't choose.
+    Version-shopping kubectl on the sandbox cannot fix it: every version enforces the match.
+  - **The cluster CA has to travel.** `clusterSpec` never read
+    `certificate-authority-data`, so the box fell back to its system trust store and every
+    handshake died with `x509: certificate signed by unknown authority`. **`tls-server-name`
+    says which NAME to verify against; the CA says which certificate to TRUST** — km was
+    emitting one half of a pair, and no stock trust store has ever heard of a private
+    corporate root or an EKS-managed CA. A `certificate-authority` **path** is read on the
+    operator's machine and base64-inlined, because that path does not exist on the sandbox.
+    `insecure-skip-tls-verify` is **MIRRORED only, never invented** — kubectl rejects a
+    config carrying both it and a CA, and silently disabling verification to make an x509
+    error go away would delete the one property that makes the loopback/SNI split safe.
+  - **Carrying the CA does NOT weaken the no-credential-on-the-box rule.** A CA certificate
+    is public, verification-only, and mints nothing; it cannot be replayed and grants no
+    route to the cluster. The VPN profile, SSO refresh token, and AWS credentials all still
+    stay on the workstation.
 - **The loopback bind port need not match the cluster's real port** (`-R 16443:k8s1.corp:443`
   is fine), because the box kubeconfig uses `tls-server-name` rather than an `/etc/hosts`
   entry. That is the whole reason **no `privileged: true` is ever required** — the rejected

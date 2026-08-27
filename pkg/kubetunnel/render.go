@@ -39,6 +39,33 @@ func RenderBoxKubeconfig(t *Target, bindPort int) ([]byte, error) {
 	if bindPort <= 0 || bindPort > 65535 {
 		return nil, fmt.Errorf("invalid bind port %d", bindPort)
 	}
+	if t.Exec == nil || t.Exec.APIVersion == "" {
+		return nil, fmt.Errorf("context %q has an exec stanza with no apiVersion; "+
+			"km must mirror it onto the box and cannot safely guess one", t.Context)
+	}
+
+	// The CA travels with tls-server-name as a pair: one says which certificate
+	// to trust, the other says which name to check it against. The box dials
+	// loopback but verifies the REAL cluster certificate, so without the CA the
+	// handshake fails with "x509: certificate signed by unknown authority" —
+	// a stock sandbox trust store has never heard of an internal or
+	// EKS-managed cluster CA.
+	//
+	// insecure-skip-tls-verify is MIRRORED from the operator's own config and
+	// never invented here. Silently disabling verification to make an x509
+	// error disappear would quietly delete the one property that makes the
+	// loopback/SNI split safe. kubectl also refuses a config carrying both, so
+	// the CA is dropped when the operator has opted out.
+	cluster := map[string]any{
+		"server":          fmt.Sprintf("https://127.0.0.1:%d", bindPort),
+		"tls-server-name": t.TLSServerName,
+	}
+	switch {
+	case t.InsecureSkipTLSVerify:
+		cluster["insecure-skip-tls-verify"] = true
+	case t.CAData != "":
+		cluster["certificate-authority-data"] = t.CAData
+	}
 
 	doc := map[string]any{
 		"apiVersion": "v1",
@@ -47,11 +74,8 @@ func RenderBoxKubeconfig(t *Target, bindPort int) ([]byte, error) {
 		// --context; an agent shelling in should not need to know km's naming.
 		"current-context": t.Context,
 		"clusters": []map[string]any{{
-			"name": t.Context,
-			"cluster": map[string]any{
-				"server":          fmt.Sprintf("https://127.0.0.1:%d", bindPort),
-				"tls-server-name": t.TLSServerName,
-			},
+			"name":    t.Context,
+			"cluster": cluster,
 		}},
 		"contexts": []map[string]any{{
 			"name": t.Context,
@@ -64,15 +88,28 @@ func RenderBoxKubeconfig(t *Target, bindPort int) ([]byte, error) {
 			"name": t.Context,
 			"user": map[string]any{
 				"exec": map[string]any{
-					"apiVersion": "client.authentication.k8s.io/v1",
+					// MIRRORED from the operator's own kubeconfig, never chosen
+					// here. kubectl demands an EXACT match between the apiVersion
+					// its kubeconfig asks for and the one the plugin's
+					// ExecCredential carries. The broker hands back the plugin's
+					// stdout verbatim and never sets KUBERNETES_EXEC_INFO, so the
+					// plugin emits its OWN default version — v1beta1 for kubectl
+					// oidc-login. Hardcoding v1 here therefore failed live UAT with
+					// "plugin returned version client.authentication.k8s.io/v1beta1".
+					// The operator's local kubectl already works against this
+					// plugin, so their declared version is the only one known to
+					// agree with it.
+					"apiVersion": t.Exec.APIVersion,
 					"command":    BoxShimPath,
 					// interactiveMode is REQUIRED under client.authentication.k8s.io/v1
-					// (unlike v1beta1, which defaults it). Omitting it makes kubectl
+					// (unlike v1beta1, which defaults it) — omitting it makes kubectl
 					// reject the exec config outright with "interactiveMode must be
-					// specified", before the plugin ever runs. "Never" is the honest
-					// value: the shim curls a unix socket and never wants a TTY — any
-					// browser hop happens on the operator's workstation, inside their
-					// own plugin, not here.
+					// specified", before the plugin ever runs. It is also a valid
+					// optional field under v1beta1 (k8s 1.23+), so "Never" is set
+					// unconditionally. Never is the honest value regardless of the
+					// operator's own setting: the shim curls a unix socket and never
+					// wants a TTY — any browser hop happens on the operator's
+					// workstation, inside their own plugin, not here.
 					"interactiveMode": "Never",
 				},
 			},

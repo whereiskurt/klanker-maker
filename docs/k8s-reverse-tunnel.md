@@ -213,7 +213,7 @@ VPN, no cluster, and no kubectl. So the escape hatches are part of the interface
 
 | Path | Mode | What |
 |---|---|---|
-| `/home/sandbox/.km/kubeconfig` | 0600 | Points at `https://127.0.0.1:<bind-port>` with `tls-server-name` carrying your real cluster name |
+| `/home/sandbox/.km/kubeconfig` | 0600 | Points at `https://127.0.0.1:<bind-port>` with `tls-server-name` carrying your real cluster name, plus your cluster's CA inlined |
 | `/home/sandbox/.km/km-kubetoken` | 0700 | The `curl --unix-socket` credential shim |
 | `/home/sandbox/.km/kubetoken.sock` | — | The reverse-forwarded broker socket, created by sshd and removed on exit |
 
@@ -224,6 +224,27 @@ at a dead socket.
 
 A process on the box *outside* your tunnel shell needs
 `export KUBECONFIG=/home/sandbox/.km/kubeconfig` to see it.
+
+### The cluster CA does travel to the box — and it is not a credential
+
+`tls-server-name` tells the box's kubectl *which name* to verify the certificate against;
+the CA tells it *which certificate* to trust. Both are needed, so km copies your
+kubeconfig's `certificate-authority-data` into the box kubeconfig. If your cluster names a
+CA **file** instead, km reads it on your workstation and inlines it — the path would not
+exist on the sandbox.
+
+This is the one piece of cluster material that reaches the box, and it does not weaken the
+rule stated above. A CA certificate is public, verification-only, and mints nothing: it
+cannot be replayed, it grants no access, and possessing it does not let the sandbox reach
+the cluster (it still has no route). Your VPN profile, SSO refresh token, and AWS
+credentials remain on your workstation.
+
+Without it, the handshake can only fail — most real clusters sit behind an internal or
+EKS-managed CA that a stock sandbox trust store has never heard of. km will **not**
+substitute `insecure-skip-tls-verify` to make that error go away; it mirrors that setting
+only if your own kubeconfig already has it, and then omits the CA, because kubectl refuses
+a config carrying both. `--dry-run` states which of the three cases you are in on the
+`Cluster CA:` line.
 
 ### Why the loopback address instead of an `/etc/hosts` entry
 
@@ -273,6 +294,28 @@ shell attached to a dead tunnel. Use a different `--bind-port`, or find the othe
 **`interactiveMode must be specified`.**
 You are on a km older than v0.8.6. That field is required under
 `client.authentication.k8s.io/v1` and older builds omitted it. Upgrade.
+
+**`exec plugin is configured to use API version client.authentication.k8s.io/v1, plugin
+returned version client.authentication.k8s.io/v1beta1`.**
+You are on a km older than v0.8.7, which hardcoded `v1` into the box kubeconfig. kubectl
+demands an exact match between the version the kubeconfig asks for and the one the
+plugin's `ExecCredential` carries, and km never sets `KUBERNETES_EXEC_INFO`, so your
+plugin emits its own default — `v1beta1` for `kubectl oidc-login`. km now mirrors the
+`exec.apiVersion` from your own kubeconfig, which is by definition the version your
+working local kubectl already agrees with the plugin on. **Do not downgrade kubectl on
+the sandbox** — a newer kubectl supports both versions and every version enforces the
+match. Upgrade km, or as a stopgap set `exec.apiVersion` in your local kubeconfig to
+whatever the plugin actually returns.
+
+**`x509: certificate signed by unknown authority` from kubectl on the box.**
+The tunnel and the credential are both fine — you got this far, so the mint succeeded and
+TLS reached the real cluster. The box just does not trust the cluster's CA. On km older
+than v0.8.7 the box kubeconfig carried no CA at all, so any cluster behind a private or
+EKS-managed CA failed here; km now inlines `certificate-authority-data` from your own
+kubeconfig. Upgrade km, then confirm with `km tunnel k8s <id> --context <ctx> --dry-run`
+that the `Cluster CA:` line reports an inlined CA rather than "none in your kubeconfig".
+If it reports none, your local kubeconfig genuinely has no CA for that cluster — fix it
+there first, and check `kubectl --context <ctx> get ns` works on your workstation.
 
 **The browser never opens when a token expires.**
 The plugin runs on your laptop with your inherited environment. Check that

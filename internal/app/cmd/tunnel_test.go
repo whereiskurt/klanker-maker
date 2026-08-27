@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"net"
 	"os"
 	"os/exec"
@@ -220,5 +221,55 @@ func TestProvisionScript(t *testing.T) {
 	}
 	if strings.Contains(script, "\n") {
 		t.Errorf("provision script must be a single line, got:\n%s", script)
+	}
+}
+
+// TestProvisionScript_CarriesRealSizedCA checks that a kubeconfig holding a
+// real cluster CA still survives the remote shell. A private root CA chain runs
+// to a few thousand base64 characters on ONE line, which is exactly the kind of
+// payload that breaks naive quoting — and it arrived in the code only after the
+// live-UAT "certificate signed by unknown authority" fix, so nothing before
+// then exercised this size.
+func TestProvisionScript_CarriesRealSizedCA(t *testing.T) {
+	caData := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("CERT"), 700)) // ~3.7k chars
+	kc, err := kubetunnel.RenderBoxKubeconfig(&kubetunnel.Target{
+		Context:       "k8s1",
+		ServerHost:    "k8s1.corp",
+		ServerPort:    443,
+		TLSServerName: "k8s1.corp",
+		CAData:        caData,
+		Exec:          &kubetunnel.ExecConfig{APIVersion: "client.authentication.k8s.io/v1beta1", Command: "kubelogin"},
+	}, 6443)
+	if err != nil {
+		t.Fatalf("RenderBoxKubeconfig: %v", err)
+	}
+
+	script := provisionScript(kc, kubetunnel.RenderShim(kubetunnel.BoxSocketPath))
+
+	// Still one line: a wrapped or split payload would truncate at the break.
+	if strings.Contains(script, "\n") {
+		t.Error("provision script must remain a single line even with a real-sized CA")
+	}
+	// The outer base64 is single-quoted in the remote command, so a quote in
+	// the payload would end the string early. The base64 alphabet has none —
+	// assert it rather than trust it.
+	if strings.Contains(caData, "'") {
+		t.Fatal("test payload is not valid base64")
+	}
+	// And the CA must actually round-trip: decode the payload back out of the
+	// script and confirm the CA is in there, not silently dropped or mangled.
+	const marker = "printf %s '"
+	i := strings.Index(script, marker)
+	if i < 0 {
+		t.Fatal("could not find the encoded kubeconfig in the script")
+	}
+	rest := script[i+len(marker):]
+	enc := rest[:strings.IndexByte(rest, '\'')]
+	decoded, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		t.Fatalf("script payload is not decodable base64: %v", err)
+	}
+	if !strings.Contains(string(decoded), caData) {
+		t.Error("the cluster CA did not survive into the provisioned kubeconfig")
 	}
 }

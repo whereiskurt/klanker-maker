@@ -13,6 +13,7 @@
 package kubetunnel
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"os"
@@ -46,6 +47,14 @@ type ExecConfig struct {
 type clusterSpec struct {
 	Server        string `yaml:"server"`
 	TLSServerName string `yaml:"tls-server-name,omitempty"`
+	// CertificateAuthorityData is the cluster CA, already base64-encoded.
+	CertificateAuthorityData string `yaml:"certificate-authority-data,omitempty"`
+	// CertificateAuthority is a PATH to the CA on the OPERATOR'S filesystem.
+	// It cannot be carried across as a path — see Resolve, which inlines it.
+	CertificateAuthority string `yaml:"certificate-authority,omitempty"`
+	// InsecureSkipTLSVerify is mirrored, never invented. km will not silently
+	// stop verifying a certificate on the operator's behalf.
+	InsecureSkipTLSVerify bool `yaml:"insecure-skip-tls-verify,omitempty"`
 }
 
 type namedCluster struct {
@@ -93,6 +102,18 @@ type Target struct {
 	// TLSServerName is the name the sandbox's kubectl must present as SNI and
 	// verify the certificate against. It is never empty — see Resolve.
 	TLSServerName string
+	// CAData is the cluster CA in base64, as a kubeconfig carries it. Empty
+	// means the box falls back to its system trust store, which works only for
+	// a publicly-trusted certificate.
+	//
+	// This is the ONE piece of cluster material that must reach the box, and it
+	// is safe to send: a CA certificate is public, verification-only, and mints
+	// nothing. It does not weaken the phase's rule that no credential — no VPN
+	// profile, no SSO refresh token, no AWS key — ever lands on a sandbox.
+	CAData string
+	// InsecureSkipTLSVerify mirrors the operator's own setting. km never sets
+	// this on its own initiative.
+	InsecureSkipTLSVerify bool
 	// Exec is the operator's credential plugin, carried verbatim.
 	Exec *ExecConfig
 }
@@ -272,11 +293,31 @@ func (k *Kubeconfig) Resolve(contextName string) (*Target, error) {
 		sni = host
 	}
 
+	// The box verifies the REAL certificate (that is what tls-server-name is
+	// for), so it needs the cluster's CA. Almost every cluster worth tunnelling
+	// to is fronted by an internal or EKS-managed CA that a stock sandbox
+	// trust store has never heard of, so omitting this can only ever produce
+	// "x509: certificate signed by unknown authority" on the box.
+	//
+	// A CA given as a FILE PATH must be read here, on the machine where that
+	// path exists, and inlined as data. Copying the path across would dangle.
+	caData := cl.CertificateAuthorityData
+	if caData == "" && cl.CertificateAuthority != "" {
+		pem, err := os.ReadFile(cl.CertificateAuthority) //nolint:gosec // operator's own kubeconfig, by design
+		if err != nil {
+			return nil, fmt.Errorf("cluster %q names certificate-authority %q, which could not be read: %w",
+				ctx.Cluster, cl.CertificateAuthority, err)
+		}
+		caData = base64.StdEncoding.EncodeToString(pem)
+	}
+
 	return &Target{
-		Context:       contextName,
-		ServerHost:    host,
-		ServerPort:    port,
-		TLSServerName: sni,
-		Exec:          usr.Exec,
+		Context:               contextName,
+		ServerHost:            host,
+		ServerPort:            port,
+		TLSServerName:         sni,
+		CAData:                caData,
+		InsecureSkipTLSVerify: cl.InsecureSkipTLSVerify,
+		Exec:                  usr.Exec,
 	}, nil
 }

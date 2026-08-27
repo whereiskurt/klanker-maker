@@ -1,6 +1,7 @@
 package kubetunnel
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -293,5 +294,116 @@ func TestResolve_ExecCarriedVerbatim(t *testing.T) {
 	// proxy for the plugin, and silently dropping it would change behaviour.
 	if e.Env[1].Name != "HTTPS_PROXY" || e.Env[1].Value != "" {
 		t.Errorf("Env[1] = %+v, want HTTPS_PROXY with an empty value", e.Env[1])
+	}
+}
+
+// loadCAFixture materialises testdata/ca.yaml with CA_FILE_PATH rewritten to a
+// real temp file, so the file-CA case exercises a path that actually exists on
+// the machine running the test.
+func loadCAFixture(t *testing.T, caPEM string) *Kubeconfig {
+	t.Helper()
+
+	caPath := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caPath, []byte(caPEM), 0o600); err != nil {
+		t.Fatalf("write CA file: %v", err)
+	}
+
+	raw, err := os.ReadFile("testdata/ca.yaml")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "kubeconfig.yaml")
+	if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(raw), "CA_FILE_PATH", caPath)), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+
+	kc, err := Load([]string{path})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return kc
+}
+
+// TestResolve_CarriesClusterCA pins the fix for the live-UAT failure
+// "x509: certificate signed by unknown authority".
+//
+// The box dials 127.0.0.1 but verifies the REAL cluster certificate via
+// tls-server-name, so it needs the cluster's CA. Almost every real cluster is
+// fronted by an internal or EKS-managed CA absent from the sandbox's system
+// trust store, so without carrying it the handshake can only fail. A CA
+// certificate is public material, not a credential — carrying it does not
+// weaken the phase's "no secret reaches the box" property.
+func TestResolve_CarriesClusterCA(t *testing.T) {
+	const caPEM = "-----BEGIN CERTIFICATE-----\nFILE-CA\n-----END CERTIFICATE-----\n"
+	kc := loadCAFixture(t, caPEM)
+
+	t.Run("inline data is carried through", func(t *testing.T) {
+		tgt, err := kc.Resolve("inline-ca")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if tgt.CAData != "SU5MSU5FLUNB" {
+			t.Errorf("CAData = %q, want the kubeconfig's certificate-authority-data verbatim", tgt.CAData)
+		}
+		if tgt.InsecureSkipTLSVerify {
+			t.Error("InsecureSkipTLSVerify must never be set from a config that supplies a CA")
+		}
+	})
+
+	t.Run("a CA file is read and inlined", func(t *testing.T) {
+		tgt, err := kc.Resolve("file-ca")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		// The path is on the OPERATOR'S filesystem. Passing it to the box
+		// verbatim would dangle, so it must arrive as base64 data.
+		want := base64.StdEncoding.EncodeToString([]byte(caPEM))
+		if tgt.CAData != want {
+			t.Errorf("CAData = %q, want the file's contents base64-encoded", tgt.CAData)
+		}
+	})
+
+	t.Run("no CA stays empty, not invented", func(t *testing.T) {
+		tgt, err := kc.Resolve("no-ca")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if tgt.CAData != "" {
+			t.Errorf("CAData = %q, want empty so the box uses its system trust store", tgt.CAData)
+		}
+	})
+
+	t.Run("insecure is mirrored, never invented", func(t *testing.T) {
+		tgt, err := kc.Resolve("insecure")
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if !tgt.InsecureSkipTLSVerify {
+			t.Error("InsecureSkipTLSVerify should mirror the operator's own insecure-skip-tls-verify")
+		}
+	})
+}
+
+// A CA file km cannot read must fail loudly on the operator's own machine,
+// naming the path. Falling through to an empty CA would defer the failure to an
+// opaque x509 error inside the sandbox.
+func TestResolve_UnreadableCAFileFails(t *testing.T) {
+	raw, err := os.ReadFile("testdata/ca.yaml")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	missing := filepath.Join(t.TempDir(), "does-not-exist.crt")
+	path := filepath.Join(t.TempDir(), "kubeconfig.yaml")
+	if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(raw), "CA_FILE_PATH", missing)), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+	kc, err := Load([]string{path})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := kc.Resolve("file-ca"); err == nil {
+		t.Error("expected an error naming the unreadable CA path")
+	} else if !strings.Contains(err.Error(), missing) {
+		t.Errorf("error %q should name the path %q", err, missing)
 	}
 }

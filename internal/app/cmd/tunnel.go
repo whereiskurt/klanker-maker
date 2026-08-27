@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -369,10 +370,23 @@ func printTunnelDryRun(w io.Writer, idArg string, t *kubetunnel.Target, boxKubec
 	fmt.Fprintf(w, "Resolved context:   %s\n", t.Context)
 	fmt.Fprintf(w, "Cluster address:    %s:%d   (dialled from THIS machine, over your VPN)\n", t.ServerHost, t.ServerPort)
 	fmt.Fprintf(w, "TLS server name:    %s\n", t.TLSServerName)
+	// State the trust decision plainly. This is the field whose absence
+	// produces "x509: certificate signed by unknown authority" inside the
+	// sandbox, and the operator should be able to see which of the three cases
+	// they are in without decoding base64 by hand.
+	switch {
+	case t.InsecureSkipTLSVerify:
+		fmt.Fprintf(w, "Cluster CA:         NOT VERIFIED — mirroring insecure-skip-tls-verify from your kubeconfig\n")
+	case t.CAData != "":
+		fmt.Fprintf(w, "Cluster CA:         inlined from your kubeconfig (%d base64 chars)\n", len(t.CAData))
+	default:
+		fmt.Fprintf(w, "Cluster CA:         none in your kubeconfig — the sandbox will use its system trust store\n")
+	}
 	fmt.Fprintf(w, "Credential plugin:  %s %v\n", t.Exec.Command, t.Exec.Args)
 	fmt.Fprintf(w, "Sandbox API port:   127.0.0.1:%d\n\n", o.bindPort)
 	fmt.Fprintf(w, "ssh command:\n  %s\n\n", kubetunnel.SSHCommandString(args))
-	fmt.Fprintf(w, "kubeconfig that would be written to %s:\n\n%s\n", kubetunnel.BoxKubeconfigPath, boxKubeconfig)
+	fmt.Fprintf(w, "kubeconfig that would be written to %s:\n\n%s\n",
+		kubetunnel.BoxKubeconfigPath, abbreviateCAData(string(boxKubeconfig)))
 	fmt.Fprintf(w, "Check the cluster address and plugin above against your own kubeconfig before running for real.\n")
 	return nil
 }
@@ -397,4 +411,28 @@ func printTunnelBanner(w io.Writer, sandboxID string, t *kubetunnel.Target, o tu
 	fmt.Fprintf(w, "  kubeconfig %s (already the default for this shell)\n", kubetunnel.BoxKubeconfigPath)
 	fmt.Fprintf(w, "\n  Try:  kubectl get ns\n")
 	fmt.Fprintf(w, "  The tunnel closes when you exit this shell.\n\n")
+}
+
+// abbreviateCAData shortens the inlined CA for display only. A real cluster CA
+// is a few thousand base64 characters on one line, which buries the fields
+// --dry-run exists to let the operator check. The length is kept so the line
+// still shows that a CA is present and roughly how big it is.
+func abbreviateCAData(kubeconfig string) string {
+	const key = "certificate-authority-data: "
+	i := strings.Index(kubeconfig, key)
+	if i < 0 {
+		return kubeconfig
+	}
+	valStart := i + len(key)
+	end := strings.IndexByte(kubeconfig[valStart:], '\n')
+	if end < 0 {
+		end = len(kubeconfig) - valStart
+	}
+	val := kubeconfig[valStart : valStart+end]
+	if len(val) <= 40 {
+		return kubeconfig
+	}
+	return kubeconfig[:valStart] +
+		fmt.Sprintf("%s...<%d base64 chars, written in full>", val[:20], len(val)) +
+		kubeconfig[valStart+end:]
 }
