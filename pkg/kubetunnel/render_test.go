@@ -13,7 +13,11 @@ func testTarget() *Target {
 		ServerHost:    "k8s1.corp",
 		ServerPort:    6443,
 		TLSServerName: "api.k8s1.corp",
-		Exec:          &ExecConfig{Command: "kubelogin", Args: []string{"get-token"}},
+		Exec: &ExecConfig{
+			APIVersion: "client.authentication.k8s.io/v1",
+			Command:    "kubelogin",
+			Args:       []string{"get-token"},
+		},
 	}
 }
 
@@ -56,6 +60,9 @@ func TestRenderBoxKubeconfig(t *testing.T) {
 	if got := execBlk["command"]; got != BoxShimPath {
 		t.Errorf("exec command = %v, want %s", got, BoxShimPath)
 	}
+	// Mirrors testTarget's exec apiVersion — see
+	// TestRenderBoxKubeconfig_MirrorsOperatorExecAPIVersion for why this is
+	// never a constant of km's own choosing.
 	if got := execBlk["apiVersion"]; got != "client.authentication.k8s.io/v1" {
 		t.Errorf("exec apiVersion = %v", got)
 	}
@@ -244,5 +251,136 @@ func TestShellQuote(t *testing.T) {
 		if got := shellQuote(tc.in); got != tc.want {
 			t.Errorf("shellQuote(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestRenderBoxKubeconfig_MirrorsOperatorExecAPIVersion pins the fix for the
+// live-UAT failure "exec plugin is configured to use API version
+// client.authentication.k8s.io/v1, plugin returned version
+// client.authentication.k8s.io/v1beta1".
+//
+// kubectl requires an EXACT match between the apiVersion its kubeconfig asks
+// for and the one the plugin's ExecCredential carries. The broker returns the
+// operator's plugin stdout verbatim and never sets KUBERNETES_EXEC_INFO, so the
+// plugin emits its own default — which for kubectl oidc-login is v1beta1. The
+// box kubeconfig therefore cannot pick a version of its own; it must mirror
+// whatever the operator's kubeconfig declares, since that is the version their
+// working local kubectl already agrees with the plugin on.
+func TestRenderBoxKubeconfig_MirrorsOperatorExecAPIVersion(t *testing.T) {
+	for _, want := range []string{
+		"client.authentication.k8s.io/v1beta1",
+		"client.authentication.k8s.io/v1",
+	} {
+		t.Run(want, func(t *testing.T) {
+			tgt := testTarget()
+			tgt.Exec.APIVersion = want
+
+			out, err := RenderBoxKubeconfig(tgt, 16443)
+			if err != nil {
+				t.Fatalf("RenderBoxKubeconfig: %v", err)
+			}
+			var doc map[string]any
+			if err := yaml.Unmarshal(out, &doc); err != nil {
+				t.Fatalf("not valid YAML: %v", err)
+			}
+			users := doc["users"].([]any)
+			execBlk := users[0].(map[string]any)["user"].(map[string]any)["exec"].(map[string]any)
+
+			if got := execBlk["apiVersion"]; got != want {
+				t.Errorf("box exec apiVersion = %v, want %v (must mirror the operator's kubeconfig, "+
+					"or kubectl on the box rejects the credential the plugin actually returns)", got, want)
+			}
+			// interactiveMode is REQUIRED under v1 and valid-but-optional under
+			// v1beta1 (k8s 1.23+), so Never stays correct for both.
+			if got := execBlk["interactiveMode"]; got != "Never" {
+				t.Errorf("interactiveMode = %v, want Never", got)
+			}
+		})
+	}
+}
+
+// A target whose exec stanza carries no apiVersion cannot be rendered: guessing
+// one reintroduces exactly the mismatch this phase's UAT hit.
+func TestRenderBoxKubeconfig_RejectsMissingExecAPIVersion(t *testing.T) {
+	tgt := testTarget()
+	tgt.Exec.APIVersion = ""
+	if _, err := RenderBoxKubeconfig(tgt, 16443); err == nil {
+		t.Error("expected an error when the operator's exec stanza has no apiVersion")
+	}
+}
+
+// TestRenderBoxKubeconfig_EmitsClusterCA pins the box-side half of the
+// unknown-authority fix: the CA resolved from the operator's kubeconfig must
+// actually reach the file kubectl reads.
+func TestRenderBoxKubeconfig_EmitsClusterCA(t *testing.T) {
+	tgt := testTarget()
+	tgt.CAData = "SU5MSU5FLUNB"
+
+	out, err := RenderBoxKubeconfig(tgt, 16443)
+	if err != nil {
+		t.Fatalf("RenderBoxKubeconfig: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("not valid YAML: %v", err)
+	}
+	cl := doc["clusters"].([]any)[0].(map[string]any)["cluster"].(map[string]any)
+
+	if got := cl["certificate-authority-data"]; got != "SU5MSU5FLUNB" {
+		t.Errorf("certificate-authority-data = %v, want the operator's CA inlined", got)
+	}
+	// tls-server-name is what the CA is checked AGAINST. Emitting one without
+	// the other is the failure mode this pair of fields exists to avoid.
+	if got := cl["tls-server-name"]; got != "api.k8s1.corp" {
+		t.Errorf("tls-server-name = %v, want it kept alongside the CA", got)
+	}
+	if _, ok := cl["insecure-skip-tls-verify"]; ok {
+		t.Error("insecure-skip-tls-verify must be absent when a CA is present: kubectl rejects both together")
+	}
+}
+
+// When no CA is available the box falls back to its system trust store. km must
+// not quietly substitute insecure-skip-tls-verify to make the error go away.
+func TestRenderBoxKubeconfig_NoCANoInsecure(t *testing.T) {
+	out, err := RenderBoxKubeconfig(testTarget(), 16443)
+	if err != nil {
+		t.Fatalf("RenderBoxKubeconfig: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("not valid YAML: %v", err)
+	}
+	cl := doc["clusters"].([]any)[0].(map[string]any)["cluster"].(map[string]any)
+
+	if _, ok := cl["certificate-authority-data"]; ok {
+		t.Error("certificate-authority-data must be absent when the operator's config has no CA")
+	}
+	if _, ok := cl["insecure-skip-tls-verify"]; ok {
+		t.Error("km must never invent insecure-skip-tls-verify; only the operator's own config may set it")
+	}
+}
+
+// insecure-skip-tls-verify is mirrored only when the operator asked for it, and
+// then the CA must be dropped — kubectl errors out if both are set.
+func TestRenderBoxKubeconfig_InsecureExcludesCA(t *testing.T) {
+	tgt := testTarget()
+	tgt.InsecureSkipTLSVerify = true
+	tgt.CAData = "SU5MSU5FLUNB"
+
+	out, err := RenderBoxKubeconfig(tgt, 16443)
+	if err != nil {
+		t.Fatalf("RenderBoxKubeconfig: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("not valid YAML: %v", err)
+	}
+	cl := doc["clusters"].([]any)[0].(map[string]any)["cluster"].(map[string]any)
+
+	if got := cl["insecure-skip-tls-verify"]; got != true {
+		t.Errorf("insecure-skip-tls-verify = %v, want true", got)
+	}
+	if _, ok := cl["certificate-authority-data"]; ok {
+		t.Error("a CA alongside insecure-skip-tls-verify makes kubectl refuse the config outright")
 	}
 }
