@@ -135,15 +135,30 @@ Existing sandboxes keep their baked-in configuration until
 
 ## Runtime narrowing from inside the sandbox
 
-`spec.network.egress.runtimeDeny: true` lets a **running** sandbox add denies to
-itself, from user-land, without an operator round-trip and without a restart.
+Every sandbox can add denies to itself while **running**, from user-land, without
+an operator round-trip and without a restart. There is nothing to enable.
+
+> **Changed in v0.8.8.** This used to be gated on
+> `spec.network.egress.runtimeDeny: true`. It no longer is — `km-netpolicy`, the
+> append-only deny file, the `KM_NETPOLICY_FILE` env on both proxies, and the eBPF
+> enforcer's `--netpolicy-file` are provisioned on **every** sandbox.
+>
+> The gate was backwards. `km-netpolicy` can only ever *add* denies — there is no
+> removal verb and the file is append-only — so its presence can never widen a
+> policy. Meanwhile the boxes where narrowing matters most are exactly the
+> wide-open ones (`allowedDNSSuffixes: ["*"]`, learn mode) that no profile would
+> have thought to opt in. Gating it meant the tool for locking a box down was
+> missing precisely where locking down was most valuable, and gaining it cost a
+> `km destroy && km create`.
+>
+> `runtimeDeny` is still accepted so existing profiles keep validating, and is now
+> a no-op. You can delete it or leave it.
 
 ```yaml
 spec:
   network:
     egress:
-      allowedDNSSuffixes: ["*"]
-      runtimeDeny: true
+      allowedDNSSuffixes: ["*"]   # wide open — and still narrowable at runtime
 ```
 
 On the box:

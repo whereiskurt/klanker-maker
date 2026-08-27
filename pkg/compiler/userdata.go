@@ -1183,14 +1183,12 @@ chmod +x /opt/km/bin/km-github
 ln -sf /opt/km/bin/km-github /usr/local/bin/km-github
 echo "[km-bootstrap] km-github binary installed at /opt/km/bin/km-github"
 {{- end }}
-{{- if .RuntimeDenyEnabled }}
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-netpolicy" /opt/km/bin/km-netpolicy
 chmod +x /opt/km/bin/km-netpolicy
 # Expose km-netpolicy on /usr/local/bin so an agent shell resolves it without
 # needing /opt/km/bin on PATH.
 ln -sf /opt/km/bin/km-netpolicy /usr/local/bin/km-netpolicy
 echo "[km-bootstrap] km-netpolicy binary installed at /opt/km/bin/km-netpolicy"
-{{- end }}
 {{- if .H1InboundEnabled }}
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-h1" /opt/km/bin/km-h1
 chmod +x /opt/km/bin/km-h1
@@ -1274,9 +1272,7 @@ Environment=ALLOWED_SUFFIXES={{ .AllowedDNSSuffixes }}
 {{- if .DeniedDNSSuffixes }}
 Environment=DENIED_SUFFIXES={{ .DeniedDNSSuffixes }}
 {{- end }}
-{{- if .RuntimeDenyEnabled }}
 Environment=KM_NETPOLICY_FILE={{ .RuntimeDenyFile }}
-{{- end }}
 Environment=UPSTREAM_DNS=169.254.169.253
 Environment=DNS_PORT=5353
 ExecStart=/opt/km/bin/km-dns-proxy
@@ -1298,9 +1294,7 @@ Environment=ALLOWED_HOSTS={{ .AllowedHTTPHosts }}
 {{- if .DeniedHTTPHosts }}
 Environment=DENIED_HOSTS={{ .DeniedHTTPHosts }}
 {{- end }}
-{{- if .RuntimeDenyEnabled }}
 Environment=KM_NETPOLICY_FILE={{ .RuntimeDenyFile }}
-{{- end }}
 Environment=KM_GITHUB_ALLOWED_REPOS={{ .GitHubAllowedRepos }}
 Environment=PROXY_PORT=3128
 ExecStart=/opt/km/bin/km-http-proxy
@@ -1318,9 +1312,18 @@ chown km-sidecar:km-sidecar /run/km
 mkfifo /run/km/audit-pipe
 chown km-sidecar:km-sidecar /run/km/audit-pipe
 chmod 666 /run/km/audit-pipe
-{{- if .RuntimeDenyEnabled }}
 
-# Runtime egress narrowing (spec.network.egress.runtimeDeny).
+# Runtime egress narrowing — provisioned on EVERY sandbox, unconditionally.
+#
+# This is deliberately NOT gated on a profile field. km-netpolicy can only ever
+# ADD denies (there is no removal verb, and the file is append-only), so its
+# presence can never widen a policy — and the boxes where narrowing matters most
+# are exactly the wide-open ones a profile would never have opted in. A sandbox
+# that turns out to need locking down mid-run should not have to be recreated to
+# gain the tool for it.
+#
+# spec.network.egress.runtimeDeny is still accepted for backwards compatibility
+# and is now a no-op.
 #
 # The sandbox appends denies here via "km-netpolicy deny", and must never be able
 # to remove one. chattr +a makes that a kernel guarantee rather than a
@@ -1355,7 +1358,6 @@ if chattr +a {{ .RuntimeDenyFile }} 2>/dev/null; then
 else
   echo "[km-bootstrap] WARNING: could not set append-only on {{ .RuntimeDenyFile }} — runtime denies still apply, but the sandbox could remove them" >&2
 fi
-{{- end }}
 {{- if .LearnMode }}
 # Learn mode: create command log file writable by all users (root and sandbox user).
 touch /run/km/learn-commands.log
@@ -4826,9 +4828,7 @@ ExecStart=/usr/local/bin/km ebpf-attach \
 {{- if .DeniedHTTPHosts }}
   --denied-hosts "{{ .DeniedHTTPHosts }}" \
 {{- end }}
-{{- if .RuntimeDenyEnabled }}
   --netpolicy-file "{{ .RuntimeDenyFile }}" \
-{{- end }}
   --proxy-hosts "{{ .L7ProxyHosts }}" \
 {{- if eq .Enforcement "both" }}
   --proxy-pid ${KM_HTTP_PROXY_PID} \
@@ -5289,11 +5289,15 @@ type userDataParams struct {
 	// renders byte-identical user-data.
 	DeniedDNSSuffixes string
 	DeniedHTTPHosts   string
-	// RuntimeDenyEnabled provisions the kernel-append-only deny file and the
-	// km-netpolicy helper so the sandbox can narrow its own egress after boot.
-	// False renders no trace of any of it.
-	RuntimeDenyEnabled bool
-	// RuntimeDenyFile is the absolute path of that file. Held in a field rather
+	// RuntimeDenyFile is the absolute path of the kernel-append-only deny file
+	// the sandbox narrows itself with. The file, the km-netpolicy helper, the
+	// KM_NETPOLICY_FILE env on both proxies, and the enforcer's --netpolicy-file
+	// flag are all provisioned UNCONDITIONALLY — there is no longer a
+	// RuntimeDenyEnabled gate, because a tool that can only add denies cannot
+	// widen a policy, and the boxes most in need of narrowing are the wide-open
+	// ones no profile would have opted in.
+	//
+	// Held in a field rather
 	// than inlined into the template so the compiler, the helper's default, and
 	// the proxies cannot drift apart.
 	RuntimeDenyFile    string
@@ -6013,7 +6017,9 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		AllowedHTTPHosts:   strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
 		DeniedDNSSuffixes:  strings.Join(p.Spec.Network.Egress.DeniedDNSSuffixes, ","),
 		DeniedHTTPHosts:    strings.Join(p.Spec.Network.Egress.DeniedHosts, ","),
-		RuntimeDenyEnabled: p.Spec.Network.Egress.RuntimeDeny,
+		// p.Spec.Network.Egress.RuntimeDeny is deliberately NOT read here any
+		// more: runtime narrowing is provisioned on every sandbox. The profile
+		// field is still accepted for backwards compatibility and is a no-op.
 		RuntimeDenyFile:    netpolicy.DefaultPath,
 		GitHubAllowedRepos: joinGitHubAllowedRepos(p),
 		KMArtifactsBucket:  artifactsBucket,

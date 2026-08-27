@@ -737,7 +737,20 @@ type EgressSpec struct {
 	// attribute — but it can equally kill the proxies outright, so the guarantee
 	// was already void there for larger reasons.
 	//
-	// false (the default) provisions nothing and renders byte-identical user-data.
+	// DEPRECATED AND NOW A NO-OP. Runtime narrowing is provisioned on EVERY
+	// sandbox regardless of this field, so setting it changes nothing and
+	// leaving it unset no longer withholds anything.
+	//
+	// The gate was removed because it was backwards: km-netpolicy can only ADD
+	// denies, so its presence can never widen a policy — while the boxes where
+	// narrowing matters most are exactly the wide-open ones (`*` allowlists,
+	// learn mode) that no profile would have thought to opt in. Gating it meant
+	// the tool for locking a box down was absent precisely where locking down
+	// was most valuable, and gaining it cost a destroy/create.
+	//
+	// The field is still accepted so existing profiles keep validating. It is
+	// deliberately NOT removed from the schema: breaking every operator's file
+	// to delete a now-harmless key would be a poor trade.
 	RuntimeDeny bool `yaml:"runtimeDeny,omitempty"`
 }
 
