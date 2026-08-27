@@ -11,82 +11,57 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 -->
-## 🔧 `km tunnel k8s` now works against a real cluster
+## 🔒 Every sandbox can now lock itself down
 
-v0.8.6 shipped `km tunnel` with its live UAT still pending. It has now been run against an
-actual cluster, and it failed twice before it worked. Both were rendering bugs on the
-operator's side — nothing on the sandbox, nothing in AWS.
+`km-netpolicy` lets a **running** sandbox add egress denies to itself, from user-land, with
+no operator round-trip and no restart. Until now it was gated behind
+`spec.network.egress.runtimeDeny: true`.
 
-**If you installed v0.8.6, `km tunnel k8s` could not have worked for you. Take this one.**
+**That gate was backwards, and it's gone.**
 
-### The exec `apiVersion` is now mirrored, not chosen
+`km-netpolicy` can only ever *add* denies — there is no removal verb, and the file it appends
+to is held append-only by the kernel. Its presence can never widen a policy. Meanwhile the
+boxes where narrowing matters most are exactly the wide-open ones — `allowedDNSSuffixes:
+["*"]`, learn mode — that nobody would have thought to opt in ahead of time. So the tool for
+locking a box down was missing precisely where locking down was most valuable, and getting it
+meant destroying and recreating the sandbox.
 
-```
-exec plugin is configured to use API version client.authentication.k8s.io/v1,
-plugin returned version client.authentication.k8s.io/v1beta1
-```
+Now it's on every box:
 
-km hardcoded `v1` into the kubeconfig it writes on the box. But the broker deliberately
-never sends `KUBERNETES_EXEC_INFO` — the box's cluster info describes a fake loopback
-endpoint, and forwarding it would be misleading — so your plugin can't know which version
-was asked for and returns its own default. `kubectl oidc-login` returns `v1beta1`, kubectl
-demands an exact match, and nothing connects.
-
-km now mirrors whatever your own kubeconfig declares. Your local kubectl already works
-against that plugin, so your declared version is the only one known to agree with it.
-Hardcoding `v1beta1` instead would have been the same bug pointed the other way, and
-changing kubectl on the sandbox can't help — every version enforces the match.
-
-### The cluster CA now travels with the tunnel
-
-```
-x509: certificate signed by unknown authority
+```console
+$ km-netpolicy deny telemetry.example.com
+$ km-netpolicy list
 ```
 
-The box dials `127.0.0.1` but verifies your **real** cluster certificate via
-`tls-server-name`. That needs the cluster's CA, and km wasn't sending one — so the sandbox
-fell back to its system trust store, which has never heard of a private corporate root or
-an EKS-managed CA. `tls-server-name` says which *name* to check; the CA says which
-*certificate* to trust. km was emitting one half of a pair.
+Effective within about a second, no restart, and the kernel won't let the sandbox take it
+back.
 
-The CA now travels, read off your machine and inlined if your kubeconfig points at a file
-(that path doesn't exist on the sandbox). `insecure-skip-tls-verify` is mirrored if you
-already set it and **never invented** — km will not quietly stop verifying a certificate to
-make an error go away.
+### All five pieces, not just the binary
 
-**This doesn't weaken anything.** A CA certificate is public, verification-only, and mints
-nothing — it can't be replayed and grants no route to your cluster. Your VPN profile, SSO
-refresh token, and AWS credentials still never leave your workstation.
+Worth stating because a partial version would have been *worse* than the gate: shipping the
+helper alone would let `km-netpolicy deny x` report success while nothing actually read the
+result, and `list` would print `(none)`. Both were real bugs when this feature first shipped.
 
-### Checking it without a VPN
+So the binary, the append-only deny file, `KM_NETPOLICY_FILE` on **both** proxies, the
+`/etc/km/netpolicy.env` mirror, and the eBPF enforcer's `--netpolicy-file` are all now
+unconditional. That last one is the easiest to forget and the most load-bearing — under
+`ebpf`/`both` enforcement the resolver serves DNS, so without it a deny would report success
+while the host stayed resolvable.
 
-`--dry-run` exercises the whole fix and touches no network:
+`spec.network.egress.runtimeDeny` is **deprecated and now a no-op**. It's still accepted, so
+your existing profiles keep validating — delete it or leave it, either is fine.
+
+### ⚠️ Deploy surface — heavier than v0.8.7
+
+This one changes rendered user-data, so it is **not** a `make build`-only upgrade:
 
 ```bash
-km tunnel k8s <sandbox> --context <your-context> --dry-run
+make build && make build-lambdas && km init --dry-run=false
 ```
 
-The exec `apiVersion` in the printed kubeconfig should match your own `~/.kube/config`, and
-you should see a `Cluster CA:` line reporting an inlined CA.
+Not `--sidecars` — that doesn't rebuild the create-handler zip that renders user-data.
 
-Deploy is `make build` — no `km init`, no sandbox recreate.
+**Existing sandboxes need `km destroy && km create` to gain it.** The binary is fetched at
+boot, so a running box keeps whatever it was created with.
 
-### 📖 And a proper explanation of how the thing works
-
-New: **[`docs/k8s-reverse-tunnel-internals.md`](https://github.com/whereiskurt/klanker-maker/blob/v0.8.7/docs/k8s-reverse-tunnel-internals.md)**.
-
-The existing runbook tells you how to *use* the tunnel. This one explains the mechanism —
-worth reading before you trust it with a cluster, and worth having open if you ever need to
-debug it:
-
-- why SSM forced SSH-inside-SSM (Session Manager has **no** reverse-forward primitive), and
-  the one property the whole design rests on — `ssh -R` resolves and dials **client-side**
-- the five approaches that don't work, and exactly why, so they don't get re-proposed
-- a sequence diagram of a credential mint, and why the broker is deliberately the dumbest
-  component in the phase
-- the TLS split: `tls-server-name` says which **name** to verify, the CA says which
-  **certificate** to trust — two halves of a pair, and shipping one was this release's bug
-- the apiVersion exact-match trap, including the two tempting wrong turns
-- a precise trust-boundary table: what stays on your workstation, what crosses, and why the
-  CA isn't a credential
-- what the tunnel bypasses, stated plainly, and why the real control is its lifetime
+See `docs/egress-deny-lists.md`.
