@@ -11,68 +11,62 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 -->
-## ✨ Major additions highlighted
+## 🔧 `km tunnel k8s` now works against a real cluster
 
-Some clusters you can only reach from your own laptop. The VPN route lives there, the
-credential can't leave, and that's the end of it — which has meant a sandbox agent could
-never touch them.
+v0.8.6 shipped `km tunnel` with its live UAT still pending. It has now been run against an
+actual cluster, and it failed twice before it worked. Both were rendering bugs on the
+operator's side — nothing on the sandbox, nothing in AWS.
 
-### 🔌 `km tunnel` — kubectl in a sandbox, against a cluster only your laptop can reach
+**If you installed v0.8.6, `km tunnel k8s` could not have worked for you. Take this one.**
 
-```bash
-km tunnel k8s my-sandbox --context k8s1
+### The exec `apiVersion` is now mirrored, not chosen
+
+```
+exec plugin is configured to use API version client.authentication.k8s.io/v1,
+plugin returned version client.authentication.k8s.io/v1beta1
 ```
 
-You land in a shell on the sandbox. `kubectl get ns` works. Exit the shell and the access
-is gone.
+km hardcoded `v1` into the kubeconfig it writes on the box. But the broker deliberately
+never sends `KUBERNETES_EXEC_INFO` — the box's cluster info describes a fake loopback
+endpoint, and forwarding it would be misleading — so your plugin can't know which version
+was asked for and returns its own default. `kubectl oidc-login` returns `v1beta1`, kubectl
+demands an exact match, and nothing connects.
 
-**Nothing sensitive reaches the box.** Not your VPN credential, not your SSO refresh
-token, not an AWS credential. `ssh -R` dials the cluster from *your* side, over *your*
-VPN — the sandbox never gets a route or even a DNS entry for it.
+km now mirrors whatever your own kubeconfig declares. Your local kubectl already works
+against that plugin, so your declared version is the only one known to agree with it.
+Hardcoding `v1beta1` instead would have been the same bug pointed the other way, and
+changing kubectl on the sandbox can't help — every version enforces the match.
 
-Credentials work by proxying Kubernetes' own ExecCredential protocol rather than
-reimplementing OIDC. The box runs a three-line `curl --unix-socket` shim; a broker on your
-laptop runs **the exec plugin your real kubeconfig already uses** and hands back its output
-untouched. Identity Center, the issuer, the refresh token, and the browser all stay on your
-machine. When a token expires mid-`kubectl`, the SSO tab opens on your laptop and the
-sandbox never prompts for anything.
+### The cluster CA now travels with the tunnel
 
-**It works on sandboxes you already have running.** No profile change, no sidecar, no
-`km init`, no recreate — `make build` and you're done. Every box already has sshd and a
-keypair, and everything the tunnel needs is written at connect time.
-
-**Three flags are permanent interface, not scaffolding.** `--dry-run` resolves your
-kubeconfig and prints exactly what it would do, touching no AWS and opening no connection —
-run it first, with or without the VPN. `--print-ssh` hands you the raw ssh command so you
-can bypass km entirely. `--verbose` announces each leg so a failure localises without a
-debugger.
-
-**And the part worth reading twice:** a reverse tunnel is a hole straight through km's
-egress enforcement. The MITM proxy, the eBPF allowlist, and `deniedHosts` do not see this
-traffic. While the tunnel is up, anything on that box that can reach the forwarded port is
-talking to your cluster as you. The control is the lifetime — it dies with your shell, and
-there is deliberately no daemon mode, no `-N`, and no flag to leave it running for an
-unattended agent.
-
-### 🧦 `km tunnel socks` — the same trick, pointed at everything else
-
-```bash
-km tunnel socks my-sandbox
-# on the box:  export ALL_PROXY=socks5h://127.0.0.1:1080
+```
+x509: certificate signed by unknown authority
 ```
 
-Same transport, no cluster. The box gets a SOCKS5 proxy on loopback that egresses through
-your workstation, so it reaches whatever your VPN reaches. Nothing is written on the box
-and there's no broker — `ssh -R <port>` with no destination makes ssh itself the proxy.
+The box dials `127.0.0.1` but verifies your **real** cluster certificate via
+`tls-server-name`. That needs the cluster's CA, and km wasn't sending one — so the sandbox
+fell back to its system trust store, which has never heard of a private corporate root or
+an EKS-managed CA. `tls-server-name` says which *name* to check; the CA says which
+*certificate* to trust. km was emitting one half of a pair.
 
-This one is deliberately wide. `k8s` forwards two sockets to one cluster; `socks` lets
-anything on the box reach anything you can. That's the point of it, and it's why it dies
-with your shell like everything else here.
+The CA now travels, read off your machine and inlined if your kubeconfig points at a file
+(that path doesn't exist on the sandbox). `insecure-skip-tls-verify` is mirrored if you
+already set it and **never invented** — km will not quietly stop verifying a certificate to
+make an error go away.
 
-One thing worth knowing before you reach for `--set-proxy-env`: km meters Bedrock,
-Anthropic and OpenAI spend by intercepting those endpoints in its own proxy, and traffic
-sent through SOCKS never gets there. Blanket-proxy the shell and **AI spend quietly stops
-being metered**. That's why it's opt-in rather than the default, and why the banner prints
-the export line instead — so you can scope it to the command that actually needs it.
+**This doesn't weaken anything.** A CA certificate is public, verification-only, and mints
+nothing — it can't be replayed and grants no route to your cluster. Your VPN profile, SSO
+refresh token, and AWS credentials still never leave your workstation.
 
-Live UAT is pending. See `docs/k8s-reverse-tunnel.md` for the full runbook.
+### Checking it without a VPN
+
+`--dry-run` exercises the whole fix and touches no network:
+
+```bash
+km tunnel k8s <sandbox> --context <your-context> --dry-run
+```
+
+The exec `apiVersion` in the printed kubeconfig should match your own `~/.kube/config`, and
+you should see a `Cluster CA:` line reporting an inlined CA.
+
+Deploy is `make build` — no `km init`, no sandbox recreate.
