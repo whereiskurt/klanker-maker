@@ -7,6 +7,11 @@
 > differs only in what it carries and what it sets up on the box. There are two:
 > **`k8s`** (this document) and **`socks`**, a general proxy to whatever your VPN reaches.
 > See [The tunnel family](#the-tunnel-family).
+>
+> This document is the **operator runbook**. For the mechanism in full — the three nested
+> tunnels, the ExecCredential proxy, the TLS name/CA split, the apiVersion exact-match trap,
+> and the precise trust boundary — see
+> **[How `km tunnel k8s` works](k8s-reverse-tunnel-internals.md)**.
 
 You have a Kubernetes cluster that is reachable only from your own workstation: the
 OpenVPN route lives there, and the VPN credential cannot leave it. You want to work in

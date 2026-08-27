@@ -70,3 +70,23 @@ The exec `apiVersion` in the printed kubeconfig should match your own `~/.kube/c
 you should see a `Cluster CA:` line reporting an inlined CA.
 
 Deploy is `make build` — no `km init`, no sandbox recreate.
+
+### 📖 And a proper explanation of how the thing works
+
+New: **[`docs/k8s-reverse-tunnel-internals.md`](https://github.com/whereiskurt/klanker-maker/blob/v0.8.7/docs/k8s-reverse-tunnel-internals.md)**.
+
+The existing runbook tells you how to *use* the tunnel. This one explains the mechanism —
+worth reading before you trust it with a cluster, and worth having open if you ever need to
+debug it:
+
+- why SSM forced SSH-inside-SSM (Session Manager has **no** reverse-forward primitive), and
+  the one property the whole design rests on — `ssh -R` resolves and dials **client-side**
+- the five approaches that don't work, and exactly why, so they don't get re-proposed
+- a sequence diagram of a credential mint, and why the broker is deliberately the dumbest
+  component in the phase
+- the TLS split: `tls-server-name` says which **name** to verify, the CA says which
+  **certificate** to trust — two halves of a pair, and shipping one was this release's bug
+- the apiVersion exact-match trap, including the two tempting wrong turns
+- a precise trust-boundary table: what stays on your workstation, what crosses, and why the
+  CA isn't a credential
+- what the tunnel bypasses, stated plainly, and why the real control is its lifetime
