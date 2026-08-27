@@ -18,7 +18,16 @@ func TestUserData_NoDenyLists_EmitsNothing(t *testing.T) {
 		t.Fatalf("Compile error = %v", err)
 	}
 
-	for _, token := range []string{"DENIED_SUFFIXES", "DENIED_HOSTS", "--denied-dns", "--denied-hosts"} {
+	// Scoped to the proxy units' Environment lines and the enforcer flags. The
+	// bare key names also appear in /etc/km/netpolicy.env, which is now written
+	// unconditionally (it is the mirror that lets `km-netpolicy list` report
+	// profile-baked denies truthfully) — with empty values, which is correct.
+	for _, token := range []string{
+		"Environment=DENIED_SUFFIXES",
+		"Environment=DENIED_HOSTS",
+		"--denied-dns",
+		"--denied-hosts",
+	} {
 		if strings.Contains(artifacts.UserData, token) {
 			t.Errorf("UserData must not contain %q when the profile declares no denies", token)
 		}
@@ -137,18 +146,72 @@ func TestECSServiceHCL_NoDenyLists_EmitsNothing(t *testing.T) {
 // Runtime narrowing (spec.network.egress.runtimeDeny)
 // ---------------------------------------------------------------------------
 
-func TestUserData_RuntimeDenyOff_EmitsNothing(t *testing.T) {
+// TestUserData_RuntimeNarrowingIsUnconditional pins the inversion of the old
+// contract: runtime narrowing used to be gated on spec.network.egress.runtimeDeny
+// and is now provisioned on EVERY sandbox.
+//
+// The rationale, so nobody re-adds the gate: km-netpolicy can only ADD denies —
+// there is no removal verb and the file is append-only — so its presence can
+// never widen a policy. And the boxes where narrowing matters most are exactly
+// the wide-open ones (`*` allowlists, learn mode) that no profile would have
+// opted in. Gating it meant the tool for locking a box down was missing
+// precisely where locking down was most valuable, and gaining it required a
+// destroy/create.
+func TestUserData_RuntimeNarrowingIsUnconditional(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
+	// Explicitly false — the field is accepted for backwards compatibility and
+	// is now a no-op.
+	p.Spec.Network.Egress.RuntimeDeny = false
 
 	artifacts, err := compiler.Compile(p, "sb-rtoff", false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile error = %v", err)
 	}
+	ud := artifacts.UserData
 
-	for _, token := range []string{"KM_NETPOLICY_FILE", "km-netpolicy", "chattr", "netpolicy"} {
-		if strings.Contains(artifacts.UserData, token) {
-			t.Errorf("UserData must not contain %q when runtimeDeny is off", token)
+	// Shipping the helper without the file, the proxies' KM_NETPOLICY_FILE, or
+	// the enforcer flag would be WORSE than omitting it: `km-netpolicy deny x`
+	// would report success while nothing read the result.
+	for _, want := range []string{
+		"sidecars/km-netpolicy",           // the binary is fetched
+		"/usr/local/bin/km-netpolicy",     // and on PATH
+		"/var/lib/km/netpolicy/deny.list", // the append-only file exists
+		"chattr +a",                       // and the kernel enforces it
+		"KM_NETPOLICY_FILE=",              // the proxies read it
+		"/etc/km/netpolicy.env",           // so `list` reports baked denies truthfully
+	} {
+		if !strings.Contains(ud, want) {
+			t.Errorf("UserData must contain %q on every sandbox, runtimeDeny off or not", want)
 		}
+	}
+
+	// Both proxy units need it — one alone leaves a half-enforced policy.
+	if got := strings.Count(ud, "KM_NETPOLICY_FILE="); got < 2 {
+		t.Errorf("KM_NETPOLICY_FILE appears %d times; both the dns-proxy and http-proxy units need it", got)
+	}
+}
+
+// Under ebpf/both the bootstrap deliberately leaves km-dns-proxy disabled and
+// the eBPF resolver serves DNS instead — so the enforcer needs the deny file
+// too. Without it `km-netpolicy deny x` would report success while x stayed
+// resolvable, which is exactly the bug the original phase found and fixed.
+// `--netpolicy-file` is unconditional now, but the enforcer block itself only
+// renders for ebpf/both, so this needs its own profile.
+func TestUserData_RuntimeNarrowing_EBPFEnforcerGetsTheFile(t *testing.T) {
+	for _, mode := range []string{"ebpf", "both"} {
+		t.Run(mode, func(t *testing.T) {
+			p := loadTestProfile(t, "ec2-basic.yaml")
+			p.Spec.Network.Enforcement = mode
+			p.Spec.Network.Egress.RuntimeDeny = false // still a no-op
+
+			artifacts, err := compiler.Compile(p, "sb-rtebpf", false, testNetwork(), nil)
+			if err != nil {
+				t.Fatalf("Compile error = %v", err)
+			}
+			if !strings.Contains(artifacts.UserData, `--netpolicy-file "/var/lib/km/netpolicy/deny.list"`) {
+				t.Errorf("enforcer must get --netpolicy-file under enforcement=%s", mode)
+			}
+		})
 	}
 }
 

@@ -69,6 +69,37 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   the old code and no refresh happens. No SandboxProfile schema change, no userdata change, **no
   sandbox recreate** — this is entirely control-plane.
 
+**Runtime egress narrowing is now unconditional (2026-08-27, v0.8.8):**
+- **`km-netpolicy` and its whole mechanism ship on EVERY sandbox.** The
+  `spec.network.egress.runtimeDeny` gate is removed from all **five** sites: the sidecar
+  `s3 cp` + symlink, `KM_NETPOLICY_FILE` on **both** proxy units, the append-only deny file
+  (+`chattr +a` +`/etc/km/netpolicy.env`), and the eBPF enforcer's `--netpolicy-file`.
+- **The gate was backwards.** `km-netpolicy` can only ever ADD denies (no removal verb, file
+  is kernel-append-only), so its presence can never widen a policy — while the boxes where
+  narrowing matters most are exactly the wide-open ones (`allowedDNSSuffixes: ["*"]`, learn
+  mode) that no profile would have thought to opt in. Gating it meant the lock-it-down tool
+  was absent precisely where locking down was most valuable, and gaining it cost a
+  `km destroy && km create`.
+- **All five sites or none — a partial change is WORSE than the gate.** Shipping only the
+  binary would let `km-netpolicy deny x` report success while nothing read the result, and
+  `list` would print `(none)`. Both were real bugs in the original phase. The eBPF site is
+  the easiest to forget and the most load-bearing: under `ebpf`/`both` the bootstrap leaves
+  `km-dns-proxy` disabled and the resolver serves DNS, so without `--netpolicy-file` a deny
+  would report success while the host stayed resolvable.
+- **`spec.network.egress.runtimeDeny` is DEPRECATED and a no-op**, still accepted so existing
+  profiles keep validating. Deliberately NOT removed from the schema — breaking every
+  operator's file to delete a harmless key is a poor trade.
+- **This deliberately breaks the "dormant ⇒ byte-identical" rule** (the second such departure,
+  after Phase 129's rickroll deletion). Three goldens gained 54–55 lines each, verified
+  purely additive and netpolicy-only. The **frozen** pre-92 baseline was hand-patched by
+  writing `stripSubagentStopScript(generated)`, NOT via `CAPTURE_PRE92_BASELINE=1` — that flag
+  writes the UNSTRIPPED output and corrupts the golden (see
+  [[project_frozen_byte_identity_golden_capture_trap]]).
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`** (the
+  create-handler zip renders userdata; NOT `--sidecars`, which does not rebuild it).
+  **Existing sandboxes need `km destroy && km create`** to gain it — the binary is fetched at
+  boot. See `docs/egress-deny-lists.md`.
+
 **Phase 130 (2026-08-26) — `km tunnel`: reverse-tunnelled kubectl into a sandbox, against a cluster only the operator's laptop can reach (code-complete; live UAT pending):**
 - `km tunnel k8s <sandbox-id> --context <ctx>` drops the operator into an interactive sandbox
   shell where `kubectl` works against a cluster reachable only from their own workstation

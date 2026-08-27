@@ -1267,6 +1267,12 @@ chmod +x /opt/km/bin/otelcol-contrib
 # ad-hoc invocations) resolve it without needing /opt/km/bin on PATH.
 # Internal callers in this userdata still use the absolute path.
 ln -sf /opt/km/bin/km-slack /usr/local/bin/km-slack
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-netpolicy" /opt/km/bin/km-netpolicy
+chmod +x /opt/km/bin/km-netpolicy
+# Expose km-netpolicy on /usr/local/bin so an agent shell resolves it without
+# needing /opt/km/bin on PATH.
+ln -sf /opt/km/bin/km-netpolicy /usr/local/bin/km-netpolicy
+echo "[km-bootstrap] km-netpolicy binary installed at /opt/km/bin/km-netpolicy"
 
 # Ensure Claude Code native binary is installed.
 # On AMI-baked instances the platform binary may be missing. Re-run install.cjs
@@ -1298,6 +1304,7 @@ After=network.target
 User=km-sidecar
 Environment=SANDBOX_ID=test-sb
 Environment=ALLOWED_SUFFIXES=example.com
+Environment=KM_NETPOLICY_FILE=/var/lib/km/netpolicy/deny.list
 Environment=UPSTREAM_DNS=169.254.169.253
 Environment=DNS_PORT=5353
 ExecStart=/opt/km/bin/km-dns-proxy
@@ -1316,6 +1323,7 @@ User=km-sidecar
 Environment=SANDBOX_ID=test-sb
 Environment=AWS_REGION=us-east-1
 Environment=ALLOWED_HOSTS=api.example.com,example.com
+Environment=KM_NETPOLICY_FILE=/var/lib/km/netpolicy/deny.list
 Environment=KM_GITHUB_ALLOWED_REPOS=
 Environment=PROXY_PORT=3128
 ExecStart=/opt/km/bin/km-http-proxy
@@ -1333,6 +1341,52 @@ chown km-sidecar:km-sidecar /run/km
 mkfifo /run/km/audit-pipe
 chown km-sidecar:km-sidecar /run/km/audit-pipe
 chmod 666 /run/km/audit-pipe
+
+# Runtime egress narrowing — provisioned on EVERY sandbox, unconditionally.
+#
+# This is deliberately NOT gated on a profile field. km-netpolicy can only ever
+# ADD denies (there is no removal verb, and the file is append-only), so its
+# presence can never widen a policy — and the boxes where narrowing matters most
+# are exactly the wide-open ones a profile would never have opted in. A sandbox
+# that turns out to need locking down mid-run should not have to be recreated to
+# gain the tool for it.
+#
+# spec.network.egress.runtimeDeny is still accepted for backwards compatibility
+# and is now a no-op.
+#
+# The sandbox appends denies here via "km-netpolicy deny", and must never be able
+# to remove one. chattr +a makes that a kernel guarantee rather than a
+# convention: an append-only file cannot be truncated, unlinked, renamed, or have
+# the attribute cleared without CAP_LINUX_IMMUTABLE, which an unprivileged
+# sandbox user does not hold.
+#
+# It lives under /var/lib rather than /run because /run is a tmpfs cleared on
+# boot, and a reboot that silently dropped accumulated denies would WIDEN the
+# sandbox's policy — the one thing this design forbids.
+#
+# Mode 0666 mirrors the audit pipe. The protection against removal comes from the
+# append-only attribute, not from the permission bits, so a writable mode costs
+# nothing and avoids depending on the sandbox group existing.
+mkdir -p "$(dirname /var/lib/km/netpolicy/deny.list)"
+if [ ! -f /var/lib/km/netpolicy/deny.list ]; then
+  printf '# Runtime egress denies for this sandbox — append-only, one entry per line.\n' > /var/lib/km/netpolicy/deny.list
+fi
+chmod 666 /var/lib/km/netpolicy/deny.list
+# The profile-baked denies otherwise live only inside the two proxy units'
+# Environment blocks, which a sandbox shell never sees — so km-netpolicy would
+# report "(none)" for them on a box that actually has them. Mirror them here.
+mkdir -p /etc/km
+cat > /etc/km/netpolicy.env << 'NETPOLICYENV'
+DENIED_SUFFIXES=
+DENIED_HOSTS=
+KM_NETPOLICY_FILE=/var/lib/km/netpolicy/deny.list
+NETPOLICYENV
+chmod 644 /etc/km/netpolicy.env
+if chattr +a /var/lib/km/netpolicy/deny.list 2>/dev/null; then
+  echo "[km-bootstrap] runtime deny list append-only: /var/lib/km/netpolicy/deny.list"
+else
+  echo "[km-bootstrap] WARNING: could not set append-only on /var/lib/km/netpolicy/deny.list — runtime denies still apply, but the sandbox could remove them" >&2
+fi
 
 # Layer 1 (Phase 79.1): systemd-tmpfiles drop-in for /run/km/audit-pipe.
 # Ensures the FIFO is recreated with correct ownership on every boot
