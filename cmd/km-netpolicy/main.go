@@ -20,6 +20,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 )
 
@@ -32,6 +33,7 @@ const prog = "km-netpolicy"
 // real filesystem or environment.
 type opts struct {
 	denyFile    string
+	flowDir     string
 	staticDNS   []string
 	staticHosts []string
 	stdout      io.Writer
@@ -43,6 +45,9 @@ const usage = `km-netpolicy — narrow this sandbox's egress policy from inside 
 Usage:
   km-netpolicy deny <pattern> [pattern...]   block a host and its subdomains
   km-netpolicy list                          show the effective deny lists
+  km-netpolicy observed                      show every destination reached so far
+  km-netpolicy flows [--since 10m] [--denied] [--json]
+                                             show raw per-connection records
 
 A pattern is a bare hostname, optionally with a leading dot. It blocks the apex
 AND every subdomain: "evil.example.com" also blocks "api.evil.example.com".
@@ -80,8 +85,14 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 		denyFile = netpolicy.DefaultPath
 	}
 
+	flowDir := pick("KM_FLOWLOG_DIR")
+	if flowDir == "" {
+		flowDir = flowlog.DefaultDir
+	}
+
 	return opts{
 		denyFile:    denyFile,
+		flowDir:     flowDir,
 		staticDNS:   splitCSV(pick("DENIED_SUFFIXES")),
 		staticHosts: splitCSV(pick("DENIED_HOSTS")),
 		stdout:      os.Stdout,
@@ -131,6 +142,10 @@ func run(args []string, o opts) int {
 		return runDeny(args[1:], o)
 	case "list":
 		return runList(o)
+	case "observed":
+		return runObserved(o)
+	case "flows":
+		return runFlows(args[1:], o)
 	case "-h", "--help", "help":
 		fmt.Fprint(o.stdout, usage)
 		return 0
