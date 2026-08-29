@@ -191,6 +191,11 @@ release:
     `./km create ...` works; or append a command to run one-shot:
     `docker run ... ghcr.io/whereiskurt/klanker-maker/km ./km list`.
 
+    Add `-v "$HOME/.km:/root/.km"` to reuse your per-sandbox SSH keys,
+    `-v "$PWD/profiles:/root/.km/profiles"` to layer your own profiles over the
+    built-in library, and `-v "$PWD:/work"` for output that outlives the
+    container.
+
     ### Build the container yourself
 
     This archive also carries everything the image build needs. Extract it and
@@ -215,10 +220,13 @@ release:
     `~/.aws`. Drop `--build-arg` to track the newest release instead of pinning
     to this one.
 
-    Scoped to `--remote` sandbox work (create, list, shell, agent, logs,
-    destroy, doctor). It does not carry `terraform`/`terragrunt`, so platform
-    provisioning — `km init`, `km bootstrap`, `--local` create/destroy — belongs
-    on the native install above. Details: `containers/operator/README.md`.
+    Covers `--remote` sandbox work (create, list, shell, agent, logs, destroy,
+    doctor) plus read-only platform inspection: `km init --dry-run`,
+    `km init --plan`, and `km bootstrap --plan` run real terragrunt plans
+    against your account. Applying — `km init --dry-run=false`,
+    `km bootstrap`, `--local` create/destroy — belongs on the native install
+    above: it shells out to `go build` at run time and pushes ECR images.
+    Details: `containers/operator/README.md`.
     {{ with index .Env "KM_RELEASE_HIGHLIGHTS" }}
 
     {{ . }}
