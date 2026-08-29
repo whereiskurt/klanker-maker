@@ -37,6 +37,8 @@ type opts struct {
 	pinFile     string
 	staticDNS   []string
 	staticHosts []string
+	captureSock string
+	captureDir  string
 	stdout      io.Writer
 	stderr      io.Writer
 }
@@ -52,6 +54,11 @@ Usage:
   km-netpolicy profile                       emit a SandboxProfile from the census
   km-netpolicy pin [--dry-run] [--exact] [--yes]
                                              narrow the allowlist to the census
+  km-netpolicy capture start [--duration 5m] [--max-size 250MB] [--port N] [--host H]
+                                             start a bounded packet capture (max 60m / 2GB)
+  km-netpolicy capture stop                  stop the running capture and upload it
+  km-netpolicy capture status                show whether a capture is running
+  km-netpolicy capture list                  list finished captures
 
 A pattern is a bare hostname, optionally with a leading dot. It blocks the apex
 AND every subdomain: "evil.example.com" also blocks "api.evil.example.com".
@@ -99,12 +106,24 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 		pinFile = netpolicy.DefaultPinPath
 	}
 
+	captureSock := pick("KM_CAPTURE_SOCK")
+	if captureSock == "" {
+		captureSock = DefaultCaptureSock
+	}
+
+	captureDir := pick("KM_CAPTURE_DIR")
+	if captureDir == "" {
+		captureDir = DefaultCaptureDir
+	}
+
 	return opts{
 		denyFile:    denyFile,
 		flowDir:     flowDir,
 		pinFile:     pinFile,
 		staticDNS:   splitCSV(pick("DENIED_SUFFIXES")),
 		staticHosts: splitCSV(pick("DENIED_HOSTS")),
+		captureSock: captureSock,
+		captureDir:  captureDir,
 		stdout:      os.Stdout,
 		stderr:      os.Stderr,
 	}
@@ -160,6 +179,10 @@ func run(args []string, o opts) int {
 		return runProfileGen(o)
 	case "pin":
 		return runPin(args[1:], o)
+	case "capture":
+		return runCapture(args[1:], o)
+	case "capture-daemon":
+		return runCaptureDaemon(o)
 	case "-h", "--help", "help":
 		fmt.Fprint(o.stdout, usage)
 		return 0
