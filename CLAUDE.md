@@ -8,6 +8,93 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 131 (2026-08-28) — Live egress census, allowlist pinning, on-demand packet capture (complete):**
+- New on-box verbs on the already-shipped `km-netpolicy` binary: `observed`,
+  `flows [--since 10m] [--denied] [--json]`, `profile`, `pin [--dry-run]
+  [--exact] [--yes] [--allow-empty]`, `capture start|stop|status|list`. Three
+  producers — the eBPF audit consumer, the DNS proxy, the HTTP proxy — now
+  append what they already decide (verdict + destination) to one JSONL file
+  each under `/var/lib/km/flows/`, merged at read time by a new `pkg/flowlog`
+  package. `pin` is the mirror image of `km-netpolicy deny`: `effective allow =
+  profile allowlist ∩ pin₁ ∩ pin₂ ∩ …`, its own kernel-append-only file
+  (`/var/lib/km/netpolicy/allow.pins`, `chattr +a`), same guarantee, same
+  absence of a removal verb. Packet capture runs in a root-owned
+  `km-capture.service` daemon (pure-Go `AF_PACKET`, no cgo, no libpcap — the
+  sidecar cross-compile requires `CGO_ENABLED=0`) so the sandbox user never
+  needs `CAP_NET_RAW` even unprivileged.
+- **Unconditional — no profile field, no dormant case.** Observation runs on
+  every sandbox regardless of `learnMode` or anything else in the profile,
+  the one deliberate exception to the platform's default disposition, on the
+  same reasoning as `km-netpolicy deny`'s own un-gating: a facility that can
+  only narrow, and that only reports what already happened, cannot widen a
+  policy by being present. Userdata goldens change for **every** profile as a
+  result — there is no byte-identical case to check against.
+- **`pin` is irreversible; there is no un-pin verb, deliberately.** Recovering
+  from a too-tight pin is `km destroy && km create`, not a command. The
+  default pin narrowing is **collapsed** (DNS suffixes always eTLD+1; hosts
+  collapsed too unless `--exact`), not the tightest possible reading, because
+  the risk is asymmetric: too loose costs a follow-up `pin` (cheap, always
+  available); too tight has no recovery path at all. `--dry-run` shows both
+  candidate lists before anything is written; a non-dry-run pin requires
+  `--yes`; an empty census additionally requires `--allow-empty` because it
+  is mathematically deny-all and that is easy to trigger by accident.
+- **The five-site pin-wiring trap, closed by a mechanical test.** Every
+  consumer of the runtime deny store — dns-proxy, http-proxy, the eBPF
+  resolver's allowlist, both proxy units' env, the eBPF enforcer's own CLI
+  flag — had to gain a matching pin-store read, mirroring the five sites
+  commit `0c7f9880` had to touch to un-gate `km-netpolicy` itself in the first
+  place: ship the writer without a reader and the verb reports success while
+  nothing enforces it. `pkg/netpolicy/wiring_guard_test.go` makes the pairing
+  mechanical rather than remembered. **The boot-time pre-seed loop in
+  `internal/app/cmd/ebpf_attach.go` was the site most likely to be missed and
+  the most load-bearing** — it resolves `--allowed-hosts` and seeds IPs into
+  the BPF allow-trie on every start (boot, resume), bypassing the live
+  resolver check pins otherwise gate. It originally consulted denies but not
+  pins, so a reboot or `km resume` on a pinned box would have re-seeded a
+  pinned-out host's IP straight into the trie and silently bypassed the pin —
+  now gated via `shouldSeedHost(host, denier, pinner)`, deny checked first,
+  pins narrowing in addition. This is exactly why pins live under `/var/lib`
+  and not `/run`: they are designed to survive a reboot, and this was the one
+  path that could have quietly un-survived them.
+- **The HTTP proxy is four sites, not one.** Flow recording had to land in
+  `proxy.go`, `ses.go` (SES MITM), `intercept.go` (Phase 129 operator
+  intercepts), plus construction in `main.go`. SES and intercepts were
+  initially missed; had they stayed missed, a `pin` taken from a census
+  blind to them would have **denied SES and every operator-declared intercept
+  host** the moment it was applied — silently breaking sandbox email and
+  MITM intercept rules on the very box that pinned. The clearest illustration
+  in this phase of why the flow census has to be structurally complete, not
+  just "the obvious places."
+- **Known, accepted gap:** `transparent.go` (the BPF-redirected `ebpf`/`both`
+  L7 path) records no flow of its own. Not a pin regression — the eBPF
+  `connect4` program captures the destination **before** rewriting it and
+  emits a redirect event carrying the *original* destination, so the flow
+  store still sees the real host and it is still pinnable. What's missing is
+  only *which* intercept rule fired, not the fact that traffic reached one.
+- **The `learn/` S3 grant gap is fixed here, riding along.** The sandbox
+  role's only S3 write grant was `transcripts/${sandbox_id}/*`
+  (`ec2spot/v1.4.0`) — `learn/` (the S3 flush target `km shell --learn` has
+  used since it existed) never had a grant and every `PutObject` there had
+  been 403ing since day one. Invisible because the failure is a
+  `logger.Warn` with `s3Key="skipped"` and `fetchEC2ObservedJSON` falls back
+  to an SSM RunCommand read, so `km shell --learn` kept working through the
+  outage and nobody noticed the primary path was dead — the same
+  soft-logger-hides-drift shape as the ttl-handler teardown gap (see
+  [[project_ttl_handler_submodule_teardown_iam]]). **The missing grant was
+  the bug; the soft failure was correct and was deliberately left alone** —
+  fixed via a new immutable `infra/modules/ec2spot/v1.5.0` (never edit
+  `v1.4.0` in place) adding `s3:PutObject` on `captures/${sandbox_id}/*` (new,
+  for `capture stop`'s upload) and `learn/${sandbox_id}/*` (repair) in the
+  same statement, plus the pin bump in `locals.substrate_module_versions`.
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.**
+  NOT `--sidecars` — the new unit (`km-capture.service`), the new env vars on
+  both proxy units, and the new append-only pin file all ride in the
+  create-handler-rendered userdata, which `--sidecars` does not rebuild.
+  Existing sandboxes gain nothing until `km destroy && km create`.
+- See `docs/egress-census.md` for the full operator runbook (census, pin
+  model, collapsed-vs-`--exact`, capture bounds, troubleshooting) and
+  `docs/egress-deny-lists.md` § Allow pins for the deny/pin relationship.
+
 **Wake-up re-credential + `km create` positional alias (2026-08-26):**
 - **`km resume` now forces a GitHub installation-token re-mint** instead of waiting up to 45
   minutes for the per-sandbox refresher's next tick. `awspkg.ForceGitHubTokenRefresh` reads the
@@ -822,6 +909,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Push webhook ingress — `webhooks:` block, Wiz Automation Rule setup, canonical km payload template, storm control (replay/cooldown/group_by/rate ceiling), deploy surface | `docs/webhook-ingress.md` |
 | Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the seven `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
 | Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
+| Live egress census, allowlist pinning, on-demand packet capture — `km-netpolicy observed/flows/profile/pin/capture`, the deny-vs-pin union/intersection relationship, the `--exact` tradeoff, the two sharp edges, capture bounds, deploy surface | `docs/egress-census.md` (Phase 131) |
 | Declarative MITM intercepts — `spec.network.mitm.intercepts`, `redirect`/`respond` actions, precedence (deny → metering/GitHub → intercepts → allowlist), by-name last-wins override, the `profiles/base/mitm-rickroll.yaml` migration fragment, deploy surface | `docs/mitm-intercepts.md` (Phase 129) |
 | kubectl in a sandbox against a cluster only your laptop can reach — `km tunnel` operator runbook: prerequisites, flags, troubleshooting, the `socks` mode, deploy surface | `docs/k8s-reverse-tunnel.md` (Phase 130) |
 | **How the k8s tunnel actually works** — the three nested tunnels and why SSM forced SSH-inside-SSM, the ExecCredential proxy and why the broker is deliberately dumb, the `tls-server-name`-vs-CA split, the exec apiVersion exact-match trap, the precise trust boundary, and why the deploy surface is `make build` alone | `docs/k8s-reverse-tunnel-internals.md` (Phase 130) |
@@ -892,6 +980,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | **Email** | `km-send`, `km-recv` (+ `km-mail-poller`) | signed inter-sandbox / operator email (see `klanker:email` skill). |
 | **HackerOne** | `km-h1` | comment on reports (internal-by-default). |
 | **Git auth** | `km-git-askpass`, `km-git-credential-helper` | inject the installation token into plain `git` operations (baked-in sandbox id, works in any subprocess). |
+| **Egress / network** | `km-netpolicy` | `deny <pattern>...` / `list` — runtime narrowing (see `docs/egress-deny-lists.md`). `observed` / `flows [--since 10m] [--denied] [--json]` / `profile` / `pin [--dry-run] [--exact] [--yes] [--allow-empty]` / `capture start\|stop\|status\|list` — live egress census, allowlist pinning (irreversible, no un-pin verb), on-demand bounded packet capture (see `docs/egress-census.md`, Phase 131). |
 
 Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, `km-presence`, `km-queue-runner`, `km-notify-hook`, `km-upload-artifacts`, `otelcol-contrib`, `sops`) plus the source-aware inbound pollers (`km-{github,slack,h1}-inbound-poller`, `km-mail-poller`) — an agent rarely calls these directly, but their presence is how the box self-censuses its capabilities (see the `klanker:sandbox` skill + `/opt/km/.km-profile.yaml`, Phase 113). New sandbox-side capability ⇒ new `km-*` binary in this dir + a `sidecarBuilds()` entry + a userdata `s3 cp`, delivered by `km init --sidecars`.
 
