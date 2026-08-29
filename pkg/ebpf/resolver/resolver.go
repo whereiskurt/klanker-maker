@@ -155,6 +155,14 @@ func NewResolver(cfg ResolverConfig) *Resolver {
 	}
 }
 
+// NameForIP delegates to the Resolver's own Allowlist — see
+// Allowlist.NameForIP. Exported so a caller holding only the Resolver (e.g.
+// the eBPF attach command wiring flow recording) can use it as a
+// flowlog.NameFn without reaching into the unexported allowlist field.
+func (r *Resolver) NameForIP(addr string) string {
+	return r.allowlist.NameForIP(addr)
+}
+
 // Start runs the DNS daemon until ctx is cancelled.
 //
 // It binds both UDP and TCP listeners on cfg.ListenAddr, starts a background

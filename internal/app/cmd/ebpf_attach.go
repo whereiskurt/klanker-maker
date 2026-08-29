@@ -27,6 +27,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf"
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf/audit"
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf/resolver"
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	ebpftls "github.com/whereiskurt/klanker-maker/pkg/ebpf/tls"
 )
@@ -60,6 +61,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		observe       bool
 		observeOutput string
 		minIPLifetime time.Duration
+		flowlogDir    string
 	)
 
 	cmd := &cobra.Command{
@@ -71,7 +73,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
 				allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, netpolicyPins, proxyHosts, cgroupPath,
 				enableTLS, allowedRepos, httpProxyPID, observe, observeOutput,
-				minIPLifetime)
+				minIPLifetime, flowlogDir)
 		},
 	}
 
@@ -110,6 +112,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Local path to write observed JSON on shutdown (used with --observe)")
 	cmd.Flags().DurationVar(&minIPLifetime, "min-ip-lifetime", 10*time.Minute,
 		"Minimum lifetime a resolved IP is retained in the BPF allowlist, independent of DNS TTL (prevents mid-download eviction for short-TTL CDNs)")
+	cmd.Flags().StringVar(&flowlogDir, "flowlog-dir", flowlog.DefaultDir,
+		"Directory to write the egress census flow log to; empty disables flow recording")
 
 	return cmd
 }
@@ -246,6 +250,7 @@ func runEbpfAttach(
 	observe bool,
 	observeOutput string,
 	minIPLifetime time.Duration,
+	flowlogDir string,
 ) error {
 	logger := log.With().Str("sandbox_id", sandboxID).Logger()
 
@@ -370,6 +375,12 @@ func runEbpfAttach(
 	// Start DNS resolver daemon (skip if dnsPort == 0, i.e. "both" mode
 	// where the existing km-dns-proxy sidecar handles DNS).
 	resolverErrCh := make(chan error, 1)
+	// nameFn correlates a flow record's destination address back to the domain
+	// that was looked up to reach it. Only the resolver started below ever
+	// holds that mapping — in "both" mode (dnsPort == 0), km-dns-proxy owns
+	// resolution instead and this stays nil, so eBPF flow records are
+	// address-only there. Never fabricated: see resolver.Allowlist.NameForIP.
+	var nameFn flowlog.NameFn
 	if dnsPort > 0 {
 		listenAddr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
 		resolverCfg := resolver.ResolverConfig{
@@ -391,6 +402,7 @@ func runEbpfAttach(
 			}
 		}
 		res := resolver.NewResolver(resolverCfg)
+		nameFn = res.NameForIP
 		go func() {
 			if err := res.Start(ctx); err != nil {
 				resolverErrCh <- err
@@ -491,8 +503,17 @@ func runEbpfAttach(
 	}
 	logger.Info().Int("seeded_ips", seeded).Int("proxy_marked", proxyMarked).Int("hosts_resolved", len(hostsToResolve)).Msg("pre-seeded BPF allowlist from allowed hosts")
 
+	// KM_FLOWLOG_DIR-equivalent: --flowlog-dir empty disables flow recording,
+	// same convention as the DNS/HTTP proxies. The consumer is the only place
+	// that holds both the resolver (for nameFn) and the writer, which is why
+	// address->name correlation happens here rather than at read time.
+	var flows *flowlog.Writer
+	if flowlogDir != "" {
+		flows = flowlog.NewWriter(flowlog.FileFor(flowlogDir, flowlog.SrcEBPF), flowlog.DefaultMaxBytes)
+	}
+
 	// Start ring buffer audit consumer.
-	consumer, err := audit.NewConsumer(enforcer.Events(), sandboxID, logger)
+	consumer, err := audit.NewConsumerWithFlows(enforcer.Events(), sandboxID, logger, flows, nameFn)
 	if err != nil {
 		return fmt.Errorf("create audit consumer: %w", err)
 	}

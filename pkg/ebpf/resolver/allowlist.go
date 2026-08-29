@@ -198,6 +198,26 @@ func (a *Allowlist) Sweep() []net.IP {
 	return evicted
 }
 
+// NameForIP returns the domain that resolved to ip, or "" if this resolver
+// never handed that address out.
+//
+// Expired entries are deliberately still consulted: a connection to an
+// address whose TTL has since lapsed was still made to that name, and the
+// census is a record of what happened, not of what is currently resolvable.
+// This is why NameForIP does NOT reuse IsResolved's active-only filter.
+func (a *Allowlist) NameForIP(ip string) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for domain, entry := range a.resolved {
+		for _, got := range entry.ips {
+			if got.String() == ip {
+				return domain
+			}
+		}
+	}
+	return ""
+}
+
 // IsResolved reports whether ip is present in any active (non-expired)
 // resolved entry. Expired entries are not removed by this call; use Sweep()
 // for that. Thread-safe.

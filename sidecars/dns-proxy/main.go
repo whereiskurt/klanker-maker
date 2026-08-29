@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	dnsproxy "github.com/whereiskurt/klanker-maker/sidecars/dns-proxy/dnsproxy"
 	"github.com/miekg/dns"
@@ -49,7 +50,15 @@ func main() {
 	}
 	pinner := netpolicy.NewPinner(pinStore)
 
-	handler := dnsproxy.NewHandler(allowedSuffixes, denier, pinner, upstream, sandboxID)
+	// KM_FLOWLOG_DIR is set only when the profile enables egress census flow
+	// recording. Empty disables it — a nil Writer keeps the handler byte-
+	// identical to before flow logging existed.
+	var flows *flowlog.Writer
+	if dir := os.Getenv("KM_FLOWLOG_DIR"); dir != "" {
+		flows = flowlog.NewWriter(flowlog.FileFor(dir, flowlog.SrcDNS), flowlog.DefaultMaxBytes)
+	}
+
+	handler := dnsproxy.NewHandlerWithFlows(allowedSuffixes, denier, pinner, upstream, sandboxID, flows)
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", handler)
 

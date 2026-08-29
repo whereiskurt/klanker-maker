@@ -5,6 +5,8 @@ package audit
 import (
 	"encoding/binary"
 	"net"
+
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 )
 
 // Action constants — must match BPF-side values in common.h.
@@ -33,6 +35,23 @@ func actionString(action uint8) string {
 		return "redirect"
 	default:
 		return "unknown"
+	}
+}
+
+// verdictFor maps a BPF-side action byte onto the flowlog verdict vocabulary,
+// so a flow record means the same thing whether it came from the eBPF path,
+// the DNS proxy, or the HTTP proxy. Anything other than deny/redirect is
+// treated as allow — the BPF side has no fourth action, but a forward-compat
+// unknown byte should read as "let through", not silently vanish from the
+// census.
+func verdictFor(action uint8) string {
+	switch action {
+	case actionDeny:
+		return flowlog.VerdictDeny
+	case actionRedirect:
+		return flowlog.VerdictRedirect
+	default:
+		return flowlog.VerdictAllow
 	}
 }
 
