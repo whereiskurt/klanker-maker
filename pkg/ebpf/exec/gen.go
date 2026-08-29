@@ -9,9 +9,17 @@
 // object serving both would couple observation to enforcement, which is exactly
 // the coupling that made Phase 131's flow recording dead under the default mode.
 //
-// To regenerate (requires clang WITH a BPF target — Apple clang has none):
-//
-//	CLANG=/opt/homebrew/opt/llvm/bin/clang go generate ./pkg/ebpf/exec/
+// To regenerate: make generate-ebpf (runs inside a Docker image carrying a
+// real Linux clang + system libbpf headers — see containers/Dockerfile.ebpf-generate).
+// A native `go generate` on this package does not work: on darwin, gen.go's
+// own `//go:build linux` tag excludes it from package matching entirely (a
+// silent no-op), and even a `GOOS=linux`-forced native run fails since
+// bpf2go's own binary then gets built for linux and can't execute on the
+// darwin host. Homebrew clang also cannot substitute for the Docker image
+// here regardless: `<bpf/bpf_helpers.h>` and `<bpf/bpf_core_read.h>` resolve
+// only against a real system libbpf install, which this repo's own
+// pkg/ebpf/headers/ (a flat, hand-rolled minimal set with no bpf/
+// subdirectory) does not provide.
 package exec
 
 // -mllvm -disable-loop-idiom-all is required: without it, LLVM's loop-idiom
@@ -20,4 +28,4 @@ package exec
 // to built-in function 'memset' is not supported") — the same wall that
 // __builtin_memset hit directly on the ~2.6 KB scratch struct.
 //
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -tags linux -target amd64 execbpf exec.c -- -I../headers -O2 -g -Wall -Werror -mllvm -disable-loop-idiom-all
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -tags linux -target amd64 execbpf exec.c -- -O2 -g -Wall -Werror -mllvm -disable-loop-idiom-all

@@ -15,8 +15,8 @@
  * Program 4 exists so the userspace join can bound a process's lifetime. Without
  * it, pid reuse makes the flow-to-process join a confident lie.
  *
- * Build: go generate ./pkg/ebpf/exec/ (requires clang WITH a BPF target —
- * Apple clang has none; use /opt/homebrew/opt/llvm/bin/clang).
+ * Build: make generate-ebpf (see pkg/ebpf/exec/gen.go for why a native
+ * `go generate` on this package does not work).
  */
 
 /* pkg/ebpf/headers/vmlinux.h is NOT included here — see vmlinux_extra.h for
@@ -66,9 +66,19 @@ struct {
     __uint(max_entries, 1 << 22); /* 4 MiB */
 } exec_events SEC(".maps");
 
-/* In-flight execve between enter and exit, keyed by pid_tgid. */
+/* In-flight execve between enter and exit, keyed by pid_tgid.
+ *
+ * LRU, not a plain hash: when a non-leader thread execs, the kernel's
+ * de_thread() reassigns its pid to the tgid before sys_exit_execve runs, so
+ * the exit-side lookup (keyed on the CURRENT pid_tgid) misses the entry this
+ * thread's enter inserted and it is never deleted. That is narrow — it needs
+ * a thread exec'ing without ever forking — but on a plain hash the orphaned
+ * entries only accumulate, and once max_entries is reached
+ * bpf_map_update_elem starts returning E2BIG and silently drops every NEW
+ * exec thereafter: capture goes quiet with no error anywhere. An LRU evicts
+ * one stale entry to make room instead of refusing the insert. */
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 4096);
     __type(key, __u64);
     __type(value, struct exec_event);
@@ -87,12 +97,19 @@ struct {
 /* __builtin_memset over ~2.6 KB is rejected by this BPF backend outright
  * ("A call to built-in function 'memset' is not supported") rather than
  * inlined — LLVM lowers a memset above its inlining threshold to a libcall,
- * and there is no libc on this target. `len` is always a compile-time
- * constant at every call site below, so after inlining this becomes a fixed
- * trip count and `#pragma unroll` expands it to straight-line stores with no
- * runtime loop for the verifier to worry about. Both call sites pass an
- * exact multiple of 8 (struct exec_event is 2616 bytes, struct exec_hdr is
- * 56), so there is no byte remainder to handle. */
+ * and there is no libc on this target. `nwords` is a compile-time constant
+ * at every call site below (327 for the full event, 7 for the header alone),
+ * but `#pragma unroll` does not turn that into straight-line code with no
+ * runtime loop here: the compiled object still contains bounded runtime
+ * loops (an unroll-by-8 pass over the 327-word case plus a 7-word
+ * remainder), each storing through the scratch map-value pointer at a
+ * loop-carried offset. That is ordinary bounded-loop verifier territory
+ * (kernel >= 5.3, which this platform already requires elsewhere) rather
+ * than the fully-unrolled straight-line form the pragma name suggests —
+ * Task 4's live load against a real kernel is what actually confirms the
+ * verifier accepts it, not this comment. Both call sites pass an exact
+ * multiple of 8 (struct exec_event is 2616 bytes, struct exec_hdr is 56), so
+ * there is no byte remainder to handle by hand. */
 static __always_inline void zero_words(void *dst, int nwords)
 {
     __u64 *p = (__u64 *)dst;
