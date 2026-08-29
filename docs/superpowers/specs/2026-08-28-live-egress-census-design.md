@@ -52,6 +52,10 @@ reached, and cannot collapse a wide-open allowlist down to only that.
 5. **Packet capture is opt-in, bounded, and explicitly triggered.** Never
    always-on. Mandatory duration and size caps.
 6. **Autonomy: code, tests, docs, PR. No deploy, no live UAT, no merge.**
+7. **The `learn/` S3 grant gap is fixed in this phase** (operator confirmed
+   2026-08-28). The v1.5.0 module version is being cut for `captures/` anyway,
+   so `learn/${sandbox_id}/*` rides along. This phase is therefore not purely
+   additive — it also repairs a shipped path that has never worked.
 
 ## Design
 
@@ -297,7 +301,7 @@ that only reports what already happened, cannot widen a policy by being present.
 
 Existing sandboxes gain nothing until `km destroy && km create`.
 
-## Pre-existing defect found during design (adjacent, decide before execution)
+## Pre-existing defect found during design — IN SCOPE (locked decision 7)
 
 **The learn-mode S3 upload has never worked.** `flushObservedState`
 (`internal/app/cmd/ebpf_attach.go`) uploads the observed state to
@@ -312,15 +316,21 @@ produces a profile and nobody notices the primary path is dead. Code-vs-IAM
 drift hidden by a soft logger — the same shape as the ttl-handler teardown gap.
 
 This phase does not depend on it: nothing here reads `learn/` and the capture
-grant is separate. But the v1.5.0 module version is being cut anyway, so adding
-`learn/${sandbox_id}/*` alongside `captures/${sandbox_id}/*` costs one line and
-one test. **Recommend fixing it here.** Flagged rather than assumed, because it
-widens this phase's blast radius from "additive" to "also repairs a shipped
-path", and that is the operator's call.
+grant is separate. But the v1.5.0 module version is being cut anyway, so
+`learn/${sandbox_id}/*` rides along beside `captures/${sandbox_id}/*` for one
+line and one test.
+
+**Do not also "fix" the swallowed error.** The `Warn` + `s3Key = "skipped"` and
+the SSM RunCommand fallback are correct behaviour for a best-effort upload —
+they are why `km shell --learn` kept working through the outage. The defect is
+the missing grant, not the soft failure. Changing the flush to fail hard would
+turn a working command into a broken one.
 
 Verify with `aws iam simulate-principal-policy` against the live sandbox role
 before and after — the technique that proved the ttl-handler fix without
-recreating anything.
+recreating anything. Note its limit: the simulator reports what a policy *says*,
+which for condition keys AWS does not populate at call time can differ from what
+is actually enforced. Not a concern for these two plain resource-ARN grants.
 
 ## Testing
 
