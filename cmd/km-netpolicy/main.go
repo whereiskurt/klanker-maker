@@ -48,6 +48,7 @@ Usage:
   km-netpolicy observed                      show every destination reached so far
   km-netpolicy flows [--since 10m] [--denied] [--json]
                                              show raw per-connection records
+  km-netpolicy profile                       emit a SandboxProfile from the census
 
 A pattern is a bare hostname, optionally with a leading dot. It blocks the apex
 AND every subdomain: "evil.example.com" also blocks "api.evil.example.com".
@@ -146,6 +147,8 @@ func run(args []string, o opts) int {
 		return runObserved(o)
 	case "flows":
 		return runFlows(args[1:], o)
+	case "profile":
+		return runProfileGen(o)
 	case "-h", "--help", "help":
 		fmt.Fprint(o.stdout, usage)
 		return 0
