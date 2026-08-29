@@ -13,6 +13,7 @@ import (
 	"time"
 
 	yaml "github.com/goccy/go-yaml"
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 	"github.com/whereiskurt/klanker-maker/pkg/quota"
@@ -1273,6 +1274,8 @@ Environment=ALLOWED_SUFFIXES={{ .AllowedDNSSuffixes }}
 Environment=DENIED_SUFFIXES={{ .DeniedDNSSuffixes }}
 {{- end }}
 Environment=KM_NETPOLICY_FILE={{ .RuntimeDenyFile }}
+Environment=KM_FLOWLOG_DIR={{ .FlowLogDir }}
+Environment=KM_NETPOLICY_PINS={{ .NetpolicyPinFile }}
 Environment=UPSTREAM_DNS=169.254.169.253
 Environment=DNS_PORT=5353
 ExecStart=/opt/km/bin/km-dns-proxy
@@ -1295,6 +1298,8 @@ Environment=ALLOWED_HOSTS={{ .AllowedHTTPHosts }}
 Environment=DENIED_HOSTS={{ .DeniedHTTPHosts }}
 {{- end }}
 Environment=KM_NETPOLICY_FILE={{ .RuntimeDenyFile }}
+Environment=KM_FLOWLOG_DIR={{ .FlowLogDir }}
+Environment=KM_NETPOLICY_PINS={{ .NetpolicyPinFile }}
 Environment=KM_GITHUB_ALLOWED_REPOS={{ .GitHubAllowedRepos }}
 Environment=PROXY_PORT=3128
 ExecStart=/opt/km/bin/km-http-proxy
@@ -1351,6 +1356,8 @@ cat > /etc/km/netpolicy.env << 'NETPOLICYENV'
 DENIED_SUFFIXES={{ .DeniedDNSSuffixes }}
 DENIED_HOSTS={{ .DeniedHTTPHosts }}
 KM_NETPOLICY_FILE={{ .RuntimeDenyFile }}
+KM_FLOWLOG_DIR={{ .FlowLogDir }}
+KM_NETPOLICY_PINS={{ .NetpolicyPinFile }}
 NETPOLICYENV
 chmod 644 /etc/km/netpolicy.env
 if chattr +a {{ .RuntimeDenyFile }} 2>/dev/null; then
@@ -1358,6 +1365,17 @@ if chattr +a {{ .RuntimeDenyFile }} 2>/dev/null; then
 else
   echo "[km-bootstrap] WARNING: could not set append-only on {{ .RuntimeDenyFile }} — runtime denies still apply, but the sandbox could remove them" >&2
 fi
+
+# Allow pins. The intersection counterpart to the deny list: each generation
+# narrows the allowlist further and none can widen it. Append-only in the
+# kernel for the same reason deny.list is — a sandbox that could rewrite this
+# file could restore access it had already given up.
+mkdir -p "$(dirname {{ .NetpolicyPinFile }})" {{ .FlowLogDir }} {{ .CaptureDir }}
+touch {{ .NetpolicyPinFile }}
+chmod 666 {{ .NetpolicyPinFile }}
+chattr +a {{ .NetpolicyPinFile }} 2>/dev/null || \
+  echo "[km-bootstrap] WARN: chattr +a failed on allow.pins (filesystem may not support it)"
+chmod 755 {{ .FlowLogDir }}
 {{- if .LearnMode }}
 # Learn mode: create command log file writable by all users (root and sandbox user).
 touch /run/km/learn-commands.log
@@ -1418,6 +1436,31 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+# Packet capture daemon: a hidden verb of the already-shipped km-netpolicy
+# binary (see the km-netpolicy install step above), not a fourth sidecar
+# download — a binary the userdata fetches but km init does not upload 404s
+# at boot and, under set -e, aborts the entire bootstrap. Runs as root: raw
+# capture needs it, and it's the same trust level the eBPF enforcer runs at.
+cat > /etc/systemd/system/km-capture.service << 'UNIT'
+[Unit]
+Description=km packet capture daemon
+After=network-online.target
+[Service]
+Type=simple
+User=root
+Environment=KM_CAPTURE_SOCK={{ .CaptureSock }}
+Environment=KM_CAPTURE_DIR={{ .CaptureDir }}
+Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
+Environment=KM_SANDBOX_ID={{ .SandboxID }}
+ExecStart=/opt/km/bin/km-netpolicy capture-daemon
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now km-capture
 
 # Shell audit hook: writes JSON audit events to the named pipe on every command,
 # plus a background heartbeat every 60s so long-running commands (top, vim, etc.)
@@ -4829,6 +4872,8 @@ ExecStart=/usr/local/bin/km ebpf-attach \
   --denied-hosts "{{ .DeniedHTTPHosts }}" \
 {{- end }}
   --netpolicy-file "{{ .RuntimeDenyFile }}" \
+  --netpolicy-pins "{{ .NetpolicyPinFile }}" \
+  --flowlog-dir "{{ .FlowLogDir }}" \
   --proxy-hosts "{{ .L7ProxyHosts }}" \
 {{- if eq .Enforcement "both" }}
   --proxy-pid ${KM_HTTP_PROXY_PID} \
@@ -5300,7 +5345,17 @@ type userDataParams struct {
 	// Held in a field rather
 	// than inlined into the template so the compiler, the helper's default, and
 	// the proxies cannot drift apart.
-	RuntimeDenyFile    string
+	RuntimeDenyFile string
+	// FlowLogDir and NetpolicyPinFile are the egress-census counterparts to
+	// RuntimeDenyFile, provisioned on every sandbox for the identical reason:
+	// a facility that only records what already happened (flows) or can only
+	// narrow further (pins) cannot widen a policy by being present, so there
+	// is no profile gate to make it dormant. CaptureSock/CaptureDir are the
+	// matching values for the km-capture.service unit below.
+	FlowLogDir         string
+	NetpolicyPinFile   string
+	CaptureSock        string
+	CaptureDir         string
 	GitHubAllowedRepos string // comma-separated GitHub repos from profile.sourceAccess.github.allowedRepos
 	KMArtifactsBucket  string // from config env var KM_ARTIFACTS_BUCKET
 	// Filesystem enforcement (section 2.5)
@@ -6020,7 +6075,16 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		// p.Spec.Network.Egress.RuntimeDeny is deliberately NOT read here any
 		// more: runtime narrowing is provisioned on every sandbox. The profile
 		// field is still accepted for backwards compatibility and is a no-op.
-		RuntimeDenyFile:    netpolicy.DefaultPath,
+		RuntimeDenyFile: netpolicy.DefaultPath,
+		// Provisioned unconditionally on every sandbox — see the field comment
+		// on FlowLogDir above. CaptureSock/CaptureDir mirror the km-netpolicy
+		// binary's own built-in defaults (cmd/km-netpolicy/capture.go); they
+		// are literals here, not an import, because cmd/km-netpolicy is an
+		// unimportable "main" package.
+		FlowLogDir:         flowlog.DefaultDir,
+		NetpolicyPinFile:   netpolicy.DefaultPinPath,
+		CaptureSock:        "/run/km/capture.sock",
+		CaptureDir:         "/var/lib/km/capture",
 		GitHubAllowedRepos: joinGitHubAllowedRepos(p),
 		KMArtifactsBucket:  artifactsBucket,
 		UseSpot:            useSpot,

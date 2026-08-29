@@ -1589,6 +1589,8 @@ User=km-sidecar
 Environment=SANDBOX_ID=sb-phase92-baseline
 Environment=ALLOWED_SUFFIXES=*
 Environment=KM_NETPOLICY_FILE=/var/lib/km/netpolicy/deny.list
+Environment=KM_FLOWLOG_DIR=/var/lib/km/flows
+Environment=KM_NETPOLICY_PINS=/var/lib/km/netpolicy/allow.pins
 Environment=UPSTREAM_DNS=169.254.169.253
 Environment=DNS_PORT=5353
 ExecStart=/opt/km/bin/km-dns-proxy
@@ -1608,6 +1610,8 @@ Environment=SANDBOX_ID=sb-phase92-baseline
 Environment=AWS_REGION=us-east-1
 Environment=ALLOWED_HOSTS=*,*
 Environment=KM_NETPOLICY_FILE=/var/lib/km/netpolicy/deny.list
+Environment=KM_FLOWLOG_DIR=/var/lib/km/flows
+Environment=KM_NETPOLICY_PINS=/var/lib/km/netpolicy/allow.pins
 Environment=KM_GITHUB_ALLOWED_REPOS=*
 Environment=PROXY_PORT=3128
 ExecStart=/opt/km/bin/km-http-proxy
@@ -1664,6 +1668,8 @@ cat > /etc/km/netpolicy.env << 'NETPOLICYENV'
 DENIED_SUFFIXES=
 DENIED_HOSTS=
 KM_NETPOLICY_FILE=/var/lib/km/netpolicy/deny.list
+KM_FLOWLOG_DIR=/var/lib/km/flows
+KM_NETPOLICY_PINS=/var/lib/km/netpolicy/allow.pins
 NETPOLICYENV
 chmod 644 /etc/km/netpolicy.env
 if chattr +a /var/lib/km/netpolicy/deny.list 2>/dev/null; then
@@ -1671,6 +1677,17 @@ if chattr +a /var/lib/km/netpolicy/deny.list 2>/dev/null; then
 else
   echo "[km-bootstrap] WARNING: could not set append-only on /var/lib/km/netpolicy/deny.list — runtime denies still apply, but the sandbox could remove them" >&2
 fi
+
+# Allow pins. The intersection counterpart to the deny list: each generation
+# narrows the allowlist further and none can widen it. Append-only in the
+# kernel for the same reason deny.list is — a sandbox that could rewrite this
+# file could restore access it had already given up.
+mkdir -p "$(dirname /var/lib/km/netpolicy/allow.pins)" /var/lib/km/flows /var/lib/km/capture
+touch /var/lib/km/netpolicy/allow.pins
+chmod 666 /var/lib/km/netpolicy/allow.pins
+chattr +a /var/lib/km/netpolicy/allow.pins 2>/dev/null || \
+  echo "[km-bootstrap] WARN: chattr +a failed on allow.pins (filesystem may not support it)"
+chmod 755 /var/lib/km/flows
 # Learn mode: create command log file writable by all users (root and sandbox user).
 touch /run/km/learn-commands.log
 chmod 666 /run/km/learn-commands.log
@@ -1724,6 +1741,31 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+# Packet capture daemon: a hidden verb of the already-shipped km-netpolicy
+# binary (see the km-netpolicy install step above), not a fourth sidecar
+# download — a binary the userdata fetches but km init does not upload 404s
+# at boot and, under set -e, aborts the entire bootstrap. Runs as root: raw
+# capture needs it, and it's the same trust level the eBPF enforcer runs at.
+cat > /etc/systemd/system/km-capture.service << 'UNIT'
+[Unit]
+Description=km packet capture daemon
+After=network-online.target
+[Service]
+Type=simple
+User=root
+Environment=KM_CAPTURE_SOCK=/run/km/capture.sock
+Environment=KM_CAPTURE_DIR=/var/lib/km/capture
+Environment=KM_ARTIFACTS_BUCKET=my-bucket
+Environment=KM_SANDBOX_ID=sb-phase92-baseline
+ExecStart=/opt/km/bin/km-netpolicy capture-daemon
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now km-capture
 
 # Shell audit hook: writes JSON audit events to the named pipe on every command,
 # plus a background heartbeat every 60s so long-running commands (top, vim, etc.)
@@ -4208,6 +4250,8 @@ ExecStart=/usr/local/bin/km ebpf-attach \
   --allowed-dns "*" \
   --allowed-hosts "*,*" \
   --netpolicy-file "/var/lib/km/netpolicy/deny.list" \
+  --netpolicy-pins "/var/lib/km/netpolicy/allow.pins" \
+  --flowlog-dir "/var/lib/km/flows" \
   --proxy-hosts "github.com,api.github.com,raw.githubusercontent.com,codeload.githubusercontent.com" \
   --proxy-pid ${KM_HTTP_PROXY_PID} \
   --tls \

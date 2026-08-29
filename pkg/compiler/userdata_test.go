@@ -2636,3 +2636,54 @@ func TestUserdataBedrockMarker(t *testing.T) {
 		t.Errorf("marker must be absent when bedrock disabled")
 	}
 }
+
+// TestUserData_ProvisionsFlowStoreAndPins pins the Task 12 five-site trap
+// (restated for pins from commit 0c7f9880): the flow dir, the pin file, its
+// kernel append-only seal, and every consumer's env var/flag must ALL be
+// provisioned together, or the CLI reports success while nothing enforces it.
+func TestUserData_ProvisionsFlowStoreAndPins(t *testing.T) {
+	// "both" enforcement exercises every consumer in one render: the eBPF
+	// enforcer's --netpolicy-pins/--flowlog-dir flags only appear in
+	// "ebpf"/"both" mode, while the flow store, pin file, and proxy env vars
+	// are provisioned unconditionally regardless of mode.
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "both"
+	script, err := generateUserData(p, "sb-flowtest", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	wants := []string{
+		"/var/lib/km/flows",                          // flow dir exists
+		"/var/lib/km/netpolicy/allow.pins",           // pin file exists
+		"chattr +a /var/lib/km/netpolicy/allow.pins", // kernel-enforced append-only
+		"KM_FLOWLOG_DIR=",                            // producers can write
+		"KM_NETPOLICY_PINS=",                         // proxies can read
+		"--netpolicy-pins",                           // eBPF resolver can read
+		"km-capture.service",                         // capture daemon unit
+		"capture-daemon",                             // its ExecStart verb
+	}
+	for _, w := range wants {
+		if !strings.Contains(script, w) {
+			t.Errorf("userdata missing %q", w)
+		}
+	}
+}
+
+// TestUserData_PinFileIsAppendOnlyBeforeAnythingCanWrite pins the ordering
+// invariant: the pin file must be sealed chattr +a BEFORE any service that
+// might read (or, on a compromised sandbox, attempt to write) it starts.
+func TestUserData_PinFileIsAppendOnlyBeforeAnythingCanWrite(t *testing.T) {
+	script, err := generateUserData(baseProfile(), "sb-flowtest", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	chattrIdx := strings.Index(script, "chattr +a /var/lib/km/netpolicy/allow.pins")
+	unitIdx := strings.Index(script, "km-capture.service")
+	if chattrIdx < 0 || unitIdx < 0 {
+		t.Fatal("expected both the chattr and the unit")
+	}
+	if chattrIdx > unitIdx {
+		t.Error("the pin file must be sealed append-only before any service starts")
+	}
+}
