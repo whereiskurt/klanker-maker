@@ -11,11 +11,6 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 -->
-> **v0.8.10 is v0.8.9 plus a one-line container fix.** v0.8.9's `COPY` of the
-> Lambda zips assumed a `build/` directory that does not exist in a clean
-> checkout, so its image never built and never published. The tarballs from
-> v0.8.9 are fine; if you use the container, start here.
-
 ## 🐳 The container can now show you what `km init` would change
 
 The operator image was a client for `--remote` sandbox work. It now also runs **real,
