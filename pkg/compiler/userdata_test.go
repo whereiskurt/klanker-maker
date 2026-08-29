@@ -2670,6 +2670,54 @@ func TestUserData_ProvisionsFlowStoreAndPins(t *testing.T) {
 	}
 }
 
+// TestUserData_ProvisionsFlowStoreInProxyMode is the proxy-mode (default)
+// counterpart to TestUserData_ProvisionsFlowStoreAndPins. "proxy" is the
+// default enforcement mode — most of the fleet — and in that mode the eBPF
+// enforcer block (and the --netpolicy-pins/--flowlog-dir flags on its
+// ExecStart) never renders at all, so the two proxies are the ONLY flow
+// recorders and the ONLY pin enforcers for a proxy-mode sandbox. This test
+// leaves baseProfile()'s default enforcement untouched (do not override it
+// to "both"/"ebpf" here — that would silently stop covering this mode) and
+// asserts the same wants list as the "both"-mode test MINUS the two
+// eBPF-only flags, which are asserted ABSENT rather than simply omitted, so
+// that anyone who later moves them outside their enforcement conditional
+// (which would leak them into "proxy" mode) or accidentally regresses the
+// proxy-only wiring is caught either way.
+func TestUserData_ProvisionsFlowStoreInProxyMode(t *testing.T) {
+	script, err := generateUserData(baseProfile(), "sb-flowtest-proxy", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	wants := []string{
+		"/var/lib/km/flows",                          // flow dir exists
+		"/var/lib/km/netpolicy/allow.pins",           // pin file exists
+		"chattr +a /var/lib/km/netpolicy/allow.pins", // kernel-enforced append-only
+		"KM_FLOWLOG_DIR=",                            // proxies can write
+		"KM_NETPOLICY_PINS=",                         // proxies can read
+		"km-capture.service",                         // capture daemon unit
+		"capture-daemon",                             // its ExecStart verb
+	}
+	for _, w := range wants {
+		if !strings.Contains(script, w) {
+			t.Errorf("proxy-mode userdata missing %q", w)
+		}
+	}
+
+	// The eBPF enforcer unit — and therefore these flags — only renders in
+	// "ebpf"/"both" mode. Their presence here would mean the enforcer block
+	// leaked outside its enforcement conditional.
+	notWants := []string{
+		"--netpolicy-pins",
+		"--flowlog-dir",
+	}
+	for _, nw := range notWants {
+		if strings.Contains(script, nw) {
+			t.Errorf("proxy-mode userdata unexpectedly contains %q (eBPF enforcer flags must not render outside ebpf/both mode)", nw)
+		}
+	}
+}
+
 // TestUserData_PinFileIsAppendOnlyBeforeAnythingCanWrite pins the ordering
 // invariant: the pin file must be sealed chattr +a BEFORE any service that
 // might read (or, on a compromised sandbox, attempt to write) it starts.
