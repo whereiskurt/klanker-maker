@@ -732,7 +732,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	// MUST be registered BEFORE the general CONNECT handler (first-match).
 	// The quota OnRequest handlers (below) run after MITM decrypts the request.
 	// -------------------------------------------------------------------------
-	registerSESMITMHandlers(proxy, sandboxID)
+	registerSESMITMHandlers(proxy, sandboxID, cfg.flows)
 
 	// -------------------------------------------------------------------------
 	// Action quota enforcement: GitHub writes + SES email send (Phase 121).
@@ -822,7 +822,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	// permitted to reach.
 	// -------------------------------------------------------------------------
 	if len(cfg.intercepts) > 0 {
-		registerInterceptHandlers(proxy, cfg.intercepts, sandboxID, cfg.budget != nil, len(cfg.githubRepos) > 0)
+		registerInterceptHandlers(proxy, cfg.intercepts, sandboxID, cfg.budget != nil, len(cfg.githubRepos) > 0, cfg.flows)
 	}
 
 	// -------------------------------------------------------------------------
