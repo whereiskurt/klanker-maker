@@ -2683,6 +2683,38 @@ func TestUserData_ProvisionsFlowStoreAndPins(t *testing.T) {
 // that anyone who later moves them outside their enforcement conditional
 // (which would leak them into "proxy" mode) or accidentally regresses the
 // proxy-only wiring is caught either way.
+// TestUserData_CaptureUnitCarriesRegion pins a bug found only in live UAT: the
+// km-capture unit shipped without AWS_REGION, so the daemon's S3 upload failed
+// with "Invalid region: region was not a valid DNS name" — an endpoint-resolution
+// error, not a credential one, which is why it reads as a bucket problem.
+//
+// It survived every unit test and both review passes because the capture itself
+// worked perfectly; only the upload failed, and the upload is deliberately
+// best-effort, so it degraded to "file kept locally" rather than failing loudly.
+// Every other km unit carries the variable.
+func TestUserData_CaptureUnitCarriesRegion(t *testing.T) {
+	script, err := generateUserData(baseProfile(), "sb-capregion", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	idx := strings.Index(script, "km-capture.service")
+	if idx < 0 {
+		t.Fatal("km-capture.service unit not rendered")
+	}
+	// Scope the search to this unit's own body rather than the whole script, so
+	// an AWS_REGION belonging to a different unit cannot satisfy the assertion.
+	// End at "[Install]": the heredoc's own delimiter is unusable as a bound
+	// because the opener ("<< 'UNIT'") sits on the same line as the unit name.
+	unit := script[idx:]
+	if end := strings.Index(unit, "[Install]"); end > 0 {
+		unit = unit[:end]
+	}
+	if !strings.Contains(unit, "Environment=AWS_REGION=") {
+		t.Errorf("km-capture unit has no AWS_REGION; its S3 upload cannot resolve an endpoint.\nunit:\n%s", unit)
+	}
+}
+
 func TestUserData_ProvisionsFlowStoreInProxyMode(t *testing.T) {
 	script, err := generateUserData(baseProfile(), "sb-flowtest-proxy", nil, "my-bucket", false, nil)
 	if err != nil {

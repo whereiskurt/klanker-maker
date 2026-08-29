@@ -1008,6 +1008,14 @@ Environment=KM_CAPTURE_SOCK=/run/km/capture.sock
 Environment=KM_CAPTURE_DIR=/var/lib/km/capture
 Environment=KM_ARTIFACTS_BUCKET=my-bucket
 Environment=KM_SANDBOX_ID=sb-phase103-baseline
+# Without a region the SDK cannot resolve an S3 endpoint at all — it fails with
+# "Invalid region: region was not a valid DNS name", not a missing-credential
+# error, which is why this reads as a bucket problem rather than a config one.
+# Every other km unit carries it; this one was missed. Found in live UAT: the
+# capture wrote fine and only the upload failed, and because the upload is
+# deliberately best-effort it degraded to "file kept locally" instead of
+# surfacing as a hard failure.
+Environment=AWS_REGION=us-east-1
 ExecStart=/opt/km/bin/km-netpolicy capture-daemon
 Restart=always
 RestartSec=2
