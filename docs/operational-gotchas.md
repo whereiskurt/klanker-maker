@@ -56,13 +56,30 @@ unit fails at apply on `filebase64sha256(build/<name>.zip): no such file`. Keep 
 in lockstep with the `build-lambdas` Makefile target (a `TestLambdaBuilds...` guard
 pins membership).
 
-Current zip list: ttl-handler, budget-enforcer, github-token-refresher,
-email-create-handler, create-handler, km-slack-bridge, km-github-bridge.
+Current zip list (ten): ttl-handler, budget-enforcer, github-token-refresher,
+email-create-handler, create-handler, km-slack-bridge, km-github-bridge,
+km-h1-bridge, km-webhook-bridge, km-quota-alerter.
 
 - ttl-handler is a platform Lambda → live immediately after `km init`.
 - budget-enforcer / github-token-refresher zips upload to the artifacts bucket →
   only **new** sandboxes (`km create`) pick up the change; existing sandboxes keep
   their old per-sandbox Lambda until recreated.
+
+`scripts/build-release-lambdas.sh` builds the same ten for the
+`km_vX.Y.Z_lambdas.tar` release asset, and `TestReleaseLambdaScript_TracksLambdaBuilds`
+pins the two lists together. A Lambda added to `lambdaBuilds()` but not the script would
+ship an asset silently missing a zip, and the operator container image would then fail
+`km init --plan` on that one module with an error naming terraform rather than the
+release pipeline.
+
+#### The remove-before-skip bug (fixed; worth knowing the shape)
+
+`os.Remove(zipPath)` used to run **before** the source-existence check. On an install
+without the Go source next to it — a release tarball, or the operator container — the
+first `km init` therefore deleted the very `build/*.zip` files the Lambda modules depend
+on, and every run after that failed. The call site only *warned*, so nothing surfaced it.
+The order is now check-then-remove, pinned by a test. The general lesson: a
+warn-and-continue call site will hide a destructive ordering bug indefinitely.
 
 ### `make build` ≠ `make build-lambdas`
 
@@ -295,6 +312,19 @@ though the file has it — and a file-override test fails with the field unset.
 `v.SetDefault` alone does **not** surface file values; the merge-list is the gate.
 Keys are flat snake_case unless mirroring the nested `slack.mention_only` style
 (those nested keys are also in the merge-list).
+
+**The merge-list is keyed on the full dotted path.** `network.nat_gateway` does *not*
+cover `network.private_subnet_count`; each nested key needs its own line. The exception
+is a whole block decoded atomically by a single `UnmarshalKey` — `github`, `h1`,
+`checks`, `limits`, `launch_accounts`, `webhooks` each get exactly **one** entry and
+their nested keys must **not** be added separately.
+
+This footgun has bitten at least seven shipped keys. Most recently
+`profile_search_paths`, which was broken at both ends: it was absent from the merge-list
+*and* its shipped default `~/.km/profiles` never resolved, because nothing expanded the
+`~` — so it looked for a directory literally named `~`. Both are fixed; tilde expansion
+now happens at load time, and relative entries like `./profiles` are deliberately left
+relative rather than being pinned to wherever km was launched.
 
 ---
 

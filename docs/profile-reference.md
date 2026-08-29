@@ -15,8 +15,9 @@ metadata:
   name: my-profile
   labels:
     tier: development
-extends: hardened          # optional parent profile
+extends: hardened          # optional; a string or an ordered list of parents
 spec:
+  # --- required blocks ---
   lifecycle: { ... }
   runtime: { ... }
   execution: { ... }
@@ -25,13 +26,22 @@ spec:
   iam: { ... }             # renamed from identity: in Phase 92
   sidecars: { ... }
   observability: { ... }
-  # agent: removed in Phase 92 (Wave 1); re-introduced with new shape in Waves 4/5
-  artifacts: { ... }       # optional
-  budget: { ... }          # optional
-  email: { ... }           # optional
-  otp: { ... }             # optional
-  cli: { ... }             # optional
+  # --- optional blocks ---
+  agent: { ... }           # default agent + Claude/Codex tool gating
+  notification: { ... }    # event gates + email/Slack/bridge delivery
+  artifacts: { ... }
+  budget: { ... }
+  email: { ... }
+  secrets: { ... }         # SOPS-encrypted env bundle
+  limits: { ... }          # per-action outbound quotas
+  cli: { ... }
 ```
+
+Every block above is accepted by the schema. `spec` and each sub-block are declared
+`additionalProperties: false`, so an unknown or misspelled key is a hard `km validate`
+error rather than a silently ignored one. One field documented below — `spec.otp` — is
+implemented in the compiler but has never been in the schema, and is rejected today; see
+its own section.
 
 ---
 
@@ -167,6 +177,31 @@ metadata:
 
 ---
 
+### `metadata.abstract`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `metadata.abstract`            |
+| Type       | bool                           |
+| Required   | No                             |
+| Default    | `false`                        |
+| Validation | Boolean                        |
+
+Marks the file as an **abstract fragment** — a partial profile meant only to be
+pulled in by another profile's `extends:`, never launched on its own. `km validate`
+skips abstract fragments (exit 0 with a `SKIP` message) instead of failing them for
+the required fields they deliberately omit, and `km create` refuses them outright.
+The shipped fragment library under `profiles/base/` sets this on every file;
+`scripts/validate-all-profiles.sh` excludes that directory automatically.
+
+```yaml
+metadata:
+  name: safenetwork
+  abstract: true
+```
+
+---
+
 ## `spec.lifecycle`
 
 Controls sandbox lifetime and teardown behavior.
@@ -245,12 +280,26 @@ spec:
 | Default    | -- (no cap)                    |
 | Validation | Pattern `^[0-9]+(s\|m\|h\|d)$`; must be >= `ttl` if set |
 
-Absolute maximum lifetime from sandbox creation. `km extend` will not extend beyond this cap. If unset, there is no limit on extensions.
+Absolute maximum lifetime, measured from sandbox creation. `km extend` refuses to push
+expiry past `createdAt + maxLifetime`. Omit it for no cap.
+
+`ttl` is the *current* expiry and is what `km extend` moves; `maxLifetime` is the ceiling
+that movement cannot cross. Setting the two equal is the "no extensions permitted"
+configuration and is explicitly allowed. Setting `maxLifetime` **shorter** than `ttl` is a
+validation error — it would make the sandbox un-extendable from the moment it booted,
+which is never the intent.
+
+The cap is evaluated against the sandbox's recorded `createdAt`, not against wall-clock
+time at the moment you run `km extend`, so pausing or stopping a sandbox does not buy back
+lifetime.
 
 ```yaml
 spec:
   lifecycle:
-    maxLifetime: "72h"
+    ttl: "4h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+    maxLifetime: "3d"     # extend freely within 3 days of creation, never past it
 ```
 
 ---
@@ -476,6 +525,131 @@ spec:
   runtime:
     efsMountPoint: /shared
 ```
+
+---
+
+### `spec.runtime.additionalSnapshots`
+
+| Property   | Value                                  |
+|------------|----------------------------------------|
+| YAML path  | `spec.runtime.additionalSnapshots`     |
+| Type       | list of objects                        |
+| Required   | No                                     |
+| Default    | -- (empty)                             |
+| Validation | EC2 only; each entry needs `snapshotId` and `mountPoint` |
+
+Materialises one fresh `aws_ebs_volume` per entry from an existing EBS snapshot,
+attaches it on `/dev/sd[f-p]`, and mounts it with a userdata-detected filesystem.
+Coexists with `additionalVolume` — both may be set. Volume lifetime is the sandbox's
+lifetime: the volumes are created at `km create` and destroyed at `km destroy`.
+
+Per-entry fields: `snapshotId` (required), `mountPoint` (required), `device`
+(optional — auto-assigned from the free `/dev/sd[f-p]` range when omitted),
+`encrypted`, `size` (optional override; must be >= the snapshot's own size).
+
+```yaml
+spec:
+  runtime:
+    additionalSnapshots:
+      - snapshotId: snap-0123456789abcdef0
+        mountPoint: /data
+      - snapshotId: snap-0fedcba9876543210
+        mountPoint: /models
+        size: 500
+```
+
+See [`OPERATOR-GUIDE.md` § additionalSnapshots](../OPERATOR-GUIDE.md) for the full
+authoring guide.
+
+### `spec.runtime.desktop`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.runtime.desktop`         |
+| Type       | object                         |
+| Required   | No                             |
+| Default    | disabled                       |
+| Validation | Ubuntu 24.04/22.04 AMIs only   |
+
+Provisions a KasmVNC graphical session reachable with `km desktop start <id>` over an
+SSM port-forward (loopback only — no security-group or public-IP change). Fields:
+
+| Field      | Type            | Default   | Meaning |
+|------------|-----------------|-----------|---------|
+| `enabled`  | bool            | `false`   | Turn the desktop on. |
+| `mode`     | `kiosk`/`full`  | `kiosk`   | `kiosk` runs a single browser fullscreen; `full` runs an XFCE desktop. |
+| `browsers` | list of strings | `[firefox]` | Subset of `firefox`, `chromium`, `chrome`, `brave`. |
+| `geometry` | string          | `1920x1080` | Initial framebuffer size. |
+
+`km validate` errors when `desktop.enabled: true` is combined with a non-Ubuntu
+`spec.runtime.ami`. The desktop packages install **before** network enforcement is
+applied, so `spec.network.egress` does not need to allowlist their download hosts.
+
+```yaml
+spec:
+  runtime:
+    ami: ubuntu-24.04
+    desktop:
+      enabled: true
+      mode: full
+      browsers: [firefox, chromium]
+      geometry: "2560x1440"
+```
+
+See [`docs/desktop.md`](desktop.md).
+
+### `spec.runtime.azPreference`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.runtime.azPreference`    |
+| Type       | list of strings                |
+| Required   | No                             |
+| Default    | -- (ranked automatically)      |
+| Validation | Availability-zone names in `spec.runtime.region` |
+
+Preferred availability zones, most-preferred first. `km create` sweeps AZs with
+classify-and-retry: an `InsufficientInstanceCapacity` / spot-price / spot-limit /
+waiter-timeout failure rotates to the next AZ, while a quota / auth / invalid-parameter
+failure fails fast (no AZ rotation helps a quota wall). When omitted, `capacity.RankAZs`
+orders the region's AZs itself using offering data, GPU quota headroom, and the
+`{prefix}-capacity` table's history. Preview the ranking with `km capacity`.
+
+```yaml
+spec:
+  runtime:
+    azPreference:
+      - us-east-1d
+      - us-east-1b
+```
+
+### `spec.runtime.launchAccount`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.runtime.launchAccount`   |
+| Type       | string                         |
+| Required   | No                             |
+| Default    | -- (launch in the home account) |
+| Validation | Must name a link in `launch_accounts:` in `km-config.yaml` |
+
+Launches this profile's EC2 instance into a **different, pre-enrolled AWS account** to
+borrow that account's vCPU quota, while the whole km control plane — DynamoDB state,
+budget, `km list`, every bridge — stays in the home account. Enroll a target account
+with `km account add` (target-account admin credentials) followed by
+`km account register` (home credentials); `km account list` shows what is wired.
+
+`km create` fails fast when the named link is absent or its external id cannot be read
+— it never silently falls back to the home account. Teardown is account-aware on both
+the `km destroy` and TTL-expiry paths.
+
+```yaml
+spec:
+  runtime:
+    launchAccount: gpu-capacity
+```
+
+See [`docs/cross-account-capacity-borrowing.md`](cross-account-capacity-borrowing.md).
 
 ---
 
@@ -707,6 +881,33 @@ spec:
 
 ---
 
+### `spec.execution.initCommandsAppend`
+
+| Property   | Value                                 |
+|------------|---------------------------------------|
+| YAML path  | `spec.execution.initCommandsAppend`   |
+| Type       | list of strings                       |
+| Required   | No                                    |
+| Default    | -- (empty)                            |
+| Validation | Array of shell commands               |
+
+Leaf-specific install steps appended **after** the merged `initCommands`. This exists
+because inheritance unions list fields: a child's `initCommands` merges with every
+base's `initCommands` rather than replacing them, so there is no way to express "run
+these last" through that field alone. `initCommandsAppend` is the ordering escape
+hatch — use it for the one or two steps that must follow everything a base installed.
+
+```yaml
+spec:
+  execution:
+    initCommandsAppend:
+      - "npm install -g @my-org/internal-cli"
+```
+
+See [`OPERATOR-GUIDE.md` § Composable inheritance](../OPERATOR-GUIDE.md).
+
+---
+
 ## `spec.sourceAccess`
 
 Controls access to source code repositories.
@@ -865,6 +1066,228 @@ spec:
 
 ---
 
+### `spec.network.egress.deniedDNSSuffixes`
+
+| Property   | Value                                    |
+|------------|------------------------------------------|
+| YAML path  | `spec.network.egress.deniedDNSSuffixes`  |
+| Type       | list of strings                          |
+| Required   | No                                       |
+| Default    | -- (empty)                               |
+| Validation | Array of DNS suffixes                    |
+
+Destinations the sandbox may never resolve. **A deny beats every allow** — including
+the `*` wildcard, the GitHub repo-filter carve-out, the OpenAI budget path, and the
+Bedrock/SES/Anthropic MITM interceptors. Deny matching is deliberately **broader** than
+allow matching: a bare entry also covers its subdomains, so `evil.example.com` blocks
+`api.evil.example.com` too. (Strictness on an allowlist permits less; the same
+strictness on a denylist would fail open.)
+
+```yaml
+spec:
+  network:
+    egress:
+      deniedDNSSuffixes:
+        - "pastebin.com"
+        - ".ngrok.io"
+```
+
+### `spec.network.egress.deniedHosts`
+
+| Property   | Value                              |
+|------------|------------------------------------|
+| YAML path  | `spec.network.egress.deniedHosts`  |
+| Type       | list of strings                    |
+| Required   | No                                 |
+| Default    | -- (empty)                         |
+| Validation | Array of hostnames                 |
+
+The HTTP/HTTPS counterpart of `deniedDNSSuffixes`, enforced by the http-proxy. The deny
+gate is registered **first** in the proxy's handler chain, because goproxy dispatches
+first-match and every later handler is a carve-out — a deny evaluated after them would
+be silently bypassable. Same broader-than-allow subdomain matching.
+
+```yaml
+spec:
+  network:
+    egress:
+      deniedHosts:
+        - "pastebin.com"
+        - "files.example-exfil.net"
+```
+
+### `spec.network.egress.runtimeDeny`
+
+| Property   | Value                              |
+|------------|------------------------------------|
+| YAML path  | `spec.network.egress.runtimeDeny`  |
+| Type       | bool                               |
+| Required   | No                                 |
+| Default    | `false`                            |
+| Validation | Boolean                            |
+
+> **Deprecated and a no-op since v0.8.8.** The `km-netpolicy` mechanism it used to gate
+> now ships on **every** sandbox. The key is still accepted so existing profiles keep
+> validating; it is deliberately not removed from the schema.
+
+`km-netpolicy deny <host>` / `km-netpolicy list` (in `/opt/km/bin`) let a **running**
+sandbox append denies to its own policy from user-land, effective within ~1s and with no
+restart. Narrow-only is enforced twice over: append is the only operation there is —
+there is no removal verb — and the deny file carries `chattr +a`, so the kernel refuses
+truncate, unlink, rename, and attribute-clear. The file lives under `/var/lib`, not
+`/run`, because a reboot that dropped accumulated denies would *widen* the policy.
+
+The gate was removed because it was backwards: `km-netpolicy` can only ever add denies,
+so its presence can never widen a policy, while the boxes where narrowing matters most
+are exactly the wide-open ones (`allowedDNSSuffixes: ["*"]`, learn mode) that no profile
+would have thought to opt in.
+
+On `privileged: true` the sandbox has sudo and can clear `+a` — but it can equally stop
+the proxies, so the guarantee is meaningful on unprivileged boxes.
+
+See [`docs/egress-deny-lists.md`](egress-deny-lists.md).
+
+### `spec.network.httpsOnly`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.network.httpsOnly`       |
+| Type       | bool                           |
+| Required   | No                             |
+| Default    | `true`                         |
+| Validation | Boolean                        |
+
+Restricts outbound HTTP traffic to TLS. Plain `http://` requests are rejected by the
+http-proxy. Set to `false` only for a sandbox that must reach a legacy plaintext
+endpoint.
+
+```yaml
+spec:
+  network:
+    httpsOnly: true
+```
+
+### `spec.network.enforcement`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.network.enforcement`     |
+| Type       | string                         |
+| Required   | No                             |
+| Default    | `proxy`                        |
+| Validation | One of `proxy`, `ebpf`, `both`; `ebpf`/`both` are EC2-only |
+
+Selects how egress policy is enforced:
+
+| Mode    | Mechanism |
+|---------|-----------|
+| `proxy` | iptables DNAT redirects DNS/HTTP/HTTPS into the userspace proxy sidecars. Root is exempt from the DNAT, so this mode does not constrain a privileged process. |
+| `ebpf`  | cgroup BPF programs (`connect4`, `sendmsg4`, `sockops`, `cgroup_skb/egress`) with an LPM-trie allowlist. Applies to every process in the cgroup regardless of privilege. The bootstrap leaves `km-dns-proxy` disabled and the eBPF resolver serves DNS. |
+| `both`  | eBPF as the primary gatekeeper **plus** the proxy for L7 inspection — Bedrock/Anthropic/OpenAI budget metering, GitHub repo filtering, and MITM intercepts all need the proxy to see the request. |
+
+On the ECS and Docker substrates, `proxy` is used regardless of what is declared.
+
+```yaml
+spec:
+  network:
+    enforcement: both
+```
+
+See [`docs/ebpf.md`](ebpf.md).
+
+### `spec.network.privateSubnet`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.network.privateSubnet`   |
+| Type       | bool                           |
+| Required   | No                             |
+| Default    | `false`                        |
+| Validation | Requires `network.nat_gateway: true` in `km-config.yaml` |
+
+Places this sandbox's ENI in a **private** subnet with no public IPv4, egressing through
+the per-AZ NAT gateway. The two toggles are decoupled on purpose: the install-level
+`network.nat_gateway` key controls whether the NAT/EIP infrastructure *exists*, and this
+per-profile field controls whether *this* sandbox uses it.
+
+`km create` fails fast — before compiling or uploading any artifact — when a private
+profile meets a NAT-less install, naming the config key and the fix command. AZs with no
+NAT gateway are dropped from the capacity ranking for private sandboxes.
+
+NAT is not free: roughly $132/month for four AZs plus $0.045/GB processed, so a GPU
+profile pulling 300GB of weights adds about $13.50 in NAT processing alone.
+
+```yaml
+spec:
+  network:
+    privateSubnet: true
+```
+
+See [`docs/private-subnet-nat.md`](private-subnet-nat.md).
+
+### `spec.network.mitm.intercepts`
+
+| Property   | Value                              |
+|------------|------------------------------------|
+| YAML path  | `spec.network.mitm.intercepts`     |
+| Type       | list of objects                    |
+| Required   | No                                 |
+| Default    | -- (empty; no interception)        |
+| Validation | `name` and `hosts` required; exactly one of `action.redirect` / `action.respond` |
+
+Operator-declared host→action rules the http-proxy applies to intercepted TLS traffic.
+Two actions are available: `redirect` (a 301 with a `Location`) and `respond` (a canned
+status/body/contentType). Off by default — a profile with no `mitm:` block gets zero
+interception.
+
+Per-entry fields: `name` (required, the override key), `enabled` (default `true`),
+`hosts` (required), and `action` with either `redirect: <url>` or
+`respond: {status, contentType, body}`.
+
+**Precedence is unconditional and cannot be overridden by a profile:** deny gate →
+Bedrock/Anthropic/OpenAI metering and the GitHub repo filter → operator intercepts →
+general allowlist. An intercept naming a metering or GitHub host is therefore silently
+dead (`km validate` WARNs); an intercept for a host absent from the allowlist still
+fires, which is the useful case for a canned error on a host the sandbox cannot
+otherwise reach.
+
+There is deliberately **no `block` action** — `deniedHosts` already blocks with strictly
+stronger semantics (ahead of everything, broader subdomain matching, appendable at
+runtime with `km-netpolicy`), and a second weaker way to block would be a footgun.
+
+Host matching reuses `IsHostAllowed` semantics: case-insensitive, port-stripped, leading
+dot for a subdomain match, no regex and no `*`.
+
+Inheritance resolves intercepts **by name, last-wins, whole-entry** — not a field merge —
+so a leaf can turn an inherited rule off with `- name: <inherited>` / `enabled: false`.
+
+```yaml
+spec:
+  network:
+    mitm:
+      intercepts:
+        - name: internal-docs
+          hosts: ["docs.example.com"]
+          action:
+            redirect: "https://intranet.example.com/docs"
+        - name: blocked-notice
+          hosts: ["files.example.com"]
+          action:
+            respond:
+              status: 403
+              contentType: "text/plain"
+              body: "Blocked by policy — ask #platform for an exception."
+```
+
+Under `enforcement: ebpf`/`both`, intercept hosts are threaded into the enforcer's
+`--proxy-hosts`, but DNS is deliberately **not** widened: a host outside
+`allowedDNSSuffixes` never resolves and the rule silently never fires (`km validate`
+warns about this).
+
+See [`docs/mitm-intercepts.md`](mitm-intercepts.md).
+
+---
+
 ## `spec.iam`
 
 Controls AWS IAM identity and session configuration.
@@ -936,6 +1359,30 @@ spec:
     allowedSecretPaths:
       - "/klanker-maker/sandbox/api-key"
       - "/klanker-maker/sandbox/db-password"
+```
+
+---
+
+### `spec.iam.allowBedrock`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.iam.allowBedrock`        |
+| Type       | bool                           |
+| Required   | No                             |
+| Default    | `false`                        |
+| Validation | Boolean                        |
+
+Grants the sandbox role Bedrock IAM (`bedrock:InvokeModel` plus `bedrock-mantle`)
+**without** `spec.execution.useBedrock`'s agent-environment injection. The distinction
+matters for GPU serving profiles: the on-box Bifrost gateway routes `bedrock/...` model
+strings with SigV4 against the instance role, so it needs the IAM grant, while the
+agents on the box stay pointed at the local vLLM endpoint rather than at Bedrock.
+
+```yaml
+spec:
+  iam:
+    allowBedrock: true
 ```
 
 ---
@@ -1221,10 +1668,22 @@ spec:
         autoApprove: [Bash, Read, Write, Edit, Glob, Grep]
         deny: []
       args: []               # extra `claude` CLI args
+      permissions: {}        # raw settings.json permissions passthrough
     codex:
+      tools:
+        autoApprove: []
+        deny: []
       args: []               # extra `codex` CLI args
+      localBaseURL: ""       # point codex at an on-box model gateway
+      localModel: ""         # model string sent to that gateway
 ```
 
+- `agent.codex.localBaseURL` repoints the Codex CLI at an OpenAI-compatible endpoint on
+  the box — in practice the Bifrost gateway in front of a locally served vLLM model
+  (`http://localhost:8001/openai/v1`). It is emitted as a `[model_providers.local]`
+  entry in the synthesized `~/.codex/config.toml`, and it is box-global: on-box terminal
+  Codex, Slack-inbound Codex turns, and VS Code all follow it. See
+  [`docs/gpu-model-serving.md`](gpu-model-serving.md).
 - `agent.default` drives `km shell` / `km agent run` / Slack-inbound dispatch and writes `KM_AGENT`.
 - Inlining `configFiles["/home/sandbox/.claude/settings.json"]` alongside `agent.claude.*` is supported: the compiler deep-merges the synthesized typed keys (permissions/trustedDirectories win) ON TOP of the inlined file, preserving operator keys like `enabledPlugins`/`env`/`model`. (Earlier builds rejected this as "mixed mode".)
 - Full field reference and the Codex asymmetry note: [`docs/agent-tool-gating.md`](agent-tool-gating.md).
@@ -1467,12 +1926,56 @@ One-time password/secret injection.
 
 SSM Parameter Store paths read once at sandbox boot and then deleted. Provides one-time secret injection that leaves no persistent credential in SSM.
 
+> **Not currently settable — schema drift.** The compiler and userdata generator both
+> honour this block (`pkg/compiler/userdata.go`, `pkg/compiler/service_hcl.go`), but
+> `otp` is absent from `pkg/profile/schemas/sandbox_profile.schema.json` and `spec` is
+> declared `additionalProperties: false`, so a profile that sets it fails validation
+> with `spec: additional properties 'otp' not allowed`. Use
+> [`spec.secrets.sopsFile`](#specsecretssopsfile) or
+> [`spec.iam.allowedSecretPaths`](#speciamallowedsecretpaths) instead until the schema
+> entry is restored.
+
 ```yaml
 spec:
   otp:
     secrets:
       - "/km/sandbox/one-time-api-key"
 ```
+
+---
+
+## `spec.secrets`
+
+Optional SOPS-encrypted secret bundle injected as environment variables at boot.
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.secrets`                 |
+| Type       | object                         |
+| Required   | No                             |
+
+### `spec.secrets.sopsFile`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.secrets.sopsFile`        |
+| Type       | string                         |
+| Required   | No                             |
+| Default    | -- (no bundle)                 |
+| Validation | Path relative to the profile YAML; must be a SOPS-encrypted YAML file |
+
+Path to a SOPS-encrypted YAML bundle (`.enc.yaml`), resolved relative to the profile
+file. Its top-level keys become environment variables in `/etc/sandbox-secrets.env`
+(mode `0440`, owner `root:sandbox`) at boot. Decryption uses the shared KMS key
+provisioned once per install by `km bootstrap --shared-secrets-key`.
+
+```yaml
+spec:
+  secrets:
+    sopsFile: secrets/my-agent.enc.yaml
+```
+
+See [`docs/sandbox-secrets.md`](sandbox-secrets.md).
 
 ---
 
@@ -1531,55 +2034,301 @@ spec:
 
 ---
 
+## `spec.notification`
+
+Operator notification policy: which agent events fire a notification, and where each one
+is delivered. All sub-blocks are optional and every one of them is dormant by default.
+
+> **Phase 92 (2026-05-31):** this block replaces the old `spec.cli.notify*` fields.
+> Sandbox-side environment variable names (`KM_NOTIFY_*`, `KM_SLACK_*`) are
+> **unchanged** — only the YAML surface moved.
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.notification`            |
+| Type       | object                         |
+| Required   | No                             |
+
+### `spec.notification.events`
+
+Gates which Claude Code hook events produce a notification at all. Delivery is then
+decided independently by the `email` and `slack` blocks.
+
+| Field             | Type | Default | Meaning |
+|-------------------|------|---------|---------|
+| `onPermission`    | bool | `false` | Notify on a Claude `Notification` hook (a permission prompt is waiting). |
+| `onIdle`          | bool | `false` | Notify on a Claude `Stop` hook (turn complete / idle). |
+| `cooldownSeconds` | int  | `0`     | Suppress notifications within N seconds of the last successful send. Per-sandbox and shared across event types. |
+
+```yaml
+spec:
+  notification:
+    events:
+      onPermission: true
+      onIdle: true
+      cooldownSeconds: 300
+```
+
+### `spec.notification.email`
+
+| Field     | Type   | Default | Meaning |
+|-----------|--------|---------|---------|
+| `enabled` | bool   | `true` behaviourally | Explicit `false` skips email dispatch from the notify-hook. |
+| `address` | string | operator inbox from `km-config.yaml` | Override recipient. |
+
+```yaml
+spec:
+  notification:
+    email:
+      enabled: true
+      address: oncall@example.com
+```
+
+### `spec.notification.slack`
+
+Slack delivery, plus the inbound chat, transcript-streaming, and auto-invite features
+that hang off the per-sandbox channel.
+
+| Field              | Type   | Default | Meaning |
+|--------------------|--------|---------|---------|
+| `enabled`          | bool   | `false` | Enable Slack delivery for events that pass the `events.*` gates. Requires `km slack init` to have provisioned the bridge. |
+| `perSandbox`       | bool   | `false` | Create a `#sb-{id}` channel at `km create`. Without it, the platform-wide shared channel is used. |
+| `channelOverride`  | string | --      | Hard-pin to a Slack channel ID (`^C[A-Z0-9]+$`). Mutually exclusive with `perSandbox: true`. |
+| `channelName`      | string | --      | Custom name for the auto-created channel. Used verbatim (sanitized to Slack's rules) with **no** forced `sb-` prefix; supports `{profile}`, `{alias}`, and `{id}` tokens. Requires `perSandbox: true`; mutually exclusive with `channelOverride`. |
+| `archiveOnDestroy` | bool   | `true`  | Archive the per-sandbox channel at `km destroy`. Set `false` to reuse the channel across an alias's lifetimes. |
+| `private`          | bool   | `false` | Create the channel as private (`is_private: true`). Channel membership becomes the read-and-trigger boundary. Takes effect at **creation only** — a reused channel is never converted public→private. |
+
+#### `spec.notification.slack.inbound`
+
+Bidirectional chat: a message in the channel dispatches an agent turn.
+
+| Field                  | Type | Default | Meaning |
+|------------------------|------|---------|---------|
+| `enabled`              | bool | `false` | Provision the per-sandbox inbound FIFO queue and poller. Requires `slack.enabled` and `slack.perSandbox`; incompatible with `channelOverride`. |
+| `mentionOnly`          | bool | per-channel-mode | Polite-bot mode — act only on messages that @-mention the bot. Omit for the smart default (shared and operator-override channels → `true`; per-sandbox channels → `false`). Once the bot has dispatched a turn in a thread, later replies in that thread bypass the mention requirement. |
+| `reactAlways`          | bool | `true`  | Post the 👀 reaction on every dispatched message. `false` reacts only on top-level engagement messages, so thread replies dispatch silently. |
+| `allow`                | list | --      | Per-sandbox trigger allowlist of Slack user IDs (`^[UW][A-Z0-9]+$`). When non-empty it **replaces** the install-level `slack.allow` for this sandbox. Empty falls back to install level; empty at both levels means everyone may trigger. Enforced ahead of the mention filter and the thread bypass; a rejected user is silently ignored — no reaction, no reply. |
+| `maxConcurrentThreads` | int  | `1`     | Distinct Slack threads this sandbox's poller dispatches in parallel. Turns **within** one thread stay strictly serial and ordered. Note that parallel turns share `/workspace`. |
+
+#### `spec.notification.slack.transcript`
+
+| Field     | Type | Default | Meaning |
+|-----------|------|---------|---------|
+| `enabled` | bool | `false` | Stream the agent's transcript into the channel thread as the turn runs. |
+
+#### `spec.notification.slack.invites`
+
+| Field        | Type | Default | Meaning |
+|--------------|------|---------|---------|
+| `emails`     | list | --      | Additional people invited to the per-sandbox channel after `km create` succeeds, beyond the always-invited primary operator. Native vs Slack Connect is auto-detected. |
+| `useConnect` | bool | `true`  | Gates the Slack Connect fallback for the `emails` loop only. `false` skips external addresses with a warning and a follow-up command. Does not affect the primary operator invite or `km slack invite`. |
+
+```yaml
+spec:
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
+      private: true
+      archiveOnDestroy: false
+      inbound:
+        enabled: true
+        mentionOnly: true
+        maxConcurrentThreads: 3
+        allow: ["U01ABCDEFGH"]
+      transcript:
+        enabled: true
+      invites:
+        emails: ["teammate@example.com"]
+```
+
+See [`docs/slack-notifications.md`](slack-notifications.md).
+
+### `spec.notification.github` / `.h1` / `.webhook`
+
+Each provisions the per-sandbox inbound FIFO queue (and, for `h1`, the poller userdata)
+for one bridge. All three take the same single field and are dormant when absent — no
+SQS queue, no DynamoDB row, no SSM parameter, no poller.
+
+| YAML path                                    | Default | Enables |
+|----------------------------------------------|---------|---------|
+| `spec.notification.github.inbound.enabled`   | `false` | GitHub PR/issue comment triggers → [`docs/github-bridge.md`](github-bridge.md) |
+| `spec.notification.h1.inbound.enabled`       | `false` | HackerOne report/comment triggers → [`docs/h1-bridge.md`](h1-bridge.md) |
+| `spec.notification.webhook.inbound.enabled`  | `false` | Generic push-webhook ingress (Wiz first source) → [`docs/webhook-ingress.md`](webhook-ingress.md) |
+
+```yaml
+spec:
+  notification:
+    github:
+      inbound:
+        enabled: true
+```
+
+---
+
+## `spec.limits`
+
+Per-action outbound quotas — a circuit breaker for an agent that has started looping,
+not a throttle for normal work. Absent block means no counting at all.
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.limits`                  |
+| Type       | object                         |
+| Required   | No                             |
+| Default    | -- (no quotas)                 |
+
+Six actions can be metered, each taking the same shape:
+
+| Action key       | Counts |
+|------------------|--------|
+| `github_pr`      | GitHub pull request creates |
+| `github_comment` | GitHub issue/PR comments |
+| `github_review`  | GitHub pull request review submissions |
+| `email_send`     | Outbound SES emails |
+| `slack_post`     | Slack posts and uploads via the bridge |
+| `h1_comment`     | HackerOne report comments via the bridge |
+
+Each entry accepts:
+
+| Field      | Type | Default | Meaning |
+|------------|------|---------|---------|
+| `lifetime` | int  | --      | Maximum over the whole sandbox lifetime; never resets. |
+| `perHour`  | int  | --      | Maximum per fixed hourly UTC bucket. |
+| `perDay`   | int  | --      | Maximum per fixed UTC calendar day. |
+| `onBreach` | enum | `warn`  | `warn` (alert only, action still flows), `block` (deny the action), or `freeze` (latch the sandbox into quarantine). |
+
+An absent window is not enforced. A window set to **`0` is a hard-deny floor** — it
+trips on the first attempt, which is how you turn an action off entirely when paired
+with `onBreach: block` or `freeze`. Install-wide defaults live under `limits:` in
+`km-config.yaml`; a profile's block overrides them. A frozen sandbox is released with
+`km unlock`, and `km status` shows a Quotas section.
+
+```yaml
+spec:
+  limits:
+    github_comment:
+      perHour: 20
+      lifetime: 200
+      onBreach: freeze
+    email_send:
+      perDay: 50
+      onBreach: block
+```
+
+See [`docs/action-quotas.md`](action-quotas.md).
+
+---
+
 ## Profile Inheritance
 
-A profile can extend a parent profile using the `extends` field. Inheritance is resolved at load time by the `Resolve()` function.
+A profile can build on one or more parents with `extends`. Inheritance is resolved at
+load time by `Resolve()`, and both `km validate` and `km create` validate the **merged**
+result rather than the raw child — a partial child alone would fail the required-field
+checks.
 
-### Rules
+> **Phase 117 (2026-06-24) rewrote these semantics.** `extends` gained the list form and
+> merging became a uniform deep merge. Most importantly, **list fields now union**
+> instead of being replaced. Guidance written against the older single-parent,
+> replace-everything model no longer describes what happens.
 
-1. **Section-level replacement** -- If a child profile defines any field within a spec section (e.g. `spec.lifecycle`), the child's entire section replaces the parent's. Fields are not merged at the individual-field level within a section.
+### The `extends` field
 
-2. **Zero-value fallback** -- If a child profile leaves an entire spec section as the zero value (all fields empty/unset), the parent's section is used.
+Accepts either a single parent name (the original form, still supported) or an **ordered
+list**. Bases resolve left to right and the child applies last, so a later parent wins a
+scalar conflict against an earlier one, and the child wins against all of them.
 
-3. **Labels are the exception** -- `metadata.labels` is the only field that merges additively. Child labels override same-key parent labels, but parent-only labels are preserved.
+```yaml
+extends: hardened                    # single parent
 
-4. **List replacement** -- For allowlist arrays (`allowedDNSSuffixes`, `allowedHosts`, `allowedRepos`, etc.), if the child specifies them at all, the child's array replaces the parent's entirely. There is no array merging.
+extends:                             # ordered list — later entries win
+  - base/safenetwork
+  - base/sidecars-all
+  - base/budget-standard
+```
 
-5. **Max depth** -- Inheritance chains are limited to 3 levels. A profile extending a profile extending a profile is the maximum.
+### Merge rules
 
-6. **Cycle detection** -- Circular inheritance (A extends B extends A) is detected and rejected.
+1. **Maps recurse at every depth.** Keys are unioned; there is no section-level
+   replacement. Setting one field in `spec.lifecycle` no longer discards the parent's
+   other lifecycle fields.
 
-7. **Resolution order** -- Built-in profiles are checked first, then search paths on disk.
+2. **Scalars: the child (or the rightmost parent) wins.**
 
-8. **Extends is cleared** -- The resolved (merged) profile has its `extends` field set to empty string.
+3. **Lists concatenate and de-duplicate**, order-preserving, first occurrence kept. This
+   applies to every list field — `initCommands`, `allowedDNSSuffixes`, `allowedHosts`,
+   `allowedRepos`, `allowedRefs`, `email.allowedSenders`,
+   `agent.claude.tools.autoApprove`, `rsyncPaths`, `artifacts.paths`. Object lists such
+   as `additionalSnapshots` de-duplicate by deep equality.
+
+4. **`metadata.labels` merges additively**, like any other map: child labels override
+   same-key parent labels and parent-only labels survive.
+
+5. **Max depth is 10**, and cycles are rejected. Diamond inheritance is fine — each node
+   is resolved once and memoized.
+
+6. **Resolution order** — built-in profiles first, then `profile_search_paths` on disk.
+
+7. **`extends` is cleared** on the resolved profile.
+
+### v1 narrowing limitation
+
+Because lists union, **a child cannot shrink a base's list.** Extending a base with ten
+allowed DNS suffixes and declaring two of your own gives you twelve, not two. To run with
+a narrower allowlist, compose from a narrower base or keep that field in the leaf profile
+entirely. A `!replace` directive is a deferred follow-up.
+
+### Bool zero-value trap
+
+A fragment that writes a whole block containing non-pointer bools pushes their
+zero values (`false`) onto every child. Keep mixed-bool blocks such as `spec.runtime` in
+the leaf profile rather than in a shared fragment.
+
+### Abstract fragments
+
+Files under `profiles/base/` set [`metadata.abstract: true`](#metadataabstract) and are
+partial by design: `km validate` skips them and `km create` refuses them. Use
+[`spec.execution.initCommandsAppend`](#specexecutioninitcommandsappend) when a leaf needs
+install steps to run *after* everything its bases installed.
 
 ### Example
 
 ```yaml
-# my-profile.yaml -- extends hardened, opens network access
+# my-profile.yaml — composes three shipped fragments, then narrows what it can
 apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: my-profile
   labels:
     team: platform
-extends: hardened
+extends:
+  - base/safenetwork
+  - base/sidecars-all
+  - base/budget-standard
 
 spec:
-  # Only override the sections you want to change.
-  # All other sections (runtime, execution, sidecars, etc.) are inherited from hardened.
-  network:
-    egress:
-      allowedDNSSuffixes:
-        - ".amazonaws.com"
-        - ".github.com"
-      allowedHosts:
-        - "api.github.com"
+  # Scalars below override whatever the bases set.
   lifecycle:
     ttl: "8h"
     idleTimeout: "2h"
     teardownPolicy: destroy
+
+  network:
+    egress:
+      # These are ADDED to the suffixes base/safenetwork already allows.
+      allowedDNSSuffixes:
+        - ".internal.example.com"
+      allowedHosts:
+        - "artifacts.internal.example.com"
+
+  execution:
+    # Runs after every initCommands entry merged from the bases.
+    initCommandsAppend:
+      - "npm install -g @my-org/internal-cli"
 ```
+
+See [`OPERATOR-GUIDE.md` § Composable inheritance](../OPERATOR-GUIDE.md) for the full
+authoring guide and the shipped fragment library.
 
 ---
 
@@ -1590,6 +2339,7 @@ Beyond JSON Schema structural validation, the following semantic rules are enfor
 | Rule | Path | Description |
 |------|------|-------------|
 | TTL >= idleTimeout | `spec.lifecycle.ttl` | The TTL must not be shorter than the idle timeout. A sandbox cannot idle out after it has already expired. |
+| maxLifetime >= TTL | `spec.lifecycle.maxLifetime` | When both are set, the lifetime cap must not be shorter than the TTL — otherwise the sandbox is un-extendable the moment it boots. Equal is allowed and means "no extensions". Skipped when `ttl` is the `0` sentinel. |
 | Valid substrate | `spec.runtime.substrate` | Must be `ec2`, `ecs`, or `docker` (also enforced by schema enum). |
 | Valid enforcement | `spec.network.enforcement` | Must be `proxy`, `ebpf`, or `both` (also enforced by schema enum). |
 | eBPF is EC2-only | `spec.network.enforcement` | eBPF enforcement (`ebpf` or `both`) is EC2-only. On ECS or Docker substrates, proxy enforcement is used regardless. |

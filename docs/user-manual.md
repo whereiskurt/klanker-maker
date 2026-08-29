@@ -36,6 +36,18 @@
   - [km bootstrap](#km-bootstrap)
   - [km roll creds](#km-roll-creds)
   - [km completion](#km-completion)
+  - [km desktop](#km-desktop)
+  - [km tunnel](#km-tunnel)
+  - [km model](#km-model)
+  - [km capacity](#km-capacity)
+  - [km freeze](#km-freeze)
+  - [km check](#km-check)
+  - [km account](#km-account)
+  - [km cluster](#km-cluster)
+  - [km slack](#km-slack)
+  - [km github / km h1](#km-github--km-h1)
+  - [km env](#km-env)
+  - [km unbootstrap](#km-unbootstrap)
 - [Walkthrough: Claude Code in a Sandbox](#walkthrough-claude-code-in-a-sandbox)
 - [Walkthrough: Goose with Budget Cap](#walkthrough-goose-with-budget-cap)
 - [Walkthrough: Security Agent in a Sealed Sandbox](#walkthrough-security-agent-in-a-sealed-sandbox)
@@ -160,7 +172,7 @@ scheduler_role_arn: arn:aws:iam::222222222222:role/km-scheduler-role
 Initialize shared regional infrastructure (VPC, subnets, security groups). **Run once per region** before creating sandboxes. Use `--sidecars` or `--lambdas` for fast partial deploys.
 
 ```
-km init [--region <region>] [--aws-profile <profile>] [--sidecars] [--lambdas] [--dry-run] [--verbose]
+km init [--region <region>] [--aws-profile <profile>] [--sidecars] [--lambdas] [--plan] [--only <module>] [--dry-run] [--verbose]
 ```
 
 > **Important:** `--dry-run` defaults to `true`. You must pass `--dry-run=false` to actually execute changes.
@@ -172,11 +184,30 @@ km init [--region <region>] [--aws-profile <profile>] [--sidecars] [--lambdas] [
 | `--sidecars` | `false` | Only rebuild and upload sidecars + km binary + toolchain (skip Terraform) |
 | `--lambdas` | `false` | Only rebuild and deploy Lambda functions (skip Terraform) |
 | `--dry-run` | `true` | Show what would be initialized without making changes (use `--dry-run=false` to execute) |
+| `--plan` | `false` | Run a real `terragrunt plan` per module behind the destroy-class safety gate. Never applies, and independent of `--dry-run` |
+| `--only` | `""` | Apply a single curated module (env + IAM only). Allowed: `lambda-github-bridge`, `lambda-slack-bridge`, `lambda-h1-bridge`, `email-handler`, `lambda-webhook-bridge`; and `ses`, which is gated |
+| `--github` / `--slack` / `--h1` / `--email` / `--webhooks` | `false` | Sugar for the matching `--only <module>` |
 | `--verbose` | `false` | Show full terragrunt/terraform output |
 
 **Full init** (~9 min): DNS zone, Lambda build, sidecar build+upload, ECR push, toolchain upload, proxy CA, Terraform apply.
 
 **Partial init** (~1-2 min): `--sidecars` and `--lambdas` can be combined or used alone to skip the Terraform apply when you only need to update binaries.
+
+**Scoped init** (seconds): `--only <module>` and its sugar aliases apply exactly one
+terragrunt module, which refreshes that Lambda's environment block and IAM without
+touching the other ~26 modules. It does **not** rebuild a stale code zip (that is still
+`make build-lambdas` + `km init --lambdas`) and does **not** provision new resources,
+tables, or queues (still a full `km init --dry-run=false`). The four bridge aliases are
+pure env+IAM targets and run without confirmation; `--only ses` routes through the
+destroy-class safety gate first, because that module owns SES domain identities, Route53
+records, and the consolidated S3 bucket policy. `--only` and the sugar flags are mutually
+exclusive with `--sidecars`, `--lambdas`, and `--plan`.
+
+**Plan before apply.** `km init --plan` runs a real plan per module and trips a curated
+safety gate on the destroy or replacement of protected resource types — SES identities,
+Route53 records, S3 buckets, DynamoDB tables, KMS keys. `--i-accept-destroys` is the
+per-invocation override; it is never persisted and does not itself apply anything. See
+[`OPERATOR-GUIDE.md` § Plan-before-apply](../OPERATOR-GUIDE.md).
 
 **Example:**
 
@@ -267,8 +298,14 @@ km validate my-broken-profile.yaml
 Provision a sandbox from a profile.
 
 ```
-km create <profile.yaml> [--on-demand] [--no-bedrock] [--docker] [--alias <alias>] [--substrate <type>] [--ttl <duration>] [--idle <duration>] [--aws-profile <profile>] [--verbose] [--remote] [--local]
+km create <profile.yaml> [alias] [flags]
 ```
+
+The alias may be given as a **second positional argument** instead of `--alias`.
+Whichever argument ends in `.yaml`/`.yml` is treated as the profile, so the order of the
+two does not matter. Ambiguity is always an error rather than a guess: two YAML-looking
+arguments, zero YAML-looking arguments, or a positional alias combined with `--alias` all
+fail with a message naming the conflict.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -283,6 +320,12 @@ km create <profile.yaml> [--on-demand] [--no-bedrock] [--docker] [--alias <alias
 | `--verbose` | `false` | Show full terragrunt/terraform output |
 | `--remote` | `false` | Dispatch to Lambda via EventBridge (default for EC2/ECS substrates) |
 | `--local` | `false` | Force local create with terragrunt (default for Docker substrate) |
+| `--ai` | -- | Override `spec.budget.ai.maxSpendUSD` |
+| `--compute` | -- | Override `spec.budget.compute.maxSpendUSD` |
+| `--prompt` | -- | Queue a prompt for the agent (repeatable). `@file` reads from a file; `@@x` escapes a literal `@x`. EC2 substrate only |
+| `--wait` | `false` | Block until the prompt queue drains. The exit code propagates from the first failing prompt |
+| `--wait-for-capacity` | -- | Re-sweep all AZs on a backoff until capacity appears or the deadline elapses (bare flag = `30m`). Iterate-class errors retry; quota/auth/invalid errors exit immediately |
+| `--launch-account` | -- | Override `spec.runtime.launchAccount`. An explicitly empty value forces the home account even when the profile names a link |
 
 **What it does:**
 
@@ -313,8 +356,15 @@ km create profiles/goose.yaml --no-bedrock
 # Use Docker Compose local substrate
 km create profiles/goose.yaml --docker
 
-# Override the sandbox alias
+# Override the sandbox alias (either form works)
 km create profiles/goose.yaml --alias mybot
+km create profiles/goose.yaml mybot
+
+# Queue work for the agent and block until it finishes
+km create profiles/goose.yaml reviewer --prompt @tasks/review.md --wait
+
+# Wait up to 30 minutes for GPU capacity instead of failing on the first sweep
+km create profiles/gpu-qwen-12x.yaml --wait-for-capacity
 
 # Create with a different AWS profile
 km create my-profile.yaml --aws-profile my-custom-profile
@@ -573,7 +623,7 @@ Sandbox sb-7f3a9e12 unlocked.
 List all running sandboxes. Alias: `km ls`.
 
 ```
-km list [--json] [--tags] [--wide]
+km list [--json] [--tags] [--wide] [--auth] [--reset]
 ```
 
 | Flag | Default | Description |
@@ -581,6 +631,8 @@ km list [--json] [--tags] [--wide]
 | `--json` | `false` | Output as JSON array |
 | `--tags` | `false` | Use AWS tag scan instead of DynamoDB (slower, more reliable) |
 | `--wide` | `false` | Show all columns (profile, substrate, region) |
+| `--auth` | `false` | Check each running sandbox's agent (claude/codex) login state over SSM |
+| `--reset` | `false` | Reset local sandbox numbering so the next created sandbox is `#1` |
 
 **Data source:** Primary lookup uses a single DynamoDB Scan on the `km-sandboxes` table (fast, O(1) per page). Falls back to S3 listing if the DynamoDB table does not exist.
 
@@ -720,7 +772,7 @@ km logs sb-7f3a9e12 --stream network
 Check platform health and bootstrap verification.
 
 ```
-km doctor [--json] [--quiet] [--dry-run] [--all-regions]
+km doctor [--json] [--quiet] [--dry-run] [--all-regions] [--ignore-prefix <csv>] [cleanup opt-ins]
 ```
 
 | Flag | Default | Description |
@@ -729,6 +781,33 @@ km doctor [--json] [--quiet] [--dry-run] [--all-regions]
 | `--quiet` | `false` | Suppress OK and SKIPPED results; show only WARN and ERROR |
 | `--dry-run` | `true` | Show stale resources without deleting (use `--dry-run=false` to clean up) |
 | `--all-regions` | `false` | Scan every active region (regions with at least one km-tagged sandbox) instead of just the primary region. Used by stale-resource checks (KMS, IAM, AMI). |
+| `--ignore-prefix` | -- | Treat these sibling `resource_prefix` values (other km installs in the same account) as known, so their cross-install resources report OK instead of WARN. Comma-separated or repeated. Augments `doctor_ignore_prefixes` in `km-config.yaml` |
+| `--backfill-tags` | `false` | Retrofit the `km:resource-prefix` tag onto pre-Phase-82 resources. Honours `--dry-run` |
+| `--republish-operator-identity` | `false` | Self-heal a missing operator public-key row (the `unknown_sender` failure). Idempotent |
+
+#### Cleanup opt-ins
+
+`--dry-run=false` alone only cleans the resource classes that are safe to remove without
+further confirmation — KMS keys, IAM roles, schedules. Everything riskier needs its own
+explicit opt-in, so a cleanup pass can never delete a class you did not name:
+
+| Flag | Deletes |
+|------|---------|
+| `--delete-ebs` | Detached orphan EBS volumes (`state=available`). In-use volumes are never touched |
+| `--delete-sqs` | Stale Slack inbound SQS queues and their per-sandbox SSM parameters |
+| `--delete-s3` | Orphan `artifacts/{id}/` and `transcripts/{id}/` prefixes for sandboxes gone from DynamoDB |
+| `--delete-lambdas` | Per-sandbox Lambdas (budget-enforcer, github-token-refresher) whose sandbox row is gone. Platform Lambdas are never touched -- the check uses a per-sandbox allowlist, not a denylist |
+| `--delete-ssh` | Operator-local `Host km-{id}` blocks in `~/.ssh/config` and matching keys in `~/.km/keys/` |
+| `--delete-ssm` | Per-sandbox SSM parameters (signing key, encryption key, safe phrase, GitHub token). Explicit because these hold cryptographic secrets |
+| `--delete-ddb-rows` | Rows in budgets/identities/slack-threads for sandboxes gone from `km-sandboxes`, plus `status=failed` rows |
+| `--delete-logs` | Orphaned CloudWatch log groups for destroyed sandboxes |
+| `--delete-state-digests` | Orphan DynamoDB lock rows where the S3 state object is *definitively* gone. Network, 5xx, and throttling errors never trigger deletion |
+| `--with-deletes` | Shortcut for all nine above. Pair with `--dry-run=false` for a full pass; with the default `--dry-run=true` it previews what each opt-in would clean |
+
+Two more are additive rather than destructive: `--set-log-retention` installs a retention
+policy on log groups that have none (default 30 days, `doctor_log_retention_days`), and
+`--set-s3-lifecycle` installs a lifecycle rule expiring transient artifact prefixes
+(default 30 days, `doctor_s3_expire_days`). Both are idempotent.
 
 **What it checks:**
 
@@ -921,6 +1000,13 @@ km shell <sandbox-id | #number> [--root] [--no-bedrock] [--ports <ports>] [--lea
 | `--learn` | `false` | After shell exit, generate a SandboxProfile YAML from observed DNS/TLS traffic |
 | `--learn-output` | `learned.YYYYMMDDHHMMSS.yaml` | Path to write the generated profile (timestamped by default) |
 | `--ami` | `false` | After shell exit, snapshot the EC2 instance into a custom AMI; the AMI ID is embedded in the generated profile at `spec.runtime.ami`. Requires `--learn`. |
+| `--notify-on-permission` / `--no-notify-on-permission` | profile default | Force-enable or force-disable operator email on a Claude permission prompt, for this session only |
+| `--notify-on-idle` / `--no-notify-on-idle` | profile default | Force-enable or force-disable operator email when Claude finishes a turn, for this session only |
+| `--transcript-stream` / `--no-transcript-stream` | profile default | Force-enable or force-disable streaming transcript turns to the per-sandbox Slack thread (and uploading the final JSONL), for this session only |
+
+The six session flags above override `spec.notification.events.*` and
+`spec.notification.slack.transcript.enabled` for one `km shell` invocation; they do not
+change the profile or the sandbox.
 
 **What it does:**
 
@@ -1447,18 +1533,20 @@ AWS Usage
 Save and restore sandbox user home directory snapshots.
 
 ```
-km rsync save <sandbox-id> <name> [--profile-dir <dir>]
-km rsync load <sandbox-id> <name>
+km rsync save   <sandbox-id> <name>
+km rsync load   <sandbox-id> <name>
+km rsync list   <sandbox-id>
+km rsync view   <sandbox-id> <name>
+km rsync delete <sandbox-id> <name>
 ```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--profile-dir` | `""` | Directory containing sandbox profile (for rsyncPaths resolution) |
-
-**What it does:**
-
-- **save**: Creates a tarball of the sandbox user's home directory (or specific paths defined by `rsyncPaths` / `rsyncFileList` in the profile) and uploads it to S3
-- **load**: Lists or restores a previously saved snapshot
+| Subcommand | Purpose |
+|---|---|
+| `save` | Tarball the sandbox user's home (or the paths named by `rsyncPaths` / `rsyncFileList`) and upload it to S3 |
+| `load` | Restore a previously saved snapshot into a running sandbox |
+| `list` | List saved snapshots for a sandbox |
+| `view` | Show a snapshot's contents in tree format |
+| `delete` | Delete a saved snapshot |
 
 Paths can be scoped via `spec.execution.rsyncPaths` in the profile, or via an external YAML file referenced by `spec.execution.rsyncFileList`.
 
@@ -1466,7 +1554,10 @@ Paths can be scoped via `spec.execution.rsyncPaths` in the profile, or via an ex
 
 ```bash
 km rsync save 1 checkpoint-1     # save home snapshot
+km rsync list 1                  # what snapshots exist
+km rsync view 1 checkpoint-1     # what is inside one
 km rsync load 1 checkpoint-1     # restore snapshot
+km rsync delete 1 checkpoint-1   # remove it
 ```
 
 ---
@@ -1594,7 +1685,7 @@ km configure --non-interactive \
 Tear down all shared regional infrastructure (reverse of `km init`).
 
 ```
-km uninit [--region <region>] [--aws-profile <profile>] [--force] [--yes] [--verbose]
+km uninit [--region <region>] [--aws-profile <profile>] [--force] [--include-scp] [--yes] [--verbose]
 ```
 
 | Flag | Default | Description |
@@ -1602,8 +1693,12 @@ km uninit [--region <region>] [--aws-profile <profile>] [--force] [--yes] [--ver
 | `--region` | `us-east-1` | AWS region to tear down |
 | `--aws-profile` | `klanker-application` | AWS CLI profile |
 | `--force` | `false` | Destroy even if active sandboxes exist |
+| `--include-scp` | `false` | Also detach and delete this install's sandbox-containment SCP from AWS Organizations (needs the `km-org-admin` role) |
 | `--yes` | `false` | Skip confirmation prompt |
 | `--verbose` | `false` | Show full terragrunt/terraform output |
+
+There is no `--dry-run` on `km uninit` -- the confirmation is `--yes`. This is the first
+of the two teardown layers; follow it with [`km unbootstrap`](#km-unbootstrap).
 
 ---
 
@@ -1612,14 +1707,22 @@ km uninit [--region <region>] [--aws-profile <profile>] [--force] [--yes] [--ver
 Deploy SCP containment policy, KMS key, and artifacts bucket.
 
 ```
-km bootstrap [--dry-run] [--show-prereqs] [--scp]
+km bootstrap [--all] [--shared-ses] [--shared-secrets-key] [--plan] [--dry-run] [--show-prereqs] [--scp]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--dry-run` | `true` | Print what would be created without making changes |
 | `--show-prereqs` | `false` | Print the IAM role and trust policy needed in the management account |
-| `--scp` | `false` | Print the km-sandbox-containment SCP policy JSON and the km-org-admin role/trust policy |
+| `--scp` | `false` | Print the `{prefix}-sandbox-containment` SCP policy JSON and the `{prefix}-org-admin` role/trust policy |
+| `--shared-ses` | `false` | Provision the account-shared SES rule set and domain identity. Run before `km init` on a fresh account |
+| `--shared-secrets-key` | `false` | Provision the per-install shared KMS key for SOPS bundle decryption. Required before any profile can use `spec.secrets.sopsFile`. Idempotent, and combinable with `--shared-ses` |
+| `--all` | `false` | Chain the subflows in order: foundation, then shared SES rule set, then shared secrets key. Mutually exclusive with `--shared-ses` |
+| `--plan` | `false` | Run `terragrunt plan` for the bootstrap modules behind the destroy-class safety gate; never applies |
+
+The shared SES rule set (`sandbox-email-shared`) is account-shared and carries
+`lifecycle.prevent_destroy`. Each install adds exactly two rules to it, and `km uninit`
+removes only its own two -- sibling installs' rules and the rule set itself survive.
 
 ---
 
@@ -1663,6 +1766,320 @@ source <(km completion bash)
 # Zsh
 km completion zsh > "${fpath[1]}/_km"
 ```
+
+---
+
+### km desktop
+
+Open a KasmVNC graphical session (a browser in kiosk mode, or a full XFCE desktop) in
+your local browser over an SSM port-forward. Loopback only -- no security-group change
+and no public IP. Requires `spec.runtime.desktop.enabled: true` and an Ubuntu AMI.
+
+| Subcommand | Purpose |
+|---|---|
+| `km desktop start <id>` | Open the port-forward; prints `https://localhost:8444/` and the credential. `--local-port` moves it. |
+| `km desktop status <id>` | Report whether the KasmVNC unit is active and the credential is present. |
+| `km desktop rekey <id>` | Rotate the per-sandbox VNC password on a running box -- no restart, no session interruption. |
+| `km desktop restart <id>` | Force a server-side restart of Xvnc + window manager + browser for a wedged desktop. Drops the live session. |
+
+```bash
+km desktop start sb-7f3a9e12
+# https://localhost:8444/   user: kasm_user   password: ...
+```
+
+The forward auto-reconnects if SSM drops it; Ctrl-C quits. Note that a connected VNC
+viewer counts as a liveness signal, so an open browser tab pins the sandbox alive against
+`idleTimeout` -- `spec.lifecycle.ttl` is the real backstop.
+
+See [`docs/desktop.md`](desktop.md).
+
+---
+
+### km tunnel
+
+Carries a network path from your workstation *into* a sandbox. Each mode reverse-forwards
+something over the same SSM+SSH transport `km vscode` uses, so the sandbox reaches a
+destination only your machine can reach -- without ever holding the credential that makes
+that reachability possible. Every mode dies with the shell it opens; there is deliberately
+no daemon and no detached mode.
+
+> While a tunnel is up, the traffic crossing it does **not** pass km's MITM proxy, eBPF
+> allowlist, or `deniedHosts`. The lifetime is the honest control.
+
+#### km tunnel k8s
+
+```bash
+km tunnel k8s <sandbox-id> --context <kube-context>
+```
+
+Drops you into a sandbox shell where `kubectl` works against a cluster reachable only from
+your workstation (a VPN route on your laptop, for instance). The cluster is dialled from
+your machine; the sandbox gets no route, no DNS entry, no VPN profile, no SSO refresh
+token and no AWS credential. Kubernetes credentials are minted locally by your own exec
+plugin and proxied to the box over a reverse-forwarded unix socket.
+
+| Flag | Purpose |
+|---|---|
+| `--context` | Kube context to tunnel (required). |
+| `--bind-port` | Sandbox loopback port for the API server (default 6443). Need not match the cluster's real port. |
+| `--local-port` | Local port for the SSM forward to sshd (default 2223). |
+| `--kubeconfig` | Override `$KUBECONFIG` / `~/.kube/config`. |
+| `--dry-run` | Resolve and print the target, the ssh command, and the box kubeconfig; connect to nothing. |
+| `--print-ssh` | Print the ssh command and exit so you can run it by hand. |
+| `--verbose` | Announce each leg as it comes up. |
+
+`--dry-run` / `--print-ssh` / `--verbose` are permanent interface, not bring-up
+scaffolding -- none of this is reproducible without a real VPN and cluster.
+
+#### km tunnel socks
+
+```bash
+km tunnel socks <sandbox-id>
+```
+
+Gives the box a SOCKS5 proxy on loopback that egresses through your workstation, so it
+reaches whatever your VPN reaches. Nothing is written on the sandbox and there is no
+credential broker -- ssh itself is the proxy. Use the `socks5h://` scheme so names resolve
+on your machine.
+
+| Flag | Purpose |
+|---|---|
+| `--bind-port` | Sandbox loopback port for the proxy (default 1080). |
+| `--set-proxy-env` | Start the shell with `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` already set. |
+| `--dry-run`, `--print-ssh`, `--verbose`, `--local-port` | As for `k8s`. |
+
+`--set-proxy-env` is **off by default on purpose**: km meters Bedrock/Anthropic/OpenAI
+spend by intercepting those hosts in its own proxy, and traffic sent through SOCKS never
+reaches it -- AI spend silently stops being metered and `km status` under-reports. When
+the flag is set, `NO_PROXY` carries `169.254.169.254` so IMDS credential fetches keep
+working.
+
+This is a much wider path than `k8s` by construction: two sockets to one cluster versus
+arbitrary access to everything your VPN reaches.
+
+See [`docs/k8s-reverse-tunnel.md`](k8s-reverse-tunnel.md) for the runbook and
+[`docs/k8s-reverse-tunnel-internals.md`](k8s-reverse-tunnel-internals.md) for how the
+three nested tunnels fit together.
+
+---
+
+### km model
+
+Connects to the on-box model gateway (Bifrost) on a GPU serving sandbox, so a locally
+served model is usable from your laptop.
+
+```bash
+km model start <sandbox-id>              # forwards :8001, prints OpenAI-style hints
+km model start <sandbox-id> --anthropic  # also prints ANTHROPIC_BASE_URL for Claude Code
+km model status <sandbox-id>             # is vLLM up? is Bifrost up?
+```
+
+Bifrost routes on the `provider/model` string the caller sends -- `vllm-local/local` for
+the on-box model, `bedrock/...` and `anthropic/...` for cloud routes (which still flow
+through the MITM proxy and stay metered).
+
+See [`docs/gpu-model-serving.md`](gpu-model-serving.md).
+
+---
+
+### km capacity
+
+Prints a per-AZ capacity feasibility table for an EC2 instance type, before you spend a
+`km create` finding out.
+
+```bash
+km capacity profiles/gpu-qwen-12x.yaml            # resolve the type from a profile
+km capacity --type g6e.12xlarge
+km capacity --type g6e.12xlarge --region us-west-2
+km capacity --type g6e.12xlarge --launch-account gpu-capacity
+```
+
+| Verdict | Meaning |
+|---|---|
+| `likely` | Offered in the AZ, quota headroom exists, and there is either a success signal or no fresh capacity failure. |
+| `recently-dry` | An `InsufficientInstanceCapacity` was recorded within the last 45 minutes. |
+| `not-offered` | The instance type is absent from `DescribeInstanceTypeOfferings` for that AZ. |
+| `quota-blocked` | A GPU family with zero vCPU headroom on quota `L-DB2E81BA`. |
+| `unknown` | No signal in the capacity store yet. |
+
+`available` is deliberately never printed -- capacity is probabilistic, not a guarantee.
+`km create` uses the same ranking to sweep AZs, and `--wait-for-capacity[=30m]` re-sweeps
+every five minutes until capacity appears or the deadline passes.
+
+---
+
+### km freeze
+
+The operator panic button. Latches `action_frozen=true` on the sandbox's DynamoDB row, so
+every outbound action gated by the quota middleware -- email, Slack, GitHub, push -- is
+blocked. **The box keeps running**; no stop is issued.
+
+```bash
+km freeze #1
+km freeze sb-abc123 --reason "quota:push:daily exceeded"
+km unlock #1              # the only way back -- CLI-only, deliberately not reachable from Slack
+```
+
+Release is `km unlock`, which also clears the safety lock. See
+[`docs/action-quotas.md`](action-quotas.md).
+
+---
+
+### km check
+
+Deploys and operates serverless "check" Lambdas -- small snippets that run on a schedule
+and can dispatch a prompt to a sandbox when their predicate fires.
+
+| Subcommand | Purpose |
+|---|---|
+| `km check deploy` | Package the snippet and create/update the Lambda; bake `KM_CHECK_TRIGGER`. `--image` for a container check; `--secret <ssm-path>` and `--sops <file>` to inject secrets. |
+| `km check run` | Invoke synchronously and print the output plus the trigger/dispatch result. |
+| `km check ls` | List checks with schedule, `sourceHash` drift flag, and last update. |
+| `km check get` | Detail for one check -- ARN, env keys, secret paths, schedule, trigger summary. |
+| `km check logs` | Tail the check Lambda's CloudWatch logs. |
+| `km check schedule` | Change or pause the EventBridge Scheduler entry. |
+| `km check sync` | Re-resolve `@file` predicates and prompts, then re-bake the trigger. |
+| `km check rm` | Delete the Lambda, its schedule, and its DynamoDB row. |
+
+See [`docs/check-runner.md`](check-runner.md).
+
+---
+
+### km account
+
+Enrolls a second AWS account as a **capacity-borrowing link**, so a profile with
+`spec.runtime.launchAccount` can launch its EC2 box there and borrow that account's vCPU
+quota -- while all km state, budget, `km list`, and every bridge stay in the home account.
+
+Enrollment is two commands with two different credential sets, and the order matters:
+
+```bash
+# 1. Target-account admin credentials. Provisions the launcher role, box role,
+#    results bucket, and optionally one subnet per AZ plus EFS.
+km account add gpu-capacity   --aws-profile target-admin   --trust 333333333333   --instance-types g6e.12xlarge,g6e.48xlarge   --provision-network --az-count 4   --dry-run=false
+
+# 2. Home-account credentials. Writes the km-config.yaml link entry, the external id
+#    into SSM, and one read-only grant on the home artifacts bucket.
+km account register gpu-capacity   --from-fragment ~/.km/account-links/gpu-capacity.link.yaml   --aws-profile klanker-application
+
+km account list
+km account rm gpu-capacity
+```
+
+`km account list` never prints the external id. `km account rm` is home-only unless you
+pass `--target-aws-profile`, which also destroys the target-account footprint;
+`--purge-backend` additionally deletes the shared state bucket and lock table.
+
+Prefer a dedicated member account over an organization **management** account: SCPs never
+apply to the management account, so this feature's "SCP is a second layer" assumption does
+not hold there.
+
+See [`docs/cross-account-capacity-borrowing.md`](cross-account-capacity-borrowing.md).
+
+---
+
+### km cluster
+
+Provisions cross-account IRSA roles in the klanker account that trust Kubernetes clusters
+in other AWS accounts, via projected ServiceAccount tokens.
+
+```bash
+km cluster add --name prod-eks --oidc-provider-arn arn:aws:iam::444444444444:oidc-provider/...   --namespace default --service-account km-agent   --aws-profile klanker-application --region us-east-1 --dry-run=false
+km cluster list
+km cluster rm prod-eks
+```
+
+`--register-oidc-provider` also creates the IAM OIDC provider when the account does not
+already have one. See [`docs/IRSA.md`](IRSA.md).
+
+---
+
+### km slack
+
+Bootstraps and operates the Slack integration. `km slack init` is the one-time setup; the
+rest are day-to-day and repair verbs.
+
+| Subcommand | Purpose |
+|---|---|
+| `init` | One-time bootstrap: shared channel, bridge Lambda, SSM params. Also caches `bot_user_id`. |
+| `manifest` | Render a deployment-specific Slack App manifest to stdout for the "From manifest" UI. |
+| `status` | Print the SSM-backed configuration. |
+| `test` | Send a test envelope end-to-end through the bridge. |
+| `invite <email>` | Add someone to a channel; auto-detects native vs Slack Connect. `--dry-run` classifies without inviting. |
+| `reply` | Post into a session's thread or a sandbox channel. |
+| `adopt <alias> <channelID>` | Seed the alias-to-channel mapping for a channel created outside km, so the next `km create` resolves it in O(1). |
+| `forget-channel` | Drop a stale alias-to-channel mapping. |
+| `threads` / `forget-thread` / `prune-threads` | Inspect and repair `km-slack-threads` rows. |
+| `rotate-token` / `rotate-signing-secret` | Rotate credentials and cold-start the bridge. |
+
+See [`docs/slack-notifications.md`](slack-notifications.md).
+
+---
+
+### km github / km h1
+
+Configure the two comment-trigger bridges. GitHub App *creation* is
+`km configure github --setup`; HackerOne has no App-manifest concept at all.
+
+```bash
+km github manifest > /tmp/km-app.json   # paste into GitHub's "from manifest" flow
+km github init                          # webhook secret, cache bot-login, record bridge-url
+km github status                        # SSM-backed config, secret redacted
+
+km h1 init                              # mint webhook secret, capture Basic-Auth creds
+km h1 status
+```
+
+Routing itself lives in `km-config.yaml` (`github.repos:` / `h1.programs:`), not in these
+commands. See [`docs/github-bridge.md`](github-bridge.md) and
+[`docs/h1-bridge.md`](h1-bridge.md).
+
+---
+
+### km env
+
+Prints an `export KEY=value` block for every `KM_*` variable that terragrunt subprocesses
+read via `get_env()`. Use it when you want to drive terragrunt directly instead of through
+`km init`.
+
+```bash
+eval $(km env)
+eval $(km env --aws-profile)   # also export AWS_PROFILE
+```
+
+`AWS_PROFILE` is excluded by default because it is operator-shell-local.
+
+---
+
+### km unbootstrap
+
+The symmetric teardown of `km bootstrap`, and the **second** of the two teardown layers --
+run `km uninit` first to clear regional infrastructure, or this fails on the state bucket
+while terragrunt-managed state is still live.
+
+Removes all SSM parameters under `/{prefix}/`, the artifacts bucket (object versions
+emptied first), the Terraform state bucket, and the platform KMS key plus its alias
+(scheduled for deletion, 7-day window by default).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--aws-profile` | `klanker-application` | AWS CLI profile to use for teardown |
+| `--region` | `us-east-1` | Region used to derive the state bucket name and target the KMS key |
+| `--include-zone` | `false` | Also delete the `sandboxes.{domain}` hosted zone |
+| `--kms-deletion-window` | `7` | Pending-deletion window in days for the platform KMS key (AWS allows 7-30) |
+| `--yes` | `false` | Skip the confirmation prompt |
+
+```bash
+km uninit --region us-east-1 --yes
+km unbootstrap --yes
+km unbootstrap --yes --include-zone --kms-deletion-window 30
+```
+
+`--include-zone` also deletes the `sandboxes.{domain}` hosted zone, keeping only the apex
+NS/SOA pair -- off by default because DNS takes longer to recreate than everything else.
+Per-step failures are warnings, not aborts, so a partial cleanup still makes progress.
+
+There is no `--dry-run`; the confirmation is `--yes`.
 
 ---
 
