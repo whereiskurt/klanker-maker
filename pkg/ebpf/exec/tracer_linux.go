@@ -7,19 +7,24 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/unix"
 
 	"github.com/whereiskurt/klanker-maker/pkg/execlog"
 )
 
 // ErrUnsupported is returned when exec tracing is not available. On this build
-// it can still surface if the kernel rejects the programs.
+// it can still surface if the kernel rejects the programs — every setup
+// failure in NewTracer wraps it, so a caller can use errors.Is(err,
+// exec.ErrUnsupported) to tell "cannot run here" from a bug in the caller,
+// on the platform where the daemon actually runs.
 var ErrUnsupported = errors.New("exec tracing unavailable")
 
 const (
@@ -58,24 +63,33 @@ type Tracer struct {
 	rd     *ringbuf.Reader
 	out    chan execlog.Record
 	closed chan struct{}
+
+	// wg tracks the drain goroutine, so Close can block until it has actually
+	// exited (and out is closed) instead of returning while it might still be
+	// mid-decode or mid-send — provable rather than merely argued-safe.
+	wg sync.WaitGroup
+
+	// stallOnce makes the first time a slow consumer stalls the drain loop
+	// loud exactly once, mirroring flowlog.Writer's warnOnce.
+	stallOnce sync.Once
 }
 
 // NewTracer loads the BPF programs, attaches all four tracepoints, and starts
 // draining the ring buffer.
 func NewTracer() (*Tracer, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
-		return nil, fmt.Errorf("remove memlock: %w", err)
+		return nil, fmt.Errorf("remove memlock: %w: %w", ErrUnsupported, err)
 	}
 
 	t := &Tracer{out: make(chan execlog.Record, 1024), closed: make(chan struct{})}
 	if err := loadExecbpfObjects(&t.objs, nil); err != nil {
-		return nil, fmt.Errorf("load exec bpf objects: %w", err)
+		return nil, fmt.Errorf("load exec bpf objects: %w: %w", ErrUnsupported, err)
 	}
 
 	links, err := t.attachAll()
 	if err != nil {
 		t.objs.Close()
-		return nil, err
+		return nil, err // already wraps ErrUnsupported, see attachAll
 	}
 	t.links = links
 
@@ -83,10 +97,11 @@ func NewTracer() (*Tracer, error) {
 	if err != nil {
 		t.closeLinks()
 		t.objs.Close()
-		return nil, fmt.Errorf("open ringbuf: %w", err)
+		return nil, fmt.Errorf("open ringbuf: %w: %w", ErrUnsupported, err)
 	}
 	t.rd = rd
 
+	t.wg.Add(1)
 	go t.drain()
 	return t, nil
 }
@@ -95,6 +110,10 @@ func NewTracer() (*Tracer, error) {
 func (t *Tracer) Events() <-chan execlog.Record { return t.out }
 
 // Close detaches everything and stops the drain goroutine.
+//
+// It waits for drain to actually exit before tearing down links and objects,
+// and Events() is guaranteed closed by the time Close returns — a caller does
+// not have to guess whether a record is still in flight.
 func (t *Tracer) Close() error {
 	select {
 	case <-t.closed:
@@ -105,6 +124,7 @@ func (t *Tracer) Close() error {
 	if t.rd != nil {
 		t.rd.Close()
 	}
+	t.wg.Wait()
 	t.closeLinks()
 	return t.objs.Close()
 }
@@ -138,7 +158,7 @@ func (t *Tracer) attachAll() ([]link.Link, error) {
 			for _, done := range links {
 				done.Close()
 			}
-			return nil, fmt.Errorf("attach %s/%s: %w", s.group, s.name, err)
+			return nil, fmt.Errorf("attach %s/%s: %w: %w", s.group, s.name, ErrUnsupported, err)
 		}
 		links = append(links, l)
 	}
@@ -151,6 +171,7 @@ func (t *Tracer) attachAll() ([]link.Link, error) {
 // never stop the trace, for the same reason a producer never lets a failed flow
 // write abort an egress decision.
 func (t *Tracer) drain() {
+	defer t.wg.Done()
 	defer close(t.out)
 	for {
 		rec, err := t.rd.Read()
@@ -165,12 +186,36 @@ func (t *Tracer) drain() {
 		case t.out <- r:
 		case <-t.closed:
 			return
+		default:
+			// out is full: the consumer is not keeping up and the kernel ring
+			// keeps filling behind this loop. BPF_MAP_TYPE_RINGBUF exposes no
+			// drop counter to userspace — exec.c's bpf_ringbuf_output() simply
+			// fails silently when the ring has no room — so a stalled
+			// consumer is the only signal available here at all. Staying
+			// silent about it would reproduce the exact defect this phase
+			// exists to eliminate: a store that reports nothing happened when
+			// what really happened is that nobody was listening fast enough.
+			// Block after warning, same as the two-case select above, rather
+			// than dropping the record outright.
+			t.stallOnce.Do(func() {
+				log.Warn().
+					Str("event_type", "exec_tracer_consumer_stalled").
+					Msg("exec tracer's consumer is not keeping up; the kernel ring buffer may now be dropping events")
+			})
+			select {
+			case t.out <- r:
+			case <-t.closed:
+				return
+			}
 		}
 	}
 }
 
-// decode turns one ring-buffer sample into a record. Exit records are emitted
-// as the header alone, so the sample's length is what distinguishes them.
+// decode turns one ring-buffer sample into a record. h.Kind is what
+// distinguishes an exec record from an exit record; the sample's length is
+// used only as a header-sized floor before decoding, never to tell the two
+// apart — an exit record happens to always be exactly header-sized, but
+// nothing about the wire format requires that of an exec record too.
 func (t *Tracer) decode(b []byte) (execlog.Record, bool) {
 	var h rawHdr
 	if len(b) < binary.Size(h) {

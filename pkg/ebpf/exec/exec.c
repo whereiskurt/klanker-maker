@@ -37,9 +37,10 @@
 #define KIND_EXIT 1
 
 /* Split into a header and an argv tail so an exit record can be emitted as just
- * the header. The ring buffer carries each record's own length, so userspace
- * tells the two apart by size — an exit record costs 56 bytes instead of 2.6 KB,
- * and exits are as frequent as execs. */
+ * the header. Userspace discriminates exec from exit on `kind`, not length —
+ * length is used only as a header-sized floor before the struct is decoded.
+ * The size split still matters for cost: an exit record costs 56 bytes instead
+ * of 2.6 KB, and exits are as frequent as execs. */
 struct exec_hdr {
     __u64 ts_ns;
     __u64 cgroup_id;

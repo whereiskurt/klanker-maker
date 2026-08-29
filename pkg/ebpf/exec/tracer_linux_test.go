@@ -48,8 +48,8 @@ func TestTracer_CapturesAnExecWithArgv(t *testing.T) {
 				if r.PID == 0 || r.UID != 0 {
 					t.Errorf("record has implausible identity: %+v", r)
 				}
-				if r.TS.Before(time.Now().Add(-time.Hour)) {
-					t.Errorf("boot-time conversion is wrong: %v", r.TS)
+				if got := time.Since(r.TS); got >= 30*time.Second {
+					t.Errorf("boot-time conversion is off by %v: %v", got, r.TS)
 				}
 				return
 			}
