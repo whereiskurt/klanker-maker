@@ -15,7 +15,7 @@
 - **No new Go module dependencies.** `cilium/ebpf v0.21.0`, `golang.org/x/sys v0.43.0` and `aws-sdk-go-v2/service/s3 v1.97.1` are already in `go.mod`. The `go.mod`/`go.sum` diff for this phase must be empty.
 - **`CGO_ENABLED=0` everywhere.** `km-netpolicy` cross-compiles to `linux/amd64` for the sandbox. `cilium/ebpf` is pure Go; nothing added here may require cgo.
 - **Build tags mirror `pkg/ebpf`.** Real loader: `//go:build linux && amd64`. Stub: `//go:build !linux || !amd64`. `cmd/km-netpolicy` must keep building and testing on `darwin/arm64`.
-- **`go generate` needs Homebrew clang, not Apple clang.** Apple clang has no BPF target (`error: unable to create target: 'No available targets are compatible with triple "bpf"'`). Use `/opt/homebrew/opt/llvm/bin/clang` (verified: Homebrew clang 21.1.8, BPF target OK).
+- **BPF objects are regenerated with `make generate-ebpf`, inside Docker.** Not with a local clang. `gen.go` files carry `//go:build linux`, so `go generate` matches zero packages on darwin and silently does nothing; and the repo's own flat `pkg/ebpf/headers/` cannot resolve `<bpf/*.h>` even on Linux. The `generate-ebpf` target drives the `km-ebpf-generate` image and covers all four BPF packages. (An earlier draft of this plan said to use Homebrew clang because it supports the BPF *target* — true, and irrelevant: it is not how this repo builds.)
 - **Never edit `infra/modules/ec2spot/v1.5.0`.** Module directories are immutable; a change means a new `v1.6.0` directory plus a pin bump.
 - **Exec store is root-only**, `0700` directory / `0600` files. The sandbox user must never read it.
 - **`AWS_REGION` on every unit that touches S3.** Its absence is the bug `216d4664` just fixed on `km-capture.service`.
@@ -828,7 +828,7 @@ thread-group leader or the store fills with thread noise.
  * it, pid reuse makes the flow-to-process join a confident lie.
  *
  * Build: go generate ./pkg/ebpf/exec/ (requires clang WITH a BPF target —
- * Apple clang has none; use /opt/homebrew/opt/llvm/bin/clang).
+ * see the Makefile's generate-ebpf target).
  */
 
 #include "../headers/vmlinux.h"
@@ -1013,7 +1013,7 @@ char _license[] SEC("license") = "GPL";
 //
 // To regenerate (requires clang WITH a BPF target — Apple clang has none):
 //
-//	CLANG=/opt/homebrew/opt/llvm/bin/clang go generate ./pkg/ebpf/exec/
+//	make generate-ebpf
 package exec
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -tags linux -target amd64 execbpf exec.c -- -I../headers -O2 -g -Wall -Werror
@@ -1023,12 +1023,12 @@ package exec
 
 Run:
 ```bash
-cd pkg/ebpf/exec && CLANG=/opt/homebrew/opt/llvm/bin/clang go generate ./... && cd -
+make generate-ebpf
 ls -la pkg/ebpf/exec/
 ```
 Expected: `execbpf_x86_bpfel.go` and `execbpf_x86_bpfel.o` exist.
 
-If clang reports `unable to create target: 'No available targets are compatible with triple "bpf"'`, `CLANG` is pointing at Apple clang. Confirm with `/opt/homebrew/opt/llvm/bin/clang --version` (expect "Homebrew clang").
+`generate-ebpf` regenerates all four BPF packages. Confirm the other three are byte-identical afterwards (`git diff --stat`) — only `pkg/ebpf/exec/` should change. If they do change, stop: the shared image or a sibling package has drifted, and rebuilding the network enforcer is not this phase's business.
 
 - [ ] **Step 4: Verify it compiles into the tree**
 
