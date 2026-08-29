@@ -111,7 +111,7 @@ Uploads the live trace to S3 and prints the URI:
 
 ```console
 $ km-netpolicy execs save
-saved: s3://example-artifacts-123456789012/execs/sb-abc123/execs-20260829T140500Z.jsonl
+saved: s3://example-artifacts-123456789012/execs/sb-abc123/execs-20260829T140500Z.jsonl (48213 bytes)
 ```
 
 Modelled on `capture stop`'s upload (`docs/egress-census.md`): a Go verb using

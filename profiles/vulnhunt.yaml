@@ -39,6 +39,17 @@ spec:
     # warns that running dual-use vulnerability analysis against an unenrolled
     # Anthropic account may trip real-time cyber safeguards. Bedrock is not a
     # first-party consumer platform, so that concern does not apply here.
+    #
+    # Two DIFFERENT knobs both have to point at Bedrock, or this rationale is
+    # dead: useBedrock (here) provisions the BOX — MITM metering hosts, IAM —
+    # but does not decide which endpoint an interactive agent actually talks
+    # to. That is spec.cli.noBedrock, read by `km shell`/`km agent run`
+    # (internal/app/cmd/shell.go), and base/platform.yaml defaults it to
+    # `true` ("prefer direct API"). Left inherited, this profile would
+    # provision Bedrock access on the box while every `km shell`-driven
+    # Claude Code turn — including the UAT's own driving step — still went
+    # straight to api.anthropic.com, silently defeating the paragraph above.
+    # Do not "simplify" this back to one flag.
     useBedrock: true
     # Privileged so a sudo'd step lands as uid 0 in the exec trace instead of
     # vanishing from it — the exact case exec capture's "capture everything,
@@ -63,6 +74,10 @@ spec:
         - whereiskurt/defcon.run.34
       allowedRefs:
         - "*"
+
+  # The other half of the useBedrock pairing above — see that comment.
+  cli:
+    noBedrock: false
 
   notification:
     events:
