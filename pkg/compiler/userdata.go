@@ -1375,7 +1375,16 @@ touch {{ .NetpolicyPinFile }}
 chmod 666 {{ .NetpolicyPinFile }}
 chattr +a {{ .NetpolicyPinFile }} 2>/dev/null || \
   echo "[km-bootstrap] WARN: chattr +a failed on allow.pins (filesystem may not support it)"
-chmod 755 {{ .FlowLogDir }}
+# Mode 1777, for the same reason the deny list is 0666: the producers are not
+# all the same user. km-dns-proxy and km-http-proxy run as km-sidecar; the eBPF
+# enforcer and its resolver run as root. A root-owned 0755 directory silently
+# EACCESed every proxy write, and both producers deliberately discard that error
+# on the egress hot path — so under proxy enforcement, the DEFAULT mode where
+# those two are the only recorders, the census recorded nothing at all while
+# every command still reported success.
+# Sticky (the leading 1) so one producer cannot unlink another's file. Each
+# producer owns exactly one file, so there is nothing here to share.
+chmod 1777 {{ .FlowLogDir }}
 {{- if .LearnMode }}
 # Learn mode: create command log file writable by all users (root and sandbox user).
 touch /run/km/learn-commands.log

@@ -2718,6 +2718,36 @@ func TestUserData_ProvisionsFlowStoreInProxyMode(t *testing.T) {
 	}
 }
 
+// TestUserData_FlowDirIsWritableByEveryProducer is the regression guard for
+// the defect that made flow recording dead in the DEFAULT enforcement mode.
+//
+// The directory was created root-owned 0755 while km-dns-proxy and km-http-proxy
+// both run as User=km-sidecar, so every flow write failed EACCES — and both
+// producers deliberately discard that error on the egress hot path. Under
+// "proxy" enforcement those two are the ONLY recorders, so the census was empty
+// on a default box while `km-netpolicy observed` reported "(none)" as though the
+// sandbox had simply reached nothing.
+//
+// Asserting the mode is the only cheap way to catch this: the producer tests
+// write into a t.TempDir() the test process owns, so they can never see it.
+func TestUserData_FlowDirIsWritableByEveryProducer(t *testing.T) {
+	for _, mode := range []string{"proxy", "ebpf", "both"} {
+		p := baseProfile()
+		p.Spec.Network.Enforcement = mode
+		script, err := generateUserData(p, "sb-flowperm", nil, "my-bucket", false, nil)
+		if err != nil {
+			t.Fatalf("generateUserData(%s) failed: %v", mode, err)
+		}
+		if !strings.Contains(script, "chmod 1777 /var/lib/km/flows") {
+			t.Errorf("%s mode: flow dir is not writable by the unprivileged sidecar user; "+
+				"every proxy flow write will EACCES silently", mode)
+		}
+		if strings.Contains(script, "chmod 755 /var/lib/km/flows") {
+			t.Errorf("%s mode: flow dir reverted to a mode only root can write", mode)
+		}
+	}
+}
+
 // TestUserData_PinFileIsAppendOnlyBeforeAnythingCanWrite pins the ordering
 // invariant: the pin file must be sealed chattr +a BEFORE any service that
 // might read (or, on a compromised sandbox, attempt to write) it starts.

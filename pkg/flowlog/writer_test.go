@@ -77,6 +77,60 @@ func TestWriter_RotatesAtCap(t *testing.T) {
 	}
 }
 
+// Rotation keeps exactly one prior generation, so the SECOND rotation discards
+// the oldest records permanently — typically the package-install phase, which
+// is exactly the traffic an operator means to pin. Everywhere else in this
+// feature "too tight has no recovery path" is treated as the hazard; here the
+// loss had no signal at all, and it feeds an irreversible operation.
+func TestWriter_RotationCounterFlagsATruncatedCensus(t *testing.T) {
+	dir := t.TempDir()
+	path := flowlog.FileFor(dir, flowlog.SrcDNS)
+	w := flowlog.NewWriter(path, 200)
+	defer w.Close()
+
+	rec := flowlog.Record{TS: time.Now().UTC(), Src: flowlog.SrcDNS, Verdict: flowlog.VerdictAllow, Host: "example.com"}
+
+	// One rotation loses nothing: the prior generation is still on disk as ".1"
+	// and ReadDir reads it. Say so, but do not cry wolf.
+	for i := 0; i < 4; i++ {
+		if err := w.Write(rec); err != nil {
+			t.Fatalf("Write %d: %v", i, err)
+		}
+	}
+	if got := flowlog.RotatedProducers(dir); len(got) == 0 {
+		t.Error("a rotated producer must be reported so pin can warn before the next one loses data")
+	}
+	if got := flowlog.TruncatedProducers(dir); len(got) != 0 {
+		t.Errorf("one rotation loses nothing yet, got %v", got)
+	}
+
+	// The second rotation overwrites ".1": records are now gone for good.
+	for i := 0; i < 8; i++ {
+		if err := w.Write(rec); err != nil {
+			t.Fatalf("Write %d: %v", i, err)
+		}
+	}
+	got := flowlog.TruncatedProducers(dir)
+	if got[flowlog.SrcDNS] < 2 {
+		t.Errorf("a census that lost records must be reported as truncated, got %v", got)
+	}
+}
+
+func TestWriter_NoRotationMeansNoTruncationSignal(t *testing.T) {
+	dir := t.TempDir()
+	w := flowlog.NewWriter(flowlog.FileFor(dir, flowlog.SrcHTTP), 1<<20)
+	defer w.Close()
+	if err := w.Write(flowlog.Record{TS: time.Now().UTC(), Src: flowlog.SrcHTTP, Verdict: flowlog.VerdictAllow, Host: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := flowlog.RotatedProducers(dir); len(got) != 0 {
+		t.Errorf("an unrotated store must report nothing, got %v", got)
+	}
+	if got := flowlog.TruncatedProducers(dir); len(got) != 0 {
+		t.Errorf("an unrotated store must report nothing, got %v", got)
+	}
+}
+
 func TestWriter_UnwritableDirDoesNotPanic(t *testing.T) {
 	// A producer must never die because the flow store is unavailable.
 	w := flowlog.NewWriter("/nonexistent-dir-abc/flows.dns.jsonl", 1<<20)

@@ -1403,7 +1403,16 @@ touch /var/lib/km/netpolicy/allow.pins
 chmod 666 /var/lib/km/netpolicy/allow.pins
 chattr +a /var/lib/km/netpolicy/allow.pins 2>/dev/null || \
   echo "[km-bootstrap] WARN: chattr +a failed on allow.pins (filesystem may not support it)"
-chmod 755 /var/lib/km/flows
+# Mode 1777, for the same reason the deny list is 0666: the producers are not
+# all the same user. km-dns-proxy and km-http-proxy run as km-sidecar; the eBPF
+# enforcer and its resolver run as root. A root-owned 0755 directory silently
+# EACCESed every proxy write, and both producers deliberately discard that error
+# on the egress hot path — so under proxy enforcement, the DEFAULT mode where
+# those two are the only recorders, the census recorded nothing at all while
+# every command still reported success.
+# Sticky (the leading 1) so one producer cannot unlink another's file. Each
+# producer owns exactly one file, so there is nothing here to share.
+chmod 1777 /var/lib/km/flows
 
 # Layer 1 (Phase 79.1): systemd-tmpfiles drop-in for /run/km/audit-pipe.
 # Ensures the FIFO is recreated with correct ownership on every boot
