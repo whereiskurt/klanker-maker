@@ -8,6 +8,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 )
 
 // MapUpdater is the interface for pushing resolved IPs into BPF maps.
@@ -104,6 +105,22 @@ type ResolverConfig struct {
 	// (trailing dot stripped) and whether it was allowed. Used by the allowlist
 	// generator's learning mode.
 	DomainObserver func(domain string, allowed bool)
+
+	// Flows, if non-nil, records one egress-census record per query: the name
+	// asked for and the verdict it got.
+	//
+	// This is the ONLY name-bearing producer under ebpf/both enforcement. The
+	// BPF program emits ring-buffer events for deny and redirect only — there is
+	// no allow event on the connect4 fast path — so without this the census
+	// holds denies and a handful of L7-proxy redirects, and `km-netpolicy pin`
+	// has essentially nothing to intersect against on the very modes where a pin
+	// bites hardest. It also puts ROOT's lookups into the census, since
+	// /etc/resolv.conf points every process here and DNS is neither uid- nor
+	// cgroup-scoped, which is what makes those destinations visible rather than
+	// invisible-and-pinned-out.
+	//
+	// nil disables recording, which is byte-identical to before it existed.
+	Flows *flowlog.Writer
 }
 
 // Resolver is the DNS resolver daemon.
@@ -284,6 +301,23 @@ func (r *Resolver) handleQuery(w dns.ResponseWriter, req *dns.Msg) {
 
 	if r.cfg.DomainObserver != nil {
 		r.cfg.DomainObserver(strings.TrimSuffix(domain, "."), allowed)
+	}
+
+	// Best-effort, exactly as in the DNS proxy: a flow store that cannot be
+	// written must never affect the answer the sandbox is waiting on. The Writer
+	// logs its own first failure, so a broken store is visible without this hot
+	// path having to care.
+	if r.cfg.Flows != nil {
+		verdict := flowlog.VerdictAllow
+		if !allowed {
+			verdict = flowlog.VerdictDeny
+		}
+		_ = r.cfg.Flows.Write(flowlog.Record{
+			TS:      time.Now().UTC(),
+			Src:     flowlog.SrcResolver,
+			Verdict: verdict,
+			Host:    strings.TrimSuffix(domain, "."),
+		})
 	}
 
 	if !allowed {

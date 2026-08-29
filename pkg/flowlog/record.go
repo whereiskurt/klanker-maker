@@ -21,6 +21,13 @@ const (
 	SrcEBPF = "ebpf"
 	SrcDNS  = "dns"
 	SrcHTTP = "http"
+	// SrcResolver is the eBPF path's DNS server. It is a separate producer from
+	// SrcDNS even though both answer DNS: under ebpf/both the bootstrap leaves
+	// km-dns-proxy disabled and this resolver serves every query instead, and
+	// naming it honestly is what lets `flows` tell an operator WHICH component
+	// decided. Distinct files also mean the two can never race on one file if a
+	// future profile ever runs both.
+	SrcResolver = "resolver"
 )
 
 // Verdicts, matching the eBPF ActionDeny/Allow/Redirect vocabulary so a record

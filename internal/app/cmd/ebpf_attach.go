@@ -27,9 +27,9 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf"
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf/audit"
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf/resolver"
+	ebpftls "github.com/whereiskurt/klanker-maker/pkg/ebpf/tls"
 	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
-	ebpftls "github.com/whereiskurt/klanker-maker/pkg/ebpf/tls"
 )
 
 // NewEBPFAttachCmd creates the "km ebpf-attach" subcommand.
@@ -372,18 +372,32 @@ func runEbpfAttach(
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start DNS resolver daemon (skip if dnsPort == 0, i.e. "both" mode
-	// where the existing km-dns-proxy sidecar handles DNS).
+	// Start DNS resolver daemon.
+	//
+	// dnsPort == 0 means PROXY enforcement, where km-dns-proxy owns resolution —
+	// but this whole command only runs under ebpf/both, where the bootstrap
+	// renders --dns-port 53 and leaves km-dns-proxy disabled. The zero branch is
+	// therefore unreachable in practice and kept only as a guard.
 	resolverErrCh := make(chan error, 1)
 	// nameFn correlates a flow record's destination address back to the domain
-	// that was looked up to reach it. Only the resolver started below ever
-	// holds that mapping — in "both" mode (dnsPort == 0), km-dns-proxy owns
-	// resolution instead and this stays nil, so eBPF flow records are
-	// address-only there. Never fabricated: see resolver.Allowlist.NameForIP.
+	// that was looked up to reach it. Only the resolver started below ever holds
+	// that mapping, and it is set in every mode that reaches this code. Never
+	// fabricated: see resolver.Allowlist.NameForIP.
 	var nameFn flowlog.NameFn
 	if dnsPort > 0 {
 		listenAddr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
+		// The resolver is the only NAME-bearing producer under ebpf/both: the BPF
+		// program emits ring-buffer events for deny and redirect only, so without
+		// this the census has nothing an allowlist could be expressed in and
+		// `km-netpolicy pin` would seal the box against an empty allowed set.
+		// Same --flowlog-dir convention as the consumer below: empty disables.
+		var resolverFlows *flowlog.Writer
+		if flowlogDir != "" {
+			resolverFlows = flowlog.NewWriter(
+				flowlog.FileFor(flowlogDir, flowlog.SrcResolver), flowlog.DefaultMaxBytes)
+		}
 		resolverCfg := resolver.ResolverConfig{
+			Flows:           resolverFlows,
 			ListenAddr:      listenAddr,
 			UpstreamAddr:    "169.254.169.253:53",
 			SandboxID:       sandboxID,
@@ -410,7 +424,7 @@ func runEbpfAttach(
 		}()
 		logger.Info().Str("listen", listenAddr).Msg("DNS resolver started")
 	} else {
-		logger.Info().Msg("DNS resolver skipped (both mode — km-dns-proxy handles DNS)")
+		logger.Info().Msg("DNS resolver skipped (--dns-port 0 — proxy enforcement, km-dns-proxy handles DNS)")
 	}
 
 	// Pre-resolve all allowed hosts and DNS suffixes to seed the BPF allowlist.
