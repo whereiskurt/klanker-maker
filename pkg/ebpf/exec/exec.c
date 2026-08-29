@@ -1,3 +1,5 @@
+//go:build ignore
+
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * exec.c — Kernel-side process-execution tracing for klanker-maker.
