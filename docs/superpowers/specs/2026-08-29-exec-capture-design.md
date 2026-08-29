@@ -255,6 +255,15 @@ in `proxy` mode, naming the mode, rather than printing `(none)`.
 The exec trace itself is complete in all three modes. Only the correlation is
 mode-dependent.
 
+**Operator decision (2026-08-29): this gap is accepted and is not to be
+re-litigated.** In practice `ebpf`/`both` on EC2 is the deployment; `proxy` is
+effectively the Docker-substrate path, and Docker/local sandboxes are not in use.
+So `who` is live on every box that actually runs. This also means §3.2's
+unconditional daemon earns its keep for **mode-independence and separation of
+observation from enforcement** — not for rescuing a default anyone runs. That is
+still the right build: it costs one systemd unit, and tying observation to an
+enforcement mode is what created the Phase 131 defect in the first place.
+
 ## 6. Record schema
 
 ```go
@@ -337,8 +346,9 @@ Existing sandboxes gain nothing until `km destroy && km create`.
 
 ## 10. Known gaps and accepted risks
 
-- **`who` is empty under `proxy` enforcement** (§5). Accepted; documented; the verb
-  explains itself.
+- **`who` is empty under `proxy` enforcement** (§5). Accepted by the operator
+  2026-08-29 on the grounds that `proxy` is the Docker path and Docker is not in
+  use; documented; the verb explains itself rather than printing `(none)`.
 - **argv is bounded at 20 × 128 bytes.** A long command line is truncated with the
   flag set. Accepted — BPF loop and stack limits make unbounded argv impractical.
 - **A hard power-off loses the unsaved tail** (§4.4). Accepted; no honest mitigation
