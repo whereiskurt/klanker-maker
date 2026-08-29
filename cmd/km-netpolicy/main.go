@@ -34,6 +34,7 @@ const prog = "km-netpolicy"
 type opts struct {
 	denyFile    string
 	flowDir     string
+	pinFile     string
 	staticDNS   []string
 	staticHosts []string
 	stdout      io.Writer
@@ -49,6 +50,8 @@ Usage:
   km-netpolicy flows [--since 10m] [--denied] [--json]
                                              show raw per-connection records
   km-netpolicy profile                       emit a SandboxProfile from the census
+  km-netpolicy pin [--dry-run] [--exact] [--yes]
+                                             narrow the allowlist to the census
 
 A pattern is a bare hostname, optionally with a leading dot. It blocks the apex
 AND every subdomain: "evil.example.com" also blocks "api.evil.example.com".
@@ -91,9 +94,15 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 		flowDir = flowlog.DefaultDir
 	}
 
+	pinFile := pick("KM_NETPOLICY_PINS")
+	if pinFile == "" {
+		pinFile = netpolicy.DefaultPinPath
+	}
+
 	return opts{
 		denyFile:    denyFile,
 		flowDir:     flowDir,
+		pinFile:     pinFile,
 		staticDNS:   splitCSV(pick("DENIED_SUFFIXES")),
 		staticHosts: splitCSV(pick("DENIED_HOSTS")),
 		stdout:      os.Stdout,
@@ -149,6 +158,8 @@ func run(args []string, o opts) int {
 		return runFlows(args[1:], o)
 	case "profile":
 		return runProfileGen(o)
+	case "pin":
+		return runPin(args[1:], o)
 	case "-h", "--help", "help":
 		fmt.Fprint(o.stdout, usage)
 		return 0
@@ -245,6 +256,21 @@ func runList(o opts) int {
 
 	fmt.Fprintln(o.stdout, "\nruntime denies (appended from inside this sandbox):")
 	printList(o.stdout, runtime)
+
+	// Without this, a pinned box prints nothing about pins and reads as
+	// unpinned — the same reason /etc/km/netpolicy.env exists for the deny side.
+	pins := netpolicy.NewPinStore(o.pinFile, 0).Generations()
+	fmt.Fprintln(o.stdout, "\nallow pins (each generation narrows further):")
+	if len(pins) == 0 {
+		fmt.Fprintln(o.stdout, "  (none — allowlist is as the profile declared it)")
+	} else {
+		for i, g := range pins {
+			fmt.Fprintf(o.stdout, "  generation %d:\n", i+1)
+			for _, p := range g {
+				fmt.Fprintf(o.stdout, "    %s\n", p)
+			}
+		}
+	}
 
 	if n := store.Dropped(); n > 0 {
 		fmt.Fprintf(o.stdout, "\n%d malformed line%s in %s were skipped\n",
