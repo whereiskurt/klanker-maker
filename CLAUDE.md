@@ -8,6 +8,110 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 132 (2026-08-29) — Exec capture: every command a sandbox ran, joined against the flow census (code-complete; live UAT pending):**
+- New on-box verbs on the already-shipped `km-netpolicy` binary: `execs [--since
+  10m] [--uid N] [--failed] [--json]`, `who <host>`, `execs save`. A new eBPF
+  producer (`pkg/ebpf/exec/`) attaches four tracepoints —
+  `sys_enter_execve`/`sys_enter_execveat` (read argv, stash an in-flight record
+  keyed by `pid_tgid` in a `BPF_MAP_TYPE_LRU_HASH`), `sys_exit_execve` (emit,
+  stamped with the return code), and `sched_process_exit` — and writes
+  `pkg/execlog`'s JSONL store, the process-side mirror of Phase 131's
+  `pkg/flowlog`. `execs` reports what ran; `who` joins that trace against the
+  flow census on pid to answer which process reached a given host — the join
+  neither store could answer alone.
+- **`sys_enter_execve`, not `sched_process_exec`, is the attach point** because
+  argv arrives there directly as a `char *const *`, read with
+  `bpf_probe_read_user_str` in a bounded loop; reading it at
+  `sched_process_exec` means walking `current->mm->arg_start` via CO-RE for no
+  gain. **`sched_process_exit` exists for exactly one reason: pid reuse.**
+  Joining a flow to "the exec that used this pid" is wrong after wraparound —
+  a flow could be attributed to a process that only inherited the number.
+  The exit tracepoint gives exact process lifetimes, turning the join into
+  *"the exec for this pid whose lifetime contains the flow's timestamp"* — a
+  fact, not a heuristic — and the join must never be implemented without it.
+- **Its own daemon (`km-execlog.service`), provisioned OUTSIDE the enforcement
+  conditional — the same trap Phase 131 already hit, closed the same way.**
+  The entire eBPF section of userdata is gated on `enforcement: ebpf`/`both`;
+  building exec capture inside `km ebpf-attach` would make it dead in `proxy`
+  mode, the schema default, silently — identical in shape to Phase 131's flow
+  recording being dead under `proxy` from a root-owned `0755` directory. So
+  capture runs in its own root daemon loading only tracepoints (no cgroup
+  programs, no resolver, no enforcement), unconditionally, on every sandbox.
+  Observation that only reports what already happened cannot widen a policy by
+  being present — the same reasoning that makes the flow census itself
+  unconditional. Userdata goldens change for every profile; there is no
+  byte-identical case.
+- **The store is root-only (`0700`/`0600`) for a reason that runs the opposite
+  direction from the flow directory's `1777`.** Two decisions force it in
+  combination: capture is unredacted (§3.4 — a redactor that silently
+  under-matches implies a guarantee that doesn't hold, and
+  `captures/{sandbox_id}/` already carries pcaps with strictly more secret
+  material than argv ever will), and capture is uid-unfiltered by design
+  (§3.3 — the decisive case is `privileged: true`, where the moment an agent
+  `sudo`s its most interesting activity *becomes root activity*, and a uid
+  filter at capture time would blind the trace to precisely the escalation
+  worth seeing). Combined: root's unredacted argv would be readable by the
+  sandbox user on exactly the *unprivileged* profiles meant to be the tighter
+  ones. The exec log is an operator forensics artifact; the sandbox user has
+  no reason to read it. Reach it via `km shell --root` or S3 after `execs save`.
+- **`who` returns nothing under `proxy` enforcement — accepted, not fixed, and
+  the verb says why instead of printing `(none)`.** `flowlog.Record.PID` is
+  populated only on the eBPF path; the proxies observe a connection, not the
+  pid that opened it, and recovering one would need a racy
+  `/proc/net/tcp` walk on the egress hot path. **Operator decision
+  (2026-08-29): accepted, not to be re-litigated** — `proxy` is effectively
+  the Docker-substrate path and Docker is not in use, so every sandbox that
+  actually runs is `ebpf`/`both`, where `who` is fully live. The exec trace
+  itself (`execs`) is complete in all three modes; only the correlation is
+  mode-dependent. Documented in the same voice as Phase 131's `transparent.go`
+  gap, on a new `profiles/uat-proxy-census.yaml`-style box rather than left for
+  an operator to discover as silence.
+- **argv is bounded (`MAX_ARGS=20`, `ARGSIZE=128`), `truncated` set rather than
+  silently clipped; a hard power-off loses whatever hadn't reached disk.**
+  `km-execlog.service` saves via **`ExecStopPost`, not `ExecStop`** — for
+  `Type=simple`, systemd runs `ExecStop` *before* signalling the main process,
+  which would upload the trace before the daemon's SIGTERM handler drains its
+  buffered-but-unwritten tail; `ExecStopPost` runs after the process has
+  actually exited, once that drain has happened. That makes `km stop`,
+  `km pause`, and the ACPI shutdown before an EC2 terminate all save without
+  anyone remembering — but only on a graceful stop. `StartLimitIntervalSec`/
+  `StartLimitBurst` live in `[Unit]`, not `[Service]` — since systemd v230 the
+  `[Service]` section only recognizes the pre-rename `StartLimitInterval=`
+  spelling, so the renamed keys placed there are silently dropped as unknown,
+  leaving the 10s manager default in effect (which a 5s `RestartSec` never
+  actually breaches) and hiding a permanently-broken tracer behind an endless
+  restart loop instead of one visibly failed unit.
+- **`AWS_REGION` is present on the unit from the first commit — the bug
+  `216d4664` just fixed on `km-capture.service`, not repeated here.** Its
+  absence fails the SDK with *"Invalid region: region was not a valid DNS
+  name,"* which reads as a bucket problem rather than a config one, and
+  degrades silently because the upload (`execs save`, modelled on
+  `capture stop`'s `uploadCapture`) is deliberately best-effort.
+- **`infra/modules/ec2spot/v1.6.0`** (new immutable dir, never an edit to
+  `v1.5.0`) adds `execs/${sandbox_id}/*` to the existing `s3:PutObject`
+  statement alongside `transcripts/`, `captures/`, and `learn/`, plus the pin
+  bump in `locals.substrate_module_versions`.
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.**
+  NOT `--sidecars` — the `ec2spot` IAM change needs a full terragrunt apply,
+  and the userdata installing `km-execlog.service` rides in the create-handler
+  zip, which `--sidecars` does not rebuild. **Do not split the deploy**: the
+  `km-netpolicy` binary carrying the new verbs is uploaded by
+  `buildAndUploadSidecars` while the unit invoking `execs-daemon` is rendered
+  into userdata by the create-handler — ship one half without the other and
+  `km-execlog.service` crash-loops on an unknown verb, the identical lockstep
+  Phase 131 documented for `km ebpf-attach`'s required flags. Existing
+  sandboxes gain nothing until `km destroy && km create`.
+- **Recorded debt:** `pkg/execlog` duplicates `flowlog.Writer`'s rotation,
+  `.rotations` counter, and one-shot write-failure warning rather than sharing
+  them — deliberate, because PR #89 (the Phase 131 branch this ships on) was
+  open and under review and `pin` correctness depends on those exact rotation
+  semantics; churning them inside a reviewed-but-unmerged PR traded a real
+  risk for a cosmetic gain. **Follow-up, with an owner:** once #89 merges,
+  extract a shared `pkg/jsonlstore` and move both `flowlog` and `execlog` onto
+  it.
+- See `docs/exec-capture.md` for the full operator runbook and
+  `docs/superpowers/specs/2026-08-29-exec-capture-design.md` for the design.
+
 **Phase 131 (2026-08-28) — Live egress census, allowlist pinning, on-demand packet capture (complete):**
 - New on-box verbs on the already-shipped `km-netpolicy` binary: `observed`,
   `flows [--since 10m] [--denied] [--json]`, `profile`, `pin [--dry-run]
@@ -975,6 +1079,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the seven `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
 | Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
 | Live egress census, allowlist pinning, on-demand packet capture — `km-netpolicy observed/flows/profile/pin/capture`, the deny-vs-pin union/intersection relationship, the `--exact` tradeoff, the two sharp edges, capture bounds, deploy surface | `docs/egress-census.md` (Phase 131) |
+| What a sandbox ran and who reached a host — `km-netpolicy execs/who/execs save`, the root-only unredacted store, the `who`-under-`proxy` limitation (accepted), argv bounds, rotation, `ExecStopPost` vs. `ExecStop`, deploy surface | `docs/exec-capture.md` (Phase 132) |
 | Declarative MITM intercepts — `spec.network.mitm.intercepts`, `redirect`/`respond` actions, precedence (deny → metering/GitHub → intercepts → allowlist), by-name last-wins override, the `profiles/base/mitm-rickroll.yaml` migration fragment, deploy surface | `docs/mitm-intercepts.md` (Phase 129) |
 | kubectl in a sandbox against a cluster only your laptop can reach — `km tunnel` operator runbook: prerequisites, flags, troubleshooting, the `socks` mode, deploy surface | `docs/k8s-reverse-tunnel.md` (Phase 130) |
 | **How the k8s tunnel actually works** — the three nested tunnels and why SSM forced SSH-inside-SSM, the ExecCredential proxy and why the broker is deliberately dumb, the `tls-server-name`-vs-CA split, the exec apiVersion exact-match trap, the precise trust boundary, and why the deploy surface is `make build` alone | `docs/k8s-reverse-tunnel-internals.md` (Phase 130) |
@@ -1045,7 +1150,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | **Email** | `km-send`, `km-recv` (+ `km-mail-poller`) | signed inter-sandbox / operator email (see `klanker:email` skill). |
 | **HackerOne** | `km-h1` | comment on reports (internal-by-default). |
 | **Git auth** | `km-git-askpass`, `km-git-credential-helper` | inject the installation token into plain `git` operations (baked-in sandbox id, works in any subprocess). |
-| **Egress / network** | `km-netpolicy` | `deny <pattern>...` / `list` — runtime narrowing (see `docs/egress-deny-lists.md`). `observed` / `flows [--since 10m] [--denied] [--json]` / `profile` / `pin [--dry-run] [--exact] [--yes] [--allow-empty] [--accept-truncated]` / `capture start\|stop\|status\|list` — live egress census, allowlist pinning (irreversible, no un-pin verb), on-demand bounded packet capture (see `docs/egress-census.md`, Phase 131). |
+| **Egress / network** | `km-netpolicy` | `deny <pattern>...` / `list` — runtime narrowing (see `docs/egress-deny-lists.md`). `observed` / `flows [--since 10m] [--denied] [--json]` / `profile` / `pin [--dry-run] [--exact] [--yes] [--allow-empty] [--accept-truncated]` / `capture start\|stop\|status\|list` — live egress census, allowlist pinning (irreversible, no un-pin verb), on-demand bounded packet capture (see `docs/egress-census.md`, Phase 131). `execs [--since 10m] [--uid N] [--failed] [--json]` / `who <host>` / `execs save` — what the sandbox ran, joined against a flow to answer which process reached it (see `docs/exec-capture.md`, Phase 132). |
 
 Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, `km-presence`, `km-queue-runner`, `km-notify-hook`, `km-upload-artifacts`, `otelcol-contrib`, `sops`) plus the source-aware inbound pollers (`km-{github,slack,h1}-inbound-poller`, `km-mail-poller`) — an agent rarely calls these directly, but their presence is how the box self-censuses its capabilities (see the `klanker:sandbox` skill + `/opt/km/.km-profile.yaml`, Phase 113). New sandbox-side capability ⇒ new `km-*` binary in this dir + a `sidecarBuilds()` entry + a userdata `s3 cp`, delivered by `km init --sidecars`.
 

@@ -134,7 +134,7 @@ func extractSubstrateVersionMap(t *testing.T, body *hclsyntax.Body) map[string]s
 }
 
 // TestSubstrateVersionPinResolvesPerSubstrate covers Tests 1, 2, and 4 from
-// the plan: ec2spot pins to v1.5.0, ecs pins to v1.0.0, and terraform.source
+// the plan: ec2spot pins to v1.6.0, ecs pins to v1.0.0, and terraform.source
 // interpolates the resolved local (not a bare version literal), so a future
 // bump cannot reintroduce the shared-literal bug by editing only the source
 // line.
@@ -143,8 +143,8 @@ func TestSubstrateVersionPinResolvesPerSubstrate(t *testing.T) {
 	body := parseSandboxTemplate(t, repoRoot)
 	versions := extractSubstrateVersionMap(t, body)
 
-	if got := versions["ec2spot"]; got != "v1.5.0" {
-		t.Errorf("substrate_module_versions[ec2spot] = %q, want v1.5.0", got)
+	if got := versions["ec2spot"]; got != "v1.6.0" {
+		t.Errorf("substrate_module_versions[ec2spot] = %q, want v1.6.0", got)
 	}
 	if got := versions["ecs"]; got != "v1.0.0" {
 		t.Errorf("substrate_module_versions[ecs] = %q, want v1.0.0", got)

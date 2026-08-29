@@ -532,3 +532,91 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [ ] 130-04-PLAN.md — `docs/k8s-reverse-tunnel.md` runbook, 7-step live UAT, CLAUDE.md block, v0.8.6 release highlights (wave 3)
+
+---
+
+### Phase 132: Exec capture — every command a sandbox ran, joined against the flow census
+
+**Goal:** A sandbox can already say where it has been (Phase 131's flow census). It
+cannot say what ran. `km-netpolicy execs` records every process a sandbox executes —
+not just what a human typed at an interactive shell — and `km-netpolicy who <host>`
+joins that trace against the flow store on pid to answer which process reached a given
+destination.
+
+A new eBPF producer (`pkg/ebpf/exec/`) attaches four tracepoints
+(`sys_enter_execve`/`sys_enter_execveat`, `sys_exit_execve`, `sched_process_exit`) and
+writes `pkg/execlog`, the process-side mirror of Phase 131's `pkg/flowlog`. The exit
+tracepoint exists for exactly one reason — pid reuse — so the join is "the exec for this
+pid whose lifetime contains the flow's timestamp," a fact rather than a heuristic.
+
+Capture runs in its own root daemon (`km-execlog.service`), provisioned **outside** the
+`enforcement` conditional — the same trap Phase 131 already hit (flow recording dead
+under `proxy` from a permissions bug) closed the same way: a facility that only records
+what already happened cannot widen a policy by being present, and building this inside
+`km ebpf-attach` would make it dead in the default `proxy` mode, silently.
+
+**Two accepted, documented limits, not defects:** the store is root-only (`0700`/`0600`)
+because argv is captured unredacted and uid-unfiltered by design (privileged escalation
+via `sudo` is exactly the activity worth seeing, so filtering happens at read time, not
+capture time) — root's unredacted argv readable by the sandbox user would be a leak on
+the tighter, unprivileged profiles. And `who` returns nothing under `proxy` enforcement,
+because only the eBPF path records a pid alongside a flow — accepted by the operator
+2026-08-29 on the grounds that `proxy` is effectively the Docker-substrate path and
+Docker is not in use; the verb explains why rather than printing `(none)`.
+
+**Deploy surface:** `make build` + `make build-lambdas` + `km init --dry-run=false`. NOT
+`--sidecars` — a new `ec2spot/v1.6.0` IAM grant (`execs/${sandbox_id}/*`) needs a full
+terragrunt apply, and the userdata installing `km-execlog.service` rides in the
+create-handler zip. The `km-netpolicy` binary (new verbs) and the userdata (the unit
+invoking them) must ship together — splitting the deploy crash-loops the unit on an
+unknown verb, the same lockstep Phase 131 documented for `km ebpf-attach`. No profile
+schema field gates this: it is unconditional, so there is no byte-identical case and
+existing sandboxes gain nothing until `km destroy && km create`.
+
+Branches from `feat/live-egress-census-pin-capture` (PR #89). Design spec:
+`docs/superpowers/specs/2026-08-29-exec-capture-design.md`.
+
+**Requirements**: REQ-132-STORE, REQ-132-JOIN, REQ-132-BPF, REQ-132-TRACER,
+REQ-132-DAEMON, REQ-132-VERBS, REQ-132-SAVE, REQ-132-USERDATA, REQ-132-IAM,
+REQ-132-DOCS
+
+**Plans:** 10/10 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] task-1-brief.md — `pkg/execlog`: record, writer (16 MiB rotation, `.rotations`
+      counter, one-shot write-failure warning), reader (corrupt-line tolerant) (wave 1)
+- [x] task-3-brief.md — the BPF programs: `exec.c`'s four tracepoints, the in-flight
+      `BPF_MAP_TYPE_LRU_HASH`, bounded argv read, cross-compiled `linux/amd64` test run
+      under Docker (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] task-2-brief.md — the pid/lifetime join: wraparound-safe attribution, the
+      empty-under-`proxy` case (wave 2)
+- [x] task-4-brief.md — the loader: `pkg/ebpf/exec`'s userspace ring-buffer consumer,
+      the stalled-consumer detector, `wallTimeOf`'s boot-instant-to-wall-clock
+      conversion (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] task-5-brief.md — the daemon verb: `km-netpolicy execs-daemon`, wiring the loader
+      to the `pkg/execlog` writer (wave 3)
+- [x] task-6-brief.md — the `execs` and `who` read verbs: filters, JSON output, the
+      proxy-mode explanation instead of `(none)` (wave 3)
+- [x] task-7-brief.md — `execs save`: S3 upload modelled on `capture stop`'s
+      `uploadCapture`, best-effort with the file kept locally on failure (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] task-8-brief.md — userdata provisioning: `km-execlog.service` outside the
+      enforcement conditional, `ExecStopPost` (not `ExecStop`), `StartLimitIntervalSec`/
+      `StartLimitBurst` in `[Unit]` (wave 4)
+- [x] task-9-brief.md — IAM: `infra/modules/ec2spot/v1.6.0`, the `execs/${sandbox_id}/*`
+      grant, the pin bump (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] task-10-brief.md — `profiles/vulnhunt.yaml`, `docs/exec-capture.md`, the 10-step
+      live UAT, CLAUDE.md block, ROADMAP entry (wave 5)
