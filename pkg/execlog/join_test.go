@@ -69,6 +69,40 @@ func TestIndexAt_NoMatchAfterExitOrBeforeExec(t *testing.T) {
 	}
 }
 
+func TestIndexAt_FlowInTheGapBetweenExitAndReuseIsUnattributed(t *testing.T) {
+	// Distinct from TestIndexAt_PIDReuseDoesNotMisattribute: that test queries
+	// AFTER the reuse exec, where a naive "most recent exec <= t, ignoring
+	// exit records" implementation gets the right answer for the wrong
+	// reason (the second exec is simply the most recent record either way).
+	// This test queries the GAP between the exit and the later reuse exec,
+	// where a naive implementation still finds the earlier (curl) exec and
+	// misattributes — this is the one assertion that fails if exit handling
+	// is ever removed from At.
+	ix := execlog.NewIndex([]execlog.Record{
+		execAt(0, 100, "curl", "curl", "https://first"),
+		exitAt(10, 100),
+		execAt(20, 100, "python3", "python3", "fetch.py"),
+	})
+	if _, ok := ix.At(100, at(15)); ok {
+		t.Error("a flow in the gap between exit and reuse must not be attributed to either process")
+	}
+}
+
+func TestIndexAt_BoundaryAtExactExecAndExitTimestamps(t *testing.T) {
+	// Changing r.TS.After(t) to !r.TS.Before(t) would silently flip which side
+	// of these boundaries is attributed, with every other test still green.
+	ix := execlog.NewIndex([]execlog.Record{
+		execAt(10, 100, "curl", "curl"),
+		exitAt(20, 100),
+	})
+	if got, ok := ix.At(100, at(10)); !ok || got.Comm != "curl" {
+		t.Errorf("a flow exactly at the exec's own timestamp must be attributed, got %+v ok=%v", got, ok)
+	}
+	if _, ok := ix.At(100, at(20)); ok {
+		t.Error("a flow exactly at the exit's own timestamp must not be attributed")
+	}
+}
+
 func TestIndexAt_LatestExecWinsForReExec(t *testing.T) {
 	// A shell that exec's a binary keeps its pid. The later exec is the truth.
 	ix := execlog.NewIndex([]execlog.Record{
@@ -113,6 +147,61 @@ func TestWho_FlowWithoutPIDIsReportedUnattributed(t *testing.T) {
 	}
 }
 
+func TestWho_PIDPresentButOwnerAlreadyExitedIsReportedUnattributed(t *testing.T) {
+	// Distinct from TestWho_FlowWithoutPIDIsReportedUnattributed: here the flow
+	// DOES carry a pid, but that pid's owner had already exited by the time
+	// the flow happened. The flow must still be listed, with Found == false —
+	// dropping it would hide a real destination just because attribution
+	// failed.
+	execs := []execlog.Record{
+		execAt(0, 100, "curl", "curl"),
+		exitAt(1, 100),
+	}
+	flows := []flowlog.Record{
+		{TS: at(5), Src: flowlog.SrcEBPF, Verdict: flowlog.VerdictAllow, Host: "api.github.com", PID: 100},
+	}
+	got := execlog.Who(execs, flows, "api.github.com")
+	if len(got) != 1 {
+		t.Fatalf("want the flow listed anyway, got %d", len(got))
+	}
+	if got[0].Found {
+		t.Error("a flow whose pid's owner had already exited must not be attributed to anything")
+	}
+}
+
+func TestWho_EmptyHostMatchesNothing(t *testing.T) {
+	// HostMatches("", ...) fails closed on an empty flow host, but
+	// strings.EqualFold(f.Addr, "") is true for every flow with no recorded
+	// address — so without an explicit guard, Who(execs, flows, "") would
+	// return that incoherent subset (address-only flows) instead of nothing.
+	execs := []execlog.Record{execAt(0, 100, "curl", "curl")}
+	flows := []flowlog.Record{
+		{TS: at(5), Src: flowlog.SrcEBPF, Verdict: flowlog.VerdictAllow, Addr: "203.0.113.9", PID: 100},
+		{TS: at(6), Src: flowlog.SrcHTTP, Verdict: flowlog.VerdictAllow, Host: "api.github.com", PID: 100},
+	}
+	got := execlog.Who(execs, flows, "")
+	if len(got) != 0 {
+		t.Fatalf("want an empty host to match nothing, got %d", len(got))
+	}
+}
+
+func TestWho_MatchesOnAddrWhenNoHostWasRecorded(t *testing.T) {
+	// The eBPF path records Addr rather than Host when the resolver could not
+	// name the destination. A regression dropping the Addr fallback would
+	// make these flows silently vanish from Who's results.
+	execs := []execlog.Record{execAt(0, 100, "curl", "curl")}
+	flows := []flowlog.Record{
+		{TS: at(5), Src: flowlog.SrcEBPF, Verdict: flowlog.VerdictAllow, Addr: "203.0.113.9", PID: 100},
+	}
+	got := execlog.Who(execs, flows, "203.0.113.9")
+	if len(got) != 1 {
+		t.Fatalf("want 1 attribution via Addr, got %d", len(got))
+	}
+	if !got[0].Found || got[0].Exec.Comm != "curl" {
+		t.Errorf("want the curl exec, got %+v", got[0])
+	}
+}
+
 func TestHostMatches_SubdomainAndCaseAndNonMatch(t *testing.T) {
 	cases := []struct {
 		flowHost, query string
@@ -124,6 +213,7 @@ func TestHostMatches_SubdomainAndCaseAndNonMatch(t *testing.T) {
 		{"github.com", "api.github.com", false}, // parent is not a match for a child
 		{"github.com.evil.example", "github.com", false}, // the lookalike Phase 129 fixed
 		{"", "github.com", false},
+		{".", ".", false}, // both normalize to "" post-trim; must not match
 	}
 	for _, c := range cases {
 		if got := execlog.HostMatches(c.flowHost, c.query); got != c.want {

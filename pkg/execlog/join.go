@@ -72,7 +72,15 @@ type Attribution struct {
 }
 
 // Who returns every flow to host, each paired with the process behind it.
+//
+// An empty host matches nothing — without this guard, HostMatches fails
+// closed on an empty query but strings.EqualFold(f.Addr, "") is true for
+// every flow with no recorded address, so Who(execs, flows, "") would return
+// that incoherent subset instead of the empty result an absent query implies.
 func Who(execs []Record, flows []flowlog.Record, host string) []Attribution {
+	if host == "" {
+		return nil
+	}
 	ix := NewIndex(execs)
 	var out []Attribution
 	for _, f := range flows {
@@ -101,5 +109,11 @@ func HostMatches(flowHost, query string) bool {
 	}
 	h := strings.ToLower(strings.TrimSuffix(flowHost, "."))
 	q := strings.ToLower(strings.TrimPrefix(strings.TrimSuffix(query, "."), "."))
+	// Re-check after normalization: a bare "." trims away to "", which the
+	// pre-normalization guard above never sees, and "" == "" would otherwise
+	// make HostMatches(".", ".") true.
+	if h == "" || q == "" {
+		return false
+	}
 	return h == q || strings.HasSuffix(h, "."+q)
 }
