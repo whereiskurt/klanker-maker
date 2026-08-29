@@ -1,6 +1,11 @@
 # Design spec — Live egress census, allowlist pinning, on-demand packet capture
 
-Phase 130. New on-box verbs: `km-netpolicy observed | flows | profile | pin | capture`.
+Phase 131. New on-box verbs: `km-netpolicy observed | flows | profile | pin | capture`.
+
+(Originally drafted as Phase 130. `origin/main` gained a Phase 130 — `km tunnel`,
+2026-08-26 — while this branch was in flight, so this feature took 131. The
+implementation plan and the SDD workspace still carry the original 130 in their
+filenames and prose; only the phase identity moved.)
 
 ## Problem
 
