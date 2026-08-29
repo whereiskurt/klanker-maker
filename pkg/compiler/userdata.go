@@ -13,6 +13,7 @@ import (
 	"time"
 
 	yaml "github.com/goccy/go-yaml"
+	"github.com/whereiskurt/klanker-maker/pkg/execlog"
 	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
@@ -1507,6 +1508,17 @@ cat > /etc/systemd/system/km-execlog.service << 'UNIT'
 [Unit]
 Description=km process execution tracer
 After=network-online.target
+# Give up rather than loop forever. A box where the tracer genuinely cannot
+# load should show one failed unit that km doctor and journalctl can see, not
+# a restart every few seconds for the life of the sandbox. These belong in
+# the Unit section, not the Service section, since systemd v230 — the
+# Service section only keeps the pre-rename StartLimitInterval= spelling, so
+# putting the renamed directives there logs them as unknown keys and
+# silently drops them, leaving the manager default
+# (DefaultStartLimitIntervalSec=10s) in effect, which a 5-second RestartSec
+# never actually breaches.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 [Service]
 Type=simple
 User=root
@@ -1522,16 +1534,16 @@ ExecStart=/opt/km/bin/km-netpolicy execs-daemon
 # not need anyone to have remembered. EC2 sends an ACPI shutdown and waits
 # before forcing, so systemd stops this unit while the network is still up —
 # which is why After=network-online.target is the right ordering for the save
-# as well as the start. Best-effort: never blocks the stop, and a hard
-# power-off still loses the unsaved tail.
-ExecStop=/opt/km/bin/km-netpolicy execs save
+# as well as the start. It has to be ExecStopPost, not ExecStop: for
+# Type=simple, ExecStop runs BEFORE the main process is signalled, and the
+# daemon only flushes its buffered-but-unwritten tail to disk on SIGTERM
+# (drainRemaining) — an ExecStop save would upload the store as it stood
+# before that tail ever reached disk, silently losing exactly what the
+# daemon's own drain fix was for. Best-effort: never blocks the stop, and a
+# hard power-off still loses the unsaved tail.
+ExecStopPost=/opt/km/bin/km-netpolicy execs save
 Restart=on-failure
 RestartSec=5
-# Give up rather than loop forever. A box where the tracer genuinely cannot
-# load should show one failed unit that km doctor and journalctl can see, not
-# a restart every few seconds for the life of the sandbox.
-StartLimitIntervalSec=300
-StartLimitBurst=5
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -5428,10 +5440,10 @@ type userDataParams struct {
 	// narrow further (pins) cannot widen a policy by being present, so there
 	// is no profile gate to make it dormant. CaptureSock/CaptureDir are the
 	// matching values for the km-capture.service unit below.
-	FlowLogDir         string
-	NetpolicyPinFile   string
-	CaptureSock        string
-	CaptureDir         string
+	FlowLogDir       string
+	NetpolicyPinFile string
+	CaptureSock      string
+	CaptureDir       string
 	// ExecLogDir is where the exec tracer writes the process trace. Root-only:
 	// argv is recorded unredacted and includes root's own.
 	ExecLogDir         string
@@ -6164,7 +6176,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		NetpolicyPinFile:   netpolicy.DefaultPinPath,
 		CaptureSock:        "/run/km/capture.sock",
 		CaptureDir:         "/var/lib/km/capture",
-		ExecLogDir:         "/var/lib/km/execs",
+		ExecLogDir:         execlog.DefaultDir,
 		GitHubAllowedRepos: joinGitHubAllowedRepos(p),
 		KMArtifactsBucket:  artifactsBucket,
 		UseSpot:            useSpot,

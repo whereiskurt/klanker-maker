@@ -1,6 +1,27 @@
 package compiler
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// execlogUnitBlock extracts just the km-execlog.service unit body from the
+// full rendered userdata, so assertions about it can't be satisfied by one of
+// the OTHER units (km-capture, km-tracing, the spot handler) that also carry
+// an Environment=AWS_REGION= line.
+func execlogUnitBlock(t *testing.T, out string) string {
+	t.Helper()
+	start := strings.Index(out, "cat > /etc/systemd/system/km-execlog.service")
+	if start == -1 {
+		t.Fatal("km-execlog.service unit not found in rendered userdata")
+	}
+	rest := out[start:]
+	end := strings.Index(rest, "\nUNIT")
+	if end == -1 {
+		t.Fatal("km-execlog.service unit has no closing UNIT heredoc terminator")
+	}
+	return rest[:end]
+}
 
 // Exec capture is unconditional: it only reports what already happened, so its
 // presence cannot widen a policy. Gating it on enforcement mode is what made
@@ -52,19 +73,37 @@ func TestUserData_ExecLogUnitCarriesRegionAndSavesOnStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateUserData: %v", err)
 	}
+	// Scoped to just this unit's body — km-capture.service, km-tracing.service,
+	// and the spot handler ALL already carry an Environment=AWS_REGION= line,
+	// so a whole-file contains() here would pass even if this unit's own line
+	// were deleted.
+	unit := execlogUnitBlock(t, out)
+
 	// Without AWS_REGION the SDK fails with "Invalid region: region was not a
 	// valid DNS name", which reads as a bucket problem. That was the km-capture
 	// bug fixed in 216d4664 and it is not being re-introduced here.
-	if !contains(out, "Environment=AWS_REGION=") {
+	if !contains(unit, "Environment=AWS_REGION=") {
 		t.Error("km-execlog.service must carry AWS_REGION")
 	}
-	if !contains(out, "ExecStop=/opt/km/bin/km-netpolicy execs save") {
-		t.Error("a graceful stop must save the trace without anyone remembering")
+	// Must be ExecStopPost, not ExecStop: for Type=simple, ExecStop runs
+	// BEFORE the main process is signalled, so a plain ExecStop would upload
+	// the store before the daemon's SIGTERM-triggered drain ever writes its
+	// buffered tail to disk — defeating Task 5's drain fix outright.
+	if !contains(unit, "ExecStopPost=/opt/km/bin/km-netpolicy execs save") {
+		t.Error("a graceful stop must save the trace, AFTER the daemon has drained, without anyone remembering")
+	}
+	if contains(unit, "\nExecStop=") {
+		t.Error("km-execlog.service must not use plain ExecStop — it races the daemon's SIGTERM drain")
 	}
 	// A box where the tracer genuinely cannot load should show one failed unit,
-	// not restart every few seconds for the life of the sandbox.
-	if contains(out, "km-execlog") && !contains(out, "StartLimitBurst") {
+	// not restart every few seconds for the life of the sandbox. Scoped to the
+	// unit body — and this also proves the directive landed under [Unit],
+	// since systemd v230 silently drops it as an unknown key under [Service].
+	if !contains(unit, "StartLimitBurst") {
 		t.Error("km-execlog.service must give up rather than crash-loop forever")
+	}
+	if idx := strings.Index(unit, "[Service]"); idx != -1 && strings.Index(unit, "StartLimitBurst") > idx {
+		t.Error("StartLimitBurst must be a [Unit] directive, not a [Service] one — systemd silently drops it there since v230")
 	}
 }
 
