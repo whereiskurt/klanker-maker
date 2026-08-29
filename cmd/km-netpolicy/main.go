@@ -15,14 +15,20 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/whereiskurt/klanker-maker/pkg/execlog"
 	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 )
+
+// errUnsupportedPlatform is returned by verbs whose implementation exists only
+// on the sandbox's linux/amd64 build.
+var errUnsupportedPlatform = errors.New("unsupported platform")
 
 // prog is this binary's own name, used in usage and error output. It is a fixed
 // brand name, not a resource identifier, so it is deliberately independent of
@@ -39,6 +45,7 @@ type opts struct {
 	staticHosts []string
 	captureSock string
 	captureDir  string
+	execDir     string
 	stdout      io.Writer
 	stderr      io.Writer
 }
@@ -116,6 +123,11 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 		captureDir = DefaultCaptureDir
 	}
 
+	execDir := pick("KM_EXEC_DIR")
+	if execDir == "" {
+		execDir = execlog.DefaultDir
+	}
+
 	return opts{
 		denyFile:    denyFile,
 		flowDir:     flowDir,
@@ -124,6 +136,7 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 		staticHosts: splitCSV(pick("DENIED_HOSTS")),
 		captureSock: captureSock,
 		captureDir:  captureDir,
+		execDir:     execDir,
 		stdout:      os.Stdout,
 		stderr:      os.Stderr,
 	}
