@@ -34,11 +34,15 @@ func execsKey(sandboxID string, now time.Time) string {
 func runExecsSave(o opts) error {
 	bucket := os.Getenv("KM_ARTIFACTS_BUCKET")
 	if bucket == "" {
-		return errors.New("KM_ARTIFACTS_BUCKET is not set; cannot save the exec trace")
+		err := errors.New("KM_ARTIFACTS_BUCKET is not set; cannot save the exec trace")
+		fmt.Fprintf(o.stderr, "%s execs save: %v\n", prog, err)
+		return err
 	}
 	sandboxID := os.Getenv("KM_SANDBOX_ID")
 	if sandboxID == "" {
-		return errors.New("KM_SANDBOX_ID is not set; cannot scope the exec trace")
+		err := errors.New("KM_SANDBOX_ID is not set; cannot scope the exec trace")
+		fmt.Fprintf(o.stderr, "%s execs save: %v\n", prog, err)
+		return err
 	}
 
 	path := execlog.Path(o.execDir)
@@ -48,12 +52,14 @@ func runExecsSave(o opts) error {
 			fmt.Fprintln(o.stdout, "nothing to save: no exec trace on disk yet")
 			return nil
 		}
+		fmt.Fprintf(o.stderr, "%s execs save: cannot read exec store %s: %v\n", prog, path, err)
 		return err
 	}
 	defer f.Close()
 
 	fi, err := f.Stat()
 	if err != nil {
+		fmt.Fprintf(o.stderr, "%s execs save: cannot stat exec store %s: %v\n", prog, path, err)
 		return err
 	}
 	if fi.Size() == 0 {
@@ -66,15 +72,18 @@ func runExecsSave(o opts) error {
 
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
+		fmt.Fprintf(o.stderr, "%s execs save: load aws config: %v (trace kept locally at %s)\n", prog, err, path)
 		return fmt.Errorf("load aws config: %w", err)
 	}
 
 	key := execsKey(sandboxID, time.Now())
 	if _, err := s3.NewFromConfig(cfg).PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Body:   f,
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		Body:        f,
+		ContentType: aws.String("application/x-ndjson"),
 	}); err != nil {
+		fmt.Fprintf(o.stderr, "%s execs save: upload failed, trace kept locally at %s: %v\n", prog, path, err)
 		return fmt.Errorf("upload exec trace: %w", err)
 	}
 

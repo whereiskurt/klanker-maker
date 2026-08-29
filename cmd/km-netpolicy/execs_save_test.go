@@ -32,6 +32,12 @@ func TestRunExecsSave_MissingBucketIsAClearError(t *testing.T) {
 	if !strings.Contains(err.Error(), "KM_ARTIFACTS_BUCKET") {
 		t.Errorf("error must name the missing variable, got %v", err)
 	}
+	// A silent non-zero exit here would show up in the journal (this runs on
+	// ExecStop) as nothing but "status=1" — the cause has to reach stderr too,
+	// not just the returned error.
+	if !strings.Contains(errb.String(), "KM_ARTIFACTS_BUCKET") {
+		t.Errorf("want stderr to name the missing variable, got %q", errb.String())
+	}
 }
 
 func TestRunExecsSave_MissingSandboxIDIsAClearError(t *testing.T) {
@@ -44,6 +50,40 @@ func TestRunExecsSave_MissingSandboxIDIsAClearError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "KM_SANDBOX_ID") {
 		t.Errorf("error must name the missing variable, got %v", err)
+	}
+	if !strings.Contains(errb.String(), "KM_SANDBOX_ID") {
+		t.Errorf("want stderr to name the missing variable, got %q", errb.String())
+	}
+}
+
+func TestRunExecsSave_UnreadableStoreIsReportedOnStderr(t *testing.T) {
+	// Stands in for the "upload could not proceed" shape of failure without
+	// needing AWS credentials or a network call: any error that stops the
+	// save before a successful upload must be visible on stderr, not just in
+	// the returned error, since this runs unattended off ExecStop.
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the permission bits this test relies on")
+	}
+	t.Setenv("KM_ARTIFACTS_BUCKET", "bucket")
+	t.Setenv("KM_SANDBOX_ID", "sb-abc123")
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/execs.jsonl", []byte(`{"ts":"2026-08-29T12:00:00Z"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) // let t.TempDir() clean up
+	var out, errb bytes.Buffer
+	err := runExecsSave(opts{execDir: dir, stdout: &out, stderr: &errb})
+	if err == nil {
+		t.Fatal("want an error when the store cannot be opened")
+	}
+	if errb.Len() == 0 {
+		t.Fatal("want the failure reported on stderr, got nothing")
+	}
+	if !strings.Contains(errb.String(), dir) {
+		t.Errorf("want stderr to name the store path so an operator can find the kept trace, got %q", errb.String())
 	}
 }
 
