@@ -14,9 +14,13 @@ A sandbox knows where it has been. It just has no way to say so.
 Three producers already observe every egress decision, and all three throw the
 answer away or ship it somewhere the box cannot reach:
 
-- the eBPF ring buffer emits a record per connection — timestamp, pid, `comm`,
-  src/dst IPv4, dst port, verdict (`allow`/`deny`/`redirect`) — which the audit
-  consumer streams to CloudWatch and never retains locally;
+- the eBPF ring buffer emits a record per BLOCKED or REDIRECTED connection —
+  timestamp, pid, `comm`, src/dst IPv4, dst port, verdict (`deny`/`redirect`) —
+  which the audit consumer streams to CloudWatch and never retains locally.
+  **There is no allow event**: `bpf.c`'s connect4 fast path returns without
+  emitting, deliberately, because one event per allowed connection is real
+  volume on the audit stream. The allowed set therefore has to come from a name
+  producer, which under `ebpf`/`both` is the on-box eBPF resolver;
 - the DNS proxy logs every query and its allow/deny verdict to journald;
 - the HTTP proxy logs every host and its verdict the same way.
 
@@ -177,6 +181,12 @@ never generate `.com`.
 - Hosts are collapsed **by default**, with `--exact` pinning the literal
   observed hostnames.
 
+For `--exact` to narrow anything, the two lists must reach two different
+matchers, so the pin file **scopes each entry** (`dns:` / `host:`; untagged
+applies to both). A single flat list read by both matchers cannot express the
+distinction: the collapsed `.github.com` the DNS side always needs would match
+every subdomain on the host side too.
+
 The default sits on the loose side deliberately, because **the risk is
 asymmetric and pin is irreversible.** Too loose costs a follow-up `pin`, which
 narrows further and is always available. Too tight has no recovery path at all
@@ -218,8 +228,10 @@ and libpcap would break that build.
   arbitrating root process is the minimum mechanism, not a preference. It idles
   until asked and holds no state between captures.
 - **Bounds are mandatory:** `--duration` (default 5m, hard ceiling 60m) and
-  `--max-size` (default 250MB, ring rotation), plus a free-disk precondition.
-  There is no unbounded capture mode.
+  `--max-size` (default 250MB, hard ceiling 2GB — hitting it STOPS the capture;
+  there is no ring), plus a free-disk precondition. A ring would keep the last N
+  bytes and discard the start of the trace, which is usually the part a "why did
+  this fail" question needs. There is no unbounded capture mode.
 - Files land at `/var/lib/km/capture/<ts>.pcap`. `capture stop` uploads to the
   artifacts bucket and prints the S3 URI.
 - Filtering in v1 is `--port N` / `--host IP` only, assembled into a classic BPF
@@ -250,12 +262,30 @@ consumer of the deny store is also a consumer of the pin store:
 | dns-proxy unit env | `KM_NETPOLICY_FILE` | `KM_NETPOLICY_PINS` |
 | http-proxy unit env | `KM_NETPOLICY_FILE` | `KM_NETPOLICY_PINS` |
 | eBPF enforcer flag | `--netpolicy-file` | `--netpolicy-pins` |
+| eBPF **boot pre-seed loop** (`internal/app/cmd/ebpf_attach.go`) | `preSeedDenier` | `hostPinner` / `shouldSeedHost` |
 | append-only file + `chattr +a` + `netpolicy.env` | `deny.list` | `allow.pins` |
 
-The eBPF site is the easiest to miss and the most load-bearing: under
+Two of these are more than one code site and are easy to undercount:
+
+- The **HTTP proxy is four decision points**, not one: the CONNECT handler, the
+  plain-HTTP handler, and the GitHub and metering carve-outs that bypass the
+  general allowlist. A pin consulted at three of the four leaves a hole.
+- The **boot pre-seed loop** is a separate site from the enforcer flag. It
+  resolves allowed hosts and pushes their IPs straight into the BPF allow trie
+  on every `ebpf-attach` start (boot, resume), ahead of any per-query decision —
+  so a pin that skipped it would be undone by the next reboot. This is the site
+  the plan actually missed; `pkg/netpolicy/wiring_guard_test.go` now lists it so
+  the pairing is mechanical rather than remembered.
+
+The eBPF DNS site is the easiest to miss and the most load-bearing: under
 `ebpf`/`both` the bootstrap deliberately leaves `km-dns-proxy` disabled and the
 resolver serves DNS, so a pin that skipped `--netpolicy-pins` would report
-success while every host stayed resolvable.
+success while every host stayed resolvable. That same resolver is also the only
+name-bearing flow producer in those modes, and — because DNS is neither uid- nor
+cgroup-scoped — it answers for root too. That is why `pkg/netpolicy` carries a
+compiled-in `.amazonaws.com` carve-out no pin can cut through: without it the
+first pin on an `ebpf`/`both` box severs the SSM control plane, and there is no
+un-pin verb to recover with.
 
 `km-netpolicy list` must report pins alongside denies for the same reason
 `netpolicy.env` exists — otherwise a pinned box shows `(none)` and looks
@@ -350,8 +380,9 @@ is actually enforced. Not a concern for these two plain resource-ARN grants.
   corresponding pin-store read — the five-site trap, made mechanical rather
   than remembered.
 - pcap writer: byte-exact global and per-packet headers against a known-good
-  fixture; `capture` refuses to start without bounds; ring rotation holds the
-  size cap.
+  fixture; `capture` refuses to start without bounds; a capture that hits its
+  own bound collects itself (clears `active`, uploads) rather than leaving
+  `status` claiming it is still running.
 - Linux-only paths (`AF_PACKET`) build and run via `go test -c` cross-compile
   executed under bare Docker; compiling inside qemu crashes the Go compiler and
   `CGO_ENABLED` must be 0.
@@ -366,7 +397,14 @@ is actually enforced. Not a concern for these two plain resource-ARN grants.
 6. `km-netpolicy pin --yes` — confirm a previously-reachable, unpinned host now
    fails within ~1s, and a pinned host still works.
 7. Confirm under `ebpf`/`both` that the pinned-out host also fails to *resolve*
-   (the enforcer-flag trap).
+   (the enforcer-flag trap). Then confirm the box is still **reachable**: the
+   on-box resolver serves root too, so `getent hosts ssm.<region>.amazonaws.com`
+   must still answer and `km shell` must still connect. That is the compiled-in
+   platform carve-out doing its job; without it this very step bricks the
+   sandbox, and there is no un-pin verb to recover with.
+   Sanity-check the census first: `km-netpolicy observed` on an `ebpf`/`both`
+   box must show `src=resolver` rows with names. If it shows only denies, do not
+   pin — the name producer is not wired and the pin would seal the box.
 8. `capture start --duration 1m`, generate traffic, `capture stop`, download the
    pcap from S3, open in Wireshark.
 9. Repeat 3–6 on a `proxy`-enforcement profile to prove the non-eBPF path.

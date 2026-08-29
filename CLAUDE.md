@@ -11,11 +11,11 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 **Phase 131 (2026-08-28) — Live egress census, allowlist pinning, on-demand packet capture (complete):**
 - New on-box verbs on the already-shipped `km-netpolicy` binary: `observed`,
   `flows [--since 10m] [--denied] [--json]`, `profile`, `pin [--dry-run]
-  [--exact] [--yes] [--allow-empty]`, `capture start|stop|status|list`. Three
-  producers — the eBPF audit consumer, the DNS proxy, the HTTP proxy — now
-  append what they already decide (verdict + destination) to one JSONL file
-  each under `/var/lib/km/flows/`, merged at read time by a new `pkg/flowlog`
-  package. `pin` is the mirror image of `km-netpolicy deny`: `effective allow =
+  [--exact] [--yes] [--allow-empty] [--accept-truncated]`, `capture
+  start|stop|status|list`. Four producers — the eBPF audit consumer, the DNS
+  proxy, the HTTP proxy, and the eBPF resolver — now append what they already
+  decide (verdict + destination) to one JSONL file each under
+  `/var/lib/km/flows/`, merged at read time by a new `pkg/flowlog` package. `pin` is the mirror image of `km-netpolicy deny`: `effective allow =
   profile allowlist ∩ pin₁ ∩ pin₂ ∩ …`, its own kernel-append-only file
   (`/var/lib/km/netpolicy/allow.pins`, `chattr +a`), same guarantee, same
   absence of a removal verb. Packet capture runs in a root-owned
@@ -45,7 +45,9 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   commit `0c7f9880` had to touch to un-gate `km-netpolicy` itself in the first
   place: ship the writer without a reader and the verb reports success while
   nothing enforces it. `pkg/netpolicy/wiring_guard_test.go` makes the pairing
-  mechanical rather than remembered. **The boot-time pre-seed loop in
+  mechanical rather than remembered — **including `ebpf_attach.go` itself**,
+  which the guard originally omitted, mechanising four sites and leaving the
+  fifth (the one the plan actually missed) remembered. **The boot-time pre-seed loop in
   `internal/app/cmd/ebpf_attach.go` was the site most likely to be missed and
   the most load-bearing** — it resolves `--allowed-hosts` and seeds IPs into
   the BPF allow-trie on every start (boot, resume), bypassing the live
@@ -86,11 +88,74 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   `v1.4.0` in place) adding `s3:PutObject` on `captures/${sandbox_id}/*` (new,
   for `capture stop`'s upload) and `learn/${sandbox_id}/*` (repair) in the
   same statement, plus the pin bump in `locals.substrate_module_versions`.
+- **The census is empty in two of three modes unless FOUR producers exist, not
+  three.** The design's premise that "the eBPF ring buffer emits a record per
+  connection" is false against `pkg/ebpf/bpf.c`: `emit_event` fires only for
+  `ACTION_DENY` and `ACTION_REDIRECT`; the connect4 allow path returns without
+  emitting, deliberately (one event per allowed connection is real CloudWatch
+  volume). And under `ebpf`/`both` the bootstrap leaves `km-dns-proxy` disabled,
+  so there was **no name producer at all** — `PinCandidates` skips address-only
+  rows, so the pinnable set was EMPTY on exactly the modes where a pin bites
+  hardest. Fixed by making the **eBPF resolver a flow producer** (`SrcResolver`,
+  `flows.resolver.jsonl`), which is symmetric — every enforcement point that
+  decides is now a producer — and adds no per-connection volume.
+- **`/var/lib/km/flows` is `1777`, and 0755 made flow recording DEAD in the
+  default mode.** km-dns-proxy and km-http-proxy run `User=km-sidecar`; the eBPF
+  enforcer and resolver run as root. A root-owned `0755` directory EACCESed every
+  proxy write, and both producers deliberately discard that error on the egress
+  hot path — so under `proxy` enforcement, the DEFAULT and the only mode where
+  those two are the sole recorders, `observed` printed `(none)` on a box that had
+  reached plenty. Invisible to every test on the branch: userdata tests assert
+  string presence, producer tests write into a `t.TempDir()` the test owns.
+  `flowlog.Writer` now also logs its OWN first write failure once
+  (`flowlog_write_failed`), so the next silent-store failure is loud.
+- **A pin can never seal `.amazonaws.com` — a compiled-in fuse in
+  `pkg/netpolicy`.** Under `ebpf`/`both`, `/etc/resolv.conf` points at the on-box
+  resolver and **DNS is neither uid- nor cgroup-scoped**, so it answers for root
+  too (`amazon-ssm-agent` above all) — while root's destinations barely reach the
+  census, since the audit consumer only watches the sandbox cgroup. The first
+  `pin` therefore NXDOMAINed `.amazonaws.com` for root: SSM dies, and with no
+  un-pin verb, no `km shell` and no remote destroy, the only recovery is
+  terminating the instance. **The spec's own UAT step 7 would have triggered it.**
+  The carve-out is the ONE deliberate exception to "pins narrow everything", is
+  not operator-overridable, and applies to pins only — `km-netpolicy deny
+  .amazonaws.com` still blocks, because a deny is a named act where a pin denies
+  everything nobody named.
+- **`--exact` was inert until the pin file gained scopes.** `PinCandidates`
+  always returns collapsed eTLD+1 suffixes as its DNS list (an exact DNS
+  allowlist stops resolving almost immediately), and `pin` wrote ONE flat
+  generation that both matchers read — so the collapsed `.github.com` beside the
+  literal `api.github.com` matched every subdomain on the host side and the flag
+  narrowed nothing. Entries are now tagged `dns:` / `host:` (untagged = both);
+  `Pinner.AllowsDNS` / `AllowsHost` gate their own matcher, and `Pinner.Allows`
+  (both scopes, the strictest answer) is what the boot pre-seed loop uses, since
+  seeding an IP into the trie bypasses both per-query checks at once.
+- **Rotation can silently truncate the census that feeds an irreversible
+  operation.** One prior generation is kept, so the SECOND rotation discards the
+  earliest records — usually the package-install phase. A per-producer
+  `.rotations` counter now records it; `pin` warns on any rotation and refuses
+  outright past the first loss without `--accept-truncated`.
+- **A finished capture collects itself.** A capture that hit its own duration or
+  `--max-size` bound left `active` set forever: `status` claimed it was still
+  capturing and `start` kept refusing. It now clears and uploads on its own.
+  `--max-size` **stops** the capture; there is no ring rotation (docs and spec
+  promised one) — a ring keeps the last N bytes and discards the start of the
+  trace, which is usually the part a failure question needs.
 - **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.**
   NOT `--sidecars` — the new unit (`km-capture.service`), the new env vars on
   both proxy units, and the new append-only pin file all ride in the
   create-handler-rendered userdata, which `--sidecars` does not rebuild.
   Existing sandboxes gain nothing until `km destroy && km create`.
+- **The sidecar/userdata lockstep here is tighter than any prior phase.**
+  `km ebpf-attach` gains two REQUIRED flags (`--netpolicy-pins`, `--flowlog-dir`)
+  that the create-handler-rendered userdata now always passes, but the enforcer
+  binary comes from `s3://<bucket>/sidecars/km` (uploaded by
+  `buildAndUploadSidecars`) while the userdata comes from the create-handler zip.
+  Run `make build-lambdas` + `km init --lambdas` **without** the sidecar upload
+  and every `ebpf`/`both` sandbox boots an enforcer that rejects an unknown flag
+  and crash-loops — **no network enforcement at all** on a box that otherwise
+  looks healthy. The full `km init --dry-run=false` does both halves; do not
+  split the deploy.
 - See `docs/egress-census.md` for the full operator runbook (census, pin
   model, collapsed-vs-`--exact`, capture bounds, troubleshooting) and
   `docs/egress-deny-lists.md` § Allow pins for the deny/pin relationship.
@@ -980,7 +1045,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | **Email** | `km-send`, `km-recv` (+ `km-mail-poller`) | signed inter-sandbox / operator email (see `klanker:email` skill). |
 | **HackerOne** | `km-h1` | comment on reports (internal-by-default). |
 | **Git auth** | `km-git-askpass`, `km-git-credential-helper` | inject the installation token into plain `git` operations (baked-in sandbox id, works in any subprocess). |
-| **Egress / network** | `km-netpolicy` | `deny <pattern>...` / `list` — runtime narrowing (see `docs/egress-deny-lists.md`). `observed` / `flows [--since 10m] [--denied] [--json]` / `profile` / `pin [--dry-run] [--exact] [--yes] [--allow-empty]` / `capture start\|stop\|status\|list` — live egress census, allowlist pinning (irreversible, no un-pin verb), on-demand bounded packet capture (see `docs/egress-census.md`, Phase 131). |
+| **Egress / network** | `km-netpolicy` | `deny <pattern>...` / `list` — runtime narrowing (see `docs/egress-deny-lists.md`). `observed` / `flows [--since 10m] [--denied] [--json]` / `profile` / `pin [--dry-run] [--exact] [--yes] [--allow-empty] [--accept-truncated]` / `capture start\|stop\|status\|list` — live egress census, allowlist pinning (irreversible, no un-pin verb), on-demand bounded packet capture (see `docs/egress-census.md`, Phase 131). |
 
 Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, `km-presence`, `km-queue-runner`, `km-notify-hook`, `km-upload-artifacts`, `otelcol-contrib`, `sops`) plus the source-aware inbound pollers (`km-{github,slack,h1}-inbound-poller`, `km-mail-poller`) — an agent rarely calls these directly, but their presence is how the box self-censuses its capabilities (see the `klanker:sandbox` skill + `/opt/km/.km-profile.yaml`, Phase 113). New sandbox-side capability ⇒ new `km-*` binary in this dir + a `sidecarBuilds()` entry + a userdata `s3 cp`, delivered by `km init --sidecars`.
 
