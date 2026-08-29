@@ -128,13 +128,14 @@ implementation plus a stub), because `cmd/km-netpolicy` imports it and must keep
 building and testing on darwin. `cilium/ebpf` is pure Go, so the loader
 cross-compiles under `CGO_ENABLED=0` exactly as the AF_PACKET capture does.
 
-Four tracepoints:
+Four BPF programs, attached at five tracepoints:
 
 | Tracepoint | Role |
 |---|---|
 | `syscalls/sys_enter_execve` | read argv, stash in-flight record in a hash keyed by `pid_tgid` |
 | `syscalls/sys_enter_execveat` | same, for the `execveat` entry point |
 | `syscalls/sys_exit_execve` | emit the record, stamped with the return code |
+| `syscalls/sys_exit_execveat` | the SAME program as `sys_exit_execve`, attached a second time — it looks up its inflight entry by `pid_tgid` and does not care which syscall produced it, and `sys_exit_execveat`'s `trace_event_raw_sys_exit` context has the identical shape. Without this fifth attach, `sys_enter_execveat`'s stashed entry is never looked up or deleted: every `execveat`/`fexecve` is captured on entry and then silently dropped. |
 | `sched/sched_process_exit` | record process end — see §5 |
 
 `sys_enter_execve` is the attach point rather than `sched/sched_process_exec`
@@ -247,13 +248,27 @@ pid, and recovering one would require a `/proc/net/tcp` source-port → inode �
 on the egress hot path — racy and expensive. So under `proxy` enforcement, the
 default, `who` has nothing to join and returns empty.
 
+**Even under `ebpf`/`both`, the join only covers DENIED and REDIRECTED
+connections, never ALLOWED ones.** `pkg/ebpf/bpf.c`'s `emit_event` fires only on
+`ACTION_DENY` and `ACTION_REDIRECT` — the connect4 **allow** path deliberately
+emits nothing, for CloudWatch volume reasons — so a flow record only ever
+carries a pid when the connection was denied or redirected. An allowed
+connection therefore produces no pid-bearing flow at all on `ebpf`/`both` either,
+and `who` will report it as unattributable there too. This is narrower than
+"the join works under ebpf/both" states on its own: enabling ebpf/both makes
+attribution *possible*, not universal — it is live only for the subset of
+traffic that was denied or redirected.
+
 This is a **stated limitation, documented in the same voice as Phase 131's
 `transparent.go` gap** — not something for an operator to discover by running `who`
-on a proxy box and getting silence. `who` must say *why* it is empty when the box is
-in `proxy` mode, naming the mode, rather than printing `(none)`.
+on a proxy box and getting silence, or by running it on an ebpf/both box against an
+allowed connection and getting the same silence for a different reason. `who` must
+say *why* it found nothing — naming the enforcement mode when that is the cause,
+and naming the deny/redirect-only narrowing when it is not — rather than printing
+`(none)`.
 
 The exec trace itself is complete in all three modes. Only the correlation is
-mode-dependent.
+mode-dependent, and even where it applies, it is verdict-dependent too.
 
 **Operator decision (2026-08-29): this gap is accepted and is not to be
 re-litigated.** In practice `ebpf`/`both` on EC2 is the deployment; `proxy` is

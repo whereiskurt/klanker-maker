@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +13,18 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/execlog"
 	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 )
+
+// execStoreErrorHint appends operator guidance when an exec-store read failure
+// looks like a permission problem. The store is 0700 root-only (design §4.2),
+// so the ordinary cause is running as the sandbox user instead of root — and
+// printing that plainly beats letting the operator read a bare error and move
+// on, which is exactly how the (none) misreading happens in the first place.
+func execStoreErrorHint(err error) string {
+	if os.IsPermission(err) {
+		return " (the exec store is root-only; run `km shell --root` instead)"
+	}
+	return ""
+}
 
 // runExecs lists what the sandbox executed.
 func runExecs(o opts, args []string) error {
@@ -65,7 +79,7 @@ func runExecs(o opts, args []string) error {
 
 	recs, err := execlog.ReadDir(o.execDir)
 	if err != nil {
-		fmt.Fprintf(o.stderr, "%s: cannot read exec store %s: %v\n", prog, o.execDir, err)
+		fmt.Fprintf(o.stderr, "%s: cannot read exec store %s: %v%s\n", prog, o.execDir, err, execStoreErrorHint(err))
 		return err
 	}
 
@@ -126,12 +140,28 @@ func formatExec(r execlog.Record) string {
 }
 
 // cmdline joins argv for display, falling back to comm when argv was not
-// captured at all.
+// captured at all, and appending the kernel's own comm alongside when it
+// disagrees with argv[0]'s basename.
+//
+// argv is caller-supplied and, on a forensics tool for a possibly-compromised
+// box, cannot be trusted at face value: execve("/usr/bin/curl", []string{"bash",
+// ...}) is a real technique for making a process listing lie, and comm is the
+// kernel's own record of the image actually running, immune to that trick.
+// TASK_COMM_LEN truncates comm to 15 usable bytes (exec.c), so a long argv[0]
+// basename disagreeing only because it was cut short is not flagged — only a
+// genuine mismatch is.
 func cmdline(r execlog.Record) string {
 	if len(r.Args) == 0 {
 		return r.Comm
 	}
-	return strings.Join(r.Args, " ")
+	line := strings.Join(r.Args, " ")
+	if r.Comm != "" {
+		base := path.Base(r.Args[0])
+		if base != r.Comm && !strings.HasPrefix(base, r.Comm) {
+			line += fmt.Sprintf("  [comm=%s]", r.Comm)
+		}
+	}
+	return line
 }
 
 // jsonLine renders a record as one JSON line, matching the on-disk form.
@@ -157,7 +187,7 @@ func runWho(o opts, args []string) error {
 
 	execs, err := execlog.ReadDir(o.execDir)
 	if err != nil {
-		fmt.Fprintf(o.stderr, "%s: cannot read exec store %s: %v\n", prog, o.execDir, err)
+		fmt.Fprintf(o.stderr, "%s: cannot read exec store %s: %v%s\n", prog, o.execDir, err, execStoreErrorHint(err))
 		return err
 	}
 	flows, err := flowlog.ReadDir(o.flowDir)
@@ -194,13 +224,25 @@ func runWho(o opts, args []string) error {
 	}
 
 	// Silence here would read as "nothing reached that host", which is the
-	// opposite of the truth. Say which half of the join was missing.
+	// opposite of the truth. Say which half of the join was missing — in terms
+	// of what the producers actually emit, not the enforcement mode. A
+	// pid-bearing flow exists only for a DENIED or REDIRECTED connection:
+	// pkg/ebpf/bpf.c's emit_event fires only on ACTION_DENY/ACTION_REDIRECT,
+	// and the connect4 ALLOW path deliberately emits no event at all (one
+	// event per allowed connection is real CloudWatch volume). The DNS/HTTP
+	// proxies and the eBPF resolver never record a pid either, on any verdict.
+	// So an ALLOWED connection is never attributable — including on a box
+	// already running ebpf/both — and that is expected, not evidence the
+	// feature is broken.
 	if unattributed == len(hits) {
 		fmt.Fprintf(o.stdout,
 			"\nNone of these flows could be attributed to a process.\n"+
-				"Only the eBPF enforcement path records a pid alongside a flow, so pid\n"+
-				"attribution needs spec.network.enforcement: ebpf or both. The exec trace\n"+
-				"itself is complete regardless — see `km-netpolicy execs`.\n")
+				"A flow only carries a pid when it was DENIED or REDIRECTED — the\n"+
+				"allowed-connection path records no pid (and, under ebpf/both, often\n"+
+				"no flow at all). So an ALLOWED connection is never attributable, even\n"+
+				"on a box already running spec.network.enforcement: ebpf or both — this\n"+
+				"is expected, not a sign the feature is broken. The exec trace itself\n"+
+				"is complete regardless — see `km-netpolicy execs`.\n")
 	}
 	warnIfTruncated(o)
 	return nil

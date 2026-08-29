@@ -74,7 +74,7 @@ type Tracer struct {
 	stallOnce sync.Once
 }
 
-// NewTracer loads the BPF programs, attaches all four tracepoints, and starts
+// NewTracer loads the BPF programs, attaches all five tracepoints, and starts
 // draining the ring buffer.
 func NewTracer() (*Tracer, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -136,9 +136,9 @@ func (t *Tracer) closeLinks() {
 	t.links = nil
 }
 
-// attachAll attaches the four tracepoints, unwinding cleanly if any fails.
+// attachAll attaches the five tracepoints, unwinding cleanly if any fails.
 //
-// A partial attach is never left in place: three of four tracepoints would
+// A partial attach is never left in place: four of five tracepoints would
 // produce a trace that looks complete and silently is not — the exact failure
 // shape this phase exists to eliminate.
 func (t *Tracer) attachAll() ([]link.Link, error) {
@@ -149,6 +149,16 @@ func (t *Tracer) attachAll() ([]link.Link, error) {
 		{"syscalls", "sys_enter_execve", t.objs.TpEnterExecve},
 		{"syscalls", "sys_enter_execveat", t.objs.TpEnterExecveat},
 		{"syscalls", "sys_exit_execve", t.objs.TpExitExecve},
+		// tp_exit_execve looks up its inflight entry by pid_tgid and never
+		// inspects which syscall produced it, and sys_exit_execveat's
+		// trace_event_raw_sys_exit context has the identical shape (id, ret)
+		// as sys_exit_execve's — so the SAME program is attached again here,
+		// under its own tracepoint, rather than duplicating it in exec.c.
+		// Without this, sys_enter_execveat's stashed inflight entry is never
+		// looked up or deleted: every execveat/fexecve is captured on entry
+		// and then silently dropped, leaking one LRU slot per call until
+		// eviction.
+		{"syscalls", "sys_exit_execveat", t.objs.TpExitExecve},
 		{"sched", "sched_process_exit", t.objs.TpProcessExit},
 	}
 	var links []link.Link

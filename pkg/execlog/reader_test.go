@@ -65,3 +65,31 @@ func TestReadDir_SkipsCorruptLinesAndMissingDir(t *testing.T) {
 		t.Fatalf("want only the well-formed record, got %+v", recs)
 	}
 }
+
+func TestReadDir_SurfacesAPermissionErrorInsteadOfAnEmptyTrace(t *testing.T) {
+	// The store is 0700 root-only. A caller that cannot read it must be told
+	// so — reading nothing and reporting nothing look identical to a caller
+	// that only checks len(recs)==0, and this store has exactly one producer,
+	// so there is no "other producer" left to answer for the trace the way
+	// flowlog's multi-writer directory has. This is the read-side twin of the
+	// Phase 131 flow-store EACCES defect flowlog.Writer's warnOnce prevents.
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the permission bits this test relies on")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(execlog.Path(dir), []byte(`{"ts":"2026-08-29T10:00:00Z","kind":"exec","pid":1,"uid":0,"comm":"ok","ret":0}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) // let t.TempDir() clean up
+
+	_, err := execlog.ReadDir(dir)
+	if err == nil {
+		t.Fatal("want an error when the store cannot be opened, not a silent empty trace")
+	}
+	if !os.IsPermission(err) {
+		t.Errorf("want a permission error, got %v", err)
+	}
+}

@@ -9,7 +9,7 @@ import (
 )
 
 func TestExecsKey_IsScopedToTheSandboxAndTimestamped(t *testing.T) {
-	got := execsKey("sb-abc123", time.Date(2026, 8, 29, 15, 4, 5, 0, time.UTC))
+	got := execsKey("sb-abc123", time.Date(2026, 8, 29, 15, 4, 5, 0, time.UTC), "")
 	if !strings.HasPrefix(got, "execs/sb-abc123/") {
 		t.Errorf("key must be scoped under the sandbox's own prefix: %q", got)
 	}
@@ -18,6 +18,54 @@ func TestExecsKey_IsScopedToTheSandboxAndTimestamped(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, ".jsonl") {
 		t.Errorf("key must keep the store's extension: %q", got)
+	}
+}
+
+func TestExecsKey_RotatedGenerationIsDistinguishableFromLive(t *testing.T) {
+	ts := time.Date(2026, 8, 29, 15, 4, 5, 0, time.UTC)
+	live := execsKey("sb-abc123", ts, "")
+	rotated := execsKey("sb-abc123", ts, ".1")
+	if live == rotated {
+		t.Fatalf("live and rotated generations must land at different keys, both got %q", live)
+	}
+	if !strings.Contains(rotated, ".1") {
+		t.Errorf("rotated generation's key must be distinguishable from the live one: %q", rotated)
+	}
+	if !strings.HasSuffix(rotated, ".jsonl") {
+		t.Errorf("rotated key must keep the store's extension: %q", rotated)
+	}
+}
+
+func TestOpenIfPresent_MissingFileIsNotAnError(t *testing.T) {
+	f, size, err := openIfPresent(t.TempDir() + "/execs.jsonl.1")
+	if err != nil {
+		t.Fatalf("a missing rotated generation must not error: %v", err)
+	}
+	if f != nil {
+		t.Errorf("want a nil file for a missing path, got %v", f)
+	}
+	if size != 0 {
+		t.Errorf("want size 0 for a missing path, got %d", size)
+	}
+}
+
+func TestOpenIfPresent_ExistingFileReturnsItsSize(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/execs.jsonl.1"
+	body := []byte(`{"ts":"2026-08-29T10:00:00Z","kind":"exec","pid":1,"uid":0,"comm":"old","ret":0}` + "\n")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, size, err := openIfPresent(path)
+	if err != nil {
+		t.Fatalf("openIfPresent: %v", err)
+	}
+	if f == nil {
+		t.Fatal("want a non-nil file for an existing path")
+	}
+	defer f.Close()
+	if size != int64(len(body)) {
+		t.Errorf("want size %d, got %d", len(body), size)
 	}
 }
 
@@ -100,6 +148,38 @@ func TestRunExecsSave_MissingStoreIsNotAnError(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "nothing to save") {
 		t.Errorf("want an explicit nothing-to-save line, got %q", out.String())
+	}
+}
+
+func TestRunExecsSave_UnreadableRotatedGenerationIsReportedButDoesNotAbort(t *testing.T) {
+	// The live generation is present but empty (as it is right after a
+	// rotation), and the retained ".1" generation cannot be opened at all.
+	// Both ending up with nothing to upload must still be a clean, AWS-free
+	// return — this is the branch that would otherwise dial out to a real S3
+	// endpoint from a unit test.
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the permission bits this test relies on")
+	}
+	t.Setenv("KM_ARTIFACTS_BUCKET", "bucket")
+	t.Setenv("KM_SANDBOX_ID", "sb-abc123")
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/execs.jsonl", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/execs.jsonl.1", []byte(`{"ts":"2026-08-29T10:00:00Z"}`+"\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir+"/execs.jsonl.1", 0o600) })
+
+	var out, errb bytes.Buffer
+	if err := runExecsSave(opts{execDir: dir, stdout: &out, stderr: &errb}); err != nil {
+		t.Fatalf("want no error, got %v", err)
+	}
+	if !strings.Contains(out.String(), "nothing to save") {
+		t.Errorf("want the live generation's nothing-to-save line, got %q", out.String())
+	}
+	if !strings.Contains(errb.String(), "cannot read retained exec store") {
+		t.Errorf("want the retained-generation read failure reported on stderr, got %q", errb.String())
 	}
 }
 

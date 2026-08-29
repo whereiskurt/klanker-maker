@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/whereiskurt/klanker-maker/pkg/execlog"
 )
 
 func writeExecStore(t *testing.T, dir, body string) {
@@ -60,6 +62,36 @@ func TestRunExecs_FailedFilterShowsOnlyFailures(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "nmap") {
 		t.Errorf("--failed hid the failure: %s", out.String())
+	}
+}
+
+func TestRunExecs_PermissionErrorNamesRootShellRatherThanReportingEmpty(t *testing.T) {
+	// A sandbox user running `km-netpolicy execs` without --root would
+	// previously see (none), which reads as "the box did nothing" rather
+	// than "you can't read this". The error must be surfaced and must name
+	// the fix.
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the permission bits this test relies on")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/execs.jsonl", []byte(`{"ts":"2026-08-29T12:00:00Z","kind":"exec","pid":1,"uid":0,"comm":"ok","ret":0}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	var out, errb bytes.Buffer
+	err := runExecs(opts{execDir: dir, stdout: &out, stderr: &errb}, nil)
+	if err == nil {
+		t.Fatal("want an error, not a silent (none)")
+	}
+	if strings.Contains(out.String(), "(none)") {
+		t.Errorf("must not report an empty trace on a permission error: %s", out.String())
+	}
+	if !strings.Contains(errb.String(), "km shell --root") {
+		t.Errorf("want the fix named on stderr, got %q", errb.String())
 	}
 }
 
@@ -158,6 +190,40 @@ func TestRunExecs_NegativeUIDIsRejected(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "curl") {
 		t.Errorf("a rejected --uid must not fall through to an unfiltered listing: %s", out.String())
+	}
+}
+
+func TestCmdline_FlagsArgv0DisagreeingWithComm(t *testing.T) {
+	// execve("/usr/bin/curl", []string{"bash", ...}) renders argv[0] as
+	// "bash" while the kernel's own comm still says "curl" — a forensics
+	// listing that only ever showed argv would let the process lie about
+	// what it is.
+	r := execlog.Record{Comm: "curl", Args: []string{"bash", "-c", "curl https://evil.example"}}
+	got := cmdline(r)
+	if !strings.Contains(got, "bash -c curl https://evil.example") {
+		t.Errorf("want argv rendered as given, got %q", got)
+	}
+	if !strings.Contains(got, "comm=curl") {
+		t.Errorf("want the disagreeing comm surfaced, got %q", got)
+	}
+}
+
+func TestCmdline_DoesNotFlagAgreeingArgv0(t *testing.T) {
+	r := execlog.Record{Comm: "curl", Args: []string{"/usr/bin/curl", "https://api.github.com"}}
+	got := cmdline(r)
+	if strings.Contains(got, "comm=") {
+		t.Errorf("argv0's basename matches comm; must not annotate: %q", got)
+	}
+}
+
+func TestCmdline_DoesNotFlagTruncationOnlyMismatch(t *testing.T) {
+	// TASK_COMM_LEN truncates comm to 15 usable bytes (exec.c), so a long
+	// argv[0] basename that merely got cut short is not a lie and must not
+	// be flagged as one.
+	r := execlog.Record{Comm: "python3.11-long", Args: []string{"/usr/bin/python3.11-longer-name", "script.py"}}
+	got := cmdline(r)
+	if strings.Contains(got, "comm=") {
+		t.Errorf("a truncation-only mismatch must not be flagged: %q", got)
 	}
 }
 
