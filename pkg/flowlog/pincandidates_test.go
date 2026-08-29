@@ -64,6 +64,32 @@ func TestPinCandidates_IgnoresDeniedAndAddressOnly(t *testing.T) {
 	}
 }
 
+// publicsuffix does not error on an IP literal — EffectiveTLDPlusOne("1.2.3.4")
+// returns "3.4" under the unmanaged-TLD rule — so a direct-to-IP HTTPS
+// connection recorded by the HTTP proxy used to put a nonsense ".3.4" suffix
+// into the pin file and, via `km-netpolicy profile`, into a generated
+// SandboxProfile. It must reach the host list verbatim instead, so the
+// destination stays reachable through the exact-matching host side.
+func TestPinCandidates_IPLiteralsNeverBecomeSuffixes(t *testing.T) {
+	for _, exact := range []bool{false, true} {
+		suf, hosts := flowlog.PinCandidates(censusOf("api.github.com", "203.0.113.9"), exact)
+		for _, s := range suf {
+			if s == ".113.9" || s == "203.0.113.9" {
+				t.Errorf("exact=%v: IP literal leaked into the DNS suffixes: %v", exact, suf)
+			}
+		}
+		found := false
+		for _, h := range hosts {
+			if h == "203.0.113.9" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("exact=%v: an observed IP-literal destination must stay pinnable as a host: %v", exact, hosts)
+		}
+	}
+}
+
 func TestPinCandidates_EmptyCensusYieldsEmptySets(t *testing.T) {
 	suf, hosts := flowlog.PinCandidates(flowlog.Census{}, false)
 	if len(suf) != 0 || len(hosts) != 0 {

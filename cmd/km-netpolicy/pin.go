@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
@@ -15,7 +17,7 @@ import (
 // set is the intersection of every generation, so a pin can only ever shrink
 // it. There is no un-pin verb and adding one would destroy the guarantee.
 func runPin(args []string, o opts) int {
-	var dryRun, exact, yes, allowEmpty bool
+	var dryRun, exact, yes, allowEmpty, acceptTruncated bool
 	for _, a := range args {
 		switch a {
 		case "--dry-run":
@@ -26,6 +28,8 @@ func runPin(args []string, o opts) int {
 			yes = true
 		case "--allow-empty":
 			allowEmpty = true
+		case "--accept-truncated":
+			acceptTruncated = true
 		default:
 			fmt.Fprintf(o.stderr, "%s pin: unknown flag %q\n", prog, a)
 			return 2
@@ -45,6 +49,27 @@ func runPin(args []string, o opts) int {
 	printList(o.stdout, suffixes)
 	fmt.Fprintf(o.stdout, "\npinned hosts (%d):\n", len(hosts))
 	printList(o.stdout, hosts)
+
+	// The carve-out is invisible in the candidate lists, and an operator who
+	// believes a pin seals EVERYTHING unnamed would be wrong about the one host
+	// set that matters most. Say it here, where the decision is being made.
+	fmt.Fprintf(o.stdout, "\nalways allowed regardless of any pin (platform recovery floor): %s\n",
+		strings.Join(netpolicy.PlatformEssentialSuffixes(), " "))
+
+	// One rotation is harmless — the previous generation is still on disk and
+	// ReadDir reads it. Two means the earliest records are gone for good, which
+	// on a long session is the package-install phase: exactly the traffic an
+	// operator means to pin.
+	rotated := flowlog.RotatedProducers(o.flowDir)
+	truncated := flowlog.TruncatedProducers(o.flowDir)
+	if len(rotated) > 0 {
+		fmt.Fprintf(o.stdout, "\nnote: flow files have rotated for: %s\n", strings.Join(rotated, " "))
+	}
+	if len(truncated) > 0 {
+		fmt.Fprintf(o.stdout,
+			"WARNING: the census is INCOMPLETE — these producers have rotated more than once,\n"+
+				"  so their earliest records were discarded: %s\n", strings.Join(sortedKeys(truncated), " "))
+	}
 
 	if dryRun {
 		mode, alt := "collapsed", "--exact"
@@ -72,6 +97,18 @@ func runPin(args []string, o opts) int {
 		return 1
 	}
 
+	// A census known to be missing records feeds an irreversible operation. The
+	// destinations it lost are pinned out with no other signal that they ever
+	// existed, so require the operator to say they accept that.
+	if len(truncated) > 0 && !acceptTruncated {
+		fmt.Fprintf(o.stderr,
+			"\n%s pin: refusing — the census has lost records to rotation (%s).\n"+
+				"  Destinations reached early in this session are missing and would be\n"+
+				"  pinned out irreversibly. Pass --accept-truncated if that is understood.\n",
+			prog, strings.Join(sortedKeys(truncated), " "))
+		return 1
+	}
+
 	if !yes {
 		fmt.Fprintf(o.stderr,
 			"\n%s pin: refusing without --yes.\n"+
@@ -96,7 +133,11 @@ func runPin(args []string, o opts) int {
 
 	store := netpolicy.NewPinStore(o.pinFile, 0)
 	gen := len(store.Generations()) + 1
-	block := netpolicy.FormatPinBlock(gen, time.Now(), dedupe(append(append([]string{}, suffixes...), hosts...)))
+	// The two lists are written under separate scopes, so the DNS matcher and
+	// the host matcher each see only their own. Folding them into one flat list
+	// is what made --exact inert: the collapsed suffixes it always needs on the
+	// DNS side would match every subdomain on the host side too.
+	block := netpolicy.FormatPinBlock(gen, time.Now(), dedupe(suffixes), dedupe(hosts))
 
 	f, err := os.OpenFile(o.pinFile, os.O_APPEND|os.O_WRONLY, 0o666)
 	if err != nil {
@@ -123,4 +164,14 @@ func runPin(args []string, o opts) int {
 	fmt.Fprintf(o.stdout, "\npinned. generation %d of %d now in force (takes effect within ~1s).\n", gen, len(live))
 	fmt.Fprintf(o.stdout, "everything not listed above is now denied.\n")
 	return 0
+}
+
+// sortedKeys renders a producer->count map deterministically.
+func sortedKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

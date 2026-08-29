@@ -77,7 +77,7 @@ func NewHandlerWithFlows(allowedSuffixes []string, denier *netpolicy.Denier, pin
 		// Deny is evaluated first and beats every allow, including "*".
 		denied := denier.IsDenied(domain)
 		preAllowed := !denied && IsAllowed(domain, allowedSuffixes)
-		allowed := preAllowed && pinner.Allows(domain)
+		allowed := preAllowed && pinner.AllowsDNS(domain)
 
 		log.Info().
 			Str("sandbox_id", sandboxID).
@@ -85,7 +85,7 @@ func NewHandlerWithFlows(allowedSuffixes []string, denier *netpolicy.Denier, pin
 			Str("domain", domain).
 			Bool("allowed", allowed).
 			Bool("denied", denied).
-			Bool("pinned_out", preAllowed && !pinner.Allows(domain)).
+			Bool("pinned_out", preAllowed && !pinner.AllowsDNS(domain)).
 			Msg("")
 
 		// Best-effort. A flow store that cannot be written must never affect the

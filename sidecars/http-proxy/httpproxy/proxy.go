@@ -250,8 +250,12 @@ func IsHostDenied(host string, denied []string) bool {
 // Callers must apply this AFTER IsHostDenied and IsHostAllowed. Pins narrow an
 // allowlist; they never override a deny and never grant what the profile did
 // not already allow.
+//
+// The HOST scope specifically: a pin's DNS list stays collapsed to eTLD+1 even
+// under --exact (or the box stops resolving), so consulting it here would make
+// --exact narrow nothing at the only layer that can express a literal host.
 func IsHostPinnedOut(host string, pinner *netpolicy.Pinner) bool {
-	return !pinner.Allows(host)
+	return !pinner.AllowsHost(host)
 }
 
 // InjectTraceContext injects W3C traceparent and tracestate headers into h using

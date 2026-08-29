@@ -26,7 +26,7 @@ func TestShouldSeedHost_PinnedOutHostIsNotSeeded(t *testing.T) {
 	// A leading-dot pattern is what the pin generator emits for a host it
 	// wants to cover including subdomains (MatchAllow semantics: a bare
 	// entry is exact-match only, mirroring IsHostAllowed).
-	body := netpolicy.FormatPinBlock(0, time.Now(), []string{".github.com"})
+	body := netpolicy.FormatPinBlock(0, time.Now(), []string{".github.com"}, []string{".github.com"})
 	if err := os.WriteFile(pinPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("seed pin file: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestShouldSeedHost_NilPinnerAllowsEverything(t *testing.T) {
 // IN ADDITION to denies, they never override them.
 func TestShouldSeedHost_DenyBeatsPin(t *testing.T) {
 	pinPath := filepath.Join(t.TempDir(), "allow.pins")
-	body := netpolicy.FormatPinBlock(0, time.Now(), []string{"evil.example.com"})
+	body := netpolicy.FormatPinBlock(0, time.Now(), []string{"evil.example.com"}, []string{"evil.example.com"})
 	if err := os.WriteFile(pinPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("seed pin file: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestShouldSeedHost_DenyBeatsPin(t *testing.T) {
 func TestShouldSeedHost_RebootDoesNotWidenPastPin(t *testing.T) {
 	pinPath := filepath.Join(t.TempDir(), "allow.pins")
 	// Sandbox pinned itself down to exactly one host before the box rebooted.
-	body := netpolicy.FormatPinBlock(0, time.Now(), []string{"pinned.example.com"})
+	body := netpolicy.FormatPinBlock(0, time.Now(), []string{"pinned.example.com"}, []string{"pinned.example.com"})
 	if err := os.WriteFile(pinPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("seed pin file: %v", err)
 	}

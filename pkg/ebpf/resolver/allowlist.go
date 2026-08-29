@@ -133,7 +133,11 @@ func (a *Allowlist) IsAllowed(name string) bool {
 	// Pins narrow whatever the allowlist permitted. Applied after allowAll so a
 	// wide-open profile collapses to exactly the pinned set — the motivating
 	// case, since * ∩ observed = observed.
-	if !a.pinner.Allows(name) {
+	//
+	// The DNS scope specifically: this resolver decides whether a NAME resolves,
+	// which is a different question from whether a host may be reached, and
+	// under --exact the two pinned lists genuinely differ.
+	if !a.pinner.AllowsDNS(name) {
 		return false
 	}
 

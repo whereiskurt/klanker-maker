@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 )
 
@@ -108,6 +109,84 @@ func TestPin_EmptyCensusRefusedWithoutAllowEmpty(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "--allow-empty") {
 		t.Errorf("refusal must name the override:\n%s", errb.String())
+	}
+}
+
+// --exact was inert: pin wrote ONE flat generation that both matchers read, so
+// the collapsed suffixes it always needs on the DNS side matched every
+// subdomain on the host side too and the literal hosts beside them narrowed
+// nothing. The file now scopes each entry, so the two matchers give genuinely
+// different answers — which is the whole documented point of the flag.
+func TestPin_ExactActuallyNarrowsTheHostSide(t *testing.T) {
+	var out, errb bytes.Buffer
+	o := pinOpts(t, &out, &errb)
+
+	if code := runPin([]string{"--exact", "--yes"}, o); code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	gens := netpolicy.NewPinStore(o.pinFile, 0).Generations()
+
+	if !netpolicy.PinsAllowDNS("gist.github.com", gens) {
+		t.Error("DNS must stay collapsed under --exact, or the box stops resolving almost at once")
+	}
+	if netpolicy.PinsAllowHost("gist.github.com", gens) {
+		t.Error("--exact must refuse a host the census never saw — otherwise the flag does nothing")
+	}
+	if !netpolicy.PinsAllowHost("api.github.com", gens) {
+		t.Error("the observed literal host must survive its own exact pin")
+	}
+}
+
+// The collapsed default must keep behaving as documented: both scopes hold the
+// same eTLD+1 suffixes, so a sibling hostname the session happened not to touch
+// is not stranded.
+func TestPin_DefaultCollapsesBothScopes(t *testing.T) {
+	var out, errb bytes.Buffer
+	o := pinOpts(t, &out, &errb)
+
+	if code := runPin([]string{"--yes"}, o); code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, errb.String())
+	}
+	gens := netpolicy.NewPinStore(o.pinFile, 0).Generations()
+	if !netpolicy.PinsAllowHost("gist.github.com", gens) {
+		t.Error("the collapsed default must not strand a sibling hostname")
+	}
+}
+
+// A pin is irreversible, so a census it can prove is missing records must not
+// be sealed silently: the destinations lost to rotation would be pinned out
+// with no other signal they ever existed.
+func TestPin_RefusesATruncatedCensusWithoutAck(t *testing.T) {
+	var out, errb bytes.Buffer
+	o := pinOpts(t, &out, &errb)
+	// Two rotations means the ".1" generation was overwritten.
+	counter := flowlog.FileFor(o.flowDir, flowlog.SrcHTTP) + ".rotations"
+	if err := os.WriteFile(counter, []byte("2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runPin([]string{"--yes"}, o); code == 0 {
+		t.Fatal("pin must refuse a census known to have lost records")
+	}
+	if !strings.Contains(errb.String(), "--accept-truncated") {
+		t.Errorf("refusal must name the override:\n%s", errb.String())
+	}
+	if code := runPin([]string{"--yes", "--accept-truncated"}, o); code != 0 {
+		t.Fatalf("the ack must let a deliberate operator through: exit %d, stderr=%s", code, errb.String())
+	}
+}
+
+// The platform recovery floor is invisible in the candidate lists, and an
+// operator who believed a pin sealed EVERYTHING unnamed would be wrong about
+// the one host set that decides whether the box can still be recovered.
+func TestPin_NamesThePlatformCarveOut(t *testing.T) {
+	var out, errb bytes.Buffer
+	o := pinOpts(t, &out, &errb)
+	if code := runPin([]string{"--dry-run"}, o); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(out.String(), ".amazonaws.com") {
+		t.Errorf("pin must state what it can never seal:\n%s", out.String())
 	}
 }
 

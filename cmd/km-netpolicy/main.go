@@ -289,9 +289,18 @@ func runList(o opts) int {
 	} else {
 		for i, g := range pins {
 			fmt.Fprintf(o.stdout, "  generation %d:\n", i+1)
-			for _, p := range g {
-				fmt.Fprintf(o.stdout, "    %s\n", p)
+			for _, p := range g.DNS {
+				fmt.Fprintf(o.stdout, "    dns   %s\n", p)
 			}
+			for _, p := range g.Hosts {
+				fmt.Fprintf(o.stdout, "    host  %s\n", p)
+			}
+		}
+		// The carve-out is invisible in the file, so a pinned box would read as
+		// though .amazonaws.com had been pinned out when it never can be.
+		fmt.Fprintln(o.stdout, "\n  always allowed regardless of pins (platform recovery floor):")
+		for _, s := range netpolicy.PlatformEssentialSuffixes() {
+			fmt.Fprintf(o.stdout, "    %s\n", s)
 		}
 	}
 

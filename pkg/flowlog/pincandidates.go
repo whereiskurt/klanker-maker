@@ -1,6 +1,7 @@
 package flowlog
 
 import (
+	"net"
 	"sort"
 
 	"github.com/whereiskurt/klanker-maker/pkg/allowlistgen"
@@ -24,11 +25,24 @@ import (
 //
 // Hosts collapse by default and stay literal under exact. The default sits on
 // the loose side deliberately: pin is irreversible, so too-loose costs a
-// follow-up pin while too-tight costs a destroy/create.
+// follow-up pin while too-tight costs a destroy/create. The two lists gate two
+// different matchers (see netpolicy.PinGeneration), which is what makes exact
+// narrow anything at all.
+//
+// IP literals never reach CollapseToDNSSuffixes. publicsuffix does not error on
+// "1.2.3.4" — it returns "3.4" under the unmanaged-TLD rule — so a direct-to-IP
+// HTTPS connection recorded by the HTTP proxy would otherwise put a nonsense
+// ".3.4" suffix into the pin file and into any generated SandboxProfile. They
+// are carried through to the host list verbatim instead, where the host matcher
+// compares them exactly and reachability is preserved.
 func PinCandidates(c Census, exact bool) (suffixes []string, hosts []string) {
-	var names []string
+	var names, literals []string
 	for _, d := range c.Allowed {
 		if d.Host == "" {
+			continue
+		}
+		if net.ParseIP(d.Host) != nil {
+			literals = append(literals, d.Host)
 			continue
 		}
 		names = append(names, d.Host)
@@ -36,17 +50,23 @@ func PinCandidates(c Census, exact bool) (suffixes []string, hosts []string) {
 
 	suffixes = allowlistgen.CollapseToDNSSuffixes(names)
 	if !exact {
-		return suffixes, suffixes
+		return suffixes, sortedUnique(append(append([]string{}, suffixes...), literals...))
 	}
+	return suffixes, sortedUnique(append(append([]string{}, names...), literals...))
+}
 
-	seen := map[string]struct{}{}
-	for _, n := range names {
-		if _, ok := seen[n]; ok {
+// sortedUnique deduplicates and sorts, so a pin block is deterministic and an
+// operator diffing two dry-runs sees only real changes.
+func sortedUnique(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
 			continue
 		}
-		seen[n] = struct{}{}
-		hosts = append(hosts, n)
+		seen[s] = struct{}{}
+		out = append(out, s)
 	}
-	sort.Strings(hosts)
-	return suffixes, hosts
+	sort.Strings(out)
+	return out
 }

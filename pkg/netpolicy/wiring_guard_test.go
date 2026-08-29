@@ -25,6 +25,12 @@ func TestEveryDenyConsumerAlsoReadsPins(t *testing.T) {
 		"sidecars/dns-proxy/dnsproxy/proxy.go",
 		"sidecars/http-proxy/httpproxy/proxy.go",
 		"pkg/ebpf/resolver/allowlist.go",
+		// The boot-time BPF pre-seed loop. It is the site the plan actually
+		// missed once: it seeds resolved IPs straight into the allow trie ahead
+		// of any per-query decision, so a pin that skipped it would be undone by
+		// the next reboot. Listing it here is what makes the five-site trap
+		// mechanical rather than remembered.
+		"internal/app/cmd/ebpf_attach.go",
 	}
 	for _, rel := range consumers {
 		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
