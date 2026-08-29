@@ -68,6 +68,7 @@ Usage:
   km-netpolicy capture list                  list finished captures
   km-netpolicy execs [--since 10m] [--uid N] [--failed] [--json]
                                              what this sandbox executed
+  km-netpolicy execs save                    upload the process trace to S3
   km-netpolicy who <host>                    which process reached <host>
 
 A pattern is a bare hostname, optionally with a leading dot. It blocks the apex
