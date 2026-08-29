@@ -11,6 +11,13 @@ before:
   hooks:
     - go mod tidy
     - bash scripts/fetch-bundled-tools.sh 1.9.8 0.99.1
+    # Lambda deployment zips, published as a standalone asset (see extra_files
+    # below) rather than bundled into the per-platform archives: they are
+    # linux/arm64 regardless of the operator's platform, and four copies of
+    # 217MB in every archive would be absurd. containers/operator/Dockerfile
+    # downloads this so the image can run `km init --plan` — the Lambda-owning
+    # terragrunt modules call filebase64sha256() on these at PLAN time.
+    - bash scripts/build-release-lambdas.sh 1.9.8 .extras/lambdas.tar
 
 builds:
   - id: km
@@ -85,10 +92,38 @@ archives:
       # .pytest_cache/README.md from a local test run.
       - profiles/checks/_bootstrap/KM_CHECK_TRIGGER.schema.md
       - profiles/secrets/README.md
+      # The terragrunt tree (~1.3MB). Needed by containers/operator/Dockerfile,
+      # which copies it to /klanker-maker/infra so `km init --plan` and
+      # `km init --dry-run` name real module directories — without it the image
+      # can only be built from a git clone, and the build-from-tarball path
+      # advertised in containers/operator/README.md breaks.
+      # Extension-scoped, mirroring the profiles globs above, so a local
+      # .terraform/ or .terragrunt-cache/ from an operator's own apply cannot
+      # ride along into a public release.
+      #
+      # *.json is deliberately NOT globbed. The only JSON under infra/ is
+      # infra/live/.secrets.json — tracked, empty today, and needed by nothing
+      # here. A glob that would publish a file with that name to a public
+      # release asset the moment someone puts something in it is not worth the
+      # zero bytes it currently buys.
+      - infra/**/*.hcl
+      - infra/**/*.tf
+      # infra/modules/ecs-spot-handler/v1.0.0/lambda/handler.py — module source,
+      # not a build artifact. The ECS substrate is unused, but a module missing
+      # a file it declares fails at plan time rather than being skipped.
+      - infra/**/*.py
 
 checksum:
   name_template: "{{ .ProjectName }}_v{{ .Version }}_checksums.txt"
   algorithm: sha256
+  # The lambdas asset must appear here, not just in release.extra_files:
+  # containers/operator/Dockerfile gates its download on
+  # `sha256sum -c --ignore-missing`, and --ignore-missing silently passes when
+  # the file has NO line in the checksums file. Absent this entry the image
+  # would happily build on a truncated download.
+  extra_files:
+    - glob: .extras/lambdas.tar
+      name_template: "{{ .ProjectName }}_v{{ .Version }}_lambdas.tar"
 
 snapshot:
   version_template: "{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}"
@@ -121,6 +156,13 @@ release:
   draft: true
   prerelease: auto
   name_template: "km v{{ .Version }}"
+  # linux/arm64 Lambda deployment zips, consumed by
+  # containers/operator/Dockerfile so the image can run `km init --plan`.
+  # Attached once as its own asset rather than duplicated into all four
+  # platform archives.
+  extra_files:
+    - glob: .extras/lambdas.tar
+      name_template: "{{ .ProjectName }}_v{{ .Version }}_lambdas.tar"
   header: |
     ## Klanker Maker v{{ .Version }}
 

@@ -22,7 +22,27 @@ Each release produces:
 - `km_vX.Y.Z_darwin_arm64.tar.xz`
 - `km_vX.Y.Z_linux_amd64.tar.xz`
 - `km_vX.Y.Z_linux_arm64.tar.xz`
-- `km_vX.Y.Z_checksums.txt` (SHA256)
+- `km_vX.Y.Z_lambdas.tar` — the ten linux/arm64 Lambda deployment zips (~217MB)
+- `km_vX.Y.Z_checksums.txt` (SHA256, covering all of the above)
+
+**About the lambdas asset.** Built by `scripts/build-release-lambdas.sh` (a
+goreleaser `before` hook) and consumed by exactly one thing:
+`containers/operator/Dockerfile`, which unpacks it into `/klanker-maker/build`
+so the image can run `km init --plan`. The nine Lambda-owning terragrunt modules
+read their zip via `filebase64sha256("${repo_root}/build/<name>.zip")`, and
+terraform evaluates that at **plan** time — so the plan needs the real zips, not
+placeholders.
+
+It is **uncompressed on purpose**: the payload is ten already-deflated zips, so
+`xz` cannot shrink them (measured: 217MB in, 225MB out) while costing minutes of
+CI time. It is a **separate asset rather than bundled** into the four platform
+archives because it is linux/arm64 regardless of the operator's platform.
+
+The script's Lambda list is pinned to `lambdaBuilds()` in
+`internal/app/cmd/init.go` by `TestReleaseLambdaScript_TracksLambdaBuilds`. Add a
+Lambda to one and not the other and that test fails — without it, the asset would
+ship silently missing a zip and the operator image would fail `km init --plan` on
+that single module with an error that names terraform, not the release pipeline.
 
 Each tarball contains:
 
@@ -64,9 +84,19 @@ This runs the full pipeline against `HEAD` without tagging. Inspect:
 ls dist/
 tar -tJf dist/km_v*_darwin_arm64.tar.xz
 sha256sum dist/km_v*_checksums.txt
+tar -tf dist/km_v*_lambdas.tar
 ```
 
-You should see four tarballs + the checksums file, and `tar -tJf` should list `km`, `bin/terraform`, `bin/terragrunt`, plus the doc files.
+You should see four tarballs, the lambdas tar and the checksums file. `tar -tJf`
+should list `km`, `bin/terraform`, `bin/terragrunt`, the doc files, `profiles/**`
+and `infra/**`; `tar -tf` on the lambdas asset should list ten `.zip` files.
+
+The `infra/**` entries matter: `containers/operator/Dockerfile` copies that tree
+into the image, and the build-from-an-extracted-tarball path documented in
+`containers/operator/README.md` breaks without it.
+
+This step now also builds the Lambda zips, so a cold snapshot takes a couple of
+minutes longer than it used to.
 
 ### 3. Tag and push
 
@@ -96,7 +126,11 @@ Open the Draft release in the GH UI. Verify:
 
 - Title is `km vX.Y.Z`
 - Body has the install snippet + changelog grouped by Features / Bug fixes / Documentation
-- All 5 assets are attached (4 tarballs + checksums)
+- All 6 assets are attached (4 tarballs + `_lambdas.tar` + checksums). The
+  lambdas asset is what `publish-image.yml` downloads on `release: published`;
+  publishing without it produces an operator image that cannot `km init --plan`
+  — the Dockerfile fails the build with a message saying the release predates
+  the asset, rather than shipping something quietly broken.
 - Prerelease checkbox matches your intent
 
 Click **Publish release**.

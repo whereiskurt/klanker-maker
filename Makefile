@@ -21,6 +21,9 @@ VERSION     ?= latest
 # km release tag baked into the operator client image.
 # 'latest' resolves the newest published release at build time.
 KM_RELEASE  ?= latest
+# Where that image gets its Lambda zips: auto | local | release. See the
+# operator-image target and containers/operator/Dockerfile.
+KM_LAMBDAS  ?= auto
 REGION      ?= $(shell aws configure get region 2>/dev/null || grep '^region:' km-config.yaml 2>/dev/null | awk '{print $$2}')
 ACCOUNT_ID   = $(shell aws sts get-caller-identity --query Account --output text)
 ECR_REGISTRY = $(ACCOUNT_ID).dkr.ecr.$(REGION).amazonaws.com
@@ -191,20 +194,36 @@ sandbox-image:
 	  --load \
 	  containers/sandbox/
 
-## operator-image: build the km operator client image (km release + aws CLI + ssm plugin)
-## Pin a release with: make operator-image KM_RELEASE=v0.7.0
+## operator-image: build the km operator client image (km release + aws CLI +
+## ssm plugin + terraform/terragrunt + infra/ + Lambda zips, so it can run
+## `km init --plan`)
+## Pin a release with:      make operator-image KM_RELEASE=v0.7.0
+## Force the zip source with: make operator-image KM_LAMBDAS=release
+##
+## KM_LAMBDAS defaults to `auto`: local build/*.zip when the working tree has
+## them (so `make build-lambdas && make operator-image` works with no release
+## cut), otherwise the release asset. The build prints which it chose — a stale
+## build/ from an unrelated experiment silently overriding the pinned release is
+## exactly how you end up with a plan nobody can explain.
 operator-image:
 	docker buildx build \
 	  --file containers/operator/Dockerfile \
 	  --build-arg KM_VERSION=$(KM_RELEASE) \
+	  --build-arg KM_LAMBDAS=$(KM_LAMBDAS) \
 	  --tag km:$(VERSION) \
 	  --tag km:latest \
 	  --load \
 	  .
 
-## operator-shell: run the operator image with ~/.aws and km-config.yaml mounted
-## Guarded: docker silently creates a DIRECTORY at a bind-mount source that does
-## not exist, which would shadow the baked km-config.yaml with an unreadable dir.
+## operator-shell: run the operator image with ~/.aws, ~/.km, ./profiles, $PWD
+## and km-config.yaml mounted.
+##
+## Every optional mount is guarded on its source EXISTING. docker silently
+## creates a DIRECTORY at a missing bind-mount source, which for km-config.yaml
+## shadows the baked file with something km cannot read, and for ./profiles
+## shadows the baked profile library with an empty dir. Guarding by adding the
+## flag only when the source is there keeps a missing optional mount a no-op
+## instead of a confusing failure.
 operator-shell:
 	@test -f km-config.yaml || { \
 	  echo "km-config.yaml not found in $(PWD)."; \
@@ -214,6 +233,9 @@ operator-shell:
 	docker run --rm -it \
 	  -v "$(HOME)/.aws:/root/.aws" \
 	  -v "$(PWD)/km-config.yaml:/klanker-maker/km-config.yaml" \
+	  -v "$(PWD):/work" \
+	  $(if $(wildcard $(HOME)/.km/.),-v "$(HOME)/.km:/root/.km",) \
+	  $(if $(wildcard profiles/.),-v "$(PWD)/profiles:/root/.km/profiles",) \
 	  $(if $(AWS_PROFILE),-e AWS_PROFILE=$(AWS_PROFILE),) \
 	  km:latest
 
