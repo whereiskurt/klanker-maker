@@ -1,9 +1,14 @@
 # Klanker Maker Sidecar Reference
 
-Every Klanker Maker sandbox runs four sidecars that enforce network policy,
-collect audit telemetry, and export traces. On EC2 they run as systemd
-services. On ECS Fargate they run as sidecar containers in the task
+Every Klanker Maker sandbox runs four **infrastructure sidecars** that enforce
+network policy, collect audit telemetry, and export traces. On EC2 they run as
+systemd services. On ECS Fargate they run as sidecar containers in the task
 definition sharing the `awsvpc` network namespace with the main container.
+
+Alongside them sit the **sandbox-side helper binaries** -- the `km-*` tools an
+agent inside the sandbox actually calls to act on the outside world. They share
+the same build and delivery pipeline, so they are documented here too
+([§6](#6-sandbox-side-helper-binaries)).
 
 ## Table of Contents
 
@@ -12,9 +17,10 @@ definition sharing the `awsvpc` network namespace with the main container.
 3. [Audit Log](#3-audit-log)
 4. [Tracing](#4-tracing)
 5. [Build and Deployment Pipeline](#5-build-and-deployment-pipeline)
-6. [iptables DNAT on EC2](#iptables-dnat-on-ec2)
-7. [Container Dependency Ordering on ECS](#container-dependency-ordering-on-ecs)
-8. [Debugging Blocked Requests](#debugging-blocked-requests)
+6. [Sandbox-side helper binaries](#6-sandbox-side-helper-binaries)
+7. [iptables DNAT on EC2](#iptables-dnat-on-ec2)
+8. [Container Dependency Ordering on ECS](#container-dependency-ordering-on-ecs)
+9. [Debugging Blocked Requests](#debugging-blocked-requests)
 
 ---
 
@@ -530,18 +536,93 @@ EC2 sandboxes receive sidecar binaries as pre-compiled static files downloaded f
 
 **Delivery flow:**
 
-1. `make sidecars` uploads compiled binaries to `s3://{artifacts-bucket}/sidecars/`.
-2. EC2 instance user-data (bootstrap script) downloads binaries on first boot:
+1. `km init --sidecars` cross-compiles every binary for `linux/amd64` and uploads it to
+   `s3://{artifacts-bucket}/sidecars/`. (The build list is `sidecarBuilds()` in
+   `internal/app/cmd/init.go`; `make sidecars` covers the local build only.)
+2. EC2 instance user-data downloads them into **`/opt/km/bin`** on first boot:
    ```bash
-   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/dns-proxy  /usr/local/bin/km-dns-proxy
-   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/http-proxy /usr/local/bin/km-http-proxy
-   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/audit-log  /usr/local/bin/km-audit-log
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/dns-proxy       /opt/km/bin/km-dns-proxy
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/http-proxy      /opt/km/bin/km-http-proxy
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/audit-log       /opt/km/bin/km-audit-log
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-slack        /opt/km/bin/km-slack
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-presence     /opt/km/bin/km-presence
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-netpolicy    /opt/km/bin/km-netpolicy
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/otelcol-contrib /opt/km/bin/otelcol-contrib
    aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/tracing/config.yaml /etc/km/tracing/config.yaml
-   chmod +x /usr/local/bin/km-dns-proxy /usr/local/bin/km-http-proxy /usr/local/bin/km-audit-log
+   chmod +x /opt/km/bin/km-* /opt/km/bin/otelcol-contrib
    ```
-3. Systemd unit files start each sidecar as a managed service.
+   `km-github` and `km-h1` are fetched **conditionally**, only when the profile enables
+   the corresponding inbound bridge. Everything above is unconditional.
+3. Each binary an agent may invoke directly is symlinked into `/usr/local/bin`, so a bare
+   `km-slack` / `km-github` / `km-netpolicy` resolves on `PATH` from a non-login shell,
+   a systemd unit, or a subprocess. Internal callers in the userdata still use the
+   absolute `/opt/km/bin/...` path.
+4. Systemd unit files start each long-running sidecar as a managed service.
 
 **Contrast with ECS:** On ECS Fargate, sidecars are Docker containers defined in the task definition. The ECS scheduler pulls images from ECR automatically — no S3 binary download or systemd unit files are needed.
+
+---
+
+## 6. Sandbox-side helper binaries
+
+`/opt/km/bin` is where everything a sandbox agent does to the outside world starts.
+These are not the operator `km` CLI -- that runs on the operator's workstation. Each
+helper reads its own per-sandbox credentials from SSM (`/{prefix}/sandbox/{id}/...`) at
+call time, so **the agent never handles a raw token** and nothing is cached on disk.
+
+When an agent needs to act, the matching helper is the right tool -- prefer it over a
+hand-rolled `curl`, `gh`, or `git push`.
+
+| Channel | Binary | Verbs and use |
+|---|---|---|
+| GitHub | `km-github` | `comment`, `review`, `check`, `pr create`, and `commit` -- the last creates a **GitHub-signed**, `klanker-maker[bot]`-attributed commit via the GraphQL `createCommitOnBranch` mutation. All keyless. |
+| Slack | `km-slack` | Post status, progress, and threaded replies, with Block Kit rich rendering. |
+| Email | `km-send`, `km-recv` | Signed inter-sandbox and operator email. |
+| HackerOne | `km-h1` | Comment on reports; internal (team-track) by default. |
+| Egress policy | `km-netpolicy` | `deny <host>` / `list` -- append-only runtime narrowing of the sandbox's own egress policy. |
+| Git auth | `km-git-askpass`, `km-git-credential-helper` | Inject the installation token into plain `git` operations. Baked-in sandbox id, so they work in any subprocess. |
+
+### Why `km-github commit` exists
+
+A sandbox's local `git commit` is unsigned, and the low-level REST `POST /git/commits` is
+bot-attributed but `verified:false reason:unsigned`. The `createCommitOnBranch` mutation
+is the only path that auto-signs: GitHub signs with its own key and attributes the commit
+to the token's identity, and it can carry multiple files in one commit.
+
+```bash
+km-github commit --repo OWNER/REPO --branch BR [--parent SHA] \
+  --message-file MSG -- path/to/file ...
+# stdout: the new commit OID
+# stderr: verified=... reason=... author=... committer=...
+git fetch origin && git reset --hard origin/BR    # resync the local worktree
+```
+
+Two things to know before using it:
+
+- **It needs `contents:write`**, which is only minted when the profile's GitHub
+  permissions include `push`. Without it the mutation returns 403. See
+  [`docs/github-app-permissions.md`](github-app-permissions.md).
+- **`--parent` force-resets the branch to that SHA first.** If a PR is already open and
+  the head is reset to exactly the base SHA, GitHub auto-closes it ("no commits between
+  base and head"). Either create the signed commits *before* opening the PR, or
+  `gh pr reopen` afterwards.
+
+### Infrastructure helpers
+
+Also present, but rarely invoked by an agent directly: `km-http-proxy`, `km-dns-proxy`,
+`km-audit-log`, `km-presence`, `km-queue-runner`, `km-notify-hook`,
+`km-upload-artifacts`, `otelcol-contrib`, `sops`, and the source-aware inbound pollers
+`km-{github,slack,h1}-inbound-poller` and `km-mail-poller`. Their *presence* is how a box
+self-censuses its own capabilities -- see the `klanker:sandbox` skill and
+`/opt/km/.km-profile.yaml`.
+
+### Adding a new capability
+
+A new sandbox-side capability means three things in lockstep: a new `km-*` binary, a
+`sidecarBuilds()` entry in `internal/app/cmd/init.go`, and a userdata `aws s3 cp` (plus a
+`/usr/local/bin` symlink if an agent will call it by name). It is delivered by
+`km init --sidecars`; existing sandboxes pick it up on `km destroy && km create`, because
+the binary is fetched at boot.
 
 ---
 

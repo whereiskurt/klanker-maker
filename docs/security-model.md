@@ -120,7 +120,22 @@ Security Group egress on TCP/443 to `0.0.0.0/0` is required for the SSM agent to
 
 ## 5. Network Enforcement
 
-Network egress is enforced at up to four independent layers, each operating at a different level of the stack. An agent must bypass all active layers to exfiltrate data.
+Network egress is enforced at several independent layers, each operating at a different level of the stack. An agent must bypass every active layer to exfiltrate data.
+
+**Evaluation order matters, and the deny list comes first.** Before any allowlist is consulted, `spec.network.egress.deniedDNSSuffixes` and `deniedHosts` are checked. A deny beats every allow -- including the `*` wildcard, the GitHub repo-filter carve-out, the OpenAI budget path, and the Bedrock/SES/Anthropic MITM interceptors. In the HTTP proxy the deny gate is registered **first** in the handler chain, because goproxy dispatches first-match and every later handler is a carve-out; a deny evaluated after them would be silently bypassable. Deny matching is deliberately *broader* than allow matching -- a bare entry also covers its subdomains -- because strictness on an allowlist permits less, while the same strictness on a denylist fails open.
+
+### Layer 0: Deny Lists and Runtime Narrowing
+
+`pkg/netpolicy` is the single canonical deny matcher, consulted per decision (never snapshotted) by the DNS proxy, the HTTP proxy, and the eBPF resolver alike. Because it is read per decision rather than at start-up, a deny added at runtime takes effect within about a second with no restart.
+
+`km-netpolicy` (in `/opt/km/bin`) lets a **running** sandbox append denies to its own policy from user-land: `km-netpolicy deny <host>` and `km-netpolicy list`. Since v0.8.8 this ships on every sandbox rather than being gated behind a profile field. Narrow-only is enforced twice over:
+
+- **Append is the only operation.** There is no removal verb, and a test fails the build if one is added.
+- **The deny file carries `chattr +a`**, so the kernel refuses truncate, unlink, rename, and attribute-clear. It lives under `/var/lib`, not `/run` -- a reboot that dropped accumulated denies would *widen* the policy.
+
+Under `ebpf`/`both` enforcement, the bootstrap deliberately leaves `km-dns-proxy` disabled and the eBPF resolver serves DNS, so the resolver reads the runtime deny file too. Without that, `km-netpolicy deny x` would report success while `x` stayed resolvable.
+
+**Limit:** on `spec.execution.privileged: true` the sandbox has sudo and can clear `+a`. But it can equally stop the proxies outright, so the guarantee is meaningful on unprivileged boxes and is not claimed for privileged ones.
 
 ### Layer 1: Security Groups (L3/L4)
 
@@ -168,6 +183,8 @@ The HTTP proxy sidecar (`sidecars/http-proxy/httpproxy/proxy.go`) intercepts all
 - W3C `traceparent` headers are injected on allowed CONNECT requests for distributed tracing.
 - Every blocked request is logged with `sandbox_id`, `host`, and `event_type: http_blocked`.
 
+**Operator-declared intercepts.** `spec.network.mitm.intercepts` lets an operator declare host-to-action rules the proxy applies to intercepted traffic -- a `redirect` (301 plus `Location`) or a canned `respond` (status, body, content type). Off by default. Precedence is fixed and a profile cannot change it: deny gate, then Bedrock/Anthropic/OpenAI metering and the GitHub repo filter, then operator intercepts, then the general allowlist. Consequently an intercept naming a metering or GitHub host is silently dead, while an intercept for a host absent from the allowlist still fires -- which is the useful case for returning a canned error on a host the sandbox cannot otherwise reach. There is deliberately no `block` action, because `deniedHosts` already blocks with strictly stronger semantics. See [`docs/mitm-intercepts.md`](mitm-intercepts.md).
+
 ### iptables DNAT Configuration
 
 The user-data bootstrap script (`pkg/compiler/userdata.go`) configures iptables rules that make proxy bypass impossible from userspace:
@@ -176,18 +193,25 @@ The user-data bootstrap script (`pkg/compiler/userdata.go`) configures iptables 
 # IMDS exemption (must be first -- prevents breaking IMDSv2 token requests)
 iptables -t nat -I OUTPUT -d 169.254.169.254 -j RETURN
 
+# Root exemption -- SSM agent, systemd, and the AWS CLI all run as root
+iptables -t nat -A OUTPUT -m owner --uid-owner 0 -j RETURN
+
 # DNS redirect (UDP and TCP port 53 -> 5353)
-iptables -t nat -A OUTPUT -p udp --dport 53 ! -m owner --uid-owner km-sidecar -j REDIRECT --to-ports 5353
-iptables -t nat -A OUTPUT -p tcp --dport 53 ! -m owner --uid-owner km-sidecar -j REDIRECT --to-ports 5353
+iptables -t nat -A OUTPUT -p udp --dport 53 -m owner ! --uid-owner km-sidecar -j REDIRECT --to-ports 5353
+iptables -t nat -A OUTPUT -p tcp --dport 53 -m owner ! --uid-owner km-sidecar -j REDIRECT --to-ports 5353
 
 # HTTP/HTTPS redirect (ports 80, 443 -> 3128)
-iptables -t nat -A OUTPUT -p tcp --dport 80  ! -m owner --uid-owner km-sidecar -j REDIRECT --to-ports 3128
-iptables -t nat -A OUTPUT -p tcp --dport 443 ! -m owner --uid-owner km-sidecar -j REDIRECT --to-ports 3128
+iptables -t nat -A OUTPUT -p tcp --dport 80  -m owner ! --uid-owner km-sidecar -j REDIRECT --to-ports 3128
+iptables -t nat -A OUTPUT -p tcp --dport 443 -m owner ! --uid-owner km-sidecar -j REDIRECT --to-ports 3128
 ```
 
-The `km-sidecar` system user runs all sidecar processes. The `! -m owner --uid-owner km-sidecar` exemption prevents redirect loops: the proxy's own upstream connections to real DNS servers and HTTPS endpoints are not redirected back to itself.
+The `km-sidecar` system user runs all sidecar processes. The `-m owner ! --uid-owner km-sidecar` exemption prevents redirect loops: the proxy's own upstream connections to real DNS servers and HTTPS endpoints are not redirected back to itself.
 
 The IMDS exemption (`-I OUTPUT -d 169.254.169.254 -j RETURN`) is inserted first (`-I` inserts at the top of the chain) to ensure IMDSv2 token requests on port 80 to the link-local metadata address are not caught by the HTTP redirect rule.
+
+> **The root exemption is why proxy-only mode does not constrain a privileged process.** Uid 0 is returned from the NAT chain before any redirect rule, because the SSM agent, systemd, and the AWS CLI all run as root and would otherwise have their `ssm.amazonaws.com:443` connections redirected into a proxy that does not allowlist them. The consequence is direct: under `enforcement: proxy`, anything running as root egresses without passing the DNS or HTTP proxy at all. Use `enforcement: ebpf` or `both` when the sandbox is privileged -- cgroup BPF has no uid concept and applies to root identically.
+>
+> **DNS is the one exception to the root bypass**, and it is easy to get wrong in the other direction. The bootstrap rewrites `/etc/resolv.conf` to `127.0.0.1`, and the resolver returns NXDOMAIN for non-allowlisted names regardless of uid or cgroup. A root-run installer for a host outside `allowedDNSSuffixes` therefore still fails to resolve -- and because `km-init.sh` runs under `set -e`, the symptom is a truncated bootstrap rather than an obvious DNS error.
 
 ---
 
@@ -682,6 +706,19 @@ spec:
 8. Even if the agent reaches the AWS API, it is in the Application account -- Terraform state, DNS configuration, and billing are in separate accounts.
 
 **Residual risk:** Kernel exploits or hypervisor escapes could theoretically breach the EC2 instance boundary. This is AWS's responsibility under the shared responsibility model.
+
+### Scenario: Egress Enforcement Bypassed by an Operator Tunnel
+
+**Threat:** While `km tunnel k8s` or `km tunnel socks` is open, traffic crossing the reverse forward is dialled from the **operator's workstation**, not from the sandbox. km's MITM proxy, the eBPF allowlist, and `deniedHosts` never see it. In `socks` mode this is a wide path by construction: anything on the box can reach anything the operator's workstation can.
+
+**Mitigations:**
+1. **Lifetime is the control.** Every tunnel dies with the interactive shell that opened it. There is deliberately no `-N`, no detached mode, and no daemon.
+2. Nothing is left behind on the box. `socks` writes nothing at all -- ssh itself is the proxy -- and `k8s` writes only a kubeconfig and a shim at connect time.
+3. No credential that makes the reachability possible ever reaches the sandbox: no VPN profile, no SSO refresh token, no AWS credential. Kubernetes credentials are minted on the workstation by the operator's own exec plugin and proxied over a unix socket. The cluster CA does travel, but a CA certificate is public, verification-only, and mints nothing.
+4. `--set-proxy-env` is off by default, so the shell does not silently route everything through the tunnel. When it is set, `NO_PROXY` carries `169.254.169.254` so IMDS credential fetches still work.
+5. `ExitOnForwardFailure=yes` means a failed reverse bind kills the session rather than leaving a working shell attached to a dead tunnel.
+
+**Residual risk:** This is an *authorization* gap, not an authentication one -- the operator holds the sandbox's private key and could run `ssh -R` by hand regardless, so km does not pretend to gate it. An earlier design carried a `spec.network.reverseTunnel` profile field; it was dropped precisely because keeping it would have implied a control that does not exist. Two further consequences are worth stating plainly: `socks` traffic bypasses km's AI-spend metering, so `km status` under-reports while it is in use; and the tunnel is invisible to the audit trail's network events.
 
 ### Scenario: Data Exfiltration via Allowed Hosts
 

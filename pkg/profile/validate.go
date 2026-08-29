@@ -259,6 +259,23 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		}
 	}
 
+	// Rule 1b: maxLifetime must not be shorter than ttl.
+	// maxLifetime caps how far km extend can push expiry (createdAt+maxLifetime).
+	// A cap below the initial ttl would make a sandbox un-extendable from the moment
+	// it boots, which is never what an operator means — the cap exists to bound
+	// extension, not to contradict the ttl the same profile just asked for.
+	// TTL="" or "0" means no auto-destroy; there is nothing to compare against.
+	if p.Spec.Lifecycle.MaxLifetime != "" && p.Spec.Lifecycle.TTL != "" && p.Spec.Lifecycle.TTL != "0" {
+		maxLife, maxErr := parseDuration(p.Spec.Lifecycle.MaxLifetime)
+		ttl, ttlErr := parseDuration(p.Spec.Lifecycle.TTL)
+		if maxErr == nil && ttlErr == nil && maxLife < ttl {
+			errs = append(errs, ValidationError{
+				Path:    "spec.lifecycle.maxLifetime",
+				Message: fmt.Sprintf("maxLifetime (%s) must not be shorter than ttl (%s) — the sandbox could never be extended", p.Spec.Lifecycle.MaxLifetime, p.Spec.Lifecycle.TTL),
+			})
+		}
+	}
+
 	// Rule 2: substrate must be ec2, ecs, or docker (belt-and-suspenders — schema also checks this)
 	substrate := p.Spec.Runtime.Substrate
 	if substrate != "" && substrate != "ec2" && substrate != "ecs" && substrate != "docker" {

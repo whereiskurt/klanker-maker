@@ -1,6 +1,6 @@
 # `km tunnel k8s` — kubectl in a sandbox, against a cluster only your laptop can reach
 
-**Phase 130 · v0.8.6 · code-complete, live UAT pending**
+**Phase 130 · shipped in v0.8.6; two live-UAT fixes in v0.8.7 — run v0.8.7 or later**
 
 > **`km tunnel` is a family, not a single command.** Every mode shares one transport —
 > an SSM port-forward to sshd, with reverse forwards riding inside the SSH session — and

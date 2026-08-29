@@ -17,7 +17,10 @@ Examples:
 
 Flags:
   --aws-profile string   AWS CLI profile to use (default: klanker-terraform)
-  --force                Skip confirmation prompt
+  --remote               Destroy via Lambda/EventBridge instead of local terragrunt
+                         (default: true; forced off for the docker substrate)
+  --verbose              Show full terragrunt/terraform output
+  --yes                  Skip confirmation prompt
 
 What Happens:
   1. Sandbox ID format is validated (must match sb-[a-f0-9]{8})

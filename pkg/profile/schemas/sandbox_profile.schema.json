@@ -169,6 +169,11 @@
               "type": "string",
               "enum": ["destroy", "stop", "retain"],
               "description": "What happens when the sandbox expires"
+            },
+            "maxLifetime": {
+              "type": "string",
+              "pattern": "^[0-9]+(s|m|h|d)$",
+              "description": "Absolute cap on sandbox lifetime, measured from creation. km extend refuses to push expiry past createdAt+maxLifetime. Omit for no cap. Must be >= ttl when both are set."
             }
           }
         },
