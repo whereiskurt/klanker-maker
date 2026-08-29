@@ -113,10 +113,21 @@ RUN set -eux; \
 # over from an unrelated experiment silently overriding the pinned release is
 # exactly the kind of thing that produces a plan nobody can explain.
 #
-# The bracket glob makes the COPY optional — it matches zero files and succeeds
-# when build/ is empty, the same trick km-config.yam[l] uses below.
+# Both path components are bracket-globbed, and BOTH are load-bearing.
+#
+# `*.zi[p]` alone is not enough — that is the km-config.yam[l] trick below, and
+# it only tolerates a missing FILE. The parent directory is still lstat'd, so on
+# a clean checkout (build/ is gitignored and therefore absent entirely, not
+# merely empty) the build dies with:
+#
+#     ERROR: failed to solve: lstat /build: no such file or directory
+#
+# Globbing the directory too makes buildkit match a pattern instead of stat'ing
+# a literal path, so zero matches is an empty result rather than an error.
+# Verified against a `git archive HEAD` context, which is what CI actually sees
+# — a working clone has build/ lying around and hides this completely.
 ARG KM_LAMBDAS=auto
-COPY build/*.zi[p] /fetch/local-lambdas/
+COPY buil[d]/*.zi[p] /fetch/local-lambdas/
 
 RUN set -eux; \
     mkdir -p /fetch/lambdas /fetch/local-lambdas; \
