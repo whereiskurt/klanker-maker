@@ -14,6 +14,12 @@ import (
 
 // runExecs lists what the sandbox executed.
 func runExecs(o opts, args []string) error {
+	// `execs save` is a sub-verb rather than a flag: it writes to S3, and a
+	// flag on a read-only listing verb is too easy to trip by accident.
+	if len(args) > 0 && args[0] == "save" {
+		return runExecsSave(o)
+	}
+
 	var since time.Duration
 	uid := -1
 	var failed, asJSON bool
@@ -45,6 +51,10 @@ func runExecs(o opts, args []string) error {
 			if err != nil {
 				fmt.Fprintf(o.stderr, "%s execs: %q is not an integer: %v\n", prog, args[i], err)
 				return err
+			}
+			if n < 0 {
+				fmt.Fprintf(o.stderr, "%s execs: --uid %q must not be negative\n", prog, args[i])
+				return fmt.Errorf("--uid %q must not be negative", args[i])
 			}
 			uid = n
 		default:
@@ -87,7 +97,10 @@ func runExecs(o opts, args []string) error {
 		}
 		fmt.Fprintln(o.stdout, formatExec(r))
 	}
-	if shown == 0 {
+	// --json means a consumer parses stdout as zero or more JSON lines; an
+	// empty-marker string would corrupt that stream the same way the rotation
+	// warning would if it went to stdout instead of stderr.
+	if shown == 0 && !asJSON {
 		fmt.Fprintln(o.stdout, "(none)")
 	}
 	warnIfTruncated(o)
@@ -135,6 +148,10 @@ func runWho(o opts, args []string) error {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		fmt.Fprintf(o.stderr, "%s who: needs a host, e.g. %s who api.github.com\n", prog, prog)
 		return errors.New("who requires a host")
+	}
+	if len(args) > 1 {
+		fmt.Fprintf(o.stderr, "%s who: unexpected argument %q (want exactly one host)\n", prog, args[1])
+		return fmt.Errorf("unexpected argument %q", args[1])
 	}
 	host := args[0]
 

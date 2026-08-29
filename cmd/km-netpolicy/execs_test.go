@@ -123,3 +123,54 @@ func TestRunWho_RequiresAHost(t *testing.T) {
 		t.Fatal("want an error when no host is given")
 	}
 }
+
+func TestRunExecs_JSONOnEmptyResultEmitsNoNonJSONLine(t *testing.T) {
+	dir := t.TempDir()
+	writeExecStore(t, dir, `{"ts":"2026-08-29T12:00:00Z","kind":"exec","pid":100,"uid":1000,"comm":"curl","args":["curl"],"ret":0}`+"\n")
+
+	var out, errb bytes.Buffer
+	// --failed with no failures present means zero matching records, but --json
+	// means a consumer parses stdout as a JSONL stream — a literal "(none)"
+	// line would corrupt it exactly like the rotation warning would if it were
+	// ever routed to stdout instead of stderr.
+	if err := runExecs(opts{execDir: dir, stdout: &out, stderr: &errb}, []string{"--json", "--failed"}); err != nil {
+		t.Fatalf("runExecs: %v", err)
+	}
+	if strings.Contains(out.String(), "(none)") {
+		t.Errorf("--json leaked a non-JSON empty marker onto stdout: %q", out.String())
+	}
+	if out.String() != "" {
+		t.Errorf("want no stdout output for an empty --json result, got %q", out.String())
+	}
+}
+
+func TestRunExecs_NegativeUIDIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeExecStore(t, dir, `{"ts":"2026-08-29T12:00:00Z","kind":"exec","pid":100,"uid":1000,"comm":"curl","args":["curl"],"ret":0}`+"\n")
+
+	var out, errb bytes.Buffer
+	// A negative --uid must be rejected rather than silently disabling the
+	// filter (uid>=0 is the sentinel for "unset") — a silently-ignored filter
+	// on a forensic trace is worse than an error: the operator would believe
+	// they'd seen only the filtered set when they'd actually seen everything.
+	if err := runExecs(opts{execDir: dir, stdout: &out, stderr: &errb}, []string{"--uid", "-1"}); err == nil {
+		t.Fatal("want an error for a negative --uid")
+	}
+	if strings.Contains(out.String(), "curl") {
+		t.Errorf("a rejected --uid must not fall through to an unfiltered listing: %s", out.String())
+	}
+}
+
+func TestRunWho_RejectsUnexpectedTrailingArgument(t *testing.T) {
+	execDir := t.TempDir()
+	writeExecStore(t, execDir, `{"ts":"2026-08-29T12:00:00Z","kind":"exec","pid":100,"uid":1000,"comm":"curl","args":["curl"],"ret":0}`+"\n")
+	flowDir := t.TempDir()
+
+	var out, errb bytes.Buffer
+	// A trailing token (e.g. an accidental flag) must error rather than be
+	// silently dropped, matching runFlows/runPin's stance on unrecognised
+	// tokens.
+	if err := runWho(opts{execDir: execDir, flowDir: flowDir, stdout: &out, stderr: &errb}, []string{"api.github.com", "--json"}); err == nil {
+		t.Fatal("want an error for an unexpected trailing argument")
+	}
+}
