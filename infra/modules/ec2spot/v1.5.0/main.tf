@@ -1,0 +1,971 @@
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+## Per-sandbox VPC (created when vpc_id is empty)
+data "aws_availability_zones" "available" {
+  count = var.vpc_id == "" ? 1 : 0
+  state = "available"
+}
+
+locals {
+  # Use provided or auto-discovered AZs
+  effective_azs = length(var.availability_zones) > 0 ? var.availability_zones : (var.vpc_id == "" ? slice(data.aws_availability_zones.available[0].names, 0, 2) : [])
+  create_vpc    = var.vpc_id == ""
+
+  # AMI slug resolution (Phase 33): map of slug → { name_pattern, owner }
+  ami_filters = {
+    "amazon-linux-2023" = {
+      name_pattern = "al2023-ami-2023.*-kernel-6.1-x86_64"
+      owner        = "amazon"
+    }
+    "ubuntu-24.04" = {
+      name_pattern = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"
+      owner        = "099720109477" # Canonical's AWS account ID
+    }
+    "ubuntu-22.04" = {
+      name_pattern = "ubuntu/images/hvm-ssd-gp3/ubuntu-jammy-22.04-amd64-server-*"
+      owner        = "099720109477" # Canonical's AWS account ID
+    }
+  }
+  resolved_ami_slug = var.ami_slug != "" ? var.ami_slug : "amazon-linux-2023"
+}
+
+resource "aws_vpc" "sandbox" {
+  count      = local.create_vpc ? 1 : 0
+  cidr_block = "10.0.0.0/16"
+
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name                 = "km-sandbox-${var.sandbox_id}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
+  }
+}
+
+resource "aws_internet_gateway" "sandbox" {
+  count  = local.create_vpc ? 1 : 0
+  vpc_id = aws_vpc.sandbox[0].id
+
+  tags = {
+    Name                 = "km-sandbox-${var.sandbox_id}-igw"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
+  }
+}
+
+resource "aws_subnet" "sandbox" {
+  count             = local.create_vpc ? length(local.effective_azs) : 0
+  vpc_id            = aws_vpc.sandbox[0].id
+  cidr_block        = cidrsubnet("10.0.0.0/16", 8, count.index)
+  availability_zone = local.effective_azs[count.index]
+
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name                 = "km-sandbox-${var.sandbox_id}-${local.effective_azs[count.index]}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
+  }
+}
+
+resource "aws_route_table" "sandbox" {
+  count  = local.create_vpc ? 1 : 0
+  vpc_id = aws_vpc.sandbox[0].id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.sandbox[0].id
+  }
+
+  tags = {
+    Name                 = "km-sandbox-${var.sandbox_id}-rt"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
+  }
+}
+
+resource "aws_route_table_association" "sandbox" {
+  count          = local.create_vpc ? length(local.effective_azs) : 0
+  subnet_id      = aws_subnet.sandbox[count.index].id
+  route_table_id = aws_route_table.sandbox[0].id
+}
+
+locals {
+  # Resolve effective VPC, subnets, AZs — either provided or auto-created
+  effective_vpc_id  = local.create_vpc ? aws_vpc.sandbox[0].id : var.vpc_id
+  effective_subnets = length(var.sandbox_subnets) > 0 ? var.sandbox_subnets : aws_subnet.sandbox[*].id
+
+  # Filter EC2 spot instances for the current region
+  region_ec2spots = [
+    for ec2spot in var.ec2spots :
+    ec2spot if ec2spot.region == var.region_full
+  ]
+
+  # Calculate total number of EC2 spot instances in this region
+  total_ec2spot_count = length(local.region_ec2spots) > 0 ? sum([for b in local.region_ec2spots : b.count]) : 0
+
+  # Phase 33.1: slug lookup fires only when ami_slug is set (not when raw ami_id is provided).
+  # Gates count = 1 on data.aws_ami.base_ami below.
+  use_slug_lookup = var.ami_slug != "" && local.total_ec2spot_count > 0
+
+  # ---------------------------------------------------------------------------
+  # Cross-account capacity borrowing (Phase 126, REQ-126-LAUNCH)
+  # ---------------------------------------------------------------------------
+  # When this sandbox launches into a LINKED account, it reuses the security
+  # group and instance profile that `km account add` already provisioned there,
+  # instead of creating its own per-sandbox pair.
+  #
+  # This is the design the launcher role was written for. Its PassOnlyBoxRole
+  # statement says so explicitly: "The launcher can attach ONLY the one pre-baked
+  # box role — never a role it (or an attacker holding the launcher) creates on
+  # the fly — and only when EC2 is the passed-to service. The launcher never
+  # needs any role-creation permission at all." The launcher likewise names the
+  # link's security group in its RunInstances resource list. Creating per-sandbox
+  # equivalents is therefore not merely unnecessary, it is unauthorised — the
+  # launcher has neither iam:CreateRole nor ec2:CreateSecurityGroup, by design.
+  #
+  # TRADE-OFF, deliberate and documented: the pre-baked box role carries only
+  # artifacts-read, results-read/write, own-instance-tag-read and optional
+  # Bedrock. A cross-account sandbox therefore does NOT get the twelve
+  # per-sandbox grants below (budget DynamoDB, GitHub token, Slack/GitHub inbound
+  # SQS, Slack transcript, sandbox secrets, EventBridge). Most of those target
+  # HOME-account resources, and SSM Parameter Store and DynamoDB support no
+  # resource-based policy at all, so they cannot be granted to an account-B role
+  # by IAM alone regardless. Restoring parity needs a back-assume path into the
+  # home account, which is out of scope here. See
+  # docs/cross-account-capacity-borrowing.md § What this buys.
+  #
+  # Both toggles are independently empty-defaulted, so a same-account sandbox is
+  # byte-identical to pre-126 behaviour.
+  create_security_group = local.total_ec2spot_count > 0 && var.existing_security_group_id == ""
+  create_instance_role  = local.total_ec2spot_count > 0 && var.existing_instance_profile_name == ""
+
+  effective_security_group_id = var.existing_security_group_id != "" ? var.existing_security_group_id : one(aws_security_group.ec2spot[*].id)
+  effective_instance_profile  = var.existing_instance_profile_name != "" ? var.existing_instance_profile_name : one(aws_iam_instance_profile.ec2spot[*].name)
+
+  # Create a flattened list of EC2 spot instances
+  ec2spot_instances = flatten([
+    for idx, ec2spot in local.region_ec2spots : [
+      for instance_idx in range(ec2spot.count) : {
+        key                    = "${ec2spot.region}-${idx}-${instance_idx}"
+        region                 = ec2spot.region
+        instance_type          = ec2spot.instance_type
+        spot_price_multiplier  = ec2spot.spot_price_multiplier
+        spot_price_offset      = ec2spot.spot_price_offset
+        block_duration_minutes = ec2spot.block_duration_minutes
+        user_data              = ec2spot.user_data
+        availability_zone      = local.effective_azs[instance_idx % length(local.effective_azs)]
+        subnet_id              = local.effective_subnets[instance_idx % length(local.effective_subnets)]
+        sandbox_id             = ec2spot.sandbox_id
+        user_data_base64       = ec2spot.user_data_base64
+        use_spot               = ec2spot.use_spot
+        instance_name          = "km-sandbox-${ec2spot.sandbox_id}-${instance_idx}"
+      }
+    ]
+  ])
+
+  ec2spot_map = {
+    for ec2spot in local.ec2spot_instances :
+    ec2spot.key => ec2spot
+    if ec2spot.use_spot
+  }
+
+  ec2_ondemand_map = {
+    for ec2spot in local.ec2spot_instances :
+    ec2spot.key => ec2spot
+    if !ec2spot.use_spot
+  }
+}
+
+# Get latest AMI for the selected slug (Phase 33: resolved via ami_filters locals map)
+# Phase 33.1: count = 0 when raw ami_id is supplied, skipping the filter lookup.
+data "aws_ami" "base_ami" {
+  count = local.use_slug_lookup ? 1 : 0 # Phase 33.1: was: local.total_ec2spot_count > 0 ? 1 : 0
+
+  most_recent = true
+  owners      = [local.ami_filters[local.resolved_ami_slug].owner]
+
+  filter {
+    name   = "name"
+    values = [local.ami_filters[local.resolved_ami_slug].name_pattern]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+locals {
+  # Phase 33.1: effective_ami_id resolves to the correct AMI ID for both branches.
+  # Raw-ID path: var.ami_id passed through directly (data.aws_ami.base_ami count = 0).
+  # Slug path: data.aws_ami lookup result (count = 1).
+  # The length() guard prevents `Invalid index` errors when count = 0 — the empty
+  # tuple cannot be indexed at [0].
+  effective_ami_id = (
+    var.ami_id != ""
+    ? var.ami_id
+    : (length(data.aws_ami.base_ami) > 0 ? data.aws_ami.base_ami[0].image_id : "")
+  )
+}
+
+# Get spot price for spot instances only
+data "aws_ec2_spot_price" "price" {
+  for_each = local.ec2spot_map
+
+  instance_type     = each.value.instance_type
+  availability_zone = each.value.availability_zone
+
+  filter {
+    name   = "product-description"
+    values = ["Linux/UNIX"]
+  }
+}
+
+# Security group for EC2 spot instances (SSM-only; no SSH ingress)
+# Egress left empty — Phase 2 profile compiler configures per-profile egress rules
+resource "aws_security_group" "ec2spot" {
+  count = local.create_security_group ? 1 : 0
+
+  name        = "${var.resource_prefix}-ec2spot-${var.sandbox_id}-${var.region_label}"
+  description = "Security group for km sandbox EC2 spot hosts (SSM-only access)"
+  vpc_id      = local.effective_vpc_id
+
+  # No SSH ingress — SSM-only access via IAM role
+  # No egress rules — Phase 2 profile compiler adds per-profile egress
+
+  tags = {
+    Name                 = "km-ec2spot-${var.region_label}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
+  }
+}
+
+# Egress rules compiled from the sandbox profile (NETW-01)
+# The profile compiler populates sg_egress_rules via service.hcl module_inputs.
+resource "aws_security_group_rule" "ec2spot_egress" {
+  count = local.create_security_group ? length(var.sg_egress_rules) : 0
+
+  type              = "egress"
+  from_port         = var.sg_egress_rules[count.index].from_port
+  to_port           = var.sg_egress_rules[count.index].to_port
+  protocol          = var.sg_egress_rules[count.index].protocol
+  cidr_blocks       = var.sg_egress_rules[count.index].cidr_blocks
+  description       = var.sg_egress_rules[count.index].description
+  security_group_id = aws_security_group.ec2spot[0].id
+}
+
+# IAM role for SSM access (no SSH needed)
+resource "aws_iam_role" "ec2spot_ssm" {
+  count = local.create_instance_role ? 1 : 0
+
+  name                 = "${var.resource_prefix}-ec2spot-ssm-${var.sandbox_id}-${var.region_label}"
+  max_session_duration = var.iam_session_policy.max_session_duration
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name                 = "km-ec2spot-ssm-${var.region_label}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
+  }
+}
+
+# Optional region-lock inline policy (NETW-04): restricts API calls to allowed regions only.
+# Only created when iam_session_policy.allowed_regions is non-empty.
+resource "aws_iam_role_policy" "ec2spot_region_lock" {
+  count = (local.create_instance_role && length(var.iam_session_policy.allowed_regions) > 0) ? 1 : 0
+
+  name = "${var.resource_prefix}-ec2spot-region-lock-${var.region_label}"
+  role = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "*"
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion" = var.iam_session_policy.allowed_regions
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ec2spot_ssm" {
+  count = local.create_instance_role ? 1 : 0
+
+  role       = aws_iam_role.ec2spot_ssm[0].name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# Policy: EventBridge PutEvents so the audit-log sidecar can publish SandboxIdle events (PROV-06)
+# Note: PutEvents does not support resource-level restrictions for the default event bus.
+resource "aws_iam_role_policy" "ec2spot_eventbridge" {
+  count = local.create_instance_role ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-eventbridge"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["events:PutEvents"]
+      Resource = ["*"]
+    }]
+  })
+}
+
+# Policy: Bedrock model invocation for Claude Code AI calls
+resource "aws_iam_role_policy" "ec2spot_bedrock" {
+  count = local.create_instance_role && var.enable_bedrock ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-bedrock"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowModelAndInferenceProfileAccess"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:ListInferenceProfiles",
+          "bedrock:ListFoundationModels",
+        ]
+        Resource = [
+          "arn:aws:bedrock:*:*:inference-profile/*",
+          "arn:aws:bedrock:*:*:application-inference-profile/*",
+          "arn:aws:bedrock:*:*:foundation-model/*",
+        ]
+      },
+      {
+        Sid    = "AllowMarketplaceSubscription"
+        Effect = "Allow"
+        Action = [
+          "aws-marketplace:ViewSubscriptions",
+          "aws-marketplace:Subscribe",
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:CalledViaLast" = "bedrock.amazonaws.com"
+          }
+        }
+      },
+      {
+        # GA OpenAI-OSS models on Bedrock (e.g. openai.gpt-oss-120b) are served via
+        # the newer project-based "bedrock-mantle" inference API, a DIFFERENT action
+        # namespace + ARN from classic bedrock:InvokeModel. Without this, the Bifrost
+        # gateway's bedrock/openai.gpt-oss-* route 401s with
+        # "bedrock-mantle:CreateInference on .../project/default" (verified live on a
+        # g6e.12xlarge, 2026-06-27). Classic Claude InvokeModel routes are unaffected.
+        Sid    = "AllowBedrockMantleOpenAIInference"
+        Effect = "Allow"
+        Action = [
+          "bedrock-mantle:CreateInference",
+        ]
+        Resource = ["arn:aws:bedrock-mantle:*:*:*"]
+      }
+    ]
+  })
+}
+
+# Policy: DynamoDB write for http-proxy AI spend metering (MITM budget tracking)
+# The km-http-proxy sidecar intercepts Bedrock responses via MITM, extracts token
+# counts, and writes AI spend to the km-budgets DynamoDB table.
+resource "aws_iam_role_policy" "ec2spot_budget_dynamo" {
+  count = local.create_instance_role ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-budget-dynamo"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DynamoDBBudgetWrite"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.resource_prefix}-budgets",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.resource_prefix}-budgets/index/*",
+        ]
+      },
+      {
+        Sid    = "DynamoDBSandboxRead"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+        ]
+        Resource = "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.resource_prefix}-sandboxes"
+      }
+    ]
+  })
+}
+
+# Policy: KMS decrypt + SSM read for GitHub token (GIT_ASKPASS credential helper)
+# The github-token module creates a per-sandbox KMS key and SSM parameter.
+# The sandbox role needs kms:Decrypt to read the SSM SecureString token.
+resource "aws_iam_role_policy" "ec2spot_github_token" {
+  count = local.create_instance_role ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-github-token"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "KMSDecryptGitHubToken"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = ["arn:aws:kms:*:${data.aws_caller_identity.current.account_id}:key/*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "ssm.${data.aws_region.current.name}.amazonaws.com"
+          }
+        }
+      },
+      {
+        Sid    = "SSMReadGitHubToken"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          # Per-sandbox identity + GitHub token live at /{resource_prefix}/sandbox/{sandbox_id}/...
+          # (see pkg/aws/identity.go:99). The hardcoded /sandbox/ here used to deny access on
+          # any non-default-prefix install — sandbox couldn't read its own signing key.
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/sandbox/${var.sandbox_id}/*",
+        ]
+      },
+      {
+        # Phase 67 gap closure: cloud-init bootstrap polls the operator-wide
+        # bridge URL so it can write KM_SLACK_BRIDGE_URL into the env file.
+        # /{prefix}/slack/bridge-url is shared across sandboxes (one bridge Lambda
+        # per region), so it lives outside the per-sandbox segment but still under
+        # the operator's resource_prefix.
+        Sid    = "SSMReadSlackBridgeURL"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/slack/bridge-url",
+        ]
+      }
+    ]
+  })
+}
+
+# Policy: SQS read access for Phase 67 Slack-inbound per-sandbox queue.
+# The sandbox-side poller (Plan 67-08) reads/deletes its own queue to consume
+# inbound Slack messages dispatched by the bridge Lambda. Scoped to the
+# sandbox's own queue ARN only — cross-sandbox read/write is prevented by IAM
+# (not just naming convention).
+#
+# The queue name follows the pattern: {resource_prefix}-slack-inbound-{sandbox_id}.fifo
+# where resource_prefix defaults to "km" (Phase 66 multi-instance aware).
+resource "aws_iam_role_policy" "ec2spot_slack_inbound_sqs" {
+  count = local.create_instance_role ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-slack-inbound"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SQSReadOwnInboundQueue"
+        Effect = "Allow"
+        Action = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ChangeMessageVisibility",
+        ]
+        # Sandbox can only access ITS OWN queue — var.sandbox_id and
+        # var.resource_prefix are interpolated at module-instance time.
+        # Wildcard on region and account prevents cross-region issues when
+        # the same module template is applied in multiple regions.
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-slack-inbound-${var.sandbox_id}.fifo"
+      }
+    ]
+  })
+}
+
+# Policy: SQS read access for Phase 97 github-inbound per-sandbox queue.
+# The sandbox-side source-aware poller drains/deletes its own github-inbound
+# FIFO to consume @-mention dispatches from the km-github-bridge Lambda.
+# Scoped to the sandbox's OWN queue ARN only (cross-sandbox access prevented by
+# IAM, not just naming). Queue name: {resource_prefix}-github-inbound-{sandbox_id}.fifo
+resource "aws_iam_role_policy" "ec2spot_github_inbound_sqs" {
+  count = local.create_instance_role ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-github-inbound"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SQSReadOwnGitHubInboundQueue"
+        Effect = "Allow"
+        Action = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ChangeMessageVisibility",
+        ]
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-github-inbound-${var.sandbox_id}.fifo"
+      }
+    ]
+  })
+}
+
+# Phase 68: PutObject permission for Slack transcript uploads.
+# Scoped to the sandbox's own prefix under transcripts/{sandbox_id}/* so a
+# compromised sandbox cannot overwrite another sandbox's transcripts. Gated
+# on var.artifacts_bucket — when empty, the policy is omitted entirely so
+# pre-Phase-68 callers continue to compile unchanged.
+resource "aws_iam_role_policy" "ec2spot_slack_transcript_s3" {
+  count = (local.create_instance_role && var.artifacts_bucket != "") ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-slack-transcript-s3"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3PutSandboxArtifacts"
+        Effect = "Allow"
+        Action = ["s3:PutObject"]
+        Resource = [
+          "arn:aws:s3:::${var.artifacts_bucket}/transcripts/${var.sandbox_id}/*",
+          "arn:aws:s3:::${var.artifacts_bucket}/captures/${var.sandbox_id}/*",
+          # learn/ has been written by the eBPF enforcer's observe flush since
+          # that feature shipped, with no grant to permit it — every PutObject
+          # returned 403, swallowed by a Warn and masked by the SSM RunCommand
+          # fallback in fetchEC2ObservedJSON. The missing grant is the defect;
+          # the soft failure is correct and must stay.
+          "arn:aws:s3:::${var.artifacts_bucket}/learn/${var.sandbox_id}/*",
+        ]
+      },
+    ]
+  })
+}
+
+# Phase 68: PutItem permission for the stream-message → transcript-offset map.
+# Wildcard region/account so the same module template works across regions
+# the sandbox might be launched in. Gated on var.slack_stream_messages_table_name —
+# when empty, the policy is omitted.
+resource "aws_iam_role_policy" "ec2spot_slack_transcript_ddb" {
+  count = (local.create_instance_role && var.slack_stream_messages_table_name != "") ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-slack-transcript-ddb"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "DDBPutItemStreamMessages"
+        Effect   = "Allow"
+        Action   = ["dynamodb:PutItem"]
+        Resource = "arn:aws:dynamodb:*:*:table/${var.slack_stream_messages_table_name}"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "ec2spot" {
+  count = local.create_instance_role ? 1 : 0
+
+  name = "${var.resource_prefix}-ec2spot-profile-${var.sandbox_id}-${var.region_label}"
+  role = aws_iam_role.ec2spot_ssm[0].name
+
+  tags = {
+    Name                 = "km-ec2spot-profile-${var.region_label}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
+  }
+}
+
+# Default user data: SSM agent only (no SSH config)
+locals {
+  default_user_data = <<-EOF
+    #!/bin/bash
+    yum update -y
+    yum install -y amazon-ssm-agent
+    systemctl enable amazon-ssm-agent
+    systemctl start amazon-ssm-agent
+  EOF
+}
+
+# Spot instance requests
+resource "aws_spot_instance_request" "ec2spot" {
+  for_each = local.ec2spot_map
+
+  ami                    = local.effective_ami_id
+  instance_type          = each.value.instance_type
+  spot_price             = format("%.6f", (data.aws_ec2_spot_price.price[each.key].spot_price * each.value.spot_price_multiplier) + each.value.spot_price_offset)
+  user_data_base64       = each.value.user_data_base64 != "" ? each.value.user_data_base64 : base64encode(local.default_user_data)
+  user_data              = null # use user_data_base64 instead
+  subnet_id              = each.value.subnet_id
+  availability_zone      = each.value.availability_zone
+  vpc_security_group_ids = [local.effective_security_group_id]
+  iam_instance_profile   = local.effective_instance_profile
+
+  # IMDSv2 enforcement — http_tokens = required means only v2 token-based requests allowed
+  metadata_options {
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    http_endpoint               = "enabled"
+  }
+
+  associate_public_ip_address = var.associate_public_ip
+  wait_for_fulfillment        = true
+
+  # Root volume sizing for spot instances (no encryption, no hibernation — spot instances
+  # are explicitly rejected in km pause; see pause.go lines 133-137)
+  dynamic "root_block_device" {
+    for_each = var.root_volume_size_gb > 0 ? [1] : []
+    content {
+      volume_size           = var.root_volume_size_gb
+      volume_type           = "gp3"
+      delete_on_termination = true
+    }
+  }
+
+  tags = {
+    Name                 = each.value.instance_name
+    "km:sandbox-id"      = each.value.sandbox_id
+    "km:managed-by"      = "klankermaker"
+    "km:resource-prefix" = var.resource_prefix
+  }
+
+  # Tag root EBS volumes so doctor's untagged-available-volume check can find them.
+  # Without volume_tags, root volumes only inherit provider default_tags and miss km:sandbox-id.
+  volume_tags = {
+    "km:sandbox-id"      = each.value.sandbox_id
+    "km:managed-by"      = "klankermaker"
+    "km:resource-prefix" = var.resource_prefix
+    Name                 = "km-sandbox-${each.value.sandbox_id}-root"
+  }
+
+  # Phase 124: bounded fulfillment waiter. Default 3m keeps a 4-AZ sweep within
+  # the Lambda 900s budget (~4 × 3m = 12m per full sweep round). A capacity-dry AZ
+  # will timeout here instead of hanging the terraform apply indefinitely.
+  # delete timeout gives terraform enough time to cancel and clean up the request.
+  timeouts {
+    create = var.spot_create_timeout
+    delete = "10m"
+  }
+
+  lifecycle {
+    ignore_changes = [
+      vpc_security_group_ids,
+      spot_price
+    ]
+  }
+}
+
+# Tag the actual EC2 instances (spot requests don't propagate tags)
+resource "aws_ec2_tag" "ec2spot_name" {
+  for_each = local.ec2spot_map
+
+  resource_id = aws_spot_instance_request.ec2spot[each.key].spot_instance_id
+  key         = "Name"
+  value       = each.value.instance_name
+}
+
+resource "aws_ec2_tag" "ec2spot_km_label" {
+  for_each = local.ec2spot_map
+
+  resource_id = aws_spot_instance_request.ec2spot[each.key].spot_instance_id
+  key         = "km:label"
+  value       = var.km_label
+}
+
+resource "aws_ec2_tag" "ec2spot_sandbox_id" {
+  for_each = local.ec2spot_map
+
+  resource_id = aws_spot_instance_request.ec2spot[each.key].spot_instance_id
+  key         = "km:sandbox-id"
+  value       = each.value.sandbox_id
+}
+
+resource "aws_ec2_tag" "ec2spot_resource_prefix" {
+  for_each = local.ec2spot_map
+
+  resource_id = aws_spot_instance_request.ec2spot[each.key].spot_instance_id
+  key         = "km:resource-prefix"
+  value       = var.resource_prefix
+}
+
+resource "aws_ec2_tag" "ec2spot_region" {
+  for_each = local.ec2spot_map
+
+  resource_id = aws_spot_instance_request.ec2spot[each.key].spot_instance_id
+  key         = "Region"
+  value       = var.region_label
+}
+
+# ============================================================
+# On-demand instances (when use_spot = false / --on-demand flag)
+# ============================================================
+
+resource "aws_instance" "ec2_ondemand" {
+  for_each = local.ec2_ondemand_map
+
+  ami                    = local.effective_ami_id
+  instance_type          = each.value.instance_type
+  user_data_base64       = each.value.user_data_base64 != "" ? each.value.user_data_base64 : base64encode(local.default_user_data)
+  subnet_id              = each.value.subnet_id
+  availability_zone      = each.value.availability_zone
+  vpc_security_group_ids = [local.effective_security_group_id]
+  iam_instance_profile   = local.effective_instance_profile
+
+  # Hibernation must be set at launch time; requires encrypted root volume (set below).
+  hibernation = var.hibernation_enabled
+
+  metadata_options {
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    http_endpoint               = "enabled"
+  }
+
+  associate_public_ip_address = var.associate_public_ip
+
+  # Root volume: emits when size override requested OR hibernation requires encrypted root.
+  # encrypted = var.hibernation_enabled ensures AWS allows hibernation at launch.
+  dynamic "root_block_device" {
+    for_each = var.root_volume_size_gb > 0 || var.hibernation_enabled ? [1] : []
+    content {
+      volume_size           = var.root_volume_size_gb > 0 ? var.root_volume_size_gb : null
+      volume_type           = "gp3"
+      encrypted             = var.hibernation_enabled
+      delete_on_termination = true
+    }
+  }
+
+  tags = {
+    Name                 = each.value.instance_name
+    "km:sandbox-id"      = each.value.sandbox_id
+    "km:managed-by"      = "klankermaker"
+    "km:label"           = var.km_label
+    "km:resource-prefix" = var.resource_prefix
+    "Region"             = var.region_label
+  }
+
+  # Tag root EBS volumes, same rationale as the spot path above: without
+  # volume_tags a root volume inherits only provider default_tags and misses
+  # km:sandbox-id, so doctor's untagged-available-volume check cannot find it.
+  # The on-demand path had no volume_tags at all — a pre-existing gap that also
+  # left the root volume without km:managed-by, which the cross-account launcher
+  # requires.
+  volume_tags = {
+    "km:sandbox-id"      = each.value.sandbox_id
+    "km:managed-by"      = "klankermaker"
+    "km:resource-prefix" = var.resource_prefix
+    Name                 = "km-sandbox-${each.value.sandbox_id}-root"
+  }
+
+  # Bounded launch waiter — the on-demand twin of the spot path's timeouts block
+  # above, and the fix for 126-UAT.md Finding L2.
+  #
+  # Phase 124 built the AZ sweep AND bounded the spot waiter, but never bounded
+  # THIS resource. Without a create timeout the AWS provider retries
+  # InsufficientInstanceCapacity internally for its 10m default, so the ICE never
+  # returns to km, capacity.ClassifyError is never reached, sweepDecision is never
+  # consulted, and the sweep cannot rotate off a dry AZ — maxAttempts can be 4 and
+  # the apply still never advances past attempt 1. In a remote create the
+  # create-handler Lambda is then killed at its 900s ceiling mid-apply, which
+  # additionally leaves a stale state lock and an untracked EBS volume behind
+  # (Finding L5).
+  #
+  # This went unnoticed because a cross-account launch is on-demand-ONLY: the
+  # launcher role grants no ec2:RequestSpotInstances and no ec2:CreateFleet (both
+  # verified implicitDeny), so the one path that could reach a scarce-capacity
+  # account was the one path with no bounded waiter.
+  #
+  # Same 3m budget and same arithmetic as spot: ~4 x 3m = 12m per full sweep round,
+  # inside the 900s Lambda budget. ClassifyError already maps the surfaced
+  # "InsufficientInstanceCapacity" to ClassICE, which rotates.
+  timeouts {
+    create = var.ondemand_create_timeout
+  }
+}
+
+# ============================================================
+# Additional EBS volume (Phase 33)
+# ============================================================
+
+resource "aws_ebs_volume" "additional" {
+  count             = var.additional_volume_size_gb > 0 ? 1 : 0
+  availability_zone = local.effective_azs[0]
+  size              = var.additional_volume_size_gb
+  encrypted         = var.additional_volume_encrypted
+  type              = "gp3"
+
+  tags = {
+    "km:sandbox-id"      = var.sandbox_id
+    "km:managed-by"      = "klankermaker"
+    "km:resource-prefix" = var.resource_prefix
+    Name                 = "km-sandbox-${var.sandbox_id}-data"
+  }
+}
+
+resource "aws_volume_attachment" "additional" {
+  count        = var.additional_volume_size_gb > 0 ? 1 : 0
+  device_name  = var.additional_volume_device_name
+  volume_id    = aws_ebs_volume.additional[0].id
+  instance_id  = length(local.ec2spot_map) > 0 ? aws_spot_instance_request.ec2spot[keys(local.ec2spot_map)[0]].spot_instance_id : aws_instance.ec2_ondemand[keys(local.ec2_ondemand_map)[0]].id
+  force_detach = true
+}
+
+# ============================================================
+# Phase 87 — Snapshot-backed EBS volumes (additionalSnapshots)
+# ============================================================
+# One aws_ebs_volume per entry, materialised from snapshot_id.
+# The source snapshot is referenced by ID only — terraform never touches the snapshot resource.
+# Volume lifecycle = sandbox lifecycle (destroyed with km destroy; snapshot survives).
+
+resource "aws_ebs_volume" "snapshot" {
+  for_each = { for i, s in var.additional_snapshots : tostring(i) => s }
+
+  availability_zone = local.effective_azs[0]
+  snapshot_id       = each.value.snapshot_id
+  # size: only override when explicit; null = inherit from snapshot
+  size      = (each.value.size_gb != null && each.value.size_gb > 0) ? each.value.size_gb : null
+  encrypted = each.value.encrypted # null = inherit from snapshot's encryption state
+  type      = "gp3"
+
+  tags = {
+    "km:sandbox-id"      = var.sandbox_id
+    "km:managed-by"      = "klankermaker"
+    "km:resource-prefix" = var.resource_prefix
+    "km:source-snapshot" = each.value.snapshot_id
+    Name                 = "${var.resource_prefix}-sandbox-${var.sandbox_id}-snap-${each.key}"
+  }
+}
+
+resource "aws_volume_attachment" "snapshot" {
+  for_each = { for i, s in var.additional_snapshots : tostring(i) => s }
+
+  device_name = each.value.device_name
+  volume_id   = aws_ebs_volume.snapshot[each.key].id
+  # Mirror the spot-vs-on-demand ternary from aws_volume_attachment.additional:
+  instance_id  = length(local.ec2spot_map) > 0 ? aws_spot_instance_request.ec2spot[keys(local.ec2spot_map)[0]].spot_instance_id : aws_instance.ec2_ondemand[keys(local.ec2_ondemand_map)[0]].id
+  force_detach = true
+}
+
+# ============================================================
+# Phase 89 — SOPS secrets bundle: KMS Decrypt + S3 GetObject
+# ============================================================
+# Grants the sandbox IAM role permission to:
+#   1. Decrypt the SOPS bundle using the per-install KMS key (scoped by alias)
+#   2. Fetch its own secrets bundle from S3 (sandboxes/{sandbox_id}/secrets.enc.yaml)
+#
+# ec2spot_sandbox_secrets_kms:
+#   Allows kms:Decrypt + kms:DescribeKey for any KMS key in the account that
+#   has alias/{resource_prefix}-sandbox-secrets. The kms:ResourceAliases
+#   condition scopes this to exactly the Phase 89 key, not the github-token key
+#   or any other KMS resource.
+#
+# ec2spot_sandbox_secrets_s3:
+#   Allows s3:GetObject for the sandbox's own bundle path only.
+#   Gated on var.artifacts_bucket != "" so pre-Phase-89 callers compile unchanged.
+
+resource "aws_iam_role_policy" "ec2spot_sandbox_secrets_kms" {
+  count = local.create_instance_role ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-sandbox-secrets-kms"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "KMSDecryptSandboxSecrets"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:DescribeKey"]
+        Resource = ["arn:aws:kms:*:${data.aws_caller_identity.current.account_id}:key/*"]
+        Condition = {
+          StringEquals = {
+            "kms:ResourceAliases" = "alias/${var.resource_prefix}-sandbox-secrets"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "ec2spot_sandbox_secrets_s3" {
+  count = (local.create_instance_role && var.artifacts_bucket != "") ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-sandbox-secrets-s3"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "S3GetOwnSecretsBundle"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "arn:aws:s3:::${var.artifacts_bucket}/sandboxes/${var.sandbox_id}/secrets.enc.yaml"
+      }
+    ]
+  })
+}
+
+# ---------------------------------------------------------------------------
+# Profile-declared secret paths -> scoped ssm:GetParameter
+# ---------------------------------------------------------------------------
+# A separate role policy rather than another statement in the existing document,
+# so the zero-path case creates no resource at all and the existing policy stays
+# byte-identical.
+#
+# Resource ARNs are exact paths, not wildcards: an SSM parameter "/km/wiz/x" is
+# addressed as "...:parameter/km/wiz/x", so the leading slash of the path
+# supplies the separator after "parameter".
+resource "aws_iam_role_policy" "ec2spot_profile_secret_paths" {
+  count = (local.create_instance_role && length(var.secret_paths) > 0) ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-profile-secret-paths"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SSMReadProfileSecretPaths"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          for p in var.secret_paths :
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter${p}"
+        ]
+      }
+    ]
+  })
+}
