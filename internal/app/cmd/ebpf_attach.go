@@ -129,6 +129,40 @@ func hostDenier(staticHosts []string, netpolicyFile string) *netpolicy.Denier {
 	return netpolicy.NewDenier(staticHosts, store)
 }
 
+// hostPinner mirrors hostDenier for the pre-seed loop's pin check. A nil
+// netpolicyPins yields a Pinner over a nil store, which allows everything —
+// the correct default for a sandbox that has never pinned.
+func hostPinner(netpolicyPins string) *netpolicy.Pinner {
+	var store *netpolicy.PinStore
+	if netpolicyPins != "" {
+		store = netpolicy.NewPinStore(netpolicyPins, netpolicy.DefaultReloadInterval)
+	}
+	return netpolicy.NewPinner(store)
+}
+
+// shouldSeedHost reports whether host may be pre-resolved and its IPs seeded
+// into the boot-time BPF allow trie.
+//
+// This is the ONE enforcement path that bypasses the live resolver.IsAllowed
+// check pins otherwise gate: pins live under /var/lib specifically so a
+// reboot can't widen policy back out, but this loop runs on every
+// ebpf-attach start (boot, resume) and seeds IPs directly, ahead of any
+// per-query decision. Without consulting pinner here, a box that pinned a
+// host out would have that host's IP re-seeded straight into the trie on the
+// very next reboot — the pin would report success while nothing enforced it,
+// on the exact component the design calls most load-bearing.
+//
+// Deny is checked first, mirroring every other consultation site in this
+// package: pins narrow in addition to denies, they never replace them. Pure
+// and side-effect free so this boot-time decision is testable without a
+// running BPF program.
+func shouldSeedHost(host string, denier *netpolicy.Denier, pinner *netpolicy.Pinner) bool {
+	if denier.IsDenied(host) {
+		return false
+	}
+	return pinner.Allows(host)
+}
+
 // parsefirewallMode converts a mode string to the BPF uint16 constant.
 func parseFirewallMode(mode string) (uint16, error) {
 	switch strings.ToLower(mode) {
@@ -372,11 +406,11 @@ func runEbpfAttach(
 	// because connect4 blocks before DNS resolution can populate the trie.
 	var hostsToResolve []string
 	allowAllHosts := false
-	// denyMatcher reuses the resolver's matching rules so a host cannot be
-	// refused by the resolver yet seeded into the BPF trie here. It exists only
-	// to answer IsDenied, so it is built with a nil pinner — pins only narrow
-	// the allow side, which this matcher never evaluates.
-	denyMatcher := resolver.NewAllowlist(nil, hostDenier(deniedHostList, netpolicyFile), nil)
+	// preSeedDenier/preSeedPinner gate exactly what shouldSeedHost decides on
+	// (see its doc comment for why the pin check here matters more than it
+	// looks — this is the one path a reboot exercises).
+	preSeedDenier := hostDenier(deniedHostList, netpolicyFile)
+	preSeedPinner := hostPinner(netpolicyPins)
 	if allowedHosts != "" {
 		for _, h := range strings.Split(allowedHosts, ",") {
 			h = strings.TrimSpace(h)
@@ -389,11 +423,15 @@ func runEbpfAttach(
 			}
 			// Strip leading dot from DNS suffix entries (e.g. ".amazonaws.com")
 			h = strings.TrimPrefix(h, ".")
-			if denyMatcher.IsDenied(h) {
+			if !shouldSeedHost(h, preSeedDenier, preSeedPinner) {
+				reason := "ebpf_host_denied"
+				if !preSeedDenier.IsDenied(h) {
+					reason = "ebpf_host_pinned_out"
+				}
 				logger.Info().
-					Str("event_type", "ebpf_host_denied").
+					Str("event_type", reason).
 					Str("host", h).
-					Msg("skipping pre-resolve of denied host")
+					Msg("skipping pre-resolve of host excluded by deny or pin policy")
 				continue
 			}
 			hostsToResolve = append(hostsToResolve, h)
