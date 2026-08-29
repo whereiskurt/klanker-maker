@@ -161,3 +161,54 @@ func TestExtendCmd_RemoteInvalidSandboxID(t *testing.T) {
 		t.Errorf("expected 0 publisher calls for invalid ID, got %d", len(pub.calls))
 	}
 }
+
+
+// TestExtendMaxLifetime_DaySuffix pins the day-suffix parse fix.
+//
+// The profile schema's pattern for maxLifetime (like ttl and idleTimeout) accepts
+// a "d" suffix, and a lifetime cap is naturally written as "3d". CheckMaxLifetime
+// used Go's time.ParseDuration directly, which only understands ns..h, so every
+// day-suffixed cap failed with "invalid maxLifetime" and blocked the extend
+// outright -- the exact opposite of enforcing the cap.
+func TestExtendMaxLifetime_DaySuffix(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:   "sb-abc004",
+		CreatedAt:   createdAt,
+		MaxLifetime: "3d", // max expiry = 2026-03-23 12:00 UTC
+	}
+
+	// Within the cap: 2 days out.
+	within := time.Date(2026, 3, 22, 12, 0, 0, 0, time.UTC)
+	if err := cmd.CheckMaxLifetime(meta, within); err != nil {
+		t.Errorf("expected 3d cap to permit a 2-day extend, got: %v", err)
+	}
+
+	// Beyond the cap: 4 days out. This must fail because it exceeds the cap,
+	// not because the duration failed to parse.
+	beyond := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	err := cmd.CheckMaxLifetime(meta, beyond)
+	if err == nil {
+		t.Fatal("expected 3d cap to reject a 4-day extend")
+	}
+	if strings.Contains(err.Error(), "invalid maxLifetime") {
+		t.Errorf("3d must parse; got a parse error instead of a cap error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "max lifetime") {
+		t.Errorf("expected a cap-exceeded message, got: %v", err)
+	}
+}
+
+// TestExtendMaxLifetime_StillRejectsGarbage confirms the day-aware parser did not
+// become an accept-anything path: a genuinely malformed cap still errors.
+func TestExtendMaxLifetime_StillRejectsGarbage(t *testing.T) {
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:   "sb-abc005",
+		CreatedAt:   time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC),
+		MaxLifetime: "forever",
+	}
+	err := cmd.CheckMaxLifetime(meta, time.Date(2026, 3, 21, 12, 0, 0, 0, time.UTC))
+	if err == nil || !strings.Contains(err.Error(), "invalid maxLifetime") {
+		t.Errorf("expected an invalid-maxLifetime error for %q, got: %v", meta.MaxLifetime, err)
+	}
+}
