@@ -1146,11 +1146,6 @@ type Tracer struct {
 	rd     *ringbuf.Reader
 	out    chan execlog.Record
 	closed chan struct{}
-	// bootWall is the wall-clock time the machine booted, used to convert the
-	// kernel's CLOCK_BOOTTIME stamps into absolute times. It is computed ONCE:
-	// deriving it per record would let clock adjustment jitter reorder the
-	// trace, and the join depends on ordering being monotonic.
-	bootWall time.Time
 }
 
 // NewTracer loads the BPF programs, attaches all four tracepoints, and starts
@@ -1191,15 +1186,6 @@ func NewTracer() (*Tracer, error) {
 		return nil, fmt.Errorf("open ringbuf: %w", err)
 	}
 	t.rd = rd
-
-	boot, err := bootWallClock()
-	if err != nil {
-		t.rd.Close()
-		t.closeLinks()
-		t.objs.Close()
-		return nil, err
-	}
-	t.bootWall = boot
 
 	go t.drain()
 	return t, nil
@@ -1266,7 +1252,7 @@ func (t *Tracer) decode(b []byte) (execlog.Record, bool) {
 	}
 
 	r := execlog.Record{
-		TS:        t.bootWall.Add(time.Duration(h.TSNS)),
+		TS:        wallTimeOf(h.TSNS),
 		PID:       int(h.PID),
 		PPID:      int(h.PPID),
 		UID:       int(h.UID),
@@ -1309,19 +1295,33 @@ func cstr(b []byte) string {
 	return string(b)
 }
 
-// bootWallClock returns the wall-clock instant the machine booted.
+// wallTimeOf converts a kernel CLOCK_BOOTTIME stamp into wall-clock time by
+// measuring backwards from now, rather than forwards from a boot instant
+// computed once at startup.
 //
-// The kernel stamps events with CLOCK_BOOTTIME (nanoseconds since boot,
-// including suspend), so absolute times need this offset. CLOCK_BOOTTIME rather
-// than CLOCK_MONOTONIC because a sandbox can be paused and resumed, and a
-// monotonic clock that stops across a hibernate would compress hours of trace
+// This shape is deliberate and EC2-specific. km sandboxes hibernate and resume
+// (`spec.runtime.hibernation`, set on the dc34 lineage), and they run chrony,
+// so wall clock is stepped by NTP after a resume while the daemon process keeps
+// running. A boot instant captured at daemon start would silently skew every
+// timestamp after the first hibernate by however far the clock was corrected —
+// and the join is a time-window comparison, so skew there does not look like a
+// bug, it looks like flows belonging to different processes.
+//
+// CLOCK_BOOTTIME rather than CLOCK_MONOTONIC because BOOTTIME includes suspend:
+// a monotonic clock that stops across hibernate would compress hours of trace
 // into an instant.
-func bootWallClock() (time.Time, error) {
+//
+// The cost is one clock_gettime per record, which is a vDSO call (~20ns) and
+// nothing beside the JSON marshal and file write that follow it.
+func wallTimeOf(evBootNS uint64) time.Time {
 	var ts unix.Timespec
 	if err := unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts); err != nil {
-		return time.Time{}, fmt.Errorf("clock_gettime(BOOTTIME): %w", err)
+		// Falling back to now is honest: the record is being decoded within
+		// microseconds of the event, so now is a very good approximation, and
+		// a zero time would silently drop the record out of every window query.
+		return time.Now()
 	}
-	return time.Now().Add(-time.Duration(ts.Nano())), nil
+	return time.Now().Add(-(time.Duration(uint64(ts.Nano()) - evBootNS)))
 }
 ```
 
@@ -2270,6 +2270,24 @@ func TestUserData_ExecLogUnitCarriesRegionAndSavesOnStop(t *testing.T) {
 	if !contains(out, "ExecStop=/opt/km/bin/km-netpolicy execs save") {
 		t.Error("a graceful stop must save the trace without anyone remembering")
 	}
+	// A box where the tracer genuinely cannot load should show one failed unit,
+	// not restart every few seconds for the life of the sandbox.
+	if contains(out, "km-execlog") && !contains(out, "StartLimitBurst") {
+		t.Error("km-execlog.service must give up rather than crash-loop forever")
+	}
+}
+
+// Tracepoint attach resolves a tracepoint id through tracefs. AL2023 and the
+// Ubuntu AMIs normally mount it, but a baked AMI need not, and the failure
+// reads as a permissions error rather than a missing filesystem.
+func TestUserData_MountsTracefsBeforeTracing(t *testing.T) {
+	out, err := generateUserData(testUserDataParams())
+	if err != nil {
+		t.Fatalf("generateUserData: %v", err)
+	}
+	if !contains(out, "/sys/kernel/tracing") {
+		t.Error("userdata must ensure tracefs is mounted for tracepoint attach")
+	}
 }
 ```
 
@@ -2308,6 +2326,14 @@ In the unconditional block that already creates `{{ .FlowLogDir }}` and
 # unprivileged profiles that are meant to be the tighter ones.
 mkdir -p {{ .ExecLogDir }}
 chmod 700 {{ .ExecLogDir }}
+
+# Tracepoint attach resolves a tracepoint id by reading tracefs, so tracefs has
+# to be mounted before km-execlog starts. AL2023 and the Ubuntu AMIs normally
+# mount it, but "normally" is not a guarantee across an AMI bump or a baked
+# image (km ami bake), and the failure mode is an attach error that reads as a
+# permissions problem rather than a missing filesystem. Idempotent and silent
+# when it is already mounted.
+mountpoint -q /sys/kernel/tracing || mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null || true
 ```
 
 - [ ] **Step 5: Render the unit**
@@ -2338,12 +2364,20 @@ Environment=KM_SANDBOX_ID={{ .SandboxID }}
 # bucket problem rather than a config one.
 Environment=AWS_REGION={{ .AWSRegion }}
 ExecStart=/opt/km/bin/km-netpolicy execs-daemon
-# A graceful stop saves the trace, so km stop / km pause / an instance
-# terminate do not need anyone to have remembered. Best-effort: never blocks
-# the stop, and a hard power-off still loses the unsaved tail.
+# A graceful stop saves the trace, so km stop / km pause / an EC2 terminate do
+# not need anyone to have remembered. EC2 sends an ACPI shutdown and waits
+# before forcing, so systemd stops this unit while the network is still up —
+# which is why After=network-online.target is the right ordering for the save
+# as well as the start. Best-effort: never blocks the stop, and a hard
+# power-off still loses the unsaved tail.
 ExecStop=/opt/km/bin/km-netpolicy execs save
-Restart=always
-RestartSec=2
+Restart=on-failure
+RestartSec=5
+# Give up rather than loop forever. A box where the tracer genuinely cannot
+# load should show one failed unit that km doctor and journalctl can see, not
+# a restart every few seconds for the life of the sandbox.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -2599,6 +2633,28 @@ spec §8, each with the exact command and its expected output:
    `cat /var/lib/km/execs/execs.jsonl.rotations` reports a plausible count.
 7. On a `profiles/uat-proxy-census.yaml` box, `who <host>` prints the explanation
    naming `ebpf`/`both` rather than `(none)`.
+
+The EC2 lifecycle checks — the ones no unit test reaches, and the reason this
+phase is EC2-only in practice:
+
+8. **Pause/resume keeps the trace and keeps its timestamps sane.** `km pause`,
+   then `km resume`, then `km-netpolicy execs --since 5m` after running a fresh
+   command. `/var/lib` is on the EBS root volume so the store must survive, and
+   the new records must carry timestamps near *now* — not skewed by however long
+   the box was hibernated. This is what `wallTimeOf` measuring backwards from
+   now exists for; a stale boot instant fails exactly here and nowhere else.
+9. **A real terminate saves.** `km destroy --remote` on a box with a non-empty
+   trace, then `aws s3 ls s3://<artifacts>/execs/<id>/`. EC2 sends ACPI shutdown
+   before forcing, so `ExecStop` should land a final object. If it does not, say
+   so in the UAT rather than quietly relying on the manual `save` — the docs
+   promise this and the promise has to be true or be removed.
+10. **BPF coexistence.** On an `ebpf`/`both` box confirm `km-ebpf-enforcer` and
+    `km-execlog` are both `active` and that network enforcement still works
+    (one allowed host connects, `evil.example.com` is blocked). km now loads
+    cgroup programs, SSL uprobes and four tracepoints on one kernel; on a box
+    that also extends `base/security/wiz` the sensor adds its own kprobes. That
+    combination has never been run and is the single most likely place for this
+    phase to interact badly with something already shipped.
 
 - [ ] **Step 5: Update `CLAUDE.md`**
 
