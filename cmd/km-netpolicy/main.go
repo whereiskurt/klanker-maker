@@ -66,6 +66,9 @@ Usage:
   km-netpolicy capture stop                  stop the running capture and upload it
   km-netpolicy capture status                show whether a capture is running
   km-netpolicy capture list                  list finished captures
+  km-netpolicy execs [--since 10m] [--uid N] [--failed] [--json]
+                                             what this sandbox executed
+  km-netpolicy who <host>                    which process reached <host>
 
 A pattern is a bare hostname, optionally with a leading dot. It blocks the apex
 AND every subdomain: "evil.example.com" also blocks "api.evil.example.com".
@@ -196,6 +199,21 @@ func run(args []string, o opts) int {
 		return runCapture(args[1:], o)
 	case "capture-daemon":
 		return runCaptureDaemon(o)
+	case "execs":
+		if err := runExecs(o, args[1:]); err != nil {
+			return 1
+		}
+		return 0
+	case "who":
+		if err := runWho(o, args[1:]); err != nil {
+			return 1
+		}
+		return 0
+	case "execs-daemon":
+		if err := runExecsDaemon(o); err != nil {
+			return 1
+		}
+		return 0
 	case "-h", "--help", "help":
 		fmt.Fprint(o.stdout, usage)
 		return 0
