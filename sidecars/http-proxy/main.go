@@ -55,6 +55,16 @@ func main() {
 		ev.Msg("")
 	}
 
+	// KM_NETPOLICY_PINS is set only when the sandbox has captured at least one
+	// pin generation. Registered unconditionally (mirrors the DNS proxy) so a
+	// pinner constructed over a not-yet-written file allows everything until
+	// the sandbox's first pin lands.
+	var pinStore *netpolicy.PinStore
+	if pf := os.Getenv("KM_NETPOLICY_PINS"); pf != "" {
+		pinStore = netpolicy.NewPinStore(pf, netpolicy.DefaultReloadInterval)
+	}
+	proxyOpts = append(proxyOpts, httpproxy.WithPinner(netpolicy.NewPinner(pinStore)))
+
 	// Budget enforcement state — hoisted so both goproxy and transparent listener
 	// can share the same DynamoDB client, model rates, and budget update callback.
 	budgetEnabled := strings.EqualFold(getEnv("KM_BUDGET_ENABLED", "false"), "true")

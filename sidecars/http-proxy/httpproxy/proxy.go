@@ -56,6 +56,7 @@ type proxyConfig struct {
 	actionQuota *actionQuotaOptions
 	githubRepos []string
 	denier      *netpolicy.Denier
+	pinner      *netpolicy.Pinner
 	httpsOnly   bool
 	intercepts  []Intercept
 }
@@ -104,6 +105,16 @@ func WithDeniedHosts(denied []string) ProxyOption {
 func WithDenier(denier *netpolicy.Denier) ProxyOption {
 	return func(_ *goproxy.ProxyHttpServer, cfg *proxyConfig) {
 		cfg.denier = denier
+	}
+}
+
+// WithPinner narrows the general allowlist by pinner, which is consulted AFTER
+// IsHostAllowed at every site that gates on it. A nil pinner (or one over an
+// absent pin file) allows everything, so a sandbox that has never pinned is
+// byte-identical to before pins existed.
+func WithPinner(pinner *netpolicy.Pinner) ProxyOption {
+	return func(_ *goproxy.ProxyHttpServer, cfg *proxyConfig) {
+		cfg.pinner = pinner
 	}
 }
 
@@ -193,6 +204,15 @@ func IsHostAllowed(host string, allowed []string) bool {
 // be blocked at one layer and reachable at the other.
 func IsHostDenied(host string, denied []string) bool {
 	return netpolicy.Match(host, denied)
+}
+
+// IsHostPinnedOut reports whether host is excluded by the runtime allow pins.
+//
+// Callers must apply this AFTER IsHostDenied and IsHostAllowed. Pins narrow an
+// allowlist; they never override a deny and never grant what the profile did
+// not already allow.
+func IsHostPinnedOut(host string, pinner *netpolicy.Pinner) bool {
+	return !pinner.Allows(host)
 }
 
 // InjectTraceContext injects W3C traceparent and tracestate headers into h using
@@ -758,6 +778,15 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				Msg("")
 			return goproxy.RejectConnect, host
 		}
+		if IsHostPinnedOut(host, cfg.pinner) {
+			log.Info().
+				Str("sandbox_id", sandboxID).
+				Str("event_type", "http_denied").
+				Str("host", host).
+				Bool("pinned_out", true).
+				Msg("")
+			return goproxy.RejectConnect, host
+		}
 
 		// Inject W3C traceparent into the original CONNECT request headers.
 		if ctx.Req != nil {
@@ -803,6 +832,15 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				Str("host", req.Host).
 				Msg("")
 			return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusForbidden, "Blocked by km sandbox policy")
+		}
+		if IsHostPinnedOut(req.Host, cfg.pinner) {
+			log.Info().
+				Str("sandbox_id", sandboxID).
+				Str("event_type", "http_denied").
+				Str("host", req.Host).
+				Bool("pinned_out", true).
+				Msg("")
+			return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusForbidden, "Blocked: host is excluded by the km sandbox allow pins")
 		}
 		return req, nil
 	})

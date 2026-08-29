@@ -39,7 +39,17 @@ func main() {
 		denier = netpolicy.NewDenier(deniedSuffixes, runtimeStore)
 	}
 
-	handler := dnsproxy.NewHandler(allowedSuffixes, denier, upstream, sandboxID)
+	// KM_NETPOLICY_PINS is set only when the sandbox has captured at least one
+	// pin generation. A nil pinner (unset env, or file not yet written) allows
+	// everything, so an unpinned box behaves exactly as it did before pins
+	// existed.
+	var pinStore *netpolicy.PinStore
+	if pf := os.Getenv("KM_NETPOLICY_PINS"); pf != "" {
+		pinStore = netpolicy.NewPinStore(pf, netpolicy.DefaultReloadInterval)
+	}
+	pinner := netpolicy.NewPinner(pinStore)
+
+	handler := dnsproxy.NewHandler(allowedSuffixes, denier, pinner, upstream, sandboxID)
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", handler)
 

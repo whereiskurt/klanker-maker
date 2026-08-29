@@ -141,6 +141,31 @@ func FormatPinBlock(n int, at time.Time, patterns []string) string {
 	return b.String()
 }
 
+// Pinner answers the allow-side question every egress decision needs once pins
+// exist: does this host survive every pin generation?
+//
+// It is the intersection counterpart to Denier. A nil Pinner, or one over an
+// absent file, allows everything — so a box that has never pinned behaves
+// exactly as it did before pins existed.
+//
+// Like Denier it is consulted per decision rather than snapshotted, which is
+// what makes a pin taken at 10:00 effective on the next request without a
+// restart.
+type Pinner struct {
+	store *PinStore
+}
+
+// NewPinner wraps a PinStore. A nil store yields a Pinner that allows all.
+func NewPinner(store *PinStore) *Pinner { return &Pinner{store: store} }
+
+// Allows reports whether host survives every pinned generation.
+func (p *Pinner) Allows(host string) bool {
+	if p == nil || p.store == nil {
+		return true
+	}
+	return PinsAllow(host, p.store.Generations())
+}
+
 // PinsAllow reports whether host survives every pinned generation.
 //
 // No generations means unpinned, so everything passes and a box behaves exactly

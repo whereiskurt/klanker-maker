@@ -70,6 +70,15 @@ type ResolverConfig struct {
 	// stayed resolvable. Empty unless the profile sets runtimeDeny.
 	RuntimeDenyFile string
 
+	// PinFile, when set, is a file the sandbox has captured allow-pin
+	// generations into. It is polled rather than snapshotted, exactly like
+	// RuntimeDenyFile.
+	//
+	// This matters most in ebpf-only enforcement, where the resolver IS the DNS
+	// server: without it, a pin would report success while every host stayed
+	// resolvable. Empty unless the sandbox has taken at least one pin.
+	PinFile string
+
 	// SandboxID is included in log fields for correlation.
 	SandboxID string
 
@@ -139,7 +148,7 @@ func NewResolver(cfg ResolverConfig) *Resolver {
 
 	return &Resolver{
 		cfg:           cfg,
-		allowlist:     NewAllowlist(cfg.AllowedSuffixes, denierFor(cfg)),
+		allowlist:     NewAllowlist(cfg.AllowedSuffixes, denierFor(cfg), pinnerFor(cfg)),
 		upstream:      upstream,
 		sweepEvery:    sweepEvery,
 		minIPLifetime: minLife,

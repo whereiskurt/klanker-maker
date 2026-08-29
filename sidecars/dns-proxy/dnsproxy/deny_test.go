@@ -22,7 +22,7 @@ func startDNSProxyWithDeny(t *testing.T, allowed, denied []string, upstreamAddr 
 	listenAddr := pc.LocalAddr().String()
 	pc.Close()
 
-	handler := dnsproxy.NewHandler(allowed, netpolicy.NewDenier(denied, nil), upstreamAddr, "test-sandbox")
+	handler := dnsproxy.NewHandler(allowed, netpolicy.NewDenier(denied, nil), nil, upstreamAddr, "test-sandbox")
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", handler)
 

@@ -51,6 +51,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		deniedDNS     string
 		deniedHosts   string
 		netpolicyFile string
+		netpolicyPins string
 		proxyHosts    string
 		cgroupPath    string
 		enableTLS     bool
@@ -68,7 +69,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		Hidden: true, // internal command, not user-facing
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
-				allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, proxyHosts, cgroupPath,
+				allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, netpolicyPins, proxyHosts, cgroupPath,
 				enableTLS, allowedRepos, httpProxyPID, observe, observeOutput,
 				minIPLifetime)
 		},
@@ -91,6 +92,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Comma-separated hosts to block outright; takes precedence over --allowed-hosts")
 	cmd.Flags().StringVar(&netpolicyFile, "netpolicy-file", "",
 		"Path to the runtime deny list the sandbox may append to; empty disables runtime narrowing")
+	cmd.Flags().StringVar(&netpolicyPins, "netpolicy-pins", "",
+		"path to the runtime allow-pin file (empty disables pin narrowing)")
 	cmd.Flags().StringVar(&proxyHosts, "proxy-hosts", "",
 		"Comma-separated hosts whose resolved IPs are redirected to L7 proxy")
 	cmd.Flags().StringVar(&cgroupPath, "cgroup", "",
@@ -201,7 +204,7 @@ func runEbpfAttach(
 	sandboxID string,
 	dnsPort, httpPort uint32,
 	firewallMode string,
-	allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, proxyHosts string,
+	allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, netpolicyPins, proxyHosts string,
 	cgroupOverride string,
 	enableTLS bool,
 	allowedRepos string,
@@ -342,6 +345,7 @@ func runEbpfAttach(
 			AllowedSuffixes: dnsSuffixes,
 			DeniedSuffixes:  deniedDNSSuffixes,
 			RuntimeDenyFile: netpolicyFile,
+			PinFile:         netpolicyPins,
 			MapUpdater:      enforcer,
 			ProxyHosts:      proxyHostList,
 			MinIPLifetime:   minIPLifetime,
@@ -369,8 +373,10 @@ func runEbpfAttach(
 	var hostsToResolve []string
 	allowAllHosts := false
 	// denyMatcher reuses the resolver's matching rules so a host cannot be
-	// refused by the resolver yet seeded into the BPF trie here.
-	denyMatcher := resolver.NewAllowlist(nil, hostDenier(deniedHostList, netpolicyFile))
+	// refused by the resolver yet seeded into the BPF trie here. It exists only
+	// to answer IsDenied, so it is built with a nil pinner — pins only narrow
+	// the allow side, which this matcher never evaluates.
+	denyMatcher := resolver.NewAllowlist(nil, hostDenier(deniedHostList, netpolicyFile), nil)
 	if allowedHosts != "" {
 		for _, h := range strings.Split(allowedHosts, ",") {
 			h = strings.TrimSpace(h)

@@ -41,7 +41,12 @@ func IsDenied(name string, denied []string) bool {
 // denier may be nil, which is the shape for a sandbox with no denies at all. It
 // is consulted per query rather than snapshotted, so a deny the sandbox appends
 // to its runtime list at 10:00 is enforced on the next query without a restart.
-func NewHandler(allowedSuffixes []string, denier *netpolicy.Denier, upstreamAddr, sandboxID string) dns.HandlerFunc {
+//
+// pinner may also be nil, which is the shape for a sandbox that has never
+// pinned. It is applied as a conjunction AFTER the existing allow check, never
+// as a replacement for it — that ordering is what keeps the change monotone:
+// A && P is a subset of A for any P.
+func NewHandler(allowedSuffixes []string, denier *netpolicy.Denier, pinner *netpolicy.Pinner, upstreamAddr, sandboxID string) dns.HandlerFunc {
 	// Ensure upstream has a port.
 	upstream := upstreamAddr
 	if _, _, err := net.SplitHostPort(upstream); err != nil {
@@ -60,7 +65,8 @@ func NewHandler(allowedSuffixes []string, denier *netpolicy.Denier, upstreamAddr
 		domain := q.Name
 		// Deny is evaluated first and beats every allow, including "*".
 		denied := denier.IsDenied(domain)
-		allowed := !denied && IsAllowed(domain, allowedSuffixes)
+		preAllowed := !denied && IsAllowed(domain, allowedSuffixes)
+		allowed := preAllowed && pinner.Allows(domain)
 
 		log.Info().
 			Str("sandbox_id", sandboxID).
@@ -68,6 +74,7 @@ func NewHandler(allowedSuffixes []string, denier *netpolicy.Denier, upstreamAddr
 			Str("domain", domain).
 			Bool("allowed", allowed).
 			Bool("denied", denied).
+			Bool("pinned_out", preAllowed && !pinner.Allows(domain)).
 			Msg("")
 
 		if !allowed {

@@ -23,7 +23,7 @@ func startDNSProxyWithDenier(t *testing.T, allowed []string, d *netpolicy.Denier
 	listenAddr := pc.LocalAddr().String()
 	pc.Close()
 
-	handler := dnsproxy.NewHandler(allowed, d, upstreamAddr, "test-sandbox")
+	handler := dnsproxy.NewHandler(allowed, d, nil, upstreamAddr, "test-sandbox")
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", handler)
 
