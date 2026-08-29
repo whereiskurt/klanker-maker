@@ -34,6 +34,16 @@ type captureState struct {
 	stop   chan struct{}
 	done   chan struct{}
 	err    error
+
+	// collected guards the one-time finish work (clear active, upload) against
+	// running twice when a capture ends on its own bound and `capture stop`
+	// arrives at the same moment.
+	collected bool
+	// lastMsg is the outcome of the most recently finished capture, so a
+	// self-completed one can still report where its file went.
+	lastMsg   string
+	lastPath  string
+	lastS3URI string
 }
 
 // runCaptureDaemon serves capture requests over a Unix socket as root.
@@ -68,12 +78,16 @@ func runCaptureDaemon(o opts) int {
 	if err := os.Chmod(o.captureSock, 0o660); err != nil {
 		fmt.Fprintf(o.stderr, "%s capture-daemon: chmod: %v\n", prog, err)
 	}
-	if g, gerr := user.LookupGroup("sandbox"); gerr == nil {
-		if gid, cerr := strconv.Atoi(g.Gid); cerr == nil {
-			_ = os.Chown(o.captureSock, 0, gid)
+	// A silently failed chown leaves the socket root:root 0660, and the agent
+	// then meets an unexplained permission error on the one verb the whole
+	// daemon exists for. Diagnose it, and widen so the daemon is still usable.
+	if err := grantSandboxGroup(o.captureSock); err != nil {
+		fmt.Fprintf(o.stderr,
+			"%s capture-daemon: cannot give the sandbox group access to %s (%v); "+
+				"falling back to 0666\n", prog, o.captureSock, err)
+		if cerr := os.Chmod(o.captureSock, 0o666); cerr != nil {
+			fmt.Fprintf(o.stderr, "%s capture-daemon: chmod 0666: %v\n", prog, cerr)
 		}
-	} else {
-		_ = os.Chmod(o.captureSock, 0o666)
 	}
 
 	st := &captureState{}
@@ -84,6 +98,21 @@ func runCaptureDaemon(o opts) int {
 		}
 		go serveCapture(conn, st, o)
 	}
+}
+
+// grantSandboxGroup chowns path to root:sandbox so the unprivileged agent can
+// use it. Returns an error when the sandbox group does not exist or the chown
+// fails, leaving the caller to decide how to degrade.
+func grantSandboxGroup(path string) error {
+	g, err := user.LookupGroup("sandbox")
+	if err != nil {
+		return err
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return err
+	}
+	return os.Chown(path, 0, gid)
 }
 
 // serveCapture handles one request/response exchange.
@@ -158,6 +187,10 @@ func (s *captureState) start(req captureReq, o opts) captureResp {
 		unix.Close(fd)
 		return captureResp{OK: false, Msg: "create capture file: " + err.Error()}
 	}
+	// `capture list` hands the caller these paths, and the caller is the
+	// unprivileged sandbox agent — a file it cannot open is a path that lies.
+	// Group-read for the sandbox group, exactly as the daemon socket is.
+	grantSandboxGroup(path)
 	w, err := pcap.NewWriter(f, pcap.DefaultSnaplen)
 	if err != nil {
 		f.Close()
@@ -165,17 +198,62 @@ func (s *captureState) start(req captureReq, o opts) captureResp {
 		return captureResp{OK: false, Msg: "pcap header: " + err.Error()}
 	}
 
-	s.active, s.path, s.err = true, path, nil
+	s.active, s.path, s.err, s.collected = true, path, nil, false
 	s.stop = make(chan struct{})
 	s.done = make(chan struct{})
+	done := s.done
 	go s.loop(fd, f, w, dur, req.MaxSize)
+
+	// A capture that hits its own duration or size bound finishes without anyone
+	// asking. Without this it would leave active=true forever: `status` would
+	// keep claiming it was capturing and `start` would keep refusing, on a
+	// diagnostic tool where a wrong status is worse than usual. Collecting here
+	// also means the pcap is uploaded, which is what the operator was promised.
+	go func() {
+		<-done
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.collectLocked(o)
+	}()
 
 	return captureResp{OK: true, Msg: fmt.Sprintf(
 		"capturing to %s (max %s / %d bytes)", path, dur, req.MaxSize)}
 }
 
+// collectLocked finishes a capture whose loop has already exited: clears the
+// active flag and uploads. Idempotent, so the self-completion goroutine and an
+// explicit `capture stop` racing each other do the work exactly once. Caller
+// holds s.mu.
+func (s *captureState) collectLocked(o opts) {
+	if s.collected || !s.active {
+		return
+	}
+	s.collected, s.active = true, false
+	s.lastPath = s.path
+
+	msg := "stopped " + s.path
+	if s.err != nil {
+		msg = fmt.Sprintf("stopped %s (with error: %v)", s.path, s.err)
+	}
+	// Upload is a convenience; the file on disk is the deliverable. A failed
+	// upload must not lose the capture, so it is reported and the local file
+	// left in place — the same stance the learn flush takes.
+	if uri, err := uploadCapture(s.path, o); err != nil {
+		msg += fmt.Sprintf(" (S3 upload failed, file kept locally: %v)", err)
+	} else {
+		s.lastS3URI = uri
+	}
+	s.lastMsg = msg
+}
+
 // loop streams frames until any bound is hit. Both bounds are enforced here,
 // not just the one the operator was thinking about when they typed the command.
+//
+// Hitting --max-size STOPS the capture; it does not ring-rotate. For a bounded
+// diagnostic that is the better behaviour: a ring would keep the last N bytes
+// and silently discard the beginning of the trace, which on a "why did this
+// connection fail" question is usually the part that matters. Stopping leaves a
+// complete prefix of the session, and the operator can start another.
 func (s *captureState) loop(fd int, f *os.File, w *pcap.Writer, dur time.Duration, maxSize int64) {
 	defer close(s.done)
 	defer unix.Close(fd)
@@ -223,32 +301,35 @@ func (s *captureState) stopCapture(o opts) captureResp {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active {
+		// A capture that ended on its own bound has already been collected and
+		// uploaded; report where it went rather than a bare "nothing running",
+		// which would read as though the capture had been lost.
+		if s.lastMsg != "" {
+			return captureResp{OK: true, Files: []string{s.lastPath}, S3URI: s.lastS3URI,
+				Msg: "no capture is running; last capture finished on its own bound: " + s.lastMsg}
+		}
 		return captureResp{OK: false, Msg: "no capture is running"}
 	}
-	close(s.stop)
-	<-s.done
-	s.active = false
-	path := s.path
-
-	resp := captureResp{OK: true, Msg: "stopped " + path, Files: []string{path}}
-	if s.err != nil {
-		resp.Msg = fmt.Sprintf("stopped %s (with error: %v)", path, s.err)
+	// Only close stop if the loop is still in it. A loop that already returned
+	// on its own bound has closed done, and closing stop twice would panic.
+	select {
+	case <-s.done:
+	default:
+		close(s.stop)
+		<-s.done
 	}
-	// Upload is a convenience; the file on disk is the deliverable. A failed
-	// upload must not lose the capture, so it is reported and the local file
-	// left in place — the same stance the learn flush takes.
-	if uri, err := uploadCapture(path, o); err != nil {
-		resp.Msg += fmt.Sprintf(" (S3 upload failed, file kept locally: %v)", err)
-	} else {
-		resp.S3URI = uri
-	}
-	return resp
+	s.collectLocked(o)
+	return captureResp{OK: true, Msg: s.lastMsg, Files: []string{s.lastPath}, S3URI: s.lastS3URI}
 }
 
 func (s *captureState) status() captureResp {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active {
+		if s.lastMsg != "" {
+			return captureResp{OK: true, Msg: "idle; last capture: " + s.lastMsg,
+				Files: []string{s.lastPath}, S3URI: s.lastS3URI}
+		}
 		return captureResp{OK: true, Msg: "idle"}
 	}
 	return captureResp{OK: true, Msg: "capturing to " + s.path}
