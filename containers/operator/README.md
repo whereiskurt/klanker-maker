@@ -185,14 +185,39 @@ Verified working: `km create --remote`, `km list`, `km status`, `km shell`,
 `km capacity`, `km validate`, `km init --dry-run`, and `km init --plan` /
 `km bootstrap --plan`.
 
-**Applying is out of scope, and the reason is mechanical, not a policy choice.**
-`km init --dry-run=false` shells out to `go build` at run time — once in
-`buildAndUploadSidecars` to cross-compile the sandbox-side helper binaries, and
-again in `uploadCreateHandlerToolchain` for the Lambda's bundled `toolchain/km`
-— and pushes container images to ECR. Supporting it would mean a Go toolchain,
-the full source tree, and a mounted docker socket in the image, at which point
-this stops being a client and becomes a dev environment. Apply from a native
-install. The same applies to `--local` create/destroy.
+**Applying is out of scope — a decision (2026-08-29), not a limitation to be
+fixed.** Please do not re-open it without reading this first.
+
+The mechanical obstacle is real but tractable: `km init --dry-run=false` shells
+out to `go build` at run time — once in `buildAndUploadSidecars` for the
+sandbox-side helper binaries, again in `uploadCreateHandlerToolchain` for the
+Lambda's bundled `toolchain/km` — and pushes images to ECR. Prebuilt release
+artifacts would solve it the same way they solved the Lambda zips, and that
+pattern is already proven in this repo: `cmd/create-handler` runs real
+`terragrunt apply` for every remote `km create` with no Go toolchain, off
+`toolchain/{km,terraform,terragrunt,infra.tar.gz}` in S3.
+
+**It is not a permissions boundary either.** The image holds whatever `~/.aws`
+carries, which is the same credential a native apply uses, and plan is not even
+read-only at the AWS level — nothing passes `-lock=false`, so it takes and
+releases DynamoDB state locks. Apply would succeed on authorization today.
+
+The reason it stays out is semantic. **A native apply deploys your working
+tree; a container apply could only ever deploy the release.**
+`buildAndUploadSidecars` compiles with `Dir = repoRoot`, so a native
+`km init --dry-run=false` ships whatever is on disk, uncommitted edits
+included — that is the normal development loop. A container has no source and
+can only ship what the release built. Those are two materially different
+operations, and giving them one command name means someone eventually runs it
+expecting the first and silently gets the second. If it is ever wanted, it
+needs its own verb — *deploy this release*, not *deploy what I have*.
+
+The same applies to `--local` create/destroy.
+
+Why the plan tier did not face this problem: plan only needs an artifact to
+*exist* so `filebase64sha256` can hash it. A hash that does not match what is
+deployed is honest noise in the diff. Apply has no such tolerance — the
+artifact it uploads becomes the deployed Lambda.
 
 ### What makes the plan tier work
 

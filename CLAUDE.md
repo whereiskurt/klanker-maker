@@ -124,6 +124,24 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   per-sandbox ed25519 keys, absent which `km vscode`/`desktop`/`tunnel` rekey every run and strand
   an `authorized_keys` entry), `./profiles` → `/root/.km/profiles`, `$PWD` → `/work`.
 - **Image grows 1.12GB → 1.78GB** (zips 215M, terraform 82M, terragrunt 70M, infra 2M).
+- **Applying from the container is DECIDED AGAINST (2026-08-29), not blocked.** Do not
+  re-open it on the grounds that the plumbing looks tractable — it is tractable, and that
+  was considered. It is **not** a permissions boundary (the image holds whatever `~/.aws`
+  carries, and plan is not even read-only at the AWS level: nothing passes `-lock=false`,
+  so it takes DynamoDB state locks), and it is **not** an unsolved mechanical problem —
+  prebuilt release artifacts would fix it exactly as they fixed the Lambda zips, and
+  `cmd/create-handler` already proves the pattern in production, running real
+  `terragrunt apply` with no Go toolchain off `toolchain/{km,terraform,terragrunt,
+  infra.tar.gz}`. The reason is **semantic**: `buildAndUploadSidecars` compiles with
+  `Dir = repoRoot`, so a native `km init --dry-run=false` deploys the WORKING TREE,
+  uncommitted edits included, while a container one could only ever deploy THE RELEASE.
+  One command name over two materially different operations means someone eventually
+  runs it expecting the first and silently gets the second. If it is ever wanted it
+  needs its own verb (*deploy this release*), not this flag.
+- **Why the plan tier escaped that problem:** plan only needs an artifact to EXIST so
+  `filebase64sha256` can hash it, and a hash that disagrees with what is deployed is
+  honest noise in the diff. Apply has no such tolerance — what it uploads becomes the
+  deployed Lambda. That asymmetry is the whole reason one tier shipped and the other did not.
 - **Deploy = cut a release.** The image is built by `publish-image.yml` on `release: published`
   and needs the new `km_vX.Y.Z_lambdas.tar` asset; a release predating it fails the build with a
   message saying so rather than producing an image that silently cannot plan. Nothing here touches
