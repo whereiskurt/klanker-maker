@@ -13,9 +13,10 @@
 -->
 ## 🔎 A sandbox can now tell you what it ran, not just where it went
 
-`km-netpolicy execs | who | execs save` adds the process half of last release's egress
-census. Every command an agent's tools spawned — `git`, `python`, `curl`, everything they
-shelled out to in turn — is now on the record, not just what a human typed at a prompt:
+`km-netpolicy execs | who | execs save` adds the process half of the egress census that
+ships in this same release (below). Every command an agent's tools spawned — `git`,
+`python`, `curl`, everything they shelled out to in turn — is now on the record, not just
+what a human typed at a prompt:
 
 ```console
 $ km-netpolicy execs --since 10m
@@ -81,6 +82,78 @@ by hand from an interactive shell currently fails with a missing-environment err
 automatic save on shutdown still works fine — `sudo systemctl restart km-execlog` is
 today's workaround); and a hard power-off still loses whatever hadn't reached disk, same as
 it would for any other on-box log.
+
+## 📍 A sandbox can say where it has been — and narrow itself to exactly that
+
+A box already decided every egress question three different ways — the eBPF ring buffer,
+the DNS proxy, the HTTP proxy — and could report none of it. `km-netpolicy` gains the
+verbs that make those decisions readable, and one that acts on them:
+
+```console
+$ km-netpolicy observed
+allowed (16):
+  api.github.com          277 conns   last just now
+  registry.npmjs.org       21 conns   last 1m ago
+denied (1):
+  evil.example.com          1 conns   last 9m ago
+
+$ km-netpolicy flows --since 10m --denied
+$ km-netpolicy profile          # emit a SandboxProfile from the census
+$ km-netpolicy capture start|stop|status|list
+```
+
+### `pin` is the mirror image of `deny`, and it only ever narrows
+
+Denies **union**; pins **intersect**. Effective allow is `profile allowlist ∩ pin₁ ∩ pin₂ …`,
+so both operations are monotone — *"a runtime action can only narrow"* stays a property of
+the data structures rather than a rule anyone has to trust. Pins live in their own
+kernel-append-only file, and there is deliberately **no un-pin verb**: recovering from a
+too-tight pin is `km destroy && km create`.
+
+Allow-all needs no special case. A wide-open profile is literally `allowedDNSSuffixes: ["*"]`,
+and `* ∩ observed = observed` — so pinning collapses the box to precisely what it touched.
+
+Because it is irreversible, the default narrowing is **collapsed** (eTLD+1), not the tightest
+possible reading: too loose costs a follow-up `pin`, which is always available; too tight has
+no recovery. `--exact` opts into literal hosts, `--dry-run` shows both candidate lists before
+anything is written, and an empty census additionally requires `--allow-empty`, because it is
+mathematically deny-all and easy to trigger by accident.
+
+### 🔒 One thing a pin can never seal, and the operator cannot override it
+
+Under `ebpf`/`both`, `/etc/resolv.conf` points at the on-box resolver, and **DNS is neither
+uid- nor cgroup-scoped** — so it answers for root too, `amazon-ssm-agent` above all, while
+root's own destinations barely reach the census. The first `pin` would therefore have
+NXDOMAINed `.amazonaws.com` for root: SSM dies, and with no un-pin verb there is no
+`km shell` and no remote destroy. The only recovery would have been terminating the instance.
+
+There is now a compiled-in carve-out that a pin can never seal. It is the one deliberate
+exception to "pins narrow everything", and it applies to pins only — an explicit
+`km-netpolicy deny .amazonaws.com` still blocks, because a deny is a named act where a pin
+denies everything nobody named.
+
+### 📦 On-demand packet capture, with mandatory bounds
+
+`capture start|stop|status|list` runs in a root-owned daemon (pure-Go `AF_PACKET`, no libpcap)
+so the sandbox user never needs `CAP_NET_RAW`. Every capture is bounded — there is no
+unbounded mode — and `--max-size` **stops** the capture rather than ring-rotating, because a
+ring keeps the last N bytes and discards the start of the trace, which is usually the part a
+failure question needs.
+
+### 🐛 A silent S3 denial, fixed on the way past
+
+The sandbox role's only write grant was `transcripts/${sandbox_id}/*`. `learn/` — the flush
+target `km shell --learn` has used since it existed — **never had a grant, and every
+`PutObject` there had been 403ing since day one.** It was invisible because the failure is a
+`logger.Warn` and an SSM fallback quietly kept learn mode working. The missing grant was the
+bug; the soft failure was correct and was left alone.
+
+### Observation is unconditional — no profile field, no dormant case
+
+The census runs on every sandbox regardless of `learnMode` or enforcement mode. A facility
+that can only narrow, and that only reports what already happened, cannot widen a policy by
+being present — and the boxes where narrowing matters most are exactly the wide-open ones no
+profile would have thought to opt in. Userdata changes for **every** profile as a result.
 
 ### ⚠️ Deploy surface — heavier than v0.8.10
 
