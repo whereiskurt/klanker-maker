@@ -144,6 +144,14 @@ type TTLHandler struct {
 	// is an injectable seam so unit tests can exercise the nil-TeardownFunc branch
 	// without making real AWS/IMDS calls. If nil, defaults to sdkOnlyTeardown.
 	SDKTeardownFunc func(ctx context.Context, h *TTLHandler, sandboxID string) error
+	// SaveExecTraceFunc runs the sandbox's `km-netpolicy execs save` over SSM
+	// BEFORE teardown, while the instance is still running and networked
+	// (Step 5b of handleDestroy). Nil by default — every existing unit test
+	// that constructs a TTLHandler without setting this field skips the step
+	// entirely, exactly like a nil TeardownFunc. Set to a real implementation
+	// in main() at cold start; see saveExecTraceBeforeTeardownWith for the
+	// pure, independently-testable core.
+	SaveExecTraceFunc func(ctx context.Context, sandboxID string)
 	// LaunchAccounts is the parsed KM_LAUNCH_ACCOUNTS map — the Lambda-side mirror
 	// of km-config.yaml's launch_accounts block, keyed by link name (Phase 126,
 	// REQ-126-TEARDOWN). Parsed once at cold start in main(); nil/empty means no
@@ -1059,6 +1067,24 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 		}
 	}
 
+	// Step 5b: Save the sandbox's process-exec trace over SSM WHILE THE
+	// INSTANCE IS STILL RUNNING, before Step 6 tears down its resources.
+	// km-execlog.service's own ExecStopPost=-/opt/km/bin/km-netpolicy execs
+	// save works on a graceful `km stop`, but not here: TerminateInstances
+	// gives a shorter grace window than StopInstances, and/or terraform
+	// destroy removes the instance's networking alongside it — so the
+	// shutdown-time upload has nowhere to send to. This is by far the more
+	// important of the two call sites: `km destroy` is --remote by default
+	// and merely publishes an event, so THIS Lambda does the real teardown —
+	// and TTL expiry / idle reaping (which never touch destroy.go at all)
+	// land here too. Nil in every context that hasn't wired a real
+	// implementation (e.g. unit tests, matching the TeardownFunc/
+	// SDKTeardownFunc nil-skips-cleanly convention above); best-effort and
+	// bounded when set — see saveExecTraceBeforeTeardownWith.
+	if h.SaveExecTraceFunc != nil {
+		h.SaveExecTraceFunc(ctx, sandboxID)
+	}
+
 	// Step 6: Destroy sandbox resources (PROV-05/PROV-06).
 	if h.TeardownFunc != nil {
 		if err := h.TeardownFunc(ctx, sandboxID); err != nil {
@@ -1779,6 +1805,76 @@ func cleanupSandboxIdentity(ctx context.Context, h *TTLHandler, sandboxID string
 	cleanupSandboxIdentityWith(ctx, h.SSMClient, h.DynamoClient, tableName, resourcePrefix(), sandboxID)
 }
 
+// execTraceEC2API is the narrow EC2 interface saveExecTraceBeforeTeardownWith
+// needs to find a still-running instance to talk to over SSM. Implemented by
+// *ec2.Client; defined here so a fake can satisfy it in tests without any
+// real AWS calls.
+type execTraceEC2API interface {
+	DescribeInstances(ctx context.Context, params *ec2pkg.DescribeInstancesInput, optFns ...func(*ec2pkg.Options)) (*ec2pkg.DescribeInstancesOutput, error)
+}
+
+// findRunningInstanceIDForExecTrace looks up a single running EC2 instance
+// tagged with this sandbox id. Returns ("", nil) — not an error — when none
+// is running: the ordinary case for a sandbox that's already stopped, was
+// never provisioned as EC2 (Docker/ECS), or is an orphaned row from a
+// cold-create that never finished.
+func findRunningInstanceIDForExecTrace(ctx context.Context, client execTraceEC2API, sandboxID string) (string, error) {
+	out, err := client.DescribeInstances(ctx, &ec2pkg.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
+			{Name: awssdk.String("instance-state-name"), Values: []string{"running"}},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, res := range out.Reservations {
+		for _, inst := range res.Instances {
+			if id := awssdk.ToString(inst.InstanceId); id != "" {
+				return id, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// saveExecTraceBeforeTeardownWith is the pure, independently-testable core of
+// Step 5b: it asks the sandbox's EC2 instance to upload its own process-exec
+// trace to S3 (`km-netpolicy execs save`) over SSM WHILE IT IS STILL RUNNING,
+// before either TeardownFunc (terraform destroy) or SDKTeardownFunc removes
+// its networking.
+//
+// Best-effort by construction and MUST NEVER block or fail the handler: a
+// missing running instance (already stopped, never provisioned as EC2, or an
+// orphaned/cold-create-failed row — the TTL handler tears down exactly these
+// cases routinely) is the ordinary case, logged at Debug — not a warning. An
+// SSM send/wait failure is logged at Warn. The whole operation is bounded by
+// an internal timeout so a hung AWS call cannot delay teardown.
+func saveExecTraceBeforeTeardownWith(ctx context.Context, ec2Client execTraceEC2API, ssmClient awspkg.SSMCommandRunner, sandboxID string) {
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	instanceID, err := findRunningInstanceIDForExecTrace(cctx, ec2Client, sandboxID)
+	if err != nil {
+		log.Debug().Err(err).Str("sandbox_id", sandboxID).
+			Msg("exec-trace save: could not look up running instance (non-fatal)")
+		return
+	}
+	if instanceID == "" {
+		log.Debug().Str("sandbox_id", sandboxID).
+			Msg("exec-trace save: no running instance found — nothing to save")
+		return
+	}
+
+	if err := awspkg.SaveExecTraceOverSSM(cctx, ssmClient, instanceID); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Str("instance_id", instanceID).
+			Msg("exec-trace save over SSM failed (non-fatal); proceeding with teardown")
+		return
+	}
+	log.Info().Str("sandbox_id", sandboxID).Str("instance_id", instanceID).
+		Msg("exec trace saved over SSM before teardown")
+}
+
 // sdkOnlyTeardown is the fallback destroy path when terraform binary isn't bundled.
 // Terminates EC2 instances, cleans up security groups, instance profiles, IAM roles,
 // EventBridge schedules, KMS keys, and DynamoDB/CW state.
@@ -1921,6 +2017,10 @@ func main() {
 		BudgetTable:    budgetTbl,
 		TeardownFunc:   nil, // set below
 		LaunchAccounts: parseLaunchAccountsEnv(),
+	}
+	ec2ClientForExecTrace := ec2pkg.NewFromConfig(awsCfg)
+	h.SaveExecTraceFunc = func(ctx context.Context, sandboxID string) {
+		saveExecTraceBeforeTeardownWith(ctx, ec2ClientForExecTrace, h.SSMClient, sandboxID)
 	}
 
 	// Use terraform-based teardown if terraform binary is bundled.
