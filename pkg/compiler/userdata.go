@@ -1359,6 +1359,9 @@ DENIED_HOSTS={{ .DeniedHTTPHosts }}
 KM_NETPOLICY_FILE={{ .RuntimeDenyFile }}
 KM_FLOWLOG_DIR={{ .FlowLogDir }}
 KM_NETPOLICY_PINS={{ .NetpolicyPinFile }}
+KM_EXEC_DIR={{ .ExecLogDir }}
+KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
+KM_SANDBOX_ID={{ .SandboxID }}
 NETPOLICYENV
 chmod 644 /etc/km/netpolicy.env
 if chattr +a {{ .RuntimeDenyFile }} 2>/dev/null; then

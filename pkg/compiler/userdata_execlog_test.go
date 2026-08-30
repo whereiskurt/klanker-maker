@@ -148,3 +148,48 @@ func TestUserData_MountsTracefsBeforeTracing(t *testing.T) {
 		t.Error("userdata must ensure tracefs is mounted for tracepoint attach")
 	}
 }
+
+// netpolicyEnvBlock extracts just the /etc/km/netpolicy.env heredoc body from
+// the full rendered userdata. KM_ARTIFACTS_BUCKET, KM_SANDBOX_ID, and
+// KM_FLOWLOG_DIR-style keys all also appear verbatim in several systemd
+// units' Environment= lines elsewhere in the file, so a whole-file contains()
+// check would pass even if this specific file's copy were missing.
+func netpolicyEnvBlock(t *testing.T, out string) string {
+	t.Helper()
+	start := strings.Index(out, "cat > /etc/km/netpolicy.env")
+	if start == -1 {
+		t.Fatal("/etc/km/netpolicy.env heredoc not found in rendered userdata")
+	}
+	rest := out[start:]
+	end := strings.Index(rest, "\nNETPOLICYENV")
+	if end == -1 {
+		t.Fatal("/etc/km/netpolicy.env heredoc has no closing NETPOLICYENV terminator")
+	}
+	return rest[:end]
+}
+
+// km-netpolicy execs save needs KM_ARTIFACTS_BUCKET and KM_SANDBOX_ID to
+// upload the exec trace when an operator runs it by hand from a shell — that
+// shell has none of the km-execlog.service unit's own environment, only
+// whatever /etc/km/netpolicy.env supplies via buildOpts' pick() fallback.
+// KM_EXEC_DIR rides along for the same reason: it would otherwise be the one
+// path of its kind missing from this file, silently falling back to the
+// compiled-in default instead of the profile's actual exec directory.
+func TestUserData_NetpolicyEnv_CarriesArtifactsBucketSandboxIDAndExecDir(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-netpolicyenv", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData: %v", err)
+	}
+	block := netpolicyEnvBlock(t, out)
+
+	for _, want := range []string{
+		"KM_ARTIFACTS_BUCKET=my-bucket",
+		"KM_SANDBOX_ID=sb-netpolicyenv",
+		"KM_EXEC_DIR=/var/lib/km/execs",
+	} {
+		if !contains(block, want) {
+			t.Errorf("/etc/km/netpolicy.env should carry %q, got:\n%s", want, block)
+		}
+	}
+}
