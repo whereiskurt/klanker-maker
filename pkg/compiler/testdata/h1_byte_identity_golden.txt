@@ -1625,6 +1625,24 @@ chown sandbox:sandbox "$LOG_FILE"
 
 log "km-queue-runner starting (sandbox=${SANDBOX_ID:-unknown})"
 
+# Phase 131 gap-fix: dispatch_as_sandbox joins this sandbox's eBPF cgroup scope
+# BEFORE dropping to the sandbox user, so an 'km agent run' turn's network
+# traffic is actually policed by the cgroup-attached eBPF programs (and, for a
+# later flow-attribution feature, actually visible in their maps) instead of
+# running unenrolled in user.slice like the tmux-dispatched agent run did before
+# this fix — measured live: sudo -u sandbox lands the process in
+# user.slice/session-*.scope, never km.slice. See the SQS pollers
+# (km-slack/github/h1/webhook-inbound-poller) above for the identical fix, with
+# the full WHY-A-SUBSHELL / WHY-runuser / WHY-$BASHPID rationale in comments
+# there; this is the 'bash -c' (non-login) twin for the tmux dispatch below.
+CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID:-unknown}.scope/cgroup.procs"
+dispatch_as_sandbox() {
+  (
+    { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
+    exec runuser -u sandbox -- bash -c "$1"
+  )
+}
+
 # ---- Wait for required runtime tools (tmux, claude, jq) before any work ----
 # The systemd unit's After=km-bootstrap.service only governs auto-start ordering,
 # NOT manual systemctl start. When operator-side km create kicks the unit early
@@ -1761,7 +1779,7 @@ EOFSCRIPT
     chmod +x "$script"
     chown sandbox:sandbox "$script"
 
-    sudo -u sandbox bash -c "tmux new-session -d -s 'km-agent-$run_id' '$script'"
+    dispatch_as_sandbox "tmux new-session -d -s 'km-agent-$run_id' '$script'"
     sudo -u sandbox bash -c "tmux wait-for 'km-done-$run_id'" 2>/dev/null || true
 
     local exit_code
