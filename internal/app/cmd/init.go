@@ -1250,7 +1250,12 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 // runInitDryRun prints what km init would do without making any changes.
 func runInitDryRun(cfg *config.Config, region string) error {
 	repoRoot := findRepoRoot()
-	regionDir := filepath.Join(repoRoot, "infra", "live", region)
+	// Region LABEL, not the raw region: every path that actually applies —
+	// RunInitWithRunner, RunInitPlanWithRunner, RunInitScopedWithRunner — builds
+	// regionDir from compiler.RegionLabel(region). Using `region` here made
+	// --dry-run print infra/live/us-east-1/... for directories that live at
+	// infra/live/use1/..., contradicting the banner on the very next line.
+	regionDir := filepath.Join(repoRoot, "infra", "live", compiler.RegionLabel(region))
 
 	printBanner("km init --dry-run", fmt.Sprintf("%s (%s)", region, compiler.RegionLabel(region)))
 
@@ -3598,8 +3603,24 @@ func buildLambdaZips(repoRoot string) error {
 	// Ensure terraform binary is current (version-aware cache via sidecar file).
 	// Phase 84.4.1: replaced the os.IsNotExist-only check with terraformIsCurrent
 	// so a stale 1.6.6 binary is re-downloaded when tfDesiredVersion bumps.
+	//
+	// Gated on the ttl-handler source actually being present, because that zip is
+	// the only thing this binary is ever put into (see the bundling branch
+	// below). Ungated, a repo-less install pulled ~90MB from
+	// releases.hashicorp.com on every run and then skipped every Lambda — and in
+	// the operator image, whose filesystem is discarded per run, that download
+	// repeated on every single `km init --plan`.
 	terraformPath := filepath.Join(buildDir, "terraform")
-	if !terraformIsCurrent(buildDir) {
+	needTerraform := false
+	for _, lb := range lambdas {
+		if lb.name == "ttl-handler" {
+			if _, err := os.Stat(filepath.Join(repoRoot, lb.srcDir)); err == nil {
+				needTerraform = true
+			}
+			break
+		}
+	}
+	if needTerraform && !terraformIsCurrent(buildDir) {
 		fmt.Printf("  Downloading terraform %s for linux/arm64...\n", tfDesiredVersion)
 		if dlErr := downloadTerraform(buildDir); dlErr != nil {
 			fmt.Printf("  [warn] terraform download failed: %v\n", dlErr)
@@ -3609,14 +3630,29 @@ func buildLambdaZips(repoRoot string) error {
 
 	for _, lb := range lambdas {
 		zipPath := filepath.Join(buildDir, lb.name+".zip")
-		// Always rebuild — ensures code changes are picked up.
-		os.Remove(zipPath)
 
+		// Establish that we CAN rebuild before destroying what is already there.
+		// The removal below and this check were once the other way round, which
+		// deleted a prebuilt zip and then skipped — in a repo-less install (the
+		// operator container image ships build/*.zip and no Go source) the first
+		// run wiped the zips the Lambda-owning terragrunt modules read via
+		// filebase64sha256(), and every run after it failed. The caller only
+		// warns on error, so nothing surfaced it.
 		srcPath := filepath.Join(repoRoot, lb.srcDir)
 		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-			fmt.Printf("  [skip] %s — source not found at %s\n", lb.name, lb.srcDir)
+			kept := ""
+			if _, zipErr := os.Stat(zipPath); zipErr == nil {
+				// Only claim this where a zip is actually there to keep. On a
+				// native install with neither source nor zip, "keeping existing"
+				// would imply an artifact that does not exist.
+				kept = fmt.Sprintf(" (keeping existing %s.zip)", lb.name)
+			}
+			fmt.Printf("  [skip] %s — source not found at %s%s\n", lb.name, lb.srcDir, kept)
 			continue
 		}
+
+		// Always rebuild — ensures code changes are picked up.
+		os.Remove(zipPath)
 
 		fmt.Printf("  Building %s Lambda (linux/arm64)...\n", lb.name)
 

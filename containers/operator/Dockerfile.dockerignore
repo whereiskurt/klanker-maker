@@ -11,8 +11,23 @@
 !profiles
 !containers/operator
 !docs/km-config.example.yaml
+# The terragrunt tree — ~1.3MB of .hcl/.tf, and what makes `km init --plan`
+# possible in the image. The exclusions below matter more here than anywhere
+# else in this file: an operator building from their own working clone has
+# applied against it, so infra/ locally carries provider caches and, if they
+# ran a local apply, state.
+!infra
+# Lambda zips only — NOT the rest of build/, which also holds cross-compiled
+# sidecar binaries and a cached terraform. See KM_LAMBDAS in the Dockerfile;
+# absent, the build falls back to the release asset.
+!build/*.zip
 
 # Never ship these even from the re-included paths.
 **/.DS_Store
 **/.terraform
 **/.terragrunt-cache
+**/terraform.tfstate*
+**/.terraform.lock.hcl
+# Tracked and empty upstream, but the build context is the operator's working
+# tree, not a clean checkout. Nothing in the image reads it.
+infra/live/.secrets.json

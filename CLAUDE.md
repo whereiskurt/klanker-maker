@@ -402,6 +402,85 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   the old code and no refresh happens. No SandboxProfile schema change, no userdata change, **no
   sandbox recreate** — this is entirely control-plane.
 
+**Operator container image is now plan-capable; profiles layer instead of replacing (2026-08-28):**
+- The `containers/operator` image goes from "`--remote` client" to "`--remote` client **plus
+  read-only platform inspection**": `km init --dry-run`, `km init --plan`, and
+  `km bootstrap --plan` all work in-container, running real terragrunt plans against a real
+  account. **Applying is still out, and for a mechanical reason, not a policy one** —
+  `km init --dry-run=false` shells out to `go build` at run time (`buildAndUploadSidecars`,
+  `uploadCreateHandlerToolchain`) and pushes ECR images, so supporting it means a Go toolchain,
+  the full source tree, and a docker socket, at which point it is a dev environment, not a client.
+- **Three things had to ship together; any two of them is a worse failure than none.** (1)
+  `terraform`+`terragrunt` installed from the release tarball (previously discarded as unusable —
+  correct while no `infra/` shipped). (2) `infra/` baked to `/klanker-maker/infra` **plus a stub
+  `CLAUDE.md` at `/klanker-maker`** — every unit under `infra/live` resolves paths via
+  `dirname(find_in_parent_folders("CLAUDE.md"))`, so without a file by that name terragrunt aborts
+  before naming a single module. The stub is written by the Dockerfile, NOT copied: terragrunt
+  reads only the dirname, and the real CLAUDE.md is ~90KB of internal phase history. (3) Prebuilt
+  Lambda zips at `/klanker-maker/build`.
+- **The zips are the non-obvious requirement.** Nine modules read theirs via
+  `filebase64sha256("${repo_root}/build/<name>.zip")` and **terraform evaluates that at PLAN
+  time**, so without them `--plan` fails outright on the first Lambda module rather than degrading.
+  `findRepoRoot()` finds no `go.mod` in the image and falls back to cwd, so `/klanker-maker` IS the
+  repo root and everything lands where `${local.repo_root}/...` expects. `region.hcl` is gitignored
+  and absent from clone and archive alike; `ensureRegionHCL` writes it on first run.
+- **`KM_LAMBDAS`** (`auto`|`local`|`release`, default `auto`) picks the zip source: `local` uses
+  `build/*.zip` from the build context so a working clone can build a plan-capable image without
+  cutting a release first — without it this Dockerfile would break every `make operator-image`
+  between a change landing and the next tag. `auto` prefers local and always announces which it
+  took. `publish-image.yml` pins `release` explicitly: a published image taking its zips from a
+  dirty runner must be impossible by configuration, not by the runner happening to be clean.
+- **Three real bugs found and fixed on the way, all correct independent of containers:**
+  - **`buildLambdaZips` deleted the zips it then skipped.** `os.Remove(zipPath)` ran BEFORE the
+    source-existence check, so in a repo-less install the first `km init --plan` wiped the very
+    zips the modules depend on and every run after it failed. Warn-and-continue at the call site
+    hid it. Fixed by reordering; pinned by a test.
+  - **`runInitDryRun` printed the wrong module paths** — built `regionDir` from the raw region
+    (`infra/live/us-east-1/...`) while every applying path uses `compiler.RegionLabel(region)`
+    (`infra/live/use1/...`), contradicting its own banner one line above.
+  - **`profile_search_paths` was broken at both ends.** Its shipped default `~/.km/profiles` never
+    resolved (`filepath.Join` does not expand `~`, so it looked for a literal `~` directory) AND
+    the key was absent from the v2→v merge-list, so an operator setting it in `km-config.yaml` was
+    silently ignored (the `project_config_key_merge_list` footgun). Both fixed; `expandTildePaths`
+    leaves relative entries like `./profiles` alone on purpose — making them absolute at load time
+    would pin them to wherever km was launched.
+- **Profiles LAYER, they do not replace.** Mounting at `/root/.km/profiles` puts your profiles
+  ahead of the baked library while `extends: base/...` still finds the shipped fragments — which is
+  what makes a short profile of your own usable at all. The image sets
+  `KM_PROFILE_SEARCH_PATHS="/root/.km/profiles /klanker-maker/profiles /work"`. **Whitespace-, not
+  comma-separated** (viper `AutomaticEnv` + `GetStringSlice` splits on whitespace; a comma value
+  becomes one path matching nothing) and **absolute on purpose** — the built-in default's
+  `./profiles` is relative to cwd, so it silently stops meaning the baked library the moment you
+  `cd /work`. Both pinned by tests.
+- **New mounts** (`make operator-shell` wires all of them, each guarded on its source existing —
+  docker silently creates a *directory* at a missing bind source): `~/.km` → `/root/.km` (the
+  per-sandbox ed25519 keys, absent which `km vscode`/`desktop`/`tunnel` rekey every run and strand
+  an `authorized_keys` entry), `./profiles` → `/root/.km/profiles`, `$PWD` → `/work`.
+- **Image grows 1.12GB → 1.78GB** (zips 215M, terraform 82M, terragrunt 70M, infra 2M).
+- **Applying from the container is DECIDED AGAINST (2026-08-29), not blocked.** Do not
+  re-open it on the grounds that the plumbing looks tractable — it is tractable, and that
+  was considered. It is **not** a permissions boundary (the image holds whatever `~/.aws`
+  carries, and plan is not even read-only at the AWS level: nothing passes `-lock=false`,
+  so it takes DynamoDB state locks), and it is **not** an unsolved mechanical problem —
+  prebuilt release artifacts would fix it exactly as they fixed the Lambda zips, and
+  `cmd/create-handler` already proves the pattern in production, running real
+  `terragrunt apply` with no Go toolchain off `toolchain/{km,terraform,terragrunt,
+  infra.tar.gz}`. The reason is **semantic**: `buildAndUploadSidecars` compiles with
+  `Dir = repoRoot`, so a native `km init --dry-run=false` deploys the WORKING TREE,
+  uncommitted edits included, while a container one could only ever deploy THE RELEASE.
+  One command name over two materially different operations means someone eventually
+  runs it expecting the first and silently gets the second. If it is ever wanted it
+  needs its own verb (*deploy this release*), not this flag.
+- **Why the plan tier escaped that problem:** plan only needs an artifact to EXIST so
+  `filebase64sha256` can hash it, and a hash that disagrees with what is deployed is
+  honest noise in the diff. Apply has no such tolerance — what it uploads becomes the
+  deployed Lambda. That asymmetry is the whole reason one tier shipped and the other did not.
+- **Deploy = cut a release.** The image is built by `publish-image.yml` on `release: published`
+  and needs the new `km_vX.Y.Z_lambdas.tar` asset; a release predating it fails the build with a
+  message saying so rather than producing an image that silently cannot plan. Nothing here touches
+  a sandbox, a Lambda, or any AWS resource — no `km init`, no recreate.
+- See `containers/operator/README.md`.
+
 **Runtime egress narrowing is now unconditional (2026-08-27, v0.8.8):**
 - **`km-netpolicy` and its whole mechanism ship on EVERY sandbox.** The
   `spec.network.egress.runtimeDeny` gate is removed from all **five** sites: the sidecar
@@ -1209,6 +1288,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Codex parity, `spec.agent.default`, Slack prefix routing & agent switching | `docs/codex-parity.md` (Phase 70) |
 | Structured Claude/Codex tool gating via `spec.agent:`, synthesizers, asymmetry note | `docs/agent-tool-gating.md` (Phase 92) |
 | Cut a release (goreleaser + GH Actions, tag-driven) | `docs/release.md` |
+| Run km from a container — the operator image's mounts, the profile overlay (`KM_PROFILE_SEARCH_PATHS`, whitespace-separated), what makes `km init --plan` work in-container, and why applying does not | `containers/operator/README.md` |
 | SOPS / SSM allowlist via `iam.allowedSecretPaths` | `docs/sandbox-secrets.md` (Phase 89, renamed `identity:`→`iam:` in Phase 92) |
 | Composable multi-parent profile inheritance — `extends:` list, deep-merge, `profiles/base/` fragments, `initCommandsAppend`, v1 narrowing limitation | `OPERATOR-GUIDE.md` § Composable inheritance |
 | Wiz Runtime Sensor on a sandbox — opt-in `base/security/wiz` fragment, the prefix-relative SSM-path rule, why it is not tamper-proof, deploy surface | `docs/wiz-sensor.md` |
@@ -1345,7 +1425,9 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 
 Tag-driven via goreleaser + GH Actions. The `VERSION` file is the dev-build counter (auto-bumped by every `make build`); git tags (`vX.Y.Z`) are the release identity.
 
-**Artifacts produced per release:** four tarballs (`km_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.xz`), each bundling `km` + `terraform` v1.9.8 + `terragrunt` v0.99.1 + `LICENSE` + `README.md` + `OPERATOR-GUIDE.md` + `THIRD-PARTY-LICENSES.txt`. Plus a SHA256 checksums file. Operators still provide `aws` CLI + `session-manager-plugin` themselves.
+**Artifacts produced per release:** four tarballs (`km_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.xz`), each bundling `km` + `terraform` v1.9.8 + `terragrunt` v0.99.1 + `LICENSE` + `README.md` + `OPERATOR-GUIDE.md` + `THIRD-PARTY-LICENSES.txt` + the `containers/operator/` build files + `profiles/**` + **`infra/**`** (the terragrunt tree, needed by the operator image). Plus **`km_vX.Y.Z_lambdas.tar`** — the ten linux/arm64 Lambda deployment zips (~217MB), built by `scripts/build-release-lambdas.sh` and consumed only by `containers/operator/Dockerfile`. Plus a SHA256 checksums file covering all of them. Operators still provide `aws` CLI + `session-manager-plugin` themselves.
+
+**The lambdas asset is deliberately uncompressed and deliberately separate.** Uncompressed because the payload is ten already-deflated zips — measured, `xz` turned 217MB of input into a 225MB file while costing minutes of CI time. Separate rather than folded into the four platform archives because it is linux/arm64 regardless of the operator's platform, so bundling would quadruple it for no one's benefit. `scripts/build-release-lambdas.sh`'s Lambda list is pinned to `lambdaBuilds()` by `TestReleaseLambdaScript_TracksLambdaBuilds` — a Lambda added to the Go list but not the script would otherwise ship an asset silently missing a zip, and the operator image would fail `km init --plan` on that one module with an error naming terraform rather than the release pipeline.
 
 **Cut-a-release workflow:**
 

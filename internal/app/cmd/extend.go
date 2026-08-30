@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -228,6 +229,21 @@ func runExtendIdle(ctx context.Context, cfg *config.Config, sandboxID, idleTimeo
 	return nil
 }
 
+// parseKMDuration parses a km duration string, which extends Go's ns..h suffixes
+// with "d" for days. It mirrors pkg/profile.parseDuration; the two are kept
+// separate because that one is unexported and this package must not import
+// profile validation internals just to read a metadata string.
+func parseKMDuration(s string) (time.Duration, error) {
+	if dayStr, ok := strings.CutSuffix(s, "d"); ok {
+		days, err := time.ParseDuration(dayStr + "h")
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q: %w", s, err)
+		}
+		return days * 24, nil
+	}
+	return time.ParseDuration(s)
+}
+
 // CheckMaxLifetime enforces the MaxLifetime cap from sandbox metadata.
 // If meta.MaxLifetime is empty, no cap is enforced (backward compatible).
 // If the proposed newExpiry exceeds CreatedAt + MaxLifetime, an error is returned
@@ -238,9 +254,13 @@ func CheckMaxLifetime(meta *awspkg.SandboxMetadata, newExpiry time.Time) error {
 	if meta.MaxLifetime == "" {
 		return nil
 	}
-	maxLifetimeDuration, err := time.ParseDuration(meta.MaxLifetime)
+	// Day suffixes are first-class in km duration strings — the profile schema's
+	// pattern for maxLifetime, ttl, and idleTimeout all accept "d", and an operator
+	// writing "3d" is the expected case, not an edge one. Go's time.ParseDuration
+	// only understands ns..h, so calling it directly turned every day-suffixed cap
+	// into an "invalid maxLifetime" error at extend time.
+	maxLifetimeDuration, err := parseKMDuration(meta.MaxLifetime)
 	if err != nil {
-		// Malformed MaxLifetime — skip enforcement rather than blocking the user.
 		return fmt.Errorf("invalid maxLifetime %q in sandbox metadata: %w", meta.MaxLifetime, err)
 	}
 	maxExpiry := meta.CreatedAt.Add(maxLifetimeDuration)

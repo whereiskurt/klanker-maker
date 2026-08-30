@@ -1167,6 +1167,13 @@ func Load() (*Config, error) {
 			// v.UnmarshalKey("webhooks", &cfg.Webhooks) below — do NOT add sibling
 			// "webhooks.*" entries (mirrors the github, h1, and checks precedent).
 			"webhooks",
+			// Profile overlay directories searched when resolving `extends:`
+			// (profile.Resolve, via km create / km validate / km capacity) and by
+			// FindProfilesReferencingAMI. CRITICAL: without this entry an operator
+			// setting profile_search_paths in km-config.yaml is silently ignored and
+			// the built-in default wins (project_config_key_merge_list footgun).
+			// Entries are tilde-expanded below.
+			"profile_search_paths",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -1195,7 +1202,7 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		// Existing fields
-		ProfileSearchPaths: v.GetStringSlice("profile_search_paths"),
+		ProfileSearchPaths: expandTildePaths(v.GetStringSlice("profile_search_paths")),
 		LogLevel:           v.GetString("log_level"),
 		StateBucket:        v.GetString("state_bucket"),
 		TTLLambdaARN:       v.GetString("ttl_lambda_arn"),
@@ -1831,6 +1838,45 @@ func (c *Config) GetLaunchAccounts() map[string]LaunchAccountConfig {
 func (c *Config) GetLaunchAccount(name string) (LaunchAccountConfig, bool) {
 	link, ok := c.LaunchAccounts[name]
 	return link, ok
+}
+
+// expandTildePaths rewrites a leading "~" in each path to the user's home
+// directory, leaving every other path verbatim.
+//
+// Needed because profile.loadRaw resolves a search path with
+// filepath.Join(dir, name+".yaml"), and filepath.Join does NOT expand "~" — it
+// treats it as an ordinary directory name. The shipped default's
+// "~/.km/profiles" entry therefore never resolved: a fragment at
+// $HOME/.km/profiles/base/frag.yaml was not found, while the "not found" error
+// printed the literal "~/.km/profiles" back, reading as though it HAD been
+// searched. Expanding once here keeps every consumer (profile.Resolve,
+// FindProfilesReferencingAMI) from re-implementing it.
+//
+// Relative entries such as "./profiles" are deliberately left alone: they are
+// resolved against the process working directory at lookup time, and making
+// them absolute here would pin them to wherever km happened to be launched.
+// A home directory that cannot be determined is not fatal — the entry is
+// passed through unchanged and simply fails to match, exactly as before.
+func expandTildePaths(paths []string) []string {
+	if len(paths) == 0 {
+		return paths
+	}
+	home, err := os.UserHomeDir()
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		switch {
+		case err != nil || p == "" || p[0] != '~':
+			out = append(out, p)
+		case p == "~":
+			out = append(out, home)
+		case p[1] == '/' || p[1] == os.PathSeparator:
+			out = append(out, filepath.Join(home, p[2:]))
+		default:
+			// "~otheruser/..." — not ours to resolve; pass through untouched.
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // awsProfileExists checks whether a named AWS profile is defined in

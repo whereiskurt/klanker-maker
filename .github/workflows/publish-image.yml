@@ -132,8 +132,15 @@ jobs:
           platforms: ${{ matrix.platform }}
           # Pin km to THIS release rather than letting the Dockerfile resolve
           # `latest` — otherwise an image tagged v0.7.0 could contain v0.7.1.
+          #
+          # KM_LAMBDAS=release, not the `auto` default: a published image must
+          # take its Lambda zips from the release asset for the tag it claims.
+          # `auto` prefers build/*.zip from the context, which is absent on a
+          # clean checkout — but relying on the runner never having any is a
+          # property of the environment, not of this workflow.
           build-args: |
             KM_VERSION=${{ needs.prepare.outputs.tag }}
+            KM_LAMBDAS=release
           provenance: false
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.arch }}
@@ -147,6 +154,23 @@ jobs:
           docker run --rm "$ref" ./km --version
           docker run --rm "$ref" ./km validate profiles/spot.yaml
           test "$(docker run --rm "$ref" ls profiles | grep -c '\.yaml$')" -ge 20
+
+          # The plan tier needs all three of these together, and each fails in a
+          # way that points somewhere else: a missing terragrunt looks like a
+          # PATH problem, a missing CLAUDE.md anchor makes terragrunt abort
+          # before naming a module, and missing zips surface as a terraform
+          # filebase64sha256 error on one module. Assert them here, where the
+          # message can say which one is actually absent.
+          docker run --rm "$ref" terraform version
+          docker run --rm "$ref" terragrunt --version
+          docker run --rm "$ref" test -f /klanker-maker/CLAUDE.md
+          docker run --rm "$ref" test -f /klanker-maker/infra/live/root.hcl
+          zips="$(docker run --rm "$ref" bash -c 'ls -1 /klanker-maker/build/*.zip | wc -l')"
+          test "$zips" -eq 10 || { echo "expected 10 Lambda zips, found $zips" >&2; exit 1; }
+
+          # Read-only and AWS-free: proves km resolves /klanker-maker as its repo
+          # root and names the region-LABEL module paths the apply would use.
+          docker run --rm "$ref" ./km init --dry-run | grep -q 'infra/live/use1/network'
 
       # The filename carries the digest, and the merge job re-adds the
       # "sha256:" prefix — so strip it here. Leaving it on yields

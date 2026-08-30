@@ -49,6 +49,25 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 # Max concurrent sandboxes (0 = unlimited, default: 10)
 # max_sandboxes: 10
 
+# Extra directories searched for profile YAML when resolving `extends:` and when
+# km create/validate/capacity look up a profile by name. Built-in profiles are always
+# searched first. Entries starting with ~ are expanded; relative entries are left
+# relative (so ./profiles keeps meaning "next to wherever km was launched").
+# Default: ["./profiles", "~/.km/profiles"]
+# profile_search_paths:
+#   - ./profiles
+#   - ~/.km/profiles
+
+# Sibling km installs in this same AWS account whose cross-install resources (SCPs,
+# SES rules, sandbox-secrets KMS aliases) should report OK in km doctor instead of WARN.
+# Augmented per-invocation by `km doctor --ignore-prefix=<csv>`.
+# doctor_ignore_prefixes: [km2, kmdev]
+
+# km doctor cleanup thresholds.
+# doctor_stale_ami_days: 30       # AMIs older than this are flagged stale
+# doctor_log_retention_days: 30   # retention set by --set-log-retention
+# doctor_s3_expire_days: 30       # expiry set by --set-s3-lifecycle
+
 # Prefix for all account-globally-unique AWS resource names (DDB tables,
 # Lambdas, IAM roles, SSM paths, etc.). Default: "km".
 # Change only when running a second km install in the same AWS account
@@ -70,6 +89,36 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 # `km create --docker` (or any profile with substrate: docker/ecs) to fail
 # fast with a clear error pointing back at this knob.
 # container_substrates_enabled: true
+
+# =============================================================================
+# NETWORK — private-subnet sandboxes and NAT (OPTIONAL, dormant unless set)
+# =============================================================================
+#
+# `nat_gateway` controls whether NAT + EIP infrastructure EXISTS at all.
+# `spec.network.privateSubnet` in a SandboxProfile controls whether a given
+# sandbox's ENI lands private. Both absent = no new resources, no change.
+#
+# One NAT gateway + one EIP per AZ (not one shared NAT), because the AZ-failover
+# sweep rotates launches across AZs and a shared NAT would add cross-AZ transfer
+# charges to every byte and make one AZ a SPOF for the whole install.
+#
+# COST: ~$132/month for 4 AZs plus $0.045/GB processed. A GPU profile pulling
+# 300GB of weights adds ~$13.50 in NAT processing alone. This is the reason the
+# toggle is reversible — disabling NAT leaves the private subnets as free,
+# routeless islands. km init REFUSES to disable NAT while any sandbox row is
+# network_placement=private and status=running (no override flag, by design).
+#
+# Deploy with `km init --dry-run=false` (NOT --sidecars).
+# See docs/private-subnet-nat.md.
+#
+# network:
+#   nat_gateway: true
+#
+#   # How many private subnets — and therefore NAT gateways — to build. 1-4;
+#   # absent means all 4. Lowering it saves money and costs AZ-rotation
+#   # tolerance: private sandboxes are confined to the AZs that have a subnet.
+#   # Lowering it on an existing install DESTROYS the surplus subnets.
+#   private_subnet_count: 1
 
 # =============================================================================
 # SLACK BRIDGE — install-level defaults (all OPTIONAL, dormant unless set)
@@ -100,6 +149,16 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 #   peer_bridges:
 #     - https://aaaaaaaaaaaaaaaaaaaaaaaaaa.lambda-url.us-east-1.on.aws/events
 #     - https://bbbbbbbbbbbbbbbbbbbbbbbbbb.lambda-url.us-east-1.on.aws/events
+#
+#   # Trigger allowlist (Phase 118). Slack user IDs (Uxxxx/Wxxxx) permitted to
+#   # trigger an agent turn. SEMANTICS ARE INVERTED versus the GitHub and H1
+#   # bridges: an EMPTY/absent list means EVERYONE may trigger (allow-by-default),
+#   # not deny-by-default. A per-sandbox notification.slack.inbound.allow REPLACES
+#   # this list for that sandbox. A rejected user is silently ignored — no 👀, no
+#   # reply, no dispatch. Enforced ahead of the mention filter and thread bypass.
+#   allow:
+#     - U01ABCDEFGH
+#     - U02IJKLMNOP
 #
 #   # Default router (Phase 96). Set true on the FRONT-DOOR install only. When
 #   # the bot is @-mentioned in a channel no install owns, the front door posts
@@ -156,6 +215,28 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 #       prompt: |
 #         Triage this issue: assign labels, summarize the request, and suggest next steps.
 #
+#   # Generic event -> prompt router (Phase 115). Non-issue_comment webhooks are
+#   # matched against these rules FIRST-MATCH and dispatched autonomously (no
+#   # human @-mention). Absent = dormant. `match` is a required repo glob;
+#   # `alias` dispatches warm to a running/stopped box, `profile` cold-creates.
+#   # Template vars: {{repo}} {{event}} {{action}} {{sender}} {{default_branch}} {{html_url}}
+#   #
+#   # GOTCHA: a `repository`/`created` event is only delivered to an App installed
+#   # on the org with "All repositories" access — a brand-new repo can never be in
+#   # a "selected repositories" set. This is the OPPOSITE of the issue_comment
+#   # recommendation. Re-run `km github manifest` and re-subscribe the App after
+#   # adding a new event type here.
+#   events:
+#     - on: repository
+#       actions: [created]
+#       match: "example-org/*"
+#       exclude: ["example-org/sandbox-*"]
+#       alias: onboarding-bot
+#       cooldown_seconds: 300
+#       prompt: |
+#         A new repository {{repo}} was created by {{sender}}.
+#         Audit its default branch ({{default_branch}}) and open an onboarding issue.
+#
 #   # Federated relay (Phase 100). One GitHub App serving multiple km installs.
 #   # List the OTHER installs' github-bridge Function URLs (`km github status` →
 #   # bridge-url). GitHub delivers every webhook to this front-door install,
@@ -169,6 +250,162 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 #   # posts one guidance comment naming `github.repos:` wiring + `km init`.
 #   # Absent/false → the event is silently dropped (Phase 100 behavior).
 #   default_router: true
+
+# =============================================================================
+# HACKERONE BRIDGE — report/comment-trigger bridge (OPTIONAL, dormant unless set)
+# =============================================================================
+#
+# A HackerOne program webhook fires a sandbox agent turn that comments back on the
+# report. Replies are INTERNAL (team-track) by default — never visible to the
+# external researcher unless the agent explicitly asks for that. Bootstrap the
+# webhook secret and Basic-Auth credentials with `km h1 init`; these keys configure
+# routing only. There is no `km h1 manifest` — HackerOne has no App-manifest concept.
+# Deploy with `km init --dry-run=false` (or the scoped `km init --h1`).
+# See docs/h1-bridge.md.
+#
+# h1:
+#   # Install-wide comment trigger token (literal substring match in the body).
+#   bot_handle: "@km"
+#   # Fallback SandboxProfile when a target sets no profile.
+#   default_profile: profiles/h1-triage.yaml
+#   programs:
+#     - handle: example_program            # routing key — exact match, deny-by-default
+#       # HackerOne usernames allowed to TRIGGER and to use /reply_to_researcher.
+#       # Deny-by-default, unlike the Slack allowlist.
+#       allow:
+#         - your-hackerone-username
+#       targets:                           # multi-target fanout — one trigger, N sandboxes
+#         - alias: h1-triage
+#           profile: profiles/h1-triage.yaml
+#       # AUTO-TRIAGE map. Present = opt-in on those lifecycle events;
+#       # remove it for comment-keyword-only operation.
+#       events:
+#         report_created:
+#           prompt: '@profiles/h1.report_created.prompt.txt'
+#       # /commands. `claude`, `codex`, and `reply_to_researcher` are RESERVED.
+#       commands:
+#         triage:
+#           description: Triage this report
+#           prompt: '@profiles/h1.triage.prompt.txt'
+
+# =============================================================================
+# CHECK TRIGGERS — pull ingress from serverless checks (OPTIONAL, dormant)
+# =============================================================================
+#
+# A `km check` Lambda runs on a schedule; when its predicate fires, it dispatches a
+# prompt to a sandbox. This is the PULL counterpart to the push `webhooks:` block
+# below — same alias/profile/on_absent/cooldown_seconds/prompt vocabulary.
+#
+# KEY RULE — snake_case everywhere. Viper lowercases config keys at load time, so
+# `on_absent` and `cooldown_seconds` work and `onAbsent`/`cooldownSeconds` do not.
+# See docs/check-runner.md.
+#
+# checks:
+#   triggers:
+#     - check: wiz-intel                   # name of a deployed check Lambda
+#       when_py: |                         # Python predicate body; inline or @file
+#         return out.get("max_affected", 0) > 100
+#       alias: wiz-triage-box              # REQUIRED — target sandbox alias
+#       prompt: |                          # inline or @file; supports {{vars}}
+#         Wiz check fired: {{reason}}
+#         Affected systems: {{out.max_affected}}
+#       on_absent: cold-create             # cold-create | skip
+#       cooldown_seconds: 3600
+
+# =============================================================================
+# ACTION QUOTAS — install-wide outbound limits (OPTIONAL, dormant unless set)
+# =============================================================================
+#
+# A circuit breaker for an agent that has started looping, NOT a throttle for normal
+# work — prefer generous caps with `onBreach: freeze` over tight caps with `block`.
+# Applies to every sandbox unless a profile's `spec.limits` overrides the specific
+# (action, window). Six actions: github_pr, github_comment, github_review,
+# email_send, slack_post, h1_comment.
+#
+# Windows: lifetime (never resets) | perHour (UTC bucket) | perDay (UTC midnight).
+# An absent window is not enforced. A window set to 0 is a HARD-DENY FLOOR — it
+# trips on the first attempt. onBreach: warn (default) | block | freeze.
+# A frozen sandbox is released with `km unlock` only. See docs/action-quotas.md.
+#
+# limits:
+#   github_pr:
+#     perDay: 10
+#     onBreach: block
+#   email_send:
+#     perHour: 25
+#     onBreach: warn
+
+# =============================================================================
+# WEBHOOK INGRESS — push ingress from third-party SaaS (OPTIONAL, dormant)
+# =============================================================================
+#
+# A single km-webhook-bridge Lambda behind a Function URL. The source is resolved
+# from the URL PATH (POST /wiz -> the `wiz` entry below), so one endpoint serves
+# every source and adding a second source is a config entry, not a new Lambda.
+# There is deliberately NO CLI verb — a webhook has a URL and a shared secret,
+# neither of which needs one. `km init` mints the bearer token into SSM once and
+# never overwrites it; rotation is an explicit `aws ssm put-parameter --overwrite`.
+#
+# `rules[].prompt` accepts inline text or a bare `@path` (NO space after the @).
+# The file is read at `km init` time and inlined — the Lambda never reads a
+# filesystem. See docs/webhook-ingress.md and docs/webhook-templates/.
+#
+# webhooks:
+#   rate_limit:                     # install-wide ceiling, shared by EVERY source
+#     max_dispatches: 20
+#     window_seconds: 600
+#   sources:
+#     - name: wiz                   # URL path segment: POST /wiz
+#       auth:
+#         type: bearer              # bearer | hmac (Wiz offers no signature)
+#         header: Authorization
+#         secret_path: /km/config/webhooks/wiz/token
+#       replay_ttl_seconds: 900     # 0 => default 900s
+#       # FALLBACK ONLY — ignored when the payload carries km_schema: v1, which
+#       # both shipped Wiz templates do.
+#       field_paths:
+#         id: "$.id"
+#         type: "$.objectType"
+#         severity: "$.severity"
+#         group: "$.entity.cloud_id"
+#       rules:
+#         - match:
+#             type: [issue, threat]
+#             severity: [CRITICAL, HIGH]
+#           alias: ir-bot
+#           profile: profiles/ir-bot.yaml
+#           on_absent: skip         # cold-create | skip
+#           cooldown_seconds: 900
+#           group_by: "{{entity.cloud_id}}"   # the coalescing lever
+#           prompt: "@profiles/prompts/wiz.triage.prompt.txt"
+
+# =============================================================================
+# CROSS-ACCOUNT CAPACITY LINKS — written by `km account register`
+# =============================================================================
+#
+# Do not hand-author this block. `km account add` (target-account admin creds)
+# provisions the target footprint and writes a handoff fragment; `km account
+# register` (home creds) writes the entry here, stores the external id as an SSM
+# SecureString, and adds one read-only grant on the home artifacts bucket.
+# The external id's VALUE never appears here — only its parameter path.
+# A profile opts in with `spec.runtime.launchAccount: <name>`.
+# See docs/cross-account-capacity-borrowing.md.
+#
+# launch_accounts:
+#   gpu-capacity:
+#     account_id: "444444444444"
+#     region: us-east-1
+#     launcher_role_arn: arn:aws:iam::444444444444:role/km-launcher
+#     box_role_arn: arn:aws:iam::444444444444:role/km-box
+#     external_id_ssm: /km/launch-accounts/gpu-capacity/external-id
+#     subnet_ids: [subnet-aaa, subnet-bbb, subnet-ccc, subnet-ddd]
+#     availability_zones: [us-east-1a, us-east-1b, us-east-1c, us-east-1d]
+#     security_group_id: sg-0123456789abcdef0
+#     results_bucket: km-results-444444444444-use1
+#     instance_types: [g6e.12xlarge, g6e.48xlarge]
+#     state_bucket: tf-km-linkstate-444444444444-use1
+#     lock_table: tf-km-linkstate-lock
+#     state_key: launch-accounts/gpu-capacity/terraform.tfstate
 
 # =============================================================================
 # AUTO-POPULATED by km init — uncomment to override
@@ -187,6 +424,9 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 # sandbox_table_name: km-sandboxes
 # identity_table_name: km-identities
 # schedules_table_name: km-schedules
+# slack_threads_table_name: km-slack-threads
+# slack_stream_messages_table_name: km-slack-stream-messages
+# slack_channels_table_name: km-slack-channels
 
 # Route53 hosted zone ID for sandboxes.{domain} (created by km init).
 # route53_zone_id: Z0123456789ABCDEFGHIJ
