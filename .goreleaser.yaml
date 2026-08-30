@@ -9,6 +9,10 @@ project_name: km
 # before-hook repopulates it: "dist is not empty".)
 before:
   hooks:
+    # FIRST, so a dirty tree fails before the multi-hundred-MB tool fetch below.
+    # The infra/**/*.hcl and infra/**/*.tf globs in the archive cannot exclude
+    # .terragrunt-cache/ or .terraform/ — see scripts/check-release-tree.sh.
+    - bash scripts/check-release-tree.sh
     - go mod tidy
     - bash scripts/fetch-bundled-tools.sh 1.9.8 0.99.1
     # Lambda deployment zips, published as a standalone asset (see extra_files
@@ -97,9 +101,19 @@ archives:
       # `km init --dry-run` name real module directories — without it the image
       # can only be built from a git clone, and the build-from-tarball path
       # advertised in containers/operator/README.md breaks.
-      # Extension-scoped, mirroring the profiles globs above, so a local
-      # .terraform/ or .terragrunt-cache/ from an operator's own apply cannot
-      # ride along into a public release.
+      # Extension-scoped, mirroring the profiles globs above. NOTE: unlike the
+      # profiles globs, extension-scoping does NOT keep a local .terraform/ or
+      # .terragrunt-cache/ out of the archive — those directories are full of
+      # exactly .hcl and .tf files (a rendered backend.tf, main.tf and
+      # terragrunt.hcl per cached unit), so these two globs match straight into
+      # them. A local snapshot picked up 528 such files, carrying the state
+      # bucket, lock table and state key for every unit.
+      #
+      # goreleaser's globs have no negation, and narrowing these by directory
+      # depth would trade a loud failure for a silent one: a tracked file added
+      # at an unexpected depth would simply vanish from the archive. So the
+      # working tree is checked instead — see the check-release-tree.sh hook
+      # above, which fails the build rather than publishing the cache.
       #
       # *.json is deliberately NOT globbed. The only JSON under infra/ is
       # infra/live/.secrets.json — tracked, empty today, and needed by nothing
