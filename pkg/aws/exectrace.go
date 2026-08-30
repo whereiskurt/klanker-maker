@@ -15,11 +15,22 @@ import (
 // paying real wall-clock time for every poll tick.
 var execTracePollInterval = 1 * time.Second
 
-// execTraceSaveCommand is the shell command run on the sandbox. It reads its
-// own S3 bucket / sandbox id / exec-store directory from /etc/km/netpolicy.env
-// via km-netpolicy's existing pick() fallback (see the km-netpolicy execs save
-// env fix) — no environment variables need to travel with the SSM command.
-const execTraceSaveCommand = "/opt/km/bin/km-netpolicy execs save"
+// execTraceSaveCommand is the shell command run on the sandbox. `km-netpolicy
+// execs save` already reads its S3 bucket / sandbox id / exec-store directory
+// / region from /etc/km/netpolicy.env via its own pick() fallback — but that
+// fallback lives inside the km-netpolicy binary, which is uploaded and
+// refreshed on a separate cadence from the userdata that renders the env file
+// (see CLAUDE.md's sidecar/userdata lockstep notes). Sourcing the file into
+// this shell's OWN environment before exec, rather than trusting the binary's
+// internal resolution alone, is a second, independent path to the same
+// values: it needs no cooperation from km-netpolicy's own code, and it is
+// exactly the vector by which AWS-RunShellScript ran with no region at all —
+// SSM invokes a bare, non-login shell that never sources /etc/profile.d
+// (where a root login gets AWS_DEFAULT_REGION from), so nothing exported the
+// region into this process before. A missing file is fine — the `&&` simply
+// evaluates false with no `set -e` to trip on it, and the verb still runs and
+// reports its own clear error either way.
+const execTraceSaveCommand = "set -a; [ -f /etc/km/netpolicy.env ] && . /etc/km/netpolicy.env; set +a; /opt/km/bin/km-netpolicy execs save"
 
 // SSMCommandRunner is the narrow SSM interface SaveExecTraceOverSSM needs:
 // SendCommand to launch the save, GetCommandInvocation to wait for it to

@@ -1362,6 +1362,7 @@ KM_NETPOLICY_PINS={{ .NetpolicyPinFile }}
 KM_EXEC_DIR={{ .ExecLogDir }}
 KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
 KM_SANDBOX_ID={{ .SandboxID }}
+AWS_REGION={{ .AWSRegion }}
 NETPOLICYENV
 chmod 644 /etc/km/netpolicy.env
 if chattr +a {{ .RuntimeDenyFile }} 2>/dev/null; then

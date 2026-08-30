@@ -48,6 +48,7 @@ type opts struct {
 	execDir         string
 	artifactsBucket string
 	sandboxID       string
+	region          string
 	stdout          io.Writer
 	stderr          io.Writer
 }
@@ -134,6 +135,17 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 		execDir = execlog.DefaultDir
 	}
 
+	// SSM's `AWS-RunShellScript` document runs this binary in a bare,
+	// non-login shell — it never sources /etc/profile.d, so a region set
+	// only there (as a root login gets) never reaches this process. Boot
+	// writes AWS_REGION into netpolicy.env for exactly that reason.
+	// AWS_DEFAULT_REGION is accepted too, so a box whose profile.d only sets
+	// the older name still resolves.
+	region := pick("AWS_REGION")
+	if region == "" {
+		region = pick("AWS_DEFAULT_REGION")
+	}
+
 	return opts{
 		denyFile:        denyFile,
 		flowDir:         flowDir,
@@ -145,6 +157,7 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 		execDir:         execDir,
 		artifactsBucket: pick("KM_ARTIFACTS_BUCKET"),
 		sandboxID:       pick("KM_SANDBOX_ID"),
+		region:          region,
 		stdout:          os.Stdout,
 		stderr:          os.Stderr,
 	}
