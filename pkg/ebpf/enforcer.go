@@ -181,11 +181,13 @@ func NewEnforcer(cfg Config) (*Enforcer, error) {
 
 	// Step 7: Pin maps that the transparent proxy needs to read.
 	// The proxy (separate process) loads these pins to look up original
-	// destinations for BPF-redirected connections.
+	// destinations for BPF-redirected connections, and (socket_pid_map) to
+	// attribute a proxied connection's flow record to the PID that opened it.
 	mapsToPin := map[string]*ebpf.Map{
 		"src_port_to_sock":      objs.SrcPortToSock,
 		"sock_to_original_ip":   objs.SockToOriginalIp,
 		"sock_to_original_port": objs.SockToOriginalPort,
+		"socket_pid_map":        objs.SocketPidMap,
 	}
 	for name, m := range mapsToPin {
 		p := pinPath + name
