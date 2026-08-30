@@ -52,8 +52,8 @@ one) the originating pid/comm:
 ```console
 $ km-netpolicy flows --since 10m
 2026-08-28T14:00:01Z  dns      allow    api.github.com
-2026-08-28T14:00:02Z  ebpf     allow    140.82.113.6:443                        git[4211]
-2026-08-28T14:00:02Z  http     allow    api.github.com:443
+2026-08-28T14:00:02Z  http     allow    api.github.com:443                      git[4211]
+2026-08-28T14:00:05Z  ebpf     redirect 172.67.74.152:443                       claude[4288]
 2026-08-28T14:02:11Z  dns      deny     evil.example.com
 2026-08-28T14:02:11Z  ebpf     deny     93.184.216.34:443                       curl[4299]
 
@@ -64,6 +64,27 @@ $ km-netpolicy flows --denied --json
 
 `--since <duration>` filters by age (e.g. `10m`, `1h`); `--denied` shows only
 blocked attempts; `--json` emits one record per line instead of the table.
+
+Two things about that `pid` column worth knowing. First, `src=ebpf` rows only
+ever carry one on a **deny** or **redirect** — the connect4 **allow** path
+deliberately emits no ring-buffer event at all (one event per allowed
+connection is real CloudWatch volume), so an allowed `src=ebpf` row is not a
+thing that exists. Second, `src=http` rows can now carry a pid on **any**
+verdict, allow included — the HTTP proxy resolves it itself, through the
+eBPF enforcer's pinned socket maps, independent of whether the ring buffer
+ever saw the connection at all. See `docs/exec-capture.md`'s `who <host>`
+section for the mechanism and what it needs (`enforcement: ebpf`/`both`).
+
+**Historical note:** every `src=ebpf` row recorded before 2026-08-30 carried
+a byte-reversed destination IP, and (for `connect4`-layer deny/redirect
+events specifically) a byte-reversed port too — a `curl https://github.com/`
+could show up as `3.114.82.140:47873` instead of `140.82.114.3:443`. This hit
+both `observed`/`flows` here and the `ebpf_network_deny` audit log entries.
+Fixed in `d36a727b` (only `connect4`-layer ports needed the swap;
+`sendmsg4`/`egress_skb` already converted to host order on the BPF side and
+would have been corrupted by a second swap). If you kept a census or capture
+from before that fix, treat any `src=ebpf` address/port pair in it as
+unreliable — it reads backwards.
 
 Every producer fills only what it actually observed and leaves the rest
 absent — the DNS proxy knows a name but not the eventual peer; the HTTP proxy

