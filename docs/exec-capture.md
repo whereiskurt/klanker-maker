@@ -314,33 +314,55 @@ $ cat /var/lib/km/execs/execs.jsonl.rotations
 2
 ```
 
-## `ExecStop`, and the honest limit on durability
+## Saving on the way out, and the honest limit on durability
 
-`km-execlog.service` saves on every graceful stop via `ExecStopPost`
-(**not** `ExecStop` — for `Type=simple`, systemd runs `ExecStop` *before*
-signalling the main process, which would upload the trace before the daemon's
-SIGTERM handler drains its final buffered-but-unwritten records to disk;
-`ExecStopPost` runs after the process has actually exited, once that drain has
-happened). That means `km stop`, `km pause`, and the ACPI shutdown that
-precedes an EC2 terminate all save the trace to S3 without anyone having to
-remember to run `execs save` by hand.
+There are two independent paths that save a trace without anyone remembering
+to, and they cover different exits.
 
-**A hard power-off still loses the unsaved tail.** `ExecStopPost` only fires
-on a graceful stop; nothing here is a durability guarantee for a killed
-instance or a kernel panic, and the docs are not going to imply one that
-doesn't hold. If you need the current trace preserved *now*, run
-`km-netpolicy execs save` yourself — see the known gap below on doing that
-by hand from an interactive shell.
+**Graceful OS stop — `ExecStopPost`.** `km-execlog.service` saves via
+`ExecStopPost` (**not** `ExecStop` — for `Type=simple`, systemd runs
+`ExecStop` *before* signalling the main process, which would upload the trace
+before the daemon's SIGTERM handler drains its final buffered-but-unwritten
+records to disk; `ExecStopPost` runs after the process has actually exited,
+once that drain has happened). This covers `km stop` and `km pause`, both
+live-verified.
 
-**Known gap: a manually-invoked `execs save` has no environment.** The
-`km-execlog.service` unit's own `Environment=` lines are what give
-`ExecStopPost` its `AWS_REGION`/`KM_ARTIFACTS_BUCKET`/`KM_SANDBOX_ID` —
-`/etc/km/netpolicy.env`, which `km shell --root` sources, carries none of
-them. Running `km-netpolicy execs save` by hand today fails with
-`KM_ARTIFACTS_BUCKET is not set`. Until that's plumbed through, the reliable
-way to force a save right now is `sudo systemctl restart km-execlog` (the
-outgoing process's `ExecStopPost` saves under the unit's own environment
-before the new one starts) rather than invoking the verb directly.
+The unit also declares `After=km-ebpf-enforcer.service km-dns-proxy.service`.
+That ordering is load-bearing, not tidiness: under `ebpf`/`both` enforcement
+`/etc/resolv.conf` points at the resolver the enforcer provides, and systemd
+stops units in reverse `After=` order — so without it the enforcer goes down
+first and the upload dies resolving the S3 hostname. `systemctl stop` on a
+running box does not expose this, because the resolver is still alive; only a
+real shutdown orders the enforcer down first.
+
+**`km destroy` — an explicit save over SSM, before teardown.** This is a
+separate mechanism and it exists because the `ExecStopPost` path does **not**
+cover a terminate. That was measured, not assumed: a `km destroy` against a
+box carrying the ordering fix above still produced an empty `execs/` prefix.
+So `km destroy` (and the ttl-handler's expiry path) now runs
+`km-netpolicy execs save` on the instance over SSM *while it is still
+running*, before terraform removes its networking. It is best-effort by
+construction — a missing instance, an SSM failure, or a save error is logged
+and destroy proceeds regardless, because a forensics artifact must never be
+able to block a teardown.
+
+**A hard power-off still loses the unsaved tail.** Neither path is a
+durability guarantee for a killed instance, a spot reclamation, or a kernel
+panic, and these docs are not going to imply one that doesn't hold. If you
+need the current trace preserved *now*, run `km-netpolicy execs save`
+yourself.
+
+**Running `execs save` by hand works.** Earlier builds failed with
+`KM_ARTIFACTS_BUCKET is not set`, because the values lived only in the
+systemd unit's own `Environment=` lines. `/etc/km/netpolicy.env` now carries
+`KM_EXEC_DIR`, `KM_ARTIFACTS_BUCKET`, `KM_SANDBOX_ID` and `AWS_REGION`, and
+the verb resolves all four through its normal environment →
+`/etc/km/netpolicy.env` fallback chain. The region matters as much as the
+bucket: SSM's `AWS-RunShellScript` runs a bare, non-login shell that never
+sources `/etc/profile.d`, so a region available to an interactive root login
+is not available to the same verb run over SSM — which is precisely how the
+`km destroy` path failed after it was first wired. `execs save` is root-only;
+the sandbox user gets a permission error by design.
 
 ## Not tamper-proof, deliberately
 
@@ -431,11 +453,13 @@ box.
   which reads as a bucket problem rather than a config one (the same trap
   `km-capture.service` hit and was fixed for in commit `216d4664`).
 - **`km-netpolicy execs save` run by hand exits `KM_ARTIFACTS_BUCKET is not
-  set`** — this is a currently-open gap, not a misconfiguration on your box.
-  The verb reads its S3 target straight from the environment, and that
-  environment only exists inside the `km-execlog.service` unit; an
-  interactive `km shell --root` session has none of it. `sudo systemctl
-  restart km-execlog` forces the same save through `ExecStopPost` instead.
+  set`** — a box created before this was fixed. The verb now resolves its S3
+  target, sandbox id, store directory and region from `/etc/km/netpolicy.env`
+  when they are absent from the environment, but the values are written into
+  that file by userdata at boot, so an older sandbox needs
+  `km destroy && km create` to gain them. On such a box, `sudo systemctl
+  restart km-execlog` still forces the save through `ExecStopPost`, which runs
+  under the unit's own `Environment=` lines.
 
 See `.planning/phases/132-exec-capture/132-UAT.md` for the full live-UAT
 record (VulnHunter vs. `defcon.run.34`) and
