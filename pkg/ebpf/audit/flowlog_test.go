@@ -44,6 +44,67 @@ func TestHandleEvent_RecordsOneFlowPerEvent(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_Connect4PortIsByteSwapped pins the live-observed
+// regression: a curl to github.com:443 recorded dst_ip=0x0372528C and
+// dst_port=0xBB01=47873 in the ring buffer. Both fields must decode to the
+// true destination (140.82.114.3:443), not the byte-reversed one this
+// bridge shipped with.
+func TestHandleEvent_Connect4PortIsByteSwapped(t *testing.T) {
+	dir := t.TempDir()
+	path := flowlog.FileFor(dir, flowlog.SrcEBPF)
+	w := flowlog.NewWriter(path, 1<<20)
+	defer w.Close()
+
+	c := newTestConsumer(w, nil)
+	c.handleEvent(bpfEvent{
+		Pid:     33061,
+		DstIP:   0x0372528C, // wire bytes for 140.82.114.3
+		DstPort: 0xBB01,     // raw, unconverted user_port for 443
+		Action:  actionRedirect,
+		Layer:   layerConnect4,
+	})
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no flow file written: %v", err)
+	}
+	got := string(body)
+	for _, want := range []string{`"addr":"140.82.114.3"`, `"port":443`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %s in:\n%s", want, got)
+		}
+	}
+}
+
+// TestHandleEvent_Sendmsg4PortNotDoubleSwapped guards the corollary bug a
+// blanket "swap every connect4/sendmsg4 port" fix would introduce: sendmsg4
+// converts its port to host order on the BPF side before emitting, so its
+// dst_port (always 53 — sendmsg4 only fires for DNS) must reach the flow
+// record unswapped.
+func TestHandleEvent_Sendmsg4PortNotDoubleSwapped(t *testing.T) {
+	dir := t.TempDir()
+	path := flowlog.FileFor(dir, flowlog.SrcEBPF)
+	w := flowlog.NewWriter(path, 1<<20)
+	defer w.Close()
+
+	c := newTestConsumer(w, nil)
+	c.handleEvent(bpfEvent{
+		Pid:     100,
+		DstIP:   ipToUint32(t, "8.8.8.8"),
+		DstPort: 53,
+		Action:  actionRedirect,
+		Layer:   layerSendmsg4,
+	})
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no flow file written: %v", err)
+	}
+	if !strings.Contains(string(body), `"port":53`) {
+		t.Errorf("want unswapped port 53 in:\n%s", body)
+	}
+}
+
 func TestHandleEvent_VerdictMapping(t *testing.T) {
 	cases := []struct {
 		action  uint8
@@ -153,13 +214,20 @@ func TestHandleEvent_NilOrEmptyNameFnLeavesHostEmpty(t *testing.T) {
 	}
 }
 
-// ipToUint32 converts a dotted-quad string into the network-byte-order uint32
-// bpfEvent.DstIP expects (mirrors uint32ToIP's inverse).
+// ipToUint32 converts a dotted-quad string into the bpfEvent.DstIP value a
+// LittleEndian binary.Read produces for those wire-order octets — the
+// correct inverse of the FIXED uint32ToIP (binary.LittleEndian.PutUint32).
+//
+// The previous version of this helper built the uint32 MSB-first
+// (ip[0]<<24 | ip[1]<<16 | ip[2]<<8 | ip[3]), documented as mirroring
+// uint32ToIP's inverse — which it did, but uint32ToIP itself was wrong (see
+// its doc comment), so every test built on this helper exercised the bug's
+// own byte order rather than the kernel's, and passed anyway.
 func ipToUint32(t *testing.T, s string) uint32 {
 	t.Helper()
 	ip := net.ParseIP(s).To4()
 	if ip == nil {
 		t.Fatalf("invalid test IP: %s", s)
 	}
-	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+	return uint32(ip[0]) | uint32(ip[1])<<8 | uint32(ip[2])<<16 | uint32(ip[3])<<24
 }
