@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
 	kmspkg "github.com/aws/aws-sdk-go-v2/service/kms"
 	lambdapkg "github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -406,6 +408,13 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 			Msg("GitHub token SSM parameter deleted")
 	}
 	fmt.Printf("GitHub token resources cleaned up for %s\n", sandboxID)
+
+	// Step 7d: Save the sandbox's process-exec trace over SSM WHILE THE
+	// INSTANCE IS STILL RUNNING, before terraform destroy removes its
+	// networking. See saveExecTraceBeforeDestroy for why km-execlog.service's
+	// own ExecStopPost cannot be relied on here. Best-effort — never blocks
+	// or fails destroy.
+	saveExecTraceBeforeDestroy(ctx, ec2.NewFromConfig(awsCfg), ssmClient, sandboxID)
 
 	// Step 8: Run terragrunt destroy (streams output in real time)
 	// If destroy fails, check if it was a state lock error and offer to retry.
@@ -904,6 +913,86 @@ func cleanupVSCodeState(sandboxID string) {
 				Msg("failed to remove vscode key file (non-fatal)")
 		}
 	}
+}
+
+// execTraceEC2API is the narrow EC2 interface saveExecTraceBeforeDestroy needs
+// to find a still-running instance to talk to over SSM. Implemented by
+// *ec2.Client; defined here (rather than reused from elsewhere) so a fake can
+// satisfy it in tests without any real AWS calls.
+type execTraceEC2API interface {
+	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+}
+
+// findRunningInstanceID looks up a single running EC2 instance tagged with
+// this sandbox id. Returns ("", nil) — not an error — when none is running:
+// that is the ordinary case for a sandbox that was already stopped, never
+// provisioned as EC2 (Docker/ECS), or an orphaned row from a cold-create that
+// never finished.
+func findRunningInstanceID(ctx context.Context, client execTraceEC2API, sandboxID string) (string, error) {
+	out, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
+			{Name: aws.String("instance-state-name"), Values: []string{"running"}},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, res := range out.Reservations {
+		for _, inst := range res.Instances {
+			if id := aws.ToString(inst.InstanceId); id != "" {
+				return id, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// saveExecTraceBeforeDestroy asks the sandbox's EC2 instance to upload its own
+// process-exec trace to S3 (`km-netpolicy execs save`) over SSM WHILE IT IS
+// STILL RUNNING, before terraform destroy tears down its networking.
+//
+// km-execlog.service's own `ExecStopPost=-/opt/km/bin/km-netpolicy execs save`
+// already does this on a graceful `km stop` — verified live: two S3 objects,
+// the shutdown-written one larger (it caught the shutdown's own execs). It
+// does NOT work for `km destroy`: `TerminateInstances` gives a shorter grace
+// window than `StopInstances`, and/or terraform destroy removes the
+// instance's networking (security group, ENI, route) alongside it, so the
+// shutdown-time upload has nowhere to send to — verified live: a box with a
+// 1,672,598-byte local trace and confirmed-correct unit ordering still
+// uploaded nothing to S3 after `km destroy`. This function sidesteps the
+// shutdown window entirely by running the save while the instance is still
+// fully alive and networked, before any teardown begins.
+//
+// Best-effort by construction and MUST NEVER block or fail destroy: a missing
+// running instance (already stopped, never provisioned as EC2, or an
+// orphaned/cold-create-failed row) is the ordinary case, logged at Debug —
+// not a warning. An SSM send/wait failure is logged at Warn. The whole
+// operation is bounded by an internal timeout so a hung AWS call cannot
+// delay teardown.
+func saveExecTraceBeforeDestroy(ctx context.Context, ec2Client execTraceEC2API, ssmClient awspkg.SSMCommandRunner, sandboxID string) {
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	instanceID, err := findRunningInstanceID(cctx, ec2Client, sandboxID)
+	if err != nil {
+		log.Debug().Err(err).Str("sandbox_id", sandboxID).
+			Msg("exec-trace save: could not look up running instance (non-fatal)")
+		return
+	}
+	if instanceID == "" {
+		log.Debug().Str("sandbox_id", sandboxID).
+			Msg("exec-trace save: no running instance found — nothing to save")
+		return
+	}
+
+	if err := awspkg.SaveExecTraceOverSSM(cctx, ssmClient, instanceID); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Str("instance_id", instanceID).
+			Msg("exec-trace save over SSM failed (non-fatal); proceeding with destroy")
+		return
+	}
+	log.Info().Str("sandbox_id", sandboxID).Str("instance_id", instanceID).
+		Msg("exec trace saved over SSM before destroy")
 }
 
 // cleanupGitHubTokenResources removes all resources created by the github-token
