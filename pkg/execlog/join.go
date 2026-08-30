@@ -61,10 +61,13 @@ func (ix *Index) At(pid int, t time.Time) (Record, bool) {
 
 // Attribution pairs one flow with the process that produced it.
 //
-// Found is false when the flow carries no pid (the DNS and HTTP proxies record
-// none) or when no process owned that pid at that moment. The flow is still
-// returned either way: dropping it would make a destination the sandbox really
-// reached look like it was never reached at all.
+// Found is false when the flow carries no pid — the DNS proxy and the eBPF
+// resolver never record one, and the HTTP proxy's own best-effort resolution
+// (pinned BPF maps that exist only under ebpf/both enforcement and only for a
+// process inside the sandbox's own cgroup) can still miss — or when no
+// process owned that pid at that moment. The flow is still returned either
+// way: dropping it would make a destination the sandbox really reached look
+// like it was never reached at all.
 type Attribution struct {
 	Flow  flowlog.Record
 	Exec  Record

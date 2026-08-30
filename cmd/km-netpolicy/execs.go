@@ -224,25 +224,29 @@ func runWho(o opts, args []string) error {
 	}
 
 	// Silence here would read as "nothing reached that host", which is the
-	// opposite of the truth. Say which half of the join was missing — in terms
-	// of what the producers actually emit, not the enforcement mode. A
-	// pid-bearing flow exists only for a DENIED or REDIRECTED connection:
-	// pkg/ebpf/bpf.c's emit_event fires only on ACTION_DENY/ACTION_REDIRECT,
-	// and the connect4 ALLOW path deliberately emits no event at all (one
-	// event per allowed connection is real CloudWatch volume). The DNS/HTTP
-	// proxies and the eBPF resolver never record a pid either, on any verdict.
-	// So an ALLOWED connection is never attributable — including on a box
-	// already running ebpf/both — and that is expected, not evidence the
-	// feature is broken.
+	// opposite of the truth. Say which half of the join was missing, and why,
+	// rather than leaving the operator to guess. Attribution rides entirely on
+	// the pinned BPF maps connect4 populates (pkg/ebpf/bpf.c's socket_pid_map,
+	// read via sidecars/http-proxy/httpproxy/pidresolve.go) — those exist only
+	// under spec.network.enforcement: ebpf or both, and only for a process
+	// inside the sandbox's own enforcement cgroup, since connect4 is a
+	// cgroup/connect4 program: a root daemon, or anything not dispatched
+	// through the sandbox's own path, is invisible to it regardless of mode.
+	// On top of that, resolution is best-effort — a missing pin directory, a
+	// map lookup miss, or any other lookup failure all cost a pid, never a
+	// request. Under plain `proxy` enforcement there is no BPF loaded at all,
+	// so nothing here is ever attributable — that is expected, not a fault.
 	if unattributed == len(hits) {
 		fmt.Fprintf(o.stdout,
 			"\nNone of these flows could be attributed to a process.\n"+
-				"A flow only carries a pid when it was DENIED or REDIRECTED — the\n"+
-				"allowed-connection path records no pid (and, under ebpf/both, often\n"+
-				"no flow at all). So an ALLOWED connection is never attributable, even\n"+
-				"on a box already running spec.network.enforcement: ebpf or both — this\n"+
-				"is expected, not a sign the feature is broken. The exec trace itself\n"+
-				"is complete regardless — see `km-netpolicy execs`.\n")
+				"Attribution needs spec.network.enforcement: ebpf or both — plain\n"+
+				"`proxy` loads no BPF and can never resolve a pid — and it needs the\n"+
+				"originating process to be inside this sandbox's own enforcement\n"+
+				"cgroup; traffic from outside it (root daemons, anything not\n"+
+				"dispatched through the sandbox path) won't resolve either way.\n"+
+				"Resolution is best-effort even when both hold: a miss costs a pid,\n"+
+				"never a request. The exec trace itself is complete regardless —\n"+
+				"see `km-netpolicy execs`.\n")
 	}
 	warnIfTruncated(o)
 	return nil
