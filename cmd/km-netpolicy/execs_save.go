@@ -101,7 +101,13 @@ func runExecsSave(o opts) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	cfg, err := config.LoadDefaultConfig(ctx)
+	// SSM's `AWS-RunShellScript` document runs this verb outside any login
+	// shell, so the ambient environment carries no region even when a root
+	// login on the same box would see one from /etc/profile.d. WithRegion is
+	// explicit here rather than left to the SDK's own env lookup so o.region
+	// (opts, not os.Getenv) is what actually governs — same reasoning as the
+	// bucket/sandbox id above, and empty is safely ignored by the SDK.
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(o.region))
 	if err != nil {
 		fmt.Fprintf(o.stderr, "%s execs save: load aws config: %v (trace kept locally at %s)\n", prog, err, livePath)
 		return fmt.Errorf("load aws config: %w", err)

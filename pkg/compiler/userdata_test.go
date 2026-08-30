@@ -2715,6 +2715,42 @@ func TestUserData_CaptureUnitCarriesRegion(t *testing.T) {
 	}
 }
 
+// TestUserData_NetpolicyEnvCarriesRegion pins the km-netpolicy sibling of the
+// same defect: `km-netpolicy execs save` is invoked over SSM's
+// AWS-RunShellScript, which runs a bare, non-login shell that never sources
+// /etc/profile.d — so unlike a root login (which gets AWS_DEFAULT_REGION from
+// there), it has no region at all unless /etc/km/netpolicy.env carries one.
+// Measured live: "operation error S3: PutObject, resolve auth scheme: resolve
+// endpoint: endpoint rule error, Invalid region: region was not a valid DNS
+// name" — the exact same endpoint-resolution failure shape as the km-capture
+// unit, found the same way.
+func TestUserData_NetpolicyEnvCarriesRegion(t *testing.T) {
+	script, err := generateUserData(baseProfile(), "sb-netpolicyenvregion", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	idx := strings.Index(script, "cat > /etc/km/netpolicy.env << 'NETPOLICYENV'")
+	if idx < 0 {
+		t.Fatal("/etc/km/netpolicy.env heredoc not rendered")
+	}
+	// Scope the search to this heredoc's own body, so an AWS_REGION line
+	// belonging to some other unit/file elsewhere in the script (there are
+	// several) cannot satisfy the assertion. The opener line itself contains
+	// the delimiter word, so search for the closing delimiter starting just
+	// past it.
+	body := script[idx+len("cat > /etc/km/netpolicy.env << 'NETPOLICYENV'"):]
+	end := strings.Index(body, "\nNETPOLICYENV\n")
+	if end < 0 {
+		t.Fatal("could not find the closing NETPOLICYENV delimiter")
+	}
+	block := body[:end]
+
+	if !strings.Contains(block, "AWS_REGION=") {
+		t.Errorf("/etc/km/netpolicy.env has no AWS_REGION; `km-netpolicy execs save` run over SSM's non-login shell cannot resolve an S3 endpoint.\nblock:\n%s", block)
+	}
+}
+
 func TestUserData_ProvisionsFlowStoreInProxyMode(t *testing.T) {
 	script, err := generateUserData(baseProfile(), "sb-flowtest-proxy", nil, "my-bucket", false, nil)
 	if err != nil {

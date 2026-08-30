@@ -17,6 +17,7 @@ import (
 type fakeSSMCommandRunner struct {
 	sendErr      error
 	sendCalls    int
+	lastCommand  string                             // the "commands" parameter sent on the most recent SendCommand call
 	invocations  []ssmtypes.CommandInvocationStatus // returned in order, one per GetCommandInvocation call
 	invErr       error                              // if set, every GetCommandInvocation call fails with this
 	getCallCount int
@@ -24,6 +25,9 @@ type fakeSSMCommandRunner struct {
 
 func (f *fakeSSMCommandRunner) SendCommand(ctx context.Context, params *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
 	f.sendCalls++
+	if cmds := params.Parameters["commands"]; len(cmds) > 0 {
+		f.lastCommand = cmds[0]
+	}
 	if f.sendErr != nil {
 		return nil, f.sendErr
 	}
@@ -138,5 +142,31 @@ func TestSaveExecTraceOverSSM_DeadlineExceededIsReturnedNotBlocked(t *testing.T)
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("SaveExecTraceOverSSM must respect ctx deadline promptly, took %v", elapsed)
+	}
+}
+
+// TestSaveExecTraceOverSSM_CommandSourcesNetpolicyEnvForRegion pins the
+// belt-and-braces fix for the region bug: AWS-RunShellScript invokes a bare,
+// non-login shell that never sources /etc/profile.d (where a root login gets
+// AWS_DEFAULT_REGION from), so the SSM command itself must source
+// /etc/km/netpolicy.env — where the region now lives — before invoking the
+// verb, rather than depending on ambient environment the shell was never
+// going to have.
+func TestSaveExecTraceOverSSM_CommandSourcesNetpolicyEnvForRegion(t *testing.T) {
+	f := &fakeSSMCommandRunner{invocations: []ssmtypes.CommandInvocationStatus{ssmtypes.CommandInvocationStatusSuccess}}
+	if err := SaveExecTraceOverSSM(context.Background(), f, "i-abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(f.lastCommand, "/etc/km/netpolicy.env") {
+		t.Fatalf("command must source /etc/km/netpolicy.env before invoking the verb, got: %q", f.lastCommand)
+	}
+	sourceIdx := strings.Index(f.lastCommand, "/etc/km/netpolicy.env")
+	verbIdx := strings.Index(f.lastCommand, "km-netpolicy execs save")
+	if verbIdx < 0 {
+		t.Fatalf("command must invoke 'km-netpolicy execs save', got: %q", f.lastCommand)
+	}
+	if sourceIdx > verbIdx {
+		t.Fatalf("the env file must be sourced BEFORE the verb runs, got: %q", f.lastCommand)
 	}
 }

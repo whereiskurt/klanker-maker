@@ -1389,6 +1389,7 @@ KM_NETPOLICY_PINS=/var/lib/km/netpolicy/allow.pins
 KM_EXEC_DIR=/var/lib/km/execs
 KM_ARTIFACTS_BUCKET=my-bucket
 KM_SANDBOX_ID=test-sb
+AWS_REGION=us-east-1
 NETPOLICYENV
 chmod 644 /etc/km/netpolicy.env
 if chattr +a /var/lib/km/netpolicy/deny.list 2>/dev/null; then
