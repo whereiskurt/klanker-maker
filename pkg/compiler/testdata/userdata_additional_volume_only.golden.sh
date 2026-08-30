@@ -1523,6 +1523,24 @@ cat > /etc/systemd/system/km-execlog.service << 'UNIT'
 [Unit]
 Description=km process execution tracer
 After=network-online.target
+# Also ordered after the units that provide DNS on this box, and this line
+# is about the SHUTDOWN direction, not the boot direction — do not "tidy"
+# it away because startup doesn't seem to need it. systemd stops units in
+# the REVERSE of their After= order, so listing km-ebpf-enforcer.service and
+# km-dns-proxy.service here makes km-execlog stop FIRST, before either of
+# them, so its ExecStopPost save below still has a resolver to ask when it
+# looks up the S3 endpoint. Under ebpf/both enforcement /etc/resolv.conf
+# points at the enforcer's own on-box resolver; under proxy enforcement
+# km-dns-proxy plays the same role — and neither is uid- or cgroup-scoped,
+# so root's own S3 lookup depends on whichever is still running. Live UAT
+# on a real ACPI shutdown (not "systemctl stop", which leaves the resolver
+# up and hid this) caught systemd stopping the enforcer first: the save
+# then failed with "dial tcp: lookup ...s3....amazonaws.com on
+# 127.0.0.1:53: read: connection refused". After= on a unit that does not
+# exist on a given box (e.g. km-dns-proxy under ebpf-only enforcement) is a
+# no-op ordering constraint, not a requirement, so this is safe in every
+# enforcement mode.
+After=km-ebpf-enforcer.service km-dns-proxy.service
 # Give up rather than loop forever. A box where the tracer genuinely cannot
 # load should show one failed unit that km doctor and journalctl can see, not
 # a restart every few seconds for the life of the sandbox. These belong in
@@ -1555,8 +1573,13 @@ ExecStart=/opt/km/bin/km-netpolicy execs-daemon
 # (drainRemaining) — an ExecStop save would upload the store as it stood
 # before that tail ever reached disk, silently losing exactly what the
 # daemon's own drain fix was for. Best-effort: never blocks the stop, and a
-# hard power-off still loses the unsaved tail.
-ExecStopPost=/opt/km/bin/km-netpolicy execs save
+# hard power-off still loses the unsaved tail. The leading "-" tells systemd
+# not to treat a non-zero exit (e.g. the S3 upload failing) as unit failure —
+# the verb itself already keeps the trace locally and says so, so a offline
+# or DNS-less shutdown should not also leave "Failed with result
+# 'exit-code'" behind for km doctor and the operator to puzzle over. Do not
+# remove the "-" as a stray typo.
+ExecStopPost=-/opt/km/bin/km-netpolicy execs save
 Restart=on-failure
 RestartSec=5
 [Install]
