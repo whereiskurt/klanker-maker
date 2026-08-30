@@ -967,9 +967,13 @@ func findRunningInstanceID(ctx context.Context, client execTraceEC2API, sandboxI
 // Best-effort by construction and MUST NEVER block or fail destroy: a missing
 // running instance (already stopped, never provisioned as EC2, or an
 // orphaned/cold-create-failed row) is the ordinary case, logged at Debug —
-// not a warning. An SSM send/wait failure is logged at Warn. The whole
-// operation is bounded by an internal timeout so a hung AWS call cannot
-// delay teardown.
+// not a warning. An SSM send/wait failure is logged at Warn AND printed
+// directly to stderr: runDestroy discards the global logger entirely unless
+// `--verbose` is passed (see the `log.Logger = zerolog.New(io.Discard)` above
+// in this file), so a Warn-level log line alone is invisible on the default,
+// non-verbose path — exactly the path that hid this failure until it was
+// found by a live measurement instead of a log. The whole operation is
+// bounded by an internal timeout so a hung AWS call cannot delay teardown.
 func saveExecTraceBeforeDestroy(ctx context.Context, ec2Client execTraceEC2API, ssmClient awspkg.SSMCommandRunner, sandboxID string) {
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -987,6 +991,8 @@ func saveExecTraceBeforeDestroy(ctx context.Context, ec2Client execTraceEC2API, 
 	}
 
 	if err := awspkg.SaveExecTraceOverSSM(cctx, ssmClient, instanceID); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: exec trace save failed for %s (instance %s), proceeding with destroy: %v\n",
+			sandboxID, instanceID, err)
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).Str("instance_id", instanceID).
 			Msg("exec-trace save over SSM failed (non-fatal); proceeding with destroy")
 		return
