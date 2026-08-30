@@ -147,3 +147,38 @@ func stripPort(host string) string {
 	}
 	return host
 }
+
+// MatchAllow reports whether host matches any of the patterns using ALLOW-side
+// semantics, which are deliberately narrower than Match's.
+//
+// A leading dot means apex-plus-subdomains (".github.com" matches "github.com"
+// and "api.github.com"); a bare entry matches exactly and nothing below it.
+// This mirrors httpproxy.IsHostAllowed so a pinned host is judged the same way
+// a profile-declared allowlist entry is.
+//
+// The asymmetry with Match is the point. On the deny side, strictness fails
+// open; on the allow side, looseness grants more than the operator wrote.
+func MatchAllow(host string, patterns []string) bool {
+	h := stripPort(host)
+	h = strings.ToLower(strings.TrimSuffix(h, "."))
+	if h == "" {
+		return false
+	}
+	for _, p := range patterns {
+		if p == "*" {
+			return true
+		}
+		p = strings.ToLower(strings.TrimSuffix(p, "."))
+		if p == "" {
+			continue
+		}
+		if strings.HasPrefix(p, ".") {
+			if h == p[1:] || strings.HasSuffix(h, p) {
+				return true
+			}
+		} else if h == p {
+			return true
+		}
+	}
+	return false
+}

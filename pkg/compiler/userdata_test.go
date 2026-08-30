@@ -2636,3 +2636,164 @@ func TestUserdataBedrockMarker(t *testing.T) {
 		t.Errorf("marker must be absent when bedrock disabled")
 	}
 }
+
+// TestUserData_ProvisionsFlowStoreAndPins pins the Task 12 five-site trap
+// (restated for pins from commit 0c7f9880): the flow dir, the pin file, its
+// kernel append-only seal, and every consumer's env var/flag must ALL be
+// provisioned together, or the CLI reports success while nothing enforces it.
+func TestUserData_ProvisionsFlowStoreAndPins(t *testing.T) {
+	// "both" enforcement exercises every consumer in one render: the eBPF
+	// enforcer's --netpolicy-pins/--flowlog-dir flags only appear in
+	// "ebpf"/"both" mode, while the flow store, pin file, and proxy env vars
+	// are provisioned unconditionally regardless of mode.
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "both"
+	script, err := generateUserData(p, "sb-flowtest", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	wants := []string{
+		"/var/lib/km/flows",                          // flow dir exists
+		"/var/lib/km/netpolicy/allow.pins",           // pin file exists
+		"chattr +a /var/lib/km/netpolicy/allow.pins", // kernel-enforced append-only
+		"KM_FLOWLOG_DIR=",                            // producers can write
+		"KM_NETPOLICY_PINS=",                         // proxies can read
+		"--netpolicy-pins",                           // eBPF resolver can read
+		"km-capture.service",                         // capture daemon unit
+		"capture-daemon",                             // its ExecStart verb
+	}
+	for _, w := range wants {
+		if !strings.Contains(script, w) {
+			t.Errorf("userdata missing %q", w)
+		}
+	}
+}
+
+// TestUserData_ProvisionsFlowStoreInProxyMode is the proxy-mode (default)
+// counterpart to TestUserData_ProvisionsFlowStoreAndPins. "proxy" is the
+// default enforcement mode — most of the fleet — and in that mode the eBPF
+// enforcer block (and the --netpolicy-pins/--flowlog-dir flags on its
+// ExecStart) never renders at all, so the two proxies are the ONLY flow
+// recorders and the ONLY pin enforcers for a proxy-mode sandbox. This test
+// leaves baseProfile()'s default enforcement untouched (do not override it
+// to "both"/"ebpf" here — that would silently stop covering this mode) and
+// asserts the same wants list as the "both"-mode test MINUS the two
+// eBPF-only flags, which are asserted ABSENT rather than simply omitted, so
+// that anyone who later moves them outside their enforcement conditional
+// (which would leak them into "proxy" mode) or accidentally regresses the
+// proxy-only wiring is caught either way.
+// TestUserData_CaptureUnitCarriesRegion pins a bug found only in live UAT: the
+// km-capture unit shipped without AWS_REGION, so the daemon's S3 upload failed
+// with "Invalid region: region was not a valid DNS name" — an endpoint-resolution
+// error, not a credential one, which is why it reads as a bucket problem.
+//
+// It survived every unit test and both review passes because the capture itself
+// worked perfectly; only the upload failed, and the upload is deliberately
+// best-effort, so it degraded to "file kept locally" rather than failing loudly.
+// Every other km unit carries the variable.
+func TestUserData_CaptureUnitCarriesRegion(t *testing.T) {
+	script, err := generateUserData(baseProfile(), "sb-capregion", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	idx := strings.Index(script, "km-capture.service")
+	if idx < 0 {
+		t.Fatal("km-capture.service unit not rendered")
+	}
+	// Scope the search to this unit's own body rather than the whole script, so
+	// an AWS_REGION belonging to a different unit cannot satisfy the assertion.
+	// End at "[Install]": the heredoc's own delimiter is unusable as a bound
+	// because the opener ("<< 'UNIT'") sits on the same line as the unit name.
+	unit := script[idx:]
+	if end := strings.Index(unit, "[Install]"); end > 0 {
+		unit = unit[:end]
+	}
+	if !strings.Contains(unit, "Environment=AWS_REGION=") {
+		t.Errorf("km-capture unit has no AWS_REGION; its S3 upload cannot resolve an endpoint.\nunit:\n%s", unit)
+	}
+}
+
+func TestUserData_ProvisionsFlowStoreInProxyMode(t *testing.T) {
+	script, err := generateUserData(baseProfile(), "sb-flowtest-proxy", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	wants := []string{
+		"/var/lib/km/flows",                          // flow dir exists
+		"/var/lib/km/netpolicy/allow.pins",           // pin file exists
+		"chattr +a /var/lib/km/netpolicy/allow.pins", // kernel-enforced append-only
+		"KM_FLOWLOG_DIR=",                            // proxies can write
+		"KM_NETPOLICY_PINS=",                         // proxies can read
+		"km-capture.service",                         // capture daemon unit
+		"capture-daemon",                             // its ExecStart verb
+	}
+	for _, w := range wants {
+		if !strings.Contains(script, w) {
+			t.Errorf("proxy-mode userdata missing %q", w)
+		}
+	}
+
+	// The eBPF enforcer unit — and therefore these flags — only renders in
+	// "ebpf"/"both" mode. Their presence here would mean the enforcer block
+	// leaked outside its enforcement conditional.
+	notWants := []string{
+		"--netpolicy-pins",
+		"--flowlog-dir",
+	}
+	for _, nw := range notWants {
+		if strings.Contains(script, nw) {
+			t.Errorf("proxy-mode userdata unexpectedly contains %q (eBPF enforcer flags must not render outside ebpf/both mode)", nw)
+		}
+	}
+}
+
+// TestUserData_FlowDirIsWritableByEveryProducer is the regression guard for
+// the defect that made flow recording dead in the DEFAULT enforcement mode.
+//
+// The directory was created root-owned 0755 while km-dns-proxy and km-http-proxy
+// both run as User=km-sidecar, so every flow write failed EACCES — and both
+// producers deliberately discard that error on the egress hot path. Under
+// "proxy" enforcement those two are the ONLY recorders, so the census was empty
+// on a default box while `km-netpolicy observed` reported "(none)" as though the
+// sandbox had simply reached nothing.
+//
+// Asserting the mode is the only cheap way to catch this: the producer tests
+// write into a t.TempDir() the test process owns, so they can never see it.
+func TestUserData_FlowDirIsWritableByEveryProducer(t *testing.T) {
+	for _, mode := range []string{"proxy", "ebpf", "both"} {
+		p := baseProfile()
+		p.Spec.Network.Enforcement = mode
+		script, err := generateUserData(p, "sb-flowperm", nil, "my-bucket", false, nil)
+		if err != nil {
+			t.Fatalf("generateUserData(%s) failed: %v", mode, err)
+		}
+		if !strings.Contains(script, "chmod 1777 /var/lib/km/flows") {
+			t.Errorf("%s mode: flow dir is not writable by the unprivileged sidecar user; "+
+				"every proxy flow write will EACCES silently", mode)
+		}
+		if strings.Contains(script, "chmod 755 /var/lib/km/flows") {
+			t.Errorf("%s mode: flow dir reverted to a mode only root can write", mode)
+		}
+	}
+}
+
+// TestUserData_PinFileIsAppendOnlyBeforeAnythingCanWrite pins the ordering
+// invariant: the pin file must be sealed chattr +a BEFORE any service that
+// might read (or, on a compromised sandbox, attempt to write) it starts.
+func TestUserData_PinFileIsAppendOnlyBeforeAnythingCanWrite(t *testing.T) {
+	script, err := generateUserData(baseProfile(), "sb-flowtest", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	chattrIdx := strings.Index(script, "chattr +a /var/lib/km/netpolicy/allow.pins")
+	unitIdx := strings.Index(script, "km-capture.service")
+	if chattrIdx < 0 || unitIdx < 0 {
+		t.Fatal("expected both the chattr and the unit")
+	}
+	if chattrIdx > unitIdx {
+		t.Error("the pin file must be sealed append-only before any service starts")
+	}
+}

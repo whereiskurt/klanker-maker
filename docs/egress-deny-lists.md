@@ -267,3 +267,30 @@ IPs seeded and cannot be reached by address.
 The one caveat inherited from the static case still applies: with
 `allowedHosts: ["*"]` under eBPF the trie is seeded `0.0.0.0/0`, so enforcement
 rests on name resolution and a connection to a literal IP is not blocked.
+
+## Allow pins: the mirror image of a deny
+
+`km-netpolicy` also ships `pin`, which narrows from the **allow** side instead
+of the deny side:
+
+```
+effective deny  = union(profile denies, runtime deny file)     # can only grow
+effective allow = profile allowlist ∩ pin generation 1 ∩ …      # can only shrink
+```
+
+Deny is a union and can only ever block more; pin is an intersection and can
+only ever allow less. Both are monotone in the narrowing direction, and both
+get the identical treatment for the identical reason: their own append-only
+file under `/var/lib`, `chattr +a` at boot, and no removal verb anywhere in
+`km-netpolicy`'s surface.
+
+**A deny still beats a pin.** Precedence is deny → pins narrow the allow →
+profile allowlist, so a pin can never re-allow a host a deny already blocked —
+a denied destination was never in the allow set to begin with, so it cannot
+appear in an intersection of allow sets. The two narrow independently and
+compose safely: denying more never widens what's pinned, and pinning tighter
+never re-opens what's denied.
+
+See `docs/egress-census.md` for the full pin workflow — the live census pin
+narrows against, the collapsed-vs-`--exact` tradeoff, and why pin has no
+un-pin verb.

@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	"github.com/whereiskurt/klanker-maker/pkg/quota"
 	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
@@ -53,6 +54,24 @@ func main() {
 			ev = ev.Str("runtime_deny_file", runtimeStore.Path())
 		}
 		ev.Msg("")
+	}
+
+	// KM_NETPOLICY_PINS is set only when the sandbox has captured at least one
+	// pin generation. Registered unconditionally (mirrors the DNS proxy) so a
+	// pinner constructed over a not-yet-written file allows everything until
+	// the sandbox's first pin lands.
+	var pinStore *netpolicy.PinStore
+	if pf := os.Getenv("KM_NETPOLICY_PINS"); pf != "" {
+		pinStore = netpolicy.NewPinStore(pf, netpolicy.DefaultReloadInterval)
+	}
+	proxyOpts = append(proxyOpts, httpproxy.WithPinner(netpolicy.NewPinner(pinStore)))
+
+	// KM_FLOWLOG_DIR is set only when the profile enables egress census flow
+	// recording. Empty disables it — a nil Writer makes recordFlow a no-op, so
+	// an unset var is byte-identical to before flow logging existed.
+	if dir := os.Getenv("KM_FLOWLOG_DIR"); dir != "" {
+		proxyOpts = append(proxyOpts,
+			httpproxy.WithFlows(flowlog.NewWriter(flowlog.FileFor(dir, flowlog.SrcHTTP), flowlog.DefaultMaxBytes)))
 	}
 
 	// Budget enforcement state — hoisted so both goproxy and transparent listener

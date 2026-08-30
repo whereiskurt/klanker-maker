@@ -5,9 +5,12 @@ package dnsproxy
 
 import (
 	"net"
+	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 )
 
@@ -41,7 +44,20 @@ func IsDenied(name string, denied []string) bool {
 // denier may be nil, which is the shape for a sandbox with no denies at all. It
 // is consulted per query rather than snapshotted, so a deny the sandbox appends
 // to its runtime list at 10:00 is enforced on the next query without a restart.
-func NewHandler(allowedSuffixes []string, denier *netpolicy.Denier, upstreamAddr, sandboxID string) dns.HandlerFunc {
+//
+// pinner may also be nil, which is the shape for a sandbox that has never
+// pinned. It is applied as a conjunction AFTER the existing allow check, never
+// as a replacement for it — that ordering is what keeps the change monotone:
+// A && P is a subset of A for any P.
+func NewHandler(allowedSuffixes []string, denier *netpolicy.Denier, pinner *netpolicy.Pinner, upstreamAddr, sandboxID string) dns.HandlerFunc {
+	return NewHandlerWithFlows(allowedSuffixes, denier, pinner, upstreamAddr, sandboxID, nil)
+}
+
+// NewHandlerWithFlows is NewHandler plus best-effort flow-record emission to
+// flows. flows may be nil (flow recording disabled), in which case the
+// handler is byte-identical to NewHandler — a flow store that cannot be
+// written must never affect the answer the sandbox is waiting on.
+func NewHandlerWithFlows(allowedSuffixes []string, denier *netpolicy.Denier, pinner *netpolicy.Pinner, upstreamAddr, sandboxID string, flows *flowlog.Writer) dns.HandlerFunc {
 	// Ensure upstream has a port.
 	upstream := upstreamAddr
 	if _, _, err := net.SplitHostPort(upstream); err != nil {
@@ -60,7 +76,8 @@ func NewHandler(allowedSuffixes []string, denier *netpolicy.Denier, upstreamAddr
 		domain := q.Name
 		// Deny is evaluated first and beats every allow, including "*".
 		denied := denier.IsDenied(domain)
-		allowed := !denied && IsAllowed(domain, allowedSuffixes)
+		preAllowed := !denied && IsAllowed(domain, allowedSuffixes)
+		allowed := preAllowed && pinner.AllowsDNS(domain)
 
 		log.Info().
 			Str("sandbox_id", sandboxID).
@@ -68,7 +85,25 @@ func NewHandler(allowedSuffixes []string, denier *netpolicy.Denier, upstreamAddr
 			Str("domain", domain).
 			Bool("allowed", allowed).
 			Bool("denied", denied).
+			Bool("pinned_out", preAllowed && !pinner.AllowsDNS(domain)).
 			Msg("")
+
+		// Best-effort. A flow store that cannot be written must never affect the
+		// answer the sandbox is waiting on — losing observability beats stalling
+		// egress. The error is deliberately dropped here; the writer surfaces
+		// persistent failure through its own logging at construction time.
+		if flows != nil {
+			verdict := flowlog.VerdictAllow
+			if !allowed {
+				verdict = flowlog.VerdictDeny
+			}
+			_ = flows.Write(flowlog.Record{
+				TS:      time.Now().UTC(),
+				Src:     flowlog.SrcDNS,
+				Verdict: verdict,
+				Host:    strings.TrimSuffix(domain, "."),
+			})
+		}
 
 		if !allowed {
 			m := new(dns.Msg)

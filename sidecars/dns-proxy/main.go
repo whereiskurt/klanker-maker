@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	dnsproxy "github.com/whereiskurt/klanker-maker/sidecars/dns-proxy/dnsproxy"
 	"github.com/miekg/dns"
@@ -39,7 +40,25 @@ func main() {
 		denier = netpolicy.NewDenier(deniedSuffixes, runtimeStore)
 	}
 
-	handler := dnsproxy.NewHandler(allowedSuffixes, denier, upstream, sandboxID)
+	// KM_NETPOLICY_PINS is set only when the sandbox has captured at least one
+	// pin generation. A nil pinner (unset env, or file not yet written) allows
+	// everything, so an unpinned box behaves exactly as it did before pins
+	// existed.
+	var pinStore *netpolicy.PinStore
+	if pf := os.Getenv("KM_NETPOLICY_PINS"); pf != "" {
+		pinStore = netpolicy.NewPinStore(pf, netpolicy.DefaultReloadInterval)
+	}
+	pinner := netpolicy.NewPinner(pinStore)
+
+	// KM_FLOWLOG_DIR is set only when the profile enables egress census flow
+	// recording. Empty disables it — a nil Writer keeps the handler byte-
+	// identical to before flow logging existed.
+	var flows *flowlog.Writer
+	if dir := os.Getenv("KM_FLOWLOG_DIR"); dir != "" {
+		flows = flowlog.NewWriter(flowlog.FileFor(dir, flowlog.SrcDNS), flowlog.DefaultMaxBytes)
+	}
+
+	handler := dnsproxy.NewHandlerWithFlows(allowedSuffixes, denier, pinner, upstream, sandboxID, flows)
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", handler)
 

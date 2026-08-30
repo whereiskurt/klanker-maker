@@ -33,6 +33,9 @@ type Allowlist struct {
 	// denier answers the deny question, unioning the profile-baked list with an
 	// optional runtime file the sandbox appends to itself. May be nil.
 	denier *netpolicy.Denier
+	// pinner narrows whatever the allowlist permits down to what the sandbox
+	// has actually pinned. May be nil.
+	pinner *netpolicy.Pinner
 
 	mu       sync.RWMutex
 	resolved map[string]resolvedEntry // domain (without trailing dot) -> entry
@@ -47,12 +50,17 @@ type Allowlist struct {
 // consulted per query rather than snapshotted — so a deny the sandbox appends to
 // its runtime list is honoured by an already-running resolver. A nil denier
 // blocks nothing.
-func NewAllowlist(suffixes []string, denier *netpolicy.Denier) *Allowlist {
+//
+// pinner is applied after allowAll/suffix matching, so it narrows exactly what
+// the allowlist would otherwise have permitted. A nil pinner allows everything,
+// which is the shape for a sandbox that has never pinned.
+func NewAllowlist(suffixes []string, denier *netpolicy.Denier, pinner *netpolicy.Pinner) *Allowlist {
 	allowSet, allowAll := normalizeSuffixes(suffixes)
 	return &Allowlist{
 		suffixes: allowSet,
 		allowAll: allowAll,
 		denier:   denier,
+		pinner:   pinner,
 		resolved: make(map[string]resolvedEntry),
 	}
 }
@@ -68,6 +76,17 @@ func denierFor(cfg ResolverConfig) *netpolicy.Denier {
 		return nil
 	}
 	return netpolicy.NewDenier(cfg.DeniedSuffixes, store)
+}
+
+// pinnerFor builds the resolver's Pinner from its config, mirroring denierFor.
+// A nil pinner (empty PinFile) allows everything, which is the resolver's
+// pre-pin behaviour.
+func pinnerFor(cfg ResolverConfig) *netpolicy.Pinner {
+	var store *netpolicy.PinStore
+	if cfg.PinFile != "" {
+		store = netpolicy.NewPinStore(cfg.PinFile, netpolicy.DefaultReloadInterval)
+	}
+	return netpolicy.NewPinner(store)
 }
 
 // normalizeSuffixes lowercases entries, strips leading and trailing dots, drops
@@ -107,10 +126,22 @@ func (a *Allowlist) IsAllowed(name string) bool {
 		return false
 	}
 
-	if a.allowAll {
-		return true
+	if !a.allowAll && !matchesAny(name, a.suffixes) {
+		return false
 	}
-	return matchesAny(name, a.suffixes)
+
+	// Pins narrow whatever the allowlist permitted. Applied after allowAll so a
+	// wide-open profile collapses to exactly the pinned set — the motivating
+	// case, since * ∩ observed = observed.
+	//
+	// The DNS scope specifically: this resolver decides whether a NAME resolves,
+	// which is a different question from whether a host may be reached, and
+	// under --exact the two pinned lists genuinely differ.
+	if !a.pinner.AllowsDNS(name) {
+		return false
+	}
+
+	return true
 }
 
 // IsDenied reports whether name is on the deny list, independent of whether the
@@ -169,6 +200,26 @@ func (a *Allowlist) Sweep() []net.IP {
 	a.mu.Unlock()
 
 	return evicted
+}
+
+// NameForIP returns the domain that resolved to ip, or "" if this resolver
+// never handed that address out.
+//
+// Expired entries are deliberately still consulted: a connection to an
+// address whose TTL has since lapsed was still made to that name, and the
+// census is a record of what happened, not of what is currently resolvable.
+// This is why NameForIP does NOT reuse IsResolved's active-only filter.
+func (a *Allowlist) NameForIP(ip string) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for domain, entry := range a.resolved {
+		for _, got := range entry.ips {
+			if got.String() == ip {
+				return domain
+			}
+		}
+	}
+	return ""
 }
 
 // IsResolved reports whether ip is present in any active (non-expired)

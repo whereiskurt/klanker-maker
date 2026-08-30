@@ -10,6 +10,7 @@ import (
 
 	"github.com/elazarl/goproxy"
 	"github.com/rs/zerolog/log"
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 )
 
 // Intercept is a single declarative host->action rule, transported to the
@@ -219,7 +220,7 @@ func isPlatformOwnedHost(host string, meteringEnabled, githubEnabled bool) bool 
 // shadow a platform handler that is actually live, while still being free to
 // fire for those same hostnames on a sandbox where the platform handler was
 // never registered in the first place.
-func registerInterceptHandlers(proxy *goproxy.ProxyHttpServer, ics []Intercept, sandboxID string, meteringEnabled, githubEnabled bool) {
+func registerInterceptHandlers(proxy *goproxy.ProxyHttpServer, ics []Intercept, sandboxID string, meteringEnabled, githubEnabled bool, flows *flowlog.Writer) {
 	proxy.OnRequest().HandleConnectFunc(
 		func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
 			if isPlatformOwnedHost(host, meteringEnabled, githubEnabled) {
@@ -252,6 +253,12 @@ func registerInterceptHandlers(proxy *goproxy.ProxyHttpServer, ics []Intercept, 
 				Str("host", req.Host).
 				Str("action", action).
 				Msg("")
+			// Redirect, not deny, for BOTH the redirect and respond actions: the
+			// destination matched here is reachable-by-policy (the operator wrote
+			// a rule for it), it just answered via policy instead of the real
+			// host. Recording it as deny would exclude it from the pinnable set
+			// and break the intercept the first time this sandbox gets pinned.
+			recordFlow(flows, flowlog.VerdictRedirect, req.Host)
 			return req, InterceptResponse(req, ic)
 		},
 	)

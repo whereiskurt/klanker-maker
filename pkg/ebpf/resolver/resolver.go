@@ -8,6 +8,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 )
 
 // MapUpdater is the interface for pushing resolved IPs into BPF maps.
@@ -70,6 +71,15 @@ type ResolverConfig struct {
 	// stayed resolvable. Empty unless the profile sets runtimeDeny.
 	RuntimeDenyFile string
 
+	// PinFile, when set, is a file the sandbox has captured allow-pin
+	// generations into. It is polled rather than snapshotted, exactly like
+	// RuntimeDenyFile.
+	//
+	// This matters most in ebpf-only enforcement, where the resolver IS the DNS
+	// server: without it, a pin would report success while every host stayed
+	// resolvable. Empty unless the sandbox has taken at least one pin.
+	PinFile string
+
 	// SandboxID is included in log fields for correlation.
 	SandboxID string
 
@@ -95,6 +105,22 @@ type ResolverConfig struct {
 	// (trailing dot stripped) and whether it was allowed. Used by the allowlist
 	// generator's learning mode.
 	DomainObserver func(domain string, allowed bool)
+
+	// Flows, if non-nil, records one egress-census record per query: the name
+	// asked for and the verdict it got.
+	//
+	// This is the ONLY name-bearing producer under ebpf/both enforcement. The
+	// BPF program emits ring-buffer events for deny and redirect only — there is
+	// no allow event on the connect4 fast path — so without this the census
+	// holds denies and a handful of L7-proxy redirects, and `km-netpolicy pin`
+	// has essentially nothing to intersect against on the very modes where a pin
+	// bites hardest. It also puts ROOT's lookups into the census, since
+	// /etc/resolv.conf points every process here and DNS is neither uid- nor
+	// cgroup-scoped, which is what makes those destinations visible rather than
+	// invisible-and-pinned-out.
+	//
+	// nil disables recording, which is byte-identical to before it existed.
+	Flows *flowlog.Writer
 }
 
 // Resolver is the DNS resolver daemon.
@@ -139,11 +165,19 @@ func NewResolver(cfg ResolverConfig) *Resolver {
 
 	return &Resolver{
 		cfg:           cfg,
-		allowlist:     NewAllowlist(cfg.AllowedSuffixes, denierFor(cfg)),
+		allowlist:     NewAllowlist(cfg.AllowedSuffixes, denierFor(cfg), pinnerFor(cfg)),
 		upstream:      upstream,
 		sweepEvery:    sweepEvery,
 		minIPLifetime: minLife,
 	}
+}
+
+// NameForIP delegates to the Resolver's own Allowlist — see
+// Allowlist.NameForIP. Exported so a caller holding only the Resolver (e.g.
+// the eBPF attach command wiring flow recording) can use it as a
+// flowlog.NameFn without reaching into the unexported allowlist field.
+func (r *Resolver) NameForIP(addr string) string {
+	return r.allowlist.NameForIP(addr)
 }
 
 // Start runs the DNS daemon until ctx is cancelled.
@@ -267,6 +301,23 @@ func (r *Resolver) handleQuery(w dns.ResponseWriter, req *dns.Msg) {
 
 	if r.cfg.DomainObserver != nil {
 		r.cfg.DomainObserver(strings.TrimSuffix(domain, "."), allowed)
+	}
+
+	// Best-effort, exactly as in the DNS proxy: a flow store that cannot be
+	// written must never affect the answer the sandbox is waiting on. The Writer
+	// logs its own first failure, so a broken store is visible without this hot
+	// path having to care.
+	if r.cfg.Flows != nil {
+		verdict := flowlog.VerdictAllow
+		if !allowed {
+			verdict = flowlog.VerdictDeny
+		}
+		_ = r.cfg.Flows.Write(flowlog.Record{
+			TS:      time.Now().UTC(),
+			Src:     flowlog.SrcResolver,
+			Verdict: verdict,
+			Host:    strings.TrimSuffix(domain, "."),
+		})
 	}
 
 	if !allowed {

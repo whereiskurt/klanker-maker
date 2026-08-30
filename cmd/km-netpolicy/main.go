@@ -20,6 +20,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 )
 
@@ -32,8 +33,12 @@ const prog = "km-netpolicy"
 // real filesystem or environment.
 type opts struct {
 	denyFile    string
+	flowDir     string
+	pinFile     string
 	staticDNS   []string
 	staticHosts []string
+	captureSock string
+	captureDir  string
 	stdout      io.Writer
 	stderr      io.Writer
 }
@@ -43,6 +48,17 @@ const usage = `km-netpolicy — narrow this sandbox's egress policy from inside 
 Usage:
   km-netpolicy deny <pattern> [pattern...]   block a host and its subdomains
   km-netpolicy list                          show the effective deny lists
+  km-netpolicy observed                      show every destination reached so far
+  km-netpolicy flows [--since 10m] [--denied] [--json]
+                                             show raw per-connection records
+  km-netpolicy profile                       emit a SandboxProfile from the census
+  km-netpolicy pin [--dry-run] [--exact] [--yes]
+                                             narrow the allowlist to the census
+  km-netpolicy capture start [--duration 5m] [--max-size 250MB] [--port N] [--host H]
+                                             start a bounded packet capture (max 60m / 2GB)
+  km-netpolicy capture stop                  stop the running capture and upload it
+  km-netpolicy capture status                show whether a capture is running
+  km-netpolicy capture list                  list finished captures
 
 A pattern is a bare hostname, optionally with a leading dot. It blocks the apex
 AND every subdomain: "evil.example.com" also blocks "api.evil.example.com".
@@ -80,10 +96,34 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 		denyFile = netpolicy.DefaultPath
 	}
 
+	flowDir := pick("KM_FLOWLOG_DIR")
+	if flowDir == "" {
+		flowDir = flowlog.DefaultDir
+	}
+
+	pinFile := pick("KM_NETPOLICY_PINS")
+	if pinFile == "" {
+		pinFile = netpolicy.DefaultPinPath
+	}
+
+	captureSock := pick("KM_CAPTURE_SOCK")
+	if captureSock == "" {
+		captureSock = DefaultCaptureSock
+	}
+
+	captureDir := pick("KM_CAPTURE_DIR")
+	if captureDir == "" {
+		captureDir = DefaultCaptureDir
+	}
+
 	return opts{
 		denyFile:    denyFile,
+		flowDir:     flowDir,
+		pinFile:     pinFile,
 		staticDNS:   splitCSV(pick("DENIED_SUFFIXES")),
 		staticHosts: splitCSV(pick("DENIED_HOSTS")),
+		captureSock: captureSock,
+		captureDir:  captureDir,
 		stdout:      os.Stdout,
 		stderr:      os.Stderr,
 	}
@@ -131,6 +171,18 @@ func run(args []string, o opts) int {
 		return runDeny(args[1:], o)
 	case "list":
 		return runList(o)
+	case "observed":
+		return runObserved(o)
+	case "flows":
+		return runFlows(args[1:], o)
+	case "profile":
+		return runProfileGen(o)
+	case "pin":
+		return runPin(args[1:], o)
+	case "capture":
+		return runCapture(args[1:], o)
+	case "capture-daemon":
+		return runCaptureDaemon(o)
 	case "-h", "--help", "help":
 		fmt.Fprint(o.stdout, usage)
 		return 0
@@ -227,6 +279,30 @@ func runList(o opts) int {
 
 	fmt.Fprintln(o.stdout, "\nruntime denies (appended from inside this sandbox):")
 	printList(o.stdout, runtime)
+
+	// Without this, a pinned box prints nothing about pins and reads as
+	// unpinned — the same reason /etc/km/netpolicy.env exists for the deny side.
+	pins := netpolicy.NewPinStore(o.pinFile, 0).Generations()
+	fmt.Fprintln(o.stdout, "\nallow pins (each generation narrows further):")
+	if len(pins) == 0 {
+		fmt.Fprintln(o.stdout, "  (none — allowlist is as the profile declared it)")
+	} else {
+		for i, g := range pins {
+			fmt.Fprintf(o.stdout, "  generation %d:\n", i+1)
+			for _, p := range g.DNS {
+				fmt.Fprintf(o.stdout, "    dns   %s\n", p)
+			}
+			for _, p := range g.Hosts {
+				fmt.Fprintf(o.stdout, "    host  %s\n", p)
+			}
+		}
+		// The carve-out is invisible in the file, so a pinned box would read as
+		// though .amazonaws.com had been pinned out when it never can be.
+		fmt.Fprintln(o.stdout, "\n  always allowed regardless of pins (platform recovery floor):")
+		for _, s := range netpolicy.PlatformEssentialSuffixes() {
+			fmt.Fprintf(o.stdout, "    %s\n", s)
+		}
+	}
 
 	if n := store.Dropped(); n > 0 {
 		fmt.Fprintf(o.stdout, "\n%d malformed line%s in %s were skipped\n",

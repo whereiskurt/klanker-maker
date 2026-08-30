@@ -63,7 +63,7 @@ func startDNSProxy(t *testing.T, allowedSuffixes []string, upstreamAddr string) 
 	listenAddr := pc.LocalAddr().String()
 	pc.Close()
 
-	handler := dnsproxy.NewHandler(allowedSuffixes, nil, upstreamAddr, "test-sandbox")
+	handler := dnsproxy.NewHandler(allowedSuffixes, nil, nil, upstreamAddr, "test-sandbox")
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", handler)
 

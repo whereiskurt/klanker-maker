@@ -16,11 +16,14 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/elazarl/goproxy"
 	"github.com/rs/zerolog/log"
 	"github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -56,8 +59,10 @@ type proxyConfig struct {
 	actionQuota *actionQuotaOptions
 	githubRepos []string
 	denier      *netpolicy.Denier
+	pinner      *netpolicy.Pinner
 	httpsOnly   bool
 	intercepts  []Intercept
+	flows       *flowlog.Writer
 }
 
 // WithBudgetEnforcement enables Bedrock MITM interception and DynamoDB spend
@@ -105,6 +110,51 @@ func WithDenier(denier *netpolicy.Denier) ProxyOption {
 	return func(_ *goproxy.ProxyHttpServer, cfg *proxyConfig) {
 		cfg.denier = denier
 	}
+}
+
+// WithPinner narrows the general allowlist by pinner, which is consulted AFTER
+// IsHostAllowed at every site that gates on it. A nil pinner (or one over an
+// absent pin file) allows everything, so a sandbox that has never pinned is
+// byte-identical to before pins existed.
+func WithPinner(pinner *netpolicy.Pinner) ProxyOption {
+	return func(_ *goproxy.ProxyHttpServer, cfg *proxyConfig) {
+		cfg.pinner = pinner
+	}
+}
+
+// WithFlows enables best-effort flow-record emission for every allow/deny/
+// redirect decision the proxy makes. flows may be nil (the default — flow
+// recording disabled), in which case recordFlow is a no-op and the proxy is
+// byte-identical to before flow logging existed.
+func WithFlows(flows *flowlog.Writer) ProxyOption {
+	return func(_ *goproxy.ProxyHttpServer, cfg *proxyConfig) {
+		cfg.flows = flows
+	}
+}
+
+// recordFlow best-effort writes one flow observation for host (which may
+// carry a "host:port" suffix, e.g. a CONNECT target). Flow recording must
+// never be load-bearing for an egress decision — these are hot paths a
+// sandbox is blocked on — so a nil writer is a silent no-op and a write
+// failure is deliberately dropped rather than surfaced here; the Writer logs
+// persistent failure at construction time, not on every call.
+func recordFlow(flows *flowlog.Writer, verdict, host string) {
+	if flows == nil {
+		return
+	}
+	h, portStr, err := net.SplitHostPort(host)
+	if err != nil {
+		h = host
+	}
+	port, _ := strconv.Atoi(portStr)
+	_ = flows.Write(flowlog.Record{
+		TS:      time.Now().UTC(),
+		Src:     flowlog.SrcHTTP,
+		Verdict: verdict,
+		Host:    h,
+		Port:    port,
+		Proto:   "tcp",
+	})
 }
 
 // WithCustomCA sets a custom CA certificate for MITM TLS interception.
@@ -195,6 +245,19 @@ func IsHostDenied(host string, denied []string) bool {
 	return netpolicy.Match(host, denied)
 }
 
+// IsHostPinnedOut reports whether host is excluded by the runtime allow pins.
+//
+// Callers must apply this AFTER IsHostDenied and IsHostAllowed. Pins narrow an
+// allowlist; they never override a deny and never grant what the profile did
+// not already allow.
+//
+// The HOST scope specifically: a pin's DNS list stays collapsed to eTLD+1 even
+// under --exact (or the box stops resolving), so consulting it here would make
+// --exact narrow nothing at the only layer that can express a literal host.
+func IsHostPinnedOut(host string, pinner *netpolicy.Pinner) bool {
+	return !pinner.AllowsHost(host)
+}
+
 // InjectTraceContext injects W3C traceparent and tracestate headers into h using
 // the globally registered OTel text map propagator. ctx is used as the span
 // context source. This is exported so tests can verify injection without
@@ -248,6 +311,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 					Str("event_type", "http_denied").
 					Str("host", host).
 					Msg("")
+				recordFlow(cfg.flows, flowlog.VerdictDeny, host)
 				return goproxy.RejectConnect, host
 			},
 		)
@@ -262,6 +326,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 					Str("event_type", "http_denied").
 					Str("host", req.Host).
 					Msg("")
+				recordFlow(cfg.flows, flowlog.VerdictDeny, req.Host)
 				return req, goproxy.NewResponse(req, goproxy.ContentTypeText,
 					http.StatusForbidden, "Blocked: host is on the km sandbox deny list")
 			},
@@ -304,6 +369,10 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 					Str("sandbox_id", sandboxID).
 					Str("host", host).
 					Msg("")
+				// Redirect, not deny: this is how an ALLOWED host is reached for
+				// metering. Recording it as deny would corrupt the census and any
+				// pin set an operator later derives from it.
+				recordFlow(cfg.flows, flowlog.VerdictRedirect, host)
 				return goproxy.MitmConnect, host
 			})
 
@@ -432,8 +501,14 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 			},
 		)
 
-		// MITM handler: AlwaysMitm for api.anthropic.com.
-		proxy.OnRequest(goproxy.ReqHostMatches(anthropicHostRegex)).HandleConnect(goproxy.AlwaysMitm)
+		// MITM handler: AlwaysMitm for api.anthropic.com. HandleConnectFunc (not
+		// the bare AlwaysMitm value used elsewhere) so the flow record can carry
+		// the specific host, mirroring the Bedrock handler above.
+		proxy.OnRequest(goproxy.ReqHostMatches(anthropicHostRegex)).HandleConnectFunc(
+			func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+				recordFlow(cfg.flows, flowlog.VerdictRedirect, host)
+				return goproxy.MitmConnect, host
+			})
 
 		// OnResponse: intercept Anthropic /v1/messages responses, extract tokens, price, increment.
 		// Uses tee-reader approach (same as Bedrock) to handle streaming SSE responses
@@ -550,8 +625,13 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 			},
 		)
 
-		// MITM handler: AlwaysMitm for api.openai.com.
-		proxy.OnRequest(goproxy.ReqHostMatches(openaiHostRegex)).HandleConnect(goproxy.AlwaysMitm)
+		// MITM handler: AlwaysMitm for api.openai.com. HandleConnectFunc (not the
+		// bare AlwaysMitm value) so the flow record can carry the specific host.
+		proxy.OnRequest(goproxy.ReqHostMatches(openaiHostRegex)).HandleConnectFunc(
+			func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+				recordFlow(cfg.flows, flowlog.VerdictRedirect, host)
+				return goproxy.MitmConnect, host
+			})
 
 		// OnResponse: intercept OpenAI /v1/responses (and /v1/chat/completions) responses,
 		// extract tokens, price, increment. Uses tee-reader approach (same as Bedrock/Anthropic)
@@ -656,7 +736,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	// MUST be registered BEFORE the general CONNECT handler (first-match).
 	// The quota OnRequest handlers (below) run after MITM decrypts the request.
 	// -------------------------------------------------------------------------
-	registerSESMITMHandlers(proxy, sandboxID)
+	registerSESMITMHandlers(proxy, sandboxID, cfg.flows)
 
 	// -------------------------------------------------------------------------
 	// Action quota enforcement: GitHub writes + SES email send (Phase 121).
@@ -692,6 +772,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 					Str("sandbox_id", sandboxID).
 					Str("host", host).
 					Msg("")
+				recordFlow(cfg.flows, flowlog.VerdictRedirect, host)
 				return goproxy.MitmConnect, host
 			},
 		)
@@ -710,6 +791,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						Str("sandbox_id", sandboxID).
 						Str("repo", repo).
 						Msg("")
+					recordFlow(cfg.flows, flowlog.VerdictAllow, req.Host)
 					return req, nil
 				}
 				log.Info().
@@ -717,6 +799,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 					Str("sandbox_id", sandboxID).
 					Str("repo", repo).
 					Msg("")
+				recordFlow(cfg.flows, flowlog.VerdictDeny, req.Host)
 				return req, GitHubBlockedResponse(req, sandboxID, repo)
 			},
 		)
@@ -743,7 +826,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	// permitted to reach.
 	// -------------------------------------------------------------------------
 	if len(cfg.intercepts) > 0 {
-		registerInterceptHandlers(proxy, cfg.intercepts, sandboxID, cfg.budget != nil, len(cfg.githubRepos) > 0)
+		registerInterceptHandlers(proxy, cfg.intercepts, sandboxID, cfg.budget != nil, len(cfg.githubRepos) > 0, cfg.flows)
 	}
 
 	// -------------------------------------------------------------------------
@@ -756,6 +839,17 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				Str("event_type", "http_blocked").
 				Str("host", host).
 				Msg("")
+			recordFlow(cfg.flows, flowlog.VerdictDeny, host)
+			return goproxy.RejectConnect, host
+		}
+		if IsHostPinnedOut(host, cfg.pinner) {
+			log.Info().
+				Str("sandbox_id", sandboxID).
+				Str("event_type", "http_denied").
+				Str("host", host).
+				Bool("pinned_out", true).
+				Msg("")
+			recordFlow(cfg.flows, flowlog.VerdictDeny, host)
 			return goproxy.RejectConnect, host
 		}
 
@@ -767,6 +861,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 			)
 		}
 
+		recordFlow(cfg.flows, flowlog.VerdictAllow, host)
 		return goproxy.OkConnect, host
 	})
 
@@ -783,17 +878,21 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				Str("host", req.Host).
 				Str("url", req.URL.String()).
 				Msg("")
+			recordFlow(cfg.flows, flowlog.VerdictDeny, req.Host)
 			return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusForbidden,
 				"Blocked: HTTPS only — plain HTTP is not allowed by sandbox policy")
 		}
 		if len(cfg.githubRepos) > 0 && githubHostsRegex.MatchString(req.Host) {
-			// GitHub hosts are handled by the GitHub-specific OnRequest handler.
+			// GitHub hosts are handled by the GitHub-specific OnRequest handler,
+			// which already records its own allow/deny flow per repo — no second
+			// record here.
 			return req, nil
 		}
 		if cfg.budget != nil && openaiHostRegex.MatchString(req.Host) {
 			// OpenAI hosts are handled by the budget-enforcement OnRequest handler.
 			// The host-level allowlist check is bypassed here; the budget preflight
 			// and OnResponse metering handler (registered above) own the lifecycle.
+			// The MITM CONNECT handler already recorded the redirect flow.
 			return req, nil
 		}
 		if !IsHostAllowed(req.Host, allowed) {
@@ -802,8 +901,20 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				Str("event_type", "http_blocked").
 				Str("host", req.Host).
 				Msg("")
+			recordFlow(cfg.flows, flowlog.VerdictDeny, req.Host)
 			return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusForbidden, "Blocked by km sandbox policy")
 		}
+		if IsHostPinnedOut(req.Host, cfg.pinner) {
+			log.Info().
+				Str("sandbox_id", sandboxID).
+				Str("event_type", "http_denied").
+				Str("host", req.Host).
+				Bool("pinned_out", true).
+				Msg("")
+			recordFlow(cfg.flows, flowlog.VerdictDeny, req.Host)
+			return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusForbidden, "Blocked: host is excluded by the km sandbox allow pins")
+		}
+		recordFlow(cfg.flows, flowlog.VerdictAllow, req.Host)
 		return req, nil
 	})
 

@@ -1,0 +1,81 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: uat-proxy-census
+  labels:
+    tier: development
+    tool: uat-proxy-enforcement
+  prefix: uatpx
+
+# Every other shipped profile runs `enforcement: both`, which leaves the DEFAULT
+# mode — `proxy` — with no profile exercising it at all. That gap is not
+# cosmetic: under `both` the bootstrap overrides km-http-proxy to User=root,
+# so the two proxies only ever run as the unprivileged km-sidecar user in
+# `proxy` mode. A permissions bug in anything they write is therefore invisible
+# to every other profile in the repo, which is exactly how the flow directory
+# shipped root-owned 0755 and silently dead for the majority of the fleet.
+#
+# This profile exists to make that mode testable. It is deliberately small and
+# short-lived: the point is the enforcement mode, not the workload.
+extends:
+  - base/os/redhat
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+
+spec:
+  network:
+    # Overrides safenetwork's `both`. In this mode there is no eBPF enforcer at
+    # all, so km-dns-proxy stays ACTIVE (under ebpf/both the bootstrap disables
+    # it and the resolver serves DNS instead) and the two proxies are the only
+    # flow producers and the only pin enforcers on the box.
+    enforcement: proxy
+
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "30m"
+    teardownPolicy: stop
+
+  budget:
+    ai:
+      maxSpendUSD: 0
+    compute:
+      maxSpendUSD: 2.00
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.large
+    region: us-east-1
+    rootVolumeSize: 30
+    spot: false
+    hibernation: false
+    mountEFS: false
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+    privileged: true
+    env:
+      SANDBOX_MODE: uat-proxy-census
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  cli:
+    noBedrock: true
+
+  agent:
+    default: claude
+
+  notification:
+    events:
+      onIdle: false
+      onPermission: false
+    email:
+      enabled: false

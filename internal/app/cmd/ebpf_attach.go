@@ -27,8 +27,9 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf"
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf/audit"
 	"github.com/whereiskurt/klanker-maker/pkg/ebpf/resolver"
-	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	ebpftls "github.com/whereiskurt/klanker-maker/pkg/ebpf/tls"
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
+	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 )
 
 // NewEBPFAttachCmd creates the "km ebpf-attach" subcommand.
@@ -51,6 +52,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		deniedDNS     string
 		deniedHosts   string
 		netpolicyFile string
+		netpolicyPins string
 		proxyHosts    string
 		cgroupPath    string
 		enableTLS     bool
@@ -59,6 +61,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		observe       bool
 		observeOutput string
 		minIPLifetime time.Duration
+		flowlogDir    string
 	)
 
 	cmd := &cobra.Command{
@@ -68,9 +71,9 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		Hidden: true, // internal command, not user-facing
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
-				allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, proxyHosts, cgroupPath,
+				allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, netpolicyPins, proxyHosts, cgroupPath,
 				enableTLS, allowedRepos, httpProxyPID, observe, observeOutput,
-				minIPLifetime)
+				minIPLifetime, flowlogDir)
 		},
 	}
 
@@ -91,6 +94,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Comma-separated hosts to block outright; takes precedence over --allowed-hosts")
 	cmd.Flags().StringVar(&netpolicyFile, "netpolicy-file", "",
 		"Path to the runtime deny list the sandbox may append to; empty disables runtime narrowing")
+	cmd.Flags().StringVar(&netpolicyPins, "netpolicy-pins", "",
+		"path to the runtime allow-pin file (empty disables pin narrowing)")
 	cmd.Flags().StringVar(&proxyHosts, "proxy-hosts", "",
 		"Comma-separated hosts whose resolved IPs are redirected to L7 proxy")
 	cmd.Flags().StringVar(&cgroupPath, "cgroup", "",
@@ -107,6 +112,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Local path to write observed JSON on shutdown (used with --observe)")
 	cmd.Flags().DurationVar(&minIPLifetime, "min-ip-lifetime", 10*time.Minute,
 		"Minimum lifetime a resolved IP is retained in the BPF allowlist, independent of DNS TTL (prevents mid-download eviction for short-TTL CDNs)")
+	cmd.Flags().StringVar(&flowlogDir, "flowlog-dir", flowlog.DefaultDir,
+		"Directory to write the egress census flow log to; empty disables flow recording")
 
 	return cmd
 }
@@ -124,6 +131,40 @@ func hostDenier(staticHosts []string, netpolicyFile string) *netpolicy.Denier {
 		return nil
 	}
 	return netpolicy.NewDenier(staticHosts, store)
+}
+
+// hostPinner mirrors hostDenier for the pre-seed loop's pin check. A nil
+// netpolicyPins yields a Pinner over a nil store, which allows everything —
+// the correct default for a sandbox that has never pinned.
+func hostPinner(netpolicyPins string) *netpolicy.Pinner {
+	var store *netpolicy.PinStore
+	if netpolicyPins != "" {
+		store = netpolicy.NewPinStore(netpolicyPins, netpolicy.DefaultReloadInterval)
+	}
+	return netpolicy.NewPinner(store)
+}
+
+// shouldSeedHost reports whether host may be pre-resolved and its IPs seeded
+// into the boot-time BPF allow trie.
+//
+// This is the ONE enforcement path that bypasses the live resolver.IsAllowed
+// check pins otherwise gate: pins live under /var/lib specifically so a
+// reboot can't widen policy back out, but this loop runs on every
+// ebpf-attach start (boot, resume) and seeds IPs directly, ahead of any
+// per-query decision. Without consulting pinner here, a box that pinned a
+// host out would have that host's IP re-seeded straight into the trie on the
+// very next reboot — the pin would report success while nothing enforced it,
+// on the exact component the design calls most load-bearing.
+//
+// Deny is checked first, mirroring every other consultation site in this
+// package: pins narrow in addition to denies, they never replace them. Pure
+// and side-effect free so this boot-time decision is testable without a
+// running BPF program.
+func shouldSeedHost(host string, denier *netpolicy.Denier, pinner *netpolicy.Pinner) bool {
+	if denier.IsDenied(host) {
+		return false
+	}
+	return pinner.Allows(host)
 }
 
 // parsefirewallMode converts a mode string to the BPF uint16 constant.
@@ -201,7 +242,7 @@ func runEbpfAttach(
 	sandboxID string,
 	dnsPort, httpPort uint32,
 	firewallMode string,
-	allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, proxyHosts string,
+	allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, netpolicyPins, proxyHosts string,
 	cgroupOverride string,
 	enableTLS bool,
 	allowedRepos string,
@@ -209,6 +250,7 @@ func runEbpfAttach(
 	observe bool,
 	observeOutput string,
 	minIPLifetime time.Duration,
+	flowlogDir string,
 ) error {
 	logger := log.With().Str("sandbox_id", sandboxID).Logger()
 
@@ -330,18 +372,39 @@ func runEbpfAttach(
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start DNS resolver daemon (skip if dnsPort == 0, i.e. "both" mode
-	// where the existing km-dns-proxy sidecar handles DNS).
+	// Start DNS resolver daemon.
+	//
+	// dnsPort == 0 means PROXY enforcement, where km-dns-proxy owns resolution —
+	// but this whole command only runs under ebpf/both, where the bootstrap
+	// renders --dns-port 53 and leaves km-dns-proxy disabled. The zero branch is
+	// therefore unreachable in practice and kept only as a guard.
 	resolverErrCh := make(chan error, 1)
+	// nameFn correlates a flow record's destination address back to the domain
+	// that was looked up to reach it. Only the resolver started below ever holds
+	// that mapping, and it is set in every mode that reaches this code. Never
+	// fabricated: see resolver.Allowlist.NameForIP.
+	var nameFn flowlog.NameFn
 	if dnsPort > 0 {
 		listenAddr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
+		// The resolver is the only NAME-bearing producer under ebpf/both: the BPF
+		// program emits ring-buffer events for deny and redirect only, so without
+		// this the census has nothing an allowlist could be expressed in and
+		// `km-netpolicy pin` would seal the box against an empty allowed set.
+		// Same --flowlog-dir convention as the consumer below: empty disables.
+		var resolverFlows *flowlog.Writer
+		if flowlogDir != "" {
+			resolverFlows = flowlog.NewWriter(
+				flowlog.FileFor(flowlogDir, flowlog.SrcResolver), flowlog.DefaultMaxBytes)
+		}
 		resolverCfg := resolver.ResolverConfig{
+			Flows:           resolverFlows,
 			ListenAddr:      listenAddr,
 			UpstreamAddr:    "169.254.169.253:53",
 			SandboxID:       sandboxID,
 			AllowedSuffixes: dnsSuffixes,
 			DeniedSuffixes:  deniedDNSSuffixes,
 			RuntimeDenyFile: netpolicyFile,
+			PinFile:         netpolicyPins,
 			MapUpdater:      enforcer,
 			ProxyHosts:      proxyHostList,
 			MinIPLifetime:   minIPLifetime,
@@ -353,6 +416,7 @@ func runEbpfAttach(
 			}
 		}
 		res := resolver.NewResolver(resolverCfg)
+		nameFn = res.NameForIP
 		go func() {
 			if err := res.Start(ctx); err != nil {
 				resolverErrCh <- err
@@ -360,7 +424,7 @@ func runEbpfAttach(
 		}()
 		logger.Info().Str("listen", listenAddr).Msg("DNS resolver started")
 	} else {
-		logger.Info().Msg("DNS resolver skipped (both mode — km-dns-proxy handles DNS)")
+		logger.Info().Msg("DNS resolver skipped (--dns-port 0 — proxy enforcement, km-dns-proxy handles DNS)")
 	}
 
 	// Pre-resolve all allowed hosts and DNS suffixes to seed the BPF allowlist.
@@ -368,9 +432,11 @@ func runEbpfAttach(
 	// because connect4 blocks before DNS resolution can populate the trie.
 	var hostsToResolve []string
 	allowAllHosts := false
-	// denyMatcher reuses the resolver's matching rules so a host cannot be
-	// refused by the resolver yet seeded into the BPF trie here.
-	denyMatcher := resolver.NewAllowlist(nil, hostDenier(deniedHostList, netpolicyFile))
+	// preSeedDenier/preSeedPinner gate exactly what shouldSeedHost decides on
+	// (see its doc comment for why the pin check here matters more than it
+	// looks — this is the one path a reboot exercises).
+	preSeedDenier := hostDenier(deniedHostList, netpolicyFile)
+	preSeedPinner := hostPinner(netpolicyPins)
 	if allowedHosts != "" {
 		for _, h := range strings.Split(allowedHosts, ",") {
 			h = strings.TrimSpace(h)
@@ -383,11 +449,15 @@ func runEbpfAttach(
 			}
 			// Strip leading dot from DNS suffix entries (e.g. ".amazonaws.com")
 			h = strings.TrimPrefix(h, ".")
-			if denyMatcher.IsDenied(h) {
+			if !shouldSeedHost(h, preSeedDenier, preSeedPinner) {
+				reason := "ebpf_host_denied"
+				if !preSeedDenier.IsDenied(h) {
+					reason = "ebpf_host_pinned_out"
+				}
 				logger.Info().
-					Str("event_type", "ebpf_host_denied").
+					Str("event_type", reason).
 					Str("host", h).
-					Msg("skipping pre-resolve of denied host")
+					Msg("skipping pre-resolve of host excluded by deny or pin policy")
 				continue
 			}
 			hostsToResolve = append(hostsToResolve, h)
@@ -447,8 +517,17 @@ func runEbpfAttach(
 	}
 	logger.Info().Int("seeded_ips", seeded).Int("proxy_marked", proxyMarked).Int("hosts_resolved", len(hostsToResolve)).Msg("pre-seeded BPF allowlist from allowed hosts")
 
+	// KM_FLOWLOG_DIR-equivalent: --flowlog-dir empty disables flow recording,
+	// same convention as the DNS/HTTP proxies. The consumer is the only place
+	// that holds both the resolver (for nameFn) and the writer, which is why
+	// address->name correlation happens here rather than at read time.
+	var flows *flowlog.Writer
+	if flowlogDir != "" {
+		flows = flowlog.NewWriter(flowlog.FileFor(flowlogDir, flowlog.SrcEBPF), flowlog.DefaultMaxBytes)
+	}
+
 	// Start ring buffer audit consumer.
-	consumer, err := audit.NewConsumer(enforcer.Events(), sandboxID, logger)
+	consumer, err := audit.NewConsumerWithFlows(enforcer.Events(), sandboxID, logger, flows, nameFn)
 	if err != nil {
 		return fmt.Errorf("create audit consumer: %w", err)
 	}

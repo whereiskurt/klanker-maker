@@ -19,6 +19,7 @@ package httpproxy
 import (
 	"github.com/elazarl/goproxy"
 	"github.com/rs/zerolog/log"
+	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 )
 
 // WithSESMITM registers a MitmConnect handler for SES regional endpoints
@@ -30,15 +31,16 @@ import (
 // When called inside NewProxy via registerSESMITMHandlers, it is invoked
 // after budget enforcement handlers and before the general CONNECT handler.
 func WithSESMITM() ProxyOption {
-	return func(proxy *goproxy.ProxyHttpServer, _ *proxyConfig) {
-		registerSESMITMHandlers(proxy, "")
+	return func(proxy *goproxy.ProxyHttpServer, cfg *proxyConfig) {
+		registerSESMITMHandlers(proxy, "", cfg.flows)
 	}
 }
 
 // registerSESMITMHandlers registers the MitmConnect handler for SES hosts.
 // sandboxID is used for logging; pass "" when called without a sandbox context.
+// flows may be nil (flow recording disabled) — see recordFlow in proxy.go.
 // Exported for reuse by transparent.go if needed; package-internal via NewProxy.
-func registerSESMITMHandlers(proxy *goproxy.ProxyHttpServer, sandboxID string) {
+func registerSESMITMHandlers(proxy *goproxy.ProxyHttpServer, sandboxID string, flows *flowlog.Writer) {
 	// MitmConnect for email.*.amazonaws.com — must be registered BEFORE the
 	// general CONNECT handler so goproxy first-match routes SES through MITM.
 	proxy.OnRequest(goproxy.ReqHostMatches(sesHostRegex)).HandleConnectFunc(
@@ -48,6 +50,11 @@ func registerSESMITMHandlers(proxy *goproxy.ProxyHttpServer, sandboxID string) {
 				Str("sandbox_id", sandboxID).
 				Str("host", host).
 				Msg("")
+			// Redirect, not deny: SES is reached via MITM interception exactly
+			// like the Bedrock/Anthropic/OpenAI metering hosts — the destination
+			// is allowed-by-policy and must survive a pin derived from this
+			// census, not be excluded from it.
+			recordFlow(flows, flowlog.VerdictRedirect, host)
 			return goproxy.MitmConnect, host
 		},
 	)
