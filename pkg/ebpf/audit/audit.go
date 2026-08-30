@@ -23,9 +23,17 @@ import (
 //
 //	uint64 timestamp   — nanoseconds since boot
 //	uint32 pid         — process ID
-//	uint32 src_ip      — source IPv4 in network byte order
-//	uint32 dst_ip      — destination IPv4 in network byte order
-//	uint16 dst_port    — destination port in network byte order
+//	uint32 src_ip      — source IPv4, network byte order; convert with
+//	                      uint32ToIP (see its doc for why LittleEndian, not
+//	                      BigEndian, is the correct conversion)
+//	uint32 dst_ip      — destination IPv4, network byte order; same as src_ip
+//	uint16 dst_port    — destination port, byte order DEPENDS ON THE LAYER
+//	                      BELOW — the connect4 emit path leaves it in network
+//	                      byte order, sendmsg4/egress_skb already convert to
+//	                      host order on the BPF side. Always go through
+//	                      normalizeDstPort(layer, dst_port); never read this
+//	                      field raw. See normalizeDstPort's doc for the full
+//	                      per-layer breakdown.
 //	uint8  action      — ActionDeny/Allow/Redirect
 //	uint8  layer       — LayerConnect4/Sendmsg4/EgressSKB/Sockops
 //	uint8  comm[16]    — process name (null-terminated)
@@ -120,6 +128,7 @@ func (c *Consumer) handleEvent(event bpfEvent) {
 	comm := nullTermString(event.Comm[:])
 	srcIP := uint32ToIP(event.SrcIP)
 	dstIP := uint32ToIP(event.DstIP)
+	dstPort := normalizeDstPort(event.Layer, event.DstPort)
 
 	entry := c.logger.With().
 		Str("event_type", "ebpf_network_deny").
@@ -127,7 +136,7 @@ func (c *Consumer) handleEvent(event bpfEvent) {
 		Uint32("pid", event.Pid).
 		Str("src_ip", srcIP.String()).
 		Str("dst_ip", dstIP.String()).
-		Uint16("dst_port", event.DstPort).
+		Uint16("dst_port", dstPort).
 		Str("action", actionString(event.Action)).
 		Str("layer", layerString(event.Layer)).
 		Str("comm", comm).
@@ -155,7 +164,7 @@ func (c *Consumer) handleEvent(event bpfEvent) {
 			Verdict: verdictFor(event.Action),
 			Host:    host,
 			Addr:    addr,
-			Port:    int(event.DstPort),
+			Port:    int(dstPort),
 			Proto:   "tcp",
 			PID:     int(event.Pid),
 			Comm:    comm,

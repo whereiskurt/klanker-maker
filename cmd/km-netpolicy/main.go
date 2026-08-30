@@ -15,14 +15,20 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/whereiskurt/klanker-maker/pkg/execlog"
 	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 )
+
+// errUnsupportedPlatform is returned by verbs whose implementation exists only
+// on the sandbox's linux/amd64 build.
+var errUnsupportedPlatform = errors.New("unsupported platform")
 
 // prog is this binary's own name, used in usage and error output. It is a fixed
 // brand name, not a resource identifier, so it is deliberately independent of
@@ -39,6 +45,7 @@ type opts struct {
 	staticHosts []string
 	captureSock string
 	captureDir  string
+	execDir     string
 	stdout      io.Writer
 	stderr      io.Writer
 }
@@ -59,6 +66,10 @@ Usage:
   km-netpolicy capture stop                  stop the running capture and upload it
   km-netpolicy capture status                show whether a capture is running
   km-netpolicy capture list                  list finished captures
+  km-netpolicy execs [--since 10m] [--uid N] [--failed] [--json]
+                                             what this sandbox executed
+  km-netpolicy execs save                    upload the process trace to S3
+  km-netpolicy who <host>                    which process reached <host>
 
 A pattern is a bare hostname, optionally with a leading dot. It blocks the apex
 AND every subdomain: "evil.example.com" also blocks "api.evil.example.com".
@@ -116,6 +127,11 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 		captureDir = DefaultCaptureDir
 	}
 
+	execDir := pick("KM_EXEC_DIR")
+	if execDir == "" {
+		execDir = execlog.DefaultDir
+	}
+
 	return opts{
 		denyFile:    denyFile,
 		flowDir:     flowDir,
@@ -124,6 +140,7 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 		staticHosts: splitCSV(pick("DENIED_HOSTS")),
 		captureSock: captureSock,
 		captureDir:  captureDir,
+		execDir:     execDir,
 		stdout:      os.Stdout,
 		stderr:      os.Stderr,
 	}
@@ -183,6 +200,21 @@ func run(args []string, o opts) int {
 		return runCapture(args[1:], o)
 	case "capture-daemon":
 		return runCaptureDaemon(o)
+	case "execs":
+		if err := runExecs(o, args[1:]); err != nil {
+			return 1
+		}
+		return 0
+	case "who":
+		if err := runWho(o, args[1:]); err != nil {
+			return 1
+		}
+		return 0
+	case "execs-daemon":
+		if err := runExecsDaemon(o); err != nil {
+			return 1
+		}
+		return 0
 	case "-h", "--help", "help":
 		fmt.Fprint(o.stdout, usage)
 		return 0

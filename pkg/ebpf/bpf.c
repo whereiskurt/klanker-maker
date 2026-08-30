@@ -90,11 +90,20 @@ struct {
     __uint(max_entries, 262144);
 } src_port_to_sock SEC(".maps");
 
-/* socket_pid_map: HASH keyed by socket cookie → PID that created the socket.
- * Written by connect4 on first use. Allows userspace to correlate sockets to
- * the sandbox process tree for audit logging. */
+/* socket_pid_map: keyed by socket cookie → PID that created the socket.
+ * Written by connect4 on EVERY connect (including the IMDS/localhost
+ * exemptions — the HTTP/DNS proxies live on loopback and are exactly the
+ * sockets userspace needs to correlate). Allows userspace to correlate
+ * sockets to the sandbox process tree for audit logging.
+ *
+ * LRU, not a plain hash: nothing ever deletes from this map, and recording
+ * unconditionally means a busy sandbox fills it fast. Once max_entries is
+ * reached, a plain hash's bpf_map_update_elem starts returning E2BIG on
+ * every NEW connect — a return value connect4 does not check — so PID
+ * attribution would quietly stop working with no error anywhere. An LRU
+ * evicts the oldest entry to make room instead of refusing the insert. */
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __type(key, __u64);   /* socket cookie */
     __type(value, __u32); /* PID (tgid) */
     __uint(max_entries, 10000);
@@ -159,8 +168,11 @@ static __always_inline void emit_event_skb(__u32 src_ip, __u32 dst_ip,
  * Intercepts every TCP connect() syscall inside the cgroup.
  * Logic:
  *   1. Exempt the sidecar proxy process itself (by PID).
- *   2. Exempt IMDS (169.254.169.254) and localhost (127.0.0.0/8).
- *   3. Record socket → PID mapping in socket_pid_map.
+ *   2. Record socket → PID mapping in socket_pid_map, unconditionally —
+ *      BEFORE the IMDS/localhost exemptions below, because the HTTP/DNS
+ *      proxies the sandbox talks to live on loopback and are exactly the
+ *      sockets userspace needs recorded.
+ *   3. Exempt IMDS (169.254.169.254) and localhost (127.0.0.0/8).
  *   4. Look up dest IP in allowed_cidrs LPM_TRIE.
  *   5. On deny: in block mode return 0 (EPERM); in log/allow mode emit event
  *      and return 1.
@@ -185,17 +197,22 @@ int connect4(struct bpf_sock_addr *ctx)
     /* user_port is in host byte order (modern kernels 5.x+) */
     __u16 dst_port = (__u16)ctx->user_port;
 
-    /* 2a. Exempt IMDS (169.254.169.254 = 0xfea9fea9 in network byte order) */
+    /* 2. Record PID → socket cookie mapping. Deliberately ahead of the
+     * IMDS/localhost exemptions below: the sandbox reaches the HTTP/DNS
+     * proxies via loopback, so a socket destined there is exactly the kind
+     * of socket userspace needs to correlate back to a PID. Recording is a
+     * map write with no effect on this program's return value, so doing it
+     * before an exemption's `return 1` changes no enforcement behaviour. */
+    __u64 cookie = bpf_get_socket_cookie(ctx);
+    bpf_map_update_elem(&socket_pid_map, &cookie, &pid, 0 /* BPF_ANY */);
+
+    /* 3a. Exempt IMDS (169.254.169.254 = 0xfea9fea9 in network byte order) */
     if (dst_ip == bpf_htonl(0xa9fea9fe)) /* 169.254.169.254 */
         return 1;
 
-    /* 2b. Exempt localhost 127.0.0.0/8 (0x7f000000 in host byte order) */
+    /* 3b. Exempt localhost 127.0.0.0/8 (0x7f000000 in host byte order) */
     if ((bpf_ntohl(dst_ip) & 0xff000000) == 0x7f000000)
         return 1;
-
-    /* 3. Record PID → socket cookie mapping */
-    __u64 cookie = bpf_get_socket_cookie(ctx);
-    bpf_map_update_elem(&socket_pid_map, &cookie, &pid, 0 /* BPF_ANY */);
 
     /* 4. LPM_TRIE lookup */
     struct ip4_trie_key trie_key = {};

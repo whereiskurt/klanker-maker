@@ -1,0 +1,87 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: vulnhunt
+  labels:
+    tier: security
+    tool: vulnhunter
+  prefix: vulnhunt
+
+# Phase 132 UAT profile (docs/exec-capture.md, .planning/phases/132-exec-capture/132-UAT.md).
+# base/network/safenetwork is the load-bearing choice here, not a default carried
+# along for convenience: it sets enforcement: both, and `km-netpolicy who` only
+# attributes a flow to a process on the eBPF path (see spec §5). On a `proxy`
+# box this profile would still capture a complete exec trace, but `who` would
+# have nothing to join it against.
+extends:
+  - base/os/redhat
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.large
+    region: us-east-1
+    spot: false
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    # Bedrock rather than the first-party Anthropic API: VulnHunter's own README
+    # warns that running dual-use vulnerability analysis against an unenrolled
+    # Anthropic account may trip real-time cyber safeguards. Bedrock is not a
+    # first-party consumer platform, so that concern does not apply here.
+    #
+    # Two DIFFERENT knobs both have to point at Bedrock, or this rationale is
+    # dead: useBedrock (here) provisions the BOX — MITM metering hosts, IAM —
+    # but does not decide which endpoint an interactive agent actually talks
+    # to. That is spec.cli.noBedrock, read by `km shell`/`km agent run`
+    # (internal/app/cmd/shell.go), and base/platform.yaml defaults it to
+    # `true` ("prefer direct API"). Left inherited, this profile would
+    # provision Bedrock access on the box while every `km shell`-driven
+    # Claude Code turn — including the UAT's own driving step — still went
+    # straight to api.anthropic.com, silently defeating the paragraph above.
+    # Do not "simplify" this back to one flag.
+    useBedrock: true
+    # Privileged so a sudo'd step lands as uid 0 in the exec trace instead of
+    # vanishing from it — the exact case exec capture's "capture everything,
+    # filter at read" decision (design spec §3.3) exists to keep visible. A
+    # uid filter at capture time would blind the trace to precisely the
+    # escalation worth seeing.
+    privileged: true
+    initCommandsAppend:
+      - "su - sandbox -c 'git clone --depth 1 https://github.com/capitalone/VulnHunter /workspace/VulnHunter'"
+      - "su - sandbox -c 'mkdir -p /home/sandbox/.claude/skills && cp -r /workspace/VulnHunter/vulnhunt /home/sandbox/.claude/skills/vulnhunt'"
+      # The scan target: the operator's own repository, already the subject of
+      # profiles/dc34.yaml's clone — an authorized run, not a scan of a
+      # third party.
+      - "su - sandbox -c 'git clone --depth 1 https://github.com/whereiskurt/defcon.run.34 /workspace/defcon.run.34'"
+      - "chown -R sandbox:sandbox /home/sandbox/.claude/skills /workspace/VulnHunter /workspace/defcon.run.34"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - capitalone/VulnHunter
+        - whereiskurt/defcon.run.34
+      allowedRefs:
+        - "*"
+
+  # The other half of the useBedrock pairing above — see that comment.
+  cli:
+    noBedrock: false
+
+  notification:
+    events:
+      onIdle: true
+    slack:
+      channelName: "sb-{profile}-{alias}"
+      archiveOnDestroy: true

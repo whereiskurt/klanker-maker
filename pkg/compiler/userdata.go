@@ -13,6 +13,7 @@ import (
 	"time"
 
 	yaml "github.com/goccy/go-yaml"
+	"github.com/whereiskurt/klanker-maker/pkg/execlog"
 	"github.com/whereiskurt/klanker-maker/pkg/flowlog"
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
@@ -1385,6 +1386,22 @@ chattr +a {{ .NetpolicyPinFile }} 2>/dev/null || \
 # Sticky (the leading 1) so one producer cannot unlink another's file. Each
 # producer owns exactly one file, so there is nothing here to share.
 chmod 1777 {{ .FlowLogDir }}
+
+# Exec trace store. Unlike the flow directory this has exactly ONE producer —
+# the root exec daemon — so it needs none of the 1777 multi-writer handling.
+# It is root-only for a stronger reason: argv is recorded unredacted and
+# includes root's, so a sandbox-readable store would leak on exactly the
+# unprivileged profiles that are meant to be the tighter ones.
+mkdir -p {{ .ExecLogDir }}
+chmod 700 {{ .ExecLogDir }}
+
+# Tracepoint attach resolves a tracepoint id by reading tracefs, so tracefs has
+# to be mounted before km-execlog starts. AL2023 and the Ubuntu AMIs normally
+# mount it, but "normally" is not a guarantee across an AMI bump or a baked
+# image (km ami bake), and the failure mode is an attach error that reads as a
+# permissions problem rather than a missing filesystem. Idempotent and silent
+# when it is already mounted.
+mountpoint -q /sys/kernel/tracing || mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null || true
 {{- if .LearnMode }}
 # Learn mode: create command log file writable by all users (root and sandbox user).
 touch /run/km/learn-commands.log
@@ -1478,6 +1495,60 @@ WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now km-capture
+
+# Exec trace daemon: a hidden verb of the same km-netpolicy binary, for the
+# same reason capture is — a binary userdata fetches but km init does not
+# upload 404s at boot and, under set -e, aborts the whole bootstrap.
+#
+# Provisioned UNCONDITIONALLY, outside the enforcement conditional. The eBPF
+# enforcer is gated on enforcement mode, so a tracer living inside it would be
+# silently dead under proxy mode. Observation that only reports what already
+# happened cannot widen a policy by being present.
+cat > /etc/systemd/system/km-execlog.service << 'UNIT'
+[Unit]
+Description=km process execution tracer
+After=network-online.target
+# Give up rather than loop forever. A box where the tracer genuinely cannot
+# load should show one failed unit that km doctor and journalctl can see, not
+# a restart every few seconds for the life of the sandbox. These belong in
+# the Unit section, not the Service section, since systemd v230 — the
+# Service section only keeps the pre-rename StartLimitInterval= spelling, so
+# putting the renamed directives there logs them as unknown keys and
+# silently drops them, leaving the manager default
+# (DefaultStartLimitIntervalSec=10s) in effect, which a 5-second RestartSec
+# never actually breaches.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+[Service]
+Type=simple
+User=root
+Environment=KM_EXEC_DIR={{ .ExecLogDir }}
+Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
+Environment=KM_SANDBOX_ID={{ .SandboxID }}
+# Same reason km-capture.service carries it: without a region the SDK cannot
+# resolve an S3 endpoint and fails with "Invalid region", which reads as a
+# bucket problem rather than a config one.
+Environment=AWS_REGION={{ .AWSRegion }}
+ExecStart=/opt/km/bin/km-netpolicy execs-daemon
+# A graceful stop saves the trace, so km stop / km pause / an EC2 terminate do
+# not need anyone to have remembered. EC2 sends an ACPI shutdown and waits
+# before forcing, so systemd stops this unit while the network is still up —
+# which is why After=network-online.target is the right ordering for the save
+# as well as the start. It has to be ExecStopPost, not ExecStop: for
+# Type=simple, ExecStop runs BEFORE the main process is signalled, and the
+# daemon only flushes its buffered-but-unwritten tail to disk on SIGTERM
+# (drainRemaining) — an ExecStop save would upload the store as it stood
+# before that tail ever reached disk, silently losing exactly what the
+# daemon's own drain fix was for. Best-effort: never blocks the stop, and a
+# hard power-off still loses the unsaved tail.
+ExecStopPost=/opt/km/bin/km-netpolicy execs save
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now km-execlog
 
 # Shell audit hook: writes JSON audit events to the named pipe on every command,
 # plus a background heartbeat every 60s so long-running commands (top, vim, etc.)
@@ -1750,6 +1821,40 @@ command -v "$AGENT" >/dev/null 2>&1 || echo "[km-inbound-poller] WARNING: agent 
 export AWS_REGION="$REGION"
 
 [ -z "$SANDBOX_ID" ] && echo "[km-slack-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
+
+# Phase 131 gap-fix: dispatch_as_sandbox joins this sandbox's eBPF cgroup scope
+# BEFORE dropping to the sandbox user, so an agent turn's network traffic is
+# actually policed by the cgroup-attached eBPF programs (and, for a later
+# flow-attribution feature, actually visible in their maps) instead of running
+# unenrolled in user.slice like every prior poller dispatch did — measured live:
+# sudo -u sandbox lands the turn in user.slice/session-*.scope, never km.slice.
+#
+# WHY A SUBSHELL: the whole join+exec runs inside a forked '( ... )' subshell so
+# ONLY the forked child (which execs into runuser) ever joins km.slice — never
+# this poller loop itself. The poller makes AWS/SQS calls every iteration;
+# migrating IT into the sandbox cgroup would put those calls under the sandbox's
+# own egress allowlist and could break the poller.
+#
+# WHY runuser, NOT sudo: sudo (and su) open a PAM session, and pam_systemd's
+# logind integration re-migrates the process into user.slice/session-*.scope
+# AFTER the cgroup join below — silently undoing it (measured live on a real
+# sandbox). runuser drops privileges without a PAM/logind session, so the join
+# survives.
+#
+# WHY $BASHPID, NOT $$: this runs inside a '( ... )' subshell, and per bash's
+# documented behavior $$ inside a subshell still reports the INVOKING shell's
+# PID (this poller loop), not the subshell's own — writing that would try to
+# move the whole poller into the cgroup, not the forked child. $BASHPID always
+# reports the actual running process's PID, which becomes the runuser/agent
+# process after exec (exec replaces the process image in place; the PID does
+# not change).
+CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID}.scope/cgroup.procs"
+dispatch_as_sandbox() {
+  (
+    { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
+    exec runuser -u sandbox -- bash -lc "$1"
+  )
+}
 
 # Fall back to SSM Parameter Store when the env var is empty. km create writes
 # /sandbox/${SANDBOX_ID}/slack-inbound-queue-url after the SQS queue is created
@@ -2174,7 +2279,7 @@ while true; do
         if [ -n "$CLAUDE_SESSION" ]; then
           # Codex resume — subcommand form (per Plan 70-00 spike). NOT --resume flag.
           # codex exec resume SESSION PROMPT --flags is the canonical 2026 syntax.
-          sudo -u sandbox bash -lc "
+          dispatch_as_sandbox "
             export HOME=/home/sandbox
             set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
             export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -2188,7 +2293,7 @@ while true; do
           " || true
         else
           # Codex first turn — no prior session.
-          sudo -u sandbox bash -lc "
+          dispatch_as_sandbox "
             export HOME=/home/sandbox
             set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
             export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -2211,7 +2316,7 @@ while true; do
         # loop below is defense-in-depth for OTEL endpoints + KM_SLACK_* env that the
         # notify-hook needs (KM_SLACK_BRIDGE_URL/CHANNEL_ID/SANDBOX_ID,
         # OTEL_EXPORTER_OTLP_*) in case .bash_profile does not chain.
-        sudo -u sandbox bash -lc "
+        dispatch_as_sandbox "
           export HOME=/home/sandbox
           set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
           # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
@@ -2404,6 +2509,40 @@ GITHUB_THREADS_TABLE="${KM_GITHUB_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-githu
 export AWS_REGION="$REGION"
 
 [ -z "$SANDBOX_ID" ] && echo "[km-github-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
+
+# Phase 131 gap-fix: dispatch_as_sandbox joins this sandbox's eBPF cgroup scope
+# BEFORE dropping to the sandbox user, so an agent turn's network traffic is
+# actually policed by the cgroup-attached eBPF programs (and, for a later
+# flow-attribution feature, actually visible in their maps) instead of running
+# unenrolled in user.slice like every prior poller dispatch did — measured live:
+# sudo -u sandbox lands the turn in user.slice/session-*.scope, never km.slice.
+#
+# WHY A SUBSHELL: the whole join+exec runs inside a forked '( ... )' subshell so
+# ONLY the forked child (which execs into runuser) ever joins km.slice — never
+# this poller loop itself. The poller makes AWS/SQS calls every iteration;
+# migrating IT into the sandbox cgroup would put those calls under the sandbox's
+# own egress allowlist and could break the poller.
+#
+# WHY runuser, NOT sudo: sudo (and su) open a PAM session, and pam_systemd's
+# logind integration re-migrates the process into user.slice/session-*.scope
+# AFTER the cgroup join below — silently undoing it (measured live on a real
+# sandbox). runuser drops privileges without a PAM/logind session, so the join
+# survives.
+#
+# WHY $BASHPID, NOT $$: this runs inside a '( ... )' subshell, and per bash's
+# documented behavior $$ inside a subshell still reports the INVOKING shell's
+# PID (this poller loop), not the subshell's own — writing that would try to
+# move the whole poller into the cgroup, not the forked child. $BASHPID always
+# reports the actual running process's PID, which becomes the runuser/agent
+# process after exec (exec replaces the process image in place; the PID does
+# not change).
+CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID}.scope/cgroup.procs"
+dispatch_as_sandbox() {
+  (
+    { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
+    exec runuser -u sandbox -- bash -lc "$1"
+  )
+}
 
 # Fall back to SSM Parameter Store when the env var is empty. km create writes
 # /{prefix}/sandbox/{id}/github-inbound-queue-url after the SQS FIFO queue is
@@ -2613,7 +2752,7 @@ $COMMENT_BODY"
       # PROMPT --flags), mirroring the Slack poller (Phase 70). The D5 cross-agent
       # reset above clears GITHUB_SESSION, so a switch TO codex always lands in the
       # else-branch below as a fresh first turn (never resumes the other agent).
-      sudo -u sandbox bash -lc "
+      dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -2627,7 +2766,7 @@ $COMMENT_BODY"
       " || true
     else
       # Codex first turn — no prior session for this (repo, number).
-      sudo -u sandbox bash -lc "
+      dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -2642,7 +2781,7 @@ $COMMENT_BODY"
   else
     # Claude path (default). Pass --resume when a prior session exists.
     # KM_GITHUB_REPLY_AGENT (exported inline) drives the km-github "via Claude" footer.
-    sudo -u sandbox bash -lc "
+    dispatch_as_sandbox "
       export HOME=/home/sandbox
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
       export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -2674,7 +2813,7 @@ $COMMENT_BODY"
           --update-expression "REMOVE agent_session_id" \
           --region "$REGION" 2>/dev/null || true
       fi
-      sudo -u sandbox bash -lc "
+      dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -2790,6 +2929,40 @@ H1_THREADS_TABLE="${KM_H1_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-h1-threads}"
 export AWS_REGION="$REGION"
 
 [ -z "$SANDBOX_ID" ] && echo "[km-h1-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
+
+# Phase 131 gap-fix: dispatch_as_sandbox joins this sandbox's eBPF cgroup scope
+# BEFORE dropping to the sandbox user, so an agent turn's network traffic is
+# actually policed by the cgroup-attached eBPF programs (and, for a later
+# flow-attribution feature, actually visible in their maps) instead of running
+# unenrolled in user.slice like every prior poller dispatch did — measured live:
+# sudo -u sandbox lands the turn in user.slice/session-*.scope, never km.slice.
+#
+# WHY A SUBSHELL: the whole join+exec runs inside a forked '( ... )' subshell so
+# ONLY the forked child (which execs into runuser) ever joins km.slice — never
+# this poller loop itself. The poller makes AWS/SQS calls every iteration;
+# migrating IT into the sandbox cgroup would put those calls under the sandbox's
+# own egress allowlist and could break the poller.
+#
+# WHY runuser, NOT sudo: sudo (and su) open a PAM session, and pam_systemd's
+# logind integration re-migrates the process into user.slice/session-*.scope
+# AFTER the cgroup join below — silently undoing it (measured live on a real
+# sandbox). runuser drops privileges without a PAM/logind session, so the join
+# survives.
+#
+# WHY $BASHPID, NOT $$: this runs inside a '( ... )' subshell, and per bash's
+# documented behavior $$ inside a subshell still reports the INVOKING shell's
+# PID (this poller loop), not the subshell's own — writing that would try to
+# move the whole poller into the cgroup, not the forked child. $BASHPID always
+# reports the actual running process's PID, which becomes the runuser/agent
+# process after exec (exec replaces the process image in place; the PID does
+# not change).
+CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID}.scope/cgroup.procs"
+dispatch_as_sandbox() {
+  (
+    { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
+    exec runuser -u sandbox -- bash -lc "$1"
+  )
+}
 
 # Fall back to SSM Parameter Store when the env var is empty. km create writes
 # /{prefix}/sandbox/{id}/h1-inbound-queue-url after the SQS FIFO queue is created.
@@ -2956,7 +3129,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
     # survive sudo -u sandbox bash -lc) — forward-compat attribution hook mirroring
     # KM_GITHUB_REPLY_AGENT.
     if [ -n "$H1_SESSION" ]; then
-      sudo -u sandbox bash -lc "
+      dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -2968,7 +3141,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
         echo \$? > '$RUN_DIR/exit_code'
       " || true
     else
-      sudo -u sandbox bash -lc "
+      dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -2981,7 +3154,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
     fi
   else
     # Claude path (default). Pass --resume when a prior session exists for (report_id, target).
-    sudo -u sandbox bash -lc "
+    dispatch_as_sandbox "
       export HOME=/home/sandbox
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
       export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -3007,7 +3180,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
         --key "{\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}}" \
         --update-expression "REMOVE agent_session_id" \
         --region "$REGION" 2>/dev/null || true
-      sudo -u sandbox bash -lc "
+      dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
         export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -3110,6 +3283,40 @@ export AWS_REGION="$REGION"
 
 [ -z "$SANDBOX_ID" ] && echo "[km-webhook-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
 
+# Phase 131 gap-fix: dispatch_as_sandbox joins this sandbox's eBPF cgroup scope
+# BEFORE dropping to the sandbox user, so an agent turn's network traffic is
+# actually policed by the cgroup-attached eBPF programs (and, for a later
+# flow-attribution feature, actually visible in their maps) instead of running
+# unenrolled in user.slice like every prior poller dispatch did — measured live:
+# sudo -u sandbox lands the turn in user.slice/session-*.scope, never km.slice.
+#
+# WHY A SUBSHELL: the whole join+exec runs inside a forked '( ... )' subshell so
+# ONLY the forked child (which execs into runuser) ever joins km.slice — never
+# this poller loop itself. The poller makes AWS/SQS calls every iteration;
+# migrating IT into the sandbox cgroup would put those calls under the sandbox's
+# own egress allowlist and could break the poller.
+#
+# WHY runuser, NOT sudo: sudo (and su) open a PAM session, and pam_systemd's
+# logind integration re-migrates the process into user.slice/session-*.scope
+# AFTER the cgroup join below — silently undoing it (measured live on a real
+# sandbox). runuser drops privileges without a PAM/logind session, so the join
+# survives.
+#
+# WHY $BASHPID, NOT $$: this runs inside a '( ... )' subshell, and per bash's
+# documented behavior $$ inside a subshell still reports the INVOKING shell's
+# PID (this poller loop), not the subshell's own — writing that would try to
+# move the whole poller into the cgroup, not the forked child. $BASHPID always
+# reports the actual running process's PID, which becomes the runuser/agent
+# process after exec (exec replaces the process image in place; the PID does
+# not change).
+CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID}.scope/cgroup.procs"
+dispatch_as_sandbox() {
+  (
+    { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
+    exec runuser -u sandbox -- bash -lc "$1"
+  )
+}
+
 # Fall back to SSM Parameter Store when the env var is empty. km create writes
 # /{prefix}/sandbox/{id}/webhook-inbound-queue-url after the SQS FIFO queue is
 # created. The poller starts at boot and may race the create-handler write —
@@ -3196,7 +3403,7 @@ channels this sandbox is configured with (e.g. Slack) to report status."
   # simply fails the turn (RUN_EXIT != 0 below) and the message is redelivered,
   # same as any other failed run.
   if [ "$AGENT" = "codex" ]; then
-    sudo -u sandbox bash -lc "
+    dispatch_as_sandbox "
       export HOME=/home/sandbox
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
       export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -3206,7 +3413,7 @@ channels this sandbox is configured with (e.g. Slack) to report status."
       echo \$? > '$RUN_DIR/exit_code'
     " || true
   else
-    sudo -u sandbox bash -lc "
+    dispatch_as_sandbox "
       export HOME=/home/sandbox
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
       export PATH=\"/home/sandbox/.local/bin:\$PATH\"
@@ -3651,6 +3858,24 @@ chown sandbox:sandbox "$LOG_FILE"
 
 log "km-queue-runner starting (sandbox=${SANDBOX_ID:-unknown})"
 
+# Phase 131 gap-fix: dispatch_as_sandbox joins this sandbox's eBPF cgroup scope
+# BEFORE dropping to the sandbox user, so an 'km agent run' turn's network
+# traffic is actually policed by the cgroup-attached eBPF programs (and, for a
+# later flow-attribution feature, actually visible in their maps) instead of
+# running unenrolled in user.slice like the tmux-dispatched agent run did before
+# this fix — measured live: sudo -u sandbox lands the process in
+# user.slice/session-*.scope, never km.slice. See the SQS pollers
+# (km-slack/github/h1/webhook-inbound-poller) above for the identical fix, with
+# the full WHY-A-SUBSHELL / WHY-runuser / WHY-$BASHPID rationale in comments
+# there; this is the 'bash -c' (non-login) twin for the tmux dispatch below.
+CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID:-unknown}.scope/cgroup.procs"
+dispatch_as_sandbox() {
+  (
+    { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
+    exec runuser -u sandbox -- bash -c "$1"
+  )
+}
+
 # ---- Wait for required runtime tools (tmux, claude, jq) before any work ----
 # The systemd unit's After=km-bootstrap.service only governs auto-start ordering,
 # NOT manual systemctl start. When operator-side km create kicks the unit early
@@ -3787,7 +4012,7 @@ EOFSCRIPT
     chmod +x "$script"
     chown sandbox:sandbox "$script"
 
-    sudo -u sandbox bash -c "tmux new-session -d -s 'km-agent-$run_id' '$script'"
+    dispatch_as_sandbox "tmux new-session -d -s 'km-agent-$run_id' '$script'"
     sudo -u sandbox bash -c "tmux wait-for 'km-done-$run_id'" 2>/dev/null || true
 
     local exit_code
@@ -5369,10 +5594,13 @@ type userDataParams struct {
 	// narrow further (pins) cannot widen a policy by being present, so there
 	// is no profile gate to make it dormant. CaptureSock/CaptureDir are the
 	// matching values for the km-capture.service unit below.
-	FlowLogDir         string
-	NetpolicyPinFile   string
-	CaptureSock        string
-	CaptureDir         string
+	FlowLogDir       string
+	NetpolicyPinFile string
+	CaptureSock      string
+	CaptureDir       string
+	// ExecLogDir is where the exec tracer writes the process trace. Root-only:
+	// argv is recorded unredacted and includes root's own.
+	ExecLogDir         string
 	GitHubAllowedRepos string // comma-separated GitHub repos from profile.sourceAccess.github.allowedRepos
 	KMArtifactsBucket  string // from config env var KM_ARTIFACTS_BUCKET
 	// Filesystem enforcement (section 2.5)
@@ -6102,6 +6330,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		NetpolicyPinFile:   netpolicy.DefaultPinPath,
 		CaptureSock:        "/run/km/capture.sock",
 		CaptureDir:         "/var/lib/km/capture",
+		ExecLogDir:         execlog.DefaultDir,
 		GitHubAllowedRepos: joinGitHubAllowedRepos(p),
 		KMArtifactsBucket:  artifactsBucket,
 		UseSpot:            useSpot,
