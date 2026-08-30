@@ -88,9 +88,14 @@ func TestUserData_ExecLogUnitCarriesRegionAndSavesOnStop(t *testing.T) {
 	// Must be ExecStopPost, not ExecStop: for Type=simple, ExecStop runs
 	// BEFORE the main process is signalled, so a plain ExecStop would upload
 	// the store before the daemon's SIGTERM-triggered drain ever writes its
-	// buffered tail to disk — defeating Task 5's drain fix outright.
-	if !contains(unit, "ExecStopPost=/opt/km/bin/km-netpolicy execs save") {
-		t.Error("a graceful stop must save the trace, AFTER the daemon has drained, without anyone remembering")
+	// buffered tail to disk — defeating Task 5's drain fix outright. The
+	// leading "-" is load-bearing too: a real ACPI shutdown can leave DNS
+	// unreachable (the enforcer/dns-proxy stop before this unit's ordering
+	// fix, or a hard power-off), and a best-effort save that fails should
+	// not also mark the unit "Failed with result 'exit-code'" for km doctor
+	// to puzzle over.
+	if !contains(unit, "ExecStopPost=-/opt/km/bin/km-netpolicy execs save") {
+		t.Error("a graceful stop must save the trace (best-effort, leading '-'), AFTER the daemon has drained, without anyone remembering")
 	}
 	if contains(unit, "\nExecStop=") {
 		t.Error("km-execlog.service must not use plain ExecStop — it races the daemon's SIGTERM drain")
@@ -104,6 +109,29 @@ func TestUserData_ExecLogUnitCarriesRegionAndSavesOnStop(t *testing.T) {
 	}
 	if idx := strings.Index(unit, "[Service]"); idx != -1 && strings.Index(unit, "StartLimitBurst") > idx {
 		t.Error("StartLimitBurst must be a [Unit] directive, not a [Service] one — systemd silently drops it there since v230")
+	}
+}
+
+// A real ACPI shutdown (as opposed to `systemctl stop km-execlog`, which
+// leaves everything else running) stops every unit at once, in the REVERSE
+// of each unit's own After= order. km-execlog's ExecStopPost save needs to
+// resolve the S3 hostname, and under ebpf/both enforcement (or under proxy
+// enforcement, for root's own DNS) that resolution depends on
+// km-ebpf-enforcer.service / km-dns-proxy.service still being up. Live UAT
+// caught systemd stopping the enforcer first on a real shutdown, so the save
+// failed with a 127.0.0.1:53 connection-refused error. Ordering km-execlog
+// AFTER both units makes systemd stop it FIRST on the way down.
+func TestUserData_ExecLogStopsBeforeItsDNSDependenciesOnShutdown(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-execlog-shutdown-order", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData: %v", err)
+	}
+	unit := execlogUnitBlock(t, out)
+	for _, want := range []string{"km-ebpf-enforcer.service", "km-dns-proxy.service"} {
+		if !contains(unit, want) {
+			t.Errorf("km-execlog.service must order After= %s so it stops before it on shutdown (a unit absent on this box's enforcement mode makes After= a harmless no-op, not an error)", want)
+		}
 	}
 }
 
