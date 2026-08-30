@@ -38,16 +38,18 @@ const prog = "km-netpolicy"
 // opts carries everything run needs, so tests can drive it without touching the
 // real filesystem or environment.
 type opts struct {
-	denyFile    string
-	flowDir     string
-	pinFile     string
-	staticDNS   []string
-	staticHosts []string
-	captureSock string
-	captureDir  string
-	execDir     string
-	stdout      io.Writer
-	stderr      io.Writer
+	denyFile        string
+	flowDir         string
+	pinFile         string
+	staticDNS       []string
+	staticHosts     []string
+	captureSock     string
+	captureDir      string
+	execDir         string
+	artifactsBucket string
+	sandboxID       string
+	stdout          io.Writer
+	stderr          io.Writer
 }
 
 const usage = `km-netpolicy — narrow this sandbox's egress policy from inside the box
@@ -133,16 +135,18 @@ func buildOpts(getenv func(string) string, envFile string) opts {
 	}
 
 	return opts{
-		denyFile:    denyFile,
-		flowDir:     flowDir,
-		pinFile:     pinFile,
-		staticDNS:   splitCSV(pick("DENIED_SUFFIXES")),
-		staticHosts: splitCSV(pick("DENIED_HOSTS")),
-		captureSock: captureSock,
-		captureDir:  captureDir,
-		execDir:     execDir,
-		stdout:      os.Stdout,
-		stderr:      os.Stderr,
+		denyFile:        denyFile,
+		flowDir:         flowDir,
+		pinFile:         pinFile,
+		staticDNS:       splitCSV(pick("DENIED_SUFFIXES")),
+		staticHosts:     splitCSV(pick("DENIED_HOSTS")),
+		captureSock:     captureSock,
+		captureDir:      captureDir,
+		execDir:         execDir,
+		artifactsBucket: pick("KM_ARTIFACTS_BUCKET"),
+		sandboxID:       pick("KM_SANDBOX_ID"),
+		stdout:          os.Stdout,
+		stderr:          os.Stderr,
 	}
 }
 

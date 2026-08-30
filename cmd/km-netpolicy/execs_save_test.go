@@ -70,10 +70,8 @@ func TestOpenIfPresent_ExistingFileReturnsItsSize(t *testing.T) {
 }
 
 func TestRunExecsSave_MissingBucketIsAClearError(t *testing.T) {
-	t.Setenv("KM_ARTIFACTS_BUCKET", "")
-	t.Setenv("KM_SANDBOX_ID", "sb-abc123")
 	var out, errb bytes.Buffer
-	err := runExecsSave(opts{execDir: t.TempDir(), stdout: &out, stderr: &errb})
+	err := runExecsSave(opts{execDir: t.TempDir(), sandboxID: "sb-abc123", stdout: &out, stderr: &errb})
 	if err == nil {
 		t.Fatal("want an error when no bucket is configured")
 	}
@@ -89,10 +87,8 @@ func TestRunExecsSave_MissingBucketIsAClearError(t *testing.T) {
 }
 
 func TestRunExecsSave_MissingSandboxIDIsAClearError(t *testing.T) {
-	t.Setenv("KM_ARTIFACTS_BUCKET", "bucket")
-	t.Setenv("KM_SANDBOX_ID", "")
 	var out, errb bytes.Buffer
-	err := runExecsSave(opts{execDir: t.TempDir(), stdout: &out, stderr: &errb})
+	err := runExecsSave(opts{execDir: t.TempDir(), artifactsBucket: "bucket", stdout: &out, stderr: &errb})
 	if err == nil {
 		t.Fatal("want an error when no sandbox id is configured")
 	}
@@ -112,8 +108,6 @@ func TestRunExecsSave_UnreadableStoreIsReportedOnStderr(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses the permission bits this test relies on")
 	}
-	t.Setenv("KM_ARTIFACTS_BUCKET", "bucket")
-	t.Setenv("KM_SANDBOX_ID", "sb-abc123")
 	dir := t.TempDir()
 	if err := os.WriteFile(dir+"/execs.jsonl", []byte(`{"ts":"2026-08-29T12:00:00Z"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -123,7 +117,7 @@ func TestRunExecsSave_UnreadableStoreIsReportedOnStderr(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) // let t.TempDir() clean up
 	var out, errb bytes.Buffer
-	err := runExecsSave(opts{execDir: dir, stdout: &out, stderr: &errb})
+	err := runExecsSave(opts{execDir: dir, artifactsBucket: "bucket", sandboxID: "sb-abc123", stdout: &out, stderr: &errb})
 	if err == nil {
 		t.Fatal("want an error when the store cannot be opened")
 	}
@@ -140,10 +134,8 @@ func TestRunExecsSave_MissingStoreIsNotAnError(t *testing.T) {
 	// executed nothing and so never created a store file at all. A non-zero
 	// exit there would make every clean stop look like a failure in the
 	// journal.
-	t.Setenv("KM_ARTIFACTS_BUCKET", "bucket")
-	t.Setenv("KM_SANDBOX_ID", "sb-abc123")
 	var out, errb bytes.Buffer
-	if err := runExecsSave(opts{execDir: t.TempDir(), stdout: &out, stderr: &errb}); err != nil {
+	if err := runExecsSave(opts{execDir: t.TempDir(), artifactsBucket: "bucket", sandboxID: "sb-abc123", stdout: &out, stderr: &errb}); err != nil {
 		t.Fatalf("missing store must not error: %v", err)
 	}
 	if !strings.Contains(out.String(), "nothing to save") {
@@ -160,8 +152,6 @@ func TestRunExecsSave_UnreadableRotatedGenerationIsReportedButDoesNotAbort(t *te
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses the permission bits this test relies on")
 	}
-	t.Setenv("KM_ARTIFACTS_BUCKET", "bucket")
-	t.Setenv("KM_SANDBOX_ID", "sb-abc123")
 	dir := t.TempDir()
 	if err := os.WriteFile(dir+"/execs.jsonl", nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -172,7 +162,7 @@ func TestRunExecsSave_UnreadableRotatedGenerationIsReportedButDoesNotAbort(t *te
 	t.Cleanup(func() { _ = os.Chmod(dir+"/execs.jsonl.1", 0o600) })
 
 	var out, errb bytes.Buffer
-	if err := runExecsSave(opts{execDir: dir, stdout: &out, stderr: &errb}); err != nil {
+	if err := runExecsSave(opts{execDir: dir, artifactsBucket: "bucket", sandboxID: "sb-abc123", stdout: &out, stderr: &errb}); err != nil {
 		t.Fatalf("want no error, got %v", err)
 	}
 	if !strings.Contains(out.String(), "nothing to save") {
@@ -187,17 +177,41 @@ func TestRunExecsSave_EmptyStoreIsNotAnError(t *testing.T) {
 	// A store file that exists but holds zero bytes (e.g. just rotated,
 	// or created but never written to) must be treated the same as no store
 	// at all — not an error.
-	t.Setenv("KM_ARTIFACTS_BUCKET", "bucket")
-	t.Setenv("KM_SANDBOX_ID", "sb-abc123")
 	dir := t.TempDir()
 	if err := os.WriteFile(dir+"/execs.jsonl", nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
-	if err := runExecsSave(opts{execDir: dir, stdout: &out, stderr: &errb}); err != nil {
+	if err := runExecsSave(opts{execDir: dir, artifactsBucket: "bucket", sandboxID: "sb-abc123", stdout: &out, stderr: &errb}); err != nil {
 		t.Fatalf("empty store must not error: %v", err)
 	}
 	if !strings.Contains(out.String(), "nothing to save") {
 		t.Errorf("want an explicit nothing-to-save line, got %q", out.String())
+	}
+}
+
+func TestRunExecsSave_ReadsBucketAndSandboxIDFromOptsNotEnv(t *testing.T) {
+	// A human running "km-netpolicy execs save" by hand has none of the
+	// systemd unit's environment. buildOpts is what resolves KM_ARTIFACTS_BUCKET
+	// and KM_SANDBOX_ID (from the real process env or /etc/km/netpolicy.env);
+	// runExecsSave itself must never fall back to os.Getenv, or that resolution
+	// is silently bypassed. Explicitly unset both env vars so a regression
+	// back to os.Getenv would fail this test even on a machine that happens
+	// to have them set.
+	t.Setenv("KM_ARTIFACTS_BUCKET", "")
+	t.Setenv("KM_SANDBOX_ID", "")
+	var out, errb bytes.Buffer
+	err := runExecsSave(opts{
+		execDir:         t.TempDir(),
+		artifactsBucket: "opts-bucket",
+		sandboxID:       "sb-from-opts",
+		stdout:          &out,
+		stderr:          &errb,
+	})
+	if err != nil {
+		t.Fatalf("want no error when opts carries the bucket/sandbox id despite an empty environment: %v", err)
+	}
+	if errb.Len() != 0 {
+		t.Errorf("want no stderr output, got %q", errb.String())
 	}
 }

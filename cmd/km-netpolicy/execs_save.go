@@ -42,13 +42,13 @@ func execsKey(sandboxID string, now time.Time, gen string) string {
 // posture lives in the systemd wiring, not here. The file always stays on
 // disk regardless of upload outcome.
 func runExecsSave(o opts) error {
-	bucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+	bucket := o.artifactsBucket
 	if bucket == "" {
 		err := errors.New("KM_ARTIFACTS_BUCKET is not set; cannot save the exec trace")
 		fmt.Fprintf(o.stderr, "%s execs save: %v\n", prog, err)
 		return err
 	}
-	sandboxID := os.Getenv("KM_SANDBOX_ID")
+	sandboxID := o.sandboxID
 	if sandboxID == "" {
 		err := errors.New("KM_SANDBOX_ID is not set; cannot scope the exec trace")
 		fmt.Fprintf(o.stderr, "%s execs save: %v\n", prog, err)

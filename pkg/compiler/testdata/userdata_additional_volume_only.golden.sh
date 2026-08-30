@@ -1386,6 +1386,9 @@ DENIED_HOSTS=
 KM_NETPOLICY_FILE=/var/lib/km/netpolicy/deny.list
 KM_FLOWLOG_DIR=/var/lib/km/flows
 KM_NETPOLICY_PINS=/var/lib/km/netpolicy/allow.pins
+KM_EXEC_DIR=/var/lib/km/execs
+KM_ARTIFACTS_BUCKET=my-bucket
+KM_SANDBOX_ID=test-sb
 NETPOLICYENV
 chmod 644 /etc/km/netpolicy.env
 if chattr +a /var/lib/km/netpolicy/deny.list 2>/dev/null; then
