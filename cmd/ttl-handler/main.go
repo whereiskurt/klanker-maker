@@ -30,7 +30,6 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	ec2pkg "github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
@@ -619,27 +618,27 @@ func (h *TTLHandler) handleBudgetAdd(ctx context.Context, event TTLEvent) error 
 		return fmt.Errorf("budget-add: at least one of budget_compute or budget_ai must be > 0")
 	}
 
-	awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
-	if err != nil {
-		return fmt.Errorf("load AWS config: %w", err)
+	// Prefer the injected client (tests); fall back to a real one.
+	budgetClient := h.BudgetClient
+	budgetTbl := h.BudgetTable
+	if budgetClient == nil {
+		awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		budgetClient = dynamodbpkg.NewFromConfig(awsCfg)
 	}
-	dynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
-	budgetTbl := budgetTableName()
+	if budgetTbl == "" {
+		budgetTbl = budgetTableName()
+	}
 
-	// Atomic increment of budget limits via UpdateItem ADD expression
-	update := &dynamodbpkg.UpdateItemInput{
-		TableName: awssdk.String(budgetTbl),
-		Key: map[string]dynamodbtypes.AttributeValue{
-			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: event.SandboxID},
-			"sk":         &dynamodbtypes.AttributeValueMemberS{Value: "budget"},
-		},
-		UpdateExpression: awssdk.String("ADD compute_limit :c, ai_limit :a"),
-		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
-			":c": &dynamodbtypes.AttributeValueMemberN{Value: fmt.Sprintf("%.2f", event.BudgetCompute)},
-			":a": &dynamodbtypes.AttributeValueMemberN{Value: fmt.Sprintf("%.2f", event.BudgetAI)},
-		},
-	}
-	if _, err := dynamoClient.UpdateItem(ctx, update); err != nil {
+	// Atomic increment via the shared helper. Do NOT hand-roll the UpdateItem
+	// here: this handler previously wrote key "sandbox_id"/"sk"="budget" and
+	// attributes compute_limit/ai_limit, none of which exist on this table
+	// (its key schema is PK/SK and the limits row is SK=BUDGET#limits with
+	// computeLimit/aiLimit), so every scheduled budget-add failed with a
+	// ValidationException once it got past the missing IAM grant.
+	if err := awspkg.AddBudgetLimits(ctx, budgetClient, budgetTbl, event.SandboxID, event.BudgetCompute, event.BudgetAI); err != nil {
 		return fmt.Errorf("update budget for %s: %w", event.SandboxID, err)
 	}
 
@@ -911,7 +910,13 @@ func (h *TTLHandler) handleScheduleCreate(ctx context.Context, event TTLEvent) e
 		Status:       "active",
 		CreatedAt:    time.Now(),
 	}
-	_ = awspkg.PutSchedule(ctx, h.DynamoClient, schedTableName, rec)
+	// Best-effort: the schedule itself is already created, so a failure here only
+	// costs visibility in `km at list`. Log it — swallowing this silently is how
+	// the missing schedules-table IAM grant went unnoticed.
+	if err := awspkg.PutSchedule(ctx, h.DynamoClient, schedTableName, rec); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", event.SandboxID).Str("table", schedTableName).
+			Msg("failed to record schedule in schedules table (non-fatal; km at list will not show it)")
+	}
 
 	log.Info().Str("sandbox_id", event.SandboxID).Str("schedule", scheduleName).
 		Str("expression", spec.Expression).Msg("schedule created")

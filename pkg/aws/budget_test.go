@@ -571,3 +571,64 @@ func TestSetBudgetLimits(t *testing.T) {
 	rawVals, _ := json.Marshal(call.ExpressionAttributeValues)
 	t.Logf("ExpressionAttributeValues: %s", rawVals)
 }
+
+// AddBudgetLimits must write the SAME item the rest of this package reads:
+// key PK/SK with SK=BUDGET#limits, attributes computeLimit/aiLimit.
+//
+// Regression: cmd/ttl-handler's "budget-add" handler hand-rolled its own
+// UpdateItem against key "sandbox_id"/"sk"="budget" and attributes
+// compute_limit/ai_limit. None of those exist — the live km-budgets table's key
+// schema is PK/SK — so every scheduled `km at ... budget-add` was dead. This
+// test pins the shape so a second copy can't drift away again.
+func TestAddBudgetLimits_UsesCanonicalLimitsItemShape(t *testing.T) {
+	fake := &fakeBudgetClient{}
+
+	err := kmaws.AddBudgetLimits(context.Background(), fake, "km-budgets", "sb-topup", 5.0, 12.5)
+	if err != nil {
+		t.Fatalf("AddBudgetLimits returned error: %v", err)
+	}
+	if len(fake.updateItemCalls) != 1 {
+		t.Fatalf("expected exactly 1 UpdateItem call, got %d", len(fake.updateItemCalls))
+	}
+	call := fake.updateItemCalls[0]
+
+	// Key must be PK/SK — not sandbox_id/sk.
+	if len(call.Key) != 2 {
+		t.Fatalf("expected a 2-attribute key, got %v", call.Key)
+	}
+	pkAV, ok := call.Key["PK"]
+	if !ok {
+		t.Fatalf("expected partition key attribute PK, got key %v", call.Key)
+	}
+	pkStr, ok := pkAV.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || pkStr.Value != "SANDBOX#sb-topup" {
+		t.Errorf("expected PK=SANDBOX#sb-topup, got %#v", pkAV)
+	}
+	skAV, ok := call.Key["SK"]
+	if !ok {
+		t.Fatalf("expected sort key attribute SK, got key %v", call.Key)
+	}
+	skStr, ok := skAV.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || skStr.Value != "BUDGET#limits" {
+		t.Errorf("expected SK=BUDGET#limits, got %#v", skAV)
+	}
+
+	// Expression must ADD onto the canonical attribute names.
+	expr := ""
+	if call.UpdateExpression != nil {
+		expr = *call.UpdateExpression
+	}
+	if !strings.HasPrefix(expr, "ADD ") {
+		t.Errorf("expected an atomic ADD expression, got %q", expr)
+	}
+	for _, attr := range []string{"computeLimit", "aiLimit"} {
+		if !strings.Contains(expr, attr) {
+			t.Errorf("expected %q in UpdateExpression, got %q", attr, expr)
+		}
+	}
+	for _, bad := range []string{"compute_limit", "ai_limit"} {
+		if strings.Contains(expr, bad) {
+			t.Errorf("UpdateExpression uses the nonexistent attribute %q: %q", bad, expr)
+		}
+	}
+}

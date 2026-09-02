@@ -12,46 +12,52 @@
   section is omitted gracefully.
 -->
 
-## 🩹 Exec capture: four fixes, all of them found by running it
+## 🛑 A sandbox could be stopped as "idle" while you were working in it
 
-v0.8.12 shipped `km-netpolicy execs | who | execs save`. Everything below was found by
-actually using it on live sandboxes and measuring the result, not by reading the code —
-each one had already survived review.
+An interactive desktop sandbox was stopped 2 minutes after its last presence heartbeat,
+against a 30-minute `idleTimeout`. Nothing about the sandbox was idle.
 
-**`execs save` works when you run it by hand.** It read its S3 target straight from the
-process environment, which only ever exists inside the `km-execlog.service` unit. From a
-`km shell --root` session it exited `KM_ARTIFACTS_BUCKET is not set`. `/etc/km/netpolicy.env`
-now carries `KM_EXEC_DIR`, `KM_ARTIFACTS_BUCKET`, `KM_SANDBOX_ID` and `AWS_REGION`, and the
-verb resolves all four through its normal environment → env-file fallback.
+The idle detector polls the sandbox's CloudWatch audit stream for its most recent event.
+When that read failed — or returned one of the empty pages `GetLogEvents` is documented to
+return even for a stream that has events — it fell back to *"has the detector been running
+longer than the timeout?"*, measured from detector start. So once a box had been up longer
+than its own idle window, **a single bad poll fired the reap**, no matter how recent the
+real activity. `OnIdle` is one-shot, so there was no second look, and the failed read was
+swallowed with no log line, which is why nothing on the box explained it afterwards.
 
-**A graceful stop no longer loses its own upload to DNS.** Under `ebpf`/`both` enforcement
-`/etc/resolv.conf` points at the resolver `km-ebpf-enforcer` provides. systemd stops units
-in reverse `After=` order, and `km-execlog` declared only `After=network-online.target` —
-so on a real shutdown the enforcer went down first and the trace upload died resolving the
-S3 hostname. `systemctl stop` on a running box never exposes this, because the resolver is
-still alive; only a real shutdown orders it down first.
+A degraded read is now the absence of evidence, not evidence of absence: the detector
+remembers the newest event it has actually seen and uses that as the baseline when a poll
+goes bad. Only a detector that has *never* observed an event falls back to its start time,
+so a sandbox that generates nothing at all is still reaped and nothing leaks. Failed and
+empty reads are now logged.
 
-**`km destroy` saves the trace before it tears anything down.** The `ExecStopPost` hook does
-**not** cover an EC2 terminate — that was measured, not assumed. `km destroy` and the
-ttl-handler's expiry path now run `execs save` on the instance over SSM while it is still
-running, before terraform removes its networking. Best-effort by construction: a forensics
-artifact must never be able to block a teardown.
+## 🔐 Three DynamoDB tables the ttl-handler was never granted
 
-**And the region that made the above fail anyway.** SSM's `AWS-RunShellScript` runs a bare,
-non-login shell that never sources `/etc/profile.d` — so a region an interactive root login
-takes for granted simply isn't there, and the save died on *"Invalid region: region was not
-a valid DNS name."* Fixed at three independent points, because the sidecar binary and the
-userdata that renders its env file ship on different cadences and either can be older.
+Found while tracing the stop above. The Lambda is handed four table names as environment
+variables and had IAM for one and a half of them:
 
-If you are on v0.8.12, `km destroy` is silently discarding the exec trace of every sandbox
-you tear down. That is the fix worth taking.
+- **`{prefix}-budgets`** — `RecordPauseStart` has been 403ing on every stop, pause and
+  idle-stop since it shipped. Its error is a `log.Warn "(non-fatal)"`, so the only symptom
+  was compute budgets quietly counting paused time as running time. `RecordResumeClose`
+  (resume) and `handleBudgetAdd` (`km at … budget-add`) were denied too.
+- **`{prefix}-schedules`** — `handleCreate` records a scheduled `km at <time> create` here
+  so it shows in `km at list`. The call discarded its own error, so the schedule fired
+  correctly and was simply invisible.
 
-## 🛡️ A local `goreleaser` run can no longer leak your Terraform state config
+`handleBudgetAdd` was broken twice over: past the missing grant it hand-rolled an
+`UpdateItem` against key `sandbox_id`/`sk` and attributes `compute_limit`/`ai_limit` — none
+of which exist on that table, whose key schema is `PK`/`SK` with the limits on
+`SK=BUDGET#limits`. It now goes through the shared `AddBudgetLimits` helper, and a test
+pins the item shape so a second copy cannot drift again.
 
-`make release` / a local goreleaser run archived `infra/` wholesale — including any
-`.terragrunt-cache/` and `.terraform/` directories left behind by a previous `km init`.
-Measured on a real tree: **528 cached files**, carrying the state bucket name, the DynamoDB
-lock table, and per-module state keys, headed for a public release archive. CI was never
-affected (it builds from a clean checkout), so nothing published has ever carried this — but
-anyone cutting a release from a working directory was one command away from it.
-`scripts/check-release-tree.sh` now runs first in the build and refuses outright.
+A guard test now compares the set of tables the module hands the Lambda as environment
+against the set named in its IAM resource ARNs, so the next table added is covered without
+anyone remembering to.
+
+## 📋 Upgrading
+
+`make build` + `make build-lambdas` + `km init --dry-run=false`. Not `--sidecars` — the two
+new IAM policies need a full terragrunt apply. The idle-detector fix rides in the
+`km-audit-log` sidecar, which is fetched at boot, so **existing sandboxes keep the old
+detector until `km destroy && km create`**. The IAM and ttl-handler fixes take effect
+immediately for every sandbox, new or existing.

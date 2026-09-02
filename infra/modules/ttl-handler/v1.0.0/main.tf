@@ -735,6 +735,70 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
   })
 }
 
+# Policy: DynamoDB {prefix}-budgets — compute-budget pause accounting + budget top-ups.
+#
+# Three handler paths use this table and NONE of them had a grant, so all three
+# had been failing since they shipped:
+#   - RecordPauseStart  (stop / pause / idle-stop) — opens the pause interval so
+#     stopped wall-clock is excluded from compute spend. Its failure is a
+#     log.Warn "(non-fatal)", which is why the AccessDenied went unnoticed and
+#     compute budgets have been counting paused time as running time.
+#   - RecordResumeClose (resume) — GetItem to read pausedAt, UpdateItem to close
+#     the interval. Needs GetItem as well as UpdateItem.
+#   - handleBudgetAdd   ("budget-add" events from `km at ... budget-add`).
+#
+# Scoped to this install's budgets table only.
+resource "aws_iam_role_policy" "dynamodb_budgets" {
+  name = "${var.resource_prefix}-ttl-handler-dynamodb-budgets"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BudgetTablePauseAccounting"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+        ]
+        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.budget_table_name}"
+      }
+    ]
+  })
+}
+
+# Policy: DynamoDB {prefix}-schedules — the `km at list` record store.
+#
+# handleCreate writes a ScheduleRecord here after creating the EventBridge
+# schedule, so a deferred `km at <time> create ...` shows up in `km at list`.
+# The call site discards its error, so the missing grant surfaced as nothing at
+# all: the schedule fires correctly and is simply invisible to the operator.
+# Both table names come from the same variables the Lambda reads as
+# KM_SCHEDULES_TABLE / KM_BUDGET_TABLE, so env and IAM cannot disagree.
+resource "aws_iam_role_policy" "dynamodb_schedules" {
+  name = "${var.resource_prefix}-ttl-handler-dynamodb-schedules"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SchedulesTableRecords"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+        ]
+        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.schedules_table_name}"
+      }
+    ]
+  })
+}
+
 # Policy: cleanup of the per-sandbox identity on teardown — DDB row + three SSM params
 # (signing-key, encryption-key, safe-phrase). Mirrors what internal/app/cmd/destroy.go
 # does on the local-destroy path so the remote-destroy path no longer leaks identity rows
