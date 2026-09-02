@@ -406,15 +406,44 @@ resource "aws_iam_role_policy" "launch_account_external_id" {
 # Lambda function: TTL handler (Go, provided.al2023, arm64)
 # ============================================================
 
+# The ttl-handler zip is delivered through S3, not inline, because it is the one
+# Lambda in this repo that outgrew the inline path.
+#
+# `filename` makes the provider base64 the whole zip into the UpdateFunctionCode
+# request, and that request is capped at 70,167,211 bytes — so the real ceiling
+# on the zip is 70167211 * 3/4 ≈ 52.6 MB, NOT the 50 MB the docs quote and not
+# anything the plan will warn about. This zip bundles both a ~85 MB terraform
+# binary and a ~85 MB handler binary and reached 53.2 MB compressed, which fails
+# the apply with a 413 RequestEntityTooLargeException at the very end of a long
+# `km init` — and takes every module ordered after it down with it.
+#
+# Via S3 the request carries a bucket/key instead, and the only limit left is
+# 250 MB unzipped (this zip is ~170 MB). The key is stable rather than
+# hash-suffixed so the bucket does not accumulate an object per deploy; the
+# function still redeploys on change because source_code_hash is computed from
+# the local file. Every other Lambda in this repo is ~25 MB and stays inline.
+resource "aws_s3_object" "ttl_handler_code" {
+  bucket = var.artifact_bucket_name
+  key    = "lambdas/${var.resource_prefix}-ttl-handler.zip"
+  source = var.lambda_zip_path
+
+  # Re-uploads whenever the built zip changes.
+  etag = filemd5(var.lambda_zip_path)
+}
+
 resource "aws_lambda_function" "ttl_handler" {
   function_name = "${var.resource_prefix}-ttl-handler"
   description   = "Uploads artifacts and sends ttl-expired notification when EventBridge TTL fires"
   role          = aws_iam_role.ttl_handler.arn
 
   # Go Lambda: custom runtime on Amazon Linux 2023, arm64 for Graviton cost efficiency
-  runtime          = "provided.al2023"
-  handler          = "bootstrap"
-  filename         = var.lambda_zip_path
+  runtime = "provided.al2023"
+  handler = "bootstrap"
+
+  # Referencing the object (not var.artifact_bucket_name) makes the upload an
+  # explicit dependency, so the code is in place before the function points at it.
+  s3_bucket        = aws_s3_object.ttl_handler_code.bucket
+  s3_key           = aws_s3_object.ttl_handler_code.key
   source_code_hash = filebase64sha256(var.lambda_zip_path)
 
   # 15-minute timeout: terraform init + destroy can take several minutes
