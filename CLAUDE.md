@@ -8,6 +8,61 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Idle-reap fail-safe + three missing ttl-handler DynamoDB grants (2026-09-02, v0.8.14):**
+- **A live desktop sandbox was stopped as idle two minutes after its last presence
+  heartbeat, against a 30-minute `idleTimeout`.** `IdleDetector.isIdle`
+  (`pkg/lifecycle/idle.go`) polls the sandbox's own CloudWatch audit stream for the
+  most recent event, and on `err != nil || len(events) == 0` fell back to
+  `now - startTime > IdleTimeout`. Once a box had been up longer than its idle
+  window — always true on a long-lived sandbox — **any single degraded poll fired
+  the one-shot reap regardless of real activity.** Both triggers are live: a
+  transient `GetLogEvents` error, and the empty page AWS documents `GetLogEvents`
+  can return for a stream that has events (very reachable at `Limit: 1`). The read
+  error was swallowed with no log line, so nothing on the box explained it after
+  the fact. **Fixed by remembering `lastSeenActivity`** (newest event observed on a
+  SUCCESSFUL poll) and using it as the degraded-read baseline. **The over-correction
+  is deliberately fenced:** only a detector that has NEVER observed an event falls
+  back to `startTime`, so a silent sandbox is still reaped and nothing leaks — pinned
+  by `TestIdleDetector_NoEventsEverStillReapsFromStartTime` and
+  `..._DegradedPollStillReapsWhenLastActivityIsStale` beside the two-shape regression
+  test. Note this is the OPPOSITE disposition from `km-presence`'s seven signals,
+  which deliberately fail idle: a signal is re-evaluated every 60s and has six
+  siblings, whereas `OnIdle` fires once and is irreversible.
+- **The evidence lives in CloudWatch, not the box.** The reap leaves
+  `{"event_type":"idle","teardown_policy":"stop"}` in `/aws/lambda/{prefix}-ttl-handler`
+  and `StateTransitionReason: "User initiated"` on the instance; CloudTrail names
+  `km-ttl-handler` as the caller. Diagnose a surprise stop by diffing that timestamp
+  against the sandbox's `/km/sandboxes/{id}/` audit stream — presence heartbeats are
+  emitted ONLY when a signal is active, so their gaps are the idle history.
+- **Three DynamoDB tables the ttl-handler is handed as env had no IAM grant**, found
+  while tracing the above and all hidden by soft-failing call sites — the same shape as
+  [[project_ttl_handler_submodule_teardown_iam]]. `{prefix}-budgets`:
+  `RecordPauseStart` has 403'd on every stop/pause/idle-stop since it shipped (its error
+  is a `log.Warn "(non-fatal)"`, so the only symptom was compute budgets counting paused
+  time as running time), plus `RecordResumeClose` and `handleBudgetAdd`.
+  `{prefix}-schedules`: `handleCreate`'s `PutSchedule` had its error **discarded**
+  (`_ =`), so a deferred `km at <time> create` fired correctly and never appeared in
+  `km at list`. Both grants added to `infra/modules/ttl-handler/v1.0.0` (edited in place,
+  additive), keyed off `var.budget_table_name` / `var.schedules_table_name` — the SAME
+  variables the env block uses, so env and IAM cannot disagree. `PutSchedule` now warns.
+- **`handleBudgetAdd` was broken twice over.** Past the missing grant it hand-rolled an
+  `UpdateItem` against key `sandbox_id`/`sk`=`"budget"` and attributes
+  `compute_limit`/`ai_limit` — **none of which exist**: the live table's key schema is
+  `PK`/`SK` and the limits row is `SK=BUDGET#limits` with `computeLimit`/`aiLimit`. So
+  every scheduled `km at ... budget-add` would have thrown a `ValidationException` even
+  with IAM. Now routed through a new exported `awspkg.AddBudgetLimits` (the ADD/delta
+  counterpart to `SetBudgetLimits`) so the item shape lives in ONE place, with a test
+  pinning it.
+- **`TestTTLHandlerModule_EveryEnvTableHasAnIAMGrant`** makes the pairing mechanical:
+  it compares the set of `var.*_table_name` in the module's Lambda environment block
+  against the set in its IAM resource ARNs. Name-agnostic, so a table added later is
+  covered without editing the test — verified to fail when a grant is removed.
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.** NOT
+  `--sidecars`: the two new IAM policies need a full terragrunt apply. The idle-detector
+  fix rides in the `km-audit-log` sidecar, fetched at boot, so **existing sandboxes keep
+  the old detector until `km destroy && km create`**; the IAM and ttl-handler fixes apply
+  to every sandbox immediately. No SandboxProfile schema change, no userdata change.
+
 **Phase 132 (2026-08-29) — Exec capture: every command a sandbox ran, joined against the flow census (live UAT run 2026-08-29/30 — found and fixed three defects in pre-existing code; complete, with one gap open and part of the checklist not yet re-run against all three fixes together):**
 - New on-box verbs on the already-shipped `km-netpolicy` binary: `execs [--since
   10m] [--uid N] [--failed] [--json]`, `who <host>`, `execs save`. A new eBPF

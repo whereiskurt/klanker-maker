@@ -330,6 +330,46 @@ func GetBudget(ctx context.Context, client BudgetAPI, tableName, sandboxID strin
 	return summary, nil
 }
 
+// AddBudgetLimits atomically increments the compute and AI limits on the
+// BUDGET#limits item for a sandbox. A zero delta is a no-op for that dimension
+// (ADD 0 leaves the value unchanged, and creates it as 0 if absent).
+//
+// This is the top-up counterpart to SetBudgetLimits, which writes absolute
+// values after a read. Callers that only have a delta — the ttl-handler's
+// "budget-add" event path — must use this rather than hand-rolling an
+// UpdateItem: the ttl-handler previously wrote its own, against key names
+// (sandbox_id/sk) and attribute names (compute_limit/ai_limit) that exist
+// nowhere in this table, so every scheduled `km at ... budget-add` failed.
+func AddBudgetLimits(ctx context.Context, client BudgetAPI, tableName, sandboxID string, computeDelta, aiDelta float64) error {
+	pk := sandboxPK(sandboxID)
+
+	computeAV, err := attributevalue.Marshal(computeDelta)
+	if err != nil {
+		return fmt.Errorf("marshal computeLimit delta: %w", err)
+	}
+	aiAV, err := attributevalue.Marshal(aiDelta)
+	if err != nil {
+		return fmt.Errorf("marshal aiLimit delta: %w", err)
+	}
+
+	_, err = client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"PK": &dynamodbtypes.AttributeValueMemberS{Value: pk},
+			"SK": &dynamodbtypes.AttributeValueMemberS{Value: "BUDGET#limits"},
+		},
+		UpdateExpression: awssdk.String("ADD computeLimit :computeDelta, aiLimit :aiDelta"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":computeDelta": computeAV,
+			":aiDelta":      aiAV,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("add budget limits for sandbox %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
 // SetBudgetLimits writes (or overwrites) the BUDGET#limits item for a sandbox,
 // storing compute limit, AI limit, and warning threshold.
 func SetBudgetLimits(ctx context.Context, client BudgetAPI, tableName, sandboxID string, computeLimit, aiLimit, warningThreshold float64) error {

@@ -406,15 +406,44 @@ resource "aws_iam_role_policy" "launch_account_external_id" {
 # Lambda function: TTL handler (Go, provided.al2023, arm64)
 # ============================================================
 
+# The ttl-handler zip is delivered through S3, not inline, because it is the one
+# Lambda in this repo that outgrew the inline path.
+#
+# `filename` makes the provider base64 the whole zip into the UpdateFunctionCode
+# request, and that request is capped at 70,167,211 bytes — so the real ceiling
+# on the zip is 70167211 * 3/4 ≈ 52.6 MB, NOT the 50 MB the docs quote and not
+# anything the plan will warn about. This zip bundles both a ~85 MB terraform
+# binary and a ~85 MB handler binary and reached 53.2 MB compressed, which fails
+# the apply with a 413 RequestEntityTooLargeException at the very end of a long
+# `km init` — and takes every module ordered after it down with it.
+#
+# Via S3 the request carries a bucket/key instead, and the only limit left is
+# 250 MB unzipped (this zip is ~170 MB). The key is stable rather than
+# hash-suffixed so the bucket does not accumulate an object per deploy; the
+# function still redeploys on change because source_code_hash is computed from
+# the local file. Every other Lambda in this repo is ~25 MB and stays inline.
+resource "aws_s3_object" "ttl_handler_code" {
+  bucket = var.artifact_bucket_name
+  key    = "lambdas/${var.resource_prefix}-ttl-handler.zip"
+  source = var.lambda_zip_path
+
+  # Re-uploads whenever the built zip changes.
+  etag = filemd5(var.lambda_zip_path)
+}
+
 resource "aws_lambda_function" "ttl_handler" {
   function_name = "${var.resource_prefix}-ttl-handler"
   description   = "Uploads artifacts and sends ttl-expired notification when EventBridge TTL fires"
   role          = aws_iam_role.ttl_handler.arn
 
   # Go Lambda: custom runtime on Amazon Linux 2023, arm64 for Graviton cost efficiency
-  runtime          = "provided.al2023"
-  handler          = "bootstrap"
-  filename         = var.lambda_zip_path
+  runtime = "provided.al2023"
+  handler = "bootstrap"
+
+  # Referencing the object (not var.artifact_bucket_name) makes the upload an
+  # explicit dependency, so the code is in place before the function points at it.
+  s3_bucket        = aws_s3_object.ttl_handler_code.bucket
+  s3_key           = aws_s3_object.ttl_handler_code.key
   source_code_hash = filebase64sha256(var.lambda_zip_path)
 
   # 15-minute timeout: terraform init + destroy can take several minutes
@@ -730,6 +759,70 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
           "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandbox_table_name}",
           "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandbox_table_name}/index/alias-index",
         ]
+      }
+    ]
+  })
+}
+
+# Policy: DynamoDB {prefix}-budgets — compute-budget pause accounting + budget top-ups.
+#
+# Three handler paths use this table and NONE of them had a grant, so all three
+# had been failing since they shipped:
+#   - RecordPauseStart  (stop / pause / idle-stop) — opens the pause interval so
+#     stopped wall-clock is excluded from compute spend. Its failure is a
+#     log.Warn "(non-fatal)", which is why the AccessDenied went unnoticed and
+#     compute budgets have been counting paused time as running time.
+#   - RecordResumeClose (resume) — GetItem to read pausedAt, UpdateItem to close
+#     the interval. Needs GetItem as well as UpdateItem.
+#   - handleBudgetAdd   ("budget-add" events from `km at ... budget-add`).
+#
+# Scoped to this install's budgets table only.
+resource "aws_iam_role_policy" "dynamodb_budgets" {
+  name = "${var.resource_prefix}-ttl-handler-dynamodb-budgets"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BudgetTablePauseAccounting"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+        ]
+        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.budget_table_name}"
+      }
+    ]
+  })
+}
+
+# Policy: DynamoDB {prefix}-schedules — the `km at list` record store.
+#
+# handleCreate writes a ScheduleRecord here after creating the EventBridge
+# schedule, so a deferred `km at <time> create ...` shows up in `km at list`.
+# The call site discards its error, so the missing grant surfaced as nothing at
+# all: the schedule fires correctly and is simply invisible to the operator.
+# Both table names come from the same variables the Lambda reads as
+# KM_SCHEDULES_TABLE / KM_BUDGET_TABLE, so env and IAM cannot disagree.
+resource "aws_iam_role_policy" "dynamodb_schedules" {
+  name = "${var.resource_prefix}-ttl-handler-dynamodb-schedules"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SchedulesTableRecords"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+        ]
+        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.schedules_table_name}"
       }
     ]
   })
