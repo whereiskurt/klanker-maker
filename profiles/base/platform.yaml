@@ -79,5 +79,16 @@ spec:
     signing: required
     verifyInbound: required
     encryption: required
-    allowedSenders:
-      - "*"
+    # allowedSenders is deliberately NOT set here.
+    #
+    # This fragment is extended by nearly every profile, so the "*" it used to
+    # carry opened inbound email fleet-wide: any stranger mailing
+    # {sandbox-id}@<domain> had their text delivered straight to the agent.
+    # Leaving it unset lets the compiler emit the closed default —
+    # self + *@<install email domain> + the operator's own address — which
+    # covers every flow km itself uses.
+    #
+    # Note lists UNION across inheritance (Phase 117), so a leaf cannot narrow
+    # a value set here; it could only add to it. Keeping the default out of the
+    # fragment is what makes a narrower per-profile allowlist expressible at all.
+    # To deliberately open a sandbox up, set allowedSenders: ["*"] in the leaf.

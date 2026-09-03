@@ -2047,32 +2047,34 @@ while true; do
           sender_email=$(echo "$sender_from" | grep -oP '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1 | tr '[:upper:]' '[:lower:]')
           sender_id=$(head -c 8192 "$local_file" | grep -i "^X-KM-Sender-ID:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
 
-          # Sender allowlist enforcement
-          if [ -n "${KM_ALLOWED_SENDERS:-}" ]; then
-            sender_allowed=false
-            IFS=: read -ra _PATTERNS <<< "$KM_ALLOWED_SENDERS"
-            for _p in "${_PATTERNS[@]}"; do
-              case "$_p" in
-                "*") sender_allowed=true; break ;;
-                "self") [ "$sender_id" = "$SANDBOX_ID" ] && sender_allowed=true && break ;;
-                *@*)
-                  _lp=$(echo "$_p" | tr '[:upper:]' '[:lower:]')
-                  if [[ "$_lp" == *"*"* ]]; then
-                    _domain="${_lp#*@}"
-                    [[ "$sender_email" == *"@$_domain" ]] && sender_allowed=true && break
-                  else
-                    [ "$sender_email" = "$_lp" ] && sender_allowed=true && break
-                  fi ;;
-                *) [ "$sender_id" = "$_p" ] && sender_allowed=true && break ;;
-              esac
-            done
-            if ! $sender_allowed; then
-              rm -f "$local_file"
-              mkdir -p "$MAIL_DIR/skipped"
-              touch "$MAIL_DIR/skipped/$key"
-              echo "[km-mail-poller] Sender $sender_email not in allowlist, skipping $key"
-              continue
-            fi
+          # Sender allowlist enforcement.
+          # Enforced unconditionally: an empty KM_ALLOWED_SENDERS used to skip
+          # this block entirely, so a missing value admitted every sender on the
+          # internet. The compiler always emits a closed default now, and an
+          # empty value here denies rather than allows.
+          sender_allowed=false
+          IFS=: read -ra _PATTERNS <<< "${KM_ALLOWED_SENDERS:-}"
+          for _p in "${_PATTERNS[@]}"; do
+            case "$_p" in
+              "*") sender_allowed=true; break ;;
+              "self") [ "$sender_id" = "$SANDBOX_ID" ] && sender_allowed=true && break ;;
+              *@*)
+                _lp=$(echo "$_p" | tr '[:upper:]' '[:lower:]')
+                if [[ "$_lp" == *"*"* ]]; then
+                  _domain="${_lp#*@}"
+                  [[ "$sender_email" == *"@$_domain" ]] && sender_allowed=true && break
+                else
+                  [ "$sender_email" = "$_lp" ] && sender_allowed=true && break
+                fi ;;
+              *) [ "$sender_id" = "$_p" ] && sender_allowed=true && break ;;
+            esac
+          done
+          if ! $sender_allowed; then
+            rm -f "$local_file"
+            mkdir -p "$MAIL_DIR/skipped"
+            touch "$MAIL_DIR/skipped/$key"
+            echo "[km-mail-poller] Sender $sender_email not in allowlist, skipping $key"
+            continue
           fi
 
           # External email safe phrase validation.
@@ -4259,34 +4261,34 @@ process_messages() {
 ${raw_body}"
     parse_headers "$raw_for_parse"
 
-    # Sender allowlist enforcement (belt-and-suspenders with km-mail-poller)
-    if [ -n "${KM_ALLOWED_SENDERS:-}" ]; then
-      _sender_check="${HDR_SENDER_ID:-}"
-      _sender_email=$(echo "$HDR_FROM" | grep -oP '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1 | tr '[:upper:]' '[:lower:]')
-      _allowed=false
-      IFS=: read -ra _PATTERNS <<< "$KM_ALLOWED_SENDERS"
-      for _p in "${_PATTERNS[@]}"; do
-        case "$_p" in
-          "*") _allowed=true; break ;;
-          "self") [ "$_sender_check" = "$SANDBOX_ID" ] && _allowed=true && break ;;
-          *@*)
-            _lp=$(echo "$_p" | tr '[:upper:]' '[:lower:]')
-            if [[ "$_lp" == *"*"* ]]; then
-              _domain="${_lp#*@}"
-              [[ "$_sender_email" == *"@$_domain" ]] && _allowed=true && break
-            else
-              [ "$_sender_email" = "$_lp" ] && _allowed=true && break
-            fi ;;
-          *) [ "$_sender_check" = "$_p" ] && _allowed=true && break ;;
-        esac
-      done
-      if ! $_allowed; then
-        if $MARK_READ; then
-          mkdir -p "$MAIL_DIR/skipped"
-          mv "$msg_file" "$MAIL_DIR/skipped/$(basename "$msg_file")"
-        fi
-        continue
+    # Sender allowlist enforcement (belt-and-suspenders with km-mail-poller).
+    # Enforced unconditionally — an empty KM_ALLOWED_SENDERS used to skip this
+    # block, which admitted every sender rather than none.
+    _sender_check="${HDR_SENDER_ID:-}"
+    _sender_email=$(echo "$HDR_FROM" | grep -oP '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1 | tr '[:upper:]' '[:lower:]')
+    _allowed=false
+    IFS=: read -ra _PATTERNS <<< "${KM_ALLOWED_SENDERS:-}"
+    for _p in "${_PATTERNS[@]}"; do
+      case "$_p" in
+        "*") _allowed=true; break ;;
+        "self") [ "$_sender_check" = "$SANDBOX_ID" ] && _allowed=true && break ;;
+        *@*)
+          _lp=$(echo "$_p" | tr '[:upper:]' '[:lower:]')
+          if [[ "$_lp" == *"*"* ]]; then
+            _domain="${_lp#*@}"
+            [[ "$_sender_email" == *"@$_domain" ]] && _allowed=true && break
+          else
+            [ "$_sender_email" = "$_lp" ] && _allowed=true && break
+          fi ;;
+        *) [ "$_sender_check" = "$_p" ] && _allowed=true && break ;;
+      esac
+    done
+    if ! $_allowed; then
+      if $MARK_READ; then
+        mkdir -p "$MAIL_DIR/skipped"
+        mv "$msg_file" "$MAIL_DIR/skipped/$(basename "$msg_file")"
       fi
+      continue
     fi
 
     # Extract body
