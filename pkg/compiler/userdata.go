@@ -1750,32 +1750,34 @@ while true; do
           sender_email=$(echo "$sender_from" | grep -oP '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1 | tr '[:upper:]' '[:lower:]')
           sender_id=$(head -c 8192 "$local_file" | grep -i "^X-KM-Sender-ID:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
 
-          # Sender allowlist enforcement
-          if [ -n "${KM_ALLOWED_SENDERS:-}" ]; then
-            sender_allowed=false
-            IFS=: read -ra _PATTERNS <<< "$KM_ALLOWED_SENDERS"
-            for _p in "${_PATTERNS[@]}"; do
-              case "$_p" in
-                "*") sender_allowed=true; break ;;
-                "self") [ "$sender_id" = "$SANDBOX_ID" ] && sender_allowed=true && break ;;
-                *@*)
-                  _lp=$(echo "$_p" | tr '[:upper:]' '[:lower:]')
-                  if [[ "$_lp" == *"*"* ]]; then
-                    _domain="${_lp#*@}"
-                    [[ "$sender_email" == *"@$_domain" ]] && sender_allowed=true && break
-                  else
-                    [ "$sender_email" = "$_lp" ] && sender_allowed=true && break
-                  fi ;;
-                *) [ "$sender_id" = "$_p" ] && sender_allowed=true && break ;;
-              esac
-            done
-            if ! $sender_allowed; then
-              rm -f "$local_file"
-              mkdir -p "$MAIL_DIR/skipped"
-              touch "$MAIL_DIR/skipped/$key"
-              echo "[km-mail-poller] Sender $sender_email not in allowlist, skipping $key"
-              continue
-            fi
+          # Sender allowlist enforcement.
+          # Enforced unconditionally: an empty KM_ALLOWED_SENDERS used to skip
+          # this block entirely, so a missing value admitted every sender on the
+          # internet. The compiler always emits a closed default now, and an
+          # empty value here denies rather than allows.
+          sender_allowed=false
+          IFS=: read -ra _PATTERNS <<< "${KM_ALLOWED_SENDERS:-}"
+          for _p in "${_PATTERNS[@]}"; do
+            case "$_p" in
+              "*") sender_allowed=true; break ;;
+              "self") [ "$sender_id" = "$SANDBOX_ID" ] && sender_allowed=true && break ;;
+              *@*)
+                _lp=$(echo "$_p" | tr '[:upper:]' '[:lower:]')
+                if [[ "$_lp" == *"*"* ]]; then
+                  _domain="${_lp#*@}"
+                  [[ "$sender_email" == *"@$_domain" ]] && sender_allowed=true && break
+                else
+                  [ "$sender_email" = "$_lp" ] && sender_allowed=true && break
+                fi ;;
+              *) [ "$sender_id" = "$_p" ] && sender_allowed=true && break ;;
+            esac
+          done
+          if ! $sender_allowed; then
+            rm -f "$local_file"
+            mkdir -p "$MAIL_DIR/skipped"
+            touch "$MAIL_DIR/skipped/$key"
+            echo "[km-mail-poller] Sender $sender_email not in allowlist, skipping $key"
+            continue
           fi
 
           # External email safe phrase validation.
@@ -4870,34 +4872,34 @@ process_messages() {
 ${raw_body}"
     parse_headers "$raw_for_parse"
 
-    # Sender allowlist enforcement (belt-and-suspenders with km-mail-poller)
-    if [ -n "${KM_ALLOWED_SENDERS:-}" ]; then
-      _sender_check="${HDR_SENDER_ID:-}"
-      _sender_email=$(echo "$HDR_FROM" | grep -oP '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1 | tr '[:upper:]' '[:lower:]')
-      _allowed=false
-      IFS=: read -ra _PATTERNS <<< "$KM_ALLOWED_SENDERS"
-      for _p in "${_PATTERNS[@]}"; do
-        case "$_p" in
-          "*") _allowed=true; break ;;
-          "self") [ "$_sender_check" = "$SANDBOX_ID" ] && _allowed=true && break ;;
-          *@*)
-            _lp=$(echo "$_p" | tr '[:upper:]' '[:lower:]')
-            if [[ "$_lp" == *"*"* ]]; then
-              _domain="${_lp#*@}"
-              [[ "$_sender_email" == *"@$_domain" ]] && _allowed=true && break
-            else
-              [ "$_sender_email" = "$_lp" ] && _allowed=true && break
-            fi ;;
-          *) [ "$_sender_check" = "$_p" ] && _allowed=true && break ;;
-        esac
-      done
-      if ! $_allowed; then
-        if $MARK_READ; then
-          mkdir -p "$MAIL_DIR/skipped"
-          mv "$msg_file" "$MAIL_DIR/skipped/$(basename "$msg_file")"
-        fi
-        continue
+    # Sender allowlist enforcement (belt-and-suspenders with km-mail-poller).
+    # Enforced unconditionally — an empty KM_ALLOWED_SENDERS used to skip this
+    # block, which admitted every sender rather than none.
+    _sender_check="${HDR_SENDER_ID:-}"
+    _sender_email=$(echo "$HDR_FROM" | grep -oP '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1 | tr '[:upper:]' '[:lower:]')
+    _allowed=false
+    IFS=: read -ra _PATTERNS <<< "${KM_ALLOWED_SENDERS:-}"
+    for _p in "${_PATTERNS[@]}"; do
+      case "$_p" in
+        "*") _allowed=true; break ;;
+        "self") [ "$_sender_check" = "$SANDBOX_ID" ] && _allowed=true && break ;;
+        *@*)
+          _lp=$(echo "$_p" | tr '[:upper:]' '[:lower:]')
+          if [[ "$_lp" == *"*"* ]]; then
+            _domain="${_lp#*@}"
+            [[ "$_sender_email" == *"@$_domain" ]] && _allowed=true && break
+          else
+            [ "$_sender_email" = "$_lp" ] && _allowed=true && break
+          fi ;;
+        *) [ "$_sender_check" = "$_p" ] && _allowed=true && break ;;
+      esac
+    done
+    if ! $_allowed; then
+      if $MARK_READ; then
+        mkdir -p "$MAIL_DIR/skipped"
+        mv "$msg_file" "$MAIL_DIR/skipped/$(basename "$msg_file")"
       fi
+      continue
     fi
 
     # Extract body
@@ -5901,12 +5903,37 @@ func joinAllowedRefs(p *profile.SandboxProfile) string {
 
 // joinAllowedSenders returns the AllowedSenders slice as a colon-separated string
 // suitable for the KM_ALLOWED_SENDERS environment variable.
-// Returns empty string when Email config is nil or AllowedSenders is empty.
-func joinAllowedSenders(p *profile.SandboxProfile) string {
-	if p.Spec.Email == nil || len(p.Spec.Email.AllowedSenders) == 0 {
-		return ""
+//
+// An explicit list is emitted verbatim, "*" included — narrowing the default
+// must not remove an operator's ability to open a sandbox up deliberately.
+//
+// When the profile declares nothing, this returns a CLOSED default rather than
+// the empty string it used to. Both shell consumers (the mail poller and
+// km-recv) treat an empty KM_ALLOWED_SENDERS as "no gate", so returning "" here
+// meant any stranger who mailed {sandbox-id}@<domain> had their text delivered
+// straight to the agent — an unauthenticated ingress into an autonomous agent's
+// context, failing in the wrong direction.
+//
+// The default admits exactly the senders km's own flows use:
+//   - self          — the sandbox's own mail
+//   - *@<domain>    — sibling sandboxes and the operator-<prefix>@ address,
+//     which both live at the install's email domain
+//   - operatorEmail — the human operator's own address (typically at an
+//     unrelated domain), so replying to a sandbox from a normal mail client
+//     keeps working. Omitted when unset rather than emitted as an empty pattern.
+func joinAllowedSenders(p *profile.SandboxProfile, emailDomain, operatorEmail string) string {
+	if p.Spec.Email != nil && len(p.Spec.Email.AllowedSenders) > 0 {
+		return strings.Join(p.Spec.Email.AllowedSenders, ":")
 	}
-	return strings.Join(p.Spec.Email.AllowedSenders, ":")
+
+	defaults := []string{"self"}
+	if emailDomain != "" {
+		defaults = append(defaults, "*@"+emailDomain)
+	}
+	if operatorEmail != "" {
+		defaults = append(defaults, operatorEmail)
+	}
+	return strings.Join(defaults, ":")
 }
 
 // joinGitHubAllowedRepos returns the AllowedRepos slice as a comma-separated string
@@ -6365,7 +6392,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		SandboxEmail:       sandboxID + "@" + emailDomain,
 		EmailDomain:        emailDomain,
 		Alias:              alias,
-		AllowedSenders:     joinAllowedSenders(p),
+		AllowedSenders:     joinAllowedSenders(p, emailDomain, os.Getenv("KM_OPERATOR_EMAIL")),
 		NotificationsEmail: "notifications@" + emailDomain,
 		OperatorEmail:      os.Getenv("KM_OPERATOR_EMAIL"),
 		AWSRegion:          p.Spec.Runtime.Region,

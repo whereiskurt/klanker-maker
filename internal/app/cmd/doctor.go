@@ -4267,6 +4267,12 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkSESRules(ctx, sesRulesClient, localPrefix, deps.IgnorePrefixes)
 	})
 
+	// The rules above are inert unless the shared rule set is the ACTIVE one —
+	// registered immediately after so the two read together.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkSESActiveRuleSet(ctx, sesRulesClient)
+	})
+
 	// Shared secrets KMS key check (Phase 89, SOPS-18-DOCTOR-CHECK).
 	// SecretsKeyClient is nil when awsCfg is unavailable (initRealDeps returns early),
 	// causing the check to return CheckSkipped — locked by TestCheckSharedSecretsKey_NilClientIsSkipped.
@@ -5363,10 +5369,86 @@ func (l *doctorEC2InstanceLister) InstanceExists(ctx context.Context, sandboxID 
 }
 
 // SESReceiptRuleAPI is the narrow interface for the SES classic v1
-// DescribeReceiptRuleSet operation used by checkSESRules (Phase 84).
+// DescribeReceiptRuleSet operation used by checkSESRules (Phase 84), plus
+// DescribeActiveReceiptRuleSet for checkSESActiveRuleSet.
 // The real *ses.Client satisfies this interface directly.
 type SESReceiptRuleAPI interface {
 	DescribeReceiptRuleSet(ctx context.Context, params *ses.DescribeReceiptRuleSetInput, optFns ...func(*ses.Options)) (*ses.DescribeReceiptRuleSetOutput, error)
+	DescribeActiveReceiptRuleSet(ctx context.Context, params *ses.DescribeActiveReceiptRuleSetInput, optFns ...func(*ses.Options)) (*ses.DescribeActiveReceiptRuleSetOutput, error)
+}
+
+// checkSESActiveRuleSet verifies that the shared rule set is the one SES is
+// ACTUALLY evaluating. SES allows exactly one active receipt rule set per
+// account/region, so a sibling install (or anyone) activating its own rule set
+// silently redirects every inbound message away from this install's rules.
+//
+// Nothing else catches this. checkSESRules inspects the CONTENTS of
+// sandbox-email-shared and happily reports "SES rules healthy" while the set is
+// inert, and terraform does not manage the activation pointer at all on an
+// install where register_shared_rule_set is false (the resource is count=0 with
+// the comment "the rule set is assumed already active"). The symptom is total:
+// outbound mail keeps working, because sending never consults receipt rules, so
+// it presents as "km-send works but km-recv never sees anything".
+//
+// Returns:
+//   - CheckSkipped — client is nil (SES classic SDK not available)
+//   - CheckError   — DescribeActiveReceiptRuleSet failed
+//   - CheckError   — a DIFFERENT rule set is active, or none is (inbound mail is dead)
+//   - CheckOK      — sandbox-email-shared is active
+func checkSESActiveRuleSet(ctx context.Context, client SESReceiptRuleAPI) CheckResult {
+	const name = "SES active rule set"
+	const sharedRuleSet = "sandbox-email-shared"
+
+	if client == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "SES classic SDK client unavailable",
+		}
+	}
+
+	out, err := client.DescribeActiveReceiptRuleSet(ctx, &ses.DescribeActiveReceiptRuleSetInput{})
+	if err != nil {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckError,
+			Message:     fmt.Sprintf("DescribeActiveReceiptRuleSet: %v", err),
+			Remediation: "Verify SES permissions; the active rule set governs ALL inbound mail for this account/region",
+		}
+	}
+
+	active := ""
+	if out.Metadata != nil {
+		active = awssdk.ToString(out.Metadata.Name)
+	}
+
+	switch {
+	case active == sharedRuleSet:
+		return CheckResult{
+			Name:    name,
+			Status:  CheckOK,
+			Message: fmt.Sprintf("%q is active", sharedRuleSet),
+		}
+	case active == "":
+		return CheckResult{
+			Name:        name,
+			Status:      CheckError,
+			Message:     "no active SES receipt rule set — ALL inbound email is dropped",
+			Remediation: fmt.Sprintf("aws ses set-active-receipt-rule-set --rule-set-name %s", sharedRuleSet),
+		}
+	default:
+		return CheckResult{
+			Name:   name,
+			Status: CheckError,
+			Message: fmt.Sprintf("%q is active, not %q — inbound email for this install is dropped (sending is unaffected)",
+				active, sharedRuleSet),
+			Remediation: fmt.Sprintf(
+				"aws ses set-active-receipt-rule-set --rule-set-name %s — but FIRST check whether another install owns %q "+
+					"(`aws ses describe-receipt-rule-set --rule-set-name %s`); activating the shared set stops SES evaluating "+
+					"its rules, so migrate them in as per-prefix rules before switching",
+				sharedRuleSet, active, active),
+		}
+	}
 }
 
 // checkSESRules lists the rules in the shared SES receipt rule set
