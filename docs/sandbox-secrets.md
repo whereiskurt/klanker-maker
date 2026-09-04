@@ -16,15 +16,23 @@
 > the JSON schema (schema-drift fix). `sessionPolicy` was removed without
 > replacement. Profiles must use `apiVersion: klankermaker.ai/v1alpha2`.
 
-Declarative SOPS-encrypted secrets attached to a SandboxProfile. At boot, the
-sandbox decrypts the bundle using a shared per-install KMS key and exposes the
-keys as environment variables in login shells (`/etc/sandbox-secrets.env` +
-`/etc/profile.d/zz-sandbox-secrets.sh`).
+Declarative SOPS-encrypted secrets attached to a SandboxProfile, decrypted
+using a shared per-install KMS key. **How the decrypted values reach the
+sandbox is the part this page's older sections still describe incorrectly —
+see the Phase 133 note above.** As of Phase 133, nothing is decrypted at boot
+and no key is exposed as an environment variable in a login shell; a root
+broker (`km-secretsd`) decrypts on demand and hands values to exactly one
+wrapped agent process via `km-env`. See `docs/brokered-secrets.md` for the
+current mechanism. The rest of this page — bootstrapping the KMS key,
+authoring and encrypting a bundle, `sopsFile` in a profile — is unchanged and
+still the right reference for those steps.
 
 ## When to use SOPS secrets vs `spec.execution.secrets`
 
-- **`spec.secrets.sopsFile`** (Phase 89): declarative bundle versioned with
-  profiles, decrypted at boot, env-var exposed. Right answer for API keys
+- **`spec.secrets.sopsFile`** (Phase 89, delivery mechanism superseded by
+  Phase 133): declarative bundle versioned with profiles, decrypted on demand
+  and delivered to a granted consumer process only (see
+  `docs/brokered-secrets.md`). Right answer for API keys
   (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`) that downstream
   tooling reads from environment variables.
 - **`spec.execution.secrets`** (legacy SSM path): list of SSM SecureString paths
@@ -101,11 +109,13 @@ profile-to-bundle topology based on blast radius — km does NOT enforce 1:1 or
    km create profiles/codex.yaml
    ```
 
-5. Inside the sandbox, secrets are available as environment variables in all
-   login shells:
-   ```bash
-   echo $OPENAI_API_KEY
-   ```
+5. **As of Phase 133, secrets are NOT in the environment of any login shell —
+   `echo $OPENAI_API_KEY` inside `km shell` prints nothing.** Only the
+   wrapped `claude`/`codex` process (or another consumer named in
+   `spec.secrets.grants`) receives the granted keys, injected on exec by
+   `km-env`. To check what a consumer would receive, or to run something
+   with the keys yourself: see `docs/brokered-secrets.md` § `km-env exec` /
+   `km-env list`.
 
 ## Troubleshooting
 
@@ -116,12 +126,14 @@ Check: (a) the sandbox IAM role has `kms:Decrypt` with a
 v1.2.0+); (b) the alias is attached to the key — run
 `aws kms list-aliases --query 'Aliases[?AliasName==\`alias/km-sandbox-secrets\`]'`.
 
-**Sandbox boots but env vars missing**
-Check `/var/log/cloud-init-output.log` for the
-`[km-bootstrap] FATAL: sops decrypt failed` line.
-Check `cat /etc/sandbox-secrets.env` (root-readable only). If the file exists
-but is empty, the dotenv conversion failed — check the bundle for non-ASCII
-values or values with embedded newlines.
+**Sandbox boots but the agent has no secrets (as of Phase 133)**
+`/etc/sandbox-secrets.env` no longer exists — do not look for it. Check
+`/var/log/cloud-init-output.log` for a boot-time `km-secretsd selftest`
+failure (the current equivalent of the old `[km-bootstrap] FATAL: sops
+decrypt failed` line), then `systemctl status km-secretsd` and
+`systemctl status km-secrets-check`. Full troubleshooting (broker down, the
+shim losing the PATH race, an ungranted consumer) is in
+`docs/brokered-secrets.md` § Troubleshooting.
 
 **`km validate` fails with "missing 'sops:' metadata block"**
 The file is plaintext, not sops-encrypted. Re-run `sops --encrypt`.

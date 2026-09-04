@@ -100,11 +100,14 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   instance role's own permanent authority. The real control is
   `privileged: false`, identical in kind to the Wiz-sensor limitation.
 - **Schema, purely additive, no `apiVersion` bump:** `spec.secrets.grants:
-  {consumer: [keys]}` and `spec.secrets.fenceIMDS` (declared now, Wave 2
-  behavior). `pkg/profile/types.go`'s `SecretsSpec` doc comment and the JSON
-  schema's `secrets` description were updated in this task to stop describing
-  the removed `/etc/sandbox-secrets.env` behavior — both had drifted true-at
-  Phase-89, false-since-this-phase.
+  {consumer: [keys]}`. `fenceIMDS` is a Wave 2 field name only — it is **NOT**
+  in `SecretsSpec` or the JSON schema yet, and because the schema's `secrets`
+  object is `additionalProperties: false`, a profile setting
+  `spec.secrets.fenceIMDS` today is actively **rejected** by `km validate`,
+  not silently ignored. `pkg/profile/types.go`'s `SecretsSpec` doc comment and
+  the JSON schema's `secrets` description were updated in this task to stop
+  describing the removed `/etc/sandbox-secrets.env` behavior — both had
+  drifted true-at-Phase-89, false-since-this-phase.
 - **Byte-identity preserved for the dormant case:** a profile with no
   `spec.secrets.sopsFile` renders userdata identical to before this phase —
   nothing in the broker/shim/selftest sections gates on anything else. A

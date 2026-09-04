@@ -236,7 +236,7 @@ ahead of invoking the turn's command specifically so this does not depend on
 prepend, `pkg/secrets/wiring_guard_test.go` is the mechanical guard against
 it going unnoticed.
 
-**Ungranted consumer** (`km-env` fails with `secrets: unknown consumer
+**Ungranted consumer** (`km-env` fails with `secrets: unknown consumer:
 "<name>"`): the caller's `--as <name>` (or the shim's baked `--as`) does not
 appear as a key in the profile's `spec.secrets.grants` map, and `grants` is
 non-empty (so the "absent grants ⇒ everyone gets everything" default does not
@@ -317,10 +317,15 @@ boot, and there is no in-place migration path for a running box.
 `spec.secrets.fenceIMDS`, the `km-creds` `credential_process` helper, and the
 new `infra/modules/ec2spot/v1.7.0` (the self-assume trust policy denying
 `kms:Decrypt`/`s3:GetObject` on the secrets path for uid `sandbox`) are **not
-shipped in this wave**. Until they land, the instance role's decrypt
-authority described above is not fenced at the OS/network layer — only the
-broker's own socket permissions and the shim wiring stand between uid
-`sandbox` and either going through `km-env` (the intended path) or, on a
-privileged profile, straight to KMS/S3 (unfenced regardless of wave). See
+shipped in this wave**. `fenceIMDS` is a reserved field name only — it is
+**not yet declared in `SecretsSpec` or the JSON schema**, and because the
+schema's `secrets` object is `additionalProperties: false`, setting
+`spec.secrets.fenceIMDS` in a profile today gets that profile **rejected by
+`km validate`**, not silently ignored. Until Wave 2 lands, the instance
+role's decrypt authority described above is not fenced at the OS/network
+layer — only the broker's own socket permissions and the shim wiring stand
+between uid `sandbox` and either going through `km-env` (the intended path)
+or, on a privileged profile, straight to KMS/S3 (unfenced regardless of
+wave). See
 `docs/superpowers/specs/2026-09-04-brokered-secret-unsealing-design.md` §4.4
 and §9.1 for the design.
