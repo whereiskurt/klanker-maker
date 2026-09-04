@@ -97,14 +97,31 @@ and a test should pin the literal in all three places.
 
 ### 4.2 Fragment (boot side)
 
+**Context discovered during live testing (2026-09-04):** `profiles/base/userinit.yaml`
+on `main` ALREADY installs Herdr — `su - sandbox -c 'curl -fsSL https://herdr.dev/install.sh | sh'`
+— landing herdr 0.8.2 at `/home/sandbox/.local/bin/herdr`, owned by the sandbox user and
+NOT on root's `PATH`. So on any profile extending `base/userinit`, this fragment is
+redundant. Its remaining, narrower purpose is the **egress-free** path: `base/network/locked`
+forbids reaching `herdr.dev`, and only the S3 mirror works there. Anyone reviewing this
+design should decide deliberately whether that narrower purpose earns the fragment's
+existence, rather than inheriting the assumption that nothing else installs Herdr.
+
 `profiles/base/tools/herdr.yaml` — a new `tools/` subdirectory under `profiles/base/`,
 matching the existing `network/`, `os/`, `security/`, `gpu/` split.
 
 Critically, this is **pure `initCommandsAppend`** — no `pkg/compiler/userdata.go` change,
 therefore **no userdata golden churn, no create-handler rebuild, and no
-`km init --dry-run=false`** for this half. The bootstrap exports
-`KM_ARTIFACTS_BUCKET` near the top of userdata, and initCommands run as a child
-process (`/tmp/km-init.sh`) that inherits it, so the fragment can reach S3 by name.
+`km init --dry-run=false`** for this half. **Corrected 2026-09-04 by live testing — the original claim here was false.**
+An earlier draft said the bootstrap exports `KM_ARTIFACTS_BUCKET` and that initCommands
+inherit it as a child process. They do not. `/tmp/km-init.sh` is fetched from S3 and run
+by cloud-init, which never sources `/etc/profile.d`, so the variable is EMPTY there —
+proven on a real sandbox, where `echo "s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr"`
+expanded to `s3:///binaries/herdr` and the fetch failed. The bucket IS on every box, at
+`/etc/profile.d/km-identity.sh`, so the fragment sources that file (preferring an
+already-set environment variable) and fails loudly if neither supplies a value.
+
+The same trap applies to anything km runs over SSM, which is also a non-login shell —
+`km herdr start`'s ensure-install hit it too.
 
 **The reason is "no template or schema change", NOT "no rendered-output change".**
 That distinction was got wrong once and is worth stating precisely. Adding an
