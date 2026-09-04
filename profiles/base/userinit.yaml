@@ -4,35 +4,45 @@ metadata:
   name: base-userinit
   abstract: true
 
+# Every external artifact fetched here is version-pinned AND sha256-verified
+# before it executes. These commands run as root, and root bypasses both the
+# iptables DNAT (uid-0 RETURN) and the eBPF cgroup — so on a profile with a
+# wildcard allowedDNSSuffixes there is no egress control on this section at
+# all. The checksums are the control. When bumping a version, re-record the
+# hash from the upstream release; never drop the check to make a bump apply.
+
 spec:
   execution:
     initCommands:
-      - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
-      - "cp -r /root/.local/bin/goose /usr/local/bin/goose-bin || true"
-      - "printf 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\\nexport OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318\\n' > /etc/profile.d/km-zz-goose-otel.sh"
-      - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose-bin /usr/local/bin/goose && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
+      # Generic OTLP exporter config for on-box agents. Not agent-specific.
+      - "printf 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\\nexport OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318\\n' > /etc/profile.d/km-zz-otel.sh"
       - "npm install -g @anthropic-ai/claude-code@2.1.132"
+      # codex: pinned release, verified before it is unpacked.
       - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.133.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "echo 'd06019ab9c35d281b78dc2ebb2ae55c2bb97ea11bf7f452bafe390eddb0034ef  /tmp/codex.tar.gz' | sha256sum -c -"
       - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
-      - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex && chown -R sandbox:sandbox /home/sandbox/.codex"
-      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
+      - "mkdir -p /home/sandbox/.codex && chown -R sandbox:sandbox /home/sandbox/.codex"
+      - "mkdir -p /workspace /home/sandbox/.config /home/sandbox/.local/bin && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
       - "su - sandbox -c 'cd /workspace && git config --global user.name \"Learner Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
-      - "su - sandbox -c 'cd /workspace && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash'"
+      # nvm: pinned tag, verified before it is sourced. Downloaded to a file
+      # rather than piped to bash so the hash can be checked at all.
+      - "su - sandbox -c 'curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh -o /tmp/nvm-install.sh && echo \"4b7412c49960c7d31e8df72da90c1fb5b8cccb419ac99537b737028d497aba4f  /tmp/nvm-install.sh\" | sha256sum -c - && bash /tmp/nvm-install.sh'"
       - "su - sandbox -c 'nvm install 22'"
-      - "su - sandbox -c 'npx -y get-shit-done-cc --claude --codex --global'"
-      - "su - sandbox -c 'curl -fsSL https://herdr.dev/install.sh | sh'"
+      - "su - sandbox -c 'npx -y get-shit-done-cc@1.42.3 --claude --codex --global'"
+      # herdr: the pinned release binary, replacing `curl herdr.dev/install.sh | sh`.
+      # That installer resolved https://herdr.dev/latest.json to whatever was
+      # newest at boot; it does verify its own download, but against a checksum
+      # served by the same host, so it pinned nothing we control.
+      - "su - sandbox -c 'curl -fsSL https://github.com/herdrdev/herdr/releases/download/v0.8.2/herdr-linux-x86_64 -o /tmp/herdr && echo \"976150a14d490c94b243ea2e1a7eb2dfb67f12e36b182db90936f6728e6aecf4  /tmp/herdr\" | sha256sum -c - && install -m 755 /tmp/herdr /home/sandbox/.local/bin/herdr'"
       - "git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && mkdir -p /home/sandbox/.claude/plugins/marketplaces && ln -sfn /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 /home/sandbox/.claude/plugins/marketplaces/klanker-maker && KM_SHA=$(git -C /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 rev-parse HEAD) && KM_NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z) && printf '{\"version\":2,\"plugins\":{\"klanker@klanker-maker\":[{\"scope\":\"user\",\"installPath\":\"/home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0\",\"version\":\"0.1.0\",\"installedAt\":\"%s\",\"lastUpdated\":\"%s\",\"gitCommitSha\":\"%s\"}]}}' \"$KM_NOW\" \"$KM_NOW\" \"$KM_SHA\" > /home/sandbox/.claude/plugins/installed_plugins.json && chown -R sandbox:sandbox /home/sandbox/.claude/plugins || true"
 
     rsyncPaths:
       - ".gitconfig"
-      - ".config/goose"
       - ".claude"
       - ".claude.json"
       - ".codex"
 
     env:
-      GOOSE_MODE: auto
-      GOOSE_TELEMETRY_ENABLED: "false"
       CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
       OPENAI_API_KEY: ""
 
