@@ -104,8 +104,11 @@ func TestHandle_AuditsEveryUnsealWithNamesNotValues(t *testing.T) {
 	if ev["uid"] != uint32(1000) || ev["pid"] != uint32(4242) {
 		t.Errorf("peer credentials not recorded: %+v", ev)
 	}
-	blob, _ := json.Marshal(ev)
-	if string(blob) != "" && contains(string(blob), "supersecret") {
+	blob, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("audit event is unmarshalable: %v", err)
+	}
+	if contains(string(blob), "supersecret") {
 		t.Error("audit event contains a secret VALUE")
 	}
 }
