@@ -71,7 +71,7 @@ a glance.
 
 ### Signals
 
-Per 60-second tick, the daemon checks all seven signals.
+Per 60-second tick, the daemon checks all eight signals.
 Emit one heartbeat event if **any** is positive (boolean OR).
 
 | # | Signal | Check | Cost | Notes |
@@ -83,6 +83,7 @@ Emit one heartbeat event if **any** is positive (boolean OR).
 | 5 | Headless agent process | `pgrep -af '(^\|/)claude( \|$)\|(^\|/)codex( \|$)\|km-agent-run\.sh'` | ~3ms | Catches `km agent run` (detached tmux + `claude -p`) and future codex headless. Word-boundary regex avoids false positives like `claudia`. |
 | 6 | VNC viewer attached (Phase 93 desktop) | `ss -tnHp state established` contains `(("Xvnc",` | ~4ms | KasmVNC runs as a systemd service, not a login session, so an attached viewer writes no utmp record and is invisible to signal 1. Matched by owning process, not port: `network.websocket_port: auto` means the port is not a contract. Fails idle when `ss` is absent. |
 | 7 | SSH session established (VS Code Remote-SSH / `km vscode`) | `ss -tnHp state established` contains `(("sshd",` or `(("sshd-session",` | ~4ms | Signal 1 misses it: sshd writes utmp only for PTY sessions, and Remote-SSH runs vscode-server over a non-PTY channel (`sshd: user@notty`) — measured who=0 while connected. Detected via the live socket, NOT `pgrep vscode-server`: VS Code leaves that server running after disconnect, so pgrep would latch the box awake. Both process names matched (OpenSSH 9.8+ renamed the session process to sshd-session). Fails idle. |
+| 8 | Herdr pane doing work (Phase 134 `km herdr`) | `herdr pane list` then `herdr pane process-info --pane <id>` per pane, via `runuser -u sandbox -- bash -lc '...'`; busy iff `foreground_process_group_id != shell_pid`, both non-zero | ~4ms × panes | Detects the WORK, not the server — `herdr server stop` is the only thing that ends a server, so a liveness check keyed on the server process would latch the box awake forever. Agent-agnostic by construction, unlike signal 5's name allowlist. `len(foreground_processes) > 0` is a trap: that list is non-empty even on an idle pane (it holds the pane's own shell), so it reads as always-true. Fails idle. See `docs/herdr-remote-attach.md` § Signal 8. |
 
 **Stamp-file pattern (signals 3+4):** Each tick ends by
 `touch /run/km/.presence-last-tick`. Next tick, "new since last

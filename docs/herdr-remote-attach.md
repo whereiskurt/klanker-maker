@@ -122,12 +122,50 @@ agent (or tool) runs in a pane needs no km change at all.
 that ends a Herdr server, so "a server process exists" would latch the sandbox
 awake forever — the same trap `pgrep vscode-server` would be for VS Code. A
 detached session with nothing running in its panes **is still correctly reaped**
-— that is by design, not a gap. `km-presence` runs the equivalent of
-`herdr pane process-info --pane <id>` per pane per tick (as the `sandbox` user,
-over `runuser -u sandbox -- bash -lc '...'`, matching the login-shell requirement
-below) and treats a pane as busy when its foreground process group differs from
-its own shell's pid — `working` or `blocked` agent states both count as busy,
-`idle`/`done`/`unknown` do not.
+— that is by design, not a gap. `km-presence` runs `herdr pane list` to enumerate
+panes, then `herdr pane process-info --pane <id>` per pane per tick (as the
+`sandbox` user, over `runuser -u sandbox -- bash -lc '...'`, matching the
+login-shell requirement below), ORing the result across every pane on every
+discovered socket.
+
+### The trap: `foreground_processes` is non-empty even when idle
+
+The obvious-looking check is wrong, and it was actually written once before
+being caught. `process-info`'s response carries a `foreground_processes` list —
+and that list is **non-empty even on a completely idle pane**, because it always
+contains the pane's own shell. A `len(foreground_processes) > 0` check is
+therefore **always true**, which would make signal 8 permanently positive and
+silently disable idle teardown fleet-wide. It was caught only by capturing a
+real idle pane and comparing it against a busy one, not by reading Herdr's docs.
+
+The correct discriminator, measured the same way: `process_info` also carries
+`foreground_process_group_id` and `shell_pid`. On an idle pane both are the
+shell's own pid (equal); on a pane running a foreground job,
+`foreground_process_group_id` is the job's process group, which differs from
+`shell_pid`. **Busy ⟺ `foreground_process_group_id != shell_pid`, both
+non-zero** — the zero check matters too, since a response missing both fields
+decodes to `0 == 0`, which must read as idle, not busy.
+
+### Working with the Herdr CLI — the published docs are wrong three ways
+
+All three were found by running the documented form first, on a live sandbox,
+and watching it fail (`cmd/km-presence/testdata/README.md` has the transcripts):
+
+- **There is no `--json` flag.** `herdr pane list --json` fails with
+  `unknown option: --json` — JSON is the default output, not something you opt
+  into.
+- **Responses are wrapped**, not bare arrays or objects:
+  `{"id":…,"result":{…},"type":…}`. The fields described above live under
+  `result`, not at the top level.
+- **`pane process-info` takes `--pane <ID>`, not a positional.**
+  `herdr pane process-info w1:p1` fails with `unknown option: w1:p1`; the
+  working form is `herdr pane process-info --pane w1:p1`. Pane ids look like
+  `w1:p1` and come from `pane_id` in the `pane list` response (not `id`).
+
+Herdr also creates a `herdr-client.sock` beside `herdr.sock` in the same config
+directory — only `herdr.sock` speaks this API, which is why socket discovery
+matches the literal filename `herdr.sock` (and its named-session equivalent)
+rather than a `*.sock` glob that would also pick up the client socket.
 
 **A pre-signal-8 sandbox needs `km destroy && km create` to gain it** —
 `km-presence` is fetched at boot, so an existing box keeps its current daemon
