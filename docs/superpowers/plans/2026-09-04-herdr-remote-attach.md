@@ -368,11 +368,17 @@ metadata:
   name: herdr-compose-check
 extends:
   - base/platform
+  - base/os/debian
+  - base/network/locked
   - base/tools/herdr
 YAML
 ./km validate /tmp/herdr-compose-check.yaml; echo "exit=$?"
 ```
-Expected: exit 0. If `base/platform` alone is not a sufficient parent for a valid leaf, add whichever fragments `profiles/learner.yaml` extends until it validates — the point of this step is only to prove `base/tools/herdr` merges cleanly, not to design a profile.
+
+Expected: exit 0. That `extends:` list is `profiles/wiz-demo.yaml`'s, with `base/security/wiz`
+swapped for `base/tools/herdr` — wiz-demo is the shipped precedent for a leaf that composes an
+opt-in tool fragment, so if it validates there it validates here. The point of this step is to
+prove `base/tools/herdr` merges cleanly, not to design a profile: do NOT commit this file.
 
 - [ ] **Step 6: Run the guard tests**
 
