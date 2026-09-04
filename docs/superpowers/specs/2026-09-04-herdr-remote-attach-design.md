@@ -105,9 +105,25 @@ therefore **no userdata golden churn, no create-handler rebuild, and no
 `km init --dry-run=false`** for this half. The bootstrap exports
 `KM_ARTIFACTS_BUCKET` near the top of userdata, and initCommands run as a child
 process (`/tmp/km-init.sh`) that inherits it, so the fragment can reach S3 by name.
-Verified against `origin/main` at 2a004efe (post-Phase-133), where `.InitCommands`
-is still referenced ONLY by the `{{- if or .InitCommands .InitScripts }}` presence
-gate — the commands themselves never render into userdata.
+
+**The reason is "no template or schema change", NOT "no rendered-output change".**
+That distinction was got wrong once and is worth stating precisely. Adding an
+initCommand *does* alter rendered userdata by one line: Phase 113 sets
+`params.ProfileYAML` to a `yaml.Marshal` of the entire `userDataParams` struct —
+`InitCommands` included — and renders it verbatim into the
+`/opt/km/.km-profile.yaml` heredoc. Because that happens through reflection, no
+template token names `InitCommands`, so grepping the template for it finds only the
+presence gate and misses the serialization entirely.
+
+The delta is nonetheless irrelevant to the deploy surface, because it is ordinary
+per-profile **data** flowing through the existing, already-deployed template — the
+same thing that happens for `base/security/wiz.yaml`'s own `initCommandsAppend`, and
+for every profile that differs from every other. A create-handler rebuild is needed
+when the *template* or the *schema* changes; `initCommandsAppend` has been schema
+since Phase 117. Goldens render fixed profiles, and adding a new fragment file
+alters no existing profile, so none move. `TestInitCommandsAppend_DeltaConfinedToProfileDump`
+pins the part that actually matters: the delta stays inside that dump and never
+reaches executable bootstrap.
 
 ```yaml
 spec:

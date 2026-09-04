@@ -223,56 +223,98 @@ git commit -m "feat(herdr): mirror pinned herdr release to s3 binaries/herdr"
 - Consumes: the `binaries/herdr` S3 key from Task 1.
 - Produces: an abstract fragment named `base-tools-herdr` that leaf profiles reach via `extends: [base/tools/herdr]`. No Go symbols.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the guard test**
 
 Create `pkg/compiler/userdata_herdr_fragment_test.go`:
 
 ```go
 package compiler
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-// TestInitCommandsAppend_DoesNotChangeUserdata is the guard the herdr fragment's
-// entire deploy story rests on.
+// herdrFetchLine is the initCommand the base/tools/herdr fragment appends.
+const herdrFetchLine = `aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr" /usr/local/bin/herdr`
+
+// profileDumpSection returns the body of the Phase 113 /opt/km/.km-profile.yaml
+// heredoc — the yaml.Marshal of userDataParams that userdata.go renders via
+// {{ .ProfileYAML }}. Returns ok=false if the block is absent.
+func profileDumpSection(ud string) (string, bool) {
+	const open = "cat > /opt/km/.km-profile.yaml << 'KM_PROFILE_EOF'\n"
+	i := strings.Index(ud, open)
+	if i < 0 {
+		return "", false
+	}
+	rest := ud[i+len(open):]
+	j := strings.Index(rest, "\nKM_PROFILE_EOF")
+	if j < 0 {
+		return "", false
+	}
+	return rest[:j], true
+}
+
+// TestInitCommandsAppend_DeltaConfinedToProfileDump is the guard the herdr
+// fragment's deploy story rests on.
 //
-// The userdata template references InitCommands ONLY through the presence gate
-// `{{- if or .InitCommands .InitScripts }}`; the commands themselves are uploaded
-// separately as artifacts/{id}/km-init.sh and fetched at boot. So adding a
-// command to a profile that already has at least one is provably byte-identical
-// userdata — which is why base/tools/herdr costs no create-handler rebuild, no
-// `km init --dry-run=false`, and no golden churn.
+// Adding an initCommand DOES change rendered userdata — Phase 113 sets
+// params.ProfileYAML to a yaml.Marshal of the whole userDataParams struct
+// (userdata.go:7070) and renders it verbatim into the /opt/km/.km-profile.yaml
+// heredoc. Because that happens by reflection, no template token names
+// InitCommands and grepping for it cannot find the reference. An earlier
+// version of this test asserted the two renders were byte-identical; that was
+// false and it failed, which is how the interaction was found.
 //
-// If this test ever fails, the fragment's deploy surface claim in
-// docs/herdr-remote-attach.md and CLAUDE.md is wrong and must be corrected
-// before shipping.
-func TestInitCommandsAppend_DoesNotChangeUserdata(t *testing.T) {
+// What actually matters is narrower and stronger: the delta must be CONFINED to
+// that profile dump, so no executable bootstrap logic changes. If a future edit
+// ever leaks initCommands into runnable script, this test fails.
+func TestInitCommandsAppend_DeltaConfinedToProfileDump(t *testing.T) {
 	base := baseProfile()
 	base.Spec.Execution.InitCommands = []string{"echo one"}
 
 	withHerdr := baseProfile()
-	withHerdr.Spec.Execution.InitCommands = []string{
-		"echo one",
-		`aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr" /usr/local/bin/herdr`,
-	}
+	withHerdr.Spec.Execution.InitCommands = []string{"echo one", herdrFetchLine}
 
-	got, err := generateUserData(base, "test-sb", nil, "my-bucket", false, nil)
+	a, err := generateUserData(base, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("render base: %v", err)
 	}
-	got2, err := generateUserData(withHerdr, "test-sb", nil, "my-bucket", false, nil)
+	b, err := generateUserData(withHerdr, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("render with herdr: %v", err)
 	}
-	if got != got2 {
-		t.Fatalf("adding an initCommand changed rendered userdata; the herdr fragment's " +
-			"no-userdata-change deploy claim is false")
+
+	dumpA, okA := profileDumpSection(a)
+	dumpB, okB := profileDumpSection(b)
+	if !okA || !okB {
+		t.Fatal("the Phase 113 /opt/km/.km-profile.yaml block is absent from rendered userdata; " +
+			"this test would otherwise pass vacuously")
+	}
+
+	// The fetch line must appear in the dump...
+	if !strings.Contains(dumpB, "binaries/herdr") {
+		t.Errorf("expected the herdr fetch line inside the profile dump; it was not there")
+	}
+	// ...and NOWHERE else in the rendered bootstrap.
+	outsideB := strings.Replace(b, dumpB, "", 1)
+	if strings.Contains(outsideB, "binaries/herdr") {
+		t.Errorf("the herdr initCommand leaked OUTSIDE the profile dump into executable bootstrap")
+	}
+
+	// The decisive assertion: strip each render's dump and the remaining
+	// bootstrap must be byte-identical.
+	outsideA := strings.Replace(a, dumpA, "", 1)
+	if outsideA != outsideB {
+		t.Fatalf("adding an initCommand changed executable bootstrap outside the Phase 113 " +
+			"profile dump; the fragment's no-create-handler-rebuild claim needs re-examining")
 	}
 }
 
-// TestInitCommandsGate_EmptyToNonEmptyDoesChangeUserdata is the negative control.
-// It proves the test above is measuring something real: going from zero commands
-// to one DOES change userdata, because that flips the presence gate. Without this,
-// a renderer that ignored InitCommands entirely would pass the test above.
+// TestInitCommandsGate_EmptyToNonEmptyDoesChangeUserdata is the negative
+// control. It proves the test above measures something real: going from zero
+// commands to one flips the {{- if or .InitCommands .InitScripts }} presence
+// gate and adds the km-init.sh download block to executable bootstrap.
 func TestInitCommandsGate_EmptyToNonEmptyDoesChangeUserdata(t *testing.T) {
 	none := baseProfile()
 	none.Spec.Execution.InitCommands = nil
@@ -294,12 +336,18 @@ func TestInitCommandsGate_EmptyToNonEmptyDoesChangeUserdata(t *testing.T) {
 }
 ```
 
-`baseProfile()` and `generateUserData(p, sandboxID, ..., bucket, ...)` are the existing helpers used by `TestUserdataAdditionalVolumeOnly_GoldenByteIdentical` in the same package; the argument list above is copied from that test. Do not add new helpers.
+`baseProfile()` and `generateUserData` are the existing helpers used by
+`TestUserdataAdditionalVolumeOnly_GoldenByteIdentical` in the same package. Do not add new ones.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the guard tests**
 
 Run: `go test ./pkg/compiler/ -run 'TestInitCommands' -v; echo "exit=$?"`
-Expected: both tests PASS immediately. This task's test is a *guard* on existing behaviour, not a driver of new behaviour — the fragment is data, and the risk being tested is a claim about the compiler. A FAIL here means the fragment's whole deploy story is wrong and the task must stop.
+Expected: both PASS. These guard existing compiler behaviour rather than driving new behaviour.
+
+A failure of `TestInitCommandsAppend_DeltaConfinedToProfileDump` means an initCommand now reaches
+executable bootstrap somewhere, which would genuinely change the deploy surface — stop and report
+BLOCKED. A failure of the negative control means the presence gate is gone.
+
 
 - [ ] **Step 3: Write the real fragment**
 
