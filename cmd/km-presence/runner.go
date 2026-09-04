@@ -291,14 +291,15 @@ func herdrPaneIsBusy(raw []byte) bool {
 // would pass, making it undetectable. HERDR_SOCKET_PATH selects the session.
 func checkHerdrPaneBusy(r commandRunner, configDir string) bool {
 	for _, sock := range herdrSocketPaths(configDir) {
+		quotedSock := shellSingleQuote(sock)
 		listOut, err := r.Output("runuser", "-u", "sandbox", "--", "bash", "-lc",
-			fmt.Sprintf("HERDR_SOCKET_PATH=%q herdr pane list", sock))
+			fmt.Sprintf("HERDR_SOCKET_PATH=%s herdr pane list", quotedSock))
 		if err != nil {
 			continue
 		}
 		for _, paneID := range herdrPaneIDs(listOut) {
 			infoOut, err := r.Output("runuser", "-u", "sandbox", "--", "bash", "-lc",
-				fmt.Sprintf("HERDR_SOCKET_PATH=%q herdr pane process-info --pane %s", sock, paneID))
+				fmt.Sprintf("HERDR_SOCKET_PATH=%s herdr pane process-info --pane %s", quotedSock, paneID))
 			if err != nil {
 				continue
 			}
@@ -308,6 +309,19 @@ func checkHerdrPaneBusy(r commandRunner, configDir string) bool {
 		}
 	}
 	return false
+}
+
+// shellSingleQuote wraps s in single quotes for safe embedding in a `bash -lc`
+// string, closing and reopening the quote around each embedded single quote
+// (the same escaping emit uses below). Go's fmt "%q" is NOT a substitute
+// here: it produces DOUBLE quotes, which the shell still expands ($ and
+// backticks included) — and the socket path this wraps comes from
+// ~/.config/herdr/sessions/*, a directory name the sandbox user controls.
+// Not a privilege boundary (the command already runs as that user), but an
+// unescaped name would break the command silently, and silence in this
+// signal reads as idle.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // =============================================================================

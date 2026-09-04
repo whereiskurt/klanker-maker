@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -505,11 +506,11 @@ func TestTick_EmitWhenOnlySSHActive(t *testing.T) {
 // =============================================================================
 
 func herdrListCmd(sock string) string {
-	return `runuser -u sandbox -- bash -lc HERDR_SOCKET_PATH="` + sock + `" herdr pane list`
+	return `runuser -u sandbox -- bash -lc HERDR_SOCKET_PATH=` + shellSingleQuote(sock) + ` herdr pane list`
 }
 
 func herdrInfoCmd(sock, pane string) string {
-	return `runuser -u sandbox -- bash -lc HERDR_SOCKET_PATH="` + sock + `" herdr pane process-info --pane ` + pane
+	return `runuser -u sandbox -- bash -lc HERDR_SOCKET_PATH=` + shellSingleQuote(sock) + ` herdr pane process-info --pane ` + pane
 }
 
 // TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy is the single most important test in
@@ -671,11 +672,87 @@ func TestHerdrSocketPaths_FindsDefaultAndNamed(t *testing.T) {
 	}
 }
 
+// TestShellSingleQuote_EscapesShellMetacharacters pins the fix for a real
+// defect: the socket path used to be embedded via fmt's %q, which produces
+// DOUBLE quotes that the shell still expands ($ and backticks included). The
+// path segment comes from a sandbox-user-writable directory
+// (~/.config/herdr/sessions/*), so a name containing either would silently
+// break the bash -lc command and read as idle. %q is Go quoting, not shell
+// quoting — this test exists to keep that straight.
+func TestShellSingleQuote_EscapesShellMetacharacters(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "/home/sandbox/.config/herdr/herdr.sock", "'/home/sandbox/.config/herdr/herdr.sock'"},
+		{"dollar", "/home/sandbox/.config/herdr/sessions/$(whoami)/herdr.sock", "'/home/sandbox/.config/herdr/sessions/$(whoami)/herdr.sock'"},
+		{"backtick", "/home/sandbox/.config/herdr/sessions/`id`/herdr.sock", "'/home/sandbox/.config/herdr/sessions/`id`/herdr.sock'"},
+		{"single-quote", "/home/sandbox/.config/herdr/sessions/a'b/herdr.sock", `'/home/sandbox/.config/herdr/sessions/a'\''b/herdr.sock'`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := shellSingleQuote(c.in)
+			if got != c.want {
+				t.Fatalf("shellSingleQuote(%q) = %q, want %q", c.in, got, c.want)
+			}
+			// The quoted form must actually round-trip through a real shell:
+			// echo it back and confirm bash reproduces the original string
+			// verbatim, including the metacharacters it must NOT expand.
+			out, err := exec.Command("bash", "-c", "printf '%s' "+got).Output()
+			if err != nil {
+				t.Fatalf("bash rejected the quoted form %q: %v", got, err)
+			}
+			if string(out) != c.in {
+				t.Fatalf("shell round-trip: got %q, want %q (metacharacter was expanded)", out, c.in)
+			}
+		})
+	}
+}
+
+// TestSignal_HerdrPaneBusy_IndependentOfSSHAndVNC proves each direction with a
+// positive control, the pattern TestSignals_VNCAndSSH_AreIndependent already
+// uses for signals 6/7: a fixture that could not possibly make the OTHER
+// signal fire says nothing about independence. Passing t.TempDir() alone (the
+// original form of this test) makes herdrSocketPaths return empty and
+// checkHerdrPaneBusy return false before the runner is ever consulted — it
+// would pass against a checkHerdrPaneBusy that always returns false.
 func TestSignal_HerdrPaneBusy_IndependentOfSSHAndVNC(t *testing.T) {
-	r := &fakeRunner{responses: map[string][]byte{
-		"ss -tnHp state established": []byte(`ESTAB 0 0 10.0.0.1:22 10.0.0.2:5000 users:(("sshd",pid=1,fd=3))`),
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "herdr.sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := os.ReadFile("testdata/herdr_pane_list.json")
+	busy, _ := os.ReadFile("testdata/herdr_process_info_busy.json")
+
+	// Direction 1: an established SSH session (signal 7's positive control)
+	// alongside a genuinely busy herdr pane. Signal 8 must fire from the
+	// herdr data, and signal 7 must fire from the ss data — neither one
+	// borrows the other's input.
+	withSSH := &fakeRunner{responses: map[string][]byte{
+		"ss -tnHp state established": []byte(ssWithSSHSession),
+		herdrListCmd(sock):           list,
+		herdrInfoCmd(sock, "w1:p1"):  busy,
 	}}
-	if checkHerdrPaneBusy(r, t.TempDir()) {
-		t.Fatal("signal 8 fired from signal 7's input")
+	if !checkHerdrPaneBusy(withSSH, dir) {
+		t.Fatal("expected signal 8 positive: a busy pane exists regardless of the SSH session")
+	}
+	if !checkSSHSessions(withSSH) {
+		t.Fatal("expected signal 7 positive: ssWithSSHSession is its own positive control")
+	}
+
+	// Direction 2: an established VNC session (signal 6's positive control)
+	// with NO herdr socket at all. Signal 6 must fire; signal 8 must not
+	// fire merely because signal 6 did.
+	noHerdr := t.TempDir()
+	withVNC := &fakeRunner{responses: map[string][]byte{
+		"ss -tnHp state established": []byte(ssWithViewer),
+	}}
+	if !checkVNCClients(withVNC) {
+		t.Fatal("expected signal 6 positive: ssWithViewer is its own positive control")
+	}
+	if checkHerdrPaneBusy(withVNC, noHerdr) {
+		t.Fatal("signal 8 fired from signal 6's input despite no herdr socket existing")
 	}
 }
