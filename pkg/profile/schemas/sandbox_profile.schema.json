@@ -648,6 +648,11 @@
             "grants": {
               "type": "object",
               "description": "Phase 133: maps a consumer name to the bundle keys it may receive. The name is both the binary intercepted on PATH and the identity presented to the broker. Absent means claude and codex each receive the whole bundle.",
+              "propertyNames": {
+                "description": "A consumer name is interpolated into a root-executed boot shell (the shim generator) and used as a filename, so it is restricted to a conservative binary-name character set. The compiler enforces this pattern independently, because cmd/create-handler never calls profile.Validate.",
+                "pattern": "^[A-Za-z0-9._-]+$",
+                "maxLength": 64
+              },
               "additionalProperties": {
                 "type": "array",
                 "items": { "type": "string" }
