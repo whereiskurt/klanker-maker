@@ -34,5 +34,9 @@ spec:
       # which never sources /etc/profile.d. Proven live — the bare form expanded to
       # `s3:///binaries/herdr` and the fetch failed silently into the boot log.
       # km-identity.sh carries the bucket on every sandbox; prefer the environment
-      # in case something ever does export it.
-      - "[ -n \"${KM_ARTIFACTS_BUCKET:-}\" ] || . /etc/profile.d/km-identity.sh; aws s3 cp \"s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr\" /usr/local/bin/herdr && chmod 0755 /usr/local/bin/herdr || echo '[km] herdr fetch failed; run km herdr start to install' >&2"
+      # in case something ever does export it. The `[ -r ... ] &&` guard around the
+      # source is load-bearing: km-init.sh runs under `set -e`, and an unguarded
+      # source of a missing file aborts km-init.sh right there, killing every
+      # LATER initCommand from other fragments — the same trap documented in
+      # base/security/wiz.yaml, just one line earlier in the script.
+      - "[ -n \"${KM_ARTIFACTS_BUCKET:-}\" ] || { [ -r /etc/profile.d/km-identity.sh ] && . /etc/profile.d/km-identity.sh; }; aws s3 cp \"s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr\" /usr/local/bin/herdr && chmod 0755 /usr/local/bin/herdr || echo '[km] herdr fetch failed; run km herdr start to install' >&2"
