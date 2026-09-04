@@ -262,6 +262,41 @@ func TestRunHerdrStart_UnhealthyPreflightDoesNotWriteSSHConfig(t *testing.T) {
 	}
 }
 
+// TestRunHerdrStart_UnhealthyPreflightUsesHerdrWording pins the F12 fix:
+// runHerdrStart must diagnose an unhealthy pre-flight with herdrHealthError's
+// wording, not parseVSCodeStatus's — meeting "VS Code not enabled in this
+// sandbox's profile" from a `km herdr start` invocation is confusing, since
+// the operator never mentioned VS Code. sshd inactive + authkeys absent is
+// the one case where the two wordings actually differ (the sshd-only case
+// happens to share text with both), so it is the only fixture that proves
+// the switch.
+func TestRunHerdrStart_UnhealthyPreflightUsesHerdrWording(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	keyPath := filepath.Join(tmp, ".km", "keys", "sb-abc123")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("dummy-private-key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	mockSSM := &vsCodeSSMMock{output: "=== sshd ===\ninactive\n=== authkeys exists ===\nno\n"}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34571, false)
+	if err == nil {
+		t.Fatal("expected error for unhealthy sshd+authkeys, got nil")
+	}
+	if strings.Contains(err.Error(), "VS Code not enabled") {
+		t.Errorf("runHerdrStart used parseVSCodeStatus's wording; got %q", err)
+	}
+	if !strings.Contains(err.Error(), "spec.runtime.vscode.enabled: false") {
+		t.Errorf("runHerdrStart should use herdrHealthError's wording; got %q", err)
+	}
+}
+
 // herdrSendCountingSSMMock returns a fixed pre-flight output from every
 // GetCommandInvocation call, like vsCodeSSMMock, but also counts SendCommand
 // invocations — used to prove --no-install never sends the install script.

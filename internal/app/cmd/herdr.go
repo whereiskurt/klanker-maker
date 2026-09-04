@@ -209,10 +209,14 @@ func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExec
 	}
 	st := parseHerdrStatus(out)
 
-	// Reuse the vscode parser for the sshd/authorized_keys half so the two
-	// commands give identical diagnoses for identical failures.
-	if err := parseVSCodeStatus(out, sandboxID); err != nil {
-		return err
+	// herdrHealthError, not parseVSCodeStatus: both read the identical
+	// sshd/authorized_keys markers, but parseVSCodeStatus's absent-both
+	// message ("VS Code not enabled...") is confusing to meet from a
+	// km herdr command. herdrHealthError gives the herdr-specific wording so
+	// `km herdr start` and `km herdr status` diagnose the same failure the
+	// same way.
+	if !st.SSHDActive || !st.AuthKeysPresent {
+		return herdrHealthError(st, sandboxID)
 	}
 
 	if st.HerdrPath == "" {
