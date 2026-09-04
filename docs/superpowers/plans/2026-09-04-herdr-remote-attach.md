@@ -22,6 +22,7 @@
 - **Every km-presence signal fails idle.** Any error, missing binary, absent socket, or malformed output returns `false`. A signal that can never go negative silently disables idle teardown fleet-wide.
 - **`runuser`, never `sudo`/`su`,** for dropping to the `sandbox` user (matches Phase 132's 15 dispatch sites).
 - **Deploy surface for the whole plan is `make build` + `km init --sidecars`.** No Terraform module, IAM policy, DynamoDB table, Lambda, or `pkg/compiler/userdata.go` template change. **Never run `km init --dry-run=false` for this work.**
+- **`km init --sidecars` needs `build/*.zip` present, and fails AFTER seeding herdr if they are absent.** Its last step, `uploadCreateHandlerToolchain`, tars `build/budget-enforcer.zip` and friends into `toolchain/infra.tar.gz`; those come from `make build-lambdas`, which a fresh worktree has never run. The command then exits **non-zero** even though every sidecar, `binaries/sops`, `binaries/herdr`, and `toolchain/{km,terraform,terragrunt}` uploaded successfully — verified live on 2026-09-04. This is safe (the failing step leaves the previous `infra.tar.gz` in place rather than writing a partial one) but the red exit is misleading. If you only need the herdr seed, `grep 'Uploaded herdr'` in the output is the check that matters; run `make build-lambdas` first if you want a clean exit.
 - **`km init --sidecars` uploads EVERY sidecar from the working tree, not just herdr's.** Since Phase 133 that set includes `km-secretsd` and `km-env`, which the deployed install already depends on. Running it from a tree behind `origin/main` rolls those binaries backward on a live install. **Always `git pull --rebase` and confirm `git log -1 origin/main` matches `HEAD` before any `km init --sidecars` in this plan** (Task 6 Step 1 and Task 9 Step 1).
 - **Commit scoping:** another agent may be working in this repo concurrently. Every `git add` in this plan names explicit paths. Never run a bare `git add`. Before starting, run `git pull --rebase` and re-run the test suite.
 - **Check `go test` exit status directly**, not the exit status of a pipe into `tail`/`head`.
@@ -1707,10 +1708,11 @@ git commit -m "docs(herdr): operator runbook, CLAUDE.md block, eight-signal swee
 git pull --rebase
 git log --oneline -1 HEAD && git log --oneline -1 origin/main   # must share a base
 make build
-km init --sidecars
+km init --sidecars       # see the Global Constraints note: a non-zero exit here is
+                         # EXPECTED in a worktree with no build/*.zip, and harmless
 ```
 
-Confirm the mirror landed:
+Confirm the mirror landed — this, not the exit code, is the check that matters:
 ```bash
 aws s3 ls "s3://<artifacts-bucket>/binaries/herdr" --profile klanker-terraform
 ```
