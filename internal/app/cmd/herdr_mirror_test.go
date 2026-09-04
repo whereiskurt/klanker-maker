@@ -42,3 +42,22 @@ func TestHerdrVersion_Pinned(t *testing.T) {
 		t.Fatalf("herdrVersion = %q; want a concrete version pin", herdrVersion)
 	}
 }
+
+// TestHerdrFragment_ResolvesBucketBeforeUse pins the fragment against a bug that
+// shipped once and was proven live: cloud-init runs km-init.sh as a plain child
+// process and never sources /etc/profile.d, so a bare ${KM_ARTIFACTS_BUCKET}
+// expands to empty and the fetch becomes `s3:///binaries/herdr`. The failure is
+// silent — the fragment's own `|| echo` swallows it into the boot log.
+func TestHerdrFragment_ResolvesBucketBeforeUse(t *testing.T) {
+	raw, err := os.ReadFile("../../../profiles/base/tools/herdr.yaml")
+	if err != nil {
+		t.Fatalf("read fragment: %v", err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "/etc/profile.d/km-identity.sh") {
+		t.Error("fragment does not source km-identity.sh before using KM_ARTIFACTS_BUCKET")
+	}
+	if strings.Contains(s, "exported at the top of the bootstrap and inherited") {
+		t.Error("fragment still carries the disproven inheritance claim in its comment")
+	}
+}

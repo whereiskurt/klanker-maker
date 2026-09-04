@@ -30,12 +30,9 @@ spec:
   execution:
     # Appends after the merged initCommands rather than replacing them.
     initCommandsAppend:
-      # KM_ARTIFACTS_BUCKET is exported at the top of the bootstrap and inherited
-      # by /tmp/km-init.sh, so it resolves here.
-      #
-      # The `|| echo` is load-bearing: km-init.sh runs under `set -e`, so a hard
-      # failure here aborts every LATER initCommand and surfaces only as
-      # "No init script found in S3 (skipped)" — the trap documented in
-      # base/security/wiz.yaml. `km herdr start` re-ensures the binary over SSM,
-      # so a soft failure here is fully recoverable and a hard one is not.
-      - "aws s3 cp \"s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr\" /usr/local/bin/herdr && chmod 0755 /usr/local/bin/herdr || echo '[km] herdr fetch failed; run km herdr start to install' >&2"
+      # KM_ARTIFACTS_BUCKET is NOT inherited here: km-init.sh runs under cloud-init,
+      # which never sources /etc/profile.d. Proven live — the bare form expanded to
+      # `s3:///binaries/herdr` and the fetch failed silently into the boot log.
+      # km-identity.sh carries the bucket on every sandbox; prefer the environment
+      # in case something ever does export it.
+      - "[ -n \"${KM_ARTIFACTS_BUCKET:-}\" ] || . /etc/profile.d/km-identity.sh; aws s3 cp \"s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr\" /usr/local/bin/herdr && chmod 0755 /usr/local/bin/herdr || echo '[km] herdr fetch failed; run km herdr start to install' >&2"
