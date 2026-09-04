@@ -51,6 +51,8 @@ PROFILES=(
   profiles/wiz-demo.yaml        # Wiz Runtime Sensor demo (base/security/wiz)
   profiles/mitm-demo.yaml       # Phase 127/129 MITM intercepts demo (base/mitm-rickroll)
   profiles/vulnhunt.yaml        # Phase 132 exec-capture UAT leaf (VulnHunter vs defcon.run.34)
+  profiles/brokered-secrets-demo.yaml         # Phase 133 brokered secrets: per-consumer grants
+  profiles/brokered-secrets-initcmd-demo.yaml # Phase 133 brokered secrets: non-agent consumer via km-env --only
   pkg/profile/builtins/ao.yaml
   pkg/profile/builtins/codex.yaml
   pkg/profile/builtins/goose.yaml
