@@ -117,16 +117,32 @@ func (s *Server) Selftest(o SelftestOpts) []Check {
 }
 
 // shimTarget extracts the absolute path a generated shim execs.
+//
+// The shim generator (pkg/compiler/userdata.go, section "7.8. Consumer shims")
+// bakes the target into a KM_REAL="..." assignment, not the exec line itself
+// — the exec line reads "exec ... -- "$KM_REAL" "$@"", a shell variable
+// reference, so parsing it directly returns the literal string "$KM_REAL"
+// rather than a path. The generator's heredoc is unquoted, so on generation
+// KM_REAL="$KM_SHIM_TARGET" is expanded to the real literal path while every
+// other "$" in the shim is escaped ("\$") and survives as a literal dollar
+// sign for the shim to evaluate later at runtime.
+//
+// The shim's own fallback branch (baked target has since moved) reassigns
+// KM_REAL too, but via a "$(...)" command substitution — its value starts
+// with "$", never a path — so that assignment must be skipped, or this
+// returns a shell expression instead of a path.
 func shimTarget(body string) string {
 	for _, line := range strings.Split(body, "\n") {
-		idx := strings.Index(line, "-- ")
-		if !strings.HasPrefix(strings.TrimSpace(line), "exec ") || idx < 0 {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, `KM_REAL="`) || !strings.HasSuffix(line, `"`) {
 			continue
 		}
-		fields := strings.Fields(line[idx+3:])
-		if len(fields) > 0 {
-			return fields[0]
+		val := strings.TrimSuffix(strings.TrimPrefix(line, `KM_REAL="`), `"`)
+		if strings.HasPrefix(val, "$") {
+			// The fallback's command-substitution assignment, not a literal.
+			continue
 		}
+		return val
 	}
 	return ""
 }
