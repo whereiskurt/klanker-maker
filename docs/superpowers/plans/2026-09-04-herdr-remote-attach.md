@@ -1861,7 +1861,29 @@ Update every hit to "eight" **except** historical narrative in CLAUDE.md that de
 
 - [ ] **Step 2: Write `docs/herdr-remote-attach.md`**
 
-Cover, in this order:
+**Facts established by live testing on 2026-09-04 that the docs MUST carry** — every one of
+these contradicts something a reader would otherwise reasonably assume:
+
+- **`base/userinit.yaml` already installs herdr** (`curl -fsSL https://herdr.dev/install.sh | sh`),
+  to `/home/sandbox/.local/bin/herdr`, owned by the sandbox user and **NOT on root's PATH**.
+  So on most profiles herdr is already present and `base/tools/herdr` is redundant; the fragment's
+  real purpose is the egress-free install for `base/network/locked` profiles that cannot reach
+  herdr.dev. Say this plainly — a reader who assumes the fragment is the only install path will
+  misdiagnose everything downstream.
+- **`KM_ARTIFACTS_BUCKET` is not visible to `initCommands` or to SSM-run scripts.** cloud-init and
+  SSM are non-login shells and never source `/etc/profile.d`. Anything on the box that needs the
+  bucket must source `/etc/profile.d/km-identity.sh` itself.
+- **`km list` shows a box green before cloud-init finishes.** A missing binary right after create
+  usually means "still booting", not "the fragment failed". `cloud-init status` is the check.
+- **The fragment fails soft**, so a genuine failure appears ONLY as `[km] herdr fetch failed` in
+  `/var/log/cloud-init-output.log`. Put that grep in the troubleshooting section.
+- **Herdr's published CLI docs are wrong in three ways** (verified against 0.8.2): there is no
+  `--json` flag (JSON is the default), responses are wrapped as `{"id":…,"result":{…},"type":…}`
+  rather than bare arrays, and `pane process-info` takes `--pane <ID>` rather than a positional.
+- **`herdr server` starts headlessly** under `setsid`/`nohup` with no TTY, creating
+  `~/.config/herdr/herdr.sock` (and a separate `herdr-client.sock` that is NOT the API socket).
+
+Then cover, in this order:
 1. What `km herdr start` does and the two-terminal workflow.
 2. Prerequisites: `spec.runtime.vscode.enabled` (default true, so sshd and the keypair already exist), and either `extends: [base/tools/herdr]` or the automatic ensure-install.
 3. **Lifecycle, stated loudly** — Herdr sessions do not survive a reboot; `km pause` (hibernate) keeps panes, `km stop` kills them, and `teardownPolicy: stop` on idle is therefore the destructive path. This is why signal 8 exists.
