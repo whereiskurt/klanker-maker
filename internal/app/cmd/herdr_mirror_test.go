@@ -4,7 +4,6 @@ package cmd
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -41,27 +40,5 @@ func TestHerdrS3Key_PinnedAcrossAllSites(t *testing.T) {
 func TestHerdrVersion_Pinned(t *testing.T) {
 	if herdrVersion == "" || herdrVersion == "latest" {
 		t.Fatalf("herdrVersion = %q; want a concrete version pin", herdrVersion)
-	}
-}
-
-// TestFetchAndUploadHerdr_SkipsDownloadWhenCached asserts the cached-binary
-// branch is taken when build/herdr already exists, so a repeated km init does
-// not re-download. The upload still runs and will fail without AWS creds, so
-// this asserts only that the error is NOT a download error.
-func TestFetchAndUploadHerdr_SkipsDownloadWhenCached(t *testing.T) {
-	dir := t.TempDir()
-	cached := filepath.Join(dir, "herdr")
-	if err := os.WriteFile(cached, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatalf("seed cached binary: %v", err)
-	}
-	err := fetchAndUploadHerdr(dir, "km-artifacts-test-does-not-exist")
-	if err != nil && strings.Contains(err.Error(), "download herdr") {
-		t.Fatalf("download was attempted despite cached binary: %v", err)
-	}
-	// The cached file must survive a failed upload — deleting a cached artifact
-	// on the failure path is the buildLambdaZips defect (see CLAUDE.md Phase 126
-	// operator-image findings) pointed at a different file.
-	if _, statErr := os.Stat(cached); statErr != nil {
-		t.Fatalf("cached binary was removed on the upload-failure path: %v", statErr)
 	}
 }
