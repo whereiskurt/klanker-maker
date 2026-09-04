@@ -9,6 +9,12 @@ import (
 	"testing"
 )
 
+var errDecryptStub = errors.New("kms 403")
+
+func osWriteFile(p string) error { return os.WriteFile(p, []byte("sops: {}\n"), 0o400) }
+
+func contains(hay, needle string) bool { return bytes.Contains([]byte(hay), []byte(needle)) }
+
 // stubDecrypt swaps the sops call out so these tests need no KMS and no age key.
 func stubDecrypt(t *testing.T, yaml string, err error) {
 	t.Helper()
