@@ -249,12 +249,17 @@ func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExec
 	return runReconnectingPortForward(ctx, execFn, buildPF, sshBannerTunnelProbe(localPort), true, os.Stdout)
 }
 
-// herdrPresenceSignal8Script reports whether the box's km-presence binary
-// carries signal 8. `strings` on the binary is crude but honest: the daemon
-// exposes no version verb, and the alternative (a DynamoDB field recording the
-// km version at create time) would be a schema change for a warning line.
+// herdrPresenceSignal8Script reports whether the box's km-presence binary carries
+// signal 8.
+//
+// Greps for the exact symbol `checkHerdrPaneBusy`, NOT the word "herdr". Go embeds
+// source file paths in binaries, so a bare "herdr" match is satisfied by any build
+// whose repo path happens to contain that word — verified live: a km-presence with
+// no signal 8 at all matched, because the build worktree was named "herdr". That
+// false positive suppresses the warning this probe exists to raise, so the symbol
+// name is the only trustworthy marker. Pinned by TestHerdrPresenceProbe_PinsSignal8Symbol.
 const herdrPresenceSignal8Script = `echo "=== presence signal8 ==="
-if strings /opt/km/bin/km-presence 2>/dev/null | grep -q herdr; then echo yes; else echo no; fi`
+if strings /opt/km/bin/km-presence 2>/dev/null | grep -q checkHerdrPaneBusy; then echo yes; else echo no; fi`
 
 // herdrStatusReport prints the readiness summary and returns a non-nil error
 // when the sandbox cannot accept an attach.

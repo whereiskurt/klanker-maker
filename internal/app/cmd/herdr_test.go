@@ -302,3 +302,66 @@ func TestHerdrStatusReport_WarnsOnPreSignal8Presence(t *testing.T) {
 		t.Errorf("warning should say the box is still idle-reapable; got:\n%s", got)
 	}
 }
+
+// TestHerdrPresenceProbe_PinsSignal8Symbol pins the probe's grep target to the real
+// km-presence function name. The probe is a string match against a binary, so a
+// rename in cmd/km-presence would silently turn it into a permanent "no" with no
+// compile error anywhere — the same class of drift the herdrS3Key three-site pin
+// guards against.
+//
+// Until Task 7 lands, cmd/km-presence/runner.go has no such function; this test then
+// asserts only that the probe does NOT use the bare word "herdr", which is the actual
+// defect being guarded (Go embeds build paths, so "herdr" matches spuriously).
+func TestHerdrPresenceProbe_PinsSignal8Symbol(t *testing.T) {
+	const symbol = "checkHerdrPaneBusy"
+
+	if !strings.Contains(herdrPresenceSignal8Script, symbol) {
+		t.Errorf("probe does not grep for %q", symbol)
+	}
+	if strings.Contains(herdrPresenceSignal8Script, "grep -q herdr") {
+		t.Error("probe greps the bare word \"herdr\", which Go's embedded build paths match spuriously")
+	}
+
+	raw, err := os.ReadFile("../../../cmd/km-presence/runner.go")
+	if err != nil {
+		t.Fatalf("read km-presence runner.go: %v", err)
+	}
+	if !strings.Contains(string(raw), "func "+symbol) {
+		t.Skipf("cmd/km-presence has no func %s yet (Task 7 introduces it); "+
+			"once it exists this test pins the probe to it", symbol)
+	}
+}
+
+// TestHerdrStatusReport_ReadsSignal8FromItsOwnSection proves the caller-side parse
+// (sectionOf on the combined SSM output) picks out the signal-8 answer and not an
+// unrelated "yes" earlier in the same output. The three TestHerdrStatusReport_*
+// tests above pass a bool straight into herdrStatusReport and so never exercise this
+// parse — which is exactly why the fix-round-1 defect (a false "yes" from
+// authkeys-exists bleeding into a bare Contains check) was invisible to them.
+func TestHerdrStatusReport_ReadsSignal8FromItsOwnSection(t *testing.T) {
+	out := `=== sshd ===
+active
+=== authkeys exists ===
+yes
+=== authkeys content ===
+ssh-ed25519 AAAAC3Nz km-sb-abc123
+=== herdr path ===
+/usr/local/bin/herdr
+=== herdr version ===
+herdr 0.8.2
+=== presence signal8 ===
+no
+`
+	got := strings.TrimSpace(sectionOf(out, "=== presence signal8 ==="))
+	if got != "no" {
+		t.Fatalf("sectionOf read %q; want \"no\" — a bare strings.Contains(out, \"yes\") "+
+			"would wrongly match the authkeys-exists section above it", got)
+	}
+
+	// And the positive case: signal8 genuinely present.
+	outYes := strings.Replace(out, "=== presence signal8 ===\nno", "=== presence signal8 ===\nyes", 1)
+	got = strings.TrimSpace(sectionOf(outYes, "=== presence signal8 ==="))
+	if got != "yes" {
+		t.Fatalf("sectionOf read %q; want \"yes\"", got)
+	}
+}
