@@ -166,17 +166,34 @@ func TestAgentShellCommands_PrepDirIsFirstAndChownsAsSandbox(t *testing.T) {
 	}
 }
 
-// TestAgentShellCommands_SourcesSandboxSecrets verifies the agent run script
-// sources /etc/profile.d/zz-sandbox-secrets.sh (Phase 89). Without this, an
-// injected OPENAI_API_KEY (or any SOPS secret) never reaches the agent's env —
-// codex/claude would run unauthenticated. The agent script runs in a non-login
-// shell, so it must source the secrets profile.d explicitly.
-func TestAgentShellCommands_SourcesSandboxSecrets(t *testing.T) {
+// TestAgentShellCommands_PrependsShimDir verifies the agent run script puts the
+// km-env shim directory first on PATH (Phase 133, replacing the Phase 89
+// `source /etc/profile.d/zz-sandbox-secrets.sh` this used to assert).
+//
+// The plaintext env file and its profile.d hook no longer exist: secrets now
+// reach an agent only through the root-owned shims in /opt/km/shims, which exec
+// km-env and hand the values to that one child. The script here is run by tmux
+// via `bash -c` — neither a login nor an interactive shell — so it reads neither
+// /etc/profile.d/zz-km-shims.sh nor ~/.bashrc, the two places that otherwise
+// install the PATH entry. Miss the prepend and every `km agent run` on a SOPS
+// profile dispatches its agent with zero credentials and dies on an opaque 401.
+//
+// This is `km agent run`: the SIXTH agent-dispatch path, and the only one
+// outside pkg/compiler/userdata.go. pkg/secrets.TestAgentRunPrependsShimDir
+// guards the same property from the secrets side.
+func TestAgentShellCommands_PrependsShimDir(t *testing.T) {
 	for _, agentType := range []string{"claude", "codex"} {
 		cmds, _ := cmd.BuildAgentShellCommands("p", cmd.AgentRunOptions{AgentType: agentType})
 		joined := strings.Join(cmds, "\n")
-		if !strings.Contains(joined, "source /etc/profile.d/zz-sandbox-secrets.sh") {
-			t.Errorf("[%s] agent script must source /etc/profile.d/zz-sandbox-secrets.sh so SOPS-injected secrets reach the agent env", agentType)
+		if !strings.Contains(joined, "export PATH=/opt/km/shims:$PATH") {
+			t.Errorf("[%s] agent script must prepend /opt/km/shims to PATH so the km-env shim intercepts the agent binary", agentType)
+		}
+		// A pointer to a deleted file is worse than no pointer: it reads as
+		// working wiring. Both are gone from the box in Phase 133.
+		for _, banned := range []string{"zz-sandbox-secrets.sh", "/etc/sandbox-secrets.env"} {
+			if strings.Contains(joined, banned) {
+				t.Errorf("[%s] agent script still references %s, which Phase 133 deleted from every sandbox", agentType, banned)
+			}
 		}
 	}
 }

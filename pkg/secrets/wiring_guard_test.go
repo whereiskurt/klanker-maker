@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/whereiskurt/klanker-maker/pkg/secrets"
 )
 
 func repoRoot(t *testing.T) string {
@@ -74,20 +76,102 @@ func TestEveryDispatchSitePrependsShimDir(t *testing.T) {
 	}
 }
 
-// The plaintext env file and its profile.d hook are the whole point of the
-// phase. If either comes back, every login shell carries the bundle again.
-func TestPlaintextEnvInjectionIsGone(t *testing.T) {
-	body, err := os.ReadFile(filepath.Join(repoRoot(t), "pkg/compiler/userdata.go"))
+// km agent run is the SIXTH agent-dispatch path and the only one that does not
+// live in pkg/compiler/userdata.go, which is exactly why it was missed: the
+// guard above reads one file and is structurally blind to everything else.
+//
+// The script internal/app/cmd/agent.go builds is executed by tmux under
+// `bash -c` — non-login AND non-interactive — so it reads neither
+// /etc/profile.d/zz-km-shims.sh nor ~/.bashrc. It must set the PATH entry
+// itself or every km agent run, km agent run --wait and scheduled
+// `km at … agent run` on a SOPS profile dispatches an agent with no
+// credentials at all.
+func TestAgentRunPrependsShimDir(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), "internal/app/cmd/agent.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := string(body)
+	// The generated script's own line, not a comment mentioning the path:
+	// require the `export` so a stray reference cannot satisfy this.
+	if !strings.Contains(string(body), "export PATH="+secrets.ShimDir+":$PATH") {
+		t.Errorf("internal/app/cmd/agent.go does not export PATH=%s:$PATH in the "+
+			"generated agent-run script: km agent run would dispatch its agent "+
+			"with no secrets", secrets.ShimDir)
+	}
+}
 
-	for _, banned := range []string{"/etc/sandbox-secrets.env", "zz-sandbox-secrets.sh"} {
-		if strings.Contains(src, banned) {
-			t.Errorf("userdata still references %s: secrets would be readable from "+
-				"every login shell again", banned)
+// The plaintext env file and its profile.d hook are the whole point of the
+// phase. If either comes back anywhere that actually RUNS — Go source or a
+// shipped profile's shell — either secrets are readable from every login shell
+// again, or (the Phase 133 shape) something reads a file that no longer exists
+// and silently gets nothing.
+//
+// Repo-wide on purpose. Scanning one file is what let km agent run and four
+// shipped profiles keep pointing at the deleted file through a whole branch;
+// a guard that covers only the file the last bug was in cannot see the next
+// one. Comment lines are exempt: pkg/profile/types.go and several profile
+// headers legitimately DESCRIBE the migration away from these paths.
+func TestPlaintextEnvInjectionIsGone(t *testing.T) {
+	root := repoRoot(t)
+	banned := []string{"/etc/sandbox-secrets.env", "zz-sandbox-secrets.sh"}
+
+	// Historical records and the guards that assert the absence itself.
+	skipDirs := map[string]bool{
+		".git": true, ".planning": true, ".superpowers": true,
+		"docs": true, "vendor": true, "node_modules": true, "dist": true,
+	}
+
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
+		rel, _ := filepath.Rel(root, path)
+		if d.IsDir() {
+			if skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		var commentPrefix string
+		switch {
+		case strings.HasSuffix(path, "_test.go"):
+			// Test files assert the absence and must name what they ban.
+			return nil
+		case strings.HasSuffix(path, ".go"):
+			commentPrefix = "//"
+		case strings.HasSuffix(path, ".yaml"), strings.HasSuffix(path, ".yml"):
+			// Only shipped profiles: their initCommands are real shell.
+			if !strings.HasPrefix(rel, "profiles"+string(filepath.Separator)) {
+				return nil
+			}
+			commentPrefix = "#"
+		default:
+			return nil
+		}
+
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for i, line := range strings.Split(string(body), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if commentPrefix != "" && strings.HasPrefix(trimmed, commentPrefix) {
+				continue
+			}
+			for _, b := range banned {
+				if strings.Contains(line, b) {
+					t.Errorf("%s:%d references %s, which Phase 133 deleted from every "+
+						"sandbox: a consumer reading it gets nothing, silently. Route it "+
+						"through km-env instead (see docs/brokered-secrets.md, "+
+						"\"Migrating a non-agent secret consumer\")", rel, i+1, b)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
