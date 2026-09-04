@@ -258,11 +258,20 @@ Rules it must obey, all inherited from signals 6 and 7:
   never go negative silently disables idle teardown fleet-wide and leaks instances.
 - **Independent.** Its own subprocess, not a share of another signal's output, matching
   the reasoning in `checkSSHSessions`.
-- **`blocked` counts as busy.** Herdr's `agent.list` exposes `idle | working | blocked |
-  done | unknown`. An agent parked on a permission prompt is *precisely* the case that
-  must not be reaped — km already treats it as operator-relevant via
-  `notification.events.onPermission`. Treat `working` and `blocked` as active; `idle`,
-  `done`, and `unknown` as not.
+- **`blocked` counts as busy — but NOT via `agent.list`.** *(Corrected 2026-09-04 after the
+  live probe; the original rule below was superseded and never shipped.)* This section
+  originally said to read Herdr's `agent.list` states (`idle | working | blocked | done |
+  unknown`) and treat `working`/`blocked` as active. **The shipped `checkHerdrPaneBusy`
+  never calls `agent list` at all.** The probe found `agent list` returns `[]` for a plain
+  `sleep`, because it lists only *recognised* agents — so depending on it would have
+  reintroduced exactly the agent-name coupling signal 8 exists to remove. §6.4's measured
+  decision (option 3, `pane process-info` only) supersedes this rule.
+
+  The underlying concern still holds and is still satisfied, by a different mechanism: an
+  agent parked on a permission prompt is precisely the case that must not be reaped, and
+  such an agent is still the pane's *foreground* process, so `foreground_process_group_id
+  != shell_pid` and the pane reads busy. The `blocked` case is therefore covered
+  incidentally and agent-agnostically, rather than by enumerating states.
 
 ### 6.3 Socket discovery
 
