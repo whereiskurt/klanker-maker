@@ -184,9 +184,17 @@ credentials read via `SO_PEERCRED`.
 
 Two RPCs:
 
-- `Unseal(as string, keys []string) → map[string]string` — resolves the effective
+- `Unseal(as string, keys []string) → map[string][]byte` — resolves the effective
   key set (§5.2), performs a live `kms:Decrypt`, writes the response, zeroes the
-  plaintext buffer.
+  plaintext buffers.
+
+**Secret values are `[]byte`, never `string`, everywhere the broker controls
+them.** Go strings are immutable and may be copied freely by the runtime, so a
+`map[string]string` cannot be zeroed at all — the claim would be decorative. Byte
+slices can be. The honest limit: zeroing covers the decrypted YAML buffer and the
+per-key values the broker holds; it cannot cover the response once it has been
+serialised onto a socket, nor the environment of the child process, which is the
+one-turn window §6 already acknowledges.
 - `Credentials() → STS credential JSON` — fence mode only, §4.4.
 
 **Decrypt via the `getsops/sops` Go API, not by shelling to `/opt/km/bin/sops`**
