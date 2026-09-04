@@ -387,8 +387,10 @@ Three independent paths — do not conflate them:
 
 **NOT `km init --dry-run=false`.** No Terraform module, IAM policy, DynamoDB table,
 Lambda, or userdata template changes. The fragment is pure `initCommandsAppend`, so the
-create-handler zip is untouched and userdata goldens do not move — verify that claim
-with a golden run rather than assuming it.
+create-handler zip is untouched and userdata goldens do not move (goldens render fixed
+profiles, and a new fragment file alters none of them) — verify with a golden run rather
+than assuming it. Note this is NOT a claim that rendered userdata is unchanged for a box
+that composes the fragment; see §4.2.
 
 **Order matters:** `km init --sidecars` seeds `binaries/herdr` *before* any profile
 extends the fragment. A sandbox booting the fragment against a missing S3 object hits
