@@ -1707,7 +1707,7 @@ Cover, in this order:
 
 - [ ] **Step 3: Add the CLAUDE.md block**
 
-Add a dated block at the top of the phase-history section, in the established voice: what shipped, the non-obvious decisions (fragment costs no userdata change because `InitCommands` only gates presence; signal 8 detects work not the server; `km herdr` is a vscode sibling not a tunnel mode and why), the lifecycle trap, the deploy surface (`make build` + `km init --sidecars`, **NOT** `km init --dry-run=false`), and that existing sandboxes need `km destroy && km create` for signal 8 only.
+Add a dated block at the top of the phase-history section, in the established voice: what shipped, the non-obvious decisions (the fragment needs no create-handler rebuild because it changes no TEMPLATE and no SCHEMA — NOT because rendered userdata is unchanged, which is false: Phase 113 yaml.Marshals `InitCommands` into the `/opt/km/.km-profile.yaml` dump by reflection, so no template token names it and grepping the template misses it; signal 8 detects work not the server; `km herdr` is a vscode sibling not a tunnel mode and why), the lifecycle trap, the deploy surface (`make build` + `km init --sidecars`, **NOT** `km init --dry-run=false`), and that existing sandboxes need `km destroy && km create` for signal 8 only.
 
 Add two "Where to look" rows:
 
