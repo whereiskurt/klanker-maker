@@ -89,6 +89,14 @@ func (s *Server) Selftest(o SelftestOpts) []Check {
 			checks = append(checks, Check{"shim:" + c, false, true, "cannot parse shim target"})
 			continue
 		case target == shim:
+			// Catches only a self-referencing BAKED target (KM_REAL= itself is
+			// the shim's own path). The shim's actual anti-recursion property at
+			// runtime rests on its fallback branch's hardcoded
+			// `grep -v '^/opt/km/shims$'` (pkg/compiler/userdata.go) excluding
+			// the shim directory from its PATH search — that pattern and
+			// secrets.ShimDir (o.ShimDir here) must always name the same path.
+			// This check cannot see a runtime fallback resolution back to the
+			// shim; it only pins the boot-time literal.
 			checks = append(checks, Check{"shim:" + c, false, true, "shim targets itself: would recurse"})
 			continue
 		}
@@ -118,28 +126,32 @@ func (s *Server) Selftest(o SelftestOpts) []Check {
 
 // shimTarget extracts the absolute path a generated shim execs.
 //
-// The shim generator (pkg/compiler/userdata.go, section "7.8. Consumer shims")
-// bakes the target into a KM_REAL="..." assignment, not the exec line itself
-// — the exec line reads "exec ... -- "$KM_REAL" "$@"", a shell variable
-// reference, so parsing it directly returns the literal string "$KM_REAL"
-// rather than a path. The generator's heredoc is unquoted, so on generation
+// The shim generator (pkg/compiler/userdata.go, section "7.8. Consumer shims",
+// which itself names shimTarget as this line's parser) bakes the target into a
+// KM_REAL="..." assignment at COLUMN 0, not the exec line itself — the exec
+// line reads "exec ... -- "$KM_REAL" "$@"", a shell variable reference, so
+// parsing it directly returns the literal string "$KM_REAL" rather than a
+// path. The generator's heredoc is unquoted, so on generation
 // KM_REAL="$KM_SHIM_TARGET" is expanded to the real literal path while every
 // other "$" in the shim is escaped ("\$") and survives as a literal dollar
 // sign for the shim to evaluate later at runtime.
 //
 // The shim's own fallback branch (baked target has since moved) reassigns
-// KM_REAL too, but via a "$(...)" command substitution — its value starts
-// with "$", never a path — so that assignment must be skipped, or this
-// returns a shell expression instead of a path.
+// KM_REAL too, but that reassignment lives inside "if ... fi" and is
+// INDENTED — anchoring on column 0 excludes it structurally, which is more
+// robust than matching on its value (a "$(...)" command substitution) alone,
+// since a future edit could change what that value looks like without
+// changing where the line sits. The "$"-prefix check below is kept as a
+// second, defensive line, not the primary rule.
 func shimTarget(body string) string {
 	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, `KM_REAL="`) || !strings.HasSuffix(line, `"`) {
 			continue
 		}
 		val := strings.TrimSuffix(strings.TrimPrefix(line, `KM_REAL="`), `"`)
 		if strings.HasPrefix(val, "$") {
-			// The fallback's command-substitution assignment, not a literal.
+			// Defensive: even at column 0, a value that is itself a shell
+			// expansion is never a literal path.
 			continue
 		}
 		return val
