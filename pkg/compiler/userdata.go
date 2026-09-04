@@ -1233,6 +1233,10 @@ chmod +x /opt/km/bin/km-secretsd
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-env" /opt/km/bin/km-env
 chmod +x /opt/km/bin/km-env
 ln -sf /opt/km/bin/km-env /usr/local/bin/km-env
+{{- if .FenceIMDS }}
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-creds" /opt/km/bin/km-creds
+chmod +x /opt/km/bin/km-creds
+{{- end }}
 
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sandboxes/{{ .SandboxID }}/secrets.enc.yaml" /etc/sandbox-secrets.enc.yaml
 chown root:root /etc/sandbox-secrets.enc.yaml
@@ -1270,6 +1274,15 @@ Environment=KM_SANDBOX_ID={{ .SandboxID }}
 # and fail to parse. Enclosing the whole assignment in single quotes makes the
 # inner double quotes literal.
 Environment='KM_SECRETS_GRANTS={{ .SopsGrantsJSON }}'
+{{- if .FenceIMDS }}
+# Fence mode. The broker mints credentials narrowed by pkg/secrets.SessionPolicy,
+# which interpolates the prefix and the bucket, so both must reach it here. With
+# KM_FENCE_IMDS unset the broker REFUSES the credentials RPC rather than handing
+# out un-narrowed credentials on a box whose IAM never gained the self-assume trust.
+Environment=KM_FENCE_IMDS=true
+Environment=KM_RESOURCE_PREFIX={{ .ResourcePrefix }}
+Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
+{{- end }}
 # Covers the paths userdata does not: /run is tmpfs, so /run/km is gone after
 # every reboot and every km resume, and this unit is not ordered after the one
 # that recreates it. Deliberately NOT RuntimeDirectory=km — its default
@@ -1288,6 +1301,81 @@ KMSECRETSD
 systemctl daemon-reload
 systemctl enable --now km-secretsd.service
 echo "[km-bootstrap] km-secretsd started"
+{{- if .FenceIMDS }}
+
+# ============================================================
+# 5.6. IMDS fence (Phase 133 Wave 2)
+# ============================================================
+# Block uid sandbox from the instance metadata service, and re-home every helper
+# that reads AWS as that uid onto credentials km-secretsd mints — the instance
+# role minus the two grants that open the secrets bundle.
+#
+# A SYSTEMD UNIT, not a bare iptables call, and that is load-bearing. There is no
+# iptables persistence anywhere in this codebase, and userdata does not re-run on
+# stop/start (cloud-init is per-instance) — but km-secretsd.service and every shim
+# ARE enabled units and do come back. A userdata-only rule would leave a resumed
+# box with a live broker, working agents, and no fence, with nothing saying so.
+#
+# FILTER table, not nat: the nat-table IMDS rule in section 6 is a different rule
+# with the opposite purpose (it RETURNs IMDS traffic so IMDSv2 keeps working) and
+# it only exists under enforcement: proxy. A fence written there would be silently
+# absent under ebpf and both.
+#
+# REJECT, not DROP: an SDK probing IMDS against a DROP waits out a full connect
+# timeout on every call, which reads as a hang rather than as a policy.
+cat > /usr/local/sbin/km-imds-fence.sh << 'KMFENCE'
+#!/bin/sh
+set -eu
+if ! command -v iptables >/dev/null 2>&1; then
+  # enforcement: ebpf and both install no iptables at all.
+  (yum install -y iptables-nft || yum install -y iptables || \
+   apt-get install -y --no-install-recommends iptables) >/dev/null 2>&1 || true
+fi
+command -v iptables >/dev/null 2>&1 || { echo "km-imds-fence: no iptables available" >&2; exit 1; }
+# -C first so a restart cannot stack duplicate rules.
+iptables -C OUTPUT -d 169.254.169.254 -m owner --uid-owner sandbox -j REJECT 2>/dev/null || \
+  iptables -A OUTPUT -d 169.254.169.254 -m owner --uid-owner sandbox -j REJECT
+KMFENCE
+chmod 0755 /usr/local/sbin/km-imds-fence.sh
+
+cat > /etc/systemd/system/km-imds-fence.service << 'KMFENCEUNIT'
+[Unit]
+Description=km IMDS fence (block uid sandbox from 169.254.169.254)
+# Before the broker so a fenced box is never briefly unfenced while agents could
+# already be dispatched.
+Before=km-secretsd.service
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/km-imds-fence.sh
+
+[Install]
+WantedBy=multi-user.target
+KMFENCEUNIT
+systemctl daemon-reload
+systemctl enable --now km-imds-fence.service
+echo "[km-bootstrap] IMDS fence active for uid sandbox"
+
+# credential_process is the other half. Without it the fence is not a boundary, it
+# is an outage: km-github, km-slack, km-h1 and the git credential helpers all read
+# AWS as uid sandbox and would lose their credentials entirely.
+#
+# A config-file credential_process outranks the IMDS provider in every AWS SDK's
+# chain, and userdata sets no AWS_ACCESS_KEY_ID for this user, so nothing outranks
+# it in turn.
+install -d -m 0700 -o sandbox -g sandbox /home/sandbox/.aws
+cat > /home/sandbox/.aws/config << 'KMAWSCONFIG'
+[default]
+credential_process = /opt/km/bin/km-creds
+KMAWSCONFIG
+printf 'region = %s\n' '{{ .AWSRegion }}' >> /home/sandbox/.aws/config
+chown sandbox:sandbox /home/sandbox/.aws/config
+chmod 0600 /home/sandbox/.aws/config
+echo "[km-bootstrap] sandbox AWS config points at km-creds"
+{{- end }}
 {{- end }}
 
 # Ensure Claude Code native binary is installed.
@@ -5649,6 +5737,10 @@ chown sandbox:sandbox "$KM_SANDBOX_BASHRC"
 echo "[km-bootstrap] Running secrets self-test..."
 KM_SANDBOX_ID={{ .SandboxID }} AWS_REGION={{ .AWSRegion }} \
   KM_SECRETS_GRANTS='{{ .SopsGrantsJSON }}' \
+{{- if .FenceIMDS }}
+  KM_FENCE_IMDS=true KM_RESOURCE_PREFIX={{ .ResourcePrefix }} \
+  KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }} \
+{{- end }}
   /opt/km/bin/km-secretsd selftest
 
 # Resume coverage: userdata does NOT re-run on stop/start (cloud-init is
@@ -5659,6 +5751,11 @@ cat > /etc/systemd/system/km-secrets-check.service << 'KMSECRETSCHECK'
 Description=km secrets self-test (resume coverage)
 After=km-secretsd.service
 Requires=km-secretsd.service
+{{- if .FenceIMDS }}
+# Assertion 6 asserts the fence; it must not run before the rule exists.
+After=km-imds-fence.service
+Requires=km-imds-fence.service
+{{- end }}
 
 [Service]
 Type=oneshot
@@ -5669,6 +5766,14 @@ Environment=KM_SANDBOX_ID={{ .SandboxID }}
 # Single-quoted for the same reason as km-secretsd.service: systemd strips
 # unquoted double quotes and would corrupt the JSON.
 Environment='KM_SECRETS_GRANTS={{ .SopsGrantsJSON }}'
+{{- if .FenceIMDS }}
+# Without these, runSelftest builds a Server with FenceEnabled false and Selftest
+# SKIPS assertion 6 entirely — reporting a clean pass over a box whose fence may
+# not have come back. Resume is exactly the path where that matters.
+Environment=KM_FENCE_IMDS=true
+Environment=KM_RESOURCE_PREFIX={{ .ResourcePrefix }}
+Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
+{{- end }}
 ExecStart=/opt/km/bin/km-secretsd selftest
 
 [Install]
@@ -5979,6 +6084,11 @@ type userDataParams struct {
 	// When false (the default, no profile change), every block is omitted entirely —
 	// existing sandbox userdata is byte-identical to pre-Phase-89 output.
 	SopsBundlePresent bool
+	// FenceIMDS gates section 5.6 — the km-imds-fence unit, the km-creds install,
+	// and the sandbox user's credential_process config. Requires
+	// SopsBundlePresent: with no bundle there is no broker to mint credentials
+	// from, so a fence would strand every helper rather than protect anything.
+	FenceIMDS bool
 	// SopsConsumers is the set of consumers to generate shims for — the grants
 	// keys, or claude+codex when grants is absent. Phase 133.
 	SopsConsumers []string
@@ -6976,6 +7086,11 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	// Phase 89: SOPS bundle present — gates section 5.5 template block.
 	// True iff profile declares spec.secrets.sopsFile (non-empty string).
 	params.SopsBundlePresent = p.Spec.Secrets != nil && p.Spec.Secrets.SopsFile != ""
+
+	// Phase 133 Wave 2: the fence. IsFenceIMDSEnabled already requires a bundle,
+	// so the IAM input (service.hcl) and this can never disagree about whether a
+	// box is fenced.
+	params.FenceIMDS = profile.IsFenceIMDSEnabled(p.Spec.Secrets)
 
 	// Phase 133: shim set and broker grants.
 	if params.SopsBundlePresent {

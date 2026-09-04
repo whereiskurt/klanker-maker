@@ -15,7 +15,7 @@ import (
 // uploading a binary nothing fetches is harmless, but listing one here before
 // the download exists turns this guard red for a reason it was not built to
 // report.
-var secretsBinaries = []string{"km-secretsd", "km-env"}
+var secretsBinaries = []string{"km-secretsd", "km-env", "km-creds"}
 
 // A sidecar the userdata downloads but km init never uploads 404s the gated
 // download and aborts bootstrap. This pairs the two mechanically.
