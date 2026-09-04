@@ -363,18 +363,30 @@ spec:
   secrets:
 `
 
+// blocking filters out IsWarning entries. ValidateSchema and Validate both
+// return []ValidationError, never error — warnings ride in the same slice.
+func blocking(errs []profile.ValidationError) []profile.ValidationError {
+	var out []profile.ValidationError
+	for _, e := range errs {
+		if !e.IsWarning {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func TestSecretsGrants_AcceptedBySchema(t *testing.T) {
 	y := grantsProfileHeader + `    sopsFile: ./secrets/x.enc.yaml
     grants:
       claude: [ANTHROPIC_API_KEY]
       codex: [OPENAI_API_KEY]
 `
-	p, err := profile.ParseYAML([]byte(y))
+	if errs := blocking(profile.ValidateSchema([]byte(y))); len(errs) > 0 {
+		t.Fatalf("schema rejected a valid grants block: %+v", errs)
+	}
+	p, err := profile.Parse([]byte(y))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
-	}
-	if err := profile.ValidateSchema([]byte(y)); err != nil {
-		t.Fatalf("schema rejected a valid grants block: %v", err)
 	}
 	if got := p.Spec.Secrets.Grants["claude"]; len(got) != 1 || got[0] != "ANTHROPIC_API_KEY" {
 		t.Errorf("Grants[claude] = %v, want [ANTHROPIC_API_KEY]", got)
@@ -384,10 +396,10 @@ func TestSecretsGrants_AcceptedBySchema(t *testing.T) {
 func TestSecretsGrants_AbsentIsValid(t *testing.T) {
 	y := grantsProfileHeader + `    sopsFile: ./secrets/x.enc.yaml
 `
-	if err := profile.ValidateSchema([]byte(y)); err != nil {
-		t.Fatalf("schema rejected a grants-less profile: %v", err)
+	if errs := blocking(profile.ValidateSchema([]byte(y))); len(errs) > 0 {
+		t.Fatalf("schema rejected a grants-less profile: %+v", errs)
 	}
-	p, err := profile.ParseYAML([]byte(y))
+	p, err := profile.Parse([]byte(y))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -397,48 +409,62 @@ func TestSecretsGrants_AbsentIsValid(t *testing.T) {
 }
 
 func TestSecretsGrants_WrongShapeRejected(t *testing.T) {
-	// A bare string instead of a list is the likely typo.
+	// A bare string instead of a list is the likely typo. additionalProperties
+	// on the grants object must constrain the VALUE to an array of strings.
 	y := grantsProfileHeader + `    sopsFile: ./secrets/x.enc.yaml
     grants:
       claude: ANTHROPIC_API_KEY
 `
-	err := profile.ValidateSchema([]byte(y))
-	if err == nil {
+	errs := blocking(profile.ValidateSchema([]byte(y)))
+	if len(errs) == 0 {
 		t.Fatal("schema accepted a scalar where a list is required")
 	}
-	if !strings.Contains(err.Error(), "grants") {
-		t.Errorf("error should name the offending path, got: %v", err)
-	}
-}
-
-func TestSecretsGrants_WithoutSopsFileWarns(t *testing.T) {
-	// grants without a bundle cannot do anything; warn, never error.
-	y := grantsProfileHeader + `    grants:
-      claude: [ANTHROPIC_API_KEY]
-`
-	p, err := profile.ParseYAML([]byte(y))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	warns := profile.ValidateWarnings(p)
 	found := false
-	for _, w := range warns {
-		if strings.Contains(w, "grants") && strings.Contains(w, "sopsFile") {
+	for _, e := range errs {
+		if strings.Contains(e.Path, "grants") || strings.Contains(e.Message, "grants") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected a warning naming grants and sopsFile, got %v", warns)
+		t.Errorf("error should name the offending path, got %+v", errs)
+	}
+}
+
+func TestSecretsGrants_WithoutSopsFileWarns(t *testing.T) {
+	// grants without a bundle cannot do anything: warn, never block.
+	y := grantsProfileHeader + `    grants:
+      claude: [ANTHROPIC_API_KEY]
+`
+	all := profile.Validate([]byte(y))
+	found := false
+	for _, e := range all {
+		if e.IsWarning && strings.Contains(e.Path, "secrets.grants") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning on spec.secrets.grants, got %+v", all)
+	}
+	// It must be a WARNING, not a blocking error.
+	for _, e := range blocking(all) {
+		if strings.Contains(e.Path, "secrets.grants") {
+			t.Errorf("grants-without-sopsFile blocked validation: %+v", e)
+		}
 	}
 }
 ```
+
+> **API note (preflight correction):** `pkg/profile` has **no** `ParseYAML` and
+> **no** `ValidateWarnings`. The real API is `profile.Parse(data []byte)
+> (*SandboxProfile, error)`, and both `profile.ValidateSchema(raw []byte)` and
+> `profile.Validate(raw []byte)` return `[]ValidationError` — never `error`.
+> Warnings are entries in that same slice carrying `IsWarning: true`. Use the
+> names above verbatim.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `go test ./pkg/profile/ -run TestSecretsGrants -v; echo "exit=$?"`
 Expected: FAIL — `p.Spec.Secrets.Grants` undefined.
-
-> If `profile.ValidateWarnings` does not exist under that exact name, run `grep -rn "func Validate" pkg/profile/validate.go` and use the repo's existing warning-collection entry point; adjust the test's call, not the repo's API.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -489,15 +515,24 @@ In `pkg/profile/schemas/sandbox_profile.schema.json`, replace the `secrets` bloc
 }
 ```
 
-In `pkg/profile/validate.go`, add to the warning collection (match the file's existing append style):
+In `pkg/profile/validate.go`, add a rule beside the existing Slack warning rules
+(they are the pattern to copy — `errs` is the accumulator and warnings ride in it
+with `IsWarning: true`):
 
 ```go
-// Phase 133: grants without a bundle is inert — there is nothing to grant.
+// Rule secrets-grants (warning, Phase 133): grants without a bundle is inert —
+// there is nothing to grant.
 if p.Spec.Secrets != nil && len(p.Spec.Secrets.Grants) > 0 && p.Spec.Secrets.SopsFile == "" {
-	warnings = append(warnings,
-		"spec.secrets.grants is set but spec.secrets.sopsFile is empty: grants are inert without a bundle")
+	errs = append(errs, ValidationError{
+		Path:      "spec.secrets.grants",
+		Message:   "spec.secrets.grants has no effect when spec.secrets.sopsFile is empty (there is no bundle to grant from)",
+		IsWarning: true,
+	})
 }
 ```
+
+Place it where the profile struct is already in scope; follow the surrounding
+guard style for how `p` is obtained in that function.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1858,6 +1893,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/whereiskurt/klanker-maker/pkg/secrets"
@@ -1997,12 +2033,17 @@ func resolveForSandbox(o SelftestOpts, consumer string) (string, error) {
 }
 
 func runSelftest(s *Server) int {
+	// secrets.DefaultConsumers is a package-level var. Never reslice it and
+	// append — consumers[:0] aliases its backing array, so the appends would
+	// overwrite the package's own defaults for the rest of the process. Always
+	// build a fresh slice.
 	consumers := secrets.DefaultConsumers
 	if len(s.Grants) > 0 {
-		consumers = consumers[:0]
+		consumers = make([]string, 0, len(s.Grants))
 		for c := range s.Grants {
 			consumers = append(consumers, c)
 		}
+		sort.Strings(consumers) // deterministic check order and audit output
 	}
 
 	checks := s.Selftest(SelftestOpts{
@@ -2358,7 +2399,8 @@ echo "[km-bootstrap] secrets self-test passed"
 {{- end }}
 ```
 
-**3e. Populate the new params.** In the params struct add:
+**3e. Populate the new params.** `pkg/compiler/userdata.go` already imports
+`encoding/json` and `fmt` but **not `sort`** — add it. In the params struct add:
 
 ```go
 	// Phase 133: consumers to generate shims for — the grants keys, or

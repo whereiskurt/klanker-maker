@@ -858,15 +858,62 @@ type LogDestination struct {
 // structured tool-gating semantics.
 
 // SecretsSpec defines SOPS-encrypted secret injection for sandboxes (Phase 89).
-// The bundle's top-level keys become environment variables in /etc/sandbox-secrets.env
-// at boot. Reserved keys "sops" and "_meta" are ignored.
+// Phase 133 superseded boot-time env-var delivery: the bundle's top-level keys
+// are no longer written to /etc/sandbox-secrets.env. Instead km-secretsd (a
+// root daemon) decrypts the bundle per request and km-env injects only the
+// keys a named consumer is granted into that one child process. Reserved
+// keys "sops" and "_meta" are ignored. See docs/brokered-secrets.md.
 type SecretsSpec struct {
 	// SopsFile is a path (relative to the profile YAML location) to a
-	// SOPS-encrypted YAML bundle. The bundle's top-level keys become
-	// environment variables in /etc/sandbox-secrets.env at boot.
-	// Reserved keys "sops" and "_meta" are ignored (sops embeds metadata).
-	// Empty (the zero value) means no secret injection — backwards compatible.
+	// SOPS-encrypted YAML bundle. Reserved keys "sops" and "_meta" are ignored.
+	// Empty (the zero value) means no secret injection.
+	//
+	// Phase 133: the bundle is no longer decrypted into /etc/sandbox-secrets.env
+	// at boot. km-secretsd decrypts it per request and km-env injects the result
+	// into one child process. See docs/brokered-secrets.md.
 	SopsFile string `yaml:"sopsFile,omitempty" json:"sopsFile,omitempty"`
+
+	// Grants maps a consumer to the bundle keys it may receive (Phase 133).
+	//
+	// A key is BOTH the binary name intercepted on PATH (a shim is generated at
+	// /opt/km/shims/<name>) and the identity presented to the broker. Absent
+	// means claude and codex each receive the whole bundle — the identical
+	// effective grant to Phase 89, merely scoped to one process rather than
+	// every login shell.
+	//
+	// Grants are blast-radius hygiene and audit legibility, NOT containment:
+	// anything running as the sandbox user can speak the broker protocol
+	// directly. See the design doc section 6.
+	Grants map[string][]string `yaml:"grants,omitempty" json:"grants,omitempty"`
+
+	// FenceIMDS blocks uid sandbox from 169.254.169.254 and re-homes every
+	// helper that reads AWS as that uid onto credentials km-secretsd mints
+	// (Phase 133 Wave 2; design doc section 4.4).
+	//
+	// A pointer rather than a plain bool because the default flips in a
+	// follow-on phase (design doc section 10.3), and at that point "the
+	// operator said false" and "the operator said nothing" have to be
+	// distinguishable. Today nil and false are identical.
+	//
+	// Read through IsFenceIMDSEnabled, never directly: the fence is only
+	// meaningful alongside SopsFile, and that requirement lives in the
+	// predicate so the IAM path and the userdata path cannot disagree.
+	FenceIMDS *bool `yaml:"fenceIMDS,omitempty" json:"fenceIMDS,omitempty"`
+}
+
+// IsFenceIMDSEnabled reports whether the IMDS fence is on for this profile.
+//
+// Nil-safe, and deliberately requires a bundle. With no SopsFile there is no
+// km-secretsd to mint narrowed credentials from, so a fence would not protect
+// anything — it would simply strand km-github, km-slack, km-h1 and the git
+// credential helpers, all of which read AWS as uid sandbox. km validate WARNs on
+// that combination rather than silently half-enabling it.
+//
+// Both the ec2spot IAM input and the userdata fence block read this ONE
+// predicate, which is what stops a box from getting the self-assume trust
+// without the iptables rule, or the reverse.
+func IsFenceIMDSEnabled(s *SecretsSpec) bool {
+	return s != nil && s.SopsFile != "" && s.FenceIMDS != nil && *s.FenceIMDS
 }
 
 // CLISpec defines operator-side defaults for km shell / km agent commands.

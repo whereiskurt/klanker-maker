@@ -3817,6 +3817,13 @@ func sidecarBuilds() []sidecarBuild {
 		// when spec.network.egress.runtimeDeny is set; a missing upload here 404s
 		// that gated download and aborts bootstrap.
 		{name: "km-netpolicy", srcDir: "cmd/km-netpolicy"},
+		// Phase 133 — the secrets broker and its client. Userdata downloads both
+		// when spec.secrets.sopsFile is set; a missing upload here 404s that
+		// gated download and aborts bootstrap. They ship together with the
+		// create-handler-rendered unit: half a deploy crash-loops the daemon.
+		{name: "km-secretsd", srcDir: "cmd/km-secretsd"},
+		{name: "km-env", srcDir: "cmd/km-env"},
+		{name: "km-creds", srcDir: "cmd/km-creds"},
 	}
 }
 
