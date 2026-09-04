@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -150,4 +151,49 @@ func (s *Server) stsAPI(ctx context.Context) (STSAPI, error) {
 		s.STS = sts.NewFromConfig(cfg)
 	})
 	return s.STS, s.stsErr
+}
+
+// runFenceProbe executes assertion 6's three clauses against the live box.
+//
+// Every clause runs AS UID SANDBOX (runuser), because uid sandbox is what the
+// fence is about; running any of them as root would prove nothing at all.
+// runuser rather than sudo, matching the rest of the platform: sudo does not
+// preserve the cgroup and skips the proxy environment.
+func (s *Server) runFenceProbe() (imdsBlocked, stsWorks, decryptDenied bool, detail string) {
+	var notes []string
+
+	// 1. IMDS must FAIL for uid sandbox. A short --connect-timeout keeps a
+	//    misconfigured DROP (rather than REJECT) from stalling the boot for the
+	//    SDK's full retry budget.
+	err := exec.Command("runuser", "-u", "sandbox", "--", "curl", "-sS", "-o", "/dev/null",
+		"--connect-timeout", "3", "-X", "PUT",
+		"http://169.254.169.254/latest/api/token",
+		"-H", "X-aws-ec2-metadata-token-ttl-seconds: 60").Run()
+	imdsBlocked = err != nil
+	notes = append(notes, fmt.Sprintf("imds-blocked=%v", imdsBlocked))
+
+	// 2. The helpers must still work — this is the clause that catches a fence
+	//    that took km-github/km-slack/km-h1 down with it. It exercises the whole
+	//    credential_process chain: ~/.aws/config -> km-creds -> broker -> STS.
+	err = exec.Command("runuser", "-u", "sandbox", "--",
+		"aws", "sts", "get-caller-identity").Run()
+	stsWorks = err == nil
+	notes = append(notes, fmt.Sprintf("sts:getcalleridentity-ok=%v", stsWorks))
+
+	// 3. THE NEGATIVE CONTROL. The narrowed credentials must FAIL to decrypt the
+	//    bundle. A success here means the session-policy Deny is not matching and
+	//    the whole fence buys nothing — which no other clause can detect, and
+	//    which an IAM simulator would report as a pass.
+	out, err := exec.Command("runuser", "-u", "sandbox", "--",
+		"/opt/km/bin/sops", "--decrypt", s.CiphertextPath).CombinedOutput()
+	decryptDenied = err != nil
+	if decryptDenied {
+		notes = append(notes, "decrypt-denied=true")
+	} else {
+		// Never let recovered plaintext reach a log line or an audit event.
+		zero(out)
+		notes = append(notes, "decrypt-denied=false (the bundle DECRYPTED as uid sandbox)")
+	}
+
+	return imdsBlocked, stsWorks, decryptDenied, strings.Join(notes, " ")
 }

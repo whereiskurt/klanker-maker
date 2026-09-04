@@ -290,10 +290,31 @@ two can never drift. A second role would need the instance role's whole policy s
 duplicated and kept in sync forever — the exact drift class that
 `TestTTLHandlerModule_EveryEnvTableHasAnIAMGrant` exists to prevent elsewhere.
 
-Cost: the trust policy must name its own ARN, which is a Terraform cycle. Broken
-by constructing the ARN string from `data.aws_caller_identity` plus the
-deterministic role name rather than referencing the resource. Role chaining caps
-sessions at one hour; `credential_process` refreshes, so this is invisible.
+Cost: **the trust policy cannot name its own ARN.** IAM resolves a principal ARN
+to a unique principal id when the policy is *saved*, so a role naming itself at
+CreateRole time fails outright — `MalformedPolicyDocument: Invalid principal in
+policy`, verified live against the application account on 2026-09-04. The
+single-pass equivalent is the **account-root principal narrowed by an
+`aws:PrincipalArn` condition** naming the role, plus a matching identity-based
+`sts:AssumeRole` grant (root-principal delegation authorizes nothing on its own —
+both halves or neither). This is exactly as narrow: `aws:PrincipalArn` is a global
+condition key AWS populates on *every* request, unlike the
+`aws:RequestTag`-on-`RunInstances` trap of Phase 126, where AWS never populates
+the key and the condition is unsatisfiable. Terraform still cannot reference the
+resource from its own argument, so the role name is spelled out from
+`data.aws_caller_identity` plus the deterministic name — that half of the original
+note was correct. Role chaining caps sessions at one hour; `credential_process`
+refreshes, so this is invisible.
+
+**The fence ships as `km-imds-fence.service`, not a bare userdata command.** There
+is no iptables persistence anywhere in this codebase and userdata does not re-run
+on stop/start, but `km-secretsd.service` and every shim are enabled units and do
+come back — so a userdata-only rule would leave a resumed box with a live broker,
+working agents, and no fence, with nothing saying so. `km-secrets-check.service` is
+ordered `After=km-imds-fence.service` so assertion 6 cannot race the rule it
+asserts, and **both** selftest invocations carry `KM_FENCE_IMDS`: without it the
+selftest builds a broker with the fence disabled and skips assertion 6 entirely,
+reporting a clean pass over an unfenced box.
 
 The two Denies are precise. The separate `kms:Decrypt` grant for SSM SecureStrings
 (`main.tf:447`, conditioned on `kms:ViaService = ssm`) targets a different key and
@@ -512,9 +533,13 @@ Its own follow-on phase, gated on a live soak proving no helper path was missed.
 
 ## 11. Open questions for planning
 
-1. Does anything running as uid `sandbox` read IMDS for **metadata** rather than
-   credentials — the `klanker:sandbox` self-census skill in particular? Sandbox id
-   and region are already in `/etc/profile.d/km-identity.sh` (userdata.go:366), so
-   this is likely covered, but it needs a live check before the fence soaks.
-2. Confirm self-assume on the instance role behaves as expected in this account's
-   SCP environment before committing to it over a parallel role.
+1. **Answered (2026-09-04).** Nothing running as uid `sandbox` reads IMDS for
+   metadata: `grep -rn '169.254.169.254' skills/ cmd/km-github cmd/km-slack
+   cmd/km-h1 cmd/km-presence` finds nothing, and sandbox id and region come from
+   `/etc/profile.d/km-identity.sh` (userdata.go:366). Clause 2 of assertion 6 is
+   the standing live check.
+2. **Answered (2026-09-04).** Self-assume was proven end to end against the
+   application account under its live SCPs: the account-root-plus-`aws:PrincipalArn`
+   trust created in one pass, the role self-assumed with an inline session policy,
+   and an explicitly denied action came back `AccessDenied ... with an explicit
+   deny in a session policy` while an allowed control succeeded.
