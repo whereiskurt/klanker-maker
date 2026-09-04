@@ -1,7 +1,7 @@
 // km-presence is the Phase 79 sandbox-side liveness daemon.
 // It replaces the per-shell bash _km_heartbeat function with a single
 // systemd-managed service that ticks every 60 seconds and emits a heartbeat
-// event into /run/km/audit-pipe if any of seven concrete signals is active.
+// event into /run/km/audit-pipe if any of eight concrete signals is active.
 //
 // See docs/superpowers/specs/2026-05-10-km-presence-daemon-design.md for design.
 package main
@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	tickInterval      = 60 * time.Second
-	defaultMailDir    = "/var/mail/km/new"
-	defaultSlackStamp = "/run/km/last-slack-inbound"
-	defaultPresStamp  = "/run/km/.presence-last-tick"
+	tickInterval          = 60 * time.Second
+	defaultMailDir        = "/var/mail/km/new"
+	defaultSlackStamp     = "/run/km/last-slack-inbound"
+	defaultPresStamp      = "/run/km/.presence-last-tick"
+	defaultHerdrConfigDir = "/home/sandbox/.config/herdr"
 )
 
 func main() {
@@ -55,7 +56,7 @@ func run() int {
 	tickNum := 0
 	runOneTick := func() {
 		tickNum++
-		active, emitted := tick(runner, sandboxID, defaultMailDir, defaultSlackStamp, defaultPresStamp)
+		active, emitted := tick(runner, sandboxID, defaultMailDir, defaultSlackStamp, defaultPresStamp, defaultHerdrConfigDir)
 		log.Info().
 			Int("tick", tickNum).
 			Bool("active", active).
