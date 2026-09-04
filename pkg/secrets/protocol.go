@@ -30,11 +30,35 @@ var DefaultConsumers = []string{"claude", "codex"}
 // binary name intercepted on PATH and the identity presented to the broker.
 type Grants map[string][]string
 
+// Op names the RPC. The zero value means OpUnseal, so the request km-env has
+// always written keeps meaning exactly what it meant.
+const (
+	OpUnseal      = ""
+	OpCredentials = "credentials"
+)
+
 // UnsealRequest is the client's ask. As is the claimed consumer identity;
 // Only narrows further and can never widen.
 type UnsealRequest struct {
+	Op   string   `json:"op,omitempty"`
 	As   string   `json:"as,omitempty"`
 	Only []string `json:"only,omitempty"`
+}
+
+// Credentials is the credential_process contract (schema Version 1), returned by
+// OpCredentials and printed verbatim by km-creds.
+//
+// The field names and their casing ARE the contract: km-creds marshals this
+// struct straight to stdout, so there is exactly one shape and it cannot drift
+// from what the AWS SDKs parse. A single wrong key and every SDK on the box
+// silently falls back down the credential chain — and behind the fence there is
+// nothing to fall back to.
+type Credentials struct {
+	Version         int    `json:"Version"`
+	AccessKeyID     string `json:"AccessKeyId"`
+	SecretAccessKey string `json:"SecretAccessKey"`
+	SessionToken    string `json:"SessionToken"`
+	Expiration      string `json:"Expiration"` // RFC3339
 }
 
 // UnsealResponse carries the values, or an Error string when the request was
@@ -43,4 +67,7 @@ type UnsealResponse struct {
 	Keys   []string          `json:"keys,omitempty"`
 	Values map[string][]byte `json:"values,omitempty"`
 	Error  string            `json:"error,omitempty"`
+
+	// Credentials answers OpCredentials, and is nil for every other RPC.
+	Credentials *Credentials `json:"credentials,omitempty"`
 }

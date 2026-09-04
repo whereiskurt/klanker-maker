@@ -68,6 +68,20 @@ type Server struct {
 	// means the default.
 	MaxConcurrentDecrypts int
 
+	// Fence mode (Phase 133 Wave 2). All five are set from the unit's
+	// Environment; with FenceEnabled false the rest are never read.
+	FenceEnabled    bool
+	ResourcePrefix  string
+	ArtifactsBucket string
+	SandboxID       string
+	STS             STSAPI
+
+	credMu       sync.Mutex
+	cachedCreds  *secrets.Credentials
+	cachedExpiry time.Time
+	stsOnce      sync.Once
+	stsErr       error
+
 	decryptSlots     chan struct{}
 	decryptSlotsOnce sync.Once
 }
@@ -153,6 +167,14 @@ func (s *Server) Handle(conn net.Conn, uid, pid uint32) {
 		return
 	}
 
+	// A credentials request performs no decrypt, so it must be answered BEFORE
+	// the semaphore below — otherwise a burst of `aws` invocations would
+	// contend for decrypt slots they never use, and could time out waiting.
+	if req.Op == secrets.OpCredentials {
+		s.handleCredentials(conn, uid, pid, req)
+		return
+	}
+
 	// Bound concurrent decrypts (see defaultMaxConcurrentDecrypts). The wait
 	// is capped by the same deadline as the I/O above; past that point the
 	// request is refused — and audited, which is more signal than less, since
@@ -207,6 +229,23 @@ func (s *Server) Handle(conn net.Conn, uid, pid uint32) {
 	for _, v := range resp.Values {
 		zero(v)
 	}
+}
+
+// handleCredentials answers the credential_process RPC km-creds speaks.
+//
+// Audited like every other broker action, and for a sharper reason: behind the
+// fence this is the ONLY way uid sandbox obtains AWS credentials at all, so the
+// record of who asked is the entire audit trail for the box's AWS activity.
+func (s *Server) handleCredentials(conn net.Conn, uid, pid uint32, req secrets.UnsealRequest) {
+	creds, err := s.mintCredentials(context.Background())
+	if err != nil {
+		s.refuse(conn, uid, pid, req, err.Error())
+		return
+	}
+	_ = s.Audit.Emit("secret_credentials", map[string]any{
+		"uid": uid, "pid": pid, "exe": exeOf(pid), "expires": creds.Expiration,
+	})
+	_ = json.NewEncoder(conn).Encode(secrets.UnsealResponse{Credentials: creds})
 }
 
 func (s *Server) refuse(conn net.Conn, uid, pid uint32, req secrets.UnsealRequest, msg string) {

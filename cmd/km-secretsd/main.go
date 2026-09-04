@@ -30,6 +30,16 @@ func main() {
 		CiphertextPath: secrets.CiphertextPath,
 		Grants:         grants,
 		Audit:          &PipeAudit{Path: secrets.AuditPipePath, SandboxID: os.Getenv("KM_SANDBOX_ID")},
+
+		// Fence mode (Phase 133 Wave 2). The compiler writes these onto both
+		// km-secretsd.service and km-secrets-check.service only when
+		// spec.secrets.fenceIMDS is on; absent, FenceEnabled is false and
+		// mintCredentials refuses rather than handing out un-narrowed
+		// credentials on a box whose IAM never gained the self-assume trust.
+		FenceEnabled:    os.Getenv("KM_FENCE_IMDS") == "true",
+		ResourcePrefix:  os.Getenv("KM_RESOURCE_PREFIX"),
+		ArtifactsBucket: os.Getenv("KM_ARTIFACTS_BUCKET"),
+		SandboxID:       os.Getenv("KM_SANDBOX_ID"),
 	}
 
 	switch os.Args[1] {
