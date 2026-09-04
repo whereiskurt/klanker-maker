@@ -158,3 +158,24 @@ func TestMintCredentials_ReturnsTheCredentialProcessShape(t *testing.T) {
 		t.Errorf("Expiration %q is not RFC3339: %v", got.Expiration, err)
 	}
 }
+
+// The session name lands in CloudTrail and in the assumed-role ARN, so it must
+// carry the install's own resource_prefix. Two installs in one account would
+// otherwise both emit "km-fenced-..." with no way to tell whose sandbox called.
+func TestSessionName_CarriesTheInstallPrefix(t *testing.T) {
+	if got := sessionName("km2", "abc123"); got != "km2-fenced-abc123" {
+		t.Errorf("sessionName = %q, want km2-fenced-abc123", got)
+	}
+	if got := sessionName("", "abc123"); got != "km-fenced-abc123" {
+		t.Errorf("empty prefix = %q, want the km default", got)
+	}
+}
+
+// STS rejects a session name over 64 characters outright, which would fail every
+// credential request on the box rather than degrading.
+func TestSessionName_TruncatesToTheSTSLimit(t *testing.T) {
+	got := sessionName("averylongresourceprefixindeed", strings.Repeat("s", 80))
+	if len(got) > 64 {
+		t.Fatalf("session name is %d chars, STS caps it at 64: %q", len(got), got)
+	}
+}

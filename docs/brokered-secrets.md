@@ -38,9 +38,10 @@ The sandbox EC2 role permanently grants `kms:Decrypt` on
 `sandboxes/{id}/secrets.enc.yaml`. Any process that can reach IMDS could
 re-derive the bundle by calling AWS directly. AWS has no notion of which uid on
 an instance is making a call, so the only place a uid-granular fence can exist
-is the OS layer — that fence (`spec.secrets.fenceIMDS`, `km-creds`,
-`ec2spot/v1.7.0`) is **Wave 2 and not shipped yet**. See § Security posture
-below for exactly what this phase does and does not guarantee in the meantime.
+is the OS layer. That fence — `spec.secrets.fenceIMDS`, `km-creds`,
+`ec2spot/v1.7.0` — **ships and is opt-in**; see § The IMDS fence below. Leave it
+off and the authority described here is unfenced, which is what § Security
+posture spells out.
 
 ## Decrypt-per-request, and its honest limit
 
@@ -273,9 +274,17 @@ Assertions (fatal aborts the boot / fails the resume check; warn does not):
    and `claude` simply runs with no secrets and dies on a confusing 401 with
    nothing in this check having complained. Assertion 5 is the only thing
    that catches it mechanically.
-6. **Not yet shipped (Wave 2).** The fence-mode assertion (sandbox-uid IMDS
-   fails, `sts get-caller-identity` as sandbox succeeds, narrowed credentials
-   fail to decrypt the bundle) ships with `spec.secrets.fenceIMDS`.
+6. **Fence mode only** (`spec.secrets.fenceIMDS: true`). Three clauses, in
+   order: uid-sandbox IMDS **fails**; `aws sts get-caller-identity` as uid
+   sandbox **succeeds**; the narrowed credentials **fail** to decrypt the
+   bundle. (fatal) The check is absent entirely on a profile that did not opt
+   in. **The third clause is a negative control** — the fence is proven by
+   proving a decrypt fails, and nothing else in the system can detect a Deny
+   that silently does not match. An IAM simulator verdict is deliberately not
+   used and must never be substituted: AWS reports an unsatisfiable condition
+   identically to a missing statement, so a simulator tells you what a policy
+   *says*, not what AWS *enforces*. Each clause fails the check on its own and
+   the detail names which one — see the fence troubleshooting below.
 7. A `grants` key naming a binary absent from the box is reported, but only
    as a warning — `initCommandsAppend` may install it later.
 
@@ -353,9 +362,9 @@ any caller can claim `--as claude` for itself.
 and can stop `km-secretsd`, rewrite the shims, or read the ciphertext object
 and call `kms:Decrypt` itself with the instance role's own permanent
 authority — bypassing the broker entirely. The real control is
-`privileged: false`. (Wave 2's `fenceIMDS` will make `km validate` WARN when
-it is combined with `privileged: true`, since the fence is equally
-defeatable by sudo.)
+`privileged: false`. **`fenceIMDS` does not change this** — sudo can flush the
+iptables rule as easily as it can stop the daemon, so the fence is worth
+exactly as much on a privileged box as everything else here: nothing.
 
 **The agent process still holds its keys in its own environ for the turn.**
 This has not gone away — a process running as `sandbox` can still read a
@@ -393,20 +402,164 @@ Existing sandboxes keep today's (pre-Phase-133) behaviour until
 `km destroy && km create` — the broker and client binaries are fetched at
 boot, and there is no in-place migration path for a running box.
 
-## Known deferrals — Wave 2
+## The IMDS fence (`spec.secrets.fenceIMDS`)
 
-`spec.secrets.fenceIMDS`, the `km-creds` `credential_process` helper, and the
-new `infra/modules/ec2spot/v1.7.0` (the self-assume trust policy denying
-`kms:Decrypt`/`s3:GetObject` on the secrets path for uid `sandbox`) are **not
-shipped in this wave**. `fenceIMDS` is a reserved field name only — it is
-**not yet declared in `SecretsSpec` or the JSON schema**, and because the
-schema's `secrets` object is `additionalProperties: false`, setting
-`spec.secrets.fenceIMDS` in a profile today gets that profile **rejected by
-`km validate`**, not silently ignored. Until Wave 2 lands, the instance
-role's decrypt authority described above is not fenced at the OS/network
-layer — only the broker's own socket permissions and the shim wiring stand
-between uid `sandbox` and either going through `km-env` (the intended path)
-or, on a privileged profile, straight to KMS/S3 (unfenced regardless of
-wave). See
-`docs/superpowers/specs/2026-09-04-brokered-secret-unsealing-design.md` §4.4
-and §9.1 for the design.
+Wave 1 removed the *dump*. It did not remove the *authority*: the instance role
+permanently holds both halves of the decrypt — `kms:Decrypt` on this install's
+`alias/{prefix}-sandbox-secrets` and `s3:GetObject` on the ciphertext object — so
+anything on the box that can reach IMDS can re-derive the whole bundle regardless
+of `grants`. AWS has no notion of *which uid on an instance* is calling it, so a
+uid-granular fence can only exist at the OS/network layer. That is this.
+
+```yaml
+spec:
+  secrets:
+    sopsFile: ./secrets/mine.enc.yaml
+    fenceIMDS: true          # opt-in; default false
+```
+
+Only meaningful alongside `sopsFile` — with no bundle there is no broker to mint
+credentials from, so a fence would strand every helper rather than protect
+anything. `km validate` warns on that combination.
+
+### What it does, in two halves that are only useful together
+
+**Half one — block the direct path.** `km-imds-fence.service` installs, in the
+**filter** table:
+
+```
+iptables -A OUTPUT -d 169.254.169.254 -m owner --uid-owner sandbox -j REJECT
+```
+
+Not the nat table: the nat-table IMDS rule you will also see is a *different*
+rule with the opposite purpose (it `RETURN`s IMDS traffic so IMDSv2 keeps
+working), and it only exists under `enforcement: proxy` — a fence written there
+would be silently absent under `ebpf` and `both`. `REJECT`, not `DROP`: against
+a `DROP` every SDK probe waits out a full connect timeout, which reads as a hang
+rather than as a policy.
+
+**A systemd unit, not a bare userdata command, and that is load-bearing.** There
+is no iptables persistence anywhere in km, and userdata does not re-run on
+stop/start (cloud-init is per-instance) — but `km-secretsd.service` and every
+shim *are* enabled units and do come back. A userdata-only rule would leave a
+resumed box with a live broker, working agents, and no fence, with nothing saying
+so.
+
+**Half two — re-home the helpers.** `km-github`, `km-slack`, `km-h1` and the git
+credential helpers all read SSM **as uid `sandbox`**, so a bare fence breaks all
+of them. The sandbox user's `~/.aws/config` therefore names a `credential_process`:
+
+```ini
+[default]
+credential_process = /opt/km/bin/km-creds
+region = us-east-1
+```
+
+Every AWS SDK picks this up transparently — **no helper binary changed at all** —
+and a config-file `credential_process` outranks the IMDS provider in every SDK's
+chain, with nothing outranking it in turn (userdata sets no `AWS_ACCESS_KEY_ID`
+for this user).
+
+`km-creds` is deliberately the dumbest component in the phase: it asks the broker
+and prints the answer verbatim. It never calls STS and *cannot* reach IMDS — it
+runs as uid `sandbox`, which is exactly what the fence blocks. All of the policy
+lives in `km-secretsd`, which is root and unfenced.
+
+### The two Denies, verbatim
+
+The broker self-assumes the instance role with this inline session policy
+(`pkg/secrets.SessionPolicy` — one definition, read by the broker and its tests):
+
+```json
+{"Version":"2012-10-17","Statement":[
+ {"Sid":"InheritTheInstanceRole","Effect":"Allow","Action":"*","Resource":"*"},
+ {"Sid":"DenySecretsBundleKMS","Effect":"Deny","Action":"kms:Decrypt","Resource":"*",
+  "Condition":{"StringEquals":{"kms:ResourceAliases":"alias/{prefix}-sandbox-secrets"}}},
+ {"Sid":"DenySecretsBundleObject","Effect":"Deny","Action":"s3:GetObject",
+  "Resource":"arn:aws:s3:::{artifacts-bucket}/sandboxes/{sandbox-id}/secrets.enc.yaml"}
+]}
+```
+
+Three things about it are deliberate:
+
+- **The `Allow` is not decoration.** A session policy *intersects* with the
+  role's identity policies, so a document carrying only Denies would grant
+  nothing at all and every helper would break the instant the fence came up.
+- **The KMS Deny is conditioned, never blanket.** An unconditional
+  `kms:Decrypt` Deny would also kill the SSM SecureString reads the helpers
+  depend on — a *different* key, granted under `kms:ViaService = ssm` — which is
+  precisely the breakage the fence exists to avoid.
+- **The S3 Deny names one object, not a prefix.**
+
+**Self-assume rather than a parallel role is the load-bearing choice.** The
+narrowed credentials are then *definitionally* the instance role minus two
+Denies, so the two can never drift. A parallel role would need the instance
+role's whole policy set duplicated and kept in sync forever.
+
+The trust side uses the **account-root principal narrowed by an
+`aws:PrincipalArn` condition** naming the role, plus a matching identity-based
+`sts:AssumeRole` grant. That is not a style choice: IAM resolves a principal ARN
+to a unique id when the policy is *saved*, so a role naming itself at CreateRole
+time fails with `MalformedPolicyDocument: Invalid principal in policy`. The
+root-plus-condition form is exactly as narrow — `aws:PrincipalArn` is a global
+condition key AWS populates on every request. Root-principal delegation
+authorizes nothing on its own, which is why both halves ship together.
+
+Sessions are capped at one hour (role chaining); `credential_process` refreshes,
+so this is invisible. The broker caches a live credential until five minutes
+before expiry, so a poller shelling out to `aws` in a loop does not mint one per
+call.
+
+### What the fence is NOT
+
+**It is not containment against a determined caller.** Uid `sandbox` can still
+invoke `km-creds`, exactly as it can still speak the broker protocol directly.
+What the fence removes is the **unmediated** path to the instance role — the
+`curl 169.254.169.254` that needed no km component at all and left no km record.
+Everything that remains is brokered, audited (`secret_credentials`, with uid,
+pid and exe), and narrowed.
+
+This is the same honest boundary `grants` has, and for the same reason: read the
+security-posture section above and take it literally. **On `privileged: true`
+none of it holds** — sudo can flush the iptables rule, stop the broker, or read
+the ciphertext and call KMS with the instance role's own permanent authority. The
+real control is `privileged: false`.
+
+### Troubleshooting the fence
+
+The selftest's `fence` check names its failing clause. Read it first:
+
+- **"uid sandbox can still reach IMDS"** — the rule is not installed.
+  `systemctl status km-imds-fence`; on `enforcement: ebpf`/`both` the box ships
+  no iptables by default and the unit installs it, so check whether that install
+  failed. Confirm with
+  `iptables -S OUTPUT | grep 169.254.169.254`.
+- **"uid sandbox cannot call sts:GetCallerIdentity"** — the fence took the
+  helpers with it, which is an outage, not a tightening. Check
+  `/home/sandbox/.aws/config` exists and names `credential_process`, that
+  `/opt/km/bin/km-creds` is present and executable, and run
+  `runuser -u sandbox -- /opt/km/bin/km-creds` directly: it prints a diagnosable
+  error naming the broker.
+- **"the narrowed credentials CAN still decrypt the secrets bundle"** — the
+  negative control failed, so the fence buys nothing. The usual cause is the
+  `kms:ResourceAliases` condition not matching the key's real aliases; check
+  `aws kms list-aliases` against `alias/{prefix}-sandbox-secrets`.
+- **`AccessDenied` on the assume, naming the role** — the sandbox predates
+  `ec2spot/v1.7.0`, or `km init` has not applied it. The self-assume trust and
+  its matching grant live in that module version; both halves are required.
+
+### Deploy surface
+
+`make build` + `make build-lambdas` + `km init --dry-run=false`.
+
+**Not `--sidecars`** — the IAM change (`ec2spot/v1.7.0`) needs a full terragrunt
+apply, and the userdata carrying the fence unit and `~/.aws/config` rides in the
+create-handler zip, which `--sidecars` does not rebuild.
+
+**Do not split the deploy.** `km-creds` is uploaded by `buildAndUploadSidecars`
+while the `~/.aws/config` that invokes it is rendered by the create-handler: ship
+one half and a fenced box either fetches a binary nothing references, or points
+`credential_process` at a binary that is not there and loses AWS access for uid
+`sandbox` entirely.
+
+Existing sandboxes keep Wave 1 behaviour until `km destroy && km create`.

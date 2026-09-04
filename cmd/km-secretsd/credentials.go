@@ -79,7 +79,7 @@ func (s *Server) mintCredentials(ctx context.Context) (*secrets.Credentials, err
 
 	out, err := api.AssumeRole(ctx, &sts.AssumeRoleInput{
 		RoleArn:         aws.String(roleARN),
-		RoleSessionName: aws.String(sessionName(s.SandboxID)),
+		RoleSessionName: aws.String(sessionName(s.ResourcePrefix, s.SandboxID)),
 		Policy:          aws.String(policy),
 		DurationSeconds: aws.Int32(chainedSessionSeconds),
 	})
@@ -104,11 +104,21 @@ func (s *Server) mintCredentials(ctx context.Context) (*secrets.Credentials, err
 	return creds, nil
 }
 
-// sessionName builds an STS role session name. STS caps it at 64 characters and
-// rejects anything longer outright, so a long sandbox id must truncate rather
-// than fail every credential request on the box.
-func sessionName(sandboxID string) string {
-	n := "km-fenced-" + sandboxID
+// sessionName builds an STS role session name.
+//
+// The prefix comes from the install's own resource_prefix rather than a literal
+// "km-": this name lands in CloudTrail and in the assumed-role ARN, and two
+// installs sharing one account would otherwise both emit "km-fenced-..." with no
+// way to tell whose sandbox made the call.
+//
+// STS caps the name at 64 characters and rejects anything longer outright, so a
+// long prefix + sandbox id must truncate rather than fail every credential
+// request on the box.
+func sessionName(resourcePrefix, sandboxID string) string {
+	if resourcePrefix == "" {
+		resourcePrefix = "km"
+	}
+	n := resourcePrefix + "-fenced-" + sandboxID
 	if len(n) > 64 {
 		n = n[:64]
 	}
