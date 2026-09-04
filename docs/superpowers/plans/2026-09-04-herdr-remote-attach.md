@@ -114,7 +114,7 @@ func TestFetchAndUploadHerdr_SkipsDownloadWhenCached(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `go test ./internal/app/cmd/ -run 'TestHerdr(S3Key|Version|.*Cached)' -v`
+Run: `go test ./internal/app/cmd/ -run 'TestHerdr|TestFetchAndUploadHerdr' -v`
 Expected: FAIL to compile — `undefined: herdrVersion`, `undefined: fetchAndUploadHerdr`, and `read herdr.go: no such file or directory`.
 
 - [ ] **Step 3: Add the version constant and the mirror function**
@@ -200,7 +200,7 @@ printf '// Package cmd — herdr.go\n// km herdr: see docs/superpowers/specs/202
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `go test ./internal/app/cmd/ -run 'TestHerdr(S3Key|Version|.*Cached)' -v; echo "exit=$?"`
+Run: `go test ./internal/app/cmd/ -run 'TestHerdr|TestFetchAndUploadHerdr' -v; echo "exit=$?"`
 Expected: PASS, `exit=0`.
 
 - [ ] **Step 7: Commit**
