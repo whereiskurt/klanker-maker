@@ -15,7 +15,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: km-secretsd serve")
+		fmt.Fprintln(os.Stderr, "usage: km-secretsd serve|selftest")
 		os.Exit(2)
 	}
 
@@ -35,7 +35,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		os.Exit(runServe(srv))
-	// The selftest verb is added in Task 7, once Selftest exists.
+	case "selftest":
+		os.Exit(runSelftest(srv))
 	default:
 		fmt.Fprintf(os.Stderr, "km-secretsd: unknown verb %q\n", os.Args[1])
 		os.Exit(2)
