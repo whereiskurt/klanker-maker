@@ -1,0 +1,9 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-tools-herdr
+  abstract: true
+spec:
+  execution:
+    initCommandsAppend:
+      - "true # binaries/herdr — filled in by Task 2"

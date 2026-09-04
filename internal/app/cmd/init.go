@@ -3932,12 +3932,27 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 		return fmt.Errorf("fetchAndUploadSops: %w", err)
 	}
 
+	// Fetch and upload the herdr binary for km herdr / base/tools/herdr.
+	// Non-fatal, unlike sops: a missing sops aborts boot because secrets are
+	// load-bearing, whereas a missing herdr costs one `km herdr start`, which
+	// re-ensures the binary over SSM anyway.
+	if err := fetchAndUploadHerdr(buildDir, bucket); err != nil {
+		fmt.Printf("  [warn] herdr upload failed: %v\n", err)
+	}
+
 	return nil
 }
 
 const otelcolContribVersion = "0.120.0"
 
 const sopsVersion = "3.13.1"
+
+// herdrVersion pins the Herdr release mirrored to s3://{bucket}/binaries/herdr.
+//
+// The release publishes bare per-platform binaries and NO checksum file, so
+// there is no published digest to verify against — this pin is the entire
+// supply-chain control. Bump it deliberately, like any other dependency.
+const herdrVersion = "0.8.2"
 
 // FetchAndUploadSops downloads sops v{sopsVersion} (cached in build/) and uploads
 // to s3://{bucket}/binaries/sops via aws-cli.
@@ -4019,6 +4034,43 @@ func verifySHA256(path, checksumsPath, entryName string) error {
 	if got := hex.EncodeToString(h.Sum(nil)); got != want {
 		return fmt.Errorf("checksum mismatch for %s: want %s, got %s", entryName, want, got)
 	}
+// FetchAndUploadHerdr downloads herdr v{herdrVersion} linux/amd64 (cached in
+// build/) and uploads it to s3://{bucket}/binaries/herdr.
+//
+// Exported so it can be tested from the _test package (cmd_test).
+func FetchAndUploadHerdr(buildDir, bucket string) error {
+	return fetchAndUploadHerdr(buildDir, bucket)
+}
+
+// fetchAndUploadHerdr is the internal implementation — see FetchAndUploadHerdr.
+//
+// Mirrors fetchAndUploadSops. Herdr ships a bare binary rather than a tarball,
+// so there is no extraction step.
+func fetchAndUploadHerdr(buildDir, bucket string) error {
+	binaryPath := filepath.Join(buildDir, "herdr")
+	if _, err := os.Stat(binaryPath); err == nil {
+		fmt.Printf("  herdr already in %s (skip download)\n", binaryPath)
+	} else {
+		url := fmt.Sprintf("https://github.com/herdrdev/herdr/releases/download/v%s/herdr-linux-x86_64",
+			herdrVersion)
+		fmt.Printf("  Downloading herdr v%s...\n", herdrVersion)
+		dlCmd := exec.Command("curl", "-fsSL", url, "-o", binaryPath)
+		if out, err := dlCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("download herdr: %s: %w", string(out), err)
+		}
+		if err := os.Chmod(binaryPath, 0o755); err != nil {
+			return fmt.Errorf("chmod herdr: %w", err)
+		}
+	}
+	s3Key := "binaries/herdr"
+	fmt.Printf("  Uploading herdr to s3://%s/%s...\n", bucket, s3Key)
+	uploadCmd := exec.Command("aws", "s3", "cp", binaryPath,
+		fmt.Sprintf("s3://%s/%s", bucket, s3Key),
+		"--profile", "klanker-terraform")
+	if out, err := uploadCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("upload herdr: %s: %w", string(out), err)
+	}
+	fmt.Printf("  Uploaded herdr\n")
 	return nil
 }
 
