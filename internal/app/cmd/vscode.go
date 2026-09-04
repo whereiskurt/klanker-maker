@@ -120,10 +120,14 @@ func resolveVSCodeDeps(ctx context.Context, cfg *config.Config, fetcher SandboxF
 	return fetcher, execFn, ssmClient, nil
 }
 
-// runVSCodeStart resolves the sandbox, verifies the local private key, runs the SSM pre-flight
-// check, upserts the ssh-config entry, prints the operator instruction block, then opens the
-// foreground SSM port-forward.
-func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
+// connectPrep is everything km vscode start and km herdr start do identically:
+// probe the local port, resolve the sandbox and its instance, locate the local
+// private key, and upsert the ~/.ssh/config entry. It stops short of the SSM
+// pre-flight (each command probes different facts) and of the banner.
+//
+// Returns the instance id, the AWS region, the ssh-config alias, and the local
+// private key path.
+func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, localPort int) (instanceID, region, alias, privPath string, err error) {
 	// Probe the local port before doing any AWS work or writing ssh-config.
 	// Common debug ports (9222 Chrome DevTools, 9229 Node, 5900 VNC) often
 	// already have a process bound — session-manager-plugin will silently
@@ -131,31 +135,48 @@ func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetche
 	// "Connection closed by 127.0.0.1" error.
 	probeLn, probeErr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
 	if probeErr != nil {
-		return fmt.Errorf("local port %d is already in use — pick a different one with --local-port (e.g. 22122)", localPort)
+		return "", "", "", "", fmt.Errorf("local port %d is already in use — pick a different one with --local-port (e.g. %d)", localPort, localPort+100)
 	}
 	probeLn.Close()
 
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 	if err != nil {
-		return fmt.Errorf("fetch sandbox: %w", err)
+		return "", "", "", "", fmt.Errorf("fetch sandbox: %w", err)
 	}
-	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	instanceID, err = extractResourceID(rec.Resources, ":instance/")
 	if err != nil {
-		return fmt.Errorf("find EC2 instance: %w", err)
+		return "", "", "", "", fmt.Errorf("find EC2 instance: %w", err)
 	}
 
-	// Locate the local private key; fail fast with a portability hint if absent.
+	privPath, err = sandboxKeyPath(sandboxID)
+	if err != nil {
+		return "", "", "", "", err
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return fmt.Errorf("locate home directory: %w", err)
+		return "", "", "", "", fmt.Errorf("locate home directory: %w", err)
 	}
-	privPath := filepath.Join(home, ".km", "keys", sandboxID)
-	if _, statErr := os.Stat(privPath); statErr != nil {
-		if os.IsNotExist(statErr) {
-			return fmt.Errorf("private key for %s not found at %s. If you created this sandbox on a different machine, copy the ~/.km/keys/%s* files over",
-				sandboxID, privPath, sandboxID)
-		}
-		return fmt.Errorf("stat private key: %w", statErr)
+	alias = "km-" + sandboxID
+	if err := UpsertHost(filepath.Join(home, ".ssh", "config"), alias, HostOptions{
+		HostName:     "localhost",
+		Port:         localPort,
+		User:         "sandbox",
+		IdentityFile: privPath,
+	}); err != nil {
+		return "", "", "", "", fmt.Errorf("upsert ssh-config: %w", err)
+	}
+
+	return instanceID, rec.Region, alias, privPath, nil
+}
+
+// runVSCodeStart resolves the sandbox, verifies the local private key, runs the SSM pre-flight
+// check, upserts the ssh-config entry, prints the operator instruction block, then opens the
+// foreground SSM port-forward.
+func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
+	instanceID, region, alias, _, err := connectPrep(ctx, fetcher, sandboxID, localPort)
+	if err != nil {
+		return err
 	}
 
 	// Single-round-trip SSM pre-flight check.
@@ -167,19 +188,6 @@ func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetche
 		return err
 	}
 
-	// Upsert the ~/.ssh/config entry.
-	sshConfigPath := filepath.Join(home, ".ssh", "config")
-	alias := "km-" + sandboxID
-	opts := HostOptions{
-		HostName:     "localhost",
-		Port:         localPort,
-		User:         "sandbox",
-		IdentityFile: privPath,
-	}
-	if err := UpsertHost(sshConfigPath, alias, opts); err != nil {
-		return fmt.Errorf("upsert ssh-config: %w", err)
-	}
-
 	// Print the connection block before opening the blocking port-forward.
 	fmt.Printf("✓ Updated ~/.ssh/config (Host: %s)\n", alias)
 	fmt.Printf("✓ Forwarding localhost:%d → sandbox:22\n\n", localPort)
@@ -189,7 +197,6 @@ func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetche
 	// Open the SSM port-forward with auto-reconnect. sshd survives a dropped tunnel,
 	// so reconnecting lets VS Code re-establish over the same forward. An SSH-banner
 	// liveness probe recycles a silently-hung plugin.
-	region := rec.Region
 	buildPF := func(c context.Context) *exec.Cmd {
 		return buildPortForwardCmd(c, instanceID, region, strconv.Itoa(localPort), "22")
 	}
