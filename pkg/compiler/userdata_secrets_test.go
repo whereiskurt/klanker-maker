@@ -210,6 +210,37 @@ func TestUserdataSopsBlock_ShimExecsAbsolutePath(t *testing.T) {
 	}
 }
 
+// TestUserdataSopsBlock_ShimCarriesLiteralTargetForSelftest pins a cross-task
+// contract. cmd/km-secretsd/selftest.go:shimTarget reads the generated shim to
+// check the real binary still exists. The exec line is NOT the place to read it
+// from: it carries the escaped token "\$KM_REAL", which the heredoc renders as a
+// literal "$KM_REAL" on disk — os.Stat on that always fails, so the shim check
+// would report FATAL on every boot of every sops sandbox (aborting the boot) and
+// the PATH-race check after it would never run at all.
+//
+// The baked absolute path lives on the KM_REAL= line, which the UNQUOTED heredoc
+// expands at generation time. That line is what a parser must read, and the
+// generated shim says so in a comment so the coupling is discoverable from the
+// file itself.
+func TestUserdataSopsBlock_ShimCarriesLiteralTargetForSelftest(t *testing.T) {
+	p := sopsBundleProfile()
+	out, err := generateUserData(p, "sb-shimparse", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	// Unescaped on purpose: this one expands when the heredoc is written, which
+	// is what puts a real path in the file. Escaping it would break the parser.
+	if !strings.Contains(out, "\nKM_REAL=\"$KM_SHIM_TARGET\"\n") {
+		t.Error("the shim's KM_REAL= line must carry the generation-time-expanded " +
+			"absolute path: km-secretsd's selftest parses it to verify the target exists")
+	}
+	if !strings.Contains(out, "# NOTE: km-secretsd selftest (shimTarget) parses this KM_REAL= line") {
+		t.Error("the generated shim must say that a parser depends on the KM_REAL= line, " +
+			"or the next person to reformat the shim silently breaks the boot check")
+	}
+}
+
 // TestUserdataSopsBlock_BootCheckAborts verifies the boot self-test runs inline
 // during userdata. Under `set -euo pipefail` a non-zero exit aborts the boot —
 // the same disposition as the Phase 89 sops-decrypt FATAL it replaces. A box

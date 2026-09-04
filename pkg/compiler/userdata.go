@@ -5550,6 +5550,7 @@ if [ -n "$KM_SHIM_TARGET" ]; then
 # would re-find this shim on PATH and recurse. If the baked target has since
 # moved (userdata re-runs Claude's install.cjs idempotently), fall back to a
 # PATH search with the shim directory removed.
+# NOTE: km-secretsd selftest (shimTarget) parses this KM_REAL= line to verify the target exists. Keep the literal path here.
 KM_REAL="$KM_SHIM_TARGET"
 if [ ! -x "\$KM_REAL" ]; then
   KM_REAL="\$(PATH="\$(echo "\$PATH" | tr ':' '\n' | grep -v '^/opt/km/shims$' | paste -sd: -)" command -v {{ . }} 2>/dev/null)"
