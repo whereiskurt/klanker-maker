@@ -189,10 +189,13 @@ Two RPCs:
   plaintext buffer.
 - `Credentials() → STS credential JSON` — fence mode only, §4.4.
 
-Prefer the `getsops/sops` Go API over shelling to `/opt/km/bin/sops`, so plaintext
-never transits a pipe or a second process's memory. If the library does not import
-cleanly under `CGO_ENABLED=0` (required for the sidecar cross-compile, per the
-`km-capture` precedent), fall back to exec with a pipe and record it as debt.
+**Decrypt via the `getsops/sops` Go API, not by shelling to `/opt/km/bin/sops`**
+(operator decision, 2026-09-04), so plaintext never transits a pipe or a second
+process's memory and the buffer stays ours to zero. The sidecar cross-compile
+requires `CGO_ENABLED=0` (the same constraint that forced pure-Go `AF_PACKET` on
+`km-capture`); if the library will not build under it, fall back to exec with a
+pipe, record it as debt, and note that the zeroing guarantee then covers only our
+side of the pipe.
 
 Also carries the `selftest` verb (§7).
 
@@ -501,11 +504,9 @@ Its own follow-on phase, gated on a live soak proving no helper path was missed.
 
 ## 11. Open questions for planning
 
-1. Does `getsops/sops` import cleanly as a Go library under `CGO_ENABLED=0`? If
-   not, the exec fallback is acceptable for v1 but should be recorded as debt.
-2. Does anything running as uid `sandbox` read IMDS for **metadata** rather than
+1. Does anything running as uid `sandbox` read IMDS for **metadata** rather than
    credentials — the `klanker:sandbox` self-census skill in particular? Sandbox id
    and region are already in `/etc/profile.d/km-identity.sh` (userdata.go:366), so
    this is likely covered, but it needs a live check before the fence soaks.
-3. Confirm self-assume on the instance role behaves as expected in this account's
+2. Confirm self-assume on the instance role behaves as expected in this account's
    SCP environment before committing to it over a parallel role.
