@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -38,7 +37,7 @@ import (
 type preflightError struct{ err error }
 
 func (e *preflightError) Error() string { return e.err.Error() }
-func (e *preflightError) Unwrap() error  { return e.err }
+func (e *preflightError) Unwrap() error { return e.err }
 
 // ShellExecFunc is the function signature for executing the AWS CLI subprocess.
 // It is package-level so tests can replace it to capture args without executing.
@@ -71,6 +70,17 @@ var fetchEC2ObservedJSONFn = fetchEC2ObservedJSON
 func runSSMInteractiveSubprocess(execFn ShellExecFunc, c *exec.Cmd) error {
 	signal.Ignore(os.Interrupt, syscall.SIGQUIT, syscall.SIGTSTP)
 	defer signal.Reset(os.Interrupt, syscall.SIGQUIT, syscall.SIGTSTP)
+
+	// Clear mouse reporting / bracketed paste / alt-screen state around the
+	// session. On the way OUT because a session killed by the SSM idle timeout
+	// (or a dropped websocket) never lets the remote program emit its own
+	// teardown, leaving those modes latched on locally — the "digits and
+	// semicolons on every scroll" symptom. On the way IN so a terminal already
+	// dirtied by an earlier drop is repaired rather than inherited. Both are
+	// no-ops on a terminal that is already clean.
+	restoreTerminal(c.Stdout)
+	defer restoreTerminal(c.Stdout)
+
 	return execFn(c)
 }
 
