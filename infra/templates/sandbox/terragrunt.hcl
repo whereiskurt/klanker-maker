@@ -26,7 +26,7 @@ locals {
   # (pkg/terragrunt/substrate_version_pin_test.go) now fails the build if any
   # substrate here resolves to a module directory that does not exist.
   substrate_module_versions = {
-    ec2spot = "v1.6.0"
+    ec2spot = "v1.7.0"
     ecs     = "v1.0.0"
   }
   substrate_module_version = lookup(local.substrate_module_versions, local.svc_config.locals.substrate_module, "v1.0.0")
