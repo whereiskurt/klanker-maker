@@ -1,24 +1,63 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/whereiskurt/klanker-maker/pkg/secrets"
 )
 
+// opts builds the UNBOUND-BY-DESIGN case: SocketPath "" means this caller
+// never binds a socket, so the socket assertion is skipped and assertion 3
+// falls back to an in-process LoadBundle. It is the one and only skip the
+// selftest allows, and it is explicit rather than ambient — a socket path that
+// merely does not exist is FATAL (see TestSelftest_DeadBrokerIsFatal), because
+// that is exactly what a broker that failed to start looks like.
 func opts(t *testing.T, shimDir string, consumers []string, resolve func(string) (string, error)) SelftestOpts {
 	t.Helper()
 	return SelftestOpts{
 		ShimDir:    shimDir,
 		Consumers:  consumers,
-		SocketPath: filepath.Join(t.TempDir(), "s.sock"),
+		SocketPath: "",
+		SocketWait: 200 * time.Millisecond,
 		LookPathAs: resolve,
 	}
+}
+
+// serveOnSocket starts a real broker on a fresh unix socket and returns its
+// path, chmod'ed 0660 exactly as km-secretsd.service's ExecStartPost does.
+// Callers get the HEALTHY case: a live daemon that answers the protocol.
+func serveOnSocket(t *testing.T, s *Server) string {
+	t.Helper()
+	// Unix socket paths are capped near 104 bytes on darwin; t.TempDir() under
+	// a long test name can exceed that, so use a short base.
+	dir, err := os.MkdirTemp("", "kmsd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s.sock")
+
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sock, 0o660); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = s.Serve(ctx, ln) }()
+	t.Cleanup(func() { cancel(); <-done })
+	return sock
 }
 
 func find(checks []Check, name string) *Check {
@@ -225,7 +264,7 @@ func TestRunSelftest_ExitsNonZeroOnFatalFailure(t *testing.T) {
 	// verb must fail loudly — this is the boot-abort path under
 	// set -euo pipefail.
 	s := &Server{CiphertextPath: filepath.Join(t.TempDir(), "absent.enc.yaml"), Audit: NopAudit{}}
-	if got := runSelftest(s); got == 0 {
+	if got := runSelftest(s, ""); got == 0 {
 		t.Errorf("runSelftest() = %d, want non-zero when a fatal check fails", got)
 	}
 }
@@ -239,7 +278,7 @@ func TestRunSelftest_ExitsZeroWhenChecksPassOrWarnOnly(t *testing.T) {
 	// machine — that degrades to a non-fatal "no shim generated" warning per
 	// consumer, not a failure.
 	s := &Server{CiphertextPath: p, Audit: NopAudit{}}
-	if got := runSelftest(s); got != 0 {
+	if got := runSelftest(s, ""); got != 0 {
 		t.Errorf("runSelftest() = %d, want 0 when every check passes or only warns", got)
 	}
 }
@@ -252,7 +291,7 @@ func TestRunSelftest_GrantsProduceConsumerListWithoutMutatingDefaults(t *testing
 
 	aud := &recordingAudit{}
 	s := &Server{CiphertextPath: p, Grants: map[string][]string{"latertool": {"A"}}, Audit: aud}
-	_ = runSelftest(s)
+	_ = runSelftest(s, "")
 
 	if len(aud.events) != 1 {
 		t.Fatalf("got %d audit events, want 1", len(aud.events))
@@ -278,7 +317,7 @@ func TestRunSelftest_EmitsSecretSelftestAuditEvent(t *testing.T) {
 	aud := &recordingAudit{}
 	s := &Server{CiphertextPath: p, Audit: aud}
 
-	_ = runSelftest(s)
+	_ = runSelftest(s, "")
 
 	if len(aud.events) != 1 {
 		t.Fatalf("got %d audit events, want 1", len(aud.events))
@@ -358,4 +397,125 @@ func TestWriteSelftestResult_MissingDirectoryIsBestEffort(t *testing.T) {
 	// the selftest itself.
 	writeSelftestResult(filepath.Join(t.TempDir(), "no-such-dir", "result.json"),
 		[]Check{{Name: "x", OK: true, Fatal: true}})
+}
+
+// --- Finding 2: the socket check must be able to FAIL ----------------------
+
+// TestSelftest_DeadBrokerIsFatal is the whole point of the socket assertion.
+//
+// A broker that never started — bad KM_SECRETS_GRANTS JSON (main exits 1), a
+// bind failure, any crash — leaves no socket. An earlier revision appended the
+// socket Check only when os.Stat SUCCEEDED, so this exact case was silently
+// omitted rather than failed, and the boot printed "secrets self-test passed"
+// over a permanently dead broker while every agent turn failed at km-env
+// connect time.
+func TestSelftest_DeadBrokerIsFatal(t *testing.T) {
+	stubDecrypt(t, "A: 1\n", nil)
+	p := filepath.Join(t.TempDir(), "secrets.enc.yaml")
+	_ = osWriteFile(p)
+	s := &Server{CiphertextPath: p, Audit: NopAudit{}}
+
+	o := opts(t, t.TempDir(), nil, nil)
+	o.SocketPath = filepath.Join(t.TempDir(), "never-bound.sock")
+
+	start := time.Now()
+	checks := s.Selftest(o)
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Errorf("socket check waited %v, far past its %v bound", waited, o.SocketWait)
+	}
+
+	c := find(checks, "socket")
+	if c == nil {
+		t.Fatal("no socket check ran at all — a dead broker must FAIL, never be skipped")
+	}
+	if c.OK || !c.Fatal {
+		t.Errorf("socket check = %+v, want failed and fatal", c)
+	}
+
+	// And assertion 3 must not paper over it by decrypting in-process: with a
+	// socket path set, the unseal goes over the wire and there is nobody there.
+	u := find(checks, "unseal")
+	if u == nil || u.OK {
+		t.Errorf("unseal check = %+v, want failure — a dead broker cannot serve an unseal", u)
+	}
+}
+
+// TestSelftest_WrongSocketModeIsFatal: 0666 would let any local uid speak the
+// protocol, not just the sandbox user.
+func TestSelftest_WrongSocketModeIsFatal(t *testing.T) {
+	stubDecrypt(t, "A: 1\n", nil)
+	p := filepath.Join(t.TempDir(), "secrets.enc.yaml")
+	_ = osWriteFile(p)
+	s := &Server{CiphertextPath: p, Audit: NopAudit{}}
+
+	sock := serveOnSocket(t, s)
+	if err := os.Chmod(sock, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	o := opts(t, t.TempDir(), nil, nil)
+	o.SocketPath = sock
+
+	c := find(s.Selftest(o), "socket")
+	if c == nil || c.OK || !c.Fatal {
+		t.Errorf("socket check = %+v, want failed and fatal on a 0666 socket", c)
+	}
+}
+
+// TestSelftest_HealthyBrokerPassesEndToEnd proves the positive half: against a
+// LIVE daemon the socket check passes and the unseal really does travel over
+// the wire — the same protocol km-env speaks — rather than being decrypted
+// in-process. Key NAMES only, never values.
+func TestSelftest_HealthyBrokerPassesEndToEnd(t *testing.T) {
+	stubDecrypt(t, "API_KEY: supersecret\nOTHER: v\n", nil)
+	p := filepath.Join(t.TempDir(), "secrets.enc.yaml")
+	_ = osWriteFile(p)
+	s := &Server{CiphertextPath: p, Audit: NopAudit{}}
+
+	o := opts(t, t.TempDir(), nil, nil)
+	o.SocketPath = serveOnSocket(t, s)
+
+	checks := s.Selftest(o)
+
+	if c := find(checks, "socket"); c == nil || !c.OK {
+		t.Errorf("socket check = %+v, want OK against a live 0660 socket", c)
+	}
+	u := find(checks, "unseal")
+	if u == nil || !u.OK {
+		t.Fatalf("unseal check = %+v, want OK against a live broker", u)
+	}
+	if !strings.Contains(u.Detail, "API_KEY") || !strings.Contains(u.Detail, "OTHER") {
+		t.Errorf("unseal detail should name every key, got %q", u.Detail)
+	}
+	if strings.Contains(u.Detail, "supersecret") {
+		t.Error("selftest detail leaked a secret VALUE")
+	}
+}
+
+// TestRunSelftest_DeadBrokerExitsNonZero is the boot-abort path: under
+// `set -euo pipefail` in userdata §7.9 a non-zero exit stops the boot rather
+// than letting a half-working box come up and fail at its first turn.
+func TestRunSelftest_DeadBrokerExitsNonZero(t *testing.T) {
+	stubDecrypt(t, "A: 1\n", nil)
+	p := filepath.Join(t.TempDir(), "secrets.enc.yaml")
+	_ = osWriteFile(p)
+	s := &Server{CiphertextPath: p, Audit: NopAudit{}}
+
+	if got := runSelftest(s, filepath.Join(t.TempDir(), "never-bound.sock")); got == 0 {
+		t.Error("runSelftest() = 0 with no broker listening: the boot would proceed onto a dead broker")
+	}
+}
+
+// TestRunSelftest_HealthyBrokerExitsZero is the same verb's positive control —
+// without it the test above would also pass if the verb simply always failed.
+func TestRunSelftest_HealthyBrokerExitsZero(t *testing.T) {
+	stubDecrypt(t, "A: 1\n", nil)
+	p := filepath.Join(t.TempDir(), "secrets.enc.yaml")
+	_ = osWriteFile(p)
+	// No Grants ⇒ secrets.DefaultConsumers against the real secrets.ShimDir,
+	// which does not exist off-box: that degrades to non-fatal warnings.
+	s := &Server{CiphertextPath: p, Audit: NopAudit{}}
+
+	if got := runSelftest(s, serveOnSocket(t, s)); got != 0 {
+		t.Errorf("runSelftest() = %d against a live broker, want 0", got)
+	}
 }

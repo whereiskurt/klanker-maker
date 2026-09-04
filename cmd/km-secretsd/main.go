@@ -36,7 +36,7 @@ func main() {
 	case "serve":
 		os.Exit(runServe(srv))
 	case "selftest":
-		os.Exit(runSelftest(srv))
+		os.Exit(runSelftest(srv, secrets.SocketPath))
 	default:
 		fmt.Fprintf(os.Stderr, "km-secretsd: unknown verb %q\n", os.Args[1])
 		os.Exit(2)

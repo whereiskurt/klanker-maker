@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/user"
@@ -39,6 +41,10 @@ type SelftestOpts struct {
 	ShimDir    string
 	Consumers  []string
 	SocketPath string
+	// SocketWait overrides socketWait, the bound on how long the socket check
+	// waits for the broker to bind. Zero means the default. Tests shorten it so
+	// the dead-broker cases do not each cost a real five seconds.
+	SocketWait time.Duration
 	// LookPathAs reports what `command -v <consumer>` resolves to for the
 	// sandbox user. Nil means run it for real via runuser.
 	LookPathAs func(consumer string) (string, error)
@@ -65,21 +71,48 @@ func (s *Server) Selftest(o SelftestOpts) []Check {
 		checks = append(checks, Check{"ciphertext", true, true, s.CiphertextPath})
 	}
 
-	// 2. Socket present with the right mode (skipped when it has not been bound,
-	//    e.g. under test).
-	if fi, err := os.Stat(o.SocketPath); err == nil {
-		ok := fi.Mode().Perm() == 0o660
-		checks = append(checks, Check{"socket", ok, true,
-			fmt.Sprintf("%s is %04o, want 0660", o.SocketPath, fi.Mode().Perm())})
+	// 2. Socket present with the right mode.
+	//
+	// FATAL, and specifically NOT skipped when the socket is absent — that is
+	// the one condition this check exists to detect. A broker that never
+	// started (bad KM_SECRETS_GRANTS JSON, a bind failure, any crash) leaves no
+	// socket at all, and an earlier revision appended this Check only when
+	// os.Stat SUCCEEDED, so the dead-broker case was silently omitted rather
+	// than failed. The boot then printed "secrets self-test passed" over a
+	// permanently dead broker and every agent turn failed at km-env connect
+	// time. `systemctl enable --now` cannot cover the gap either: the unit is
+	// Type=simple, so it reports success as soon as the fork succeeds.
+	//
+	// The ONLY skip is the explicit unbound-by-design seam below: SocketPath ==
+	// "" means the caller never binds one (a unit test). Anything else — a
+	// missing path, a wrong mode — fails.
+	if o.SocketPath == "" {
+		// Unbound by design; nothing to assert. Never reachable on a box:
+		// runSelftest always passes secrets.SocketPath.
+	} else if fi, err := waitForSocket(o.SocketPath, o.socketWait()); err != nil {
+		checks = append(checks, Check{"socket", false, true,
+			fmt.Sprintf("%s: %v — km-secretsd is not listening, so every agent turn "+
+				"would fail at km-env connect time (systemctl status km-secretsd)",
+				o.SocketPath, err)})
+	} else if perm := fi.Mode().Perm(); perm != 0o660 {
+		checks = append(checks, Check{"socket", false, true,
+			fmt.Sprintf("%s is %04o, want 0660", o.SocketPath, perm)})
+	} else {
+		checks = append(checks, Check{"socket", true, true,
+			fmt.Sprintf("%s is 0660", o.SocketPath)})
 	}
 
-	// 3. Live end-to-end unseal. NAMES only in the detail, never values.
-	bundle, err := LoadBundle(s.CiphertextPath)
+	// 3. Live end-to-end unseal — THROUGH THE SOCKET, exactly as km-env does it.
+	//
+	// Calling LoadBundle in-process here would prove KMS and the ciphertext and
+	// say nothing about whether the broker answers, which is the half that
+	// actually breaks. Going over the wire proves the whole chain the agent
+	// depends on: socket reachable, daemon alive, grants parsed, KMS reachable,
+	// bundle decryptable. NAMES only in the detail, never values.
+	names, err := s.selftestUnseal(o.SocketPath)
 	if err != nil {
 		checks = append(checks, Check{"unseal", false, true, err.Error()})
 	} else {
-		names := bundle.Keys()
-		bundle.Zero()
 		checks = append(checks, Check{"unseal", true, true,
 			fmt.Sprintf("%d keys: %s", len(names), strings.Join(names, ", "))})
 	}
@@ -138,6 +171,98 @@ func (s *Server) Selftest(o SelftestOpts) []Check {
 	return checks
 }
 
+// socketWait bounds how long the socket check waits for the broker to bind.
+//
+// It should never actually elapse: km-secretsd.service's ExecStartPost already
+// polls for the socket and chgrp/chmods it, and `systemctl start` does not
+// return until ExecStartPost finishes, so by the time userdata reaches §7.9 the
+// socket is bound and 0660. The wait exists because the cost is asymmetric — a
+// false FATAL here aborts a boot, while a couple of wasted seconds cost
+// nothing — and because km-secrets-check.service on resume is only ordered
+// After= the daemon.
+const socketWait = 5 * time.Second
+
+func (o SelftestOpts) socketWait() time.Duration {
+	if o.SocketWait > 0 {
+		return o.SocketWait
+	}
+	return socketWait
+}
+
+// waitForSocket stats path, retrying briefly (see socketWait). It returns the
+// last error rather than a synthesized one so the failing detail names the real
+// syscall result.
+func waitForSocket(path string, d time.Duration) (os.FileInfo, error) {
+	deadline := time.Now().Add(d)
+	for {
+		fi, err := os.Stat(path)
+		if err == nil || time.Now().After(deadline) {
+			return fi, err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// selftestUnseal performs assertion 3's unseal and returns the key NAMES.
+//
+// socketPath == "" is the unbound-by-design seam (unit tests): there is no
+// broker to ask, so it falls back to an in-process LoadBundle, which still
+// proves KMS and the ciphertext. On a box socketPath is always
+// secrets.SocketPath, so the real path is always the socket.
+func (s *Server) selftestUnseal(socketPath string) ([]string, error) {
+	if socketPath == "" {
+		bundle, err := LoadBundle(s.CiphertextPath)
+		if err != nil {
+			return nil, err
+		}
+		names := bundle.Keys()
+		bundle.Zero()
+		return names, nil
+	}
+	return unsealViaSocket(socketPath)
+}
+
+// unsealViaSocket speaks the same protocol km-env speaks, against the running
+// daemon, and returns the key names it got back.
+//
+// This is a second process talking to the broker over the wire — the selftest
+// verb and the serve verb are separate invocations of this binary — so a dead
+// daemon fails here rather than being masked by an in-process decrypt.
+//
+// The protocol has no names-only mode, so the response carries values; they are
+// zeroed on every return path. The same json.Decoder-buffer gap server.go
+// documents applies (the decoder's internal buffer holds a base64 copy this
+// loop cannot reach) — stated here rather than silently inherited.
+func unsealViaSocket(socketPath string) ([]string, error) {
+	conn, err := net.DialTimeout("unix", socketPath, socketWait)
+	if err != nil {
+		return nil, fmt.Errorf("cannot reach the secrets broker at %s: %w "+
+			"(systemctl status km-secretsd)", socketPath, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+
+	// No --as: the selftest is not claiming a consumer identity, so Resolve
+	// returns the whole available set rather than one consumer's grant. Asking
+	// as a consumer would only prove that consumer's slice.
+	if err := json.NewEncoder(conn).Encode(secrets.UnsealRequest{}); err != nil {
+		return nil, fmt.Errorf("send unseal request: %w", err)
+	}
+	var resp secrets.UnsealResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil, fmt.Errorf("read unseal response: %w", err)
+	}
+	defer func() {
+		for _, v := range resp.Values {
+			zero(v)
+		}
+	}()
+	if resp.Error != "" {
+		return nil, errors.New(resp.Error)
+	}
+	return resp.Keys, nil
+}
+
 // shimTarget extracts the absolute path a generated shim execs.
 //
 // The shim generator (pkg/compiler/userdata.go, section "7.8. Consumer shims",
@@ -186,7 +311,14 @@ func resolveForSandbox(o SelftestOpts, consumer string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func runSelftest(s *Server) int {
+// runSelftest runs every assertion and returns the process exit code.
+//
+// socketPath is a parameter rather than a constant so tests can choose between
+// the three cases that matter: "" (unbound by design — no socket assertion, and
+// an in-process unseal), a path with nothing behind it (the dead-broker case,
+// which must be FATAL), and a path with a real listener (the healthy case).
+// main always passes secrets.SocketPath.
+func runSelftest(s *Server, socketPath string) int {
 	// secrets.DefaultConsumers is a package-level var. Never reslice it and
 	// append — consumers[:0] aliases its backing array, so the appends would
 	// overwrite the package's own defaults for the rest of the process. Always
@@ -203,7 +335,7 @@ func runSelftest(s *Server) int {
 	checks := s.Selftest(SelftestOpts{
 		ShimDir:    secrets.ShimDir,
 		Consumers:  consumers,
-		SocketPath: secrets.SocketPath,
+		SocketPath: socketPath,
 	})
 
 	failed := 0

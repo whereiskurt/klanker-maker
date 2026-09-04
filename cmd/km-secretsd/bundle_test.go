@@ -3,8 +3,8 @@ package main
 import (
 	"bytes"
 	"errors"
-	"path/filepath"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
