@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -3974,6 +3975,47 @@ func fetchAndUploadSops(buildDir, bucket string) error {
 	return nil
 }
 
+// verifySHA256 checks that file at path hashes to the digest recorded for
+// entryName in a `sha256sum`-format checksums file (`<hex>  <name>` per line).
+//
+// A missing entry is an ERROR, never a pass. This mirrors the trap the operator
+// Dockerfile already documents: `sha256sum -c --ignore-missing` succeeds
+// vacuously when nothing in the checksums file matches, so an upstream that
+// renames its assets would silently turn verification off rather than fail.
+func verifySHA256(path, checksumsPath, entryName string) error {
+	sums, err := os.ReadFile(checksumsPath)
+	if err != nil {
+		return fmt.Errorf("read checksums: %w", err)
+	}
+
+	var want string
+	for _, line := range strings.Split(string(sums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == entryName {
+			want = strings.ToLower(fields[0])
+			break
+		}
+	}
+	if want == "" {
+		return fmt.Errorf("no checksum published for %q in %s", entryName, filepath.Base(checksumsPath))
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hash %s: %w", entryName, err)
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != want {
+		return fmt.Errorf("checksum mismatch for %s: want %s, got %s", entryName, want, got)
+	}
+	return nil
+}
+
 // fetchAndUploadOtelcolContrib downloads the otelcol-contrib binary from the
 // official GitHub releases and uploads it to s3://<bucket>/sidecars/otelcol-contrib.
 // Skips the download if build/otelcol-contrib already exists.
@@ -3984,18 +4026,41 @@ func fetchAndUploadOtelcolContrib(buildDir, bucket string) error {
 	if _, err := os.Stat(binaryPath); err == nil {
 		fmt.Printf("  otelcol-contrib already in build/ (skip download)\n")
 	} else {
-		url := fmt.Sprintf(
-			"https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v%s/otelcol-contrib_%s_linux_amd64.tar.gz",
-			otelcolContribVersion, otelcolContribVersion,
+		base := fmt.Sprintf(
+			"https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v%s",
+			otelcolContribVersion,
 		)
+		tarball := fmt.Sprintf("otelcol-contrib_%s_linux_amd64.tar.gz", otelcolContribVersion)
+		checksums := "opentelemetry-collector-releases_otelcol-contrib_checksums.txt"
+		tarPath := filepath.Join(buildDir, tarball)
+		sumPath := filepath.Join(buildDir, checksums)
 		fmt.Printf("  Downloading otelcol-contrib v%s...\n", otelcolContribVersion)
 
-		// Download and extract in one pipeline: curl | tar
-		dlCmd := exec.Command("bash", "-c",
-			fmt.Sprintf("curl -sL %q | tar xz -C %q otelcol-contrib", url, buildDir))
-		if out, err := dlCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("download otelcol-contrib: %s: %w", string(out), err)
+		// Land the tarball on disk and verify it BEFORE extracting. This binary
+		// is uploaded to the artifacts bucket and then fetched at boot by every
+		// sandbox, so an unverified download here reaches the whole fleet.
+		//
+		// Verified against the checksums file the release publishes rather than
+		// a hash pinned in this source, so bumping otelcolContribVersion stays a
+		// one-line change. Hashing is done in Go, not by shelling out: km init
+		// runs on the operator's workstation, and macOS has no sha256sum.
+		for _, d := range []struct{ url, dest string }{
+			{base + "/" + tarball, tarPath},
+			{base + "/" + checksums, sumPath},
+		} {
+			cmd := exec.Command("curl", "-fsSL", "-o", d.dest, d.url)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("download %s: %s: %w", filepath.Base(d.dest), string(out), err)
+			}
 		}
+		if err := verifySHA256(tarPath, sumPath, tarball); err != nil {
+			return fmt.Errorf("verify otelcol-contrib: %w", err)
+		}
+		if out, err := exec.Command("tar", "xzf", tarPath, "-C", buildDir, "otelcol-contrib").CombinedOutput(); err != nil {
+			return fmt.Errorf("extract otelcol-contrib: %s: %w", string(out), err)
+		}
+		_ = os.Remove(tarPath)
+		_ = os.Remove(sumPath)
 		if err := os.Chmod(binaryPath, 0o755); err != nil {
 			return fmt.Errorf("chmod otelcol-contrib: %w", err)
 		}

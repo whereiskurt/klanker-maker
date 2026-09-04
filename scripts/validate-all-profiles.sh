@@ -53,7 +53,6 @@ PROFILES=(
   profiles/vulnhunt.yaml        # Phase 132 exec-capture UAT leaf (VulnHunter vs defcon.run.34)
   pkg/profile/builtins/ao.yaml
   pkg/profile/builtins/codex.yaml
-  pkg/profile/builtins/goose.yaml
   pkg/profile/builtins/hardened.yaml
   pkg/profile/builtins/learn.yaml
   pkg/profile/builtins/open-dev.yaml

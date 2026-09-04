@@ -46,7 +46,7 @@ spec:
       OPENAI_API_KEY: ""   # dummy key; Bifrost/vLLM accept keyless requests on loopback
       # NOTE: OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 is exported by
       # base/userinit (confirmed in profiles/base/userinit.yaml initCommands:
-      # /etc/profile.d/km-zz-goose-otel.sh) — NOT duplicated here.
+      # /etc/profile.d/km-zz-otel.sh) — NOT duplicated here.
 
     # ⛔ BLOCKED (2026-06-27): these commands do NOT reach the boot — `km create
     # --local`'s km-init.sh contains only base/userinit's initCommands; the leaf's
