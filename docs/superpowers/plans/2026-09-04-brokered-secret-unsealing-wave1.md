@@ -1893,6 +1893,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/whereiskurt/klanker-maker/pkg/secrets"
@@ -2032,12 +2033,17 @@ func resolveForSandbox(o SelftestOpts, consumer string) (string, error) {
 }
 
 func runSelftest(s *Server) int {
+	// secrets.DefaultConsumers is a package-level var. Never reslice it and
+	// append — consumers[:0] aliases its backing array, so the appends would
+	// overwrite the package's own defaults for the rest of the process. Always
+	// build a fresh slice.
 	consumers := secrets.DefaultConsumers
 	if len(s.Grants) > 0 {
-		consumers = consumers[:0]
+		consumers = make([]string, 0, len(s.Grants))
 		for c := range s.Grants {
 			consumers = append(consumers, c)
 		}
+		sort.Strings(consumers) // deterministic check order and audit output
 	}
 
 	checks := s.Selftest(SelftestOpts{
