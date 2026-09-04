@@ -6,10 +6,14 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
@@ -258,6 +262,107 @@ func TestRunHerdrStart_UnhealthyPreflightDoesNotWriteSSHConfig(t *testing.T) {
 	}
 }
 
+// herdrSendCountingSSMMock returns a fixed pre-flight output from every
+// GetCommandInvocation call, like vsCodeSSMMock, but also counts SendCommand
+// invocations — used to prove --no-install never sends the install script.
+type herdrSendCountingSSMMock struct {
+	output       string
+	sendCommands int
+}
+
+func (m *herdrSendCountingSSMMock) SendCommand(_ context.Context, _ *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
+	m.sendCommands++
+	return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: awssdk.String("cmd-herdr-noinstall-test")}}, nil
+}
+
+func (m *herdrSendCountingSSMMock) GetCommandInvocation(_ context.Context, _ *ssm.GetCommandInvocationInput, _ ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
+	return &ssm.GetCommandInvocationOutput{
+		Status:                ssmtypes.CommandInvocationStatusSuccess,
+		StandardOutputContent: awssdk.String(m.output),
+	}, nil
+}
+
+// TestRunHerdrStart_NoInstallShortCircuitsWithoutSendingInstallCommand pins
+// spec §11's required --no-install unit test: herdr absent + --no-install
+// must error naming the flag, and must never attempt the install SSM command
+// (only the pre-flight SendCommand call happens).
+func TestRunHerdrStart_NoInstallShortCircuitsWithoutSendingInstallCommand(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	keyPath := filepath.Join(tmp, ".km", "keys", "sb-abc123")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("dummy-private-key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	// Healthy sshd/authkeys, herdr absent — not port 2222: an unrelated live
+	// process holds it on this machine.
+	mockSSM := &herdrSendCountingSSMMock{
+		output: "=== sshd ===\nactive\n=== authkeys exists ===\nyes\n=== herdr path ===\n=== herdr version ===\n",
+	}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34569, true)
+	if err == nil {
+		t.Fatal("expected error when herdr is absent and --no-install is set")
+	}
+	if !strings.Contains(err.Error(), "--no-install") {
+		t.Errorf("error should name --no-install; got %q", err)
+	}
+	if mockSSM.sendCommands != 1 {
+		t.Errorf("expected exactly 1 SendCommand call (pre-flight only, no install attempted); got %d", mockSSM.sendCommands)
+	}
+}
+
+// TestRunHerdrStart_RepairInstallPreservesPreflightFields pins commit
+// 384224fb's fix: the install branch assigns ONLY HerdrPath/HerdrVersion from
+// the install output, because that output carries no sshd/authkeys markers —
+// replacing the whole struct would silently zero SSHDActive/AuthKeysPresent
+// even though the pre-flight already found them true. A full success run
+// (through upsertSandboxHost) is the only way to observe that those two
+// fields survived, since herdrBanner itself never reads them.
+func TestRunHerdrStart_RepairInstallPreservesPreflightFields(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	keyPath := filepath.Join(tmp, ".km", "keys", "sb-abc123")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("dummy-private-key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, ".ssh"), 0o700); err != nil {
+		t.Fatalf("mkdir .ssh: %v", err)
+	}
+
+	preflight := "=== sshd ===\nactive\n=== authkeys exists ===\nyes\n=== herdr path ===\n=== herdr version ===\n"
+	installOut := "=== herdr path ===\n/usr/local/bin/herdr\n=== herdr version ===\nherdr 0.8.2\n"
+	mockSSM := &sequencedSSMMock{outputs: []string{preflight, installOut}}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+	execFn := func(c *exec.Cmd) error { return nil }
+
+	err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", 34570, false)
+	if err != nil {
+		t.Fatalf("expected success after a repair install, got: %v", err)
+	}
+
+	// If the install branch had clobbered SSHDActive/AuthKeysPresent to
+	// false, parseVSCodeStatus's pre-flight check already ran against the
+	// PRE-FLIGHT output and would have returned before this point — so
+	// reaching here at all is part of the pin. The stronger assertion is
+	// that upsertSandboxHost, which runs only after the repaired state is
+	// assembled, actually wrote the ssh-config entry.
+	sshConfigPath := filepath.Join(tmp, ".ssh", "config")
+	data, statErr := os.ReadFile(sshConfigPath)
+	if statErr != nil || !strings.Contains(string(data), "km-sb-abc123") {
+		t.Fatalf("expected ssh-config to be written after a successful repair install; statErr=%v data=%q", statErr, data)
+	}
+}
+
 func TestHerdrStatusReport_ReadyIsNilError(t *testing.T) {
 	var buf bytes.Buffer
 	st := herdrBoxState{SSHDActive: true, AuthKeysPresent: true,
@@ -308,10 +413,6 @@ func TestHerdrStatusReport_WarnsOnPreSignal8Presence(t *testing.T) {
 // rename in cmd/km-presence would silently turn it into a permanent "no" with no
 // compile error anywhere — the same class of drift the herdrS3Key three-site pin
 // guards against.
-//
-// Until Task 7 lands, cmd/km-presence/runner.go has no such function; this test then
-// asserts only that the probe does NOT use the bare word "herdr", which is the actual
-// defect being guarded (Go embeds build paths, so "herdr" matches spuriously).
 func TestHerdrPresenceProbe_PinsSignal8Symbol(t *testing.T) {
 	const symbol = "checkHerdrPaneBusy"
 
@@ -327,8 +428,10 @@ func TestHerdrPresenceProbe_PinsSignal8Symbol(t *testing.T) {
 		t.Fatalf("read km-presence runner.go: %v", err)
 	}
 	if !strings.Contains(string(raw), "func "+symbol) {
-		t.Skipf("cmd/km-presence has no func %s yet (Task 7 introduces it); "+
-			"once it exists this test pins the probe to it", symbol)
+		t.Fatalf("cmd/km-presence/runner.go has no func %s. "+
+			"herdrPresenceSignal8Script greps the km-presence binary for that exact symbol to "+
+			"decide whether a sandbox has signal 8; renaming it silently turns the probe into a "+
+			"permanent \"no\" with no compile error anywhere. Update both together.", symbol)
 	}
 }
 
