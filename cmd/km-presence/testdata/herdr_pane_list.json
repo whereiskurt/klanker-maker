@@ -1,0 +1,1 @@
+{"id":"cli:pane:list","result":{"panes":[{"agent_status":"unknown","cwd":"/home/sandbox","focused":true,"foreground_cwd":"/home/sandbox","pane_id":"w1:p1","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":39},"tab_id":"w1:t1","terminal_id":"term_65aaf43ccc3061","workspace_id":"w1"}],"type":"pane_list"}}
