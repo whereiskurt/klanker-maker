@@ -157,6 +157,13 @@ const ec2ServiceHCLTemplate = `locals {
     # sandbox role ssm:GetParameter on exactly these paths (ec2spot v1.4.0).
     secret_paths = [{{ joinStrings .SecretPaths }}]
 {{- end }}
+{{- if .FenceIMDS }}
+
+    # spec.secrets.fenceIMDS. Adds the self-assume trust statement and the
+    # sts:AssumeRole grant km-secretsd needs to mint credentials narrowed by two
+    # explicit Denies (ec2spot v1.7.0). Absent means the module default, false.
+    fence_imds = true
+{{- end }}
 
     enable_bedrock = {{ .EnableBedrock }}
     associate_public_ip = {{ .AssociatePublicIP }}
@@ -538,7 +545,7 @@ type ec2HCLParams struct {
 	ExistingSecurityGroupID string
 	ExistingInstanceProfile string
 	SGEgressRules           []SGRule
-	IAMPolicy          *IAMSessionPolicy
+	IAMPolicy               *IAMSessionPolicy
 	// Budget enforcement fields (BUDG-03, BUDG-07)
 	HasBudget        bool    // true when profile.spec.budget is set
 	SpotRateUSD      float64 // pre-calculated hourly rate (0.0 when no budget)
@@ -582,6 +589,11 @@ type ec2HCLParams struct {
 	// emitted into ec2spot module_inputs ONLY when non-empty so a profile that
 	// declares none renders byte-identically to pre-v1.4.0.
 	SecretPaths []string
+
+	// FenceIMDS gates the ec2spot v1.7.0 self-assume trust statement and the
+	// matching sts:AssumeRole grant. Emitted only when true, so a profile that
+	// does not ask for the fence renders byte-identical Terraform.
+	FenceIMDS bool
 }
 
 // ============================================================
@@ -929,8 +941,8 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		ExistingSecurityGroupID: network.ExistingSecurityGroupID,
 		ExistingInstanceProfile: network.ExistingInstanceProfile,
 		SGEgressRules:           sgRules,
-		IAMPolicy:          iamPolicy,
-		AssociatePublicIP:  !p.Spec.Network.PrivateSubnet,
+		IAMPolicy:               iamPolicy,
+		AssociatePublicIP:       !p.Spec.Network.PrivateSubnet,
 		// Budget enforcement fields
 		HasBudget:        hasBudget,
 		SpotRateUSD:      network.SpotRateUSD,
@@ -982,6 +994,7 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		// nil claimed: additionalVolume is always a single entry, no cross-entry dedup needed.
 		AdditionalVolumeDeviceName: pickAdditionalVolumeDevice(amiBDMDeviceNames, nil),
 		SecretPaths:                secretPaths,
+		FenceIMDS:                  profile.IsFenceIMDSEnabled(p.Spec.Secrets),
 	}
 
 	// Phase 87 — allocate devices for additionalSnapshots entries.
