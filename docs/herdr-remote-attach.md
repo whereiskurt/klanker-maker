@@ -138,6 +138,15 @@ panes, then `herdr pane process-info --pane <id>` per pane per tick (as the
 login-shell requirement below), ORing the result across every pane on every
 discovered socket.
 
+**A pane parked in an interactive foreground program pins the sandbox alive
+indefinitely** — the same property signals 6 and 7 already document for an open
+browser tab or VS Code window. A detached pane left sitting in `vim`, `less`,
+`top`, or `tail -f` has `foreground_process_group_id != shell_pid` forever, and
+signal 8 has no way to and should not try to distinguish "genuine work" from "an
+editor left open" — the whole point of the signal is that it does not try to
+recognise what is running. `spec.lifecycle.ttl` is the real backstop against a
+box leaked this way, exactly as it is for signals 6 and 7.
+
 ### The trap: `foreground_processes` is non-empty even when idle
 
 The obvious-looking check is wrong, and it was actually written once before
