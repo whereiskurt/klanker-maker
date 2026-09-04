@@ -424,10 +424,18 @@ YAML
 ./km validate /tmp/herdr-compose-check.yaml; echo "exit=$?"
 ```
 
-Expected: exit 0. That `extends:` list is `profiles/wiz-demo.yaml`'s, with `base/security/wiz`
-swapped for `base/tools/herdr` — wiz-demo is the shipped precedent for a leaf that composes an
-opt-in tool fragment, so if it validates there it validates here. The point of this step is to
-prove `base/tools/herdr` merges cleanly, not to design a profile: do NOT commit this file.
+Expected: exit 0.
+
+**The `extends:` list alone is NOT enough** — verified the hard way. `profiles/wiz-demo.yaml` is
+not just a four-fragment `extends:` list; it also carries its own leaf `spec:` block, and none of
+`base/platform` / `base/os/debian` / `base/network/locked` supply those required fields. A
+metadata-plus-`extends:`-only file fails with nine schema errors
+(`spec.execution.workingDir`, `spec.execution.shell`, `spec.lifecycle.{ttl,idleTimeout,teardownPolicy}`,
+`spec.runtime.{substrate,instanceType,region}`, `spec.sourceAccess.mode`).
+
+So copy `profiles/wiz-demo.yaml` wholesale, swap `base/security/wiz` for `base/tools/herdr` in its
+`extends:` list, and keep its `spec:` block as-is. The point of this step is to prove
+`base/tools/herdr` merges cleanly, not to design a profile: do NOT commit this file.
 
 - [ ] **Step 6: Run the guard tests**
 
