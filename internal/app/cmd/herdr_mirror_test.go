@@ -20,8 +20,8 @@ func TestHerdrS3Key_PinnedAcrossAllSites(t *testing.T) {
 	const key = "binaries/herdr"
 
 	sites := []string{
-		"init.go",                          // fetchAndUploadHerdr upload target
-		"herdr.go",                         // ensure-install download source
+		"init.go",  // fetchAndUploadHerdr upload target
+		"herdr.go", // ensure-install download source
 		"../../../profiles/base/tools/herdr.yaml", // boot-time fetch
 	}
 	for _, rel := range sites {
