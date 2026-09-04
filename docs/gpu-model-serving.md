@@ -291,10 +291,15 @@ when `useBedrock || allowBedrock`).
 
 Each GPU leaf references its **own** SOPS bundle via `spec.secrets.sopsFile`
 (`secrets/<leaf>.enc.yaml`): qwen/glm/kimi carry `ANTHROPIC_API_KEY` +
-`OPENAI_API_KEY`; the Llama leaves add `HF_TOKEN` (gated model). The sandbox role
-decrypts them at boot to `/etc/sandbox-secrets.env` (never in operator context);
-the bring-up copies the API keys into `/etc/km/bifrost-env`. See
-`docs/sandbox-secrets.md`.
+`OPENAI_API_KEY`; the Llama leaves add `HF_TOKEN` (gated model). Since Phase 133 the
+bundle is never decrypted to disk (never in operator context either): only the
+ciphertext lands on the box, and the `km-secretsd` broker decrypts per request. The
+bring-up therefore asks for the keys explicitly —
+`km-env exec --only ANTHROPIC_API_KEY,OPENAI_API_KEY -- ...` writing
+`/etc/km/bifrost-env`, and `km-env exec --only HF_TOKEN -- ...` writing
+`/etc/km/vllm.env` — rather than grepping the deleted
+`/etc/sandbox-secrets.env`. See `docs/brokered-secrets.md`
+§ Migrating a non-agent secret consumer.
 
 Bundles are encrypted with the shared `km-sandbox-secrets` KMS key via the repo
 `.sops.yaml` creation rule (`secrets/.*\.enc\.yaml$` → the key **ARN**, not the
@@ -360,7 +365,7 @@ promptly after a UAT run.
 | `VcpuLimitExceeded: limit of 0` at create | G-instance quota is 0 in this account/region — request an increase (Prerequisites). |
 | vLLM container loses GPUs after `systemctl daemon-reload` | DLAMI+systemd cgroup race — the unit has `ExecStartPre=/bin/sleep 5` + `--gpus all --ipc=host`; restart `vllm.service`. |
 | vLLM OOM on bring-up | Lower `--gpu-memory-utilization` (0.90→0.80) and/or `--max-model-len` in the leaf's `/etc/km/vllm.env` (`VLLM_EXTRA`) and re-create. GLM/Kimi tuning is MEDIUM-confidence — adjust live. |
-| `claude-anthropic` route 401/empty | `ANTHROPIC_API_KEY` not reaching Bifrost: Bifrost reads `/etc/km/bifrost-env`, while SOPS injects `/etc/sandbox-secrets.env` — ensure the env is wired into `bifrost.service` and that Bifrost expands `${ANTHROPIC_API_KEY}` in its JSON config. |
+| `claude-anthropic` route 401/empty | `ANTHROPIC_API_KEY` not reaching Bifrost. Bifrost reads `/etc/km/bifrost-env`, which `base/gpu/serve`'s bring-up populates via `km-env exec --only ANTHROPIC_API_KEY,OPENAI_API_KEY` (Phase 133 — there is no `/etc/sandbox-secrets.env` any more). Check the key is in the bundle (`km-env list`), that `/etc/km/bifrost-env` actually has the line, that the file is wired into `bifrost.service`, and that Bifrost expands `${ANTHROPIC_API_KEY}` in its JSON config. If `km-env` itself failed, `/var/log/cloud-init-output.log` carries the error under a misleading `No init script found in S3 (skipped)`. |
 | `claude-bedrock` / `gpt-oss-bedrock` 403 | Sandbox role lacks `bedrock:InvokeModel` for that model ID — add the Claude + `openai.gpt-oss-*` IDs to the role's Bedrock allowlist. |
 | Slack 👀 but no reply | Inbound poller not emitted — needs `Spec.CLI != nil` (satisfied by `base/platform`); check `systemctl is-active km-slack-inbound-poller` + `/etc/km/notify.env`. |
 | Remote create: "profile base/gpu/serve not found" | The create-handler has no `profiles/base/` fragments — the operator binary must flatten `extends` before upload (refresh `toolchain/km` via `km init`). |

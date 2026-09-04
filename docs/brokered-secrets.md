@@ -132,6 +132,75 @@ a grep guard, not static analysis: it cannot catch a verb assembled from a
 constant, a concatenation, or matched via a prefix/regex instead of a literal
 case — read a pass as "no obvious banned verb", not a proof that none exists.
 
+## Migrating a non-agent secret consumer
+
+The PATH shims only cover the **agent binaries** (`claude`, `codex`, plus
+anything named in `grants`). Anything else that used to read the Phase 89
+plaintext `/etc/sandbox-secrets.env` — a profile `initCommand` populating a
+systemd `EnvironmentFile`, a bring-up script, a sidecar's config builder — is
+**not** intercepted and must ask the broker itself. That file is gone, and the
+failure is silent by default: `grep '^KEY=' /etc/sandbox-secrets.env || true`
+now matches nothing, writes nothing, and returns 0, so the consumer starts
+without its credential and fails much later for a reason that names the
+consumer rather than km.
+
+The replacement is `km-env exec --only <KEY>`, which unseals into exactly one
+child process:
+
+```sh
+# Before (Phase 89) — silently a no-op since Phase 133:
+grep '^HF_TOKEN=' /etc/sandbox-secrets.env >> /etc/km/vllm.env 2>/dev/null || true
+
+# After (Phase 133):
+/opt/km/bin/km-env exec --only HF_TOKEN -- \
+  sh -c 'test -n "$HF_TOKEN" && printf "HF_TOKEN=%s\n" "$HF_TOKEN" >> /etc/km/vllm.env'
+```
+
+Four things about that shape are deliberate:
+
+- **`--only <KEY>`**, not a bare unseal. The request narrows to the one key the
+  consumer needs, so the `secret_unseal` audit line names exactly that key and
+  nothing wider. `--only` can never widen a grant; see above.
+- **No `--as`.** A non-agent consumer has no shim and no consumer identity.
+  Omitting `--as` returns the whole available set (then narrowed by `--only`);
+  claiming an agent's identity here would be a lie in the audit trail. If you
+  want a consumer to appear under its own name in `grants`, add it there — it
+  gets its own shim and its own grant.
+- **Loud, not `|| true`.** `test -n "$HF_TOKEN"` makes an absent key a non-zero
+  exit. Profile `initCommands` run inside `/tmp/km-init.sh` under `set -e`, so
+  the rest of that script stops and the failure lands in
+  `/var/log/cloud-init-output.log` next to the `km-env:` error line. A silently
+  missing credential is precisely what this migration exists to stop being
+  possible. **Note the surrounding userdata swallows the script's exit status**
+  (§7.5 wraps it in `|| echo "No init script found in S3 (skipped)"`), so the
+  boot itself continues — that misleading line in the log means "the init
+  script failed", not "there wasn't one".
+- **Ordering.** `km-secretsd` is started in userdata §5.5, well before §7.5
+  runs `initCommands`, so the broker is up by the time any of this runs. The
+  shims, by contrast, are generated in §7.8 — *after* `initCommands` — which is
+  another reason a non-agent consumer must call `km-env` directly rather than
+  relying on PATH.
+
+**Optional keys in an abstract fragment.** If the fragment can be inherited by
+a profile with no `spec.secrets.sopsFile` at all, there is no broker and no
+`km-env` binary, so guard on the binary rather than swallowing the error —
+`profiles/base/gpu/serve.yaml` is the worked example:
+
+```sh
+if [ -x /opt/km/bin/km-env ]; then
+  /opt/km/bin/km-env exec --only ANTHROPIC_API_KEY,OPENAI_API_KEY -- sh -c '...'
+fi
+```
+
+An absent bundle is then a legitimate no-op, while a broker that *is* installed
+and fails is still a hard error.
+
+**Mechanically guarded.** `pkg/secrets`'s `TestPlaintextEnvInjectionIsGone`
+scans every non-test `.go` file and every shipped profile under `profiles/`
+for `/etc/sandbox-secrets.env` and `zz-sandbox-secrets.sh`, ignoring comment
+lines. A new consumer wired to the deleted file fails the suite rather than
+failing a boot.
+
 ## Reading `secret_unseal` events
 
 Every unseal and every refusal is written to the sandbox's CloudWatch audit
@@ -178,9 +247,21 @@ limit of what that attribution actually proves.
 Assertions (fatal aborts the boot / fails the resume check; warn does not):
 
 1. Ciphertext present at `/etc/sandbox-secrets.enc.yaml`, mode `0400`. (fatal)
-2. The broker's socket exists with mode `0660`. (fatal)
-3. A live end-to-end unseal succeeds, then the buffer is zeroed; the detail
-   logs key **names** only. (fatal)
+2. The broker's socket exists at `/run/km/secrets.sock` with mode `0660`.
+   (fatal) **A missing socket fails this check; it is not skipped.** That is
+   the whole point of the assertion: a broker that never started — bad
+   `KM_SECRETS_GRANTS` JSON, a bind failure, any crash — leaves no socket, and
+   `systemctl enable --now` cannot catch it either (`Type=simple` reports
+   success as soon as the fork succeeds). The check waits up to 5s for the
+   socket to appear before failing, which should never elapse in practice:
+   `km-secretsd.service`'s `ExecStartPost` already polls for the socket and
+   sets its mode, and `systemctl start` does not return until that finishes.
+3. A live end-to-end unseal succeeds **through the socket** — the selftest
+   speaks the same protocol `km-env` speaks, against the running daemon, so
+   this proves the whole chain an agent depends on (socket reachable, daemon
+   alive, grants parsed, KMS reachable, bundle decryptable) rather than only
+   KMS and the ciphertext. The response buffer is zeroed; the detail logs key
+   **names** only. (fatal)
 4. Every generated shim's target exists and is not the shim itself (catches a
    stale path after a `claude` reinstall, or accidental self-recursion).
    (fatal)

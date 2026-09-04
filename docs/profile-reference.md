@@ -1965,8 +1965,15 @@ Optional SOPS-encrypted secret bundle injected as environment variables at boot.
 | Validation | Path relative to the profile YAML; must be a SOPS-encrypted YAML file |
 
 Path to a SOPS-encrypted YAML bundle (`.enc.yaml`), resolved relative to the profile
-file. Its top-level keys become environment variables in `/etc/sandbox-secrets.env`
-(mode `0440`, owner `root:sandbox`) at boot. Decryption uses the shared KMS key
+file. Since Phase 133 the bundle is **never decrypted to disk**: only the ciphertext
+lands on the box (`/etc/sandbox-secrets.enc.yaml`, mode `0400`, owner `root:root`),
+and the `km-secretsd` broker decrypts per request and hands the values to one child
+process via `km-env`. Its top-level keys become environment variables in the agent
+process only — not in every login shell. The Phase 89 plaintext
+`/etc/sandbox-secrets.env` and its `/etc/profile.d/zz-sandbox-secrets.sh` hook no
+longer exist; a non-agent consumer that used to read that file must call
+`km-env exec --only <KEY> -- ...` instead (see `docs/brokered-secrets.md`
+§ Migrating a non-agent secret consumer). Decryption uses the shared KMS key
 provisioned once per install by `km bootstrap --shared-secrets-key`.
 
 ```yaml
