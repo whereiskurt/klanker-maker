@@ -10,6 +10,25 @@ import (
 	"time"
 )
 
+// TestHerdrConfigDir_DefaultsWhenUnset and its sibling pin the F9 escape
+// hatch: KM_HERDR_CONFIG_DIR overrides the hardcoded Herdr config path
+// signal 8 probes, for the day XDG_CONFIG_HOME or a relocated config dir
+// makes the constant wrong on a real box — a case the negative-case signal-8
+// tests cannot catch, since they construct their own config dir directly.
+func TestHerdrConfigDir_DefaultsWhenUnset(t *testing.T) {
+	t.Setenv("KM_HERDR_CONFIG_DIR", "")
+	if got := herdrConfigDir(); got != defaultHerdrConfigDir {
+		t.Fatalf("herdrConfigDir() = %q, want default %q", got, defaultHerdrConfigDir)
+	}
+}
+
+func TestHerdrConfigDir_EnvOverride(t *testing.T) {
+	t.Setenv("KM_HERDR_CONFIG_DIR", "/custom/herdr/config")
+	if got := herdrConfigDir(); got != "/custom/herdr/config" {
+		t.Fatalf("herdrConfigDir() = %q, want /custom/herdr/config", got)
+	}
+}
+
 // =============================================================================
 // Signal 1: Login shells
 // =============================================================================

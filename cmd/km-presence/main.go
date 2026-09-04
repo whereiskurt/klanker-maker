@@ -29,6 +29,22 @@ func main() {
 	os.Exit(run())
 }
 
+// herdrConfigDir returns the directory signal 8 probes for Herdr sockets.
+// Hardcoded to Herdr's default location, because userdata never sets
+// XDG_CONFIG_HOME for the sandbox user today — but if it ever does, or the
+// config dir is relocated some other way, signal 8 goes permanently negative
+// with NO diagnostic: herdrSocketPaths finds nothing, checkHerdrPaneBusy
+// returns false forever, and the negative-case tests (which construct their
+// own config dir) cannot catch a real-world path that no longer matches this
+// constant. KM_HERDR_CONFIG_DIR is the escape hatch for that day, wired here
+// rather than left as a pure comment since it costs one line and one test.
+func herdrConfigDir() string {
+	if v := os.Getenv("KM_HERDR_CONFIG_DIR"); v != "" {
+		return v
+	}
+	return defaultHerdrConfigDir
+}
+
 // run is the testable entrypoint for the daemon. Returns 0 on clean shutdown,
 // 1 on fatal startup error (e.g. SANDBOX_ID not set).
 func run() int {
@@ -56,7 +72,7 @@ func run() int {
 	tickNum := 0
 	runOneTick := func() {
 		tickNum++
-		active, emitted := tick(runner, sandboxID, defaultMailDir, defaultSlackStamp, defaultPresStamp, defaultHerdrConfigDir)
+		active, emitted := tick(runner, sandboxID, defaultMailDir, defaultSlackStamp, defaultPresStamp, herdrConfigDir())
 		log.Info().
 			Int("tick", tickNum).
 			Bool("active", active).
