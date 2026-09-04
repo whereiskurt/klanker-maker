@@ -554,12 +554,17 @@ func TestHerdrBanner_PrintsAttachCommandAndSSHConfigOptOut(t *testing.T) {
 	}
 }
 
+// Construct with &config.Config{}, never nil — the house style in
+// vscode_test.go:410 and tunnel_test.go:62. cfg is only captured in RunE
+// closures today, so nil would work, but an empty struct cannot panic if a
+// future edit dereferences it at construction time.
+//
 // TestHerdrDefaultLocalPort_DoesNotCollide pins 2224. km vscode owns 2222 and
 // both km tunnel modes own 2223; being attached to a box with more than one of
 // these at once is a plausible combination, and a collision surfaces as a
 // confusing "Connection closed by 127.0.0.1" rather than a bind error.
 func TestHerdrDefaultLocalPort_DoesNotCollide(t *testing.T) {
-	cmd := NewHerdrCmd(nil)
+	cmd := NewHerdrCmd(&config.Config{})
 	start, _, err := cmd.Find([]string{"start"})
 	if err != nil {
 		t.Fatalf("find start subcommand: %v", err)
@@ -577,7 +582,7 @@ func TestHerdrDefaultLocalPort_DoesNotCollide(t *testing.T) {
 // Rekey is deliberately absent: herdr shares the vscode keypair, and two verbs
 // rotating one key is a footgun.
 func TestNewHerdrCmd_HasStartAndStatusOnly(t *testing.T) {
-	cmd := NewHerdrCmd(nil)
+	cmd := NewHerdrCmd(&config.Config{})
 	got := map[string]bool{}
 	for _, c := range cmd.Commands() {
 		got[c.Name()] = true
