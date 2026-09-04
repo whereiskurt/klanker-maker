@@ -38,9 +38,13 @@ test -f /home/sandbox/.ssh/authorized_keys && echo yes || echo no
 echo "=== authkeys content ==="
 cat /home/sandbox/.ssh/authorized_keys 2>/dev/null | head -1 || true
 echo "=== herdr path ==="
-command -v herdr 2>/dev/null || true
+HERDR_BIN=$(command -v herdr 2>/dev/null || true)
+if [ -z "$HERDR_BIN" ] && [ -x /home/sandbox/.local/bin/herdr ]; then
+  HERDR_BIN=/home/sandbox/.local/bin/herdr
+fi
+echo "$HERDR_BIN"
 echo "=== herdr version ==="
-herdr --version 2>/dev/null || true`
+if [ -n "$HERDR_BIN" ]; then "$HERDR_BIN" --version 2>/dev/null || true; fi`
 
 // herdrBoxState is the parsed result of herdrStatusScript.
 type herdrBoxState struct {
@@ -245,6 +249,68 @@ func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExec
 	return runReconnectingPortForward(ctx, execFn, buildPF, sshBannerTunnelProbe(localPort), true, os.Stdout)
 }
 
+// herdrPresenceSignal8Script reports whether the box's km-presence binary
+// carries signal 8. `strings` on the binary is crude but honest: the daemon
+// exposes no version verb, and the alternative (a DynamoDB field recording the
+// km version at create time) would be a schema change for a warning line.
+const herdrPresenceSignal8Script = `echo "=== presence signal8 ==="
+if strings /opt/km/bin/km-presence 2>/dev/null | grep -q herdr; then echo yes; else echo no; fi`
+
+// herdrStatusReport prints the readiness summary and returns a non-nil error
+// when the sandbox cannot accept an attach.
+func herdrStatusReport(w io.Writer, sandboxID string, st herdrBoxState, presenceHasSignal8 bool) error {
+	if !st.SSHDActive || !st.AuthKeysPresent {
+		return herdrHealthError(st, sandboxID)
+	}
+	if st.HerdrPath == "" {
+		return fmt.Errorf("herdr is not installed on %s — run `km herdr start %s` to install it, or add `extends: [base/tools/herdr]` to the profile and recreate", sandboxID, sandboxID)
+	}
+
+	fmt.Fprintf(w, "✓ herdr ready on %s (sshd active, authorized_keys present, herdr v%s at %s)\n",
+		sandboxID, st.HerdrVersion, st.HerdrPath)
+
+	if !presenceHasSignal8 {
+		fmt.Fprintf(w, "\n⚠ This sandbox runs a km-presence daemon without signal 8.\n")
+		fmt.Fprintf(w, "  A DETACHED herdr session running work is invisible to the idle timer,\n")
+		fmt.Fprintf(w, "  so the box can still be stopped mid-run. Under teardownPolicy: stop that\n")
+		fmt.Fprintf(w, "  kills every pane's process — herdr sessions do not survive a reboot.\n")
+		fmt.Fprintf(w, "  Fix: km destroy %s && km create <profile>\n", sandboxID)
+	}
+	return nil
+}
+
+// herdrHealthError renders the same diagnoses parseVSCodeStatus gives, from an
+// already-parsed state rather than raw SSM output — herdrStatusReport only has
+// the struct, not the original script text.
+func herdrHealthError(st herdrBoxState, sandboxID string) error {
+	switch {
+	case !st.SSHDActive && !st.AuthKeysPresent:
+		return fmt.Errorf("sshd is not running and authorized_keys is absent on %s — this profile likely has spec.runtime.vscode.enabled: false; set it true and recreate the sandbox", sandboxID)
+	case !st.AuthKeysPresent:
+		return fmt.Errorf("unexpected state: sshd is running but /home/sandbox/.ssh/authorized_keys is absent — recreate the sandbox")
+	default:
+		return fmt.Errorf("sshd is not running on the sandbox; try `km shell %s -- sudo systemctl start sshd`", sandboxID)
+	}
+}
+
 func runHerdrStatus(ctx context.Context, fetcher SandboxFetcher, ssmClient SSMSendAPI, sandboxID string) error {
-	return fmt.Errorf("not implemented")
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox: %w", err)
+	}
+	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	if err != nil {
+		return fmt.Errorf("find EC2 instance: %w", err)
+	}
+
+	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, herdrStatusScript+"\n"+herdrPresenceSignal8Script)
+	if err != nil {
+		return fmt.Errorf("ssm status check: %w", err)
+	}
+	st := parseHerdrStatus(out)
+	// Read the probe's own section. A bare strings.Contains(out, "yes") would
+	// also match the "=== authkeys exists ===\nyes" section above it and report
+	// every sandbox as signal-8-capable, silencing the warning that matters most.
+	hasS8 := strings.TrimSpace(sectionOf(out, "=== presence signal8 ===")) == "yes"
+	return herdrStatusReport(os.Stdout, sandboxID, st, hasS8)
 }

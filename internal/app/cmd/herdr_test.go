@@ -257,3 +257,48 @@ func TestRunHerdrStart_UnhealthyPreflightDoesNotWriteSSHConfig(t *testing.T) {
 		t.Errorf("ssh-config was written for an unhealthy sandbox; got:\n%s", data)
 	}
 }
+
+func TestHerdrStatusReport_ReadyIsNilError(t *testing.T) {
+	var buf bytes.Buffer
+	st := herdrBoxState{SSHDActive: true, AuthKeysPresent: true,
+		HerdrPath: "/usr/local/bin/herdr", HerdrVersion: "0.8.2"}
+	if err := herdrStatusReport(&buf, "sb-abc123", st, true); err != nil {
+		t.Fatalf("healthy sandbox reported an error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "0.8.2") {
+		t.Errorf("report omits the herdr version; got:\n%s", buf.String())
+	}
+}
+
+func TestHerdrStatusReport_HerdrAbsentIsError(t *testing.T) {
+	var buf bytes.Buffer
+	st := herdrBoxState{SSHDActive: true, AuthKeysPresent: true}
+	err := herdrStatusReport(&buf, "sb-abc123", st, true)
+	if err == nil {
+		t.Fatal("expected a non-nil error when herdr is absent")
+	}
+	if !strings.Contains(err.Error(), "km herdr start") {
+		t.Errorf("error should name the repair command; got %q", err)
+	}
+}
+
+// TestHerdrStatusReport_WarnsOnPreSignal8Presence is the load-bearing one.
+// km-presence is fetched at boot, so a sandbox created before signal 8 shipped
+// keeps the seven-signal daemon and a detached herdr session on it is STILL
+// reapable. Saying so is the difference between "the box vanished" and "I could
+// see it coming".
+func TestHerdrStatusReport_WarnsOnPreSignal8Presence(t *testing.T) {
+	var buf bytes.Buffer
+	st := herdrBoxState{SSHDActive: true, AuthKeysPresent: true,
+		HerdrPath: "/usr/local/bin/herdr", HerdrVersion: "0.8.2"}
+	if err := herdrStatusReport(&buf, "sb-abc123", st, false); err != nil {
+		t.Fatalf("a pre-signal-8 daemon is a warning, not an error: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "km destroy") {
+		t.Errorf("warning should name the recreate that fixes it; got:\n%s", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "idle") {
+		t.Errorf("warning should say the box is still idle-reapable; got:\n%s", got)
+	}
+}
