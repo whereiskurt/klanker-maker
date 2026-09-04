@@ -566,6 +566,16 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		}
 	}
 
+	// Rule secrets-grants (warning, Phase 133): grants without a bundle is inert —
+	// there is nothing to grant.
+	if p.Spec.Secrets != nil && len(p.Spec.Secrets.Grants) > 0 && p.Spec.Secrets.SopsFile == "" {
+		errs = append(errs, ValidationError{
+			Path:      "spec.secrets.grants",
+			Message:   "spec.secrets.grants has no effect when spec.secrets.sopsFile is empty (there is no bundle to grant from)",
+			IsWarning: true,
+		})
+	}
+
 	// Phase 121 Plan 03 (PROF-01): spec.limits semantic validation.
 	// The JSON schema enforces minimum:1 on the integer fields and the onBreach enum;
 	// this belt-and-suspenders check catches the same constraints at the typed level

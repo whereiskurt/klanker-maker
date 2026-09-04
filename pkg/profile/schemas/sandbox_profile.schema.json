@@ -643,7 +643,15 @@
           "properties": {
             "sopsFile": {
               "type": "string",
-              "description": "Path (relative to profile YAML) to a SOPS-encrypted YAML bundle (.enc.yaml). Top-level keys become env vars in /etc/sandbox-secrets.env at boot."
+              "description": "Path (relative to profile YAML) to a SOPS-encrypted YAML bundle (.enc.yaml). Phase 133: decrypted on demand by km-secretsd, never written to disk in plaintext."
+            },
+            "grants": {
+              "type": "object",
+              "description": "Phase 133: maps a consumer name to the bundle keys it may receive. The name is both the binary intercepted on PATH and the identity presented to the broker. Absent means claude and codex each receive the whole bundle.",
+              "additionalProperties": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
             }
           }
         },

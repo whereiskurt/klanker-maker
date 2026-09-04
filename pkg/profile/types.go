@@ -862,11 +862,26 @@ type LogDestination struct {
 // at boot. Reserved keys "sops" and "_meta" are ignored.
 type SecretsSpec struct {
 	// SopsFile is a path (relative to the profile YAML location) to a
-	// SOPS-encrypted YAML bundle. The bundle's top-level keys become
-	// environment variables in /etc/sandbox-secrets.env at boot.
-	// Reserved keys "sops" and "_meta" are ignored (sops embeds metadata).
-	// Empty (the zero value) means no secret injection — backwards compatible.
+	// SOPS-encrypted YAML bundle. Reserved keys "sops" and "_meta" are ignored.
+	// Empty (the zero value) means no secret injection.
+	//
+	// Phase 133: the bundle is no longer decrypted into /etc/sandbox-secrets.env
+	// at boot. km-secretsd decrypts it per request and km-env injects the result
+	// into one child process. See docs/brokered-secrets.md.
 	SopsFile string `yaml:"sopsFile,omitempty" json:"sopsFile,omitempty"`
+
+	// Grants maps a consumer to the bundle keys it may receive (Phase 133).
+	//
+	// A key is BOTH the binary name intercepted on PATH (a shim is generated at
+	// /opt/km/shims/<name>) and the identity presented to the broker. Absent
+	// means claude and codex each receive the whole bundle — the identical
+	// effective grant to Phase 89, merely scoped to one process rather than
+	// every login shell.
+	//
+	// Grants are blast-radius hygiene and audit legibility, NOT containment:
+	// anything running as the sandbox user can speak the broker protocol
+	// directly. See the design doc section 6.
+	Grants map[string][]string `yaml:"grants,omitempty" json:"grants,omitempty"`
 }
 
 // CLISpec defines operator-side defaults for km shell / km agent commands.
