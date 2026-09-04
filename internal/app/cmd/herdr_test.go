@@ -4,8 +4,13 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
 func TestParseHerdrStatus_AllPresent(t *testing.T) {
@@ -107,6 +112,25 @@ func TestHerdrInstallScript_UsesS3AndCorrectPath(t *testing.T) {
 	}
 }
 
+// TestHerdrInstallScript_ResolvesBucketFromIdentityFile pins the fix for a
+// script that could never work over SSM: KM_ARTIFACTS_BUCKET is exported only
+// into login shells (/etc/profile.d/km-identity.sh), and cloud-init/SSM both
+// run non-login shells, so a bare "${KM_ARTIFACTS_BUCKET}" reference resolves
+// to the empty string and the s3 cp target becomes "s3:///binaries/herdr" —
+// this exact failure mode was reproduced live on a probe sandbox. A test that
+// only checks the script *contains* the s3 key (as this one used to) cannot
+// tell a working script from a broken one, since the broken version also
+// contained it.
+func TestHerdrInstallScript_ResolvesBucketFromIdentityFile(t *testing.T) {
+	s := herdrInstallScript()
+	if !strings.Contains(s, "/etc/profile.d/km-identity.sh") {
+		t.Error("install script does not fall back to /etc/profile.d/km-identity.sh for KM_ARTIFACTS_BUCKET")
+	}
+	if !strings.Contains(s, `-z "${KM_ARTIFACTS_BUCKET:-}"`) {
+		t.Error("install script does not guard on an empty KM_ARTIFACTS_BUCKET")
+	}
+}
+
 // TestHerdrBanner_PrintsAttachCommandAndSSHConfigOptOut asserts the two things
 // the operator cannot discover on their own: the exact attach command, and the
 // fact that herdr will fight km over ~/.ssh/config unless told not to.
@@ -161,5 +185,75 @@ func TestNewHerdrCmd_HasStartAndStatusOnly(t *testing.T) {
 	}
 	if got["rekey"] {
 		t.Error("km herdr must NOT define rekey — km vscode rekey rotates the shared keypair")
+	}
+}
+
+// TestRunVSCodeStart_UnhealthyPreflightDoesNotWriteSSHConfig pins the fix to a
+// real behavioural regression introduced by extracting connectPrep: the SSM
+// pre-flight must run BEFORE the ~/.ssh/config entry is written, exactly as
+// km vscode start always behaved before this task. connectPrep must never
+// upsert the ssh-config entry itself — only upsertSandboxHost may, and only
+// after the caller's own pre-flight has passed.
+func TestRunVSCodeStart_UnhealthyPreflightDoesNotWriteSSHConfig(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	keyPath := filepath.Join(tmp, ".km", "keys", "sb-abc123")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("dummy-private-key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, ".ssh"), 0o700); err != nil {
+		t.Fatalf("mkdir .ssh: %v", err)
+	}
+
+	// sshd inactive — an unhealthy sandbox. Not port 2222: that port is
+	// occupied by an unrelated live process on this machine.
+	mockSSM := &vsCodeSSMMock{output: "=== sshd ===\ninactive\n=== authkeys exists ===\nyes\n"}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	err := runVSCodeStart(context.Background(), &config.Config{}, fetcher, nil, mockSSM, "sb-abc123", 34567)
+	if err == nil {
+		t.Fatal("expected error for unhealthy sshd, got nil")
+	}
+
+	sshConfigPath := filepath.Join(tmp, ".ssh", "config")
+	data, statErr := os.ReadFile(sshConfigPath)
+	if statErr == nil && strings.Contains(string(data), "km-sb-abc123") {
+		t.Errorf("ssh-config was written for an unhealthy sandbox; got:\n%s", data)
+	}
+}
+
+// TestRunHerdrStart_UnhealthyPreflightDoesNotWriteSSHConfig is the herdr analog
+// of the vscode test above — same connectPrep/upsertSandboxHost split, same rule.
+func TestRunHerdrStart_UnhealthyPreflightDoesNotWriteSSHConfig(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	keyPath := filepath.Join(tmp, ".km", "keys", "sb-abc123")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("dummy-private-key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, ".ssh"), 0o700); err != nil {
+		t.Fatalf("mkdir .ssh: %v", err)
+	}
+
+	mockSSM := &vsCodeSSMMock{output: "=== sshd ===\ninactive\n=== authkeys exists ===\nyes\n"}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34568, false)
+	if err == nil {
+		t.Fatal("expected error for unhealthy sshd, got nil")
+	}
+
+	sshConfigPath := filepath.Join(tmp, ".ssh", "config")
+	data, statErr := os.ReadFile(sshConfigPath)
+	if statErr == nil && strings.Contains(string(data), "km-sb-abc123") {
+		t.Errorf("ssh-config was written for an unhealthy sandbox; got:\n%s", data)
 	}
 }

@@ -121,9 +121,12 @@ func resolveVSCodeDeps(ctx context.Context, cfg *config.Config, fetcher SandboxF
 }
 
 // connectPrep is everything km vscode start and km herdr start do identically:
-// probe the local port, resolve the sandbox and its instance, locate the local
-// private key, and upsert the ~/.ssh/config entry. It stops short of the SSM
-// pre-flight (each command probes different facts) and of the banner.
+// probe the local port, resolve the sandbox and its instance, and locate the
+// local private key. It deliberately stops short of the SSM pre-flight (each
+// command probes different facts) AND of upserting ~/.ssh/config — each caller
+// runs its own pre-flight FIRST and only then calls upsertSandboxHost, so an
+// unhealthy sandbox never gets an ssh-config entry written for it. That
+// ordering is load-bearing: see upsertSandboxHost.
 //
 // Returns the instance id, the AWS region, the ssh-config alias, and the local
 // private key path.
@@ -153,39 +156,48 @@ func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, 
 		return "", "", "", "", err
 	}
 
+	alias = "km-" + sandboxID
+	return instanceID, rec.Region, alias, privPath, nil
+}
+
+// upsertSandboxHost writes the ~/.ssh/config entry. Kept OUT of connectPrep so
+// each caller can run its own SSM pre-flight FIRST — km vscode start has always
+// declined to touch the operator's ssh config for a sandbox that turns out
+// unhealthy, and that ordering is load-bearing.
+func upsertSandboxHost(alias, privPath string, localPort int) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("locate home directory: %w", err)
+		return fmt.Errorf("locate home directory: %w", err)
 	}
-	alias = "km-" + sandboxID
-	if err := UpsertHost(filepath.Join(home, ".ssh", "config"), alias, HostOptions{
+	return UpsertHost(filepath.Join(home, ".ssh", "config"), alias, HostOptions{
 		HostName:     "localhost",
 		Port:         localPort,
 		User:         "sandbox",
 		IdentityFile: privPath,
-	}); err != nil {
-		return "", "", "", "", fmt.Errorf("upsert ssh-config: %w", err)
-	}
-
-	return instanceID, rec.Region, alias, privPath, nil
+	})
 }
 
 // runVSCodeStart resolves the sandbox, verifies the local private key, runs the SSM pre-flight
 // check, upserts the ssh-config entry, prints the operator instruction block, then opens the
 // foreground SSM port-forward.
 func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
-	instanceID, region, alias, _, err := connectPrep(ctx, fetcher, sandboxID, localPort)
+	instanceID, region, alias, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort)
 	if err != nil {
 		return err
 	}
 
-	// Single-round-trip SSM pre-flight check.
+	// Single-round-trip SSM pre-flight check. Runs BEFORE upsertSandboxHost —
+	// an unhealthy sandbox must not get an ssh-config entry written for it.
 	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, vsCodeStatusScript)
 	if err != nil {
 		return fmt.Errorf("ssm pre-flight check: %w", err)
 	}
 	if err := parseVSCodeStatus(out, sandboxID); err != nil {
 		return err
+	}
+
+	if err := upsertSandboxHost(alias, privPath, localPort); err != nil {
+		return fmt.Errorf("upsert ssh-config: %w", err)
 	}
 
 	// Print the connection block before opening the blocking port-forward.

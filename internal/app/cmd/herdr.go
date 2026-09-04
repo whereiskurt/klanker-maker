@@ -87,6 +87,16 @@ func sectionOf(out, marker string) string {
 // Herdr's own docs say non-interactive installs fail outright.
 func herdrInstallScript() string {
 	return fmt.Sprintf(`set -e
+# KM_ARTIFACTS_BUCKET is not exported into non-login shells (cloud-init, SSM),
+# but every sandbox carries it in /etc/profile.d/km-identity.sh. Prefer the
+# environment when it is already set so this keeps working if that ever changes.
+if [ -z "${KM_ARTIFACTS_BUCKET:-}" ] && [ -r /etc/profile.d/km-identity.sh ]; then
+  . /etc/profile.d/km-identity.sh
+fi
+if [ -z "${KM_ARTIFACTS_BUCKET:-}" ]; then
+  echo "KM_ARTIFACTS_BUCKET is unset and /etc/profile.d/km-identity.sh did not supply it" >&2
+  exit 1
+fi
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/%s" /usr/local/bin/herdr
 chmod 0755 /usr/local/bin/herdr
 echo "=== herdr path ==="
@@ -182,11 +192,13 @@ func newHerdrStatusCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSM
 }
 
 func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int, noInstall bool) error {
-	instanceID, region, alias, _, err := connectPrep(ctx, fetcher, sandboxID, localPort)
+	instanceID, region, alias, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort)
 	if err != nil {
 		return err
 	}
 
+	// Runs BEFORE upsertSandboxHost — an unhealthy sandbox must not get an
+	// ssh-config entry written for it.
 	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, herdrStatusScript)
 	if err != nil {
 		return fmt.Errorf("ssm pre-flight check: %w", err)
@@ -208,11 +220,21 @@ func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExec
 		if instErr != nil {
 			return fmt.Errorf("install herdr on sandbox: %w", instErr)
 		}
-		st = parseHerdrStatus(instOut)
+		// Assign only the two herdr fields the install output actually carries —
+		// its markers don't include sshd/authkeys, so replacing the whole
+		// struct would silently zero SSHDActive/AuthKeysPresent even though
+		// nothing changed on that front.
+		instSt := parseHerdrStatus(instOut)
+		st.HerdrPath = instSt.HerdrPath
+		st.HerdrVersion = instSt.HerdrVersion
 		if st.HerdrPath == "" {
 			return fmt.Errorf("herdr install ran but the binary is still absent on %s — check that `km init --sidecars` has seeded s3://<artifacts>/%s", sandboxID, herdrS3Key)
 		}
 		fmt.Printf("✓ Installed herdr v%s\n", st.HerdrVersion)
+	}
+
+	if err := upsertSandboxHost(alias, privPath, localPort); err != nil {
+		return fmt.Errorf("upsert ssh-config: %w", err)
 	}
 
 	herdrBanner(os.Stdout, sandboxID, alias, localPort, st)
