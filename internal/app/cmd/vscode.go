@@ -128,9 +128,13 @@ func resolveVSCodeDeps(ctx context.Context, cfg *config.Config, fetcher SandboxF
 // unhealthy sandbox never gets an ssh-config entry written for it. That
 // ordering is load-bearing: see upsertSandboxHost.
 //
+// portSuggestion is the alternate --local-port value named in the collision
+// error; each caller supplies its own so the message stays specific to that
+// command's port range rather than a generic offset.
+//
 // Returns the instance id, the AWS region, the ssh-config alias, and the local
 // private key path.
-func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, localPort int) (instanceID, region, alias, privPath string, err error) {
+func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, localPort, portSuggestion int) (instanceID, region, alias, privPath string, err error) {
 	// Probe the local port before doing any AWS work or writing ssh-config.
 	// Common debug ports (9222 Chrome DevTools, 9229 Node, 5900 VNC) often
 	// already have a process bound — session-manager-plugin will silently
@@ -138,7 +142,7 @@ func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, 
 	// "Connection closed by 127.0.0.1" error.
 	probeLn, probeErr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
 	if probeErr != nil {
-		return "", "", "", "", fmt.Errorf("local port %d is already in use — pick a different one with --local-port (e.g. %d)", localPort, localPort+100)
+		return "", "", "", "", fmt.Errorf("local port %d is already in use — pick a different one with --local-port (e.g. %d)", localPort, portSuggestion)
 	}
 	probeLn.Close()
 
@@ -181,7 +185,10 @@ func upsertSandboxHost(alias, privPath string, localPort int) error {
 // check, upserts the ssh-config entry, prints the operator instruction block, then opens the
 // foreground SSM port-forward.
 func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
-	instanceID, region, alias, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort)
+	// 22122 was chosen deliberately (Phase 73 UAT) and is still documented as
+	// the escape hatch in docs/vscode.md and docs/user-manual.md — keep it a
+	// fixed literal here rather than an offset off localPort.
+	instanceID, region, alias, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, 22122)
 	if err != nil {
 		return err
 	}

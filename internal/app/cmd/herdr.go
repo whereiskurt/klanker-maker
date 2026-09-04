@@ -196,7 +196,7 @@ func newHerdrStatusCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSM
 }
 
 func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int, noInstall bool) error {
-	instanceID, region, alias, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort)
+	instanceID, region, alias, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, localPort+100)
 	if err != nil {
 		return err
 	}
