@@ -259,7 +259,7 @@ func runTunnelK8s(ctx context.Context, cfg *config.Config, fetcher SandboxFetche
 	sshCmd.Stdin = os.Stdin
 	sshCmd.Stdout = os.Stdout
 	sshCmd.Stderr = os.Stderr
-	sshErr := execFn(sshCmd)
+	sshErr := runInteractiveWithTerminalRestore(execFn, sshCmd)
 
 	cancelFwd()
 	<-fwdDone

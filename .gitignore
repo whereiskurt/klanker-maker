@@ -50,6 +50,8 @@ dist/
 /km-h1-bridge
 /km-h1
 /km-quota-alerter
+/km-secretsd
+/km-env
 
 /excalidraw.log
 

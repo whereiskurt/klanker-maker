@@ -639,11 +639,24 @@
         "secrets": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Phase 89: optional SOPS-encrypted secret bundle to inject as environment variables at sandbox boot",
+          "description": "Phase 89: optional SOPS-encrypted secret bundle. Phase 133: delivery is brokered on demand by km-secretsd/km-env per the grants map, not injected as environment variables at boot; see docs/brokered-secrets.md.",
           "properties": {
             "sopsFile": {
               "type": "string",
-              "description": "Path (relative to profile YAML) to a SOPS-encrypted YAML bundle (.enc.yaml). Top-level keys become env vars in /etc/sandbox-secrets.env at boot."
+              "description": "Path (relative to profile YAML) to a SOPS-encrypted YAML bundle (.enc.yaml). Phase 133: decrypted on demand by km-secretsd, never written to disk in plaintext."
+            },
+            "grants": {
+              "type": "object",
+              "description": "Phase 133: maps a consumer name to the bundle keys it may receive. The name is both the binary intercepted on PATH and the identity presented to the broker. Absent means claude and codex each receive the whole bundle.",
+              "propertyNames": {
+                "description": "A consumer name is interpolated into a root-executed boot shell (the shim generator) and used as a filename, so it is restricted to a conservative binary-name character set. The compiler enforces this pattern independently, because cmd/create-handler never calls profile.Validate.",
+                "pattern": "^[A-Za-z0-9._-]+$",
+                "maxLength": 64
+              },
+              "additionalProperties": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
             }
           }
         },

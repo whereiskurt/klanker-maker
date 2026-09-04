@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -18,7 +20,15 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/netpolicy"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 	"github.com/whereiskurt/klanker-maker/pkg/quota"
+	"github.com/whereiskurt/klanker-maker/pkg/secrets"
 )
+
+// validConsumerName bounds a Phase 133 secrets-grant consumer name. The name is
+// interpolated into the root-executed boot shell that generates the PATH shims
+// and is used as a filename under /opt/km/shims, so it is restricted to a
+// conservative binary-name character set. Kept in lockstep with the
+// propertyNames pattern on spec.secrets.grants in the JSON schema.
+var validConsumerName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 // otpEnvName derives the env var name for an OTP secret from its SSM path.
 // The last path segment is uppercased, with hyphens replaced by underscores,
@@ -1209,36 +1219,75 @@ echo "[km-bootstrap] km binary installed for eBPF enforcement"
 {{- if .SopsBundlePresent }}
 
 # ============================================================
-# 5.5. SOPS secret injection (Phase 89)
+# 5.5. Brokered secret unsealing (Phase 133, replaces Phase 89 env injection)
 # ============================================================
-echo "[km-bootstrap] Decrypting SOPS bundle..."
+# The bundle is NEVER decrypted to disk. km-secretsd decrypts per request and
+# km-env injects the result into one child process. The Phase 89 plaintext env
+# file and its profile.d hook are deliberately gone: they put the whole bundle
+# into every login shell, which is what an env dump collects.
+echo "[km-bootstrap] Installing secrets broker..."
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/binaries/sops" /opt/km/bin/sops
 chmod +x /opt/km/bin/sops
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-secretsd" /opt/km/bin/km-secretsd
+chmod +x /opt/km/bin/km-secretsd
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-env" /opt/km/bin/km-env
+chmod +x /opt/km/bin/km-env
+ln -sf /opt/km/bin/km-env /usr/local/bin/km-env
+
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sandboxes/{{ .SandboxID }}/secrets.enc.yaml" /etc/sandbox-secrets.enc.yaml
+chown root:root /etc/sandbox-secrets.enc.yaml
 chmod 0400 /etc/sandbox-secrets.enc.yaml
-# Decrypt to dotenv format; sops uses AWS SDK creds (instance profile) automatically.
-# --output-type dotenv emits KEY=VALUE lines (one per top-level YAML key).
-if ! /opt/km/bin/sops decrypt --output-type dotenv /etc/sandbox-secrets.enc.yaml > /etc/sandbox-secrets.env; then
-  echo "[km-bootstrap] FATAL: sops decrypt failed — aborting boot" >&2
-  exit 1
-fi
-# root owns; sandbox group reads. The sandbox user (whose login shell sources
-# this via profile.d) MUST be able to read it, but the km-sidecar user and
-# world must not. 0440 root:sandbox satisfies both.
-chown root:sandbox /etc/sandbox-secrets.env
-chmod 0440 /etc/sandbox-secrets.env
-# Expose key=value as exported env vars via /etc/profile.d/.
-cat > /etc/profile.d/zz-sandbox-secrets.sh << 'SOPSENV'
-# Phase 89: load decrypted secrets into login-shell env.
-# set -a/+a flips auto-export so dotenv KEY=VALUE lines become exported vars.
-if [ -r /etc/sandbox-secrets.env ]; then
-  set -a
-  . /etc/sandbox-secrets.env
-  set +a
-fi
-SOPSENV
-chmod 0644 /etc/profile.d/zz-sandbox-secrets.sh
-echo "[km-bootstrap] SOPS bundle decrypted to /etc/sandbox-secrets.env (root:sandbox 0440)"
+
+# The broker binds /run/km/secrets.sock, so the directory must exist BEFORE it
+# starts. /run is tmpfs; the sidecar block that normally creates /run/km runs
+# ~75 lines below this point, and on a reboot or resume it does not run at all.
+# Without this, net.Listen fails ENOENT and the failure is doubly hidden: the
+# ExecStartPost socket poll turns it into a chgrp error that blames the socket,
+# and the 7.9 selftest SKIPS its socket check when the socket is absent rather
+# than failing it — so the boot can print "secrets self-test passed" over a
+# permanently dead broker while every agent turn fails at km-env connect time.
+mkdir -p /run/km
+
+cat > /etc/systemd/system/km-secretsd.service << 'KMSECRETSD'
+[Unit]
+Description=km secrets broker (decrypt on demand, never at rest)
+After=network-online.target
+Wants=network-online.target
+# StartLimitIntervalSec/StartLimitBurst belong in [Unit], NOT [Service]: since
+# systemd v230 the [Service] section only recognises the pre-rename
+# StartLimitInterval= spelling, so the renamed keys placed there are silently
+# dropped and a permanently broken daemon hides behind an endless restart loop.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Environment=AWS_REGION={{ .AWSRegion }}
+Environment=KM_SANDBOX_ID={{ .SandboxID }}
+# Single-quoted because systemd strips double quotes from an unquoted
+# Environment= value: {"claude":["A"]} would reach the daemon as {claude:[A]}
+# and fail to parse. Enclosing the whole assignment in single quotes makes the
+# inner double quotes literal.
+Environment='KM_SECRETS_GRANTS={{ .SopsGrantsJSON }}'
+# Covers the paths userdata does not: /run is tmpfs, so /run/km is gone after
+# every reboot and every km resume, and this unit is not ordered after the one
+# that recreates it. Deliberately NOT RuntimeDirectory=km — its default
+# RuntimeDirectoryPreserve=no would DELETE /run/km when the broker stops,
+# taking the km-audit-log sidecar's audit-pipe FIFO with it.
+ExecStartPre=/bin/mkdir -p /run/km
+ExecStart=/opt/km/bin/km-secretsd serve
+# The socket must be reachable by the sandbox user and by nobody else.
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 50); do [ -S /run/km/secrets.sock ] && break; sleep 0.1; done; chgrp sandbox /run/km/secrets.sock && chmod 0660 /run/km/secrets.sock'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+KMSECRETSD
+systemctl daemon-reload
+systemctl enable --now km-secretsd.service
+echo "[km-bootstrap] km-secretsd started"
 {{- end }}
 
 # Ensure Claude Code native binary is installed.
@@ -1881,7 +1930,7 @@ CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID}.scope/cgroup.procs"
 dispatch_as_sandbox() {
   (
     { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
-    exec runuser -u sandbox -- bash -lc "$1"
+    exec runuser -u sandbox -- bash -lc "{{ if .SopsBundlePresent }}PATH=/opt/km/shims:\$PATH; {{ end }}$1"
   )
 }
 
@@ -2569,7 +2618,7 @@ CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID}.scope/cgroup.procs"
 dispatch_as_sandbox() {
   (
     { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
-    exec runuser -u sandbox -- bash -lc "$1"
+    exec runuser -u sandbox -- bash -lc "{{ if .SopsBundlePresent }}PATH=/opt/km/shims:\$PATH; {{ end }}$1"
   )
 }
 
@@ -2989,7 +3038,7 @@ CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID}.scope/cgroup.procs"
 dispatch_as_sandbox() {
   (
     { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
-    exec runuser -u sandbox -- bash -lc "$1"
+    exec runuser -u sandbox -- bash -lc "{{ if .SopsBundlePresent }}PATH=/opt/km/shims:\$PATH; {{ end }}$1"
   )
 }
 
@@ -3342,7 +3391,7 @@ CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID}.scope/cgroup.procs"
 dispatch_as_sandbox() {
   (
     { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
-    exec runuser -u sandbox -- bash -lc "$1"
+    exec runuser -u sandbox -- bash -lc "{{ if .SopsBundlePresent }}PATH=/opt/km/shims:\$PATH; {{ end }}$1"
   )
 }
 
@@ -3901,7 +3950,7 @@ CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-${SANDBOX_ID:-unknown}.scope/cgroup.pro
 dispatch_as_sandbox() {
   (
     { echo "$BASHPID" > "$CGROUP_PROCS"; } 2>/dev/null || true
-    exec runuser -u sandbox -- bash -c "$1"
+    exec runuser -u sandbox -- bash -c "{{ if .SopsBundlePresent }}PATH=/opt/km/shims:\$PATH; {{ end }}$1"
   )
 }
 
@@ -5506,6 +5555,129 @@ if aws s3 ls "s3://{{ .KMArtifactsBucket }}/${KM_CLONE_KEY}" 2>/dev/null | grep 
     echo "[km-bootstrap] Clone workspace restored"
   } || echo "[km-bootstrap] WARNING: clone workspace download failed"
 fi
+{{- if .SopsBundlePresent }}
+
+# ============================================================
+# 7.8. Consumer shims (Phase 133)
+# ============================================================
+# Runs AFTER initCommands so claude/codex are already installed and resolvable.
+# A shim makes km-env INNERMOST: the turn shell receives a PATH entry, the agent
+# process receives the secrets. Wrapping dispatch_as_sandbox instead would hand
+# the whole bash -lc the bundle, which is the thing being removed.
+mkdir -p /opt/km/shims
+# Clear stale shims before regenerating. /opt/km/shims lives on the root volume,
+# so a sandbox launched from a baked AMI (spec.runtime.ami) starts with the BAKE
+# SOURCE's shims already present and already on PATH, so "command -v claude"
+# would return /opt/km/shims/claude and we would bake a shim whose target is
+# itself. The runtime fallback does not save it (that path IS executable), and
+# km-secretsd's selftest treats a self-targeting shim as fatal, so every
+# AMI-backed secrets profile would abort its boot.
+rm -f /opt/km/shims/*
+{{- range .SopsConsumers }}
+# Belt to the rm's braces: resolve with the shim directory removed from PATH,
+# exactly as the generated shim's own fallback does, so a leftover shim that
+# survived by some other route still cannot become its own target. The consumer
+# name is passed as a positional ARGUMENT, never spliced into the script text.
+KM_SHIM_TARGET="$(sudo -u sandbox bash -lc 'PATH="$(echo "$PATH" | tr ":" "\n" | grep -v "^/opt/km/shims$" | paste -sd: -)"; command -v "$1"' km-shim '{{ . }}' 2>/dev/null || true)"
+if [ -n "$KM_SHIM_TARGET" ]; then
+  cat > "/opt/km/shims/{{ . }}" << KMSHIM
+#!/bin/sh
+# Phase 133: exec an ABSOLUTE path, never the bare name — resolving by name here
+# would re-find this shim on PATH and recurse. If the baked target has since
+# moved (userdata re-runs Claude's install.cjs idempotently), fall back to a
+# PATH search with the shim directory removed.
+# NOTE: km-secretsd selftest (shimTarget) parses this KM_REAL= line to verify the target exists. Keep the literal path here.
+KM_REAL="$KM_SHIM_TARGET"
+if [ ! -x "\$KM_REAL" ]; then
+  KM_REAL="\$(PATH="\$(echo "\$PATH" | tr ':' '\n' | grep -v '^/opt/km/shims$' | paste -sd: -)" command -v '{{ . }}' 2>/dev/null)"
+fi
+[ -x "\$KM_REAL" ] || { echo "km-shim: cannot locate the real {{ . }}" >&2; exit 127; }
+exec /opt/km/bin/km-env exec --as '{{ . }}' -- "\$KM_REAL" "\$@"
+KMSHIM
+  chmod 0755 "/opt/km/shims/{{ . }}"
+  chown root:root "/opt/km/shims/{{ . }}"
+  echo "[km-bootstrap] shim: {{ . }} -> $KM_SHIM_TARGET"
+else
+  echo "[km-bootstrap] WARNING: no {{ . }} on PATH; no shim generated" >&2
+fi
+{{- end }}
+
+# Two hooks, because ONE IS NOT ENOUGH, and the reason is ordering rather than
+# caution. nvm installs NO /etc/profile.d script — its installer APPENDS to
+# ~/.bashrc. A bash login shell reads /etc/profile (and so /etc/profile.d/*)
+# FIRST, then ~/.profile, which sources ~/.bashrc — so nvm's prepend runs AFTER
+# ours and an nvm-managed claude/codex would beat /opt/km/shims. profile.d alone
+# would leave the shim inert with no error wherever nvm owns the agent: km shell
+# would run the unshimmed binary with no secrets, and km-secretsd's selftest
+# asserts the login-shell resolution and treats a miss as FATAL, so the boot
+# would abort. Today's profiles escape only by accident — base/userinit.yaml
+# npm-installs claude as ROOT before nvm exists, so it lands outside nvm's bin.
+cat > /etc/profile.d/zz-km-shims.sh << 'KMSHIMPATH'
+case ":$PATH:" in
+  *":/opt/km/shims:"*) ;;
+  *) PATH="/opt/km/shims:$PATH"; export PATH ;;
+esac
+KMSHIMPATH
+chmod 0644 /etc/profile.d/zz-km-shims.sh
+
+# Appended LAST, after initCommands have already added nvm's lines, so ours is
+# the final word on PATH. Guarded so repeated boots — and an AMI relaunch, where
+# ~/.bashrc is baked in — cannot accumulate duplicates.
+KM_SANDBOX_BASHRC=/home/sandbox/.bashrc
+touch "$KM_SANDBOX_BASHRC"
+if ! grep -q '/opt/km/shims' "$KM_SANDBOX_BASHRC"; then
+  cat >> "$KM_SANDBOX_BASHRC" << 'KMSHIMBASHRC'
+
+# Phase 133: the km secret shims must win over nvm, which prepends from this
+# same file. Keep this block LAST.
+case ":$PATH:" in
+  *":/opt/km/shims:"*) ;;
+  *) PATH="/opt/km/shims:$PATH"; export PATH ;;
+esac
+KMSHIMBASHRC
+  echo "[km-bootstrap] shim PATH appended to $KM_SANDBOX_BASHRC"
+fi
+chown sandbox:sandbox "$KM_SANDBOX_BASHRC"
+
+# ============================================================
+# 7.9. Secrets boot check (Phase 133)
+# ============================================================
+# Answers one question: will agents fail? A non-zero exit aborts the boot, the
+# same disposition as the Phase 89 sops-decrypt FATAL this replaces. A box that
+# looks healthy and fails at first turn is worse, because an autonomous trigger
+# will find it first.
+echo "[km-bootstrap] Running secrets self-test..."
+KM_SANDBOX_ID={{ .SandboxID }} AWS_REGION={{ .AWSRegion }} \
+  KM_SECRETS_GRANTS='{{ .SopsGrantsJSON }}' \
+  /opt/km/bin/km-secretsd selftest
+
+# Resume coverage: userdata does NOT re-run on stop/start (cloud-init is
+# per-instance), and a resumed box can meet a rotated bundle or a revoked grant.
+# There is no boot to abort on resume, so this fails red and audits instead.
+cat > /etc/systemd/system/km-secrets-check.service << 'KMSECRETSCHECK'
+[Unit]
+Description=km secrets self-test (resume coverage)
+After=km-secretsd.service
+Requires=km-secretsd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Environment=AWS_REGION={{ .AWSRegion }}
+Environment=KM_SANDBOX_ID={{ .SandboxID }}
+# Single-quoted for the same reason as km-secretsd.service: systemd strips
+# unquoted double quotes and would corrupt the JSON.
+Environment='KM_SECRETS_GRANTS={{ .SopsGrantsJSON }}'
+ExecStart=/opt/km/bin/km-secretsd selftest
+
+[Install]
+WantedBy=multi-user.target
+KMSECRETSCHECK
+systemctl daemon-reload
+systemctl enable km-secrets-check.service
+echo "[km-bootstrap] secrets self-test passed"
+{{- end }}
 
 # ============================================================
 # Phase 56.1 Bug 4: Post-env-rewrite sidecar restart
@@ -5801,11 +5973,18 @@ type userDataParams struct {
 	// multi-instance prefix overrides propagate to KM_SLACK_STREAM_TABLE consumers
 	// (Plan 68-09 hook script, Plan 68-10 km create env injection).
 	SlackStreamMessagesTableName string
-	// SopsBundlePresent gates the Phase 89 SOPS decrypt block (section 5.5).
+	// SopsBundlePresent gates the Phase 133 secrets-broker blocks (sections 5.5,
+	// 7.8, 7.9) and the shim PATH prepend in every dispatch_as_sandbox definition.
 	// True iff resolvedProfile.Spec.Secrets != nil && resolvedProfile.Spec.Secrets.SopsFile != "".
-	// When false (the default, no profile change), the block is omitted entirely —
+	// When false (the default, no profile change), every block is omitted entirely —
 	// existing sandbox userdata is byte-identical to pre-Phase-89 output.
 	SopsBundlePresent bool
+	// SopsConsumers is the set of consumers to generate shims for — the grants
+	// keys, or claude+codex when grants is absent. Phase 133.
+	SopsConsumers []string
+	// SopsGrantsJSON is the grants map as compact JSON for the daemon's
+	// KM_SECRETS_GRANTS env. Empty object when no grants are declared. Phase 133.
+	SopsGrantsJSON string
 	// GitHubInboundEnabled gates conditional emission of the km-github-inbound-poller
 	// bash script, its systemd unit, the km-github binary download, and the
 	// systemctl enable/start lines.
@@ -6797,6 +6976,36 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	// Phase 89: SOPS bundle present — gates section 5.5 template block.
 	// True iff profile declares spec.secrets.sopsFile (non-empty string).
 	params.SopsBundlePresent = p.Spec.Secrets != nil && p.Spec.Secrets.SopsFile != ""
+
+	// Phase 133: shim set and broker grants.
+	if params.SopsBundlePresent {
+		params.SopsConsumers = secrets.DefaultConsumers
+		params.SopsGrantsJSON = "{}"
+		if g := p.Spec.Secrets.Grants; len(g) > 0 {
+			params.SopsConsumers = make([]string, 0, len(g))
+			for name := range g {
+				// A consumer name reaches a root shell at boot (the 7.8 shim
+				// generator) and becomes a filename. The JSON schema carries
+				// the same pattern, but this guard is NOT redundant: it is the
+				// only barrier on the remote-create path, because
+				// cmd/create-handler never calls profile.Validate. Same
+				// disposition as InterpolateSecretPaths' HasPrefix check —
+				// deliberately exactly as strict as the validator.
+				if !validConsumerName.MatchString(name) {
+					return "", fmt.Errorf("secrets grant consumer %q is not a valid consumer name "+
+						"(must match %s): it is used as a filename and interpolated into the boot shell",
+						name, validConsumerName)
+				}
+				params.SopsConsumers = append(params.SopsConsumers, name)
+			}
+			sort.Strings(params.SopsConsumers) // deterministic userdata
+			blob, err := json.Marshal(g)
+			if err != nil {
+				return "", fmt.Errorf("marshal secrets grants: %w", err)
+			}
+			params.SopsGrantsJSON = string(blob)
+		}
+	}
 
 	// Phase 73: VS Code Remote-SSH access (default true).
 	// Only validate when network is non-nil (EC2 compile path). When network is nil

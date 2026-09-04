@@ -30,7 +30,7 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/ssm-session-doc/v2.0.0"
+  source = "${local.repo_root}/infra/modules/ssm-session-doc/v2.1.0"
 }
 
 inputs = {

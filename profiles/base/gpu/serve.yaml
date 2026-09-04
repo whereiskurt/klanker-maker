@@ -162,9 +162,25 @@ spec:
         [Install]
         WantedBy=multi-user.target
         KM_BIFROST_UNIT
-      # Populate /etc/km/bifrost-env from SOPS-injected keys FIRST so the config
-      # build below can detect which providers are usable.
-      - "mkdir -p /etc/km/bifrost-data && touch /etc/km/bifrost-env && grep -hE '^(ANTHROPIC_API_KEY|OPENAI_API_KEY)=' /etc/sandbox-secrets.env >> /etc/km/bifrost-env 2>/dev/null || true"
+      # Populate /etc/km/bifrost-env from the Phase 133 secrets broker FIRST so the
+      # config build below can detect which providers are usable.
+      #
+      # The Phase 89 plaintext /etc/sandbox-secrets.env no longer exists. km-env
+      # unseals into ONE child process; --only narrows the request to these two
+      # keys, and the inner shell writes only the ones that actually came back.
+      #
+      # The `[ -x /opt/km/bin/km-env ]` guard is load-bearing, not caution: this
+      # is an abstract fragment, and gpu-rehearsal-cpu.yaml extends it with NO
+      # spec.secrets.sopsFile, so on that profile there is no broker and no
+      # km-env binary at all. Both keys are OPTIONAL here by design (the jq build
+      # below includes a provider only when its key is present), so an absent
+      # bundle is a legitimate no-op — but a broker that IS installed and fails
+      # is a hard error, not a `|| true`.
+      - |
+        mkdir -p /etc/km/bifrost-data && touch /etc/km/bifrost-env
+        if [ -x /opt/km/bin/km-env ]; then
+          /opt/km/bin/km-env exec --only ANTHROPIC_API_KEY,OPENAI_API_KEY -- sh -c 'for K in ANTHROPIC_API_KEY OPENAI_API_KEY; do V=$(printenv "$K" || true); [ -n "$V" ] && printf "%s=%s\n" "$K" "$V" >> /etc/km/bifrost-env; done; true'
+        fi
       # Build Bifrost config.json with jq — include a provider ONLY when usable:
       # vllm-local always; anthropic/openai if their key is in bifrost-env;
       # bedrock if /etc/km/bedrock.enabled exists (spec.iam.allowBedrock:true).
@@ -208,9 +224,10 @@ spec:
         - "*"
 
   # NOTE: secrets for the gateway's key-gated routes (ANTHROPIC_API_KEY / OPENAI_API_KEY)
-  # arrive via spec.secrets.sopsFile (KMS-decrypted to /etc/sandbox-secrets.env at boot;
-  # the role already has kms:Decrypt on alias/km-sandbox-secrets), then the
-  # initCommandsAppend copies them into /etc/km/bifrost-env. We deliberately do NOT use
+  # arrive via spec.secrets.sopsFile. Since Phase 133 the bundle is never decrypted to
+  # disk: km-secretsd holds the ciphertext and decrypts per request (the role already has
+  # kms:Decrypt on alias/km-sandbox-secrets), and the initCommandsAppend above asks it via
+  # `km-env exec --only ...` and copies the result into /etc/km/bifrost-env. We deliberately do NOT use
   # iam.allowedSecretPaths (SSM-path injection) here — a bad/non-existent path makes the
   # boot's `aws ssm get-parameter` fail under `set -e` and BRICKS the boot (validated on
   # the CPU rehearsal). base/platform's iam block (roleSessionDuration, allowedRegions)

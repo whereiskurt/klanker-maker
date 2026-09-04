@@ -1697,7 +1697,8 @@ func (c *Config) GetCapacityTableName() string {
 
 // GetSandboxSessionDocumentName returns the per-install SSM Session Manager
 // document name, e.g. "km-Sandbox-Session", "tg-Sandbox-Session". Mirrors the
-// computation in infra/modules/ssm-session-doc/v2.0.0/main.tf (Phase 84.4.1).
+// computation in infra/modules/ssm-session-doc/ (the version the live terragrunt
+// unit pins; naming contract introduced in v2.0.0, Phase 84.4.1).
 //
 // Phase 84.4.1: replaces 5 hardcoded "KM-Sandbox-Session" callsites
 // (shell.go:500, agent.go:356/430/619, agent_auth.go:157/411). Note the

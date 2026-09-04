@@ -1386,7 +1386,16 @@ export HOME=/home/sandbox
 source /etc/profile.d/km-profile-env.sh 2>/dev/null
 source /etc/profile.d/km-identity.sh 2>/dev/null
 source /etc/profile.d/km-audit.sh 2>/dev/null
-source /etc/profile.d/zz-sandbox-secrets.sh 2>/dev/null
+# Phase 133: secrets reach the agent through the root-owned km-env shims in
+# /opt/km/shims, not through a plaintext env file. This script is executed by
+# tmux via bash -c, so it is neither a login nor an interactive shell and reads
+# neither /etc/profile.d/zz-km-shims.sh nor ~/.bashrc, the two places that
+# otherwise install this PATH entry. Without the prepend the agent resolves the
+# real binary directly and runs with no credentials, dying on an opaque 401.
+# Placed AFTER the sources above so nothing they do can win the PATH race.
+# Harmless on a profile with no SOPS bundle: the directory does not exist and a
+# missing PATH entry is simply skipped.
+export PATH=/opt/km/shims:$PATH
 %s
 %sKM_ARTIFACTS_BUCKET="%s"
 cd /workspace

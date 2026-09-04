@@ -31,8 +31,10 @@ func TestCompileEC2ServiceHCLHasArtifactsBucket(t *testing.T) {
 }
 
 // TestSopsBundlePresentPopulatedFromProfile asserts that when a profile has
-// Spec.Secrets.SopsFile set, the compiled userdata contains the SOPS section 5.5 markers.
-// This verifies the SopsBundlePresent field is correctly propagated through the compile path.
+// Spec.Secrets.SopsFile set, the compiled userdata contains the Phase 133 broker
+// markers — and none of the Phase 89 plaintext ones. This verifies the
+// SopsBundlePresent field is correctly propagated through the compile path, not
+// just through the direct generateUserData path.
 func TestSopsBundlePresentPopulatedFromProfile(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	p.Spec.Secrets = &profile.SecretsSpec{
@@ -45,15 +47,24 @@ func TestSopsBundlePresentPopulatedFromProfile(t *testing.T) {
 	}
 
 	required := []string{
-		"SOPS secret injection",
-		"sops decrypt --output-type dotenv",
+		"Brokered secret unsealing",
 		"secrets.enc.yaml",
-		"/etc/sandbox-secrets.env",
-		"/etc/profile.d/zz-sandbox-secrets.sh",
+		"/opt/km/bin/km-secretsd",
+		"/opt/km/bin/km-env",
+		"/opt/km/shims",
 	}
 	for _, want := range required {
 		if !strings.Contains(artifacts.UserData, want) {
 			t.Errorf("compiled userdata missing %q when SopsFile is set", want)
+		}
+	}
+
+	for _, banned := range []string{
+		"/etc/sandbox-secrets.env",
+		"/etc/profile.d/zz-sandbox-secrets.sh",
+	} {
+		if strings.Contains(artifacts.UserData, banned) {
+			t.Errorf("compiled userdata still emits %q: the bundle would reach every login shell", banned)
 		}
 	}
 }
