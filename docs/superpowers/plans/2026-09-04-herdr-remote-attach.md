@@ -394,7 +394,11 @@ spec:
       # "No init script found in S3 (skipped)" — the trap documented in
       # base/security/wiz.yaml. `km herdr start` re-ensures the binary over SSM,
       # so a soft failure here is fully recoverable and a hard one is not.
-      - "aws s3 cp \"s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr\" /usr/local/bin/herdr && chmod 0755 /usr/local/bin/herdr || echo '[km] herdr fetch failed; run km herdr start to install' >&2"
+      # KM_ARTIFACTS_BUCKET is NOT inherited here: km-init.sh runs under cloud-init,
+      # which never sources /etc/profile.d. Proven live — the bare form expanded to
+      # `s3:///binaries/herdr` and the fetch failed silently into the boot log.
+      # km-identity.sh carries the bucket on every sandbox.
+      - "[ -n \"${KM_ARTIFACTS_BUCKET:-}\" ] || . /etc/profile.d/km-identity.sh; aws s3 cp \"s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr\" /usr/local/bin/herdr && chmod 0755 /usr/local/bin/herdr || echo '[km] herdr fetch failed; run km herdr start to install' >&2"
 ```
 
 - [ ] **Step 4: Verify the fragment is skipped by the validator and parses**
@@ -1474,7 +1478,7 @@ Append to `cmd/km-presence/main_test.go`:
 
 // herdrPaneCmd builds the fakeRunner key for a pane-list call against one socket.
 func herdrPaneCmd(sock string) string {
-	return "runuser -u sandbox -- herdr pane list --json --socket " + sock
+	return `runuser -u sandbox -- bash -lc herdr pane list --json --socket "` + sock + `"`
 }
 
 func TestSignal_HerdrPaneBusy_Positive(t *testing.T) {
@@ -1644,10 +1648,18 @@ type herdrPane struct {
 //
 // Runs the sandbox user's herdr via runuser (not sudo/su), matching the dispatch
 // convention established when agent traffic had to keep its cgroup.
+//
+// `bash -lc`, not a bare `herdr`, and this is load-bearing. Verified on a live
+// sandbox: base/userinit.yaml installs herdr to /home/sandbox/.local/bin/herdr
+// and `command -v herdr` as root finds nothing. km-presence runs as User=root,
+// so a non-login runuser would fail to resolve the binary, Output would error,
+// and this signal would fail idle PERMANENTLY — reaping every box with a live
+// detached session. Note the negative-case test cannot catch that: a signal
+// stuck at false passes it perfectly. A login shell picks up ~/.local/bin.
 func checkHerdrPaneBusy(r commandRunner, configDir string) bool {
 	for _, sock := range herdrSocketPaths(configDir) {
 		out, err := r.Output("runuser", "-u", "sandbox", "--",
-			"herdr", "pane", "list", "--json", "--socket", sock)
+			"bash", "-lc", fmt.Sprintf("herdr pane list --json --socket %q", sock))
 		if err != nil || len(bytes.TrimSpace(out)) == 0 {
 			continue
 		}
