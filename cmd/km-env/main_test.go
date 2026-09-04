@@ -37,16 +37,40 @@ func TestParseArgs_ExecRequiresCommand(t *testing.T) {
 // The single most important test in this file. km-env must never grow a verb
 // that puts the bundle back into a shell — that is the entire thing being
 // removed. Same disposition as km-netpolicy having no un-deny verb.
+// TestNoShellExportVerbExists is a lexical grep guard, not a semantic one: it
+// scans every non-test .go file in this package for a small set of literal
+// quoted verb tokens. It catches a banned verb added to main.go OR to a new
+// sibling file in this package (the gap a prior review found: the original
+// version only ever read main.go). It does NOT and cannot catch a verb
+// assembled from a constant, a string concatenation, or matched via a
+// prefix/regex instead of a literal switch case — that would need real
+// static analysis. Treat a pass as "no obvious banned verb", not a proof.
 func TestNoShellExportVerbExists(t *testing.T) {
-	src, err := os.ReadFile("main.go")
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, banned := range []string{`"export"`, `"env"`, `"eval"`, `"dump"`, `"shell"`, `"source"`} {
-		if strings.Contains(string(src), banned) {
-			t.Errorf("km-env appears to define a %s verb: a form that emits secrets to a "+
-				"shell defeats the whole phase. Remove it.", banned)
+	banned := []string{`"export"`, `"env"`, `"eval"`, `"dump"`, `"shell"`, `"source"`}
+	checked := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
 		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checked++
+		for _, b := range banned {
+			if strings.Contains(string(src), b) {
+				t.Errorf("%s appears to define a %s verb: a form that emits secrets to a "+
+					"shell defeats the whole phase. Remove it.", name, b)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no non-test .go files found in cmd/km-env — guard is checking nothing")
 	}
 }
 

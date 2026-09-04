@@ -858,8 +858,11 @@ type LogDestination struct {
 // structured tool-gating semantics.
 
 // SecretsSpec defines SOPS-encrypted secret injection for sandboxes (Phase 89).
-// The bundle's top-level keys become environment variables in /etc/sandbox-secrets.env
-// at boot. Reserved keys "sops" and "_meta" are ignored.
+// Phase 133 superseded boot-time env-var delivery: the bundle's top-level keys
+// are no longer written to /etc/sandbox-secrets.env. Instead km-secretsd (a
+// root daemon) decrypts the bundle per request and km-env injects only the
+// keys a named consumer is granted into that one child process. Reserved
+// keys "sops" and "_meta" are ignored. See docs/brokered-secrets.md.
 type SecretsSpec struct {
 	// SopsFile is a path (relative to the profile YAML location) to a
 	// SOPS-encrypted YAML bundle. Reserved keys "sops" and "_meta" are ignored.

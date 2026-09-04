@@ -639,7 +639,7 @@
         "secrets": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Phase 89: optional SOPS-encrypted secret bundle to inject as environment variables at sandbox boot",
+          "description": "Phase 89: optional SOPS-encrypted secret bundle. Phase 133: delivery is brokered on demand by km-secretsd/km-env per the grants map, not injected as environment variables at boot; see docs/brokered-secrets.md.",
           "properties": {
             "sopsFile": {
               "type": "string",

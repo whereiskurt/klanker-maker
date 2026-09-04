@@ -8,6 +8,134 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 133 (2026-09-04) — Brokered secret unsealing: secrets leave the shell (Wave 1 of 2; complete, live UAT pending):**
+- **The problem: malware dumping `env` collected every SOPS secret on the box.**
+  `spec.secrets.sopsFile` decrypted at boot into `/etc/sandbox-secrets.env`
+  (`0440 root:sandbox`), auto-exported by `/etc/profile.d/zz-sandbox-secrets.sh`
+  into every login shell. Agent turns dispatch through `runuser -u sandbox --
+  bash -lc` — a login shell — so the whole bundle sat in the agent's environment,
+  in every `km shell`, and in the environ of anything either one ever forked.
+  `cat /proc/*/environ`, or just reading the file, yielded everything.
+- **The finding that shaped the whole design: the instance role permanently
+  holds BOTH halves of the decrypt** — `kms:Decrypt` on the sandbox-secrets
+  KMS alias and `s3:GetObject` on the ciphertext object. Moving decryption from
+  boot-time to call-time removes the *dump*; it does not remove the
+  *authority* — anything that can reach IMDS can still re-derive the bundle
+  itself. AWS has no notion of which uid on an instance is calling it, so a
+  uid-granular fence can only exist at the OS/network layer. That fence
+  (`spec.secrets.fenceIMDS`, `km-creds`, a self-assuming `ec2spot/v1.7.0`) is
+  the harder half of the problem and is **Wave 2, not shipped in this wave.**
+- **Decrypt-per-request, `[]byte` not `string`, zeroed after — with an honest
+  limit stated in code and docs, not glossed over.** `km-secretsd` (new root
+  daemon, `/run/km/secrets.sock`, `0660 root:sandbox`, `SO_PEERCRED`) performs
+  a live `kms:Decrypt` on every unseal and zeroes its buffers immediately
+  after writing the response. Values are `[]byte` everywhere the broker
+  controls them — Go strings are immutable and runtime-copyable, so a
+  `map[string]string` could never actually be zeroed and the claim would be
+  decorative. The zeroing does NOT reach the YAML decoder's own intermediate
+  string allocations, nor `json.Encoder`'s internal buffer (which holds a
+  base64 copy of every value while writing the wire response) — both are GC
+  garbage the broker's code cannot touch. Cost accepted: ~10ms/unseal, and a
+  network partition makes secrets unavailable — loud (`km-env: cannot reach
+  the secrets broker`), not silent.
+- **Shims make `km-env` innermost; wrapping `dispatch_as_sandbox` was
+  rejected.** `claude`/`codex` (or any `grants`-named consumer) are
+  intercepted by root-owned `/opt/km/shims/{name}` (first on PATH), which
+  `exec`s `/opt/km/bin/km-env exec --as <name> -- <real binary>`. The
+  rejected alternative — auto-unsealing at the `dispatch_as_sandbox`
+  chokepoint itself — was one template edit and no shims, but it would hand
+  the WHOLE turn's `bash -lc` the bundle, so anything the agent shells out to
+  (including a tool it was tricked into running) inherits it: a smaller
+  version of the exact problem being fixed, not a fix. `km-env` has
+  deliberately no export/eval form — `km-env exec` `execve`s one command and
+  is gone; `km-env list` prints key names only, never values — pinned by
+  `TestNoShellExportVerbExists`, which scans every non-test `.go` file in
+  `cmd/km-env/` (not just `main.go`) for a banned-token list; it is a lexical
+  grep guard, honestly documented as unable to catch a verb built from a
+  constant or matched by regex.
+- **The nvm PATH race, and the one assertion that actually proves interception
+  is live.** nvm's own `profile.d` script prepends `~/.nvm/versions/node/*/bin`
+  to PATH, and the tmux dispatch site uses non-login `bash -c` that never
+  sources `profile.d` at all — either would leave a shim silently inert, the
+  same "dead under the default config, invisible to string-presence tests"
+  shape Phases 131/132 already hit. Fixed by making all FIVE
+  `dispatch_as_sandbox` definitions (four SQS pollers + the tmux twin) set
+  `PATH=/opt/km/shims:$PATH` explicitly rather than trusting profile.d
+  ordering, guarded by `pkg/secrets/wiring_guard_test.go` (name-agnostic —
+  covers a sixth poller added later without an edit). The boot selftest's
+  assertion 5 — `runuser -u sandbox -- bash -lc 'command -v claude'` must
+  resolve to the shim, not the real binary — is the single highest-value
+  check in the whole design: every OTHER selftest failure is loud, but a lost
+  PATH race boots clean, the daemon runs, the shim exists, and `claude` just
+  runs with no secrets and dies on a confusing 401 with nothing else noticing.
+- **Boot-fatal, resume-red: the same check, two dispositions, for a structural
+  reason.** `km-secretsd selftest` runs at boot as a plain userdata command
+  under `set -euo pipefail` (non-zero aborts the boot, same disposition as the
+  Phase 89 `sops decrypt` FATAL it replaces) AND on every resume via
+  `km-secrets-check.service` (`Type=oneshot`). Userdata never re-runs on
+  stop/start — cloud-init is per-instance — so a resumed box can meet a
+  rotated bundle or a revoked grant with no boot left to abort; the unit just
+  fails red and a `secret_selftest` audit event records why. Not a
+  compromise: it is what systemd's model makes possible in each position.
+- **`grants` is blast-radius hygiene and audit legibility, NOT containment —
+  stated plainly rather than implied.** A `grants` key is simultaneously the
+  binary intercepted on PATH and the identity presented to the broker (one
+  name, two jobs, deliberately). Absent `grants`, `claude`+`codex` each get
+  the full bundle by default — identical effective grant to pre-Phase-133,
+  just scoped to one process instead of every shell. But a bare `km-env exec
+  -- sh` still gets the full bundle (no `--as`, no narrowing), and any caller
+  reachable as uid `sandbox` can claim `--as claude` for itself — `km-env`
+  states an identity, it does not authenticate one. **The broker is a logged
+  door, not a wall**: uid `sandbox` must reach the socket for the feature to
+  work at all, so peer credentials (uid/pid/exe) are recorded for
+  ATTRIBUTION, not authorization, because `km-env` is the executable in every
+  legitimate call and every illegitimate one alike. What changes is the
+  character of a theft — passive, traceless file/environ read becomes an
+  active, authenticated-in-the-uid-sense, pid-attributed request that writes
+  `secret_unseal`/`secret_unseal_refused` to the CloudWatch audit stream and a
+  discrete `kms:Decrypt` to CloudTrail, joinable against Phase 132's
+  `km-netpolicy execs` on pid. Detection and forensics, not prevention. **On
+  `privileged: true` none of it holds** — sudo can stop `km-secretsd`,
+  rewrite the shims, or read the ciphertext and call KMS directly with the
+  instance role's own permanent authority. The real control is
+  `privileged: false`, identical in kind to the Wiz-sensor limitation.
+- **Schema, purely additive, no `apiVersion` bump:** `spec.secrets.grants:
+  {consumer: [keys]}` and `spec.secrets.fenceIMDS` (declared now, Wave 2
+  behavior). `pkg/profile/types.go`'s `SecretsSpec` doc comment and the JSON
+  schema's `secrets` description were updated in this task to stop describing
+  the removed `/etc/sandbox-secrets.env` behavior — both had drifted true-at
+  Phase-89, false-since-this-phase.
+- **Byte-identity preserved for the dormant case:** a profile with no
+  `spec.secrets.sopsFile` renders userdata identical to before this phase —
+  nothing in the broker/shim/selftest sections gates on anything else. A
+  profile WITH `sopsFile` changes substantially (the entire Phase 89
+  env-injection block is replaced), as intended.
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.
+  NOT `--sidecars`. Do not split the deploy.** The userdata changes (both
+  systemd units, the shim generator, all five PATH prepends) ride in the
+  create-handler zip, which `--sidecars` does not rebuild. `km-secretsd` and
+  `km-env` are uploaded to `s3://<bucket>/sidecars/` by
+  `buildAndUploadSidecars` via new `sidecarBuilds()` entries — shipping only
+  one half means every SOPS sandbox either 404s on the gated `s3 cp` (units
+  render, binaries missing, boot aborts under `set -e`) or boots with no
+  interception at all (binaries present, units/shims never rendered) — the
+  identical lockstep Phase 131 documented for `km ebpf-attach`'s required
+  flags. `TestSidecarBuilds_CoversEverySecretsBinary` and
+  `TestUserdataDownloadsMatchSidecarBuilds` (`internal/app/cmd/init_sidecars_test.go`)
+  pin the pairing mechanically. Existing sandboxes keep pre-Phase-133 behavior
+  until `km destroy && km create` — the binaries are fetched at boot, and
+  there is no in-place migration for a running box.
+- **Wave 2 — `spec.secrets.fenceIMDS`, `km-creds`, `infra/modules/ec2spot/v1.7.0`
+  — is still outstanding.** Until it ships, the instance role's decrypt
+  authority described above is not fenced at the OS/network layer for any
+  profile, privileged or not. See `docs/brokered-secrets.md` § Known
+  deferrals and `docs/superpowers/specs/2026-09-04-brokered-secret-unsealing-design.md`
+  §4.4/§9.1 for the design.
+- See `docs/brokered-secrets.md` for the full operator runbook (grants,
+  `km-env` usage, reading `secret_unseal` events, the boot check,
+  troubleshooting, deploy surface, and the security posture verbatim) and
+  `docs/sandbox-secrets.md` for the superseded-note pointing at it.
+
 **Idle-reap fail-safe + three missing ttl-handler DynamoDB grants (2026-09-02, v0.8.14):**
 - **A live desktop sandbox was stopped as idle two minutes after its last presence
   heartbeat, against a 30-minute `idleTimeout`.** `IdleDetector.isIdle`

@@ -1,5 +1,16 @@
 # SOPS secret injection for sandboxes (Phase 89)
 
+> **Phase 133 (2026-09-04) supersedes the delivery mechanism described below.**
+> Boot-time env-var delivery is gone: `/etc/sandbox-secrets.env` and
+> `/etc/profile.d/zz-sandbox-secrets.sh` **no longer exist** on any sandbox.
+> Secrets are now served on demand by a root broker (`km-secretsd`) to a client
+> (`km-env`) that injects them into exactly one process — the wrapped
+> `claude`/`codex` agent, via shims on `PATH`. `sopsFile` and the KMS/bootstrap
+> prerequisites below are unchanged; only how the decrypted values reach the
+> sandbox has changed. See `docs/brokered-secrets.md` for the current
+> mechanism, the `grants` field, troubleshooting, and the honest security
+> posture.
+
 > **Phase 92 (2026-05-31):** `spec.identity:` was renamed to `spec.iam:`.
 > `iam.allowedSecretPaths` (the SSM-allowlist field, Phase 89) is now declared in
 > the JSON schema (schema-drift fix). `sessionPolicy` was removed without
