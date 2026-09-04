@@ -39,3 +39,36 @@ Note also the CLI surface differs from the published docs:
 - there is **no `--json` flag**; these commands emit JSON by default
 - responses are **wrapped**: `{"id":..., "result":{...}, "type":...}`, not bare arrays
 - `process-info` takes **`--pane <ID>`**, not a positional argument
+
+
+## Verified invocation syntax
+
+The fixtures above record response *bodies*. These are the exact commands that produced them,
+run **as root** on the live sandbox — which is how km-presence runs. Both forms were executed and
+their output captured; neither is inferred from documentation.
+
+```sh
+SOCK=/home/sandbox/.config/herdr/herdr.sock
+
+# enumerate panes  -> herdr_pane_list.json
+runuser -u sandbox -- bash -lc "HERDR_SOCKET_PATH=\"$SOCK\" herdr pane list"
+
+# per-pane process state -> herdr_process_info_{busy,idle}.json
+runuser -u sandbox -- bash -lc "HERDR_SOCKET_PATH=\"$SOCK\" herdr pane process-info --pane w1:p1"
+```
+
+Notes, each established by running the wrong form first:
+
+- **The session is selected by the `HERDR_SOCKET_PATH` environment variable, not a `--socket`
+  flag.** `commandRunner` has no env support, so the assignment goes inside the `bash -lc` string.
+- **There is no `--json` flag.** `herdr pane list --json` fails with `unknown option: --json`;
+  JSON is the default output.
+- **`process-info` takes `--pane <ID>`.** A positional (`herdr pane process-info w1:p1`) fails with
+  `unknown option: w1:p1`.
+- **`bash -lc` is mandatory, not stylistic.** `base/userinit.yaml` installs herdr to
+  `/home/sandbox/.local/bin/herdr`, and root's PATH does not include it. Measured:
+  `runuser -u sandbox -- herdr pane list` → `runuser: failed to execute herdr: No such file or
+  directory`. A non-login shell therefore makes signal 8 fail idle **permanently** — and the
+  negative-case test passes against a permanently-false signal, so no test would catch it.
+- **Pane ids look like `w1:p1`** and come from `pane_id` in the `pane list` response (not `id`).
+- herdr also creates `herdr-client.sock` beside `herdr.sock`; only `herdr.sock` speaks this API.
