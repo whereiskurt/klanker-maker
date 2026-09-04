@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -292,4 +293,69 @@ func TestRunSelftest_EmitsSecretSelftestAuditEvent(t *testing.T) {
 	if _, ok := detail["failed"]; !ok {
 		t.Errorf("audit detail missing the failed count: %v", detail)
 	}
+}
+
+func TestWriteSelftestResult_WritesExpectedShapeWithoutLeakingValues(t *testing.T) {
+	// The third of the design spec's three result destinations (§7.2): a
+	// file the klanker:sandbox self-census skill reads directly.
+	stubDecrypt(t, "API_KEY: supersecret\n", nil)
+	p := filepath.Join(t.TempDir(), "secrets.enc.yaml")
+	_ = osWriteFile(p)
+	s := &Server{CiphertextPath: p, Audit: NopAudit{}}
+	checks := s.Selftest(opts(t, t.TempDir(), nil, nil))
+
+	out := filepath.Join(t.TempDir(), "result.json")
+	writeSelftestResult(out, checks)
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("result file not written: %v", err)
+	}
+	if contains(string(data), "supersecret") {
+		t.Error("selftest result file leaked a secret VALUE")
+	}
+	if !contains(string(data), "API_KEY") {
+		t.Error("result file should name the key")
+	}
+
+	var parsed struct {
+		Timestamp string `json:"timestamp"`
+		Failed    int    `json:"failed"`
+		Checks    []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+			Detail string `json:"detail"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("result file is not valid JSON: %v", err)
+	}
+	if parsed.Timestamp == "" {
+		t.Error("result file missing a timestamp")
+	}
+	var sawUnseal bool
+	for _, c := range parsed.Checks {
+		if c.Name == "unseal" {
+			sawUnseal = true
+			if c.Status != "ok" {
+				t.Errorf("unseal status = %q, want ok", c.Status)
+			}
+		}
+	}
+	if !sawUnseal {
+		t.Errorf("result file missing the unseal check: %+v", parsed)
+	}
+}
+
+func TestWriteSelftestResult_EmptyPathIsNoop(t *testing.T) {
+	// The zero value every prior Selftest-only test gets (they never set
+	// ResultPath) — must stay side-effect free, no panic, no I/O attempted.
+	writeSelftestResult("", []Check{{Name: "x", OK: true, Fatal: true}})
+}
+
+func TestWriteSelftestResult_MissingDirectoryIsBestEffort(t *testing.T) {
+	// The expected off-box shape of failure — a report file must never fail
+	// the selftest itself.
+	writeSelftestResult(filepath.Join(t.TempDir(), "no-such-dir", "result.json"),
+		[]Check{{Name: "x", OK: true, Fatal: true}})
 }

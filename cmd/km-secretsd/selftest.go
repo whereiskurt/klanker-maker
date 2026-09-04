@@ -1,15 +1,29 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/whereiskurt/klanker-maker/pkg/secrets"
 )
+
+// SelftestResultPath is where runSelftest writes its result for the
+// klanker:sandbox self-census skill to read (design spec §7.2) — the third
+// of the three places a selftest result lands, alongside the systemd unit's
+// own exit status and the secret_selftest audit event. World-readable like
+// /opt/km/.km-profile.yaml (Phase 113) for the same reason: the agent's own
+// self-census reads it directly, and it never carries a secret value — only
+// check names, statuses, and the same key-NAME-only Detail strings the
+// audit event already carries.
+const SelftestResultPath = "/opt/km/.km-secrets-check.json"
 
 // Check is one selftest assertion.
 type Check struct {
@@ -195,14 +209,9 @@ func runSelftest(s *Server) int {
 	failed := 0
 	detail := map[string]any{}
 	for _, c := range checks {
-		status := "ok"
-		switch {
-		case c.OK:
-		case c.Fatal:
-			status = "FAIL"
+		status := checkStatus(c)
+		if status == "FAIL" {
 			failed++
-		default:
-			status = "warn"
 		}
 		fmt.Fprintf(os.Stderr, "[km-secrets-check] %-16s %-4s %s\n", c.Name, status, c.Detail)
 		detail[c.Name] = status
@@ -210,9 +219,102 @@ func runSelftest(s *Server) int {
 	detail["failed"] = failed
 	_ = s.Audit.Emit("secret_selftest", detail)
 
+	// Third destination per the design spec (§7.2). Best-effort: see
+	// writeSelftestResult — a report file that could not be written must
+	// never fail the selftest itself.
+	writeSelftestResult(SelftestResultPath, checks)
+
 	if failed > 0 {
 		fmt.Fprintf(os.Stderr, "[km-secrets-check] %d fatal check(s) failed: agents would fail\n", failed)
 		return 1
 	}
 	return 0
+}
+
+// checkStatus renders a Check's pass/fail/warn state as the single word used
+// both on the stderr report line and in the result artifacts (audit detail,
+// the result file below).
+func checkStatus(c Check) string {
+	switch {
+	case c.OK:
+		return "ok"
+	case c.Fatal:
+		return "FAIL"
+	default:
+		return "warn"
+	}
+}
+
+// selftestResult is the shape written to SelftestResultPath.
+type selftestResult struct {
+	Timestamp string                `json:"timestamp"`
+	Failed    int                   `json:"failed"`
+	Checks    []selftestResultCheck `json:"checks"`
+}
+
+type selftestResultCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+// writeSelftestResult writes the third of the selftest's three result
+// destinations (design spec §7.2), for the klanker:sandbox self-census skill
+// to read directly rather than shelling out to re-run the selftest itself.
+//
+// BEST-EFFORT BY CONSTRUCTION: an empty path (the zero value tests get by
+// default) is a no-op, and any write or chown failure — the parent directory
+// missing being the expected case off-box — is swallowed rather than
+// propagated. Failing a boot because a convenience report file could not be
+// written would be absurd; the boot-abort mechanism is runSelftest's exit
+// code, not this file.
+//
+// Carries only check NAMES, statuses, and each check's existing Detail
+// string — the same key-NAME-only rule the audit event and the unseal
+// check's own Detail already follow. Nothing here ever sees a secret value.
+func writeSelftestResult(path string, checks []Check) {
+	if path == "" {
+		return
+	}
+
+	out := selftestResult{Timestamp: time.Now().UTC().Format(time.RFC3339)}
+	for _, c := range checks {
+		status := checkStatus(c)
+		if status == "FAIL" {
+			out.Failed++
+		}
+		out.Checks = append(out.Checks, selftestResultCheck{Name: c.Name, Status: status, Detail: c.Detail})
+	}
+
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return
+	}
+	// 0644: world-readable like /opt/km/.km-profile.yaml (Phase 113) — the
+	// sandbox user's own self-census skill reads this directly, and it
+	// carries nothing more sensitive than that skill already gathers itself.
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return
+	}
+	chownToSandboxUser(path)
+}
+
+// chownToSandboxUser gives the result file to sandbox:sandbox, mirroring the
+// Phase 113 precedent for /opt/km/.km-profile.yaml. Best-effort: a dev
+// machine or test sandbox with no "sandbox" user, or a non-root process,
+// just leaves the file root-owned.
+func chownToSandboxUser(path string) {
+	u, err := user.Lookup("sandbox")
+	if err != nil {
+		return
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return
+	}
+	_ = os.Chown(path, uid, gid)
 }
