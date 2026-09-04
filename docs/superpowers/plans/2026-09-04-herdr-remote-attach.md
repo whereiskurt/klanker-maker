@@ -1319,9 +1319,37 @@ state signal 8 exists to detect.
 git pull --rebase
 git log --oneline -1 HEAD && git log --oneline -1 origin/main   # must share a base
 make build
-km init --sidecars          # seeds s3://<artifacts>/binaries/herdr
-km create profiles/learner.yaml herdrprobe --wait
+km init --sidecars       # a NON-ZERO exit is expected in a worktree that has never run
+                         # `make build-lambdas` — the toolchain tar step fails AFTER the
+                         # herdr upload. Confirm `Uploaded herdr` in the output instead.
+aws s3 ls s3://<artifacts-bucket>/binaries/herdr --profile klanker-terraform
 ```
+
+**The probe profile MUST extend the fragment.** `profiles/learner.yaml` does NOT extend
+`base/tools/herdr`, so a box created from it has no herdr binary and Step 2 fails at its first
+command. Create a throwaway leaf that does — which also makes this probe the fragment's first
+end-to-end live proof, the only place `base/tools/herdr` gets exercised before the PR:
+
+```bash
+sed -e 's/^  name: learner$/  name: herdrprobe/' \
+    -e 's|^  - base/userinit$|  - base/userinit\n  - base/tools/herdr|' \
+    profiles/learner.yaml > /tmp/herdrprobe.yaml
+grep -n "base/tools/herdr" /tmp/herdrprobe.yaml    # must print a line; if not, edit by hand
+./km validate /tmp/herdrprobe.yaml
+./km create /tmp/herdrprobe.yaml herdrprobe --wait
+```
+
+Then confirm the FRAGMENT delivered the binary — not a later manual step. This is the assertion
+the fragment's existence rests on:
+
+```bash
+./km shell herdrprobe     # on the box:  ls -l /usr/local/bin/herdr && herdr --version
+```
+
+If it is absent, grep `/var/log/cloud-init-output.log` for `[km] herdr fetch failed`. The
+fail-soft `|| echo` means a missing binary is a warning in the boot log rather than a boot
+failure, so that log line is the only place it surfaces.
+
 
 - [ ] **Step 2: Start a headless server and capture the IDLE fixture first**
 
