@@ -10,6 +10,10 @@ import (
 func TestPipeAudit_EmitsCanonicalSchema(t *testing.T) {
 	// A regular file stands in for the FIFO: the writer must not care.
 	p := filepath.Join(t.TempDir(), "audit-pipe")
+	// Pre-create since O_CREATE is not used (only the FIFO should exist).
+	if err := os.WriteFile(p, []byte{}, 0o666); err != nil {
+		t.Fatal(err)
+	}
 	a := &PipeAudit{Path: p, SandboxID: "sb-a1b2c3d4"}
 
 	if err := a.Emit("secret_unseal", map[string]any{
@@ -60,6 +64,10 @@ func TestPipeAudit_MissingPipeIsNotFatal(t *testing.T) {
 func TestPipeAudit_NeverLogsValues(t *testing.T) {
 	// Guard against a future refactor passing values instead of names.
 	p := filepath.Join(t.TempDir(), "audit-pipe")
+	// Pre-create since O_CREATE is not used.
+	if err := os.WriteFile(p, []byte{}, 0o666); err != nil {
+		t.Fatal(err)
+	}
 	a := &PipeAudit{Path: p, SandboxID: "sb-1"}
 	if err := a.Emit("secret_unseal", map[string]any{"keys": []string{"API_KEY"}}); err != nil {
 		t.Fatal(err)
