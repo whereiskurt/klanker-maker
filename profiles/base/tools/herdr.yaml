@@ -3,7 +3,39 @@ kind: SandboxProfile
 metadata:
   name: base-tools-herdr
   abstract: true
+
+# Herdr — persistent terminal multiplexer for agent panes.
+#
+# Opt in with `extends: [base/tools/herdr]`. See docs/herdr-remote-attach.md
+# and `km herdr start`.
+#
+# The binary comes from S3 over the instance role, NOT from herdr.dev. That is
+# the decisive difference from base/security/wiz.yaml, which needs a
+# ".wiz.io" allowedDNSSuffixes entry because its installer downloads over the
+# public internet — and DNS is the one enforcement layer root does NOT bypass
+# (userdata.go rewrites /etc/resolv.conf to 127.0.0.1 for the whole box, and the
+# eBPF resolver NXDOMAINs non-allowlisted names with no uid or cgroup check).
+# Fetching from S3 keeps this fragment free of any egress change at all.
+#
+# Deliberately absent:
+#   spec.network  — no allowlist entry is needed; see above.
+#   spec.runtime  — Phase 117 bool zero-value trap; mixed-bool blocks stay in leaves.
+#   a systemd unit — the herdr server starts itself on first attach. A unit would
+#                 run a server nobody is attached to and defeat km-presence
+#                 signal 8's negative case, latching the box awake forever.
+#   pane_history  — Herdr's scrollback persistence writes pane output (secrets,
+#                 tokens, prompts) to session-history.json at rest on the box.
+#                 It is off by default upstream and km does not turn it on.
 spec:
   execution:
+    # Appends after the merged initCommands rather than replacing them.
     initCommandsAppend:
-      - "true # binaries/herdr — filled in by Task 2"
+      # KM_ARTIFACTS_BUCKET is exported at the top of the bootstrap and inherited
+      # by /tmp/km-init.sh, so it resolves here.
+      #
+      # The `|| echo` is load-bearing: km-init.sh runs under `set -e`, so a hard
+      # failure here aborts every LATER initCommand and surfaces only as
+      # "No init script found in S3 (skipped)" — the trap documented in
+      # base/security/wiz.yaml. `km herdr start` re-ensures the binary over SSM,
+      # so a soft failure here is fully recoverable and a hard one is not.
+      - "aws s3 cp \"s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr\" /usr/local/bin/herdr && chmod 0755 /usr/local/bin/herdr || echo '[km] herdr fetch failed; run km herdr start to install' >&2"
