@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/whereiskurt/klanker-maker/pkg/secrets"
 )
@@ -42,11 +43,26 @@ func main() {
 }
 
 func runServe(srv *Server) int {
+	// A second daemon starting while one is already live (a manual invocation
+	// racing the unit, or a restart overlapping the old process's shutdown)
+	// must not unlink the live socket out from under it — that produces two
+	// root daemons both holding decrypted material with systemctl only
+	// showing one. Probe before removing.
+	if socketLive(secrets.SocketPath) {
+		fmt.Fprintf(os.Stderr, "km-secretsd: %s already answers; refusing to steal it from a live daemon\n", secrets.SocketPath)
+		return 1
+	}
 	// Remove a stale socket from an unclean shutdown; systemd restarts us and a
-	// leftover inode would make every bind fail.
+	// leftover inode would make every bind fail. socketLive above already
+	// confirmed nothing is listening on it.
 	_ = os.Remove(secrets.SocketPath)
 
+	// The socket must never be even briefly world-connectable between Listen
+	// and the Chmod below, regardless of what UMask= the unit sets (or a
+	// hand-run `km-secretsd serve` inherits from its shell).
+	oldMask := syscall.Umask(0o177) // socket is born 0600
 	ln, err := net.Listen("unix", secrets.SocketPath)
+	syscall.Umask(oldMask)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "km-secretsd: listen: %v\n", err)
 		return 1
@@ -65,4 +81,16 @@ func runServe(srv *Server) int {
 		return 1
 	}
 	return 0
+}
+
+// socketLive reports whether something is already answering at path. A short
+// dial timeout keeps this from hanging on a genuinely stale inode (a socket
+// file left behind by an unclean shutdown, with nothing behind it).
+func socketLive(path string) bool {
+	conn, err := net.DialTimeout("unix", path, 200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
