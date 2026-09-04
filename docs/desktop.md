@@ -318,7 +318,10 @@ Two consequences worth knowing:
 of viewer activity.
 
 A connected VS Code Remote-SSH session is covered separately by signal 7; see
-`docs/vscode.md` § Idle timeout and Remote-SSH sessions.
+`docs/vscode.md` § Idle timeout and Remote-SSH sessions. A detached Herdr pane
+still doing real work is covered by signal 8, which — unlike 6 and 7 — looks
+inside the session rather than at the socket; see
+`docs/herdr-remote-attach.md` § Signal 8.
 
 **Requires a sandbox created after this change.** `km-presence` ships in the
 sandbox image, so existing desktop sandboxes keep the five-signal daemon until
