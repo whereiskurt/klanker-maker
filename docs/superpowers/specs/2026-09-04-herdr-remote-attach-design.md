@@ -102,9 +102,12 @@ matching the existing `network/`, `os/`, `security/`, `gpu/` split.
 
 Critically, this is **pure `initCommandsAppend`** — no `pkg/compiler/userdata.go` change,
 therefore **no userdata golden churn, no create-handler rebuild, and no
-`km init --dry-run=false`** for this half. `userdata.go:374` exports
-`KM_ARTIFACTS_BUCKET` at the top of the bootstrap, and initCommands run as a child
+`km init --dry-run=false`** for this half. The bootstrap exports
+`KM_ARTIFACTS_BUCKET` near the top of userdata, and initCommands run as a child
 process (`/tmp/km-init.sh`) that inherits it, so the fragment can reach S3 by name.
+Verified against `origin/main` at 2a004efe (post-Phase-133), where `.InitCommands`
+is still referenced ONLY by the `{{- if or .InitCommands .InitScripts }}` presence
+gate — the commands themselves never render into userdata.
 
 ```yaml
 spec:
