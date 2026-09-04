@@ -311,3 +311,68 @@ func TestCheckStaleSSHConfig_NonKMAliasInsideMarkers_Untouched(t *testing.T) {
 		t.Error("km-sb-ghost should have been removed")
 	}
 }
+
+func TestCheckHerdrSSHConfigConflict_WarnsWhenBothManage(t *testing.T) {
+	dir := t.TempDir()
+	herdrCfg := filepath.Join(dir, "config.toml")
+	sshCfg := filepath.Join(dir, "config")
+	if err := os.WriteFile(herdrCfg, []byte("[remote]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sshCfg, []byte("Host km-sb-abc123\n  HostName localhost\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := checkHerdrSSHConfigConflict(herdrCfg, sshCfg)
+	if res.Status != CheckWarn {
+		t.Fatalf("Status = %v; want CheckWarn when herdr manages ssh config and a km- Host block exists", res.Status)
+	}
+	if !strings.Contains(res.Remediation, "manage_ssh_config = false") {
+		t.Errorf("Remediation should name the fix; got %q", res.Remediation)
+	}
+}
+
+func TestCheckHerdrSSHConfigConflict_SilentWhenOptedOut(t *testing.T) {
+	dir := t.TempDir()
+	herdrCfg := filepath.Join(dir, "config.toml")
+	sshCfg := filepath.Join(dir, "config")
+	if err := os.WriteFile(herdrCfg, []byte("[remote]\nmanage_ssh_config = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sshCfg, []byte("Host km-sb-abc123\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res := checkHerdrSSHConfigConflict(herdrCfg, sshCfg); res.Status != CheckOK {
+		t.Fatalf("Status = %v; want CheckOK once manage_ssh_config = false is set", res.Status)
+	}
+}
+
+// TestCheckHerdrSSHConfigConflict_SilentWhenHerdrUnused asserts the check costs
+// nothing for an operator who has never run herdr. Every km doctor group that is
+// not configured must skip silently rather than emit noise.
+func TestCheckHerdrSSHConfigConflict_SilentWhenHerdrUnused(t *testing.T) {
+	dir := t.TempDir()
+	sshCfg := filepath.Join(dir, "config")
+	if err := os.WriteFile(sshCfg, []byte("Host km-sb-abc123\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res := checkHerdrSSHConfigConflict(filepath.Join(dir, "absent.toml"), sshCfg); res.Status != CheckOK {
+		t.Fatalf("Status = %v; want CheckOK when no herdr config exists", res.Status)
+	}
+}
+
+// TestCheckHerdrSSHConfigConflict_SilentWithoutKmHosts asserts the two tools only
+// conflict when both actually write the file.
+func TestCheckHerdrSSHConfigConflict_SilentWithoutKmHosts(t *testing.T) {
+	dir := t.TempDir()
+	herdrCfg := filepath.Join(dir, "config.toml")
+	sshCfg := filepath.Join(dir, "config")
+	if err := os.WriteFile(herdrCfg, []byte("[remote]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sshCfg, []byte("Host bastion\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res := checkHerdrSSHConfigConflict(herdrCfg, sshCfg); res.Status != CheckOK {
+		t.Fatalf("Status = %v; want CheckOK when ~/.ssh/config has no km- Host block", res.Status)
+	}
+}

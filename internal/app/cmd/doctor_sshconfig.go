@@ -262,3 +262,40 @@ func planArtifacts(hasAlias, hasKey, hasKeyPub bool) string {
 	}
 	return " (" + strings.Join(parts, "+") + ")"
 }
+
+// checkHerdrSSHConfigConflict reports whether Herdr and km are both managing
+// ~/.ssh/config. Herdr rewrites it by default (adding keepalive fallbacks) and
+// km's UpsertHost owns the `Host km-<id>` blocks — two writers, one file.
+//
+// km deliberately does NOT write the fix itself. ~/.config/herdr/config.toml is
+// a workstation-global file km does not own; silently editing it to win a
+// conflict is how you produce a bug report about km breaking an unrelated remote
+// host. Report it and let the operator decide.
+//
+// Skips silently when herdr has never been configured, or when ~/.ssh/config has
+// no km- Host block — there is no conflict until both tools write the file.
+func checkHerdrSSHConfigConflict(herdrConfigPath, sshConfigPath string) CheckResult {
+	const name = "Herdr ssh-config conflict"
+	ok := CheckResult{Name: name, Status: CheckOK, Message: "herdr is not managing ~/.ssh/config"}
+
+	herdrRaw, err := os.ReadFile(herdrConfigPath)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckOK, Message: "herdr not configured on this workstation"}
+	}
+	if strings.Contains(strings.ReplaceAll(string(herdrRaw), " ", ""), "manage_ssh_config=false") {
+		return ok
+	}
+	sshRaw, err := os.ReadFile(sshConfigPath)
+	if err != nil {
+		return ok
+	}
+	if !strings.Contains(string(sshRaw), "Host km-") {
+		return ok
+	}
+	return CheckResult{
+		Name:        name,
+		Status:      CheckWarn,
+		Message:     fmt.Sprintf("herdr is managing %s, where km owns the `Host km-*` blocks", sshConfigPath),
+		Remediation: fmt.Sprintf("Add to %s:\n\n    [remote]\n    manage_ssh_config = false\n", herdrConfigPath),
+	}
+}
