@@ -29,6 +29,14 @@ var reservedKeys = map[string]bool{"sops": true, "_meta": true}
 // Zeroing here covers the decrypted YAML buffer and these per-key values; it
 // cannot cover a response already serialised onto a socket, nor the environment
 // of the child process.
+//
+// It also cannot cover the transient copy that exists while LoadBundle runs:
+// yaml.Unmarshal decodes into a map[string]any, and every string value in
+// that map is a decoder-allocated Go string — immutable, unreachable from
+// Bundle once LoadBundle returns, and never zeroed. That copy is GC garbage
+// of indeterminate lifetime. This is unavoidable when decoding YAML into
+// map[string]any (there is no in-place, zeroable YAML scalar decode) and is
+// accepted as a known gap in the zeroing guarantee.
 type Bundle struct {
 	vals map[string][]byte
 	raw  []byte // the decrypted YAML, retained solely so Zero can overwrite it
@@ -48,7 +56,15 @@ func LoadBundle(path string) (*Bundle, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal(plain, &doc); err != nil {
 		zero(plain)
-		return nil, fmt.Errorf("parse decrypted bundle: %w", err)
+		// Deliberately NOT %w-wrapping the decoder's error: yaml.Unmarshal
+		// errors can quote a fragment of the offending line, and that line
+		// is decrypted plaintext — it can contain a secret. This error
+		// travels over the km-secretsd socket into UnsealResponse.Error,
+		// which km-env prints to the agent's stderr and into transcripts,
+		// so propagating the decoder's text verbatim would be a plaintext
+		// leak path. Diagnose a malformed bundle by decrypting it locally
+		// with sops, not from this message.
+		return nil, fmt.Errorf("parse decrypted bundle at %s: invalid YAML (details suppressed: the decoder echoes source text, which here is plaintext)", path)
 	}
 
 	b := &Bundle{vals: make(map[string][]byte, len(doc)), raw: plain}
