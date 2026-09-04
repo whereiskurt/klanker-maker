@@ -1458,27 +1458,114 @@ git commit -m "test(herdr): capture live herdr API fixtures for presence signal 
 - Test: `cmd/km-presence/main_test.go` (append)
 
 **Interfaces:**
-- Consumes: the fixtures and the §6.4 decision from Task 6; `commandRunner`.
+- Consumes: the committed fixtures in `cmd/km-presence/testdata/` (captured live from herdr 0.8.2 — read `testdata/README.md` FIRST); `commandRunner`.
 - Produces:
   - `const defaultHerdrConfigDir = "/home/sandbox/.config/herdr"`
   - `func herdrSocketPaths(configDir string) []string`
+  - `func herdrPaneIDs(raw []byte) []string`
+  - `func herdrPaneIsBusy(raw []byte) bool`
   - `func checkHerdrPaneBusy(r commandRunner, configDir string) bool`
-  - `tick` signature becomes `tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath, herdrConfigDir string) (bool, bool)`
+  - `tick` gains a final `herdrConfigDir string` parameter
 
-**Deviation note for the implementer:** the struct below is written against Herdr's documented `pane.process_info` shape (shell pid, foreground process group id, foreground processes with pid/name/argv/cwd). If Task 6's fixtures show different field names, **change the JSON tags to match the fixtures** — the fixtures are ground truth and the docs are not. This is a bounded, mechanical deviation; the signal's semantics do not change.
+**This task's design was rewritten after live measurement. Read `cmd/km-presence/testdata/README.md` before writing any code** — the published Herdr docs are wrong in three ways that matter here, and an earlier draft of this task contained a defect that would have disabled idle teardown fleet-wide.
 
-- [ ] **Step 1: Write the failing test**
+Measured facts (herdr 0.8.2, verified on a real sandbox):
+- There is **no `--json` flag**. These commands emit JSON by default; passing `--json` errors with `unknown option`.
+- Responses are **wrapped**: `{"id":…,"result":{…},"type":…}` — not bare arrays.
+- `process-info` takes **`--pane <ID>`**, not a positional argument.
+- **`pane list` is byte-identical busy vs idle** and carries no process data, so it cannot source this signal. It is used only to enumerate pane ids.
+- **`agent list` returns `[]` for a plain `sleep`** — it lists only recognised agents, so relying on it would reintroduce the agent-name coupling this signal exists to remove.
+- **`foreground_processes` is NON-EMPTY WHEN IDLE** — it contains the pane's own shell. See the trap below.
 
-Append to `cmd/km-presence/main_test.go`:
+- [ ] **Step 1: Write the failing tests**
+
+Append to `cmd/km-presence/main_test.go` (add `"errors"` to its imports):
 
 ```go
 // =============================================================================
 // Signal 8: Herdr pane busy
 // =============================================================================
 
-// herdrPaneCmd builds the fakeRunner key for a pane-list call against one socket.
-func herdrPaneCmd(sock string) string {
-	return `runuser -u sandbox -- bash -lc herdr pane list --json --socket "` + sock + `"`
+func herdrListCmd(sock string) string {
+	return `runuser -u sandbox -- bash -lc HERDR_SOCKET_PATH="` + sock + `" herdr pane list`
+}
+
+func herdrInfoCmd(sock, pane string) string {
+	return `runuser -u sandbox -- bash -lc HERDR_SOCKET_PATH="` + sock + `" herdr pane process-info --pane ` + pane
+}
+
+// TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy is the single most important test in
+// this task.
+//
+// `foreground_processes` is non-empty even when a pane sits at a bare shell — it
+// contains that shell. An earlier draft of this signal checked
+// `len(foreground_processes) > 0`, which is therefore ALWAYS true: signal 8 would
+// have been permanently positive, silently disabling idle teardown on every box
+// that ever ran herdr and leaking instances forever. That is the exact
+// `pgrep vscode-server` trap the design set out to avoid.
+//
+// The real discriminator is foreground_process_group_id != shell_pid.
+func TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy(t *testing.T) {
+	raw, err := os.ReadFile("testdata/herdr_process_info_idle.json")
+	if err != nil {
+		t.Fatalf("read idle fixture: %v", err)
+	}
+	if herdrPaneIsBusy(raw) {
+		t.Fatal("idle pane reported BUSY — signal 8 can never go negative, which " +
+			"disables idle teardown fleet-wide")
+	}
+	// Guard the guard: the fixture must actually contain a foreground process,
+	// otherwise this test passes for the wrong reason.
+	if !bytes.Contains(raw, []byte(`"foreground_processes"`)) ||
+		!bytes.Contains(raw, []byte(`"/bin/sh"`)) {
+		t.Fatal("idle fixture no longer contains a foreground shell; this test is " +
+			"no longer exercising the trap it exists for")
+	}
+}
+
+func TestHerdrPaneIsBusy_BusyPaneIsBusy(t *testing.T) {
+	raw, err := os.ReadFile("testdata/herdr_process_info_busy.json")
+	if err != nil {
+		t.Fatalf("read busy fixture: %v", err)
+	}
+	if !herdrPaneIsBusy(raw) {
+		t.Fatal("pane running `sleep 900` reported IDLE")
+	}
+}
+
+func TestHerdrPaneIsBusy_MalformedIsIdle(t *testing.T) {
+	for _, in := range [][]byte{[]byte("not json"), []byte("{}"), nil, []byte(`{"result":{}}`)} {
+		if herdrPaneIsBusy(in) {
+			t.Fatalf("malformed input %q reported BUSY; must fail idle", in)
+		}
+	}
+}
+
+// TestHerdrPaneIsBusy_ZeroPidsAreIdle covers a response where both ids are absent
+// or zero — equal, but not meaningfully so. Treating 0 == 0 as "idle" is correct;
+// treating it as busy would latch the signal on.
+func TestHerdrPaneIsBusy_ZeroPidsAreIdle(t *testing.T) {
+	raw := []byte(`{"result":{"process_info":{"foreground_process_group_id":0,"shell_pid":0}}}`)
+	if herdrPaneIsBusy(raw) {
+		t.Fatal("zero pids reported BUSY")
+	}
+}
+
+func TestHerdrPaneIDs_ParsesLiveFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/herdr_pane_list.json")
+	if err != nil {
+		t.Fatalf("read pane list fixture: %v", err)
+	}
+	got := herdrPaneIDs(raw)
+	if len(got) != 1 || got[0] != "w1:p1" {
+		t.Fatalf("herdrPaneIDs = %v; want [w1:p1]", got)
+	}
+}
+
+func TestHerdrPaneIDs_MalformedIsEmpty(t *testing.T) {
+	if got := herdrPaneIDs([]byte("not json")); len(got) != 0 {
+		t.Fatalf("malformed pane list returned %v; want empty", got)
+	}
 }
 
 func TestSignal_HerdrPaneBusy_Positive(t *testing.T) {
@@ -1487,30 +1574,31 @@ func TestSignal_HerdrPaneBusy_Positive(t *testing.T) {
 	if err := os.WriteFile(sock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile("testdata/herdr_pane_list.json")
-	if err != nil {
-		t.Fatalf("read busy fixture: %v", err)
-	}
-	r := &fakeRunner{responses: map[string][]byte{herdrPaneCmd(sock): raw}}
+	list, _ := os.ReadFile("testdata/herdr_pane_list.json")
+	busy, _ := os.ReadFile("testdata/herdr_process_info_busy.json")
+	r := &fakeRunner{responses: map[string][]byte{
+		herdrListCmd(sock):            list,
+		herdrInfoCmd(sock, "w1:p1"):   busy,
+	}}
 	if !checkHerdrPaneBusy(r, dir) {
-		t.Fatal("expected positive when a pane has a foreground process")
+		t.Fatal("expected positive when a pane is running a foreground job")
 	}
 }
 
-// TestSignal_HerdrPaneBusy_NegativeAllIdle is the load-bearing negative case.
-// If this ever returns true, idle teardown is silently disabled on every box that
-// has ever run herdr, and instances leak indefinitely.
+// TestSignal_HerdrPaneBusy_NegativeAllIdle is load-bearing: it is what keeps idle
+// teardown working.
 func TestSignal_HerdrPaneBusy_NegativeAllIdle(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "herdr.sock")
 	if err := os.WriteFile(sock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile("testdata/herdr_pane_list_idle.json")
-	if err != nil {
-		t.Fatalf("read idle fixture: %v", err)
-	}
-	r := &fakeRunner{responses: map[string][]byte{herdrPaneCmd(sock): raw}}
+	list, _ := os.ReadFile("testdata/herdr_pane_list.json")
+	idle, _ := os.ReadFile("testdata/herdr_process_info_idle.json")
+	r := &fakeRunner{responses: map[string][]byte{
+		herdrListCmd(sock):          list,
+		herdrInfoCmd(sock, "w1:p1"): idle,
+	}}
 	if checkHerdrPaneBusy(r, dir) {
 		t.Fatal("expected negative when every pane sits at a bare shell — a signal " +
 			"that cannot go negative disables idle teardown fleet-wide")
@@ -1523,7 +1611,11 @@ func TestSignal_HerdrPaneBusy_NegativeNoSocket(t *testing.T) {
 	}
 }
 
-func TestSignal_HerdrPaneBusy_NegativeCommandError(t *testing.T) {
+// TestSignal_HerdrPaneBusy_NegativeBinaryMissing simulates herdr being absent or
+// unresolvable — the runner returns an error. This is NOT hypothetical: herdr is
+// installed to /home/sandbox/.local/bin and is invisible to root, which is why the
+// invocation uses a login shell.
+func TestSignal_HerdrPaneBusy_NegativeBinaryMissing(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "herdr.sock")
 	if err := os.WriteFile(sock, nil, 0o600); err != nil {
@@ -1531,31 +1623,21 @@ func TestSignal_HerdrPaneBusy_NegativeCommandError(t *testing.T) {
 	}
 	r := &fakeRunner{
 		responses: map[string][]byte{},
-		errors:    map[string]error{herdrPaneCmd(sock): errors.New("exit status 1")},
+		errors:    map[string]error{herdrListCmd(sock): errors.New("exit status 127")},
 	}
 	if checkHerdrPaneBusy(r, dir) {
-		t.Fatal("expected negative (fail idle) when herdr exits non-zero")
+		t.Fatal("expected negative (fail idle) when herdr cannot be run")
 	}
 }
 
-func TestSignal_HerdrPaneBusy_NegativeMalformedJSON(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "herdr.sock")
-	if err := os.WriteFile(sock, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r := &fakeRunner{responses: map[string][]byte{herdrPaneCmd(sock): []byte("not json")}}
-	if checkHerdrPaneBusy(r, dir) {
-		t.Fatal("expected negative (fail idle) on malformed output")
-	}
-}
-
-// TestHerdrSocketPaths_FindsDefaultAndNamed asserts named sessions are queried
-// too. Discovery is a filesystem glob rather than `herdr session list` — signals
-// 3 and 4 already read the filesystem directly, and a glob needs no subprocess.
 func TestHerdrSocketPaths_FindsDefaultAndNamed(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "herdr.sock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// herdr also creates herdr-client.sock beside it; it must NOT be treated as an
+	// API socket.
+	if err := os.WriteFile(filepath.Join(dir, "herdr-client.sock"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	named := filepath.Join(dir, "sessions", "agents")
@@ -1567,13 +1649,10 @@ func TestHerdrSocketPaths_FindsDefaultAndNamed(t *testing.T) {
 	}
 	got := herdrSocketPaths(dir)
 	if len(got) != 2 {
-		t.Fatalf("herdrSocketPaths returned %d paths, want 2: %v", len(got), got)
+		t.Fatalf("herdrSocketPaths returned %d paths, want 2 (client socket must be excluded): %v", len(got), got)
 	}
 }
 
-// TestSignal_HerdrPaneBusy_IndependentOfSSHAndVNC pins that signal 8 never fires
-// from signal 6's or 7's inputs, matching the cross-independence discipline the
-// VNC/SSH signals already follow.
 func TestSignal_HerdrPaneBusy_IndependentOfSSHAndVNC(t *testing.T) {
 	r := &fakeRunner{responses: map[string][]byte{
 		"ss -tnHp state established": []byte(`ESTAB 0 0 10.0.0.1:22 10.0.0.2:5000 users:(("sshd",pid=1,fd=3))`),
@@ -1584,24 +1663,26 @@ func TestSignal_HerdrPaneBusy_IndependentOfSSHAndVNC(t *testing.T) {
 }
 ```
 
-Add `"errors"` to that file's imports.
+- [ ] **Step 2: Run tests to verify they fail**
 
-- [ ] **Step 2: Run test to verify it fails**
+Run: `go test ./cmd/km-presence/ -run 'Herdr' -v; echo "exit=$?"`
+Expected: FAIL to compile — `undefined: herdrPaneIsBusy`, `herdrPaneIDs`, `herdrSocketPaths`, `checkHerdrPaneBusy`.
 
-Run: `go test ./cmd/km-presence/ -run 'HerdrPaneBusy|HerdrSocketPaths' -v; echo "exit=$?"`
-Expected: FAIL to compile — `undefined: checkHerdrPaneBusy`, `undefined: herdrSocketPaths`.
+- [ ] **Step 3: Implement**
 
-- [ ] **Step 3: Implement the signal**
-
-Add to `cmd/km-presence/runner.go`:
+Add to `cmd/km-presence/runner.go` (add `"encoding/json"` to its imports):
 
 ```go
-// herdrSocketPaths returns every Herdr server socket under configDir: the
-// default session plus one per named session.
+// herdrSocketPaths returns every Herdr API socket under configDir: the default
+// session plus one per named session.
 //
 // Discovery is a filesystem glob rather than `herdr session list` because a glob
 // needs no subprocess and no seam — the same reasoning that has signals 3 and 4
 // reading the filesystem directly.
+//
+// herdr also creates a `herdr-client.sock` beside the API socket; only
+// `herdr.sock` speaks the API, so the exact filename is matched rather than a
+// `*.sock` glob.
 func herdrSocketPaths(configDir string) []string {
 	var out []string
 	if _, err := os.Stat(filepath.Join(configDir, "herdr.sock")); err == nil {
@@ -1611,70 +1692,104 @@ func herdrSocketPaths(configDir string) []string {
 	return append(out, named...)
 }
 
-// herdrPane is the subset of `herdr pane list --json` this signal reads.
-// Field names track cmd/km-presence/testdata/herdr_pane_list.json, which was
-// captured from a live server — the API docs are not authoritative here.
-type herdrPane struct {
-	ID                string `json:"id"`
-	ShellPID          int    `json:"shell_pid"`
-	ForegroundPGID    int    `json:"foreground_pgid"`
-	ForegroundProcess []struct {
-		PID  int    `json:"pid"`
-		Name string `json:"name"`
-	} `json:"foreground_processes"`
+// herdrPaneList is the shape of `herdr pane list`. Field names track
+// cmd/km-presence/testdata/herdr_pane_list.json, captured from a live server —
+// the published docs are not authoritative here (they describe a `--json` flag
+// that does not exist and bare arrays that are actually wrapped).
+type herdrPaneList struct {
+	Result struct {
+		Panes []struct {
+			PaneID string `json:"pane_id"`
+		} `json:"panes"`
+	} `json:"result"`
+}
+
+// herdrProcessInfo is the shape of `herdr pane process-info --pane <id>`.
+type herdrProcessInfo struct {
+	Result struct {
+		ProcessInfo struct {
+			ForegroundProcessGroupID int `json:"foreground_process_group_id"`
+			ShellPID                 int `json:"shell_pid"`
+		} `json:"process_info"`
+	} `json:"result"`
+}
+
+// herdrPaneIDs extracts pane ids from `herdr pane list` output. Returns nil on
+// any parse failure — callers fail idle.
+func herdrPaneIDs(raw []byte) []string {
+	var pl herdrPaneList
+	if err := json.Unmarshal(raw, &pl); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(pl.Result.Panes))
+	for _, p := range pl.Result.Panes {
+		if p.PaneID != "" {
+			out = append(out, p.PaneID)
+		}
+	}
+	return out
+}
+
+// herdrPaneIsBusy reports whether one pane is running a foreground job.
+//
+// The discriminator is foreground_process_group_id != shell_pid, measured on a
+// live server: an idle pane reports both as the shell's pid (35371 == 35371),
+// while a pane running `sleep 900` reports the job's pgid (35854 != 35371).
+//
+// Do NOT use `len(foreground_processes) > 0`. That field is non-empty even when
+// idle — it contains the pane's own shell — so the check is always true, which
+// would make signal 8 permanently positive and silently disable idle teardown
+// fleet-wide. TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy pins this.
+//
+// Both ids must be non-zero: a response missing them decodes to 0 == 0, which is
+// equal-but-meaningless and must read as idle.
+func herdrPaneIsBusy(raw []byte) bool {
+	var pi herdrProcessInfo
+	if err := json.Unmarshal(raw, &pi); err != nil {
+		return false
+	}
+	fg := pi.Result.ProcessInfo.ForegroundProcessGroupID
+	shell := pi.Result.ProcessInfo.ShellPID
+	return fg != 0 && shell != 0 && fg != shell
 }
 
 // checkHerdrPaneBusy returns true when any Herdr session has a pane doing work.
 // Signal 8.
 //
-// Herdr's whole purpose here is persistence across detach: an operator closes
-// the laptop and expects agent panes to keep running. Signal 7 sees an ATTACHED
-// client (a herdr client is an SSH session), and signal 5 sees a running
-// claude/codex by name — but a DETACHED pane running anything else (a build, a
-// test suite, an agent whose name is not in signal 5's pgrep list) is invisible,
-// and under teardownPolicy: stop the idle reaper then kills the work. This
-// signal closes that, and does it without naming any agent, so swapping agents
-// costs no edit here.
+// Herdr's purpose here is persistence across detach: an operator closes the laptop
+// and expects agent panes to keep running. Signal 7 sees an ATTACHED client (a
+// herdr client is an SSH session) and signal 5 sees a running claude/codex BY NAME
+// — but a DETACHED pane running anything else (a build, a test suite, an agent
+// whose name is not in signal 5's pgrep list) is invisible, and under
+// teardownPolicy: stop the idle reaper then kills the work. This closes that
+// without naming any agent, so swapping agents costs no edit here.
 //
-// Detects the WORK, never the server. `herdr server stop` is the only thing that
-// ends a Herdr server, so "a server is running" would latch the box awake forever
-// — exactly the pgrep vscode-server trap that checkSSHSessions was written to
-// avoid.
+// Detects the WORK, never the server: `herdr server stop` is the only thing that
+// ends a herdr server, so "a server is running" would latch the box awake forever.
 //
-// Fails idle: an absent socket, a missing binary, a non-zero exit, or malformed
-// JSON all return false. A reaped box costs one `km resume`; a signal that can
-// never go negative silently disables idle teardown fleet-wide and leaks
-// instances.
+// Fails idle on every error path — absent socket, unresolvable binary, non-zero
+// exit, malformed JSON. A reaped box costs one `km resume`; a signal that can never
+// go negative leaks instances indefinitely.
 //
-// Runs the sandbox user's herdr via runuser (not sudo/su), matching the dispatch
-// convention established when agent traffic had to keep its cgroup.
-//
-// `bash -lc`, not a bare `herdr`, and this is load-bearing. Verified on a live
-// sandbox: base/userinit.yaml installs herdr to /home/sandbox/.local/bin/herdr
-// and `command -v herdr` as root finds nothing. km-presence runs as User=root,
-// so a non-login runuser would fail to resolve the binary, Output would error,
-// and this signal would fail idle PERMANENTLY — reaping every box with a live
-// detached session. Note the negative-case test cannot catch that: a signal
-// stuck at false passes it perfectly. A login shell picks up ~/.local/bin.
+// `bash -lc` is load-bearing: base/userinit.yaml installs herdr to
+// /home/sandbox/.local/bin/herdr, and `command -v herdr` as root finds nothing.
+// km-presence runs as User=root, so a non-login runuser would fail to resolve the
+// binary and this signal would fail idle permanently — which the negative-case test
+// would pass, making it undetectable. HERDR_SOCKET_PATH selects the session.
 func checkHerdrPaneBusy(r commandRunner, configDir string) bool {
 	for _, sock := range herdrSocketPaths(configDir) {
-		out, err := r.Output("runuser", "-u", "sandbox", "--",
-			"bash", "-lc", fmt.Sprintf("herdr pane list --json --socket %q", sock))
-		if err != nil || len(bytes.TrimSpace(out)) == 0 {
+		listOut, err := r.Output("runuser", "-u", "sandbox", "--", "bash", "-lc",
+			fmt.Sprintf("HERDR_SOCKET_PATH=%q herdr pane list", sock))
+		if err != nil {
 			continue
 		}
-		var panes []herdrPane
-		if err := json.Unmarshal(out, &panes); err != nil {
-			continue
-		}
-		for _, p := range panes {
-			// A pane whose foreground process group differs from its shell's is
-			// running a foreground job. Herdr also reports the processes directly
-			// when the platform exposes them; either is sufficient evidence.
-			if len(p.ForegroundProcess) > 0 {
-				return true
+		for _, paneID := range herdrPaneIDs(listOut) {
+			infoOut, err := r.Output("runuser", "-u", "sandbox", "--", "bash", "-lc",
+				fmt.Sprintf("HERDR_SOCKET_PATH=%q herdr pane process-info --pane %s", sock, paneID))
+			if err != nil {
+				continue
 			}
-			if p.ForegroundPGID != 0 && p.ShellPID != 0 && p.ForegroundPGID != p.ShellPID {
+			if herdrPaneIsBusy(infoOut) {
 				return true
 			}
 		}
@@ -1683,11 +1798,15 @@ func checkHerdrPaneBusy(r commandRunner, configDir string) bool {
 }
 ```
 
-Add `"encoding/json"` to `runner.go`'s imports.
+**Note on cost:** this is 1 + N subprocesses per 60s tick (one `pane list`, one
+`process-info` per pane). That is more than any existing signal, and it is
+unavoidable — `pane list` carries no process data, proven by capturing both
+states. If it ever matters, the fix is to speak the socket protocol directly
+rather than to guess a cheaper CLI shape.
 
 - [ ] **Step 4: Extend `tick`**
 
-In `cmd/km-presence/runner.go`, change `tick`'s signature and body:
+In `cmd/km-presence/runner.go`:
 
 ```go
 func tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath, herdrConfigDir string) (bool, bool) {
@@ -1703,16 +1822,17 @@ func tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath
 	active := s1 || s2 || s3 || s4 || s5 || s6 || s7 || s8
 ```
 
-Update the doc comment above `tick` from "seven signals" to "eight signals".
+Update `tick`'s doc comment from "seven signals" to "eight signals".
 
-In `cmd/km-presence/main.go`: add `defaultHerdrConfigDir = "/home/sandbox/.config/herdr"` to the const block, pass it as the final argument to the `tick` call, and change the package doc comment at line 4 from "seven concrete signals" to "eight concrete signals".
+In `cmd/km-presence/main.go`: add `defaultHerdrConfigDir = "/home/sandbox/.config/herdr"` to the const block, pass it as `tick`'s final argument, and change the package doc comment at line 4 from "seven concrete signals" to "eight concrete signals".
 
-Update the two existing `tick` call sites in `main_test.go` (`TestTick_NoEmitWhenAllNegative`, `TestTick_EmitWhenAnyPositive`) to pass `t.TempDir()` as the new argument — an empty directory has no socket, so signal 8 is negative and neither test's expectation changes.
+Update the two existing `tick` call sites in `main_test.go` (`TestTick_NoEmitWhenAllNegative`, `TestTick_EmitWhenAnyPositive`) to pass `t.TempDir()` — an empty dir has no socket, so signal 8 is negative and neither expectation changes.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 5: Run tests**
 
 Run: `go test ./cmd/km-presence/ -v; echo "exit=$?"`
-Expected: PASS, `exit=0`, with every signal-8 test green — above all `TestSignal_HerdrPaneBusy_NegativeAllIdle`.
+Expected: PASS, `exit=0` — above all `TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy` and
+`TestSignal_HerdrPaneBusy_NegativeAllIdle`.
 
 - [ ] **Step 6: Commit**
 
@@ -1721,7 +1841,6 @@ git add cmd/km-presence/runner.go cmd/km-presence/main.go cmd/km-presence/main_t
 git commit -m "feat(herdr): km-presence signal 8 keeps a busy detached herdr session alive"
 ```
 
----
 
 ### Task 8: Documentation
 
