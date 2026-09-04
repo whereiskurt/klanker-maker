@@ -3951,7 +3951,11 @@ const sopsVersion = "3.13.1"
 //
 // The release publishes bare per-platform binaries and NO checksum file, so
 // there is no published digest to verify against — this pin is the entire
-// supply-chain control. Bump it deliberately, like any other dependency.
+// supply-chain control FOR THE S3 PATH. A profile that also extends
+// base/userinit gets a SECOND, unpinned herdr at ~/.local/bin (that fragment's
+// `curl | sh`), and the sandbox user's login PATH resolves that copy ahead of
+// this one — see docs/herdr-remote-attach.md's "already installed" section.
+// Bump this pin deliberately, like any other dependency.
 const herdrVersion = "0.8.2"
 
 // FetchAndUploadSops downloads sops v{sopsVersion} (cached in build/) and uploads

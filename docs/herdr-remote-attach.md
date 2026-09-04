@@ -58,7 +58,17 @@ Herdr via `curl -fsSL https://herdr.dev/install.sh | sh`, landing it at
 `/home/sandbox/.local/bin/herdr`, **owned by the sandbox user and NOT on root's
 `PATH`**. On any profile that extends `base/userinit`, Herdr is present the
 moment cloud-init finishes, and `profiles/base/tools/herdr.yaml` (below) is
-redundant.
+redundant — **and, on a profile that extends both, redundant-plus-divergent**:
+you now have two herdr binaries at two paths, potentially two versions, each
+resolved by a different PATH. Root (`km herdr status`'s `command -v herdr`)
+finds the pinned `/usr/local/bin/herdr`; the sandbox user's login shell (which
+signal 8 runs as, via `runuser -u sandbox -- bash -lc`) finds the unpinned
+`~/.local/bin/herdr` first — measured live, `~/.local/bin` sits at PATH
+position 2 and `/usr/local/bin` at position 5. So `km herdr status` can report
+a version the panes underneath signal 8 are not actually running. Both are
+`0.8.2` as of this writing, so this is a reporting-accuracy caveat today, not
+a live defect — but it is worth knowing before trusting the status version
+number on a profile that extends both fragments.
 
 That fragment's real purpose is narrower: an **egress-free** install for
 `base/network/locked`-style profiles that cannot reach `herdr.dev` at all. It
