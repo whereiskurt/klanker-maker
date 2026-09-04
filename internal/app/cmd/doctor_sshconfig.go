@@ -282,7 +282,7 @@ func checkHerdrSSHConfigConflict(herdrConfigPath, sshConfigPath string) CheckRes
 	if err != nil {
 		return CheckResult{Name: name, Status: CheckOK, Message: "herdr not configured on this workstation"}
 	}
-	if strings.Contains(strings.ReplaceAll(string(herdrRaw), " ", ""), "manage_ssh_config=false") {
+	if herdrOptedOutOfSSHConfig(herdrRaw) {
 		return ok
 	}
 	sshRaw, err := os.ReadFile(sshConfigPath)
@@ -298,4 +298,29 @@ func checkHerdrSSHConfigConflict(herdrConfigPath, sshConfigPath string) CheckRes
 		Message:     fmt.Sprintf("herdr is managing %s, where km owns the `Host km-*` blocks", sshConfigPath),
 		Remediation: fmt.Sprintf("Add to %s:\n\n    [remote]\n    manage_ssh_config = false\n", herdrConfigPath),
 	}
+}
+
+// herdrOptedOutOfSSHConfig reports whether herdr's config.toml genuinely turns
+// ssh-config management off.
+//
+// Parses line by line and skips comments. A naive whitespace-strip +
+// strings.Contains matches a commented-out "# manage_ssh_config = false" — it
+// strips to "#manage_ssh_config=false", which still contains the substring — and
+// would silently suppress the warning on a workstation where herdr IS still
+// managing ~/.ssh/config. That is the dangerous direction, so comment handling is
+// load-bearing rather than cosmetic.
+func herdrOptedOutOfSSHConfig(raw []byte) bool {
+	for _, line := range strings.Split(string(raw), "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if i := strings.Index(t, "#"); i >= 0 { // trailing inline comment
+			t = t[:i]
+		}
+		if strings.Contains(strings.ReplaceAll(t, " ", ""), "manage_ssh_config=false") {
+			return true
+		}
+	}
+	return false
 }
