@@ -1226,6 +1226,15 @@ git commit -m "feat(herdr): km doctor warns when herdr and km both manage ssh co
 
 **This task requires a real sandbox and a real Herdr server. It cannot be completed from the dev machine.** Its output is committed test fixtures that Task 7 parses. Spec §6.4 exists precisely because the choice between "one call per session" and "one call per pane" is not answerable from documentation.
 
+**It does NOT require an interactive attach.** `herdr server` starts a headless
+background server (herdr.dev/docs/how-to-work, and the "Live updates without killing
+your terminal processes" post: "launch herdr in any terminal or as a headless daemon";
+"when no client is attached, the server uses a 120x40 virtual terminal for layout and
+newly created panes"). `herdr workspace create`, `herdr pane split`, and
+`herdr pane run` drive panes from the command line. Every step below runs over
+`km shell` / SSM. A pane created this way with nothing attached IS the detached-busy
+state signal 8 exists to detect.
+
 **Files:**
 - Create: `cmd/km-presence/testdata/herdr_pane_list.json`
 - Create: `cmd/km-presence/testdata/herdr_agent_list.json`
@@ -1246,50 +1255,58 @@ km init --sidecars          # seeds s3://<artifacts>/binaries/herdr
 km create profiles/learner.yaml herdrprobe --wait
 ```
 
-- [ ] **Step 2: Attach and start one busy pane and one idle pane**
+- [ ] **Step 2: Start a headless server and capture the IDLE fixture first**
 
-Terminal A:
+Over `km shell herdrprobe`, as the `sandbox` user:
+
 ```bash
-./km herdr start herdrprobe
+setsid herdr server >/tmp/herdr-server.log 2>&1 < /dev/null &
+sleep 3
+ls -la ~/.config/herdr/            # herdr.sock must exist
+herdr workspace create --label probe
+herdr pane list --json
 ```
 
-Terminal B:
-```bash
-herdr --remote km-<sandbox-id>
-```
-
-Inside Herdr: leave one pane at an idle shell, and in a second pane run a long
-non-agent job — `sleep 900` is sufficient and deliberately not an agent, since
-the whole point of signal 8 is to be agent-agnostic.
-
-- [ ] **Step 3: Capture the fixtures from the busy state**
-
-In a third pane (or over `km shell`), with both panes as above:
+Capture the idle fixture **before** creating any work, so it is unambiguously a
+server with panes and nothing running:
 
 ```bash
 herdr api schema --output /tmp/herdr-api.schema.json
+herdr pane list --json > /tmp/herdr_pane_list_idle.json
+```
+
+If `herdr server` will not start without a TTY, or no socket appears, **stop this
+task**, record exactly what happened in the report, and skip to Task 8. The
+fallback the operator authorised is to ship Tasks 1-5 plus docs rather than write
+signal 8 against unverified JSON.
+
+- [ ] **Step 3: Create a busy pane and capture the BUSY fixtures**
+
+```bash
+herdr pane list --json                       # note a pane target, e.g. w1:p1
+herdr pane run <pane-target> "sleep 900"
+sleep 2
 herdr pane list --json  > /tmp/herdr_pane_list.json
 herdr agent list --json > /tmp/herdr_agent_list.json
 cat /tmp/herdr_pane_list.json
 ```
 
-Inspect `/tmp/herdr_pane_list.json` and answer the §6.4 question:
+`sleep 900` is deliberately not an agent: the whole point of signal 8 is that it
+does not depend on recognising an agent by name.
 
-- Does each pane object already carry foreground-process or busy information?
-- If not, does `/tmp/herdr-api.schema.json` show `pane.process_info` as a
-  per-pane call?
+- [ ] **Step 4: Answer the §6.4 question from what you captured**
 
-- [ ] **Step 4: Capture the idle fixture**
+Diff the busy and idle fixtures and decide:
 
-Kill the `sleep 900`, leave every pane at a bare shell, then:
+- Do the two `pane list --json` outputs actually DIFFER — i.e. does a pane object
+  already carry foreground-process or busy information? (Option 1)
+- If they are byte-identical, does `/tmp/herdr-api.schema.json` show
+  `pane.process_info` as a separate per-pane call, and does `agent list --json`
+  differ instead? (Option 2 or 3)
 
-```bash
-herdr pane list --json > /tmp/herdr_pane_list_idle.json
-```
+**If busy and idle `pane list` are byte-identical, signal 8 cannot be built on
+`pane list` alone.** Say so explicitly and name the option Task 7 must take.
 
-This fixture is the **most important one in the plan**: it is what proves signal
-8's negative case, and the negative case is what keeps idle teardown working
-fleet-wide.
 
 - [ ] **Step 5: Bring the fixtures back and record the decision**
 
@@ -1303,9 +1320,12 @@ that names a private path — these are committed). Then write
 Captured from herdr v0.8.2 on a live sandbox on <DATE>, per Task 6 of
 docs/superpowers/plans/2026-09-04-herdr-remote-attach.md.
 
-- `herdr_pane_list.json`      — one idle pane, one pane running `sleep 900`
-- `herdr_pane_list_idle.json` — every pane at a bare shell
+- `herdr_pane_list.json`      — a pane running `sleep 900`, captured headlessly
+- `herdr_pane_list_idle.json` — the same server with every pane at a bare shell
 - `herdr_agent_list.json`     — same moment as herdr_pane_list.json
+
+Captured from a headless `herdr server` driven by `herdr pane run` over SSM. No
+interactive client was ever attached, which is exactly the state signal 8 targets.
 
 ## §6.4 decision
 
@@ -1706,27 +1726,49 @@ km shell herdruat --root      # then: rm -f /usr/local/bin/herdr
 ./km herdr start herdruat     # expected: installs, then opens the forward
 ```
 
-- [ ] **Step 4: Attach, detach, and prove signal 8 positive**
+- [ ] **Step 4: Prove signal 8 positive (headless)**
 
-Attach from a second terminal, start `sleep 3600` in one pane, leave another idle,
-detach with `ctrl+b q`, then close the `km herdr start` terminal too. Watch:
+Use a UAT profile with a SHORT `idleTimeout` — 10m makes this observable in one
+sitting rather than four hours. Over `km shell`, as the `sandbox` user:
+
+```bash
+setsid herdr server >/tmp/herdr-server.log 2>&1 < /dev/null &
+sleep 3
+herdr workspace create --label uat
+herdr pane run <pane-target> "sleep 3600"
+```
+
+Nothing is attached — this is precisely the detached-busy state signal 8 exists
+for. Then watch:
 
 ```bash
 km logs herdruat --follow --stream <presence-stream>
 ```
 
-Expected: heartbeats continue while the sleep runs. Confirm the box outlives its
-`idleTimeout` (set a short one on the UAT profile — 10m makes this observable in
-one sitting rather than four hours).
+Expected: heartbeats continue past `idleTimeout` and the box stays running.
+**Then cross-check that signal 8 is the one carrying it** — stop the pane's job
+and confirm heartbeats stop. A box kept alive by signal 1 or signal 5 proves
+nothing about signal 8, and that confusion is the easiest way to pass this UAT
+while shipping a dead signal.
 
 - [ ] **Step 5: Prove signal 8 negative — the one that matters**
 
-Kill the `sleep`, leave the detached Herdr session with only idle shells, and
-walk away for longer than `idleTimeout`.
+Kill the `sleep`, leave the headless Herdr server running with only idle panes,
+and wait longer than `idleTimeout`. Close every `km shell` session first: a live
+shell holds the box awake through signal 1 and would mask the result.
 
 Expected: heartbeats stop, and the box is stopped on schedule. **If it stays
 alive, signal 8 cannot go negative and idle teardown is broken fleet-wide —
 stop and fix before merging.**
+
+- [ ] **Step 5b: OPERATOR-RUN — interactive attach round-trip**
+
+Everything above drives Herdr headlessly. One claim remains unverified by
+automation: that an interactive `herdr --remote km-<id>` attach, a `ctrl+b q`
+detach, and a reattach behave identically to a headless server. Record it in the
+UAT file as **OPERATOR-RUN, NOT YET VERIFIED**, and state the same limitation in
+the PR body rather than implying the signal was proven against a hand-attached
+session.
 
 - [ ] **Step 6: Prove the lifecycle claim**
 
@@ -1756,6 +1798,6 @@ git commit -m "docs(herdr): live UAT record"
 ## Notes for the executor
 
 - **Rebase first.** Another agent is merging a PR in this repo. Run `git pull --rebase` before Task 1 and again before Task 9. Never run a bare `git add` — every commit in this plan names explicit paths, because a bare add sweeps another agent's staged files.
-- **Task 6 blocks Task 7.** The fixtures are ground truth for the parser. Do not write `herdrPane`'s JSON tags from the API documentation.
+- **Task 6 blocks Task 7.** The fixtures are ground truth for the parser. Do not write `herdrPane`'s JSON tags from the API documentation. If Task 6 cannot start a headless server, Task 7 does not get written — skip to Task 8 and ship Tasks 1-5 plus docs.
 - **Tasks 1–5 are independently useful** and ship a working `km herdr start` on existing sandboxes. Tasks 6–9 are what make the persistence promise real.
 - **Never run `km init --dry-run=false` for this work.** Nothing here touches Terraform, IAM, a Lambda, or the userdata template.
