@@ -241,7 +241,7 @@ bites, not after.
 ## The `~/.ssh/config` conflict
 
 Herdr manages `~/.ssh/config` on your workstation by default (adding keepalive
-fallbacks); km's `UpsertHost` owns the `Host km-<id>` block in that same file. Two
+fallbacks); km's `UpsertHost` owns the `Host km-<alias> km-<id>` block in that same file. Two
 writers, one file.
 
 `km herdr start` prints the fix on every run, and `km doctor` warns

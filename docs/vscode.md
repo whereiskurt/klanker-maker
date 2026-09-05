@@ -68,7 +68,7 @@ SB=$(km list | awk '/my-poc/ {print $1}')
 #    a separate terminal while this one stays open.
 km vscode start $SB
 #    Output:
-#      ✓ Updated ~/.ssh/config (Host: km-<sandbox-id>)
+#      ✓ Updated ~/.ssh/config (Host: km-<alias> km-<sandbox-id>)
 #      ✓ Forwarding localhost:2222 → sandbox:22
 #      In VS Code: F1 → "Remote-SSH: Connect to Host..." → km-$SB
 #      Press Ctrl-C to close the tunnel (sshd keeps running on the sandbox).
@@ -210,7 +210,7 @@ $ km vscode rekey sb-abc12345
 
 ### What rekey does NOT change
 
-- `~/.ssh/config` — the managed `Host km-<sandbox-id>` block already points
+- `~/.ssh/config` — the managed `Host km-<alias> km-<sandbox-id>` block already points
   `IdentityFile` at `~/.km/keys/<sandbox-id>`. Rekey overwrites the file at that path; no
   ssh-config edit needed.
 - DDB schema, SSM Parameter Store entries, Lambda code, sidecars, infra modules — none.
@@ -348,7 +348,7 @@ Sample managed block (km writes and maintains this):
 
 ```
 # BEGIN km vscode hosts (managed; do not edit between markers)
-Host km-lrn2-abc123
+Host km-mybox km-lrn2-abc123
   HostName localhost
   Port 2222
   User sandbox

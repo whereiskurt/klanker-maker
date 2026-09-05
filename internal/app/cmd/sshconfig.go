@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 const (
@@ -21,13 +22,44 @@ type HostOptions struct {
 	IdentityFile string // "~/.km/keys/sb-abc123"
 }
 
-// hostLineRe matches "Host <alias>" lines (the start of a Host block).
-var hostLineRe = regexp.MustCompile(`^Host\s+(\S+)\s*$`)
+// hostLineRe matches "Host <name> [<name>...]" lines (the start of a Host
+// block). ssh(5) allows several patterns on one Host line and matches the first
+// block whose pattern list contains the requested name, so km writes both the
+// operator's alias and the sandbox id: `Host km-<alias> km-<sandbox-id>`.
+var hostLineRe = regexp.MustCompile(`^Host\s+(\S+(?:[ \t]+\S+)*)[ \t]*$`)
 
-// hostBlock holds a parsed SSH Host block (alias + raw content including the Host line).
+// hostBlock holds a parsed SSH Host block (its name list + raw content
+// including the Host line).
+//
+// The LAST name is the sandbox id by construction — see renderHostBlock and
+// readManagedAliases, which depend on that ordering.
 type hostBlock struct {
-	alias   string
-	content []byte // the "Host <alias>\n  ..." lines including trailing newline
+	names   []string
+	content []byte // the "Host <names...>\n  ..." lines including trailing newline
+}
+
+// sandboxIDName returns the block's last name, which km renders as the
+// `km-<sandbox-id>` form. Empty for a block with no names.
+func (b hostBlock) sandboxIDName() string {
+	if len(b.names) == 0 {
+		return ""
+	}
+	return b.names[len(b.names)-1]
+}
+
+// sharesName reports whether b and names have any name in common. Used to
+// decide whether an upsert replaces an existing block: reusing an alias for a
+// freshly created sandbox must overwrite the old entry rather than append a
+// second block claiming the same alias, since ssh takes the first match.
+func (b hostBlock) sharesName(names []string) bool {
+	for _, n := range b.names {
+		for _, m := range names {
+			if n == m {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // managedSections splits content into (before, inside, after) regions around
@@ -81,8 +113,7 @@ func parseHostBlocks(inside []byte) []hostBlock {
 			if current != nil {
 				blocks = append(blocks, *current)
 			}
-			alias := string(m[1])
-			current = &hostBlock{alias: alias}
+			current = &hostBlock{names: strings.Fields(string(m[1]))}
 			current.content = append(current.content, line...)
 		} else if current != nil {
 			current.content = append(current.content, line...)
@@ -96,13 +127,16 @@ func parseHostBlocks(inside []byte) []hostBlock {
 }
 
 // renderHostBlock produces the canonical text for a Host block.
-func renderHostBlock(alias string, opts HostOptions) []byte {
+//
+// names is written in order, so callers MUST put the `km-<sandbox-id>` form
+// last: readManagedAliases reads the last name as the sandbox id.
+func renderHostBlock(names []string, opts HostOptions) []byte {
 	port := opts.Port
 	if port == 0 {
 		port = 2222
 	}
 	s := fmt.Sprintf("Host %s\n  HostName %s\n  Port %d\n  User %s\n  IdentityFile %s\n  IdentitiesOnly yes\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  ServerAliveInterval 30\n",
-		alias, opts.HostName, port, opts.User, opts.IdentityFile)
+		strings.Join(names, " "), opts.HostName, port, opts.User, opts.IdentityFile)
 	return []byte(s)
 }
 
@@ -148,10 +182,21 @@ func ensureTrailingNewline(buf *bytes.Buffer) {
 	}
 }
 
-// UpsertHost inserts or replaces the Host entry for alias inside the managed
+// UpsertHost inserts or replaces the Host entry for names inside the managed
 // block of configPath. Creates configPath (mode 0600) and the managed block if
 // absent. Content outside the markers is preserved byte-for-byte.
-func UpsertHost(configPath, alias string, opts HostOptions) error {
+//
+// An existing block is replaced when it shares ANY name with names, not only
+// when the lists are equal — so recreating a sandbox under a reused alias
+// overwrites that alias's old entry instead of leaving two blocks claiming it
+// (ssh would silently take the first, pointing at the destroyed sandbox).
+//
+// The last entry in names must be the `km-<sandbox-id>` form; see
+// renderHostBlock.
+func UpsertHost(configPath string, names []string, opts HostOptions) error {
+	if len(names) == 0 {
+		return fmt.Errorf("sshconfig: UpsertHost requires at least one host name")
+	}
 	content, err := os.ReadFile(configPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("sshconfig: read %s: %w", configPath, err)
@@ -160,7 +205,7 @@ func UpsertHost(configPath, alias string, opts HostOptions) error {
 
 	before, inside, after := managedSections(content)
 
-	newBlock := renderHostBlock(alias, opts)
+	newBlock := renderHostBlock(names, opts)
 
 	var blocks []hostBlock
 	if inside != nil {
@@ -170,14 +215,15 @@ func UpsertHost(configPath, alias string, opts HostOptions) error {
 	// Replace existing block or append new one.
 	found := false
 	for i, b := range blocks {
-		if b.alias == alias {
+		if b.sharesName(names) {
+			blocks[i].names = names
 			blocks[i].content = newBlock
 			found = true
 			break
 		}
 	}
 	if !found {
-		blocks = append(blocks, hostBlock{alias: alias, content: newBlock})
+		blocks = append(blocks, hostBlock{names: names, content: newBlock})
 	}
 
 	// Reassemble.
@@ -207,8 +253,11 @@ func UpsertHost(configPath, alias string, opts HostOptions) error {
 	return atomicWrite(configPath, assembled, 0o600)
 }
 
-// RemoveHost drops the Host entry for alias from the managed block of
-// configPath. Returns nil when alias or file is absent (idempotent). Cleans up
+// RemoveHost drops the Host entry naming alias from the managed block of
+// configPath. A block is removed when it CONTAINS alias among its names, not
+// only when it is the sole name — callers pass the `km-<sandbox-id>` form and
+// must still drop a block that also carries the operator's alias.
+// Returns nil when alias or file is absent (idempotent). Cleans up
 // the managed-block markers when the block becomes empty after removal.
 // When the entire file consisted solely of our managed block, the result is an
 // empty file (mode 0600).
@@ -230,7 +279,7 @@ func RemoveHost(configPath, alias string) error {
 	blocks := parseHostBlocks(inside)
 	kept := blocks[:0]
 	for _, b := range blocks {
-		if b.alias != alias {
+		if !b.sharesName([]string{alias}) {
 			kept = append(kept, b)
 		}
 	}

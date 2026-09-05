@@ -797,7 +797,7 @@ explicit opt-in, so a cleanup pass can never delete a class you did not name:
 | `--delete-sqs` | Stale Slack inbound SQS queues and their per-sandbox SSM parameters |
 | `--delete-s3` | Orphan `artifacts/{id}/` and `transcripts/{id}/` prefixes for sandboxes gone from DynamoDB |
 | `--delete-lambdas` | Per-sandbox Lambdas (budget-enforcer, github-token-refresher) whose sandbox row is gone. Platform Lambdas are never touched -- the check uses a per-sandbox allowlist, not a denylist |
-| `--delete-ssh` | Operator-local `Host km-{id}` blocks in `~/.ssh/config` and matching keys in `~/.km/keys/` |
+| `--delete-ssh` | Operator-local `Host km-{alias} km-{id}` blocks in `~/.ssh/config` and matching keys in `~/.km/keys/` |
 | `--delete-ssm` | Per-sandbox SSM parameters (signing key, encryption key, safe phrase, GitHub token). Explicit because these hold cryptographic secrets |
 | `--delete-ddb-rows` | Rows in budgets/identities/slack-threads for sandboxes gone from `km-sandboxes`, plus `status=failed` rows |
 | `--delete-logs` | Orphaned CloudWatch log groups for destroyed sandboxes |
@@ -1239,14 +1239,14 @@ km vscode status <sandbox-id>
 - `km create` generates a per-sandbox ed25519 keypair locally at `~/.km/keys/<id>` and
   ships the pubkey to the sandbox via userdata. The private key never leaves your laptop.
 - `km vscode start` runs an SSM pre-flight check (sshd active + authorized_keys
-  present), upserts a managed `Host km-<id>` block into `~/.ssh/config`, and then
+  present), upserts a managed `Host km-<alias> km-<id>` block into `~/.ssh/config`, and then
   opens the SSM port-forward in the foreground. Use a second terminal for ssh / VS Code.
 - `km destroy` removes the Host block and deletes the keypair files.
 
 **VS Code workflow:**
 
 1. `km vscode start <sandbox-id>` (terminal A — leave running)
-2. In VS Code: `F1` → `Remote-SSH: Connect to Host...` → `km-<sandbox-id>`
+2. In VS Code: `F1` → `Remote-SSH: Connect to Host...` → `km-<alias>` (or `km-<sandbox-id>`; both resolve)
 3. `File → Open Folder → /workspace`
 4. Ctrl-C terminal A when finished. `sshd` keeps running on the sandbox; `km vscode
    start` again to reattach.
