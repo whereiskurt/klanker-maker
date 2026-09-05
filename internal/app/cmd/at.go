@@ -86,8 +86,8 @@ Supported commands: create, destroy, kill, stop, pause, resume, extend, budget-a
 Lifecycle commands resolve aliases and list numbers (e.g. 'alice' or '1').
 
 Examples:
-  km at '10pm tomorrow' create profiles/goose.yaml
-  km at 'in 1 hour' create profiles/goose.yaml --alias g1 --on-demand --ttl 4h --compute 10.00 --ai 5.00
+  km at '10pm tomorrow' create profiles/spot.yaml
+  km at 'in 1 hour' create profiles/spot.yaml --alias g1 --on-demand --ttl 4h --compute 10.00 --ai 5.00
   km at 'every thursday at 3pm' kill alice
   km at 'tomorrow at 6am' resume 1
   km at 'in 2 hours' extend alice 4h

@@ -196,7 +196,7 @@ func buildSystemPrompt(profiles []string, sandboxes []string) string {
 	sb.WriteString("- `create <profile>` — create a new sandbox from the named profile\n")
 	sb.WriteString("  - Supports overrides: alias, on_demand (true/false), schedule_time (natural language time expression)\n")
 	sb.WriteString("  - If the user says 'schedule' or mentions a future time, set overrides.schedule_time to the time expression\n")
-	sb.WriteString("  - Example: 'schedule a goose sandbox tomorrow at 9am' → command: create, profile: goose, overrides: {schedule_time: 'tomorrow at 9am EST', alias: 'goose-morning', on_demand: true}\n")
+	sb.WriteString("  - Example: 'schedule a codex sandbox tomorrow at 9am' → command: create, profile: codex, overrides: {schedule_time: 'tomorrow at 9am EST', alias: 'codex-morning', on_demand: true}\n")
 	sb.WriteString("- `destroy <sandbox-id>` — destroy (teardown) a running sandbox\n")
 	sb.WriteString("- `extend <sandbox-id>` — extend the TTL of a running sandbox\n")
 	sb.WriteString("- `pause <sandbox-id>` — pause/hibernate a running sandbox\n")

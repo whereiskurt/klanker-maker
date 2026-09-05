@@ -55,7 +55,6 @@ PROFILES=(
   profiles/brokered-secrets-initcmd-demo.yaml # Phase 133 brokered secrets: non-agent consumer via km-env --only
   pkg/profile/builtins/ao.yaml
   pkg/profile/builtins/codex.yaml
-  pkg/profile/builtins/goose.yaml
   pkg/profile/builtins/hardened.yaml
   pkg/profile/builtins/learn.yaml
   pkg/profile/builtins/open-dev.yaml

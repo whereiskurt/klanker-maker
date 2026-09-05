@@ -162,29 +162,48 @@ RUN set -eux; \
 # Needs glibc, which is why this image is Debian and not Alpine.
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      amd64) awsarch="x86_64" ;; \
-      arm64) awsarch="aarch64" ;; \
+      amd64) awsarch="x86_64"; awssha="4e3c39d9881cb6f893ea93219d971390864b1f7e3756197413a7de38ce059609" ;; \
+      arm64) awsarch="aarch64"; awssha="bd5c3d645fa92624c0cb85f0bda0a373e5354faac99f21f244b2813dbdea3c3d" ;; \
       *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     curl -fsSL -o awscli.zip \
       "https://awscli.amazonaws.com/awscli-exe-linux-${awsarch}-${AWSCLI_VERSION}.zip"; \
+    echo "${awssha}  awscli.zip" | sha256sum -c -; \
     unzip -q awscli.zip
 
 # session-manager-plugin — required by km shell / agent / vscode / desktop,
 # all of which tunnel over SSM.
+#
+# Pinned to an explicit version, NOT plugin/latest/. AWS publishes no checksum
+# file for this artifact, so the digests below are recorded by hand — bumping
+# SSM_PLUGIN_VERSION means re-recording both. `latest` cannot be pinned this way
+# at all, which is the reason it is no longer used.
+ARG SSM_PLUGIN_VERSION=1.2.835.0
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      amd64) ssmdir="ubuntu_64bit" ;; \
-      arm64) ssmdir="ubuntu_arm64" ;; \
+      amd64) ssmdir="ubuntu_64bit"; ssmsha="7c6dcad12518571cc7959a713e6a8ae1bdf6ed66fd9bee37dc189e39ca58ae03" ;; \
+      arm64) ssmdir="ubuntu_arm64"; ssmsha="0add94c4c8b6ca63f26e44fd655d662b0f6455a268b5b9ebebee0f462214e928" ;; \
       *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     curl -fsSL -o session-manager-plugin.deb \
-      "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/${ssmdir}/session-manager-plugin.deb"
+      "https://s3.amazonaws.com/session-manager-downloads/plugin/${SSM_PLUGIN_VERSION}/${ssmdir}/session-manager-plugin.deb"; \
+    echo "${ssmsha}  session-manager-plugin.deb" | sha256sum -c -
 
 # sops — for editing SOPS-encrypted secret files (docs/sandbox-secrets.md).
+#
+# Verified against the checksums file the release publishes, so bumping
+# SOPS_VERSION needs no hash edit here. grep first: `sha256sum -c
+# --ignore-missing` passes VACUOUSLY when no line matches, so without it a
+# renamed upstream asset would silently skip verification instead of failing.
 RUN set -eux; \
-    curl -fsSL -o sops \
-      "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.${TARGETARCH}"; \
+    asset="sops-${SOPS_VERSION}.linux.${TARGETARCH}"; \
+    curl -fsSL -o "${asset}" \
+      "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/${asset}"; \
+    curl -fsSL -o sops-checksums.txt \
+      "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.checksums.txt"; \
+    grep -q " ${asset}$" sops-checksums.txt; \
+    sha256sum -c --ignore-missing sops-checksums.txt; \
+    mv "${asset}" sops; \
     chmod +x sops
 
 # ---------------------------------------------------------------------------
