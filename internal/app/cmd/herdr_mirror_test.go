@@ -3,7 +3,10 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -105,5 +108,175 @@ func TestHerdrFragment_ResolvesBucketBeforeUse(t *testing.T) {
 	}
 	if strings.Contains(cmd, "exported at the top of the bootstrap and inherited") {
 		t.Error("fetch command still carries the disproven inheritance claim")
+	}
+}
+
+// TestFetchAndUploadHerdr_DigestVerification covers the digest-check paths
+// that TestFetchAndUploadHerdr (herdr_mirror_external_test.go, package
+// cmd_test) cannot reach: it needs to override the unexported herdrSHA256 var
+// so an arbitrary small fixture — not the real ~22MB binary — can pass or
+// fail verification deliberately.
+func TestFetchAndUploadHerdr_DigestVerification(t *testing.T) {
+	const fixtureContent = "fakeherdrbinary"
+
+	// matchingDigest is the real SHA-256 of fixtureContent, computed once so
+	// the "cache hit" / "fresh download" happy paths can be exercised without
+	// embedding the real herdr binary as a test fixture.
+	sum := sha256.Sum256([]byte(fixtureContent))
+	matchingDigest := hex.EncodeToString(sum[:])
+
+	withOverriddenDigest := func(t *testing.T, digest string) {
+		t.Helper()
+		orig := herdrSHA256
+		herdrSHA256 = digest
+		t.Cleanup(func() { herdrSHA256 = orig })
+	}
+
+	t.Run("MismatchFailsAndRemovesCachedFile", func(t *testing.T) {
+		buildDir := t.TempDir()
+		shimDir := t.TempDir()
+		binaryPath := filepath.Join(buildDir, "herdr")
+
+		if err := os.WriteFile(binaryPath, []byte(fixtureContent), 0o755); err != nil {
+			t.Fatalf("pre-create herdr: %v", err)
+		}
+		// Leave herdrSHA256 at its real (production) value — fixtureContent
+		// deliberately does not hash to it, so this exercises the mismatch
+		// path with no override at all.
+
+		// aws shim: must NOT be invoked — a digest mismatch must fail before
+		// any upload is attempted.
+		logFile := filepath.Join(t.TempDir(), "aws-calls.log")
+		awsShim := "#!/bin/sh\necho \"$@\" >> \"" + logFile + "\"\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "aws"), []byte(awsShim), 0o755); err != nil {
+			t.Fatalf("write aws shim: %v", err)
+		}
+		// curl shim: must NOT be invoked — build/herdr already exists.
+		curlShim := "#!/bin/sh\necho 'curl called unexpectedly' >&2\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "curl"), []byte(curlShim), 0o755); err != nil {
+			t.Fatalf("write curl shim: %v", err)
+		}
+		t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		err := fetchAndUploadHerdr(buildDir, "fake-bucket")
+		if err == nil {
+			t.Fatal("expected a digest mismatch error, got nil")
+		}
+		for _, want := range []string{"checksum", "mismatch", herdrSHA256} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not mention %q", err.Error(), want)
+			}
+		}
+
+		// aws must never have been invoked.
+		if _, statErr := os.Stat(logFile); statErr == nil {
+			logContent, _ := os.ReadFile(logFile)
+			if strings.TrimSpace(string(logContent)) != "" {
+				t.Errorf("aws was called despite a digest mismatch: %q", string(logContent))
+			}
+		}
+
+		// The bad cached file must be gone, so a retry re-downloads rather
+		// than trusting the poisoned/truncated cache forever.
+		if _, statErr := os.Stat(binaryPath); statErr == nil {
+			t.Fatal("bad cached herdr binary was not removed after a digest mismatch")
+		}
+	})
+
+	t.Run("CacheHitWithMatchingDigestUploads", func(t *testing.T) {
+		withOverriddenDigest(t, matchingDigest)
+
+		buildDir := t.TempDir()
+		shimDir := t.TempDir()
+		binaryPath := filepath.Join(buildDir, "herdr")
+		if err := os.WriteFile(binaryPath, []byte(fixtureContent), 0o755); err != nil {
+			t.Fatalf("pre-create herdr: %v", err)
+		}
+
+		logFile := filepath.Join(t.TempDir(), "aws-calls.log")
+		awsShim := "#!/bin/sh\necho \"$@\" >> \"" + logFile + "\"\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "aws"), []byte(awsShim), 0o755); err != nil {
+			t.Fatalf("write aws shim: %v", err)
+		}
+		curlShim := "#!/bin/sh\necho 'curl called unexpectedly' >&2\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "curl"), []byte(curlShim), 0o755); err != nil {
+			t.Fatalf("write curl shim: %v", err)
+		}
+		t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		if err := fetchAndUploadHerdr(buildDir, "fake-bucket"); err != nil {
+			t.Fatalf("unexpected error with a matching digest: %v", err)
+		}
+
+		logContent, err := os.ReadFile(logFile)
+		if err != nil {
+			t.Fatalf("read aws log: %v", err)
+		}
+		if !strings.Contains(string(logContent), "binaries/herdr") {
+			t.Errorf("expected an aws s3 cp to binaries/herdr, got: %q", string(logContent))
+		}
+
+		// A verified cache hit must survive — verification is read-only.
+		if _, statErr := os.Stat(binaryPath); statErr != nil {
+			t.Fatalf("verified cached binary was removed: %v", statErr)
+		}
+	})
+
+	t.Run("UploadFailureAfterVerifiedCacheHitPreservesFile", func(t *testing.T) {
+		withOverriddenDigest(t, matchingDigest)
+
+		buildDir := t.TempDir()
+		shimDir := t.TempDir()
+		binaryPath := filepath.Join(buildDir, "herdr")
+		if err := os.WriteFile(binaryPath, []byte(fixtureContent), 0o755); err != nil {
+			t.Fatalf("pre-create herdr: %v", err)
+		}
+
+		awsShim := "#!/bin/sh\necho 'upload failed' >&2\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "aws"), []byte(awsShim), 0o755); err != nil {
+			t.Fatalf("write aws shim: %v", err)
+		}
+		t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		err := fetchAndUploadHerdr(buildDir, "fake-bucket")
+		if err == nil {
+			t.Fatal("expected error from aws upload failure, got nil")
+		}
+		if !strings.Contains(err.Error(), "upload herdr") {
+			t.Errorf("expected error to mention %q, got: %v", "upload herdr", err)
+		}
+
+		// A verified cached binary must survive a failed upload — deleting a
+		// cached artifact on the failure path is the buildLambdaZips defect
+		// (see CLAUDE.md Phase 126 operator-image findings) pointed at a
+		// different file.
+		if _, statErr := os.Stat(binaryPath); statErr != nil {
+			t.Fatalf("cached binary was removed on the upload-failure path: %v", statErr)
+		}
+	})
+}
+
+// TestHerdrSHA256_LooksLikeARealDigest guards against the constant regressing
+// to empty, a placeholder, or the wrong shape — SHA-256 hex is always exactly
+// 64 lowercase hex characters.
+func TestHerdrSHA256_LooksLikeARealDigest(t *testing.T) {
+	if len(herdrSHA256) != 64 {
+		t.Fatalf("herdrSHA256 = %q (len %d); want 64 hex characters", herdrSHA256, len(herdrSHA256))
+	}
+	for _, r := range herdrSHA256 {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			t.Fatalf("herdrSHA256 = %q contains non-lowercase-hex character %q", herdrSHA256, r)
+		}
+	}
+	placeholders := []string{
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		strings.Repeat("0", 64),
+		strings.Repeat("f", 64),
+		"deadbeef",
+	}
+	for _, bad := range placeholders {
+		if herdrSHA256 == bad {
+			t.Fatalf("herdrSHA256 = %q looks like a placeholder, not a real digest", herdrSHA256)
+		}
 	}
 }

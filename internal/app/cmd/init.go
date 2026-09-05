@@ -3949,14 +3949,31 @@ const sopsVersion = "3.13.1"
 
 // herdrVersion pins the Herdr release mirrored to s3://{bucket}/binaries/herdr.
 //
-// The release publishes bare per-platform binaries and NO checksum file, so
-// there is no published digest to verify against — this pin is the entire
-// supply-chain control FOR THE S3 PATH. A profile that also extends
-// base/userinit gets a SECOND, unpinned herdr at ~/.local/bin (that fragment's
-// `curl | sh`), and the sandbox user's login PATH resolves that copy ahead of
-// this one — see docs/herdr-remote-attach.md's "already installed" section.
-// Bump this pin deliberately, like any other dependency.
+// The release publishes bare per-platform binaries and NO checksum file (verified
+// against the v0.8.2 release assets: no checksums.txt / .sha256 alongside the five
+// binaries). So unlike every other fetcher in this file, verifySHA256 cannot be
+// used here — there is nothing upstream to check the download against. herdrSHA256
+// below is this repo's own trust-on-first-use pin instead, computed once from a
+// verified download and hardcoded rather than fetched. That is actually STRONGER
+// than a publisher-supplied checksums file: a re-cut or compromised upstream
+// release fails the digest check here rather than silently re-verifying against
+// its own replaced checksum. A profile that also extends base/userinit gets a
+// SECOND, unpinned herdr at ~/.local/bin (that fragment's `curl | sh`), and the
+// sandbox user's login PATH resolves that copy ahead of this one — see
+// docs/herdr-remote-attach.md's "already installed" section. Bump both consts
+// together, deliberately, like any other dependency: re-download, re-hash, re-pin.
 const herdrVersion = "0.8.2"
+
+// herdrSHA256 is the SHA-256 digest of herdr-linux-x86_64 for herdrVersion,
+// computed locally on 2026-09-04 from a fresh download of
+// https://github.com/herdrdev/herdr/releases/download/v0.8.2/herdr-linux-x86_64
+// (`shasum -a 256`). See herdrVersion's comment for why this is pinned in source
+// rather than verified against a published checksums file.
+//
+// var, not const: TestFetchAndUploadHerdr overrides it to exercise the
+// mismatch/cache-removal paths without embedding the real ~22MB binary as a
+// test fixture. Production always uses this default value.
+var herdrSHA256 = "976150a14d490c94b243ea2e1a7eb2dfb67f12e36b182db90936f6728e6aecf4"
 
 // FetchAndUploadSops downloads sops v{sopsVersion} (cached in build/) and uploads
 // to s3://{bucket}/binaries/sops via aws-cli.
@@ -4025,20 +4042,32 @@ func verifySHA256(path, checksumsPath, entryName string) error {
 		return fmt.Errorf("no checksum published for %q in %s", entryName, filepath.Base(checksumsPath))
 	}
 
+	got, err := sha256File(path)
+	if err != nil {
+		return fmt.Errorf("hash %s: %w", entryName, err)
+	}
+	if got != want {
+		return fmt.Errorf("checksum mismatch for %s: want %s, got %s", entryName, want, got)
+	}
+	return nil
+}
+
+// sha256File returns the lowercase hex SHA-256 digest of the file at path.
+// Shared by verifySHA256 (checked against a published checksums file) and
+// fetchAndUploadHerdr (checked against the source-pinned herdrSHA256, since
+// herdr's release publishes no checksums file at all).
+func sha256File(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return fmt.Errorf("hash %s: %w", entryName, err)
+		return "", err
 	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != want {
-		return fmt.Errorf("checksum mismatch for %s: want %s, got %s", entryName, want, got)
-	}
-	return nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // FetchAndUploadHerdr downloads herdr v{herdrVersion} linux/amd64 (cached in
@@ -4056,6 +4085,13 @@ func FetchAndUploadHerdr(buildDir, bucket string) error {
 func fetchAndUploadHerdr(buildDir, bucket string) error {
 	binaryPath := filepath.Join(buildDir, "herdr")
 	if _, err := os.Stat(binaryPath); err == nil {
+		// A cached build/herdr from a prior run is trusted only after it re-passes
+		// the same digest check as a fresh download — otherwise a poisoned or
+		// truncated cache would be reused forever, which is exactly the gap #106
+		// closed for every other fetcher in this file.
+		if err := verifyHerdrDigest(binaryPath); err != nil {
+			return fmt.Errorf("verify cached herdr: %w", err)
+		}
 		fmt.Printf("  herdr already in %s (skip download)\n", binaryPath)
 	} else {
 		url := fmt.Sprintf("https://github.com/herdrdev/herdr/releases/download/v%s/herdr-linux-x86_64",
@@ -4064,6 +4100,14 @@ func fetchAndUploadHerdr(buildDir, bucket string) error {
 		dlCmd := exec.Command("curl", "-fsSL", url, "-o", binaryPath)
 		if out, err := dlCmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("download herdr: %s: %w", string(out), err)
+		}
+		// Verify BEFORE chmod and BEFORE upload — this binary is uploaded to the
+		// artifacts bucket and then fetched at boot by every sandbox extending
+		// base/tools/herdr, so an unverified download here reaches the whole
+		// fleet. See herdrSHA256's comment for why the digest is pinned in
+		// source rather than checked against a published checksums file.
+		if err := verifyHerdrDigest(binaryPath); err != nil {
+			return fmt.Errorf("verify herdr: %w", err)
 		}
 		if err := os.Chmod(binaryPath, 0o755); err != nil {
 			return fmt.Errorf("chmod herdr: %w", err)
@@ -4078,6 +4122,23 @@ func fetchAndUploadHerdr(buildDir, bucket string) error {
 		return fmt.Errorf("upload herdr: %s: %w", string(out), err)
 	}
 	fmt.Printf("  Uploaded herdr\n")
+	return nil
+}
+
+// verifyHerdrDigest hashes path and compares it against herdrSHA256, the
+// source-pinned digest for herdrVersion (see herdrSHA256's comment for why
+// there is no published checksums file to verify against instead). On
+// mismatch it deletes the bad file — never leave a poisoned or truncated
+// binary sitting in build/ for the next invocation to trust as a cache hit.
+func verifyHerdrDigest(path string) error {
+	got, err := sha256File(path)
+	if err != nil {
+		return err
+	}
+	if got != herdrSHA256 {
+		_ = os.Remove(path)
+		return fmt.Errorf("checksum mismatch for herdr-linux-x86_64: want %s, got %s", herdrSHA256, got)
+	}
 	return nil
 }
 
