@@ -134,7 +134,7 @@ func resolveVSCodeDeps(ctx context.Context, cfg *config.Config, fetcher SandboxF
 //
 // Returns the instance id, the AWS region, the ssh-config alias, and the local
 // private key path.
-func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, localPort, portSuggestion int) (instanceID, region, alias, privPath string, err error) {
+func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, localPort, portSuggestion int) (instanceID, region string, hostNames []string, privPath string, err error) {
 	// Probe the local port before doing any AWS work or writing ssh-config.
 	// Common debug ports (9222 Chrome DevTools, 9229 Node, 5900 VNC) often
 	// already have a process bound — session-manager-plugin will silently
@@ -142,38 +142,68 @@ func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, 
 	// "Connection closed by 127.0.0.1" error.
 	probeLn, probeErr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
 	if probeErr != nil {
-		return "", "", "", "", fmt.Errorf("local port %d is already in use — pick a different one with --local-port (e.g. %d)", localPort, portSuggestion)
+		return "", "", nil, "", fmt.Errorf("local port %d is already in use — pick a different one with --local-port (e.g. %d)", localPort, portSuggestion)
 	}
 	probeLn.Close()
 
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("fetch sandbox: %w", err)
+		return "", "", nil, "", fmt.Errorf("fetch sandbox: %w", err)
 	}
 	instanceID, err = extractResourceID(rec.Resources, ":instance/")
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("find EC2 instance: %w", err)
+		return "", "", nil, "", fmt.Errorf("find EC2 instance: %w", err)
 	}
 
 	privPath, err = sandboxKeyPath(sandboxID)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", nil, "", err
 	}
 
-	alias = "km-" + sandboxID
-	return instanceID, rec.Region, alias, privPath, nil
+	// ssh(5) allows several patterns per Host line and matches the first block
+	// containing the requested name, so km writes both forms: the operator's
+	// alias for typing, and the sandbox id so anything already referencing
+	// km-<sandbox-id> (a saved VS Code workspace, a script, this repo's docs)
+	// keeps resolving.
+	//
+	// The id MUST stay last — km doctor's stale-entry sweep reads the last name
+	// as the sandbox id, and that sweep deletes keypairs.
+	hostNames = sandboxHostNames(rec.Alias, sandboxID)
+	return instanceID, rec.Region, hostNames, privPath, nil
+}
+
+// sandboxHostNames builds the ssh-config Host name list for a sandbox:
+// `km-<alias>` first when an alias exists, then always `km-<sandbox-id>` last.
+// A blank alias, or one that would render the same name as the id, yields the
+// id alone rather than a duplicated pattern.
+func sandboxHostNames(alias, sandboxID string) []string {
+	id := "km-" + sandboxID
+	alias = strings.TrimSpace(alias)
+	if alias == "" || alias == sandboxID {
+		return []string{id}
+	}
+	return []string{"km-" + alias, id}
+}
+
+// primaryHostName is the name shown to the operator and typed into VS Code or
+// `herdr --remote` — the friendly one when there is an alias.
+func primaryHostName(hostNames []string) string {
+	if len(hostNames) == 0 {
+		return ""
+	}
+	return hostNames[0]
 }
 
 // upsertSandboxHost writes the ~/.ssh/config entry. Kept OUT of connectPrep so
 // each caller can run its own SSM pre-flight FIRST — km vscode start has always
 // declined to touch the operator's ssh config for a sandbox that turns out
 // unhealthy, and that ordering is load-bearing.
-func upsertSandboxHost(alias, privPath string, localPort int) error {
+func upsertSandboxHost(hostNames []string, privPath string, localPort int) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("locate home directory: %w", err)
 	}
-	return UpsertHost(filepath.Join(home, ".ssh", "config"), alias, HostOptions{
+	return UpsertHost(filepath.Join(home, ".ssh", "config"), hostNames, HostOptions{
 		HostName:     "localhost",
 		Port:         localPort,
 		User:         "sandbox",
@@ -188,7 +218,7 @@ func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetche
 	// 22122 was chosen deliberately (Phase 73 UAT) and is still documented as
 	// the escape hatch in docs/vscode.md and docs/user-manual.md — keep it a
 	// fixed literal here rather than an offset off localPort.
-	instanceID, region, alias, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, 22122)
+	instanceID, region, hostNames, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, 22122)
 	if err != nil {
 		return err
 	}
@@ -203,12 +233,13 @@ func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetche
 		return err
 	}
 
-	if err := upsertSandboxHost(alias, privPath, localPort); err != nil {
+	if err := upsertSandboxHost(hostNames, privPath, localPort); err != nil {
 		return fmt.Errorf("upsert ssh-config: %w", err)
 	}
+	alias := primaryHostName(hostNames)
 
 	// Print the connection block before opening the blocking port-forward.
-	fmt.Printf("✓ Updated ~/.ssh/config (Host: %s)\n", alias)
+	fmt.Printf("✓ Updated ~/.ssh/config (Host: %s)\n", strings.Join(hostNames, " "))
 	fmt.Printf("✓ Forwarding localhost:%d → sandbox:22\n\n", localPort)
 	fmt.Printf("In VS Code: F1 → \"Remote-SSH: Connect to Host...\" → %s\n", alias)
 	fmt.Printf("The tunnel auto-reconnects if it drops; press Ctrl-C to close it (sshd keeps running on the sandbox).\n\n")

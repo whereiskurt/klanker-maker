@@ -24,7 +24,7 @@ func writeFixture(t *testing.T, dir, content string) string {
 func TestSSHConfig_UpsertCreatesFileIfAbsent(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "config")
-	err := UpsertHost(cfgPath, "km-sb-abc", HostOptions{
+	err := UpsertHost(cfgPath, []string{"km-sb-abc"}, HostOptions{
 		HostName: "localhost", Port: 2222, User: "sandbox",
 		IdentityFile: "~/.km/keys/sb-abc",
 	})
@@ -65,7 +65,7 @@ func TestSSHConfig_UpsertAppendsMarkersIfAbsent(t *testing.T) {
 	cfgPath := writeFixture(t, dir, existing)
 
 	opts := HostOptions{HostName: "localhost", Port: 2222, User: "sandbox", IdentityFile: "~/.km/keys/sb-abc123"}
-	if err := UpsertHost(cfgPath, "km-sb-abc123", opts); err != nil {
+	if err := UpsertHost(cfgPath, []string{"km-sb-abc123"}, opts); err != nil {
 		t.Fatalf("UpsertHost: %v", err)
 	}
 	raw, _ := os.ReadFile(cfgPath)
@@ -89,7 +89,7 @@ func TestSSHConfig_UpsertReplacesExistingEntry(t *testing.T) {
 	cfgPath := writeFixture(t, dir, initial)
 
 	opts := HostOptions{HostName: "localhost", Port: 9000, User: "sandbox", IdentityFile: "~/.km/keys/sb-abc123"}
-	if err := UpsertHost(cfgPath, "km-sb-abc123", opts); err != nil {
+	if err := UpsertHost(cfgPath, []string{"km-sb-abc123"}, opts); err != nil {
 		t.Fatalf("UpsertHost: %v", err)
 	}
 	raw, _ := os.ReadFile(cfgPath)
@@ -113,7 +113,7 @@ func TestSSHConfig_UpsertInsertsBeforeEnd(t *testing.T) {
 	cfgPath := writeFixture(t, dir, initial)
 
 	opts := HostOptions{HostName: "localhost", Port: 3333, User: "sandbox", IdentityFile: "~/.km/keys/sb-new"}
-	if err := UpsertHost(cfgPath, "km-sb-new", opts); err != nil {
+	if err := UpsertHost(cfgPath, []string{"km-sb-new"}, opts); err != nil {
 		t.Fatalf("UpsertHost: %v", err)
 	}
 	raw, _ := os.ReadFile(cfgPath)
@@ -142,7 +142,7 @@ func TestSSHConfig_PreservesOutsideMarkers(t *testing.T) {
 	cfgPath := writeFixture(t, dir, initial)
 
 	opts := HostOptions{HostName: "localhost", Port: 2222, User: "sandbox", IdentityFile: "~/.km/keys/sb-abc123"}
-	if err := UpsertHost(cfgPath, "km-sb-abc123", opts); err != nil {
+	if err := UpsertHost(cfgPath, []string{"km-sb-abc123"}, opts); err != nil {
 		t.Fatalf("UpsertHost: %v", err)
 	}
 	raw, _ := os.ReadFile(cfgPath)

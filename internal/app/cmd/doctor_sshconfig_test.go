@@ -25,7 +25,7 @@ func makeSSHFixture(t *testing.T, dir string, sandboxIDs []string) string {
 			User:         "sandbox",
 			IdentityFile: filepath.Join(dir, "keys", sid),
 		}
-		if err := UpsertHost(cfgPath, "km-"+sid, opts); err != nil {
+		if err := UpsertHost(cfgPath, []string{"km-"+sid}, opts); err != nil {
 			t.Fatalf("seed UpsertHost: %v", err)
 		}
 	}

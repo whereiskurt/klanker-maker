@@ -198,7 +198,7 @@ func newHerdrStatusCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSM
 }
 
 func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int, noInstall bool) error {
-	instanceID, region, alias, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, localPort+100)
+	instanceID, region, hostNames, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, localPort+100)
 	if err != nil {
 		return err
 	}
@@ -243,11 +243,11 @@ func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExec
 		fmt.Printf("✓ Installed herdr v%s\n", st.HerdrVersion)
 	}
 
-	if err := upsertSandboxHost(alias, privPath, localPort); err != nil {
+	if err := upsertSandboxHost(hostNames, privPath, localPort); err != nil {
 		return fmt.Errorf("upsert ssh-config: %w", err)
 	}
 
-	herdrBanner(os.Stdout, sandboxID, alias, localPort, st)
+	herdrBanner(os.Stdout, sandboxID, primaryHostName(hostNames), localPort, st)
 
 	buildPF := func(c context.Context) *exec.Cmd {
 		return buildPortForwardCmd(c, instanceID, region, strconv.Itoa(localPort), "22")

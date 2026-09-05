@@ -210,7 +210,12 @@ func readManagedAliases(configPath string) (map[string]bool, error) {
 	}
 	out := make(map[string]bool)
 	for _, b := range parseHostBlocks(inside) {
-		if sid, ok := strings.CutPrefix(b.alias, "km-"); ok && sid != "" {
+		// km renders `Host km-<alias> km-<sandbox-id>` with the id LAST, so the
+		// last name is the sandbox id. Reading any other name would treat the
+		// operator's alias as a sandbox id, find no DDB record for it, and
+		// report every live alias-named block as stale — which under
+		// --delete-ssh deletes a live entry and its keypair.
+		if sid, ok := strings.CutPrefix(b.sandboxIDName(), "km-"); ok && sid != "" {
 			out[sid] = true
 		}
 	}
