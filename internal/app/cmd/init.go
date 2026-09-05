@@ -3824,6 +3824,7 @@ func sidecarBuilds() []sidecarBuild {
 		// create-handler-rendered unit: half a deploy crash-loops the daemon.
 		{name: "km-secretsd", srcDir: "cmd/km-secretsd"},
 		{name: "km-env", srcDir: "cmd/km-env"},
+		{name: "km-creds", srcDir: "cmd/km-creds"},
 	}
 }
 

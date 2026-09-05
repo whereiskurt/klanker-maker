@@ -48,6 +48,12 @@ type SelftestOpts struct {
 	// LookPathAs reports what `command -v <consumer>` resolves to for the
 	// sandbox user. Nil means run it for real via runuser.
 	LookPathAs func(consumer string) (string, error)
+
+	// FenceProbe runs assertion 6's three clauses and reports
+	// (imdsBlocked, stsWorks, decryptDenied, detail). Nil means run them for
+	// real via runFenceProbe. Injectable because none of the three can be
+	// exercised off a real box.
+	FenceProbe func() (bool, bool, bool, string)
 }
 
 // Selftest answers one question: will agents fail?
@@ -166,6 +172,45 @@ func (s *Server) Selftest(o SelftestOpts) []Check {
 			continue
 		}
 		checks = append(checks, Check{"path:" + c, true, true, resolved})
+	}
+
+	// 6. Fence only. Three clauses, and the third is the one that matters.
+	//
+	// Clause 1 proves the rule is there; clause 2 proves it did not take the
+	// helpers with it; clause 3 proves the credentials those helpers now use
+	// cannot open the bundle.
+	//
+	// CLAUSE 3 IS A NEGATIVE CONTROL — the fence is proven by proving a decrypt
+	// FAILS. An IAM simulator verdict is not a substitute and must never be
+	// swapped in: AWS reports an unsatisfiable condition identically to a
+	// missing statement, so the simulator says what a policy SAYS, not what AWS
+	// ENFORCES. This is the technique that verified the ttl-handler IAM fix
+	// rather than assuming a policy edit had taken effect.
+	if s.FenceEnabled {
+		probe := o.FenceProbe
+		if probe == nil {
+			probe = s.runFenceProbe
+		}
+		imdsBlocked, stsWorks, decryptDenied, detail := probe()
+		switch {
+		case !imdsBlocked:
+			checks = append(checks, Check{"fence", false, true,
+				"uid sandbox can still reach IMDS at 169.254.169.254 — the fence is not " +
+					"fencing (systemctl status km-imds-fence): " + detail})
+		case !stsWorks:
+			checks = append(checks, Check{"fence", false, true,
+				"uid sandbox cannot call sts:GetCallerIdentity — the fence took the helpers " +
+					"with it. km-github, km-slack, km-h1 and the git credential helpers all " +
+					"read AWS as this uid (check /home/sandbox/.aws/config and " +
+					"/opt/km/bin/km-creds): " + detail})
+		case !decryptDenied:
+			checks = append(checks, Check{"fence", false, true,
+				"the narrowed credentials CAN still decrypt the secrets bundle — the session " +
+					"policy Deny is not matching, so the fence buys nothing (check the " +
+					"kms:ResourceAliases condition against the key's real aliases): " + detail})
+		default:
+			checks = append(checks, Check{"fence", true, true, detail})
+		}
 	}
 
 	return checks

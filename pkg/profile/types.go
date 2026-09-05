@@ -885,6 +885,35 @@ type SecretsSpec struct {
 	// anything running as the sandbox user can speak the broker protocol
 	// directly. See the design doc section 6.
 	Grants map[string][]string `yaml:"grants,omitempty" json:"grants,omitempty"`
+
+	// FenceIMDS blocks uid sandbox from 169.254.169.254 and re-homes every
+	// helper that reads AWS as that uid onto credentials km-secretsd mints
+	// (Phase 133 Wave 2; design doc section 4.4).
+	//
+	// A pointer rather than a plain bool because the default flips in a
+	// follow-on phase (design doc section 10.3), and at that point "the
+	// operator said false" and "the operator said nothing" have to be
+	// distinguishable. Today nil and false are identical.
+	//
+	// Read through IsFenceIMDSEnabled, never directly: the fence is only
+	// meaningful alongside SopsFile, and that requirement lives in the
+	// predicate so the IAM path and the userdata path cannot disagree.
+	FenceIMDS *bool `yaml:"fenceIMDS,omitempty" json:"fenceIMDS,omitempty"`
+}
+
+// IsFenceIMDSEnabled reports whether the IMDS fence is on for this profile.
+//
+// Nil-safe, and deliberately requires a bundle. With no SopsFile there is no
+// km-secretsd to mint narrowed credentials from, so a fence would not protect
+// anything — it would simply strand km-github, km-slack, km-h1 and the git
+// credential helpers, all of which read AWS as uid sandbox. km validate WARNs on
+// that combination rather than silently half-enabling it.
+//
+// Both the ec2spot IAM input and the userdata fence block read this ONE
+// predicate, which is what stops a box from getting the self-assume trust
+// without the iptables rule, or the reverse.
+func IsFenceIMDSEnabled(s *SecretsSpec) bool {
+	return s != nil && s.SopsFile != "" && s.FenceIMDS != nil && *s.FenceIMDS
 }
 
 // CLISpec defines operator-side defaults for km shell / km agent commands.

@@ -519,3 +519,95 @@ func TestRunSelftest_HealthyBrokerExitsZero(t *testing.T) {
 		t.Errorf("runSelftest() = %d against a live broker, want 0", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Assertion 6 — the fence (Phase 133 Wave 2)
+// ---------------------------------------------------------------------------
+
+// fenceSelftestServer builds a Server whose bundle decrypts cleanly, so the only
+// thing under test is the fence assertion.
+func fenceSelftestServer(t *testing.T, fenceEnabled bool) *Server {
+	t.Helper()
+	stubDecrypt(t, "API_KEY: v\n", nil)
+	p := filepath.Join(t.TempDir(), "secrets.enc.yaml")
+	_ = osWriteFile(p)
+	return &Server{CiphertextPath: p, Audit: NopAudit{}, FenceEnabled: fenceEnabled}
+}
+
+// No fence, no assertion: a profile that never opted in must not gain a check it
+// can only fail.
+func TestSelftest_NoFenceCheckWhenFenceOff(t *testing.T) {
+	s := fenceSelftestServer(t, false)
+	o := opts(t, t.TempDir(), nil, nil)
+	o.FenceProbe = func() (bool, bool, bool, string) { return true, true, true, "unused" }
+	if c := find(s.Selftest(o), "fence"); c != nil {
+		t.Errorf("a fence check appeared with the fence off: %+v", c)
+	}
+}
+
+func TestSelftest_FencePassesWhenAllThreeClausesHold(t *testing.T) {
+	s := fenceSelftestServer(t, true)
+	o := opts(t, t.TempDir(), nil, nil)
+	o.FenceProbe = func() (bool, bool, bool, string) { return true, true, true, "all good" }
+	c := find(s.Selftest(o), "fence")
+	if c == nil {
+		t.Fatal("no fence check with the fence on")
+	}
+	if !c.OK {
+		t.Fatalf("fence check failed with every clause holding: %s", c.Detail)
+	}
+}
+
+// Each clause must be able to fail the check ALONE, and the detail must name
+// which one — a fence failure reading only "fence: FAIL" costs an operator an
+// hour. Clause 3 is the negative control: the narrowed credentials must FAIL to
+// decrypt, and nothing else in the system can detect it when they do not.
+func TestSelftest_EachFenceClauseFailsIndependently(t *testing.T) {
+	cases := []struct {
+		name              string
+		imds, sts, denied bool
+		wantDetail        string
+	}{
+		{"imds still reachable", false, true, true, "imds"},
+		{"helpers broken", true, false, true, "sts:getcalleridentity"},
+		{"narrowed creds still decrypt", true, true, false, "decrypt"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fenceSelftestServer(t, true)
+			o := opts(t, t.TempDir(), nil, nil)
+			o.FenceProbe = func() (bool, bool, bool, string) {
+				return tc.imds, tc.sts, tc.denied, "probe detail"
+			}
+			c := find(s.Selftest(o), "fence")
+			if c == nil {
+				t.Fatal("no fence check")
+			}
+			if c.OK {
+				t.Fatal("fence check passed with a clause failing")
+			}
+			if !c.Fatal {
+				t.Error("fence check is not fatal; a broken fence must abort the boot")
+			}
+			if !strings.Contains(strings.ToLower(c.Detail), tc.wantDetail) {
+				t.Errorf("detail %q does not name the failing clause (%q)", c.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+// roleARNFromCallerARN is exercised in credentials_test.go; this pins that the
+// fence check reaches runFenceProbe when no probe is injected, rather than
+// silently passing. Running the real probe off-box fails (no runuser, no
+// sandbox user), which is the correct outcome and what this asserts.
+func TestSelftest_FenceWithNoInjectedProbeRunsTheRealOne(t *testing.T) {
+	s := fenceSelftestServer(t, true)
+	c := find(s.Selftest(opts(t, t.TempDir(), nil, nil)), "fence")
+	if c == nil {
+		t.Fatal("no fence check ran with a nil FenceProbe: the real probe was skipped")
+	}
+	if c.OK {
+		t.Error("the real probe reported a healthy fence on a dev machine with no " +
+			"sandbox user and no iptables; it cannot have actually run")
+	}
+}
