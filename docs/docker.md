@@ -8,7 +8,7 @@ Run sandboxes on your local machine using Docker Compose instead of provisioning
 
 ```bash
 # Create a local sandbox (Docker Compose)
-km create profiles/goose.yaml --docker
+km create profiles/spot.yaml --docker
 
 # Connect
 km shell 1
@@ -141,19 +141,19 @@ If `KM_ACCOUNTS_APPLICATION` is set (your AWS account ID), `km create --docker` 
 
 ```bash
 # Using --docker shortcut
-km create profiles/goose.yaml --docker
+km create profiles/spot.yaml --docker
 
 # Using --substrate flag
-km create profiles/goose.yaml --substrate docker
+km create profiles/spot.yaml --substrate docker
 
 # With alias
-km create profiles/goose.yaml --docker --alias mybot
+km create profiles/spot.yaml --docker --alias mybot
 
 # Disable Bedrock (use direct API keys)
-km create profiles/goose.yaml --docker --no-bedrock
+km create profiles/spot.yaml --docker --no-bedrock
 
 # Verbose output (shows docker compose logs)
-km create profiles/goose.yaml --docker --verbose
+km create profiles/spot.yaml --docker --verbose
 ```
 
 **What happens:**
@@ -177,7 +177,7 @@ km create profiles/goose.yaml --docker --verbose
 ```bash
 km shell 1                  # restricted sandbox user
 km shell 1 --root           # root access
-km shell goose-abc123       # by sandbox ID
+km shell spot-abc123        # by sandbox ID
 ```
 
 Uses `docker exec -it km-{sandboxID}-main bash --login` (no SSM session). The `--login` flag ensures `/etc/profile.d/` scripts run for environment setup.

@@ -23,7 +23,7 @@ metadata:
 extends:
   - base/os/redhat            # node, npm, git, python3, tmux
   - base/network/safenetwork
-  - base/userinit             # claude + codex + goose + herdr
+  - base/userinit             # claude + codex + herdr
   - base/platform
 
 spec:

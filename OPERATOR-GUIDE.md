@@ -1852,8 +1852,7 @@ spec:
     useBedrock: true
     privileged: true
     env:
-      SANDBOX_MODE: goose-ebpf-gatekeeper
-      GOOSE_PROVIDER: aws_bedrock
+      SANDBOX_MODE: ebpf-gatekeeper
 
   # dc34 email: specific allowedSenders (narrower than "*").
   # Kept in-leaf per locked decision A: no list narrowing in v1.

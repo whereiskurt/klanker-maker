@@ -3552,7 +3552,6 @@ func profileYAMLForUpload(_ *profile.SandboxProfile, raw []byte, noBedrock bool)
 	s = strings.Replace(s, "useBedrock: true", "useBedrock: false", 1)
 	// Remove Bedrock-specific env vars from the YAML
 	for _, line := range []string{
-		"GOOSE_PROVIDER: aws_bedrock",
 		"CLAUDE_CODE_USE_BEDROCK: \"1\"",
 		"CLAUDE_CODE_USE_BEDROCK: 1",
 	} {
@@ -3577,16 +3576,6 @@ func stripBedrockEnvVars(p *profile.SandboxProfile) {
 	}
 	for _, k := range bedrockKeys {
 		delete(p.Spec.Execution.Env, k)
-	}
-	// Strip GOOSE_PROVIDER if it's set to aws_bedrock
-	if p.Spec.Execution.Env["GOOSE_PROVIDER"] == "aws_bedrock" {
-		delete(p.Spec.Execution.Env, "GOOSE_PROVIDER")
-	}
-	// Strip GOOSE_MODEL if it references a bedrock model ID
-	if v, ok := p.Spec.Execution.Env["GOOSE_MODEL"]; ok {
-		if strings.Contains(v, "anthropic.claude") {
-			delete(p.Spec.Execution.Env, "GOOSE_MODEL")
-		}
 	}
 }
 

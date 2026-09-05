@@ -80,7 +80,7 @@ Klanker Maker sits in the gap between three categories of tool. The table below 
 | | **Klanker Maker** | **AWS Bedrock AgentCore** | **Coder** | **E2B / agent-sandbox** |
 |---|---|---|---|---|
 | **Who runs the runtime?** | You - your AWS account, your VPC, your bill | AWS-managed | You - typically Kubernetes | E2B-managed (SaaS) / your K8s cluster |
-| **Who is it for?** | AI agents (Claude, Goose, Codex, security tools) | AI agents | Human developers | AI agents |
+| **Who is it for?** | AI agents (Claude, Codex, security tools) | AI agents | Human developers | AI agents |
 | **Definition format** | Declarative YAML profile, schema-validated | SDK / API construction | Terraform-templated workspaces | SDK / Dockerfile |
 | **Network policy** | Cgroup eBPF + DNS/HTTP MITM proxy + SCP backstop | VPC + IAM | NetworkPolicy / SG | Container network |
 | **Budget enforcement** | Per-sandbox $ ceiling, dual-layer (proxy 403 + IAM revocation) | Per-account billing alarms (delayed) | None | None |

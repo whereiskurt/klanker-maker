@@ -2030,7 +2030,7 @@ agent-agnostic session IDs — either a Claude session ID or a Codex session ID,
 based on the row's `agent_type`. The column name is a Phase 67 hangover;
 renaming would require a migration job we chose not to run (cosmetic only).
 
-Future agents (Goose etc.) slot in as new `agent_type` enum values without
+Future agents slot in as new `agent_type` enum values without
 further DDB schema work.
 
 ### Phase 72: Corporate workspace support — auto-detect invite + manifest generator

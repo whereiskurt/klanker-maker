@@ -50,7 +50,7 @@ func TestAttributionFooter(t *testing.T) {
 		{
 			name:  "unknown agent leaves body unchanged",
 			body:  "untouched",
-			agent: "goose",
+			agent: "nonesuch",
 			want:  "untouched",
 		},
 	}

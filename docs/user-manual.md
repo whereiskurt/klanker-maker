@@ -49,7 +49,7 @@
   - [km env](#km-env)
   - [km unbootstrap](#km-unbootstrap)
 - [Walkthrough: Claude Code in a Sandbox](#walkthrough-claude-code-in-a-sandbox)
-- [Walkthrough: Goose with Budget Cap](#walkthrough-goose-with-budget-cap)
+- [Walkthrough: Budget-Capped Agent Run](#walkthrough-budget-capped-agent-run)
 - [Walkthrough: Security Agent in a Sealed Sandbox](#walkthrough-security-agent-in-a-sealed-sandbox)
 - [Profile Authoring Guide](#profile-authoring-guide)
   - [Profile spec.email](#profile-specemail)
@@ -273,14 +273,14 @@ km validate <profile.yaml> [profile2.yaml ...]
 
 ```bash
 # Validate a single profile
-km validate profiles/goose.yaml
-# goose.yaml: valid
+km validate profiles/spot.yaml
+# spot.yaml: valid
 
 # Validate multiple profiles
 km validate profiles/*.yaml
 # ao.yaml: valid
 # codex.yaml: valid
-# goose.yaml: valid
+# spot.yaml: valid
 # hardened.yaml: valid
 # learn.yaml: valid
 # sealed.yaml: valid
@@ -345,23 +345,23 @@ fail with a message naming the conflict.
 
 ```bash
 # Create a sandbox from a built-in profile
-km create profiles/goose.yaml
+km create profiles/spot.yaml
 
 # Create with on-demand instances (no spot)
 km create profiles/sealed.yaml --on-demand
 
 # Disable Bedrock — use direct Anthropic API keys instead
-km create profiles/goose.yaml --no-bedrock
+km create profiles/spot.yaml --no-bedrock
 
 # Use Docker Compose local substrate
-km create profiles/goose.yaml --docker
+km create profiles/spot.yaml --docker
 
 # Override the sandbox alias (either form works)
-km create profiles/goose.yaml --alias mybot
-km create profiles/goose.yaml mybot
+km create profiles/spot.yaml --alias mybot
+km create profiles/spot.yaml mybot
 
 # Queue work for the agent and block until it finishes
-km create profiles/goose.yaml reviewer --prompt @tasks/review.md --wait
+km create profiles/spot.yaml reviewer --prompt @tasks/review.md --wait
 
 # Wait up to 30 minutes for GPU capacity instead of failing on the first sweep
 km create profiles/gpu-qwen-12x.yaml --wait-for-capacity
@@ -668,9 +668,9 @@ km list --wide
 
 ```
 #   ALIAS       SANDBOX ID    PROFILE          SUBSTRATE  REGION       STATUS     TTL
-1   my-agent    sb-7f3a9e12   goose            ec2        us-east-1    running    5h46m
+1   my-agent    sb-7f3a9e12   codex            ec2        us-east-1    running    5h46m
 2   -           sb-a4c8e210   hardened         ecs        us-east-1    running    2h12m
-3   dev-box     sb-d9f01b3c   goose            ec2        us-west-2    paused     18h33m
+3   dev-box     sb-d9f01b3c   codex            ec2        us-west-2    paused     18h33m
 4   locked-one  sb-e5b82f01   codex            ec2        us-east-1    running    3h10m  🔒
 ```
 
@@ -682,7 +682,7 @@ km list --json
 [
   {
     "sandbox_id": "sb-7f3a9e12",
-    "profile": "goose",
+    "profile": "codex",
     "substrate": "ec2",
     "region": "us-east-1",
     "status": "running",
@@ -713,7 +713,7 @@ km status sb-7f3a9e12
 
 ```
 Sandbox ID:  sb-7f3a9e12
-Profile:     goose
+Profile:     codex
 Substrate:   ec2
 Region:      us-east-1
 Status:      running
@@ -1617,10 +1617,10 @@ Each command is dispatched to the appropriate Lambda (create-handler for `create
 
 ```bash
 # One-shot: create a sandbox tomorrow at 10pm
-km at '10pm tomorrow' create profiles/goose.yaml
+km at '10pm tomorrow' create profiles/spot.yaml
 
 # Create with alias, on-demand, and overrides
-km at 'in 1 hour' create profiles/goose.yaml --alias g1 --on-demand --ttl 4h --compute 10.00 --ai 5.00
+km at 'in 1 hour' create profiles/spot.yaml --alias g1 --on-demand --ttl 4h --compute 10.00 --ai 5.00
 
 # Recurring: kill a sandbox every Thursday at 3pm (alias resolution)
 km at 'every thursday at 3pm' kill alice
@@ -1650,7 +1650,7 @@ km at list
 km at cancel my-schedule-name
 
 # km schedule is an alias
-km schedule '10pm tomorrow' create profiles/goose.yaml
+km schedule '10pm tomorrow' create profiles/spot.yaml
 ```
 
 ---
@@ -2272,19 +2272,19 @@ aws s3 ls s3://km-sandbox-artifacts-ea554771/artifacts/sb-7f3a9e12/
 
 ---
 
-## Walkthrough: Goose with Budget Cap
+## Walkthrough: Budget-Capped Agent Run
 
-This walkthrough runs Block's [Goose](https://github.com/block/goose) agent with a strict budget ceiling — the sandbox suspends before you overspend.
+This walkthrough runs an agent with a strict budget ceiling — the sandbox suspends before you overspend.
 
 ### Step 1: Create the Profile
 
-Save as `goose-budgeted.yaml`:
+Save as `agent-budgeted.yaml`:
 
 ```yaml
 apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
-  name: goose-budgeted
+  name: agent-budgeted
 extends: hardened
 
 spec:
@@ -2303,7 +2303,6 @@ spec:
     shell: /bin/bash
     workingDir: /workspace
     env:
-      GOOSE_PROVIDER: anthropic
 
   network:
     egress:
@@ -2350,7 +2349,7 @@ spec:
     paths:
       - "/workspace/**/*.patch"
       - "/workspace/**/test-results/**"
-      - "/workspace/.goose/**"
+      - "/workspace/.codex/**"
     maxSizeMB: 100
 
 ```
@@ -2358,13 +2357,13 @@ spec:
 ### Step 2: Create and Connect
 
 ```bash
-km create goose-budgeted.yaml
+km create agent-budgeted.yaml
 # sandbox: sb-e4a19c07
 
 aws ssm start-session --target i-0abc123def456 --profile klanker-terraform
 ```
 
-### Step 3: Run Goose
+### Step 3: Run the agent
 
 Inside the sandbox:
 
@@ -2373,14 +2372,12 @@ cd /workspace
 git clone https://github.com/mycompany/api-service.git
 cd api-service
 
-# Install Goose
-pipx install goose-ai
-
-# Run Goose — it will use the Anthropic API key from SSM
-goose session start
+# codex and claude are already installed by base/userinit —
+# both pick up the Anthropic API key from SSM
+codex
 ```
 
-Goose runs autonomously — installing dependencies, editing code, running tests. The HTTP proxy meters every Anthropic API call. When the AI budget reaches 80%, you get a warning email. At 100%, the proxy returns 403 for Bedrock/Anthropic calls and the sandbox suspends.
+The agent runs autonomously — installing dependencies, editing code, running tests. The HTTP proxy meters every Anthropic API call. When the AI budget reaches 80%, you get a warning email. At 100%, the proxy returns 403 for Bedrock/Anthropic calls and the sandbox suspends.
 
 ### Step 4: Top Up if Needed
 
@@ -2487,13 +2484,12 @@ spec:
 ```
 sealed (most restrictive)
   └── hardened
-        └── goose (Goose + Claude Code + Codex, Bedrock)
 ao (agent orchestrator)
 codex (OpenAI Codex agent)
 learn (wide-open traffic observation)
 ```
 
-Built-in profiles on disk: `ao.yaml`, `codex.yaml`, `goose.yaml`, `hardened.yaml`, `learn.yaml`, `sealed.yaml`.
+Built-in profiles on disk: `ao.yaml`, `codex.yaml`, `spot.yaml`, `hardened.yaml`, `learn.yaml`, `sealed.yaml`.
 
 Start from the most restrictive profile that works and open up what you need:
 
@@ -2582,7 +2578,7 @@ When eBPF enforcement is enabled, uprobes provide **passive TLS plaintext captur
 | TLS Library | Used By | What's Captured | Status |
 |-------------|---------|-----------------|--------|
 | OpenSSL (libssl.so.3) | curl, wget, Python, Ruby | Full plaintext (HTTP/1.1 requests/responses) | **E2E verified** |
-| Go crypto/tls | Goose, Go agents | Plaintext (requires unstripped binary) | Schema-ready |
+| Go crypto/tls | Go agents | Plaintext (requires unstripped binary) | Schema-ready |
 | BoringSSL (Bun) | Claude Code | Plaintext (requires per-binary offset discovery) | Schema-ready |
 
 **Use cases:**

@@ -456,7 +456,7 @@ Budget limits serve a dual security purpose: they prevent resource exhaustion at
 1. **Proxy 403:** The HTTP proxy blocks requests to non-allowed hosts immediately. No external API call can be made to a host not in the allowlist. This is the fast path -- the request never leaves the sandbox.
 2. **IAM revocation:** If budget alerts fire, the sandbox's IAM role can be revoked at the account level, cutting off all AWS API access regardless of what the agent is doing inside the instance.
 
-**Lifecycle as budget enforcement:** The `lifecycle.ttl` field (e.g., `"4h"` for `goose`, `"1h"` for `sealed`) ensures sandboxes are automatically destroyed after their maximum lifetime. The `idleTimeout` catches abandoned sandboxes. The `teardownPolicy: destroy` ensures resources are fully cleaned up, not just stopped.
+**Lifecycle as budget enforcement:** The `lifecycle.ttl` field (e.g., `"4h"` for `codex`, `"1h"` for `sealed`) ensures sandboxes are automatically destroyed after their maximum lifetime. The `idleTimeout` catches abandoned sandboxes. The `teardownPolicy: destroy` ensures resources are fully cleaned up, not just stopped.
 
 ---
 
@@ -801,6 +801,5 @@ The four built-in profiles demonstrate the security model at different trust lev
 |---------|-------------|------------|------------|-------------|----------|-----|
 | `sealed` | Empty (zero egress) | Empty | None | None | `destroy` | 1h |
 | `hardened` | `.amazonaws.com` only | `sts.us-east-1.amazonaws.com`, `ssm.us-east-1.amazonaws.com` | None | `read_file` only | `destroy` | 4h |
-| `goose` | AWS + Anthropic + GitHub + npm + PyPI + OpenAI + Google | ~30 hosts | Read/write, allowlisted repos | `bash`, `read_file`, `write_file`, `list_files` | `stop` | 1h |
 
 The `sealed` profile produces a sandbox with zero network egress, zero repository access, no agent tools, and a 1-hour TTL. It is the most restrictive possible configuration and serves as a baseline for verifying that the deny-by-default model works correctly.

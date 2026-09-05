@@ -1910,7 +1910,7 @@ func TestCLISpec_Agent_EnumInvalid(t *testing.T) {
 		name      string
 		agentLine string
 	}{
-		{"goose-rejected", "    default: goose\n"},
+		{"unknown-agent-rejected", "    default: nonesuch\n"},
 		{"uppercase-rejected", "    default: CLAUDE\n"},
 	}
 	for _, tc := range cases {

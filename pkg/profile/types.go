@@ -579,7 +579,7 @@ type ExecutionSpec struct {
 	// ConfigFiles is a map of absolute file paths to their contents.
 	// Each entry is written to the sandbox filesystem during bootstrap,
 	// owned by the sandbox user. Use this to pre-seed tool configuration
-	// (e.g. Claude settings.json, Goose config, .gitconfig).
+	// (e.g. Claude settings.json, Codex config.toml, .gitconfig).
 	//
 	// Example:
 	//   configFiles:

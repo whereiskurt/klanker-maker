@@ -1615,7 +1615,7 @@ The observer attaches uprobes to TLS library functions (`SSL_write`, `SSL_read`)
 | TLS Library | Binary Path | Uprobe Target | Coverage |
 |-------------|-------------|---------------|----------|
 | OpenSSL 3.x | `/usr/lib64/libssl.so.3` | `SSL_write` / `SSL_read` | curl, wget, Python, Ruby |
-| Go crypto/tls | Per-binary (e.g., `/usr/local/bin/goose`) | `writeRecordLocked` / `Read` | Goose, Go-based agents |
+| Go crypto/tls | Per-binary | `writeRecordLocked` / `Read` | Go-based agents |
 | BoringSSL | Per-binary (e.g., Bun runtime) | Offset-based `SSL_write` | Claude Code |
 
 ### What It Captures

@@ -89,7 +89,7 @@ km-send --subject "add budget" --body /tmp/op-request.txt
 
 ```bash
 cat > /tmp/op-request.txt << 'EOF'
-Create a new sandbox from the goose profile with alias worker-3
+Create a new sandbox from the spot profile with alias worker-3
 EOF
 km-send --subject "create sandbox" --body /tmp/op-request.txt
 ```

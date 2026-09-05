@@ -527,13 +527,12 @@ spec:
 
 | Profile | signing | verifyInbound | encryption | allowedSenders |
 |---------|---------|---------------|------------|----------------|
-| `goose` | `required` | `required` | `required` | `["self"]` |
 | `ao` | `required` | `required` | `required` | `["self"]` |
 | `codex` | `required` | `required` | `required` | `["self"]` |
 | `hardened` | *(no email block)* | *(no email block)* | *(no email block)* | *(no email block)* |
 | `sealed` | *(no email block)* | *(no email block)* | *(no email block)* | *(no email block)* |
 
-Profiles with `spec.email` defined (`goose`, `ao`, `codex`) enforce full signing, required encryption, and restrict inbound to self-mail only. Profiles without an email block (`hardened`, `sealed`) inherit the `nil` default -- email policy is not enforced and plain email is used (see "How nil Behaves" above). Custom profiles can relax these settings for inter-sandbox communication.
+Profiles with `spec.email` defined (`ao`, `codex`) enforce full signing, required encryption, and restrict inbound to self-mail only. Profiles without an email block (`hardened`, `sealed`) inherit the `nil` default -- email policy is not enforced and plain email is used (see "How nil Behaves" above). Custom profiles can relax these settings for inter-sandbox communication.
 
 ---
 

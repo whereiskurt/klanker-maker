@@ -100,12 +100,12 @@ spec:
         # OpenAI (codex)
         - ".openai.com"
         - ".chatgpt.com"
-        # Python (goose extensions via uvx)
+        # Python packages (uvx / pip)
         - ".pypi.org"
         - ".pythonhosted.org"
-        # Goose extensions / MCP
+        # MCP servers
         - ".pulsemcp.com"
-        # Google (goose telemetry, search)
+        # Google (telemetry, search)
         - ".google.com"
         - ".google-analytics.com"
         - ".googletagmanager.com"
