@@ -153,8 +153,10 @@ func newHerdrStartCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellEx
 
 Run this in one terminal and ` + "`herdr --remote km-<id>`" + ` in another. Panes keep
 running when you detach with ctrl+b q, and survive this command being Ctrl-C'd —
-but a Herdr session does NOT survive a reboot, so km stop (and an idle stop under
-teardownPolicy: stop) kills every pane's process. km pause hibernates and keeps them.`,
+but a Herdr session does NOT survive a reboot, so km stop kills every pane's
+process. km pause hibernates and keeps them. An idle stop under teardownPolicy:
+stop follows spec.runtime.hibernation: it hibernates (panes survive) when that is
+set, and stops (panes die) when it is not.`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {

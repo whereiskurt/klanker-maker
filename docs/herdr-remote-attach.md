@@ -120,12 +120,36 @@ and it interacts with km's lifecycle commands in a way that is easy to get wrong
 | `km resume` (from pause) | Panes are exactly as you left them. |
 | `km stop` | **Every pane's process dies.** Herdr's `pane_history`/`resume_agents_on_restore` can restore terminal *scrollback* and re-attach *recognized* agents — the running work itself is gone. |
 | `km resume` (from stop) | A fresh Herdr server; nothing to reattach unless the above restore features were separately opted into upstream. |
+| idle reap, `teardownPolicy: stop`, `hibernation: false` | **Every pane's process dies**, same as `km stop`. |
+| idle reap, `teardownPolicy: stop`, `hibernation: true` | **Survive.** The reaper hibernates rather than stopping — see below. |
 
-The sentence that should worry you: **`teardownPolicy: stop` on an idle timeout is
-the destructive path.** If km's idle reaper decides a sandbox is unused and its
-teardown policy is `stop` (not `pause`), a detached-but-working Herdr pane gets
-killed along with everything else on the box — silently, from the pane's point of
-view. That is the entire reason signal 8 exists.
+**The idle reap follows `spec.runtime.hibernation`, not `teardownPolicy` alone.**
+An earlier draft of this document, and `km herdr start`'s own help text, said an
+idle stop kills every pane unconditionally. That is wrong, and live UAT proved
+it: `cmd/ttl-handler/main.go` calls `lookupHibernation`, reads
+`profile.Spec.Runtime.Hibernation` off the stored profile, and issues
+`StopInstances` with `Hibernate: true` when it is set — falling back to a plain
+stop only on `UnsupportedHibernationConfiguration`. `km stop` (`stop.go`) never
+passes that flag, which is why the two differ.
+
+Measured on `uatherdr-511e0afc`, same box, both paths:
+
+| | idle reap (`hibernation: true`) | `km stop` |
+|---|---|---|
+| boot time across the cycle | unchanged | new |
+| `hibernation exit` in `dmesg` | present | absent |
+| `herdr server` | **same pid** | gone |
+| API socket | present | gone |
+| detached pane job | survived | gone |
+
+So the sentence that should worry you is narrower than it looks: **`teardownPolicy:
+stop` on an idle timeout is the destructive path _when the profile does not enable
+hibernation_.** There, a detached-but-working Herdr pane gets killed along with
+everything else on the box — silently, from the pane's point of view. That is the
+entire reason signal 8 exists. On a hibernation-enabled profile the reap is
+survivable, but do not rely on that as the control: hibernation can fail at
+runtime and fall back to a plain stop, and signal 8 is what keeps the box up in
+the first place.
 
 ---
 
