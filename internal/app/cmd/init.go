@@ -4038,6 +4038,9 @@ func verifySHA256(path, checksumsPath, entryName string) error {
 	if got := hex.EncodeToString(h.Sum(nil)); got != want {
 		return fmt.Errorf("checksum mismatch for %s: want %s, got %s", entryName, want, got)
 	}
+	return nil
+}
+
 // FetchAndUploadHerdr downloads herdr v{herdrVersion} linux/amd64 (cached in
 // build/) and uploads it to s3://{bucket}/binaries/herdr.
 //
