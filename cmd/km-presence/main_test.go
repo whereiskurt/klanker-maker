@@ -1,11 +1,33 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// TestHerdrConfigDir_DefaultsWhenUnset and its sibling pin the F9 escape
+// hatch: KM_HERDR_CONFIG_DIR overrides the hardcoded Herdr config path
+// signal 8 probes, for the day XDG_CONFIG_HOME or a relocated config dir
+// makes the constant wrong on a real box — a case the negative-case signal-8
+// tests cannot catch, since they construct their own config dir directly.
+func TestHerdrConfigDir_DefaultsWhenUnset(t *testing.T) {
+	t.Setenv("KM_HERDR_CONFIG_DIR", "")
+	if got := herdrConfigDir(); got != defaultHerdrConfigDir {
+		t.Fatalf("herdrConfigDir() = %q, want default %q", got, defaultHerdrConfigDir)
+	}
+}
+
+func TestHerdrConfigDir_EnvOverride(t *testing.T) {
+	t.Setenv("KM_HERDR_CONFIG_DIR", "/custom/herdr/config")
+	if got := herdrConfigDir(); got != "/custom/herdr/config" {
+		t.Fatalf("herdrConfigDir() = %q, want /custom/herdr/config", got)
+	}
+}
 
 // =============================================================================
 // Signal 1: Login shells
@@ -181,7 +203,7 @@ func TestTick_NoEmitWhenAllNegative(t *testing.T) {
 	emitFn = func(_ string) error { called = true; return nil }
 	defer func() { emitFn = orig }()
 
-	active, emitted := tick(r, "sb-test123", mailDir, slackStamp, presenceStamp)
+	active, emitted := tick(r, "sb-test123", mailDir, slackStamp, presenceStamp, t.TempDir())
 	if active {
 		t.Fatalf("expected no active signals when all checks return false")
 	}
@@ -216,7 +238,7 @@ func TestTick_EmitWhenAnyPositive(t *testing.T) {
 	}
 	defer func() { emitFn = orig }()
 
-	active, emitted := tick(r, "sb-test123", mailDir, slackStamp, presenceStamp)
+	active, emitted := tick(r, "sb-test123", mailDir, slackStamp, presenceStamp, t.TempDir())
 	if !active {
 		t.Fatalf("expected at least one active signal when login shell is present")
 	}
@@ -242,7 +264,7 @@ func TestTick_StampAlwaysTouched(t *testing.T) {
 
 	before := time.Now().Add(-time.Second) // sentinel: stamp must not exist pre-tick
 
-	tick(r, "sb-test123", mailDir, slackStamp, presenceStamp)
+	tick(r, "sb-test123", mailDir, slackStamp, presenceStamp, t.TempDir())
 
 	fi, err := os.Stat(presenceStamp)
 	if err != nil {
@@ -363,7 +385,7 @@ func TestTick_EmitWhenOnlyVNCActive(t *testing.T) {
 	emitFn = func(_ string) error { called = true; return nil }
 	defer func() { emitFn = orig }()
 
-	active, emitted := tick(r, "sb-test123", mailDir, slackStamp, presenceStamp)
+	active, emitted := tick(r, "sb-test123", mailDir, slackStamp, presenceStamp, t.TempDir())
 	if !active {
 		t.Fatalf("expected active when only the VNC signal is positive")
 	}
@@ -489,11 +511,267 @@ func TestTick_EmitWhenOnlySSHActive(t *testing.T) {
 	emitFn = func(_ string) error { called = true; return nil }
 	defer func() { emitFn = orig }()
 
-	active, emitted := tick(r, "sb-test123", mailDir, slackStamp, presenceStamp)
+	active, emitted := tick(r, "sb-test123", mailDir, slackStamp, presenceStamp, t.TempDir())
 	if !active {
 		t.Fatalf("expected active when only the SSH signal is positive")
 	}
 	if !emitted || !called {
 		t.Fatalf("expected heartbeat for an SSH-only session (active=%v emitted=%v called=%v)", active, emitted, called)
+	}
+}
+
+// =============================================================================
+// Signal 8: Herdr pane busy
+// =============================================================================
+
+func herdrListCmd(sock string) string {
+	return `runuser -u sandbox -- bash -lc HERDR_SOCKET_PATH=` + shellSingleQuote(sock) + ` herdr pane list`
+}
+
+func herdrInfoCmd(sock, pane string) string {
+	return `runuser -u sandbox -- bash -lc HERDR_SOCKET_PATH=` + shellSingleQuote(sock) + ` herdr pane process-info --pane ` + pane
+}
+
+// TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy is the single most important test in
+// this task.
+//
+// `foreground_processes` is non-empty even when a pane sits at a bare shell — it
+// contains that shell. An earlier draft of this signal checked
+// `len(foreground_processes) > 0`, which is therefore ALWAYS true: signal 8 would
+// have been permanently positive, silently disabling idle teardown on every box
+// that ever ran herdr and leaking instances forever. That is the exact
+// `pgrep vscode-server` trap the design set out to avoid.
+//
+// The real discriminator is foreground_process_group_id != shell_pid.
+func TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy(t *testing.T) {
+	raw, err := os.ReadFile("testdata/herdr_process_info_idle.json")
+	if err != nil {
+		t.Fatalf("read idle fixture: %v", err)
+	}
+	if herdrPaneIsBusy(raw) {
+		t.Fatal("idle pane reported BUSY — signal 8 can never go negative, which " +
+			"disables idle teardown fleet-wide")
+	}
+	// Guard the guard: the fixture must actually contain a foreground process,
+	// otherwise this test passes for the wrong reason.
+	if !bytes.Contains(raw, []byte(`"foreground_processes"`)) ||
+		!bytes.Contains(raw, []byte(`"/bin/sh"`)) {
+		t.Fatal("idle fixture no longer contains a foreground shell; this test is " +
+			"no longer exercising the trap it exists for")
+	}
+}
+
+func TestHerdrPaneIsBusy_BusyPaneIsBusy(t *testing.T) {
+	raw, err := os.ReadFile("testdata/herdr_process_info_busy.json")
+	if err != nil {
+		t.Fatalf("read busy fixture: %v", err)
+	}
+	if !herdrPaneIsBusy(raw) {
+		t.Fatal("pane running `sleep 900` reported IDLE")
+	}
+}
+
+func TestHerdrPaneIsBusy_MalformedIsIdle(t *testing.T) {
+	for _, in := range [][]byte{[]byte("not json"), []byte("{}"), nil, []byte(`{"result":{}}`)} {
+		if herdrPaneIsBusy(in) {
+			t.Fatalf("malformed input %q reported BUSY; must fail idle", in)
+		}
+	}
+}
+
+// TestHerdrPaneIsBusy_ZeroPidsAreIdle covers a response where both ids are absent
+// or zero — equal, but not meaningfully so. Treating 0 == 0 as "idle" is correct;
+// treating it as busy would latch the signal on.
+func TestHerdrPaneIsBusy_ZeroPidsAreIdle(t *testing.T) {
+	raw := []byte(`{"result":{"process_info":{"foreground_process_group_id":0,"shell_pid":0}}}`)
+	if herdrPaneIsBusy(raw) {
+		t.Fatal("zero pids reported BUSY")
+	}
+}
+
+func TestHerdrPaneIDs_ParsesLiveFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/herdr_pane_list.json")
+	if err != nil {
+		t.Fatalf("read pane list fixture: %v", err)
+	}
+	got := herdrPaneIDs(raw)
+	if len(got) != 1 || got[0] != "w1:p1" {
+		t.Fatalf("herdrPaneIDs = %v; want [w1:p1]", got)
+	}
+}
+
+func TestHerdrPaneIDs_MalformedIsEmpty(t *testing.T) {
+	if got := herdrPaneIDs([]byte("not json")); len(got) != 0 {
+		t.Fatalf("malformed pane list returned %v; want empty", got)
+	}
+}
+
+func TestSignal_HerdrPaneBusy_Positive(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "herdr.sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := os.ReadFile("testdata/herdr_pane_list.json")
+	busy, _ := os.ReadFile("testdata/herdr_process_info_busy.json")
+	r := &fakeRunner{responses: map[string][]byte{
+		herdrListCmd(sock):          list,
+		herdrInfoCmd(sock, "w1:p1"): busy,
+	}}
+	if !checkHerdrPaneBusy(r, dir) {
+		t.Fatal("expected positive when a pane is running a foreground job")
+	}
+}
+
+// TestSignal_HerdrPaneBusy_NegativeAllIdle is load-bearing: it is what keeps idle
+// teardown working.
+func TestSignal_HerdrPaneBusy_NegativeAllIdle(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "herdr.sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := os.ReadFile("testdata/herdr_pane_list.json")
+	idle, _ := os.ReadFile("testdata/herdr_process_info_idle.json")
+	r := &fakeRunner{responses: map[string][]byte{
+		herdrListCmd(sock):          list,
+		herdrInfoCmd(sock, "w1:p1"): idle,
+	}}
+	if checkHerdrPaneBusy(r, dir) {
+		t.Fatal("expected negative when every pane sits at a bare shell — a signal " +
+			"that cannot go negative disables idle teardown fleet-wide")
+	}
+}
+
+func TestSignal_HerdrPaneBusy_NegativeNoSocket(t *testing.T) {
+	if checkHerdrPaneBusy(&fakeRunner{}, t.TempDir()) {
+		t.Fatal("expected negative when no herdr socket exists")
+	}
+}
+
+// TestSignal_HerdrPaneBusy_NegativeBinaryMissing simulates herdr being absent or
+// unresolvable — the runner returns an error. This is NOT hypothetical: herdr is
+// installed to /home/sandbox/.local/bin and is invisible to root, which is why the
+// invocation uses a login shell.
+func TestSignal_HerdrPaneBusy_NegativeBinaryMissing(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "herdr.sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeRunner{
+		responses: map[string][]byte{},
+		errors:    map[string]error{herdrListCmd(sock): errors.New("exit status 127")},
+	}
+	if checkHerdrPaneBusy(r, dir) {
+		t.Fatal("expected negative (fail idle) when herdr cannot be run")
+	}
+}
+
+func TestHerdrSocketPaths_FindsDefaultAndNamed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "herdr.sock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// herdr also creates herdr-client.sock beside it; it must NOT be treated as an
+	// API socket.
+	if err := os.WriteFile(filepath.Join(dir, "herdr-client.sock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	named := filepath.Join(dir, "sessions", "agents")
+	if err := os.MkdirAll(named, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(named, "herdr.sock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := herdrSocketPaths(dir)
+	if len(got) != 2 {
+		t.Fatalf("herdrSocketPaths returned %d paths, want 2 (client socket must be excluded): %v", len(got), got)
+	}
+}
+
+// TestShellSingleQuote_EscapesShellMetacharacters pins the fix for a real
+// defect: the socket path used to be embedded via fmt's %q, which produces
+// DOUBLE quotes that the shell still expands ($ and backticks included). The
+// path segment comes from a sandbox-user-writable directory
+// (~/.config/herdr/sessions/*), so a name containing either would silently
+// break the bash -lc command and read as idle. %q is Go quoting, not shell
+// quoting — this test exists to keep that straight.
+func TestShellSingleQuote_EscapesShellMetacharacters(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "/home/sandbox/.config/herdr/herdr.sock", "'/home/sandbox/.config/herdr/herdr.sock'"},
+		{"dollar", "/home/sandbox/.config/herdr/sessions/$(whoami)/herdr.sock", "'/home/sandbox/.config/herdr/sessions/$(whoami)/herdr.sock'"},
+		{"backtick", "/home/sandbox/.config/herdr/sessions/`id`/herdr.sock", "'/home/sandbox/.config/herdr/sessions/`id`/herdr.sock'"},
+		{"single-quote", "/home/sandbox/.config/herdr/sessions/a'b/herdr.sock", `'/home/sandbox/.config/herdr/sessions/a'\''b/herdr.sock'`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := shellSingleQuote(c.in)
+			if got != c.want {
+				t.Fatalf("shellSingleQuote(%q) = %q, want %q", c.in, got, c.want)
+			}
+			// The quoted form must actually round-trip through a real shell:
+			// echo it back and confirm bash reproduces the original string
+			// verbatim, including the metacharacters it must NOT expand.
+			out, err := exec.Command("bash", "-c", "printf '%s' "+got).Output()
+			if err != nil {
+				t.Fatalf("bash rejected the quoted form %q: %v", got, err)
+			}
+			if string(out) != c.in {
+				t.Fatalf("shell round-trip: got %q, want %q (metacharacter was expanded)", out, c.in)
+			}
+		})
+	}
+}
+
+// TestSignal_HerdrPaneBusy_IndependentOfSSHAndVNC proves each direction with a
+// positive control, the pattern TestSignals_VNCAndSSH_AreIndependent already
+// uses for signals 6/7: a fixture that could not possibly make the OTHER
+// signal fire says nothing about independence. Passing t.TempDir() alone (the
+// original form of this test) makes herdrSocketPaths return empty and
+// checkHerdrPaneBusy return false before the runner is ever consulted — it
+// would pass against a checkHerdrPaneBusy that always returns false.
+func TestSignal_HerdrPaneBusy_IndependentOfSSHAndVNC(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "herdr.sock")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := os.ReadFile("testdata/herdr_pane_list.json")
+	busy, _ := os.ReadFile("testdata/herdr_process_info_busy.json")
+
+	// Direction 1: an established SSH session (signal 7's positive control)
+	// alongside a genuinely busy herdr pane. Signal 8 must fire from the
+	// herdr data, and signal 7 must fire from the ss data — neither one
+	// borrows the other's input.
+	withSSH := &fakeRunner{responses: map[string][]byte{
+		"ss -tnHp state established": []byte(ssWithSSHSession),
+		herdrListCmd(sock):           list,
+		herdrInfoCmd(sock, "w1:p1"):  busy,
+	}}
+	if !checkHerdrPaneBusy(withSSH, dir) {
+		t.Fatal("expected signal 8 positive: a busy pane exists regardless of the SSH session")
+	}
+	if !checkSSHSessions(withSSH) {
+		t.Fatal("expected signal 7 positive: ssWithSSHSession is its own positive control")
+	}
+
+	// Direction 2: an established VNC session (signal 6's positive control)
+	// with NO herdr socket at all. Signal 6 must fire; signal 8 must not
+	// fire merely because signal 6 did.
+	noHerdr := t.TempDir()
+	withVNC := &fakeRunner{responses: map[string][]byte{
+		"ss -tnHp state established": []byte(ssWithViewer),
+	}}
+	if !checkVNCClients(withVNC) {
+		t.Fatal("expected signal 6 positive: ssWithViewer is its own positive control")
+	}
+	if checkHerdrPaneBusy(withVNC, noHerdr) {
+		t.Fatal("signal 8 fired from signal 6's input despite no herdr socket existing")
 	}
 }

@@ -316,7 +316,7 @@ The `both` mode bootstrap in userdata has a specific ordering to ensure BPF maps
 
 ### E2E Verification Results
 
-Verified on `goose-ebpf-gatekeeper` profile (EC2, AL2023 kernel 6.18, `enforcement: both`):
+Verified on an `enforcement: both` profile (EC2, AL2023 kernel 6.18):
 
 | Scenario | Expected | Result |
 |----------|----------|--------|
@@ -326,11 +326,6 @@ Verified on `goose-ebpf-gatekeeper` profile (EC2, AL2023 kernel 6.18, `enforceme
 | `pip install requests` (non-L7 host) | Direct connection, no proxy | **PASS** — connect4 skips DNAT, traffic flows direct |
 | Bedrock API call | Token metered | **PASS** — transparent proxy captures response, meters tokens |
 | `iptables -F -t nat` then retry | Still enforced | **PASS** — BPF enforcement independent of iptables |
-
-### Built-in Profiles
-
-- **`goose-ebpf-gatekeeper`** — gatekeeper mode with eBPF + proxy enforcement, GitHub repo filtering, and Bedrock token metering.
-- **`goose-ebpf`** — pure eBPF enforcement, no proxy. Maximum security, lowest overhead.
 
 ### Operational Lessons
 
@@ -484,7 +479,7 @@ An `ebpf-observer` sidecar attaches uprobes to TLS library functions for passive
 | Library | Binary | Uprobe Target | Attach Method | Status | Limitations |
 |---------|--------|---------------|---------------|--------|-------------|
 | OpenSSL 3.x | `/usr/lib64/libssl.so.3` | `SSL_write`, `SSL_read`, `SSL_write_ex`, `SSL_read_ex` | Standard dynamic symbol | **E2E verified** | None — most reliable |
-| Go crypto/tls | Per-binary (e.g., goose) | `writeRecordLocked` / `Read` | Symbol scan + per-RET offsets | Schema-ready | Binary must be unstripped; uretprobe crashes Go |
+| Go crypto/tls | Per-binary | `writeRecordLocked` / `Read` | Symbol scan + per-RET offsets | Schema-ready | Binary must be unstripped; uretprobe crashes Go |
 | BoringSSL | Per-binary (e.g., Bun/Claude Code) | `SSL_write` | Byte-pattern offset discovery | Schema-ready | Offsets break per Bun version |
 | rustls | Per-binary (future) | `rustls_connection_write_tls` | Reverse-correlation | Schema-ready | Experimental |
 

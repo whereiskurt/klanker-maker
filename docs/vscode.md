@@ -304,7 +304,9 @@ sandbox image, so existing sandboxes keep the older daemon until
 `km extend <id> --idle <duration>`.
 
 See `docs/desktop.md` § Idle timeout and desktop sessions for the equivalent
-KasmVNC signal.
+KasmVNC signal, and `docs/herdr-remote-attach.md` § Signal 8 for how a detached
+Herdr pane running real work is kept awake the same way — over a `km herdr`
+tunnel using this same sshd, rather than a Remote-SSH session.
 
 ---
 

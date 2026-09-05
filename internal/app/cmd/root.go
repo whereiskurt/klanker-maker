@@ -89,6 +89,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewAMICmd(cfg))
 	root.AddCommand(NewSlackCmd(cfg))
 	root.AddCommand(NewVSCodeCmd(cfg))
+	root.AddCommand(NewHerdrCmd(cfg))
 	root.AddCommand(NewDesktopCmd(cfg))
 	root.AddCommand(NewModelCmd(cfg))
 	root.AddCommand(NewTunnelCmd(cfg))

@@ -4426,6 +4426,22 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		)
 	})
 
+	// Herdr ssh-config conflict check. Herdr rewrites ~/.ssh/config by default
+	// (adding keepalive fallbacks) while km's UpsertHost owns the `Host km-<id>`
+	// blocks in that same file — two writers, one file. km does not write the
+	// fix itself (herdr's config.toml is a workstation-global file km does not
+	// own); it only reports. Never fails a doctor run; worst case is CheckWarn.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			return CheckResult{Name: "Herdr ssh-config conflict", Status: CheckSkipped, Message: fmt.Sprintf("could not locate home dir: %v", herr)}
+		}
+		return checkHerdrSSHConfigConflict(
+			filepath.Join(home, ".config", "herdr", "config.toml"),
+			filepath.Join(home, ".ssh", "config"),
+		)
+	})
+
 	// Orphaned EC2 instances check (report-only, never terminates).
 	ec2InstanceClient := deps.EC2InstanceClient
 	ec2ResourcePrefix := cfg.GetResourcePrefix()

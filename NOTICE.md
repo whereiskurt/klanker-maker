@@ -29,7 +29,7 @@ positions of any employer or third party.
 ## Trademarks
 
 References in this repository to AWS, Anthropic, Claude, Slack, GitHub,
-OpenAI, Goose, Coder, E2B, Cilium, and any other third-party product, service,
+OpenAI, Coder, E2B, Cilium, and any other third-party product, service,
 or organization are nominal and descriptive only. All trademarks, service
 marks, and product names are the property of their respective owners. Klanker
 Maker is not affiliated with, sponsored by, or endorsed by any of these

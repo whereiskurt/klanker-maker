@@ -8,6 +8,114 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 134 (2026-09-04) — `km herdr`: persistent remote attach for sandbox agent panes (code-complete; live UAT pending):**
+- `km herdr start|status <sandbox-id>` — a **sibling of `km vscode`, not a
+  `km tunnel` mode.** `km tunnel` carries a network path from the workstation
+  *into* the sandbox, and its security note (km's egress enforcement can't see
+  traffic crossing the tunnel) follows from that direction; `km herdr` points
+  the other way — the operator reaches *in* to a box already theirs, over the
+  same SSM+SSH transport `km vscode` already terminates. Filing it under
+  `tunnel` would attach a caveat that is false here. Reuses `km vscode`'s
+  transport wholesale (`connectPrep`, `upsertSandboxHost`,
+  `runReconnectingPortForward`) and differs only in pre-flight (adds a herdr
+  binary/version check to the SSM round trip) and banner. Default
+  `--local-port 2224` — `2222` is `km vscode`, `2223` is both `km tunnel`
+  modes.
+- **`profiles/base/tools/herdr.yaml`** — opt-in fragment, pure
+  `initCommandsAppend`, pulling the binary from S3 over the instance role. Its
+  real purpose is narrower than it looks, and **narrower still since #106**:
+  `profiles/base/userinit.yaml` already installs the same pinned 0.8.2 on any
+  profile that extends it, to `/home/sandbox/.local/bin/herdr` (sandbox-owned,
+  not on root's `PATH`), so this fragment is redundant there. Before #106 that
+  install was `curl herdr.dev/install.sh | sh`, and the fragment's stated
+  justification was `base/network/locked`-style profiles that cannot reach
+  `herdr.dev` — **that justification is now false.** #106 repointed userinit at
+  a SHA-pinned `github.com` release asset, and `base/network/locked` allows
+  `.github.com`/`.githubusercontent.com`; a leading-dot entry matches the apex
+  as well as subdomains (`IsHostAllowed`, and the DNS matcher agrees), so
+  userinit's fetch succeeds under lock. What actually remains is a profile that
+  does **not** extend `base/userinit` — which has no herdr at all — or one whose
+  egress is narrower than `locked`. For those, S3 needs no allowlist entry at
+  all, unlike `base/security/wiz.yaml`'s `.wiz.io` suffix.
+- **A real bug found AFTER this fragment first shipped, live-tested and
+  fixed same-day:** the original `initCommandsAppend` line referenced
+  `${KM_ARTIFACTS_BUCKET}` bare, on the assumption that the bootstrap exports
+  it and `/tmp/km-init.sh` inherits it as a child process. **Proven false on a
+  real sandbox** — `/tmp/km-init.sh` is generated with a plain `#!/bin/bash`
+  shebang and run as `/tmp/km-init.sh` (a child process, not sourced), and
+  `KM_ARTIFACTS_BUCKET` is `export`ed exactly once anywhere in the userdata
+  template, inside the heredoc writing `/etc/profile.d/km-identity.sh` for
+  future *login* shells only — never into the boot script's own environment.
+  The bare form measurably expanded to `s3:///binaries/herdr` and failed. Fixed
+  by sourcing `km-identity.sh` first when the variable is unset — the same
+  trap `km herdr start`'s SSM-run ensure-install hit independently, since SSM
+  is equally a non-login shell.
+- **The deploy story is "no template or schema change," NOT "no rendered-output
+  change" — getting that distinction wrong once is why it's stated here
+  precisely.** Adding an `initCommandsAppend` line *does* alter one thing in
+  rendered userdata: Phase 113's `/opt/km/.km-profile.yaml` dump is a
+  `yaml.Marshal` of the whole resolved profile — `InitCommands` included — by
+  reflection, so no template token names it and grepping the template for it
+  finds nothing. The delta stays confined to that one dump and never reaches
+  executable bootstrap logic, which is what actually licenses "no
+  create-handler rebuild" — a claim about the *template* and the *schema*
+  being unchanged, not about the bytes being identical.
+- **`km-presence` signal 8** — a detached Herdr pane doing real work now keeps
+  the sandbox awake; a detached, quiet one is still correctly reaped. **It
+  detects the WORK, never the server**: `herdr server stop` is the only thing
+  that ends a server, so "a server process exists" would latch a box awake
+  forever, the identical trap `pgrep vscode-server` would be for VS Code —
+  which is precisely why there's no herdr systemd unit either (see the
+  fragment's own comments). The discriminator, found only by capturing a real
+  idle pane rather than reading Herdr's (wrong) published CLI docs:
+  `foreground_process_group_id != shell_pid`. A naive
+  `len(foreground_processes) > 0` check is **always true** — the pane's own
+  shell always appears in that list — and would have silently disabled idle
+  teardown fleet-wide; caught before shipping by
+  `TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy` and
+  `TestSignal_HerdrPaneBusy_NegativeAllIdle`, the load-bearing negative cases.
+  Agent-agnostic by construction: signal 5's `pgrep` name allowlist costs an
+  edit and a fleet recreate per new agent, signal 8 costs neither.
+  `runuser -u sandbox -- bash -lc '...'` (not `sudo`/`su`, matching Phase 132's
+  15 dispatch sites) is mandatory, not stylistic — herdr lives on the sandbox
+  user's `PATH`, not root's, so a non-login `runuser` alone would fail idle
+  *permanently*, and a permanently-false signal passes its own negative-case
+  test trivially.
+- **The lifecycle trap this whole phase exists to close:** Herdr sessions do
+  not survive a reboot. `km pause` (hibernate) preserves RAM, so panes and
+  their processes survive; `km stop` kills every pane's process outright. That
+  makes `teardownPolicy: stop` on an idle timeout the destructive path — an
+  idle reaper that used to just cost a `km resume` now costs the running work
+  too, silently, unless signal 8 is what's actually holding the box awake.
+- **`km doctor` warns when Herdr and km both manage `~/.ssh/config`** — Herdr
+  rewrites it by default (keepalive fallbacks), km's `UpsertHost` owns the
+  `Host km-<id>` block, two writers one file. **km deliberately does not write
+  the fix itself** (`manage_ssh_config = false` in Herdr's own
+  `config.toml`) — that file is workstation-global and km does not own it;
+  silently editing it to win a conflict is how you get a bug report about km
+  breaking an unrelated remote host. Comment-aware: a commented-out
+  `# manage_ssh_config = false` must not read as opted-out.
+- **`pane_history` stays off.** Off by default upstream; km's fragment does
+  not turn it on. It persists pane scrollback — secrets, tokens, prompts
+  included — to disk on the box for restart convenience, which is the wrong
+  trade for km to make on an operator's behalf.
+- **Deploy = `make build` + `km init --sidecars`.** **NOT**
+  `km init --dry-run=false` — no Terraform module, IAM policy, DynamoDB table,
+  Lambda, or userdata *template* change (see the dump-vs-template distinction
+  above). `km init --sidecars` **exits non-zero in a worktree that has never
+  run `make build-lambdas`** (its last step tars `build/*.zip`, absent in a
+  fresh worktree) but only AFTER every sidecar including `binaries/herdr` has
+  already uploaded and the prior `infra.tar.gz` is left intact — verified
+  live; `grep 'Uploaded herdr'` in the output is the check that matters, not
+  the exit code. `km herdr start|status` and the S3 mirror reach EXISTING
+  sandboxes immediately (ensure-install over SSM); the fragment reaches new
+  sandboxes only; **signal 8 needs `km destroy && km create`** — `km-presence`
+  is fetched at boot. `km herdr status` names which situation a given sandbox
+  is in.
+- See `docs/herdr-remote-attach.md` for the full operator runbook and
+  `docs/superpowers/specs/2026-09-04-herdr-remote-attach-design.md` for the
+  design.
+
 **Phase 133 (2026-09-04) — Brokered secret unsealing: secrets leave the shell (Wave 1 of 2; complete, live-UAT'd 31/31):**
 - **The problem: malware dumping `env` collected every SOPS secret on the box.**
   `spec.secrets.sopsFile` decrypted at boot into `/etc/sandbox-secrets.env`
@@ -1518,13 +1626,15 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | You want to… | Look at |
 |---|---|
 | Push webhook ingress — `webhooks:` block, Wiz Automation Rule setup, canonical km payload template, storm control (replay/cooldown/group_by/rate ceiling), deploy surface | `docs/webhook-ingress.md` |
-| Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the seven `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
+| Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the eight `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
 | Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
 | Live egress census, allowlist pinning, on-demand packet capture — `km-netpolicy observed/flows/profile/pin/capture`, the deny-vs-pin union/intersection relationship, the `--exact` tradeoff, the two sharp edges, capture bounds, deploy surface | `docs/egress-census.md` (Phase 131) |
 | What a sandbox ran and who reached a host — `km-netpolicy execs/who/execs save`, why `who`'s pid attribution comes from the HTTP proxy (not the eBPF ring buffer) and needs `enforcement: ebpf`/`both`, the root-only unredacted store, argv bounds, rotation, `ExecStopPost` vs. `ExecStop`, deploy surface | `docs/exec-capture.md` (Phase 132) |
 | Declarative MITM intercepts — `spec.network.mitm.intercepts`, `redirect`/`respond` actions, precedence (deny → metering/GitHub → intercepts → allowlist), by-name last-wins override, the `profiles/base/mitm-rickroll.yaml` migration fragment, deploy surface | `docs/mitm-intercepts.md` (Phase 129) |
 | kubectl in a sandbox against a cluster only your laptop can reach — `km tunnel` operator runbook: prerequisites, flags, troubleshooting, the `socks` mode, deploy surface | `docs/k8s-reverse-tunnel.md` (Phase 130) |
 | **How the k8s tunnel actually works** — the three nested tunnels and why SSM forced SSH-inside-SSM, the ExecCredential proxy and why the broker is deliberately dumb, the `tls-server-name`-vs-CA split, the exec apiVersion exact-match trap, the precise trust boundary, and why the deploy surface is `make build` alone | `docs/k8s-reverse-tunnel-internals.md` (Phase 130) |
+| Persistent agent panes that survive detach — `km herdr start`, the base/tools/herdr fragment, km-presence signal 8, the pause-vs-stop lifecycle trap, the ssh-config conflict, deploy surface | `docs/herdr-remote-attach.md` |
+| Why a detached herdr session did or did not keep a sandbox awake — signal 8's busy-pane rule, why it detects work rather than the server, and why a quiet session is still reaped | `docs/herdr-remote-attach.md` § Signal 8 |
 | Cross-account capacity borrowing — `km account add/register/list/rm`, `spec.runtime.launchAccount`, the two-credential enrollment sequence, the launcher-role security model, capacity/teardown/doctor cross-account wiring, deploy surface | `docs/cross-account-capacity-borrowing.md` (Phase 126) |
 | Private-subnet sandboxes + per-AZ NAT gateways — `network.nat_gateway` / `spec.network.privateSubnet` toggles, cost, the one-time route-table split, reversal, guards, deploy surface | `docs/private-subnet-nat.md` (Phase 125) |
 | Sizing the private topology to cut the NAT bill — `network.private_subnet_count` (1–4, absent = all 4), the AZ-rotation tradeoff it buys, and the subnet destroys on lowering it | `docs/private-subnet-nat.md` § Paying for fewer AZs |
@@ -1596,6 +1706,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | **HackerOne** | `km-h1` | comment on reports (internal-by-default). |
 | **Git auth** | `km-git-askpass`, `km-git-credential-helper` | inject the installation token into plain `git` operations (baked-in sandbox id, works in any subprocess). |
 | **Egress / network** | `km-netpolicy` | `deny <pattern>...` / `list` — runtime narrowing (see `docs/egress-deny-lists.md`). `observed` / `flows [--since 10m] [--denied] [--json]` / `profile` / `pin [--dry-run] [--exact] [--yes] [--allow-empty] [--accept-truncated]` / `capture start\|stop\|status\|list` — live egress census, allowlist pinning (irreversible, no un-pin verb), on-demand bounded packet capture (see `docs/egress-census.md`, Phase 131). `execs [--since 10m] [--uid N] [--failed] [--json]` / `who <host>` / `execs save` — what the sandbox ran, joined against a flow to answer which process reached it (see `docs/exec-capture.md`, Phase 132). |
+| **Terminal multiplexer** | `herdr` (in `/usr/local/bin`, not `/opt/km/bin`) | Third-party; mirrored from S3 by `km init --sidecars`, installed by `base/tools/herdr` or `km herdr start`. Attach from the operator's laptop with `herdr --remote km-<id>`. |
 
 Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, `km-presence`, `km-queue-runner`, `km-notify-hook`, `km-upload-artifacts`, `otelcol-contrib`, `sops`) plus the source-aware inbound pollers (`km-{github,slack,h1}-inbound-poller`, `km-mail-poller`) — an agent rarely calls these directly, but their presence is how the box self-censuses its capabilities (see the `klanker:sandbox` skill + `/opt/km/.km-profile.yaml`, Phase 113). New sandbox-side capability ⇒ new `km-*` binary in this dir + a `sidecarBuilds()` entry + a userdata `s3 cp`, delivered by `km init --sidecars`.
 
@@ -1646,6 +1757,8 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km tunnel` — parent verb for carrying a network path from the operator's workstation into a sandbox. A **family**, not one command: every mode shares the SSM+SSH transport and differs only in what it forwards and what it provisions on the box
 - `km tunnel k8s <sandbox-id> --context <kube-context>` — interactive sandbox shell carrying a reverse tunnel to a Kubernetes cluster only the operator's workstation can reach; credentials are minted locally by the operator's own exec plugin and proxied over a unix socket, so no VPN/SSO/AWS credential reaches the box (`--dry-run`, `--print-ssh`, `--verbose`, `--local-port`, `--bind-port`, `--kubeconfig`). Dies with the shell — no daemon mode by design
 - `km tunnel socks <sandbox-id>` — interactive sandbox shell with a SOCKS5 proxy on the box's loopback (`--bind-port`, default 1080) egressing via the operator's workstation, so the box reaches whatever the VPN reaches. No broker, nothing written on the box. `--set-proxy-env` pre-sets ALL_PROXY/HTTPS_PROXY/HTTP_PROXY (off by default — it stops km metering AI spend). Wider than `k8s` by design; dies with the shell
+- `km herdr start <sandbox-id>` — hold open the SSM+SSH transport for a Herdr remote attach; run `herdr --remote km-<id>` in another terminal (`--local-port`, `--no-install`)
+- `km herdr status <sandbox-id>` — report sshd, authorized_keys, the herdr binary, and whether the box's km-presence carries signal 8
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role
@@ -1917,7 +2030,7 @@ agent-agnostic session IDs — either a Claude session ID or a Codex session ID,
 based on the row's `agent_type`. The column name is a Phase 67 hangover;
 renaming would require a migration job we chose not to run (cosmetic only).
 
-Future agents (Goose etc.) slot in as new `agent_type` enum values without
+Future agents slot in as new `agent_type` enum values without
 further DDB schema work.
 
 ### Phase 72: Corporate workspace support — auto-detect invite + manifest generator

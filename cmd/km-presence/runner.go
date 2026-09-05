@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -185,16 +186,154 @@ func checkSSHSessions(r commandRunner) bool {
 		bytes.Contains(out, []byte(`(("sshd-session",`))
 }
 
+// herdrSocketPaths returns every Herdr API socket under configDir: the default
+// session plus one per named session.
+//
+// Discovery is a filesystem glob rather than `herdr session list` because a glob
+// needs no subprocess and no seam — the same reasoning that has signals 3 and 4
+// reading the filesystem directly.
+//
+// herdr also creates a `herdr-client.sock` beside the API socket; only
+// `herdr.sock` speaks the API, so the exact filename is matched rather than a
+// `*.sock` glob.
+func herdrSocketPaths(configDir string) []string {
+	var out []string
+	if _, err := os.Stat(filepath.Join(configDir, "herdr.sock")); err == nil {
+		out = append(out, filepath.Join(configDir, "herdr.sock"))
+	}
+	named, _ := filepath.Glob(filepath.Join(configDir, "sessions", "*", "herdr.sock"))
+	return append(out, named...)
+}
+
+// herdrPaneList is the shape of `herdr pane list`. Field names track
+// cmd/km-presence/testdata/herdr_pane_list.json, captured from a live server —
+// the published docs are not authoritative here (they describe a `--json` flag
+// that does not exist and bare arrays that are actually wrapped).
+type herdrPaneList struct {
+	Result struct {
+		Panes []struct {
+			PaneID string `json:"pane_id"`
+		} `json:"panes"`
+	} `json:"result"`
+}
+
+// herdrProcessInfo is the shape of `herdr pane process-info --pane <id>`.
+type herdrProcessInfo struct {
+	Result struct {
+		ProcessInfo struct {
+			ForegroundProcessGroupID int `json:"foreground_process_group_id"`
+			ShellPID                 int `json:"shell_pid"`
+		} `json:"process_info"`
+	} `json:"result"`
+}
+
+// herdrPaneIDs extracts pane ids from `herdr pane list` output. Returns nil on
+// any parse failure — callers fail idle.
+func herdrPaneIDs(raw []byte) []string {
+	var pl herdrPaneList
+	if err := json.Unmarshal(raw, &pl); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(pl.Result.Panes))
+	for _, p := range pl.Result.Panes {
+		if p.PaneID != "" {
+			out = append(out, p.PaneID)
+		}
+	}
+	return out
+}
+
+// herdrPaneIsBusy reports whether one pane is running a foreground job.
+//
+// The discriminator is foreground_process_group_id != shell_pid, measured on a
+// live server: an idle pane reports both as the shell's pid (35371 == 35371),
+// while a pane running `sleep 900` reports the job's pgid (35854 != 35371).
+//
+// Do NOT use `len(foreground_processes) > 0`. That field is non-empty even when
+// idle — it contains the pane's own shell — so the check is always true, which
+// would make signal 8 permanently positive and silently disable idle teardown
+// fleet-wide. TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy pins this.
+//
+// Both ids must be non-zero: a response missing them decodes to 0 == 0, which is
+// equal-but-meaningless and must read as idle.
+func herdrPaneIsBusy(raw []byte) bool {
+	var pi herdrProcessInfo
+	if err := json.Unmarshal(raw, &pi); err != nil {
+		return false
+	}
+	fg := pi.Result.ProcessInfo.ForegroundProcessGroupID
+	shell := pi.Result.ProcessInfo.ShellPID
+	return fg != 0 && shell != 0 && fg != shell
+}
+
+// checkHerdrPaneBusy returns true when any Herdr session has a pane doing work.
+// Signal 8.
+//
+// Herdr's purpose here is persistence across detach: an operator closes the laptop
+// and expects agent panes to keep running. Signal 7 sees an ATTACHED client (a
+// herdr client is an SSH session) and signal 5 sees a running claude/codex BY NAME
+// — but a DETACHED pane running anything else (a build, a test suite, an agent
+// whose name is not in signal 5's pgrep list) is invisible, and under
+// teardownPolicy: stop the idle reaper then kills the work. This closes that
+// without naming any agent, so swapping agents costs no edit here.
+//
+// Detects the WORK, never the server: `herdr server stop` is the only thing that
+// ends a herdr server, so "a server is running" would latch the box awake forever.
+//
+// Fails idle on every error path — absent socket, unresolvable binary, non-zero
+// exit, malformed JSON. A reaped box costs one `km resume`; a signal that can never
+// go negative leaks instances indefinitely.
+//
+// `bash -lc` is load-bearing: base/userinit.yaml installs herdr to
+// /home/sandbox/.local/bin/herdr, and `command -v herdr` as root finds nothing.
+// km-presence runs as User=root, so a non-login runuser would fail to resolve the
+// binary and this signal would fail idle permanently — which the negative-case test
+// would pass, making it undetectable. HERDR_SOCKET_PATH selects the session.
+func checkHerdrPaneBusy(r commandRunner, configDir string) bool {
+	for _, sock := range herdrSocketPaths(configDir) {
+		quotedSock := shellSingleQuote(sock)
+		listOut, err := r.Output("runuser", "-u", "sandbox", "--", "bash", "-lc",
+			fmt.Sprintf("HERDR_SOCKET_PATH=%s herdr pane list", quotedSock))
+		if err != nil {
+			continue
+		}
+		for _, paneID := range herdrPaneIDs(listOut) {
+			infoOut, err := r.Output("runuser", "-u", "sandbox", "--", "bash", "-lc",
+				fmt.Sprintf("HERDR_SOCKET_PATH=%s herdr pane process-info --pane %s", quotedSock, paneID))
+			if err != nil {
+				continue
+			}
+			if herdrPaneIsBusy(infoOut) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// shellSingleQuote wraps s in single quotes for safe embedding in a `bash -lc`
+// string, closing and reopening the quote around each embedded single quote
+// (the same escaping emit uses below). Go's fmt "%q" is NOT a substitute
+// here: it produces DOUBLE quotes, which the shell still expands ($ and
+// backticks included) — and the socket path this wraps comes from
+// ~/.config/herdr/sessions/*, a directory name the sandbox user controls.
+// Not a privilege boundary (the command already runs as that user), but an
+// unescaped name would break the command silently, and silence in this
+// signal reads as idle.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // =============================================================================
 // Daemon helpers
 // =============================================================================
 
 // tick runs one iteration of the presence loop. Returns (signalsActive, emitted).
-// signalsActive is true when any of the seven signals is positive; emitted is true
+// signalsActive is true when any of the eight signals is positive; emitted is true
 // when a heartbeat event was written to the audit pipe.
 // The presence stamp at presenceStampPath is ALWAYS touched at end of tick,
 // even if no signal is active or emit fails.
-func tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath string) (bool, bool) {
+func tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath, herdrConfigDir string) (bool, bool) {
 	s1 := checkLoginShells(r)
 	s2 := checkTmuxClients(r)
 	s3 := checkInboundEmail(mailDir, presenceStampPath)
@@ -202,8 +341,9 @@ func tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath
 	s5 := checkAgentProcess(r)
 	s6 := checkVNCClients(r)
 	s7 := checkSSHSessions(r)
+	s8 := checkHerdrPaneBusy(r, herdrConfigDir)
 
-	active := s1 || s2 || s3 || s4 || s5 || s6 || s7
+	active := s1 || s2 || s3 || s4 || s5 || s6 || s7 || s8
 
 	emitted := false
 	if active {

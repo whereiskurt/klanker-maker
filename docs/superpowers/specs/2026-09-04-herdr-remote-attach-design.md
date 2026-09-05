@@ -97,17 +97,50 @@ and a test should pin the literal in all three places.
 
 ### 4.2 Fragment (boot side)
 
+**Context discovered during live testing (2026-09-04):** `profiles/base/userinit.yaml`
+on `main` ALREADY installs Herdr — `su - sandbox -c 'curl -fsSL https://herdr.dev/install.sh | sh'`
+— landing herdr 0.8.2 at `/home/sandbox/.local/bin/herdr`, owned by the sandbox user and
+NOT on root's `PATH`. So on any profile extending `base/userinit`, this fragment is
+redundant. Its remaining, narrower purpose is the **egress-free** path: `base/network/locked`
+forbids reaching `herdr.dev`, and only the S3 mirror works there. Anyone reviewing this
+design should decide deliberately whether that narrower purpose earns the fragment's
+existence, rather than inheriting the assumption that nothing else installs Herdr.
+
 `profiles/base/tools/herdr.yaml` — a new `tools/` subdirectory under `profiles/base/`,
 matching the existing `network/`, `os/`, `security/`, `gpu/` split.
 
 Critically, this is **pure `initCommandsAppend`** — no `pkg/compiler/userdata.go` change,
 therefore **no userdata golden churn, no create-handler rebuild, and no
-`km init --dry-run=false`** for this half. The bootstrap exports
-`KM_ARTIFACTS_BUCKET` near the top of userdata, and initCommands run as a child
-process (`/tmp/km-init.sh`) that inherits it, so the fragment can reach S3 by name.
-Verified against `origin/main` at 2a004efe (post-Phase-133), where `.InitCommands`
-is still referenced ONLY by the `{{- if or .InitCommands .InitScripts }}` presence
-gate — the commands themselves never render into userdata.
+`km init --dry-run=false`** for this half. **Corrected 2026-09-04 by live testing — the original claim here was false.**
+An earlier draft said the bootstrap exports `KM_ARTIFACTS_BUCKET` and that initCommands
+inherit it as a child process. They do not. `/tmp/km-init.sh` is fetched from S3 and run
+by cloud-init, which never sources `/etc/profile.d`, so the variable is EMPTY there —
+proven on a real sandbox, where `echo "s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr"`
+expanded to `s3:///binaries/herdr` and the fetch failed. The bucket IS on every box, at
+`/etc/profile.d/km-identity.sh`, so the fragment sources that file (preferring an
+already-set environment variable) and fails loudly if neither supplies a value.
+
+The same trap applies to anything km runs over SSM, which is also a non-login shell —
+`km herdr start`'s ensure-install hit it too.
+
+**The reason is "no template or schema change", NOT "no rendered-output change".**
+That distinction was got wrong once and is worth stating precisely. Adding an
+initCommand *does* alter rendered userdata by one line: Phase 113 sets
+`params.ProfileYAML` to a `yaml.Marshal` of the entire `userDataParams` struct —
+`InitCommands` included — and renders it verbatim into the
+`/opt/km/.km-profile.yaml` heredoc. Because that happens through reflection, no
+template token names `InitCommands`, so grepping the template for it finds only the
+presence gate and misses the serialization entirely.
+
+The delta is nonetheless irrelevant to the deploy surface, because it is ordinary
+per-profile **data** flowing through the existing, already-deployed template — the
+same thing that happens for `base/security/wiz.yaml`'s own `initCommandsAppend`, and
+for every profile that differs from every other. A create-handler rebuild is needed
+when the *template* or the *schema* changes; `initCommandsAppend` has been schema
+since Phase 117. Goldens render fixed profiles, and adding a new fragment file
+alters no existing profile, so none move. `TestInitCommandsAppend_DeltaConfinedToProfileDump`
+pins the part that actually matters: the delta stays inside that dump and never
+reaches executable bootstrap.
 
 ```yaml
 spec:
@@ -225,11 +258,20 @@ Rules it must obey, all inherited from signals 6 and 7:
   never go negative silently disables idle teardown fleet-wide and leaks instances.
 - **Independent.** Its own subprocess, not a share of another signal's output, matching
   the reasoning in `checkSSHSessions`.
-- **`blocked` counts as busy.** Herdr's `agent.list` exposes `idle | working | blocked |
-  done | unknown`. An agent parked on a permission prompt is *precisely* the case that
-  must not be reaped — km already treats it as operator-relevant via
-  `notification.events.onPermission`. Treat `working` and `blocked` as active; `idle`,
-  `done`, and `unknown` as not.
+- **`blocked` counts as busy — but NOT via `agent.list`.** *(Corrected 2026-09-04 after the
+  live probe; the original rule below was superseded and never shipped.)* This section
+  originally said to read Herdr's `agent.list` states (`idle | working | blocked | done |
+  unknown`) and treat `working`/`blocked` as active. **The shipped `checkHerdrPaneBusy`
+  never calls `agent list` at all.** The probe found `agent list` returns `[]` for a plain
+  `sleep`, because it lists only *recognised* agents — so depending on it would have
+  reintroduced exactly the agent-name coupling signal 8 exists to remove. §6.4's measured
+  decision (option 3, `pane process-info` only) supersedes this rule.
+
+  The underlying concern still holds and is still satisfied, by a different mechanism: an
+  agent parked on a permission prompt is precisely the case that must not be reaped, and
+  such an agent is still the pane's *foreground* process, so `foreground_process_group_id
+  != shell_pid` and the pane reads busy. The `blocked` case is therefore covered
+  incidentally and agent-agnostically, rather than by enumerating states.
 
 ### 6.3 Socket discovery
 
@@ -371,8 +413,10 @@ Three independent paths — do not conflate them:
 
 **NOT `km init --dry-run=false`.** No Terraform module, IAM policy, DynamoDB table,
 Lambda, or userdata template changes. The fragment is pure `initCommandsAppend`, so the
-create-handler zip is untouched and userdata goldens do not move — verify that claim
-with a golden run rather than assuming it.
+create-handler zip is untouched and userdata goldens do not move (goldens render fixed
+profiles, and a new fragment file alters none of them) — verify with a golden run rather
+than assuming it. Note this is NOT a claim that rendered userdata is unchanged for a box
+that composes the fragment; see §4.2.
 
 **Order matters:** `km init --sidecars` seeds `binaries/herdr` *before* any profile
 extends the fragment. A sandbox booting the fragment against a missing S3 object hits

@@ -1,0 +1,49 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: base-tools-herdr
+  abstract: true
+
+# Herdr — persistent terminal multiplexer for agent panes.
+#
+# Opt in with `extends: [base/tools/herdr]`. See docs/herdr-remote-attach.md
+# and `km herdr start`.
+#
+# NOTE ON REDUNDANCY: base/userinit.yaml already installs the same pinned 0.8.2
+# to /home/sandbox/.local/bin/herdr. Since #106 it fetches from github.com, and
+# base/network/locked allows .github.com — a leading-dot entry matches the apex
+# too — so that install succeeds even under lock. This fragment therefore earns
+# its place ONLY on a profile that does not extend base/userinit, or one whose
+# egress is narrower than base/network/locked. See docs/herdr-remote-attach.md.
+#
+# The binary comes from S3 over the instance role, needing no egress at all.
+# That is the decisive difference from base/security/wiz.yaml, which needs a
+# ".wiz.io" allowedDNSSuffixes entry because its installer downloads over the
+# public internet — and DNS is the one enforcement layer root does NOT bypass
+# (userdata.go rewrites /etc/resolv.conf to 127.0.0.1 for the whole box, and the
+# eBPF resolver NXDOMAINs non-allowlisted names with no uid or cgroup check).
+# Fetching from S3 keeps this fragment free of any egress change at all.
+#
+# Deliberately absent:
+#   spec.network  — no allowlist entry is needed; see above.
+#   spec.runtime  — Phase 117 bool zero-value trap; mixed-bool blocks stay in leaves.
+#   a systemd unit — the herdr server starts itself on first attach. A unit would
+#                 run a server nobody is attached to and defeat km-presence
+#                 signal 8's negative case, latching the box awake forever.
+#   pane_history  — Herdr's scrollback persistence writes pane output (secrets,
+#                 tokens, prompts) to session-history.json at rest on the box.
+#                 It is off by default upstream and km does not turn it on.
+spec:
+  execution:
+    # Appends after the merged initCommands rather than replacing them.
+    initCommandsAppend:
+      # KM_ARTIFACTS_BUCKET is NOT inherited here: km-init.sh runs under cloud-init,
+      # which never sources /etc/profile.d. Proven live — the bare form expanded to
+      # `s3:///binaries/herdr` and the fetch failed silently into the boot log.
+      # km-identity.sh carries the bucket on every sandbox; prefer the environment
+      # in case something ever does export it. The `[ -r ... ] &&` guard around the
+      # source is load-bearing: km-init.sh runs under `set -e`, and an unguarded
+      # source of a missing file aborts km-init.sh right there, killing every
+      # LATER initCommand from other fragments — the same trap documented in
+      # base/security/wiz.yaml, just one line earlier in the script.
+      - "[ -n \"${KM_ARTIFACTS_BUCKET:-}\" ] || { [ -r /etc/profile.d/km-identity.sh ] && . /etc/profile.d/km-identity.sh; }; aws s3 cp \"s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr\" /usr/local/bin/herdr && chmod 0755 /usr/local/bin/herdr || echo '[km] herdr fetch failed; run km herdr start to install' >&2"

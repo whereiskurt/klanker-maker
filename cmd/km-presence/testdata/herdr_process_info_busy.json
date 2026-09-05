@@ -1,0 +1,1 @@
+{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":35854,"foreground_processes":[{"argv":["sleep","900"],"cmdline":"sleep 900","cwd":"/home/sandbox","name":"sleep","pid":35854}],"pane_id":"w1:p1","shell_pid":35371},"type":"pane_process_info"}}

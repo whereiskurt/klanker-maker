@@ -172,7 +172,7 @@ Custom prefix for the sandbox ID. Replaces the default `sb-` prefix.
 
 ```yaml
 metadata:
-  prefix: goose    # generates goose-{8hex}
+  prefix: agent    # generates agent-{8hex}
 ```
 
 ---
@@ -865,7 +865,7 @@ spec:
 | Default    | -- (empty)                     |
 | Validation | Keys must be absolute file paths; values are file contents |
 
-Map of absolute file paths to their contents. Each entry is written to the sandbox filesystem during bootstrap, owned by the sandbox user. Use this to pre-seed tool configuration files (e.g. Goose config, `.gitconfig`). Written after `initCommands`.
+Map of absolute file paths to their contents. Each entry is written to the sandbox filesystem during bootstrap, owned by the sandbox user. Use this to pre-seed tool configuration files (e.g. Codex `config.toml`, `.gitconfig`). Written after `initCommands`.
 
 > **Phase 92:** the `"/home/sandbox/.claude/settings.json"` key is **forbidden** here — `~/.claude/settings.json` is synthesized from `spec.agent.claude.tools.*` + `trustedDirectories` (see [`docs/agent-tool-gating.md`](agent-tool-gating.md)). Inlining it alongside the typed `spec.agent.claude` block is a hard `km validate` error.
 
@@ -2355,7 +2355,7 @@ Beyond JSON Schema structural validation, the following semantic rules are enfor
 
 ## Built-in Profiles
 
-Seven built-in profiles ship with Klanker Maker: `open-dev`, `restricted-dev`, `hardened`, `sealed`, `goose`, `ao`, and `codex`. These range from permissive development (`open-dev`) to maximum containment (`sealed`), plus tool-specific agent profiles. The `learn` profile (in `profiles/learn.yaml`) is not a built-in but is documented separately below for traffic observation workflows.
+Seven built-in profiles ship with Klanker Maker: `open-dev`, `restricted-dev`, `hardened`, `sealed`, `ao`, `codex`, and `learn`. These range from permissive development (`open-dev`) to maximum containment (`sealed`), plus tool-specific agent profiles. `learn` is documented separately below for traffic observation workflows.
 
 ### `open-dev`
 
@@ -2600,133 +2600,6 @@ spec:
       enabled: true
       libraries: [openssl]
       capturePayloads: false
-```
-
-### `goose`
-
-Goose AI agent (Block) with Bedrock access, Claude Code, Codex, MCP extensions, OTEL telemetry, EFS shared storage, eBPF gatekeeper enforcement, email, and hibernation support.
-
-```yaml
-apiVersion: klankermaker.ai/v1alpha2
-kind: SandboxProfile
-metadata:
-  name: goose
-  labels:
-    tier: development
-    tool: goose
-  prefix: gebpfgk
-spec:
-  lifecycle:
-    ttl: "1h"
-    idleTimeout: "15m"
-    teardownPolicy: stop
-  runtime:
-    substrate: ec2
-    spot: false
-    instanceType: t3.medium
-    region: us-east-1
-    hibernation: true
-    mountEFS: true
-    efsMountPoint: /shared
-    additionalVolume:
-      size: 20
-      mountPoint: /data
-  execution:
-    shell: /bin/bash
-    workingDir: /workspace
-    useBedrock: true
-    env:
-      SANDBOX_MODE: goose-ebpf-gatekeeper
-      GOOSE_PROVIDER: aws_bedrock
-      GOOSE_MODEL: us.anthropic.claude-opus-4-6-v1
-      GOOSE_MODE: auto
-      GOOSE_TELEMETRY_ENABLED: "false"
-      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
-      OPENAI_API_KEY: ""
-    rsyncPaths:
-      - ".gitconfig"
-      - ".config/goose"
-      - ".claude"
-      - ".claude.json"
-      - ".codex"
-    initCommands:
-      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip"
-      - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
-      - "npm install -g @anthropic-ai/claude-code"
-      # ... additional setup commands for goose, codex, CA certs
-  sourceAccess:
-    mode: allowlist
-    github:
-      allowedRepos: ["whereiskurt/meshtk", "whereiskurt/defcon.run.34"]
-      allowedRefs: ["main", "develop", "feature/*", "fix/*"]
-  network:
-    enforcement: both
-    egress:
-      allowedDNSSuffixes:
-        - ".amazonaws.com"
-        - ".anthropic.com"
-        - ".claude.ai"
-        - ".claude.com"
-        - ".sentry.io"
-        - ".cloudfront.net"
-        - ".github.com"
-        - ".githubusercontent.com"
-        - ".npmjs.org"
-        - ".npmjs.com"
-        - ".nodejs.org"
-        - ".npmmirror.com"
-        - ".openai.com"
-        - ".chatgpt.com"
-        - ".pypi.org"
-        - ".pythonhosted.org"
-        - ".pulsemcp.com"
-        - ".google.com"
-        - ".google-analytics.com"
-        - ".googletagmanager.com"
-      allowedHosts:
-        - "github.com"
-        - "api.anthropic.com"
-        - "statsig.anthropic.com"
-        - "statsig.com"
-        - "api.statsig.com"
-        - "featuregates.org"
-        - "api.featuregates.org"
-        - "registry.npmjs.org"
-        - "nodejs.org"
-        - "api.openai.com"
-        - "chatgpt.com"
-        - "pypi.org"
-        - "files.pythonhosted.org"
-        - "pulsemcp.com"
-        - "google.com"
-  budget:
-    compute: { maxSpendUSD: 0.50 }
-    ai: { maxSpendUSD: 1.00 }
-    warningThreshold: 0.80
-  iam:
-    roleSessionDuration: "1h"
-    allowedRegions: [us-east-1]
-  sidecars:
-    dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
-    httpProxy: { enabled: true, image: "km-http-proxy:latest" }
-    auditLog:  { enabled: true, image: "km-audit-log:latest" }
-    tracing:   { enabled: true, image: "km-tracing:latest" }
-  observability:
-    commandLog: { destination: cloudwatch, logGroup: "/klanker-maker/sandboxes" }
-    networkLog: { destination: cloudwatch, logGroup: "/klanker-maker/network" }
-    claudeTelemetry:
-      enabled: true
-      logPrompts: true
-      logToolDetails: true
-    tlsCapture:
-      enabled: true
-      libraries: [openssl]
-      capturePayloads: false
-  email:
-    signing: required
-    verifyInbound: required
-    encryption: required
-    allowedSenders: ["self"]
 ```
 
 ### `codex`
@@ -3007,25 +2880,25 @@ km validate learned.*.yaml            # validate, then use for production sandbo
 
 ## Built-in Profile Comparison
 
-| Field | open-dev | restricted-dev | hardened | sealed | goose | codex | ao | learn* |
-|-------|----------|----------------|----------|--------|-------|-------|----|--------|
-| `lifecycle.ttl` | 24h | 8h | 4h | 1h | 1h | 4h | 8h | 2h |
-| `lifecycle.idleTimeout` | 4h | 2h | 1h | 30m | 15m | 30m | 1h | 30m |
-| `lifecycle.teardownPolicy` | destroy | destroy | destroy | destroy | stop | stop | stop | destroy |
-| `runtime.instanceType` | t3.medium | t3.medium | t3.small | t3.micro | t3.medium | t3.medium | t3.large | t3.medium |
-| `runtime.spot` | true | true | true | true | false | true | true | true |
-| `runtime.hibernation` | -- | -- | -- | -- | true | true | true | -- |
-| `runtime.mountEFS` | -- | -- | -- | -- | true | -- | -- | -- |
-| `runtime.additionalVolume` | -- | -- | -- | -- | 20 GB | 20 GB | 20 GB | -- |
-| `network.enforcement` | proxy | proxy | proxy | proxy | both | proxy | both | both |
-| `execution.privileged` | -- | -- | -- | -- | -- | -- | -- | true |
-| `execution.useBedrock` | -- | -- | -- | -- | true | -- | -- | -- |
-| `observability.learnMode` | -- | -- | -- | -- | -- | -- | -- | true |
-| `observability.tlsCapture` | -- | -- | true | true | true | -- | -- | true |
-| `metadata.prefix` | sb | sb | sb | sb | gebpfgk | codex | ao | learn |
-| `budget.compute.maxSpendUSD` | -- | -- | -- | -- | $0.50 | $2.00 | $4.00 | $2.00 |
-| `budget.ai.maxSpendUSD` | -- | -- | -- | -- | $1.00 | $5.00 | $10.00 | $0.00 |
-| `email` | -- | -- | -- | -- | required | required | required | -- |
+| Field | open-dev | restricted-dev | hardened | sealed | codex | ao | learn* |
+|-------|----------|----------------|----------|--------|-------|----|--------|
+| `lifecycle.ttl` | 24h | 8h | 4h | 1h | 4h | 8h | 2h |
+| `lifecycle.idleTimeout` | 4h | 2h | 1h | 30m | 30m | 1h | 30m |
+| `lifecycle.teardownPolicy` | destroy | destroy | destroy | destroy | stop | stop | destroy |
+| `runtime.instanceType` | t3.medium | t3.medium | t3.small | t3.micro | t3.medium | t3.large | t3.medium |
+| `runtime.spot` | true | true | true | true | true | true | true |
+| `runtime.hibernation` | -- | -- | -- | -- | true | true | -- |
+| `runtime.mountEFS` | -- | -- | -- | -- | -- | -- | -- |
+| `runtime.additionalVolume` | -- | -- | -- | -- | 20 GB | 20 GB | -- |
+| `network.enforcement` | proxy | proxy | proxy | proxy | proxy | both | both |
+| `execution.privileged` | -- | -- | -- | -- | -- | -- | true |
+| `execution.useBedrock` | -- | -- | -- | -- | -- | -- | -- |
+| `observability.learnMode` | -- | -- | -- | -- | -- | -- | true |
+| `observability.tlsCapture` | -- | -- | true | true | -- | -- | true |
+| `metadata.prefix` | sb | sb | sb | sb | codex | ao | learn |
+| `budget.compute.maxSpendUSD` | -- | -- | -- | -- | $2.00 | $4.00 | $2.00 |
+| `budget.ai.maxSpendUSD` | -- | -- | -- | -- | $5.00 | $10.00 | $0.00 |
+| `email` | -- | -- | -- | -- | required | required | -- |
 
 *\* `learn` is not a built-in profile; it lives in `profiles/learn.yaml`.*
 

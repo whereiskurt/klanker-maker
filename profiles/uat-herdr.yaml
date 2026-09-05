@@ -1,0 +1,82 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: uat-herdr
+  labels:
+    tier: uat
+    tool: herdr
+  prefix: uatherdr
+
+# DELIBERATELY does NOT extend base/userinit or base/os/redhat.
+#
+# This profile exists to exercise the ONE case base/tools/herdr.yaml still
+# justifies after #106 (see docs/herdr-remote-attach.md):
+#
+#   1. no base/userinit  => no /home/sandbox/.local/bin/herdr, so the ONLY
+#      herdr that can appear is the fragment's S3 fetch; and
+#   2. an egress allowlist with NO GitHub, so userinit's github.com path is
+#      not merely unused but unreachable.
+#
+# Phase 117 unions lists, so a leaf can never NARROW a base's allowlist —
+# which is exactly why spec.network is written here rather than by extending
+# base/network/locked.
+#
+# base/os/redhat is also skipped on purpose: its `yum install` needs repo
+# egress this profile does not grant, and km-init.sh runs under `set -e`, so a
+# failed yum would abort every LATER initCommand — including the fragment's
+# herdr fetch, failing the UAT for the wrong reason. Only redhat's CA-trust
+# line is carried over, below; it needs no egress.
+extends:
+  - base/platform
+  - base/tools/herdr
+
+spec:
+  lifecycle:
+    ttl: "3h"
+    # Short on purpose: signal 8's negative case has to be observable in one
+    # sitting. This is the whole point of the profile.
+    idleTimeout: "10m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    ami: amazon-linux-2023
+    instanceType: t3.medium
+    region: us-east-1
+    rootVolumeSize: 30
+    spot: false
+    # Enabled so UAT step 6 can prove the pause/resume claim (panes survive
+    # hibernation) as well as the stop/resume one (they do not).
+    hibernation: true
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+    privileged: false
+    initCommands:
+      # Carried over from base/os/redhat. Needed so `aws s3 cp` from the
+      # fragment validates against the km MITM proxy. No egress required.
+      - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt"
+
+  network:
+    enforcement: both
+    egress:
+      # No .github.com, no .githubusercontent.com — that omission IS the test.
+      # A leading-dot entry matches the apex too (IsHostAllowed), so these are
+      # apex+subdomain.
+      allowedDNSSuffixes:
+        - ".amazonaws.com"      # S3 (the herdr mirror), SSM, CloudWatch
+        - ".amazonlinux.com"    # AL2023 package metadata
+        - ".cloudfront.net"     # what the above resolves through
+        - "time.aws.com"
+      allowedHosts:
+        - ".amazonaws.com"
+        - ".amazonlinux.com"
+        - ".cloudfront.net"
+
+  sourceAccess:
+    mode: none
+
+  cli:
+    noBedrock: true

@@ -34,8 +34,6 @@ spec:
     privileged: true
     env:
       SANDBOX_MODE: goose-ebpf-gatekeeper
-      GOOSE_PROVIDER: aws_bedrock
-      GOOSE_MODEL: us.anthropic.claude-opus-4-6-v1
       GOOSE_MODE: auto
       GOOSE_TELEMETRY_ENABLED: "false"
       CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt

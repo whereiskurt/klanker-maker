@@ -107,16 +107,15 @@ func TestValidateMultipleFilesOneInvalid(t *testing.T) {
 	}
 }
 
-// TestValidateBuiltinProfile verifies that a built-in profile file passes validation.
-// goose.yaml was archived to testdata/profiles/ in Phase 120 (plan 03).
+// TestValidateBuiltinProfile verifies that a real profile file passes validation.
 func TestValidateBuiltinProfile(t *testing.T) {
 	km := buildKM(t)
-	profileFile := testdataPath(t, "goose.yaml")
+	profileFile := testdataPath(t, "locked.yaml")
 
 	cmd := exec.Command(km, "validate", profileFile)
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("km validate goose.yaml: expected exit 0, got error: %v\nstdout: %s\nstderr: %s",
+		t.Fatalf("km validate locked.yaml: expected exit 0, got error: %v\nstdout: %s\nstderr: %s",
 			err, out, func() string {
 				if exitErr, ok := err.(*exec.ExitError); ok {
 					return string(exitErr.Stderr)

@@ -328,7 +328,7 @@ Run with `km doctor` or `km doctor --all-regions` for multi-region installs.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `km validate` rejects `agent: goose` | Schema enum only allows `claude`/`codex` | Use `claude` or `codex`; Goose parity is deferred |
+| `km validate` rejects an unknown `agent:` value | Schema enum only allows `claude`/`codex` | Use `claude` or `codex` |
 | Codex notification never fires | Expected — hooks don't fire under `--dangerously-bypass-approvals-and-sandbox` | This is by design (SC-3 dropped). Notifications come from JSONL parse on turn completion |
 | Codex session doesn't resume across turns | Session ID not captured in DDB | Check for `thread.started` in output JSONL; look for JSONL parse errors in `journalctl -u km-slack-inbound-poller` |
 | `claude:` mid-sentence triggers routing | Should not happen with `^` anchor | File a bug — regex MUST anchor; see Plan 70-06 `TestPoller_PrefixParser_AnchoredAtStart` |
@@ -344,7 +344,7 @@ ID or a Codex session ID, based on the row's `agent_type`. The column name is a
 Phase 67 hangover — renaming requires a migration job we explicitly chose not
 to run (cosmetic only; column semantics are correct as-is).
 
-Future agents (Goose, etc.) reuse this column by adding a new `agent_type` enum
+Future agents reuse this column by adding a new `agent_type` enum
 value and a new dispatch branch in the poller.
 
 ## Phase 70 deferrals
@@ -356,7 +356,7 @@ These are explicitly OUT of Phase 70 scope (see CONTEXT.md `<deferred>`):
   parser gains a new event type.
 - **Slack-driven approve/deny on Codex PermissionRequest** — requires Slack
   interactivity webhook into the bridge; a phase of its own.
-- **Goose / other-agent parity** — `agent_type` extends cleanly; one new enum
+- **Other-agent parity** — `agent_type` extends cleanly; one new enum
   value + one new dispatch branch.
 - **Auto-routing by content heuristics** — no "this looks like code → codex"
   classifier. Routing is explicit via prefix only.

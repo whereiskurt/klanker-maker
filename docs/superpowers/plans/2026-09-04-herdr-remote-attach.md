@@ -22,6 +22,7 @@
 - **Every km-presence signal fails idle.** Any error, missing binary, absent socket, or malformed output returns `false`. A signal that can never go negative silently disables idle teardown fleet-wide.
 - **`runuser`, never `sudo`/`su`,** for dropping to the `sandbox` user (matches Phase 132's 15 dispatch sites).
 - **Deploy surface for the whole plan is `make build` + `km init --sidecars`.** No Terraform module, IAM policy, DynamoDB table, Lambda, or `pkg/compiler/userdata.go` template change. **Never run `km init --dry-run=false` for this work.**
+- **`km init --sidecars` needs `build/*.zip` present, and fails AFTER seeding herdr if they are absent.** Its last step, `uploadCreateHandlerToolchain`, tars `build/budget-enforcer.zip` and friends into `toolchain/infra.tar.gz`; those come from `make build-lambdas`, which a fresh worktree has never run. The command then exits **non-zero** even though every sidecar, `binaries/sops`, `binaries/herdr`, and `toolchain/{km,terraform,terragrunt}` uploaded successfully — verified live on 2026-09-04. This is safe (the failing step leaves the previous `infra.tar.gz` in place rather than writing a partial one) but the red exit is misleading. If you only need the herdr seed, `grep 'Uploaded herdr'` in the output is the check that matters; run `make build-lambdas` first if you want a clean exit.
 - **`km init --sidecars` uploads EVERY sidecar from the working tree, not just herdr's.** Since Phase 133 that set includes `km-secretsd` and `km-env`, which the deployed install already depends on. Running it from a tree behind `origin/main` rolls those binaries backward on a live install. **Always `git pull --rebase` and confirm `git log -1 origin/main` matches `HEAD` before any `km init --sidecars` in this plan** (Task 6 Step 1 and Task 9 Step 1).
 - **Commit scoping:** another agent may be working in this repo concurrently. Every `git add` in this plan names explicit paths. Never run a bare `git add`. Before starting, run `git pull --rebase` and re-run the test suite.
 - **Check `go test` exit status directly**, not the exit status of a pipe into `tail`/`head`.
@@ -114,7 +115,7 @@ func TestFetchAndUploadHerdr_SkipsDownloadWhenCached(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `go test ./internal/app/cmd/ -run 'TestHerdr(S3Key|Version|.*Cached)' -v`
+Run: `go test ./internal/app/cmd/ -run 'TestHerdr|TestFetchAndUploadHerdr' -v`
 Expected: FAIL to compile — `undefined: herdrVersion`, `undefined: fetchAndUploadHerdr`, and `read herdr.go: no such file or directory`.
 
 - [ ] **Step 3: Add the version constant and the mirror function**
@@ -200,7 +201,7 @@ printf '// Package cmd — herdr.go\n// km herdr: see docs/superpowers/specs/202
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `go test ./internal/app/cmd/ -run 'TestHerdr(S3Key|Version|.*Cached)' -v; echo "exit=$?"`
+Run: `go test ./internal/app/cmd/ -run 'TestHerdr|TestFetchAndUploadHerdr' -v; echo "exit=$?"`
 Expected: PASS, `exit=0`.
 
 - [ ] **Step 7: Commit**
@@ -222,56 +223,98 @@ git commit -m "feat(herdr): mirror pinned herdr release to s3 binaries/herdr"
 - Consumes: the `binaries/herdr` S3 key from Task 1.
 - Produces: an abstract fragment named `base-tools-herdr` that leaf profiles reach via `extends: [base/tools/herdr]`. No Go symbols.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the guard test**
 
 Create `pkg/compiler/userdata_herdr_fragment_test.go`:
 
 ```go
 package compiler
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-// TestInitCommandsAppend_DoesNotChangeUserdata is the guard the herdr fragment's
-// entire deploy story rests on.
+// herdrFetchLine is the initCommand the base/tools/herdr fragment appends.
+const herdrFetchLine = `aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr" /usr/local/bin/herdr`
+
+// profileDumpSection returns the body of the Phase 113 /opt/km/.km-profile.yaml
+// heredoc — the yaml.Marshal of userDataParams that userdata.go renders via
+// {{ .ProfileYAML }}. Returns ok=false if the block is absent.
+func profileDumpSection(ud string) (string, bool) {
+	const open = "cat > /opt/km/.km-profile.yaml << 'KM_PROFILE_EOF'\n"
+	i := strings.Index(ud, open)
+	if i < 0 {
+		return "", false
+	}
+	rest := ud[i+len(open):]
+	j := strings.Index(rest, "\nKM_PROFILE_EOF")
+	if j < 0 {
+		return "", false
+	}
+	return rest[:j], true
+}
+
+// TestInitCommandsAppend_DeltaConfinedToProfileDump is the guard the herdr
+// fragment's deploy story rests on.
 //
-// The userdata template references InitCommands ONLY through the presence gate
-// `{{- if or .InitCommands .InitScripts }}`; the commands themselves are uploaded
-// separately as artifacts/{id}/km-init.sh and fetched at boot. So adding a
-// command to a profile that already has at least one is provably byte-identical
-// userdata — which is why base/tools/herdr costs no create-handler rebuild, no
-// `km init --dry-run=false`, and no golden churn.
+// Adding an initCommand DOES change rendered userdata — Phase 113 sets
+// params.ProfileYAML to a yaml.Marshal of the whole userDataParams struct
+// (userdata.go:7070) and renders it verbatim into the /opt/km/.km-profile.yaml
+// heredoc. Because that happens by reflection, no template token names
+// InitCommands and grepping for it cannot find the reference. An earlier
+// version of this test asserted the two renders were byte-identical; that was
+// false and it failed, which is how the interaction was found.
 //
-// If this test ever fails, the fragment's deploy surface claim in
-// docs/herdr-remote-attach.md and CLAUDE.md is wrong and must be corrected
-// before shipping.
-func TestInitCommandsAppend_DoesNotChangeUserdata(t *testing.T) {
+// What actually matters is narrower and stronger: the delta must be CONFINED to
+// that profile dump, so no executable bootstrap logic changes. If a future edit
+// ever leaks initCommands into runnable script, this test fails.
+func TestInitCommandsAppend_DeltaConfinedToProfileDump(t *testing.T) {
 	base := baseProfile()
 	base.Spec.Execution.InitCommands = []string{"echo one"}
 
 	withHerdr := baseProfile()
-	withHerdr.Spec.Execution.InitCommands = []string{
-		"echo one",
-		`aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr" /usr/local/bin/herdr`,
-	}
+	withHerdr.Spec.Execution.InitCommands = []string{"echo one", herdrFetchLine}
 
-	got, err := generateUserData(base, "test-sb", nil, "my-bucket", false, nil)
+	a, err := generateUserData(base, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("render base: %v", err)
 	}
-	got2, err := generateUserData(withHerdr, "test-sb", nil, "my-bucket", false, nil)
+	b, err := generateUserData(withHerdr, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("render with herdr: %v", err)
 	}
-	if got != got2 {
-		t.Fatalf("adding an initCommand changed rendered userdata; the herdr fragment's " +
-			"no-userdata-change deploy claim is false")
+
+	dumpA, okA := profileDumpSection(a)
+	dumpB, okB := profileDumpSection(b)
+	if !okA || !okB {
+		t.Fatal("the Phase 113 /opt/km/.km-profile.yaml block is absent from rendered userdata; " +
+			"this test would otherwise pass vacuously")
+	}
+
+	// The fetch line must appear in the dump...
+	if !strings.Contains(dumpB, "binaries/herdr") {
+		t.Errorf("expected the herdr fetch line inside the profile dump; it was not there")
+	}
+	// ...and NOWHERE else in the rendered bootstrap.
+	outsideB := strings.Replace(b, dumpB, "", 1)
+	if strings.Contains(outsideB, "binaries/herdr") {
+		t.Errorf("the herdr initCommand leaked OUTSIDE the profile dump into executable bootstrap")
+	}
+
+	// The decisive assertion: strip each render's dump and the remaining
+	// bootstrap must be byte-identical.
+	outsideA := strings.Replace(a, dumpA, "", 1)
+	if outsideA != outsideB {
+		t.Fatalf("adding an initCommand changed executable bootstrap outside the Phase 113 " +
+			"profile dump; the fragment's no-create-handler-rebuild claim needs re-examining")
 	}
 }
 
-// TestInitCommandsGate_EmptyToNonEmptyDoesChangeUserdata is the negative control.
-// It proves the test above is measuring something real: going from zero commands
-// to one DOES change userdata, because that flips the presence gate. Without this,
-// a renderer that ignored InitCommands entirely would pass the test above.
+// TestInitCommandsGate_EmptyToNonEmptyDoesChangeUserdata is the negative
+// control. It proves the test above measures something real: going from zero
+// commands to one flips the {{- if or .InitCommands .InitScripts }} presence
+// gate and adds the km-init.sh download block to executable bootstrap.
 func TestInitCommandsGate_EmptyToNonEmptyDoesChangeUserdata(t *testing.T) {
 	none := baseProfile()
 	none.Spec.Execution.InitCommands = nil
@@ -293,12 +336,18 @@ func TestInitCommandsGate_EmptyToNonEmptyDoesChangeUserdata(t *testing.T) {
 }
 ```
 
-`baseProfile()` and `generateUserData(p, sandboxID, ..., bucket, ...)` are the existing helpers used by `TestUserdataAdditionalVolumeOnly_GoldenByteIdentical` in the same package; the argument list above is copied from that test. Do not add new helpers.
+`baseProfile()` and `generateUserData` are the existing helpers used by
+`TestUserdataAdditionalVolumeOnly_GoldenByteIdentical` in the same package. Do not add new ones.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the guard tests**
 
 Run: `go test ./pkg/compiler/ -run 'TestInitCommands' -v; echo "exit=$?"`
-Expected: both tests PASS immediately. This task's test is a *guard* on existing behaviour, not a driver of new behaviour — the fragment is data, and the risk being tested is a claim about the compiler. A FAIL here means the fragment's whole deploy story is wrong and the task must stop.
+Expected: both PASS. These guard existing compiler behaviour rather than driving new behaviour.
+
+A failure of `TestInitCommandsAppend_DeltaConfinedToProfileDump` means an initCommand now reaches
+executable bootstrap somewhere, which would genuinely change the deploy surface — stop and report
+BLOCKED. A failure of the negative control means the presence gate is gone.
+
 
 - [ ] **Step 3: Write the real fragment**
 
@@ -345,7 +394,11 @@ spec:
       # "No init script found in S3 (skipped)" — the trap documented in
       # base/security/wiz.yaml. `km herdr start` re-ensures the binary over SSM,
       # so a soft failure here is fully recoverable and a hard one is not.
-      - "aws s3 cp \"s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr\" /usr/local/bin/herdr && chmod 0755 /usr/local/bin/herdr || echo '[km] herdr fetch failed; run km herdr start to install' >&2"
+      # KM_ARTIFACTS_BUCKET is NOT inherited here: km-init.sh runs under cloud-init,
+      # which never sources /etc/profile.d. Proven live — the bare form expanded to
+      # `s3:///binaries/herdr` and the fetch failed silently into the boot log.
+      # km-identity.sh carries the bucket on every sandbox.
+      - "[ -n \"${KM_ARTIFACTS_BUCKET:-}\" ] || . /etc/profile.d/km-identity.sh; aws s3 cp \"s3://${KM_ARTIFACTS_BUCKET}/binaries/herdr\" /usr/local/bin/herdr && chmod 0755 /usr/local/bin/herdr || echo '[km] herdr fetch failed; run km herdr start to install' >&2"
 ```
 
 - [ ] **Step 4: Verify the fragment is skipped by the validator and parses**
@@ -368,11 +421,25 @@ metadata:
   name: herdr-compose-check
 extends:
   - base/platform
+  - base/os/debian
+  - base/network/locked
   - base/tools/herdr
 YAML
 ./km validate /tmp/herdr-compose-check.yaml; echo "exit=$?"
 ```
-Expected: exit 0. If `base/platform` alone is not a sufficient parent for a valid leaf, add whichever fragments `profiles/learner.yaml` extends until it validates — the point of this step is only to prove `base/tools/herdr` merges cleanly, not to design a profile.
+
+Expected: exit 0.
+
+**The `extends:` list alone is NOT enough** — verified the hard way. `profiles/wiz-demo.yaml` is
+not just a four-fragment `extends:` list; it also carries its own leaf `spec:` block, and none of
+`base/platform` / `base/os/debian` / `base/network/locked` supply those required fields. A
+metadata-plus-`extends:`-only file fails with nine schema errors
+(`spec.execution.workingDir`, `spec.execution.shell`, `spec.lifecycle.{ttl,idleTimeout,teardownPolicy}`,
+`spec.runtime.{substrate,instanceType,region}`, `spec.sourceAccess.mode`).
+
+So copy `profiles/wiz-demo.yaml` wholesale, swap `base/security/wiz` for `base/tools/herdr` in its
+`extends:` list, and keep its `spec:` block as-is. The point of this step is to prove
+`base/tools/herdr` merges cleanly, not to design a profile: do NOT commit this file.
 
 - [ ] **Step 6: Run the guard tests**
 
@@ -547,12 +614,17 @@ func TestHerdrBanner_PrintsAttachCommandAndSSHConfigOptOut(t *testing.T) {
 	}
 }
 
+// Construct with &config.Config{}, never nil — the house style in
+// vscode_test.go:410 and tunnel_test.go:62. cfg is only captured in RunE
+// closures today, so nil would work, but an empty struct cannot panic if a
+// future edit dereferences it at construction time.
+//
 // TestHerdrDefaultLocalPort_DoesNotCollide pins 2224. km vscode owns 2222 and
 // both km tunnel modes own 2223; being attached to a box with more than one of
 // these at once is a plausible combination, and a collision surfaces as a
 // confusing "Connection closed by 127.0.0.1" rather than a bind error.
 func TestHerdrDefaultLocalPort_DoesNotCollide(t *testing.T) {
-	cmd := NewHerdrCmd(nil)
+	cmd := NewHerdrCmd(&config.Config{})
 	start, _, err := cmd.Find([]string{"start"})
 	if err != nil {
 		t.Fatalf("find start subcommand: %v", err)
@@ -570,7 +642,7 @@ func TestHerdrDefaultLocalPort_DoesNotCollide(t *testing.T) {
 // Rekey is deliberately absent: herdr shares the vscode keypair, and two verbs
 // rotating one key is a footgun.
 func TestNewHerdrCmd_HasStartAndStatusOnly(t *testing.T) {
-	cmd := NewHerdrCmd(nil)
+	cmd := NewHerdrCmd(&config.Config{})
 	got := map[string]bool{}
 	for _, c := range cmd.Commands() {
 		got[c.Name()] = true
@@ -1226,6 +1298,15 @@ git commit -m "feat(herdr): km doctor warns when herdr and km both manage ssh co
 
 **This task requires a real sandbox and a real Herdr server. It cannot be completed from the dev machine.** Its output is committed test fixtures that Task 7 parses. Spec §6.4 exists precisely because the choice between "one call per session" and "one call per pane" is not answerable from documentation.
 
+**It does NOT require an interactive attach.** `herdr server` starts a headless
+background server (herdr.dev/docs/how-to-work, and the "Live updates without killing
+your terminal processes" post: "launch herdr in any terminal or as a headless daemon";
+"when no client is attached, the server uses a 120x40 virtual terminal for layout and
+newly created panes"). `herdr workspace create`, `herdr pane split`, and
+`herdr pane run` drive panes from the command line. Every step below runs over
+`km shell` / SSM. A pane created this way with nothing attached IS the detached-busy
+state signal 8 exists to detect.
+
 **Files:**
 - Create: `cmd/km-presence/testdata/herdr_pane_list.json`
 - Create: `cmd/km-presence/testdata/herdr_agent_list.json`
@@ -1242,54 +1323,90 @@ git commit -m "feat(herdr): km doctor warns when herdr and km both manage ssh co
 git pull --rebase
 git log --oneline -1 HEAD && git log --oneline -1 origin/main   # must share a base
 make build
-km init --sidecars          # seeds s3://<artifacts>/binaries/herdr
-km create profiles/learner.yaml herdrprobe --wait
+km init --sidecars       # a NON-ZERO exit is expected in a worktree that has never run
+                         # `make build-lambdas` — the toolchain tar step fails AFTER the
+                         # herdr upload. Confirm `Uploaded herdr` in the output instead.
+aws s3 ls s3://<artifacts-bucket>/binaries/herdr --profile klanker-terraform
 ```
 
-- [ ] **Step 2: Attach and start one busy pane and one idle pane**
+**The probe profile MUST extend the fragment.** `profiles/learner.yaml` does NOT extend
+`base/tools/herdr`, so a box created from it has no herdr binary and Step 2 fails at its first
+command. Create a throwaway leaf that does — which also makes this probe the fragment's first
+end-to-end live proof, the only place `base/tools/herdr` gets exercised before the PR:
 
-Terminal A:
 ```bash
-./km herdr start herdrprobe
+sed -e 's/^  name: learner$/  name: herdrprobe/' \
+    -e 's|^  - base/userinit$|  - base/userinit\n  - base/tools/herdr|' \
+    profiles/learner.yaml > /tmp/herdrprobe.yaml
+grep -n "base/tools/herdr" /tmp/herdrprobe.yaml    # must print a line; if not, edit by hand
+./km validate /tmp/herdrprobe.yaml
+./km create /tmp/herdrprobe.yaml herdrprobe --wait
 ```
 
-Terminal B:
+Then confirm the FRAGMENT delivered the binary — not a later manual step. This is the assertion
+the fragment's existence rests on:
+
 ```bash
-herdr --remote km-<sandbox-id>
+./km shell herdrprobe     # on the box:  ls -l /usr/local/bin/herdr && herdr --version
 ```
 
-Inside Herdr: leave one pane at an idle shell, and in a second pane run a long
-non-agent job — `sleep 900` is sufficient and deliberately not an agent, since
-the whole point of signal 8 is to be agent-agnostic.
+If it is absent, grep `/var/log/cloud-init-output.log` for `[km] herdr fetch failed`. The
+fail-soft `|| echo` means a missing binary is a warning in the boot log rather than a boot
+failure, so that log line is the only place it surfaces.
 
-- [ ] **Step 3: Capture the fixtures from the busy state**
 
-In a third pane (or over `km shell`), with both panes as above:
+- [ ] **Step 2: Start a headless server and capture the IDLE fixture first**
+
+Over `km shell herdrprobe`, as the `sandbox` user:
+
+```bash
+setsid herdr server >/tmp/herdr-server.log 2>&1 < /dev/null &
+sleep 3
+ls -la ~/.config/herdr/            # herdr.sock must exist
+herdr workspace create --label probe
+herdr pane list --json
+```
+
+Capture the idle fixture **before** creating any work, so it is unambiguously a
+server with panes and nothing running:
 
 ```bash
 herdr api schema --output /tmp/herdr-api.schema.json
+herdr pane list --json > /tmp/herdr_pane_list_idle.json
+```
+
+If `herdr server` will not start without a TTY, or no socket appears, **stop this
+task**, record exactly what happened in the report, and skip to Task 8. The
+fallback the operator authorised is to ship Tasks 1-5 plus docs rather than write
+signal 8 against unverified JSON.
+
+- [ ] **Step 3: Create a busy pane and capture the BUSY fixtures**
+
+```bash
+herdr pane list --json                       # note a pane target, e.g. w1:p1
+herdr pane run <pane-target> "sleep 900"
+sleep 2
 herdr pane list --json  > /tmp/herdr_pane_list.json
 herdr agent list --json > /tmp/herdr_agent_list.json
 cat /tmp/herdr_pane_list.json
 ```
 
-Inspect `/tmp/herdr_pane_list.json` and answer the §6.4 question:
+`sleep 900` is deliberately not an agent: the whole point of signal 8 is that it
+does not depend on recognising an agent by name.
 
-- Does each pane object already carry foreground-process or busy information?
-- If not, does `/tmp/herdr-api.schema.json` show `pane.process_info` as a
-  per-pane call?
+- [ ] **Step 4: Answer the §6.4 question from what you captured**
 
-- [ ] **Step 4: Capture the idle fixture**
+Diff the busy and idle fixtures and decide:
 
-Kill the `sleep 900`, leave every pane at a bare shell, then:
+- Do the two `pane list --json` outputs actually DIFFER — i.e. does a pane object
+  already carry foreground-process or busy information? (Option 1)
+- If they are byte-identical, does `/tmp/herdr-api.schema.json` show
+  `pane.process_info` as a separate per-pane call, and does `agent list --json`
+  differ instead? (Option 2 or 3)
 
-```bash
-herdr pane list --json > /tmp/herdr_pane_list_idle.json
-```
+**If busy and idle `pane list` are byte-identical, signal 8 cannot be built on
+`pane list` alone.** Say so explicitly and name the option Task 7 must take.
 
-This fixture is the **most important one in the plan**: it is what proves signal
-8's negative case, and the negative case is what keeps idle teardown working
-fleet-wide.
 
 - [ ] **Step 5: Bring the fixtures back and record the decision**
 
@@ -1303,9 +1420,12 @@ that names a private path — these are committed). Then write
 Captured from herdr v0.8.2 on a live sandbox on <DATE>, per Task 6 of
 docs/superpowers/plans/2026-09-04-herdr-remote-attach.md.
 
-- `herdr_pane_list.json`      — one idle pane, one pane running `sleep 900`
-- `herdr_pane_list_idle.json` — every pane at a bare shell
+- `herdr_pane_list.json`      — a pane running `sleep 900`, captured headlessly
+- `herdr_pane_list_idle.json` — the same server with every pane at a bare shell
 - `herdr_agent_list.json`     — same moment as herdr_pane_list.json
+
+Captured from a headless `herdr server` driven by `herdr pane run` over SSM. No
+interactive client was ever attached, which is exactly the state signal 8 targets.
 
 ## §6.4 decision
 
@@ -1338,27 +1458,114 @@ git commit -m "test(herdr): capture live herdr API fixtures for presence signal 
 - Test: `cmd/km-presence/main_test.go` (append)
 
 **Interfaces:**
-- Consumes: the fixtures and the §6.4 decision from Task 6; `commandRunner`.
+- Consumes: the committed fixtures in `cmd/km-presence/testdata/` (captured live from herdr 0.8.2 — read `testdata/README.md` FIRST); `commandRunner`.
 - Produces:
   - `const defaultHerdrConfigDir = "/home/sandbox/.config/herdr"`
   - `func herdrSocketPaths(configDir string) []string`
+  - `func herdrPaneIDs(raw []byte) []string`
+  - `func herdrPaneIsBusy(raw []byte) bool`
   - `func checkHerdrPaneBusy(r commandRunner, configDir string) bool`
-  - `tick` signature becomes `tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath, herdrConfigDir string) (bool, bool)`
+  - `tick` gains a final `herdrConfigDir string` parameter
 
-**Deviation note for the implementer:** the struct below is written against Herdr's documented `pane.process_info` shape (shell pid, foreground process group id, foreground processes with pid/name/argv/cwd). If Task 6's fixtures show different field names, **change the JSON tags to match the fixtures** — the fixtures are ground truth and the docs are not. This is a bounded, mechanical deviation; the signal's semantics do not change.
+**This task's design was rewritten after live measurement. Read `cmd/km-presence/testdata/README.md` before writing any code** — the published Herdr docs are wrong in three ways that matter here, and an earlier draft of this task contained a defect that would have disabled idle teardown fleet-wide.
 
-- [ ] **Step 1: Write the failing test**
+Measured facts (herdr 0.8.2, verified on a real sandbox):
+- There is **no `--json` flag**. These commands emit JSON by default; passing `--json` errors with `unknown option`.
+- Responses are **wrapped**: `{"id":…,"result":{…},"type":…}` — not bare arrays.
+- `process-info` takes **`--pane <ID>`**, not a positional argument.
+- **`pane list` is byte-identical busy vs idle** and carries no process data, so it cannot source this signal. It is used only to enumerate pane ids.
+- **`agent list` returns `[]` for a plain `sleep`** — it lists only recognised agents, so relying on it would reintroduce the agent-name coupling this signal exists to remove.
+- **`foreground_processes` is NON-EMPTY WHEN IDLE** — it contains the pane's own shell. See the trap below.
 
-Append to `cmd/km-presence/main_test.go`:
+- [ ] **Step 1: Write the failing tests**
+
+Append to `cmd/km-presence/main_test.go` (add `"errors"` to its imports):
 
 ```go
 // =============================================================================
 // Signal 8: Herdr pane busy
 // =============================================================================
 
-// herdrPaneCmd builds the fakeRunner key for a pane-list call against one socket.
-func herdrPaneCmd(sock string) string {
-	return "runuser -u sandbox -- herdr pane list --json --socket " + sock
+func herdrListCmd(sock string) string {
+	return `runuser -u sandbox -- bash -lc HERDR_SOCKET_PATH="` + sock + `" herdr pane list`
+}
+
+func herdrInfoCmd(sock, pane string) string {
+	return `runuser -u sandbox -- bash -lc HERDR_SOCKET_PATH="` + sock + `" herdr pane process-info --pane ` + pane
+}
+
+// TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy is the single most important test in
+// this task.
+//
+// `foreground_processes` is non-empty even when a pane sits at a bare shell — it
+// contains that shell. An earlier draft of this signal checked
+// `len(foreground_processes) > 0`, which is therefore ALWAYS true: signal 8 would
+// have been permanently positive, silently disabling idle teardown on every box
+// that ever ran herdr and leaking instances forever. That is the exact
+// `pgrep vscode-server` trap the design set out to avoid.
+//
+// The real discriminator is foreground_process_group_id != shell_pid.
+func TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy(t *testing.T) {
+	raw, err := os.ReadFile("testdata/herdr_process_info_idle.json")
+	if err != nil {
+		t.Fatalf("read idle fixture: %v", err)
+	}
+	if herdrPaneIsBusy(raw) {
+		t.Fatal("idle pane reported BUSY — signal 8 can never go negative, which " +
+			"disables idle teardown fleet-wide")
+	}
+	// Guard the guard: the fixture must actually contain a foreground process,
+	// otherwise this test passes for the wrong reason.
+	if !bytes.Contains(raw, []byte(`"foreground_processes"`)) ||
+		!bytes.Contains(raw, []byte(`"/bin/sh"`)) {
+		t.Fatal("idle fixture no longer contains a foreground shell; this test is " +
+			"no longer exercising the trap it exists for")
+	}
+}
+
+func TestHerdrPaneIsBusy_BusyPaneIsBusy(t *testing.T) {
+	raw, err := os.ReadFile("testdata/herdr_process_info_busy.json")
+	if err != nil {
+		t.Fatalf("read busy fixture: %v", err)
+	}
+	if !herdrPaneIsBusy(raw) {
+		t.Fatal("pane running `sleep 900` reported IDLE")
+	}
+}
+
+func TestHerdrPaneIsBusy_MalformedIsIdle(t *testing.T) {
+	for _, in := range [][]byte{[]byte("not json"), []byte("{}"), nil, []byte(`{"result":{}}`)} {
+		if herdrPaneIsBusy(in) {
+			t.Fatalf("malformed input %q reported BUSY; must fail idle", in)
+		}
+	}
+}
+
+// TestHerdrPaneIsBusy_ZeroPidsAreIdle covers a response where both ids are absent
+// or zero — equal, but not meaningfully so. Treating 0 == 0 as "idle" is correct;
+// treating it as busy would latch the signal on.
+func TestHerdrPaneIsBusy_ZeroPidsAreIdle(t *testing.T) {
+	raw := []byte(`{"result":{"process_info":{"foreground_process_group_id":0,"shell_pid":0}}}`)
+	if herdrPaneIsBusy(raw) {
+		t.Fatal("zero pids reported BUSY")
+	}
+}
+
+func TestHerdrPaneIDs_ParsesLiveFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/herdr_pane_list.json")
+	if err != nil {
+		t.Fatalf("read pane list fixture: %v", err)
+	}
+	got := herdrPaneIDs(raw)
+	if len(got) != 1 || got[0] != "w1:p1" {
+		t.Fatalf("herdrPaneIDs = %v; want [w1:p1]", got)
+	}
+}
+
+func TestHerdrPaneIDs_MalformedIsEmpty(t *testing.T) {
+	if got := herdrPaneIDs([]byte("not json")); len(got) != 0 {
+		t.Fatalf("malformed pane list returned %v; want empty", got)
+	}
 }
 
 func TestSignal_HerdrPaneBusy_Positive(t *testing.T) {
@@ -1367,30 +1574,31 @@ func TestSignal_HerdrPaneBusy_Positive(t *testing.T) {
 	if err := os.WriteFile(sock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile("testdata/herdr_pane_list.json")
-	if err != nil {
-		t.Fatalf("read busy fixture: %v", err)
-	}
-	r := &fakeRunner{responses: map[string][]byte{herdrPaneCmd(sock): raw}}
+	list, _ := os.ReadFile("testdata/herdr_pane_list.json")
+	busy, _ := os.ReadFile("testdata/herdr_process_info_busy.json")
+	r := &fakeRunner{responses: map[string][]byte{
+		herdrListCmd(sock):            list,
+		herdrInfoCmd(sock, "w1:p1"):   busy,
+	}}
 	if !checkHerdrPaneBusy(r, dir) {
-		t.Fatal("expected positive when a pane has a foreground process")
+		t.Fatal("expected positive when a pane is running a foreground job")
 	}
 }
 
-// TestSignal_HerdrPaneBusy_NegativeAllIdle is the load-bearing negative case.
-// If this ever returns true, idle teardown is silently disabled on every box that
-// has ever run herdr, and instances leak indefinitely.
+// TestSignal_HerdrPaneBusy_NegativeAllIdle is load-bearing: it is what keeps idle
+// teardown working.
 func TestSignal_HerdrPaneBusy_NegativeAllIdle(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "herdr.sock")
 	if err := os.WriteFile(sock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile("testdata/herdr_pane_list_idle.json")
-	if err != nil {
-		t.Fatalf("read idle fixture: %v", err)
-	}
-	r := &fakeRunner{responses: map[string][]byte{herdrPaneCmd(sock): raw}}
+	list, _ := os.ReadFile("testdata/herdr_pane_list.json")
+	idle, _ := os.ReadFile("testdata/herdr_process_info_idle.json")
+	r := &fakeRunner{responses: map[string][]byte{
+		herdrListCmd(sock):          list,
+		herdrInfoCmd(sock, "w1:p1"): idle,
+	}}
 	if checkHerdrPaneBusy(r, dir) {
 		t.Fatal("expected negative when every pane sits at a bare shell — a signal " +
 			"that cannot go negative disables idle teardown fleet-wide")
@@ -1403,7 +1611,11 @@ func TestSignal_HerdrPaneBusy_NegativeNoSocket(t *testing.T) {
 	}
 }
 
-func TestSignal_HerdrPaneBusy_NegativeCommandError(t *testing.T) {
+// TestSignal_HerdrPaneBusy_NegativeBinaryMissing simulates herdr being absent or
+// unresolvable — the runner returns an error. This is NOT hypothetical: herdr is
+// installed to /home/sandbox/.local/bin and is invisible to root, which is why the
+// invocation uses a login shell.
+func TestSignal_HerdrPaneBusy_NegativeBinaryMissing(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "herdr.sock")
 	if err := os.WriteFile(sock, nil, 0o600); err != nil {
@@ -1411,31 +1623,21 @@ func TestSignal_HerdrPaneBusy_NegativeCommandError(t *testing.T) {
 	}
 	r := &fakeRunner{
 		responses: map[string][]byte{},
-		errors:    map[string]error{herdrPaneCmd(sock): errors.New("exit status 1")},
+		errors:    map[string]error{herdrListCmd(sock): errors.New("exit status 127")},
 	}
 	if checkHerdrPaneBusy(r, dir) {
-		t.Fatal("expected negative (fail idle) when herdr exits non-zero")
+		t.Fatal("expected negative (fail idle) when herdr cannot be run")
 	}
 }
 
-func TestSignal_HerdrPaneBusy_NegativeMalformedJSON(t *testing.T) {
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "herdr.sock")
-	if err := os.WriteFile(sock, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r := &fakeRunner{responses: map[string][]byte{herdrPaneCmd(sock): []byte("not json")}}
-	if checkHerdrPaneBusy(r, dir) {
-		t.Fatal("expected negative (fail idle) on malformed output")
-	}
-}
-
-// TestHerdrSocketPaths_FindsDefaultAndNamed asserts named sessions are queried
-// too. Discovery is a filesystem glob rather than `herdr session list` — signals
-// 3 and 4 already read the filesystem directly, and a glob needs no subprocess.
 func TestHerdrSocketPaths_FindsDefaultAndNamed(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "herdr.sock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// herdr also creates herdr-client.sock beside it; it must NOT be treated as an
+	// API socket.
+	if err := os.WriteFile(filepath.Join(dir, "herdr-client.sock"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	named := filepath.Join(dir, "sessions", "agents")
@@ -1447,13 +1649,10 @@ func TestHerdrSocketPaths_FindsDefaultAndNamed(t *testing.T) {
 	}
 	got := herdrSocketPaths(dir)
 	if len(got) != 2 {
-		t.Fatalf("herdrSocketPaths returned %d paths, want 2: %v", len(got), got)
+		t.Fatalf("herdrSocketPaths returned %d paths, want 2 (client socket must be excluded): %v", len(got), got)
 	}
 }
 
-// TestSignal_HerdrPaneBusy_IndependentOfSSHAndVNC pins that signal 8 never fires
-// from signal 6's or 7's inputs, matching the cross-independence discipline the
-// VNC/SSH signals already follow.
 func TestSignal_HerdrPaneBusy_IndependentOfSSHAndVNC(t *testing.T) {
 	r := &fakeRunner{responses: map[string][]byte{
 		"ss -tnHp state established": []byte(`ESTAB 0 0 10.0.0.1:22 10.0.0.2:5000 users:(("sshd",pid=1,fd=3))`),
@@ -1464,24 +1663,26 @@ func TestSignal_HerdrPaneBusy_IndependentOfSSHAndVNC(t *testing.T) {
 }
 ```
 
-Add `"errors"` to that file's imports.
+- [ ] **Step 2: Run tests to verify they fail**
 
-- [ ] **Step 2: Run test to verify it fails**
+Run: `go test ./cmd/km-presence/ -run 'Herdr' -v; echo "exit=$?"`
+Expected: FAIL to compile — `undefined: herdrPaneIsBusy`, `herdrPaneIDs`, `herdrSocketPaths`, `checkHerdrPaneBusy`.
 
-Run: `go test ./cmd/km-presence/ -run 'HerdrPaneBusy|HerdrSocketPaths' -v; echo "exit=$?"`
-Expected: FAIL to compile — `undefined: checkHerdrPaneBusy`, `undefined: herdrSocketPaths`.
+- [ ] **Step 3: Implement**
 
-- [ ] **Step 3: Implement the signal**
-
-Add to `cmd/km-presence/runner.go`:
+Add to `cmd/km-presence/runner.go` (add `"encoding/json"` to its imports):
 
 ```go
-// herdrSocketPaths returns every Herdr server socket under configDir: the
-// default session plus one per named session.
+// herdrSocketPaths returns every Herdr API socket under configDir: the default
+// session plus one per named session.
 //
 // Discovery is a filesystem glob rather than `herdr session list` because a glob
 // needs no subprocess and no seam — the same reasoning that has signals 3 and 4
 // reading the filesystem directly.
+//
+// herdr also creates a `herdr-client.sock` beside the API socket; only
+// `herdr.sock` speaks the API, so the exact filename is matched rather than a
+// `*.sock` glob.
 func herdrSocketPaths(configDir string) []string {
 	var out []string
 	if _, err := os.Stat(filepath.Join(configDir, "herdr.sock")); err == nil {
@@ -1491,62 +1692,104 @@ func herdrSocketPaths(configDir string) []string {
 	return append(out, named...)
 }
 
-// herdrPane is the subset of `herdr pane list --json` this signal reads.
-// Field names track cmd/km-presence/testdata/herdr_pane_list.json, which was
-// captured from a live server — the API docs are not authoritative here.
-type herdrPane struct {
-	ID                string `json:"id"`
-	ShellPID          int    `json:"shell_pid"`
-	ForegroundPGID    int    `json:"foreground_pgid"`
-	ForegroundProcess []struct {
-		PID  int    `json:"pid"`
-		Name string `json:"name"`
-	} `json:"foreground_processes"`
+// herdrPaneList is the shape of `herdr pane list`. Field names track
+// cmd/km-presence/testdata/herdr_pane_list.json, captured from a live server —
+// the published docs are not authoritative here (they describe a `--json` flag
+// that does not exist and bare arrays that are actually wrapped).
+type herdrPaneList struct {
+	Result struct {
+		Panes []struct {
+			PaneID string `json:"pane_id"`
+		} `json:"panes"`
+	} `json:"result"`
+}
+
+// herdrProcessInfo is the shape of `herdr pane process-info --pane <id>`.
+type herdrProcessInfo struct {
+	Result struct {
+		ProcessInfo struct {
+			ForegroundProcessGroupID int `json:"foreground_process_group_id"`
+			ShellPID                 int `json:"shell_pid"`
+		} `json:"process_info"`
+	} `json:"result"`
+}
+
+// herdrPaneIDs extracts pane ids from `herdr pane list` output. Returns nil on
+// any parse failure — callers fail idle.
+func herdrPaneIDs(raw []byte) []string {
+	var pl herdrPaneList
+	if err := json.Unmarshal(raw, &pl); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(pl.Result.Panes))
+	for _, p := range pl.Result.Panes {
+		if p.PaneID != "" {
+			out = append(out, p.PaneID)
+		}
+	}
+	return out
+}
+
+// herdrPaneIsBusy reports whether one pane is running a foreground job.
+//
+// The discriminator is foreground_process_group_id != shell_pid, measured on a
+// live server: an idle pane reports both as the shell's pid (35371 == 35371),
+// while a pane running `sleep 900` reports the job's pgid (35854 != 35371).
+//
+// Do NOT use `len(foreground_processes) > 0`. That field is non-empty even when
+// idle — it contains the pane's own shell — so the check is always true, which
+// would make signal 8 permanently positive and silently disable idle teardown
+// fleet-wide. TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy pins this.
+//
+// Both ids must be non-zero: a response missing them decodes to 0 == 0, which is
+// equal-but-meaningless and must read as idle.
+func herdrPaneIsBusy(raw []byte) bool {
+	var pi herdrProcessInfo
+	if err := json.Unmarshal(raw, &pi); err != nil {
+		return false
+	}
+	fg := pi.Result.ProcessInfo.ForegroundProcessGroupID
+	shell := pi.Result.ProcessInfo.ShellPID
+	return fg != 0 && shell != 0 && fg != shell
 }
 
 // checkHerdrPaneBusy returns true when any Herdr session has a pane doing work.
 // Signal 8.
 //
-// Herdr's whole purpose here is persistence across detach: an operator closes
-// the laptop and expects agent panes to keep running. Signal 7 sees an ATTACHED
-// client (a herdr client is an SSH session), and signal 5 sees a running
-// claude/codex by name — but a DETACHED pane running anything else (a build, a
-// test suite, an agent whose name is not in signal 5's pgrep list) is invisible,
-// and under teardownPolicy: stop the idle reaper then kills the work. This
-// signal closes that, and does it without naming any agent, so swapping agents
-// costs no edit here.
+// Herdr's purpose here is persistence across detach: an operator closes the laptop
+// and expects agent panes to keep running. Signal 7 sees an ATTACHED client (a
+// herdr client is an SSH session) and signal 5 sees a running claude/codex BY NAME
+// — but a DETACHED pane running anything else (a build, a test suite, an agent
+// whose name is not in signal 5's pgrep list) is invisible, and under
+// teardownPolicy: stop the idle reaper then kills the work. This closes that
+// without naming any agent, so swapping agents costs no edit here.
 //
-// Detects the WORK, never the server. `herdr server stop` is the only thing that
-// ends a Herdr server, so "a server is running" would latch the box awake forever
-// — exactly the pgrep vscode-server trap that checkSSHSessions was written to
-// avoid.
+// Detects the WORK, never the server: `herdr server stop` is the only thing that
+// ends a herdr server, so "a server is running" would latch the box awake forever.
 //
-// Fails idle: an absent socket, a missing binary, a non-zero exit, or malformed
-// JSON all return false. A reaped box costs one `km resume`; a signal that can
-// never go negative silently disables idle teardown fleet-wide and leaks
-// instances.
+// Fails idle on every error path — absent socket, unresolvable binary, non-zero
+// exit, malformed JSON. A reaped box costs one `km resume`; a signal that can never
+// go negative leaks instances indefinitely.
 //
-// Runs the sandbox user's herdr via runuser (not sudo/su), matching the dispatch
-// convention established when agent traffic had to keep its cgroup.
+// `bash -lc` is load-bearing: base/userinit.yaml installs herdr to
+// /home/sandbox/.local/bin/herdr, and `command -v herdr` as root finds nothing.
+// km-presence runs as User=root, so a non-login runuser would fail to resolve the
+// binary and this signal would fail idle permanently — which the negative-case test
+// would pass, making it undetectable. HERDR_SOCKET_PATH selects the session.
 func checkHerdrPaneBusy(r commandRunner, configDir string) bool {
 	for _, sock := range herdrSocketPaths(configDir) {
-		out, err := r.Output("runuser", "-u", "sandbox", "--",
-			"herdr", "pane", "list", "--json", "--socket", sock)
-		if err != nil || len(bytes.TrimSpace(out)) == 0 {
+		listOut, err := r.Output("runuser", "-u", "sandbox", "--", "bash", "-lc",
+			fmt.Sprintf("HERDR_SOCKET_PATH=%q herdr pane list", sock))
+		if err != nil {
 			continue
 		}
-		var panes []herdrPane
-		if err := json.Unmarshal(out, &panes); err != nil {
-			continue
-		}
-		for _, p := range panes {
-			// A pane whose foreground process group differs from its shell's is
-			// running a foreground job. Herdr also reports the processes directly
-			// when the platform exposes them; either is sufficient evidence.
-			if len(p.ForegroundProcess) > 0 {
-				return true
+		for _, paneID := range herdrPaneIDs(listOut) {
+			infoOut, err := r.Output("runuser", "-u", "sandbox", "--", "bash", "-lc",
+				fmt.Sprintf("HERDR_SOCKET_PATH=%q herdr pane process-info --pane %s", sock, paneID))
+			if err != nil {
+				continue
 			}
-			if p.ForegroundPGID != 0 && p.ShellPID != 0 && p.ForegroundPGID != p.ShellPID {
+			if herdrPaneIsBusy(infoOut) {
 				return true
 			}
 		}
@@ -1555,11 +1798,15 @@ func checkHerdrPaneBusy(r commandRunner, configDir string) bool {
 }
 ```
 
-Add `"encoding/json"` to `runner.go`'s imports.
+**Note on cost:** this is 1 + N subprocesses per 60s tick (one `pane list`, one
+`process-info` per pane). That is more than any existing signal, and it is
+unavoidable — `pane list` carries no process data, proven by capturing both
+states. If it ever matters, the fix is to speak the socket protocol directly
+rather than to guess a cheaper CLI shape.
 
 - [ ] **Step 4: Extend `tick`**
 
-In `cmd/km-presence/runner.go`, change `tick`'s signature and body:
+In `cmd/km-presence/runner.go`:
 
 ```go
 func tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath, herdrConfigDir string) (bool, bool) {
@@ -1575,16 +1822,17 @@ func tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath
 	active := s1 || s2 || s3 || s4 || s5 || s6 || s7 || s8
 ```
 
-Update the doc comment above `tick` from "seven signals" to "eight signals".
+Update `tick`'s doc comment from "seven signals" to "eight signals".
 
-In `cmd/km-presence/main.go`: add `defaultHerdrConfigDir = "/home/sandbox/.config/herdr"` to the const block, pass it as the final argument to the `tick` call, and change the package doc comment at line 4 from "seven concrete signals" to "eight concrete signals".
+In `cmd/km-presence/main.go`: add `defaultHerdrConfigDir = "/home/sandbox/.config/herdr"` to the const block, pass it as `tick`'s final argument, and change the package doc comment at line 4 from "seven concrete signals" to "eight concrete signals".
 
-Update the two existing `tick` call sites in `main_test.go` (`TestTick_NoEmitWhenAllNegative`, `TestTick_EmitWhenAnyPositive`) to pass `t.TempDir()` as the new argument — an empty directory has no socket, so signal 8 is negative and neither test's expectation changes.
+Update the two existing `tick` call sites in `main_test.go` (`TestTick_NoEmitWhenAllNegative`, `TestTick_EmitWhenAnyPositive`) to pass `t.TempDir()` — an empty dir has no socket, so signal 8 is negative and neither expectation changes.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 5: Run tests**
 
 Run: `go test ./cmd/km-presence/ -v; echo "exit=$?"`
-Expected: PASS, `exit=0`, with every signal-8 test green — above all `TestSignal_HerdrPaneBusy_NegativeAllIdle`.
+Expected: PASS, `exit=0` — above all `TestHerdrPaneIsBusy_TrapIdleShellIsNotBusy` and
+`TestSignal_HerdrPaneBusy_NegativeAllIdle`.
 
 - [ ] **Step 6: Commit**
 
@@ -1593,7 +1841,6 @@ git add cmd/km-presence/runner.go cmd/km-presence/main.go cmd/km-presence/main_t
 git commit -m "feat(herdr): km-presence signal 8 keeps a busy detached herdr session alive"
 ```
 
----
 
 ### Task 8: Documentation
 
@@ -1614,7 +1861,29 @@ Update every hit to "eight" **except** historical narrative in CLAUDE.md that de
 
 - [ ] **Step 2: Write `docs/herdr-remote-attach.md`**
 
-Cover, in this order:
+**Facts established by live testing on 2026-09-04 that the docs MUST carry** — every one of
+these contradicts something a reader would otherwise reasonably assume:
+
+- **`base/userinit.yaml` already installs herdr** (`curl -fsSL https://herdr.dev/install.sh | sh`),
+  to `/home/sandbox/.local/bin/herdr`, owned by the sandbox user and **NOT on root's PATH**.
+  So on most profiles herdr is already present and `base/tools/herdr` is redundant; the fragment's
+  real purpose is the egress-free install for `base/network/locked` profiles that cannot reach
+  herdr.dev. Say this plainly — a reader who assumes the fragment is the only install path will
+  misdiagnose everything downstream.
+- **`KM_ARTIFACTS_BUCKET` is not visible to `initCommands` or to SSM-run scripts.** cloud-init and
+  SSM are non-login shells and never source `/etc/profile.d`. Anything on the box that needs the
+  bucket must source `/etc/profile.d/km-identity.sh` itself.
+- **`km list` shows a box green before cloud-init finishes.** A missing binary right after create
+  usually means "still booting", not "the fragment failed". `cloud-init status` is the check.
+- **The fragment fails soft**, so a genuine failure appears ONLY as `[km] herdr fetch failed` in
+  `/var/log/cloud-init-output.log`. Put that grep in the troubleshooting section.
+- **Herdr's published CLI docs are wrong in three ways** (verified against 0.8.2): there is no
+  `--json` flag (JSON is the default), responses are wrapped as `{"id":…,"result":{…},"type":…}`
+  rather than bare arrays, and `pane process-info` takes `--pane <ID>` rather than a positional.
+- **`herdr server` starts headlessly** under `setsid`/`nohup` with no TTY, creating
+  `~/.config/herdr/herdr.sock` (and a separate `herdr-client.sock` that is NOT the API socket).
+
+Then cover, in this order:
 1. What `km herdr start` does and the two-terminal workflow.
 2. Prerequisites: `spec.runtime.vscode.enabled` (default true, so sshd and the keypair already exist), and either `extends: [base/tools/herdr]` or the automatic ensure-install.
 3. **Lifecycle, stated loudly** — Herdr sessions do not survive a reboot; `km pause` (hibernate) keeps panes, `km stop` kills them, and `teardownPolicy: stop` on idle is therefore the destructive path. This is why signal 8 exists.
@@ -1627,7 +1896,7 @@ Cover, in this order:
 
 - [ ] **Step 3: Add the CLAUDE.md block**
 
-Add a dated block at the top of the phase-history section, in the established voice: what shipped, the non-obvious decisions (fragment costs no userdata change because `InitCommands` only gates presence; signal 8 detects work not the server; `km herdr` is a vscode sibling not a tunnel mode and why), the lifecycle trap, the deploy surface (`make build` + `km init --sidecars`, **NOT** `km init --dry-run=false`), and that existing sandboxes need `km destroy && km create` for signal 8 only.
+Add a dated block at the top of the phase-history section, in the established voice: what shipped, the non-obvious decisions (the fragment needs no create-handler rebuild because it changes no TEMPLATE and no SCHEMA — NOT because rendered userdata is unchanged, which is false: Phase 113 yaml.Marshals `InitCommands` into the `/opt/km/.km-profile.yaml` dump by reflection, so no template token names it and grepping the template misses it; signal 8 detects work not the server; `km herdr` is a vscode sibling not a tunnel mode and why), the lifecycle trap, the deploy surface (`make build` + `km init --sidecars`, **NOT** `km init --dry-run=false`), and that existing sandboxes need `km destroy && km create` for signal 8 only.
 
 Add two "Where to look" rows:
 
@@ -1681,10 +1950,11 @@ git commit -m "docs(herdr): operator runbook, CLAUDE.md block, eight-signal swee
 git pull --rebase
 git log --oneline -1 HEAD && git log --oneline -1 origin/main   # must share a base
 make build
-km init --sidecars
+km init --sidecars       # see the Global Constraints note: a non-zero exit here is
+                         # EXPECTED in a worktree with no build/*.zip, and harmless
 ```
 
-Confirm the mirror landed:
+Confirm the mirror landed — this, not the exit code, is the check that matters:
 ```bash
 aws s3 ls "s3://<artifacts-bucket>/binaries/herdr" --profile klanker-terraform
 ```
@@ -1706,27 +1976,49 @@ km shell herdruat --root      # then: rm -f /usr/local/bin/herdr
 ./km herdr start herdruat     # expected: installs, then opens the forward
 ```
 
-- [ ] **Step 4: Attach, detach, and prove signal 8 positive**
+- [ ] **Step 4: Prove signal 8 positive (headless)**
 
-Attach from a second terminal, start `sleep 3600` in one pane, leave another idle,
-detach with `ctrl+b q`, then close the `km herdr start` terminal too. Watch:
+Use a UAT profile with a SHORT `idleTimeout` — 10m makes this observable in one
+sitting rather than four hours. Over `km shell`, as the `sandbox` user:
+
+```bash
+setsid herdr server >/tmp/herdr-server.log 2>&1 < /dev/null &
+sleep 3
+herdr workspace create --label uat
+herdr pane run <pane-target> "sleep 3600"
+```
+
+Nothing is attached — this is precisely the detached-busy state signal 8 exists
+for. Then watch:
 
 ```bash
 km logs herdruat --follow --stream <presence-stream>
 ```
 
-Expected: heartbeats continue while the sleep runs. Confirm the box outlives its
-`idleTimeout` (set a short one on the UAT profile — 10m makes this observable in
-one sitting rather than four hours).
+Expected: heartbeats continue past `idleTimeout` and the box stays running.
+**Then cross-check that signal 8 is the one carrying it** — stop the pane's job
+and confirm heartbeats stop. A box kept alive by signal 1 or signal 5 proves
+nothing about signal 8, and that confusion is the easiest way to pass this UAT
+while shipping a dead signal.
 
 - [ ] **Step 5: Prove signal 8 negative — the one that matters**
 
-Kill the `sleep`, leave the detached Herdr session with only idle shells, and
-walk away for longer than `idleTimeout`.
+Kill the `sleep`, leave the headless Herdr server running with only idle panes,
+and wait longer than `idleTimeout`. Close every `km shell` session first: a live
+shell holds the box awake through signal 1 and would mask the result.
 
 Expected: heartbeats stop, and the box is stopped on schedule. **If it stays
 alive, signal 8 cannot go negative and idle teardown is broken fleet-wide —
 stop and fix before merging.**
+
+- [ ] **Step 5b: OPERATOR-RUN — interactive attach round-trip**
+
+Everything above drives Herdr headlessly. One claim remains unverified by
+automation: that an interactive `herdr --remote km-<id>` attach, a `ctrl+b q`
+detach, and a reattach behave identically to a headless server. Record it in the
+UAT file as **OPERATOR-RUN, NOT YET VERIFIED**, and state the same limitation in
+the PR body rather than implying the signal was proven against a hand-attached
+session.
 
 - [ ] **Step 6: Prove the lifecycle claim**
 
@@ -1756,6 +2048,6 @@ git commit -m "docs(herdr): live UAT record"
 ## Notes for the executor
 
 - **Rebase first.** Another agent is merging a PR in this repo. Run `git pull --rebase` before Task 1 and again before Task 9. Never run a bare `git add` — every commit in this plan names explicit paths, because a bare add sweeps another agent's staged files.
-- **Task 6 blocks Task 7.** The fixtures are ground truth for the parser. Do not write `herdrPane`'s JSON tags from the API documentation.
+- **Task 6 blocks Task 7.** The fixtures are ground truth for the parser. Do not write `herdrPane`'s JSON tags from the API documentation. If Task 6 cannot start a headless server, Task 7 does not get written — skip to Task 8 and ship Tasks 1-5 plus docs.
 - **Tasks 1–5 are independently useful** and ship a working `km herdr start` on existing sandboxes. Tasks 6–9 are what make the persistence promise real.
 - **Never run `km init --dry-run=false` for this work.** Nothing here touches Terraform, IAM, a Lambda, or the userdata template.

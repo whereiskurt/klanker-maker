@@ -25,7 +25,6 @@ var fixtures = []string{
 	"learn_v2_codex",
 	"locked",
 	"dc34",
-	"goose",
 	"ao",
 	"builtin_hardened",
 }

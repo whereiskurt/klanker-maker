@@ -77,7 +77,7 @@ The learn profile (`profiles/learn.yaml`) is designed for exploration:
 - eBPF enforcement in `both` mode with full observability
 - `privileged: true` for sudo access
 - `teardownPolicy: stop` — pause instead of destroy on TTL
-- Pre-installed tools: claude-code, goose, codex, git, node, python
+- Pre-installed tools: claude-code, codex, git, node, python
 
 ### Validate Before Creating
 
