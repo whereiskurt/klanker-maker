@@ -1,0 +1,97 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: herdr
+  labels:
+    tier: development
+    tool: herdr-agent-panes
+  prefix: herdr
+
+# A sandbox for actually working in Herdr: agent panes you attach to, detach
+# from, and come back to.
+#
+# NOTE: it deliberately does NOT extend base/tools/herdr.
+#
+# base/userinit already installs the same pinned herdr 0.8.2, to
+# /home/sandbox/.local/bin/herdr. That is the copy signal 8 finds (it probes via
+# `runuser -u sandbox -- bash -lc`, a login shell) and the copy `km herdr status`
+# falls back to when root's PATH misses it. Adding base/tools/herdr on top would
+# install a SECOND binary at /usr/local/bin and leave two pins in two files with
+# nothing forcing them to agree. The fragment earns its place only on a profile
+# that does not extend base/userinit, or one whose egress excludes GitHub — see
+# profiles/uat-herdr.yaml and docs/herdr-remote-attach.md.
+extends:
+  - base/os/redhat            # node, npm, git, python3, tmux
+  - base/network/safenetwork
+  - base/userinit             # claude + codex + goose + herdr
+  - base/platform
+
+spec:
+  lifecycle:
+    ttl: "24h"
+    # Generous on purpose. km-presence signal 8 keeps the box alive whenever a
+    # detached pane is running a foreground job, so this bound is what catches a
+    # session you walked away from with nothing running — not one mid-build.
+    idleTimeout: "2h"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.2xlarge
+    region: us-east-1
+    rootVolumeSize: 80
+    spot: false
+    # Load-bearing for this profile, and the reason it is set explicitly rather
+    # than inherited (Phase 117's bool zero-value trap keeps mixed-bool blocks in
+    # the leaf anyway).
+    #
+    # The idle reaper reads spec.runtime.hibernation and, when true, issues
+    # StopInstances with Hibernate: true rather than a plain stop
+    # (cmd/ttl-handler/main.go lookupHibernation). Proven on a live box: the box
+    # came back with herdr server on the SAME pid and every detached pane's job
+    # still running. With hibernation false, an idle reap kills them.
+    #
+    # So this turns the idle reap from destructive into survivable. Do not treat
+    # it as the control — hibernation can fail at runtime and fall back to a
+    # plain stop. Signal 8 is what keeps the box up in the first place.
+    hibernation: true
+    mountEFS: true
+    efsMountPoint: /shared
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+    # Matches profiles/learner.yaml: agents on a dev box routinely want to
+    # install packages. Note that on a privileged box the agent can also stop
+    # km-presence, so signal 8 is a convenience here, not a control.
+    privileged: true
+
+  budget:
+    ai:
+      maxSpendUSD: 0        # Max/subscription OAuth login, not metered API keys
+    compute:
+      maxSpendUSD: 10.00    # real-money backstop beyond ttl/idleTimeout
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  cli:
+    noBedrock: true
+
+  agent:
+    default: claude
+
+  notification:
+    events:
+      onIdle: false
+      onPermission: false
+    email:
+      enabled: false
+  # For a per-sandbox Slack channel, add base/slack-persandbox to extends.
+  # Left off here so short-lived herdr boxes do not accumulate channels.
