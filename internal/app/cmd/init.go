@@ -3959,10 +3959,13 @@ const sopsVersion = "3.13.1"
 // than a publisher-supplied checksums file: a re-cut or compromised upstream
 // release fails the digest check here rather than silently re-verifying against
 // its own replaced checksum. A profile that also extends base/userinit gets a
-// SECOND, unpinned herdr at ~/.local/bin (that fragment's `curl | sh`), and the
-// sandbox user's login PATH resolves that copy ahead of this one — see
-// docs/herdr-remote-attach.md's "already installed" section. Bump both consts
-// together, deliberately, like any other dependency: re-download, re-hash, re-pin.
+// SECOND herdr at ~/.local/bin, and the sandbox user's login PATH resolves that
+// copy ahead of this one — see docs/herdr-remote-attach.md's "already installed"
+// section. Since #106 that copy is no longer the old `curl herdr.dev/install.sh
+// | sh`: it is the same 0.8.2 GitHub release asset checked against the same
+// digest, so the two agree today. They are still two independent pins in two
+// files, so bump them TOGETHER, deliberately, like any other dependency:
+// re-download, re-hash, re-pin both here and in profiles/base/userinit.yaml.
 const herdrVersion = "0.8.2"
 
 // herdrSHA256 is the SHA-256 digest of herdr-linux-x86_64 for herdrVersion,

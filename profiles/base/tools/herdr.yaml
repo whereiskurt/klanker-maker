@@ -9,8 +9,15 @@ metadata:
 # Opt in with `extends: [base/tools/herdr]`. See docs/herdr-remote-attach.md
 # and `km herdr start`.
 #
-# The binary comes from S3 over the instance role, NOT from herdr.dev. That is
-# the decisive difference from base/security/wiz.yaml, which needs a
+# NOTE ON REDUNDANCY: base/userinit.yaml already installs the same pinned 0.8.2
+# to /home/sandbox/.local/bin/herdr. Since #106 it fetches from github.com, and
+# base/network/locked allows .github.com — a leading-dot entry matches the apex
+# too — so that install succeeds even under lock. This fragment therefore earns
+# its place ONLY on a profile that does not extend base/userinit, or one whose
+# egress is narrower than base/network/locked. See docs/herdr-remote-attach.md.
+#
+# The binary comes from S3 over the instance role, needing no egress at all.
+# That is the decisive difference from base/security/wiz.yaml, which needs a
 # ".wiz.io" allowedDNSSuffixes entry because its installer downloads over the
 # public internet — and DNS is the one enforcement layer root does NOT bypass
 # (userdata.go rewrites /etc/resolv.conf to 127.0.0.1 for the whole box, and the

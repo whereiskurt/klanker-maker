@@ -23,13 +23,20 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   modes.
 - **`profiles/base/tools/herdr.yaml`** — opt-in fragment, pure
   `initCommandsAppend`, pulling the binary from S3 over the instance role. Its
-  real purpose is narrower than it looks: `profiles/base/userinit.yaml`
-  **already installs Herdr** from `herdr.dev` on any profile that extends it,
-  to `/home/sandbox/.local/bin/herdr` (sandbox-owned, not on root's `PATH`), so
-  this fragment is redundant there. It earns its place only for
-  `base/network/locked`-style profiles that cannot reach `herdr.dev` at all —
-  S3 needs no egress allowlist entry, unlike `base/security/wiz.yaml`'s
-  `.wiz.io` suffix.
+  real purpose is narrower than it looks, and **narrower still since #106**:
+  `profiles/base/userinit.yaml` already installs the same pinned 0.8.2 on any
+  profile that extends it, to `/home/sandbox/.local/bin/herdr` (sandbox-owned,
+  not on root's `PATH`), so this fragment is redundant there. Before #106 that
+  install was `curl herdr.dev/install.sh | sh`, and the fragment's stated
+  justification was `base/network/locked`-style profiles that cannot reach
+  `herdr.dev` — **that justification is now false.** #106 repointed userinit at
+  a SHA-pinned `github.com` release asset, and `base/network/locked` allows
+  `.github.com`/`.githubusercontent.com`; a leading-dot entry matches the apex
+  as well as subdomains (`IsHostAllowed`, and the DNS matcher agrees), so
+  userinit's fetch succeeds under lock. What actually remains is a profile that
+  does **not** extend `base/userinit` — which has no herdr at all — or one whose
+  egress is narrower than `locked`. For those, S3 needs no allowlist entry at
+  all, unlike `base/security/wiz.yaml`'s `.wiz.io` suffix.
 - **A real bug found AFTER this fragment first shipped, live-tested and
   fixed same-day:** the original `initCommandsAppend` line referenced
   `${KM_ARTIFACTS_BUCKET}` bare, on the assumption that the bootstrap exports

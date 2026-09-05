@@ -54,25 +54,44 @@ reachable and holds the tunnel open, exactly like `km vscode start`.
 ### The binary is probably already there
 
 `profiles/base/userinit.yaml` — which most profiles extend — already installs
-Herdr via `curl -fsSL https://herdr.dev/install.sh | sh`, landing it at
-`/home/sandbox/.local/bin/herdr`, **owned by the sandbox user and NOT on root's
-`PATH`**. On any profile that extends `base/userinit`, Herdr is present the
+Herdr, landing it at `/home/sandbox/.local/bin/herdr`, **owned by the sandbox
+user and NOT on root's `PATH`**. (Before #106 that was
+`curl -fsSL https://herdr.dev/install.sh | sh`; it is now the same pinned 0.8.2
+GitHub release asset this fragment mirrors, verified against the same digest.) On any profile that extends `base/userinit`, Herdr is present the
 moment cloud-init finishes, and `profiles/base/tools/herdr.yaml` (below) is
 redundant — **and, on a profile that extends both, redundant-plus-divergent**:
 you now have two herdr binaries at two paths, potentially two versions, each
 resolved by a different PATH. Root (`km herdr status`'s `command -v herdr`)
 finds the pinned `/usr/local/bin/herdr`; the sandbox user's login shell (which
-signal 8 runs as, via `runuser -u sandbox -- bash -lc`) finds the unpinned
+signal 8 runs as, via `runuser -u sandbox -- bash -lc`) finds
 `~/.local/bin/herdr` first — measured live, `~/.local/bin` sits at PATH
 position 2 and `/usr/local/bin` at position 5. So `km herdr status` can report
 a version the panes underneath signal 8 are not actually running. Both are
-`0.8.2` as of this writing, so this is a reporting-accuracy caveat today, not
-a live defect — but it is worth knowing before trusting the status version
-number on a profile that extends both fragments.
+`0.8.2` as of this writing and both are digest-pinned, so this is a
+reporting-accuracy caveat today, not a live defect — but the two pins live in
+two files (`herdrVersion`/`herdrSHA256` in `internal/app/cmd/init.go`, and the
+`initCommands` line in `profiles/base/userinit.yaml`) and nothing enforces that
+they agree. Bump them together.
 
-That fragment's real purpose is narrower: an **egress-free** install for
-`base/network/locked`-style profiles that cannot reach `herdr.dev` at all. It
-pulls the binary from S3 over the instance role instead:
+That fragment's real purpose is narrower — and **narrower than earlier drafts
+of this document claimed.** The original justification was `base/network/locked`
+profiles that cannot reach `herdr.dev`. Since #106 that is no longer true:
+userinit fetches from `github.com`, and `base/network/locked` allows
+`.github.com` and `.githubusercontent.com`. A leading-dot entry matches the
+apex as well as subdomains (`IsHostAllowed` in
+`sidecars/http-proxy/httpproxy/proxy.go`, and the DNS matcher behaves the same),
+so **userinit's herdr install succeeds under `base/network/locked`** and the
+fragment is redundant there too.
+
+What genuinely remains is an **egress-free** install for either of:
+
+- a profile that does **not** extend `base/userinit`, which therefore has no
+  herdr at all; or
+- a profile whose egress allowlist is narrower than `base/network/locked` and
+  excludes GitHub.
+
+For those, it pulls the binary from S3 over the instance role, needing no
+allowlist entry at all:
 
 ```yaml
 extends: [..., base/tools/herdr]
