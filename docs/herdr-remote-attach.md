@@ -311,18 +311,17 @@ km just doesn't make that choice for you.
   sandbox traffic routes through your workstation. The MITM proxy still meters
   AI spend, and the flow/exec census (`docs/egress-census.md`,
   `docs/exec-capture.md`) still records what the panes do.
-- **But the eBPF allowlist does NOT hold in a Herdr pane.** An ssh session lands
-  in `user.slice/user-1001.slice/session-N.scope`, not the per-sandbox
-  `km.slice` scope the cgroup-attached BPF programs are bound to, so the
-  allow-trie never sees pane traffic. This is **not specific to Herdr** — it is
-  true of `km vscode`, direct `ssh`, and `km shell` alike, and the wrapper that
-  is supposed to perform the join fails silently (`EPERM`, swallowed by
-  `2>/dev/null`). The DNS resolver and the HTTP proxy still apply, so this is a
-  defence-in-depth loss rather than an open door: what is lost is enforcement
-  against traffic that bypasses *both* — a connection to a literal IP, or a
-  process that ignores the proxy environment. It makes no practical difference
-  on `profiles/herdr.yaml`, which is wide open at every layer. See
-  `docs/operational-gotchas.md` § Interactive sessions run OUTSIDE the eBPF
+- **The eBPF allowlist applies to a Herdr pane only on sandboxes created after
+  Phase 135.** Before it, an ssh session landed in
+  `user.slice/user-1001.slice/session-N.scope` rather than the `km.slice` scope
+  those builds attach the BPF programs to, and the wrapper meant to perform the
+  join failed silently (`EPERM`, swallowed by `2>/dev/null`) — so the allow-trie
+  never saw pane traffic. Not specific to Herdr: `km vscode`, direct `ssh` and
+  `km shell` were all affected identically. Phase 135 attaches at the root
+  cgroup and selects by uid, closing it for every entry point at once, but the
+  enforcer is fetched at boot so an existing box needs
+  `km destroy && km create`. DNS and the HTTP proxy applied throughout either
+  way. See `docs/operational-gotchas.md` § Interactive sessions and the eBPF
   enforcement cgroup.
 
 ---

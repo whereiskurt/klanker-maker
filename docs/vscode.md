@@ -481,15 +481,17 @@ The sandbox was created with `runtime.vscode.enabled: false` or without VS Code 
 - **Existing sandboxes need reprovisioning.** Sandboxes created without `runtime.vscode.enabled: true` do NOT get
   sshd provisioning retroactively. `km destroy` + `km create` required.
 
-- **A Remote-SSH session is outside the eBPF enforcement cgroup.** The session
-  lands in `user.slice/user-1001.slice/session-N.scope`, not the per-sandbox
-  `km.slice` scope the cgroup-attached BPF programs are bound to, so the
-  allow-trie does not apply to anything you do in VS Code's terminal or to
-  anything `vscode-server` spawns. The DNS resolver and the HTTP proxy still do
-  apply — this is a defence-in-depth loss, not an open door. Not specific to VS
-  Code: `km herdr`, direct `ssh`, and `km shell` are all affected identically.
-  See `docs/operational-gotchas.md` § Interactive sessions run OUTSIDE the eBPF
-  enforcement cgroup.
+- **Sandboxes created before Phase 135 do not enforce the eBPF allowlist in a
+  Remote-SSH session.** The session lands in
+  `user.slice/user-1001.slice/session-N.scope`, not the per-sandbox `km.slice`
+  scope those builds attach the BPF programs to, so the allow-trie never
+  applied to VS Code's terminal or to anything `vscode-server` spawned. (DNS
+  and the HTTP proxy always did apply, so this was a defence-in-depth loss
+  rather than an open door.) Phase 135 attaches at the root cgroup and selects
+  by uid instead, so a session is enforced wherever logind puts it — but the
+  enforcer is fetched at boot, so an existing sandbox needs
+  `km destroy && km create` to gain it. See `docs/operational-gotchas.md`
+  § Interactive sessions and the eBPF enforcement cgroup.
 
 ---
 
@@ -508,11 +510,10 @@ The SSM tunnel is the real security boundary. SSH on top adds key-based authenti
 encrypted file transfer, and terminal access, and enables the VS Code Remote-SSH extension
 to work without a custom protocol.
 
-**Network enforcement is not part of this boundary.** A Remote-SSH session is
-policed by the DNS resolver and the HTTP proxy, but *not* by the eBPF
-allow-trie — see Limitations above. Nothing in the table changes; the point is
-that the sandbox's network policy is one layer thinner inside an interactive
-session than it is for an agent turn.
+**Network enforcement sits alongside this boundary, not inside it.** A
+Remote-SSH session is policed by the DNS resolver, the HTTP proxy, and — on
+sandboxes created after Phase 135 — the eBPF allow-trie. On older sandboxes the
+BPF layer does not apply to the session; see Limitations above.
 
 ---
 

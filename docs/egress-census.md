@@ -229,23 +229,17 @@ km-netpolicy pin: the census is empty, so this pin would deny ALL egress.
   Pass --allow-empty if sealing the box is genuinely what you want.
 ```
 
-**The eBPF producer is blind to interactive sessions.** The `connect4`/`egress`
-programs are cgroup-attached, so they emit no ring-buffer event for a process
-outside the cgroup — which is every `km shell`, Herdr pane, and VS Code
-terminal. Those sessions still appear in the census via the DNS and proxy
-producers, which are not cgroup-scoped; what is missing is the `src=ebpf` view
-of them, i.e. a direct-to-literal-IP connection from a pane is recorded nowhere.
-Low practical impact on `pin` — `PinCandidates` skips address-only rows anyway —
-but worth knowing when a census looks thinner than the work you did.
-
-**A pin does not constrain an interactive session at the IP layer.** Pins narrow
-the DNS resolver and the HTTP proxy, both of which apply everywhere. They also
-narrow the BPF allow-trie via the boot pre-seed — but every interactive entry
-point (`km shell`, `km herdr`, `km vscode`, direct `ssh`) runs outside the
-cgroup those programs are attached to, so that half of a pin has never bitten an
-operator shell. An agent turn *is* inside the cgroup and gets all three layers.
-See `docs/operational-gotchas.md` § Interactive sessions run OUTSIDE the eBPF
-enforcement cgroup.
+**On sandboxes created before Phase 135, the eBPF producer is blind to
+interactive sessions and a pin does not constrain them at the IP layer.** Those
+builds attach the `connect4`/`egress` programs to the per-sandbox cgroup, which
+no `km shell`, Herdr pane or VS Code terminal ever entered — so no ring-buffer
+event was emitted for them, and the boot pre-seed half of a pin never bit an
+operator shell. Such sessions still appeared in the census via the DNS and proxy
+producers, which are not cgroup-scoped; what was missing was the `src=ebpf` view,
+i.e. a direct-to-literal-IP connection from a pane was recorded nowhere. Phase 135
+attaches at the root cgroup and selects by uid, so both hold for every session on
+a sandbox created after that deploy. See `docs/operational-gotchas.md`
+§ Interactive sessions and the eBPF enforcement cgroup.
 
 **Pin is a snapshot, not a mode.** It freezes the census as of the instant it
 runs; anything genuinely new the box reaches afterwards is denied, same as any
