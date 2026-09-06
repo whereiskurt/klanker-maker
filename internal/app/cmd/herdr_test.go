@@ -5,10 +5,13 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -250,7 +253,7 @@ func TestRunHerdrStart_UnhealthyPreflightDoesNotWriteSSHConfig(t *testing.T) {
 	mockSSM := &vsCodeSSMMock{output: "=== sshd ===\ninactive\n=== authkeys exists ===\nyes\n"}
 	fetcher := newVSCodeEC2Sandbox("sb-abc123")
 
-	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34568, false)
+	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34568, false, true, "")
 	if err == nil {
 		t.Fatal("expected error for unhealthy sshd, got nil")
 	}
@@ -285,7 +288,7 @@ func TestRunHerdrStart_UnhealthyPreflightUsesHerdrWording(t *testing.T) {
 	mockSSM := &vsCodeSSMMock{output: "=== sshd ===\ninactive\n=== authkeys exists ===\nno\n"}
 	fetcher := newVSCodeEC2Sandbox("sb-abc123")
 
-	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34571, false)
+	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34571, false, true, "")
 	if err == nil {
 		t.Fatal("expected error for unhealthy sshd+authkeys, got nil")
 	}
@@ -340,7 +343,7 @@ func TestRunHerdrStart_NoInstallShortCircuitsWithoutSendingInstallCommand(t *tes
 	}
 	fetcher := newVSCodeEC2Sandbox("sb-abc123")
 
-	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34569, true)
+	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34569, true, true, "")
 	if err == nil {
 		t.Fatal("expected error when herdr is absent and --no-install is set")
 	}
@@ -380,7 +383,7 @@ func TestRunHerdrStart_RepairInstallPreservesPreflightFields(t *testing.T) {
 	fetcher := newVSCodeEC2Sandbox("sb-abc123")
 	execFn := func(c *exec.Cmd) error { return nil }
 
-	err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", 34570, false)
+	err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", 34570, false, true, "")
 	if err != nil {
 		t.Fatalf("expected success after a repair install, got: %v", err)
 	}
@@ -501,5 +504,182 @@ no
 	got = strings.TrimSpace(sectionOf(outYes, "=== presence signal8 ==="))
 	if got != "yes" {
 		t.Fatalf("sectionOf read %q; want \"yes\"", got)
+	}
+}
+
+// =============================================================================
+// One-window attach flow (km launches herdr itself)
+// =============================================================================
+
+func TestHerdrAttachArgs(t *testing.T) {
+	cases := []struct {
+		name    string
+		host    string
+		session string
+		want    []string
+	}{
+		{"no session", "herdrbox", "", []string{"--remote", "herdrbox"}},
+		{"named session", "herdrbox", "agents", []string{"--remote", "herdrbox", "--session", "agents"}},
+		{"blank session is not passed through", "herdrbox", "   ", []string{"--remote", "herdrbox"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := herdrAttachArgs(tc.host, tc.session)
+			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// stubHerdrOnPath puts an executable `herdr` on PATH so exec.LookPath finds it,
+// and returns its path. The stub is never actually run — execFn is the seam.
+func stubHerdrOnPath(t *testing.T) string {
+	t.Helper()
+	binDir := t.TempDir()
+	p := filepath.Join(binDir, "herdr")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write herdr stub: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+	return p
+}
+
+func herdrStartFixture(t *testing.T) (*vsCodeFetcherMock, *sequencedSSMMock) {
+	t.Helper()
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	keyPath := filepath.Join(tmp, ".km", "keys", "sb-abc123")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("k"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, ".ssh"), 0o700); err != nil {
+		t.Fatalf("mkdir .ssh: %v", err)
+	}
+	healthy := "=== sshd ===\nactive\n=== authkeys exists ===\nyes\n=== herdr path ===\n/usr/local/bin/herdr\n=== herdr version ===\nherdr 0.8.2\n"
+	return newVSCodeEC2Sandbox("sb-abc123"), &sequencedSSMMock{outputs: []string{healthy}}
+}
+
+// startFakeSSHD binds 127.0.0.1:port and answers every connection with an SSH
+// banner, so waitForSSHD's probe succeeds.
+//
+// It must NOT be running before runHerdrStart is called: connectPrep probes the
+// port and refuses to proceed if anything already holds it. So the caller
+// starts this from inside execFn, when the port-forward command runs — the same
+// ordering as production, where the forward is what binds the port.
+func startFakeSSHD(t *testing.T, port int) func() {
+	t.Helper()
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Skipf("cannot bind 127.0.0.1:%d: %v", port, err)
+	}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = c.Write([]byte("SSH-2.0-fake\r\n"))
+			c.Close()
+		}
+	}()
+	return func() { ln.Close() }
+}
+
+// The default flow must actually launch herdr, not just print a command. The
+// port-forward and the herdr invocation both go through execFn, so the test
+// asserts on which commands were run.
+func TestRunHerdrStart_AttachLaunchesHerdr(t *testing.T) {
+	stub := stubHerdrOnPath(t)
+	fetcher, mockSSM := herdrStartFixture(t)
+	const port = 34590
+
+	var mu sync.Mutex
+	var ran []string
+	var stopSSHD func()
+	forwardHeld := make(chan struct{})
+	t.Cleanup(func() { close(forwardHeld) })
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if stopSSHD != nil {
+			stopSSHD()
+		}
+	})
+
+	execFn := func(c *exec.Cmd) error {
+		joined := strings.Join(c.Args, " ")
+		mu.Lock()
+		ran = append(ran, joined)
+		isForward := stopSSHD == nil && !strings.HasPrefix(joined, stub+" ")
+		if isForward {
+			stopSSHD = startFakeSSHD(t, port)
+		}
+		mu.Unlock()
+		if isForward {
+			// Stand in for the real forward, which blocks for the life of the
+			// session. Released at cleanup; runHerdrStart never waits on it.
+			<-forwardHeld
+		}
+		return nil
+	}
+
+	err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", port, false, false, "agents")
+	if err != nil {
+		t.Fatalf("attach flow returned: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var sawHerdr bool
+	for _, cmd := range ran {
+		if strings.HasPrefix(cmd, stub+" ") {
+			sawHerdr = true
+			for _, want := range []string{"--remote", "--session agents"} {
+				if !strings.Contains(cmd, want) {
+					t.Errorf("herdr invocation missing %q: %s", want, cmd)
+				}
+			}
+		}
+	}
+	if !sawHerdr {
+		t.Fatalf("herdr was never launched; commands run: %v", ran)
+	}
+}
+
+// --no-attach must NOT launch herdr even when it is on PATH — that flag exists
+// for driving several clients over one forward, or attaching with another tool.
+func TestRunHerdrStart_NoAttachDoesNotLaunchHerdr(t *testing.T) {
+	stub := stubHerdrOnPath(t)
+	fetcher, mockSSM := herdrStartFixture(t)
+
+	var ran []string
+	execFn := func(c *exec.Cmd) error {
+		ran = append(ran, strings.Join(c.Args, " "))
+		return nil
+	}
+
+	if err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", 34591, false, true, ""); err != nil {
+		t.Fatalf("no-attach flow returned: %v", err)
+	}
+	for _, cmd := range ran {
+		if strings.HasPrefix(cmd, stub+" ") {
+			t.Fatalf("--no-attach launched herdr anyway: %s", cmd)
+		}
+	}
+}
+
+// A missing local herdr must fall back to holding the forward, not fail. The
+// transport is still useful and someone may attach with something else.
+func TestRunHerdrStart_MissingLocalHerdrFallsBackToHoldingTheForward(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no herdr anywhere
+	fetcher, mockSSM := herdrStartFixture(t)
+
+	execFn := func(c *exec.Cmd) error { return nil }
+	if err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", 34592, false, false, ""); err != nil {
+		t.Fatalf("missing local herdr should fall back, not fail: %v", err)
 	}
 }
