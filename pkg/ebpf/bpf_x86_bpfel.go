@@ -89,8 +89,10 @@ type bpfVariableSpecs struct {
 	ConstHttpProxyPid     *ebpf.VariableSpec `ebpf:"const_http_proxy_pid"`
 	ConstHttpProxyPort    *ebpf.VariableSpec `ebpf:"const_http_proxy_port"`
 	ConstHttpsProxyPort   *ebpf.VariableSpec `ebpf:"const_https_proxy_port"`
+	ConstKmCgid           *ebpf.VariableSpec `ebpf:"const_km_cgid"`
 	ConstMitmProxyAddress *ebpf.VariableSpec `ebpf:"const_mitm_proxy_address"`
 	ConstProxyPid         *ebpf.VariableSpec `ebpf:"const_proxy_pid"`
+	ConstSandboxUid       *ebpf.VariableSpec `ebpf:"const_sandbox_uid"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -143,8 +145,10 @@ type bpfVariables struct {
 	ConstHttpProxyPid     *ebpf.Variable `ebpf:"const_http_proxy_pid"`
 	ConstHttpProxyPort    *ebpf.Variable `ebpf:"const_http_proxy_port"`
 	ConstHttpsProxyPort   *ebpf.Variable `ebpf:"const_https_proxy_port"`
+	ConstKmCgid           *ebpf.Variable `ebpf:"const_km_cgid"`
 	ConstMitmProxyAddress *ebpf.Variable `ebpf:"const_mitm_proxy_address"`
 	ConstProxyPid         *ebpf.Variable `ebpf:"const_proxy_pid"`
+	ConstSandboxUid       *ebpf.Variable `ebpf:"const_sandbox_uid"`
 }
 
 // bpfPrograms contains all programs after they have been loaded into the kernel.

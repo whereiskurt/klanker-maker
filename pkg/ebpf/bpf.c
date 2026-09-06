@@ -163,6 +163,39 @@ static __always_inline void emit_event_skb(__u32 src_ip, __u32 dst_ip,
 }
 
 /* ════════════════════════════════════════════════════════════════════
+ * HELPER: the Phase 135 enforcement predicate
+ *
+ * Two variants, because the available helpers differ by context:
+ *   - km_enforced_task() for connect4 / sendmsg4 / sockops (process context)
+ *   - km_enforced_skb()  for cgroup_skb/egress, which fires in softirq with no
+ *     current task, so bpf_get_current_uid_gid() is rejected by the verifier
+ *     (see the emit_event note above). bpf_get_socket_uid() reads the uid off
+ *     the socket instead and IS valid there — verified on AL2023 kernel 6.1.
+ *
+ * Returns 1 when this caller is subject to km enforcement, 0 to pass through.
+ * Called first in every program: an unenforced caller costs two compares.
+ * ════════════════════════════════════════════════════════════════════ */
+static __always_inline int km_enforced_task(void)
+{
+    if (const_sandbox_uid != KM_UID_UNSET &&
+        (__u32)bpf_get_current_uid_gid() == const_sandbox_uid)
+        return 1;
+    if (const_km_cgid != 0 && bpf_get_current_cgroup_id() == const_km_cgid)
+        return 1;
+    return 0;
+}
+
+static __always_inline int km_enforced_skb(struct __sk_buff *skb)
+{
+    if (const_sandbox_uid != KM_UID_UNSET &&
+        bpf_get_socket_uid(skb) == const_sandbox_uid)
+        return 1;
+    if (const_km_cgid != 0 && bpf_skb_cgroup_id(skb) == const_km_cgid)
+        return 1;
+    return 0;
+}
+
+/* ════════════════════════════════════════════════════════════════════
  * PROGRAM 1: cgroup/connect4
  *
  * Intercepts every TCP connect() syscall inside the cgroup.
@@ -183,6 +216,10 @@ static __always_inline void emit_event_skb(__u32 src_ip, __u32 dst_ip,
 SEC("cgroup/connect4")
 int connect4(struct bpf_sock_addr *ctx)
 {
+    /* Phase 135: attached at the ROOT cgroup — pass anything that is not ours. */
+    if (!km_enforced_task())
+        return 1;
+
     __u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
 
     /* 1. Exempt proxy process (enforcer) and HTTP proxy process (gatekeeper mode).
@@ -271,6 +308,10 @@ int connect4(struct bpf_sock_addr *ctx)
 SEC("cgroup/sendmsg4")
 int sendmsg4(struct bpf_sock_addr *ctx)
 {
+    /* Phase 135: attached at the ROOT cgroup — pass anything that is not ours. */
+    if (!km_enforced_task())
+        return 1;
+
     __u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
 
     /* 1. Exempt proxy process (enforcer) and HTTP proxy process (gatekeeper mode). */
@@ -313,6 +354,10 @@ int sendmsg4(struct bpf_sock_addr *ctx)
 SEC("sockops")
 int bpf_sockops(struct bpf_sock_ops *skops)
 {
+    /* Phase 135: attached at the ROOT cgroup — pass anything that is not ours. */
+    if (!km_enforced_task())
+        return 1;
+
     if (skops->op != BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB)
         return 1;
 
@@ -336,6 +381,10 @@ int bpf_sockops(struct bpf_sock_ops *skops)
 SEC("cgroup_skb/egress")
 int egress_filter(struct __sk_buff *skb)
 {
+    /* Phase 135: attached at the ROOT cgroup — pass anything that is not ours. */
+    if (!km_enforced_skb(skb))
+        return 1;
+
     /* Parse IP header — offset 0 for cgroup_skb (no ethernet header) */
     struct iphdr iph = {};
     if (bpf_skb_load_bytes(skb, 0, &iph, sizeof(iph)) < 0)
