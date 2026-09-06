@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -172,21 +173,99 @@ func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, 
 	return instanceID, rec.Region, hostNames, privPath, nil
 }
 
-// sandboxHostNames builds the ssh-config Host name list for a sandbox:
-// `km-<alias>` first when an alias exists, then always `km-<sandbox-id>` last.
-// A blank alias, or one that would render the same name as the id, yields the
-// id alone rather than a duplicated pattern.
+// sandboxHostNames builds the ssh-config Host name list for a sandbox, in the
+// order they are written:
+//
+//	<alias> km-<alias> <sandbox-id> km-<sandbox-id>
+//
+// All four resolve, so `herdr --remote herdrbox` and
+// `ssh km-herdr-cacc8426` both work. The BARE alias is first because it is what
+// an operator types; primaryHostName returns it for the banner.
+//
+// `km-<sandbox-id>` MUST stay last — km doctor's stale-entry sweep reads the
+// last name as the sandbox id (readManagedAliases), and that sweep deletes
+// keypairs. Reordering this silently changes what doctor considers claimed.
+//
+// Duplicates are dropped, so a blank alias, or one equal to the sandbox id,
+// yields the id forms alone rather than a repeated pattern.
 func sandboxHostNames(alias, sandboxID string) []string {
-	id := "km-" + sandboxID
 	alias = strings.TrimSpace(alias)
-	if alias == "" || alias == sandboxID {
-		return []string{id}
+	var out []string
+	seen := map[string]bool{}
+	add := func(n string) {
+		if n == "" || seen[n] {
+			return
+		}
+		seen[n] = true
+		out = append(out, n)
 	}
-	return []string{"km-" + alias, id}
+	if alias != "" {
+		add(alias)
+		add("km-" + alias)
+	}
+	add(sandboxID)
+	add("km-" + sandboxID)
+	return out
+}
+
+// hostPatternLineRe matches any "Host <patterns>" line, indented or not. Used
+// to scan the operator's OWN config outside km's managed block; the stricter
+// hostLineRe in sshconfig.go parses km's own canonical rendering.
+var hostPatternLineRe = regexp.MustCompile(`(?i)^\s*Host\s+(.+?)\s*$`)
+
+// externalHostPatterns returns every Host pattern defined OUTSIDE km's managed
+// block in configPath.
+//
+// km's block sits wherever it was first written — near the top of the file in
+// practice — and ssh takes the FIRST block whose pattern list matches. So a
+// bare pattern km writes can shadow a host the operator defined themselves
+// further down. An alias like "prod" or "db" is exactly the collision that
+// would cost someone an afternoon.
+func externalHostPatterns(configPath string) (map[string]bool, error) {
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]bool{}, nil
+		}
+		return nil, err
+	}
+	before, _, after := managedSections(content)
+	out := map[string]bool{}
+	for _, region := range [][]byte{before, after} {
+		for _, line := range strings.Split(string(region), "\n") {
+			m := hostPatternLineRe.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			for _, pat := range strings.Fields(m[1]) {
+				out[pat] = true
+			}
+		}
+	}
+	return out, nil
+}
+
+// dropShadowingNames removes any name that the operator has already defined as
+// a Host pattern outside km's managed block, so km never shadows their own
+// host. The `km-` prefixed forms are km's namespace and are always kept — if
+// the operator has defined `km-something` themselves, that collision is theirs.
+//
+// Returns the filtered list plus the names dropped, so callers can say so
+// rather than silently writing a shorter list.
+func dropShadowingNames(names []string, external map[string]bool) (kept, dropped []string) {
+	for _, n := range names {
+		if !strings.HasPrefix(n, "km-") && external[n] {
+			dropped = append(dropped, n)
+			continue
+		}
+		kept = append(kept, n)
+	}
+	return kept, dropped
 }
 
 // primaryHostName is the name shown to the operator and typed into VS Code or
-// `herdr --remote` — the friendly one when there is an alias.
+// `herdr --remote` — the bare alias when there is one, else the bare
+// sandbox id.
 func primaryHostName(hostNames []string) string {
 	if len(hostNames) == 0 {
 		return ""
@@ -203,7 +282,21 @@ func upsertSandboxHost(hostNames []string, privPath string, localPort int) error
 	if err != nil {
 		return fmt.Errorf("locate home directory: %w", err)
 	}
-	return UpsertHost(filepath.Join(home, ".ssh", "config"), hostNames, HostOptions{
+	cfgPath := filepath.Join(home, ".ssh", "config")
+
+	// Never shadow a Host the operator defined themselves. A read failure here
+	// is not fatal — it only costs the bare-name convenience, and refusing to
+	// write the entry at all would break the connect flow over a cosmetic.
+	if external, extErr := externalHostPatterns(cfgPath); extErr == nil {
+		kept, dropped := dropShadowingNames(hostNames, external)
+		if len(dropped) > 0 {
+			fmt.Fprintf(os.Stderr, "  [note] not claiming %s in ~/.ssh/config — already defined outside km's managed block; use %s instead\n",
+				strings.Join(dropped, ", "), strings.Join(kept, " or "))
+			hostNames = kept
+		}
+	}
+
+	return UpsertHost(cfgPath, hostNames, HostOptions{
 		HostName:     "localhost",
 		Port:         localPort,
 		User:         "sandbox",

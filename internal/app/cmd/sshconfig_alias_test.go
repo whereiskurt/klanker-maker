@@ -23,16 +23,16 @@ func TestSandboxHostNames(t *testing.T) {
 		sandbox string
 		want    []string
 	}{
-		{"alias present — friendly first, id last", "herdrbox", "herdr-cacc8426",
-			[]string{"km-herdrbox", "km-herdr-cacc8426"}},
-		{"no alias — id alone", "", "herdr-cacc8426",
-			[]string{"km-herdr-cacc8426"}},
-		{"blank alias — id alone", "   ", "herdr-cacc8426",
-			[]string{"km-herdr-cacc8426"}},
-		// A duplicated pattern on one Host line is legal but pointless, and it
-		// would make the "last name is the id" rule ambiguous.
-		{"alias equals id — not duplicated", "herdr-cacc8426", "herdr-cacc8426",
-			[]string{"km-herdr-cacc8426"}},
+		{"alias present — bare first, km-id last", "herdrbox", "herdr-cacc8426",
+			[]string{"herdrbox", "km-herdrbox", "herdr-cacc8426", "km-herdr-cacc8426"}},
+		{"no alias — id forms only", "", "herdr-cacc8426",
+			[]string{"herdr-cacc8426", "km-herdr-cacc8426"}},
+		{"blank alias — id forms only", "   ", "herdr-cacc8426",
+			[]string{"herdr-cacc8426", "km-herdr-cacc8426"}},
+		// A repeated pattern on one Host line is legal but pointless, and would
+		// make the "last name is km-<id>" rule ambiguous.
+		{"alias equals id — deduped", "herdr-cacc8426", "herdr-cacc8426",
+			[]string{"herdr-cacc8426", "km-herdr-cacc8426"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -40,16 +40,98 @@ func TestSandboxHostNames(t *testing.T) {
 			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
-			// The id MUST be last — km doctor's stale sweep reads the last
-			// name as the sandbox id, and that sweep deletes keypairs.
+			// km-<sandbox-id> MUST be last — km doctor's stale sweep reads the
+			// last name as the sandbox id, and that sweep deletes keypairs.
 			if got[len(got)-1] != "km-"+tc.sandbox {
-				t.Errorf("last name must be the id form, got %q", got[len(got)-1])
+				t.Errorf("last name must be km-<sandbox-id>, got %q", got[len(got)-1])
+			}
+			// The operator types the first one.
+			if tc.alias != "" && strings.TrimSpace(tc.alias) != "" && tc.alias != tc.sandbox {
+				if got[0] != strings.TrimSpace(tc.alias) {
+					t.Errorf("first name should be the bare alias, got %q", got[0])
+				}
 			}
 		})
 	}
 }
 
-func TestUpsertHost_WritesBothNamesOnOneHostLine(t *testing.T) {
+// km must never shadow a Host the operator defined themselves: km's managed
+// block sits near the top of ~/.ssh/config and ssh takes the FIRST match, so a
+// bare pattern km claims would silently win over their own entry further down.
+func TestDropShadowingNames(t *testing.T) {
+	names := sandboxHostNames("prod", "km2-abc12345")
+	external := map[string]bool{"prod": true}
+	kept, dropped := dropShadowingNames(names, external)
+
+	if len(dropped) != 1 || dropped[0] != "prod" {
+		t.Fatalf("expected the bare colliding name dropped, got %v", dropped)
+	}
+	for _, n := range kept {
+		if n == "prod" {
+			t.Fatalf("shadowing name survived: %v", kept)
+		}
+	}
+	// The km- namespace is km's own and is never dropped — including the last
+	// name, which km doctor depends on.
+	if kept[len(kept)-1] != "km-km2-abc12345" {
+		t.Fatalf("km-<id> must survive as the last name, got %v", kept)
+	}
+	if !contains(kept, "km-prod") {
+		t.Errorf("km-prefixed alias form should be kept: %v", kept)
+	}
+}
+
+// Even when every bare name collides, the km- forms survive, so the doctor
+// invariant (last name is km-<sandbox-id>) cannot be broken by the guard.
+func TestDropShadowingNames_KmFormsAlwaysSurvive(t *testing.T) {
+	names := sandboxHostNames("herdrbox", "herdr-cacc8426")
+	external := map[string]bool{"herdrbox": true, "herdr-cacc8426": true}
+	kept, _ := dropShadowingNames(names, external)
+	want := []string{"km-herdrbox", "km-herdr-cacc8426"}
+	if strings.Join(kept, " ") != strings.Join(want, " ") {
+		t.Fatalf("got %v, want %v", kept, want)
+	}
+}
+
+func TestExternalHostPatterns_IgnoresKmManagedBlock(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config")
+	// Operator content first, then km's managed block.
+	if err := os.WriteFile(cfgPath, []byte("Host prod bastion\n  HostName prod.example.com\n\n"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := UpsertHost(cfgPath, sandboxHostNames("herdrbox", "herdr-cacc8426"),
+		HostOptions{HostName: "localhost", Port: 2224, User: "sandbox", IdentityFile: "/k"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := externalHostPatterns(cfgPath)
+	if err != nil {
+		t.Fatalf("externalHostPatterns: %v", err)
+	}
+	for _, want := range []string{"prod", "bastion"} {
+		if !got[want] {
+			t.Errorf("operator pattern %q not seen: %v", want, got)
+		}
+	}
+	// km's own names must NOT count as external, or km would refuse to
+	// re-claim its own block on the next run.
+	for _, notWant := range []string{"herdrbox", "km-herdrbox", "herdr-cacc8426", "km-herdr-cacc8426"} {
+		if got[notWant] {
+			t.Errorf("km-managed name %q leaked into external set: %v", notWant, got)
+		}
+	}
+}
+
+func contains(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+func TestUpsertHost_WritesEveryNameOnOneHostLine(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config")
 	names := sandboxHostNames("herdrbox", "herdr-cacc8426")
@@ -57,8 +139,8 @@ func TestUpsertHost_WritesBothNamesOnOneHostLine(t *testing.T) {
 		t.Fatalf("UpsertHost: %v", err)
 	}
 	b, _ := os.ReadFile(cfgPath)
-	if !strings.Contains(string(b), "Host km-herdrbox km-herdr-cacc8426\n") {
-		t.Fatalf("expected both names on one Host line, got:\n%s", b)
+	if !strings.Contains(string(b), "Host herdrbox km-herdrbox herdr-cacc8426 km-herdr-cacc8426\n") {
+		t.Fatalf("expected all four names on one Host line, got:\n%s", b)
 	}
 }
 
