@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -167,8 +168,12 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, check
 		}
 	}
 
-	// Compute idle remaining for running sandboxes (wide mode or JSON)
-	if wide || jsonOutput {
+	// Compute idle remaining for every running sandbox. This costs one
+	// CloudWatch lookup per running box and is no longer gated on --wide,
+	// because the default view's SHUTDOWN column needs it: TTL alone is
+	// misleading, not merely incomplete -- a box with 19h of TTL left is
+	// routinely reaped in 2h by the idle timer.
+	{
 		for i := range records {
 			if records[i].Status == "running" && records[i].IdleTimeout != "" {
 				remaining := computeIdleRemaining(ctx, records[i].SandboxID, records[i].IdleTimeout, records[i].CreatedAt, nil, cfg.GetResourcePrefix())
@@ -398,42 +403,41 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 	// Substrate and region columns use icon+word and AWS short codes. Pad by
 	// visual width so emoji-bearing rows align with ASCII rows. Widths must
 	// also fit the human-readable header strings.
-	const substrateColW = 10 // fits "SUBSTRATE" header and "🐳  dock" values
-	const regionColW = 7     // fits "REGION" header and "apse1" values
+	const regionColW = 7 // fits "REGION" header and "apse1" values
 
 	if wide {
 		if showThreads {
 			if showAuth {
-				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %-7s %-5s %-9s %s\n",
+				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %-10s %-6s %-6s %-7s %-5s %-9s\n",
 					numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
-					padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
-					"STATUS", "TTL", "IDLE", "UP", "💬", "AUTH", "CLONED FROM")
+					padVis("REGION", regionColW),
+					"STATUS", "TTL", "IDLE", "UP", "💬", "AUTH")
 			} else {
-				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %-7s %-5s %s\n",
+				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %-10s %-6s %-6s %-7s %-5s\n",
 					numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
-					padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
-					"STATUS", "TTL", "IDLE", "UP", "💬", "CLONED FROM")
+					padVis("REGION", regionColW),
+					"STATUS", "TTL", "IDLE", "UP", "💬")
 			}
 		} else {
 			if showAuth {
-				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %-7s %-9s %s\n",
+				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %-10s %-6s %-6s %-7s %-9s\n",
 					numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
-					padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
-					"STATUS", "TTL", "IDLE", "UP", "AUTH", "CLONED FROM")
+					padVis("REGION", regionColW),
+					"STATUS", "TTL", "IDLE", "UP", "AUTH")
 			} else {
-				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %-7s %s\n",
+				fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %-10s %-6s %-6s %-7s\n",
 					numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
-					padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
-					"STATUS", "TTL", "IDLE", "UP", "CLONED FROM")
+					padVis("REGION", regionColW),
+					"STATUS", "TTL", "IDLE", "UP")
 			}
 		}
 	} else {
 		if showAuth {
-			fmt.Fprintf(out, "%-*s %-*s  %-*s %-10s %-8s %-7s %s\n",
-				numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL", "UP", "AUTH")
+			fmt.Fprintf(out, "%-*s %-*s  %-*s %-10s %-11s %-7s %s\n",
+				numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "STATUS", "SHUTDOWN", "UP", "AUTH")
 		} else {
-			fmt.Fprintf(out, "%-*s %-*s  %-*s %-10s %-8s %s\n",
-				numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL", "UP")
+			fmt.Fprintf(out, "%-*s %-*s  %-*s %-10s %-11s %s\n",
+				numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "STATUS", "SHUTDOWN", "UP")
 		}
 	}
 	for i, r := range records {
@@ -504,11 +508,6 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 			}
 			// Strip " remaining" suffix for compact display
 			idle = strings.TrimSuffix(idle, " remaining")
-			clonedFrom := r.ClonedFrom
-			if clonedFrom == "" {
-				clonedFrom = "-"
-			}
-			substrate := padVis(substrateDisplay(r.Substrate), substrateColW)
 			region := padVis(shortRegion(r.Region), regionColW)
 			if showThreads {
 				threads := "-"
@@ -516,42 +515,42 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 					threads = fmt.Sprintf("%d", r.ActiveThreads)
 				}
 				if showAuth {
-					fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %-7s %-5s %-9s %s%s\n",
+					fmt.Fprintf(out, "%s %s  %s %s %s %s %-6s %-6s %-7s %-5s %-9s%s\n",
 						num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-						bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
+						bw(fmt.Sprintf("%-16s", profile)),
 						bw(region), colorStatus, bw(ttl), bw(idle),
-						bw(uptime), bw(threads), bw(authStr), bw(truncCol(clonedFrom, 14)), lock)
+						bw(uptime), bw(threads), bw(authStr), lock)
 				} else {
-					fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %-7s %-5s %s%s\n",
+					fmt.Fprintf(out, "%s %s  %s %s %s %s %-6s %-6s %-7s %-5s%s\n",
 						num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-						bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
+						bw(fmt.Sprintf("%-16s", profile)),
 						bw(region), colorStatus, bw(ttl), bw(idle),
-						bw(uptime), bw(threads), bw(truncCol(clonedFrom, 14)), lock)
+						bw(uptime), bw(threads), lock)
 				}
 			} else {
 				if showAuth {
-					fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %-7s %-9s %s%s\n",
+					fmt.Fprintf(out, "%s %s  %s %s %s %s %-6s %-6s %-7s %-9s%s\n",
 						num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-						bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
+						bw(fmt.Sprintf("%-16s", profile)),
 						bw(region), colorStatus, bw(ttl), bw(idle),
-						bw(uptime), bw(authStr), bw(truncCol(clonedFrom, 14)), lock)
+						bw(uptime), bw(authStr), lock)
 				} else {
-					fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %-7s %s%s\n",
+					fmt.Fprintf(out, "%s %s  %s %s %s %s %-6s %-6s %-7s%s\n",
 						num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-						bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
+						bw(fmt.Sprintf("%-16s", profile)),
 						bw(region), colorStatus, bw(ttl), bw(idle),
-						bw(uptime), bw(truncCol(clonedFrom, 14)), lock)
+						bw(uptime), lock)
 				}
 			}
 		} else {
 			if showAuth {
-				fmt.Fprintf(out, "%s %s  %s %s %-8s %-7s %s%s\n",
+				fmt.Fprintf(out, "%s %s  %s %s %-11s %-7s %s%s\n",
 					num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-					colorStatus, bw(ttl), bw(uptime), bw(authStr), lock)
+					colorStatus, bw(shutdownLabel(r)), bw(uptime), bw(authStr), lock)
 			} else {
-				fmt.Fprintf(out, "%s %s  %s %s %-8s %s%s\n",
+				fmt.Fprintf(out, "%s %s  %s %s %-11s %s%s\n",
 					num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-					colorStatus, bw(ttl), bw(uptime), lock)
+					colorStatus, bw(shutdownLabel(r)), bw(uptime), lock)
 			}
 		}
 	}
@@ -826,4 +825,65 @@ func reconcileStatusFromInstances(stored string, instances []ec2types.Instance) 
 	default:
 		return string(best.State.Name)
 	}
+}
+
+// shutdownLabel answers the question km list is actually asked: how long until
+// this box goes away on its own.
+//
+// A sandbox dies at whichever comes first, TTL expiry or the idle reaper, so
+// showing TTL alone is misleading rather than merely incomplete — a box with
+// 19h of TTL left is routinely reaped in 2h by the idle timer. The label names
+// which of the two is biting, because the operator's response differs: an idle
+// reap is averted by using the box, a TTL expiry only by km extend.
+//
+// Idle applies to running sandboxes only. A stopped or paused box is not being
+// idle-reaped (it is already stopped); only its TTL still runs.
+func shutdownLabel(r kmaws.SandboxRecord) string {
+	var (
+		ttlLeft  time.Duration
+		hasTTL   bool
+		idleLeft time.Duration
+		hasIdle  bool
+	)
+
+	if r.TTLExpiry != nil {
+		ttlLeft = time.Until(*r.TTLExpiry)
+		if ttlLeft <= 0 {
+			return "expired"
+		}
+		hasTTL = true
+	}
+
+	if r.Status == "running" && r.IdleRemaining != "" {
+		if r.IdleRemaining == "imminent" {
+			return "imminent idle"
+		}
+		if d, err := time.ParseDuration(strings.TrimSuffix(r.IdleRemaining, " remaining")); err == nil {
+			idleLeft, hasIdle = d, true
+		}
+	}
+
+	switch {
+	case hasIdle && (!hasTTL || idleLeft < ttlLeft):
+		return compactDuration(idleLeft) + " idle"
+	case hasTTL:
+		return compactDuration(ttlLeft) + " ttl"
+	default:
+		return "-"
+	}
+}
+
+// compactDuration renders a duration as "1h30m" or "46m", dropping the seconds
+// that time.Duration.String() would otherwise spend a column on.
+func compactDuration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh%dm", h, m)
+	}
+	if m > 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return "<1m"
 }

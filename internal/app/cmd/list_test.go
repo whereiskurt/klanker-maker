@@ -100,8 +100,12 @@ func TestListCmd_TableOutput(t *testing.T) {
 	if !strings.Contains(out, "PROFILE") {
 		t.Errorf("output missing 'PROFILE' header column:\n%s", out)
 	}
-	if !strings.Contains(out, "SUBSTRATE") {
-		t.Errorf("output missing 'SUBSTRATE' header column:\n%s", out)
+	if strings.Contains(out, "SUBSTRATE") {
+		t.Errorf("SUBSTRATE column should be gone -- every sandbox is ec2 in practice, "+
+			"so it spent width on a constant:\n%s", out)
+	}
+	if strings.Contains(out, "CLONED FROM") {
+		t.Errorf("CLONED FROM column should be gone:\n%s", out)
 	}
 	if !strings.Contains(out, "REGION") {
 		t.Errorf("output missing 'REGION' header column:\n%s", out)
@@ -388,6 +392,39 @@ func TestListCmd_NarrowHidesColumns(t *testing.T) {
 	}
 	if !strings.Contains(out, "STATUS") {
 		t.Errorf("narrow output missing STATUS:\n%s", out)
+	}
+	// The default view answers "when does this go away on its own", which is
+	// the soonest of TTL and the idle reaper -- not TTL alone. A box showing
+	// 19h of TTL is routinely reaped in 2h by the idle timer, so a bare TTL
+	// column was misleading rather than merely incomplete.
+	if !strings.Contains(out, "SHUTDOWN") {
+		t.Errorf("narrow output missing SHUTDOWN:\n%s", out)
+	}
+}
+
+// The SHUTDOWN column must name WHICH deadline is biting, because the operator's
+// response differs: an idle reap is averted by using the box, a TTL expiry only
+// by km extend.
+func TestListCmd_ShutdownColumnNamesTheDeadline(t *testing.T) {
+	soon := time.Now().Add(19 * time.Hour)
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{
+				SandboxID: "sb-idle", Status: "running",
+				TTLExpiry: &soon, IdleRemaining: "2h0m0s remaining",
+			},
+		},
+	}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+	if !strings.Contains(out, "2h0m idle") {
+		t.Errorf("expected the idle deadline to win over a distant TTL:\n%s", out)
+	}
+	if strings.Contains(out, "19h") {
+		t.Errorf("the distant TTL should not be what is shown:\n%s", out)
 	}
 }
 

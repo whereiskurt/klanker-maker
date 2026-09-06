@@ -384,6 +384,117 @@ attribute); delete only on explicit `km destroy`.
 
 ## Sandbox runtime & OS bootstrap
 
+### Interactive sessions and the eBPF enforcement cgroup
+
+**Fixed in Phase 135. Sandboxes created before that deploy still have the gap** —
+the enforcer is fetched at boot, so an existing box keeps the old behaviour until
+`km destroy && km create`.
+
+**What was wrong.** Every interactive entry point — `km shell`, `km herdr`,
+`km vscode`, direct `ssh`, `sudo -u sandbox` — ran *outside* the per-sandbox
+cgroup the BPF programs were attached to, so the allow-trie never applied to
+anything an operator did. Measured 2026-09-06 on a live `enforcement: both`
+sandbox:
+
+| entry path | lands in | was in `km.slice`? |
+|---|---|---|
+| agent dispatch (Phase 132, `runuser` after a root join) | `km.slice/km-<id>.scope` | yes |
+| `km shell` (SSM session document, `runAs sandbox`) | `system.slice/amazon-ssm-agent.service` | **no** |
+| `km herdr` / `km vscode` / direct `ssh` | `user.slice/user-1001.slice/session-N.scope` | **no** |
+| `sudo -u sandbox` | `user.slice/user-1001.slice/session-N.scope` | **no** |
+
+**Why the join could never work.** `km-sandbox-shell` and
+`/etc/profile.d/km-cgroup.sh` both tried to join by writing `$$` into the
+scope's `cgroup.procs`. km-bootstrap chowns that file `root:sandbox 0664`,
+which is necessary but **not sufficient**: cgroup v2 permits a migration only
+if the caller can write the `cgroup.procs` of the **common ancestor** of the
+source and destination cgroups. Every interactive source cgroup has the *root*
+cgroup as its common ancestor with `km.slice/…`, and that is `root:root 0644`.
+EPERM, from every direction — and `2>/dev/null || true` swallowed it, so the
+wrapper looked like it worked. For `ssh` there is a second, independent
+blocker: `pam_systemd` places the session in `user.slice` before the login
+shell runs.
+
+This is the same family as the Phase 132 finding, which fixed the 15 agent
+dispatch sites by joining as root in a forked subshell and dropping privileges
+with `runuser` (never `sudo`/`su`, which re-migrate via PAM). That fix works —
+it was the only thing ever inside the cgroup — but it cannot reach sshd or the
+SSM session document, because km does not own process placement at the moment
+the uid drops in either case.
+
+**What Phase 135 changed.** The programs now attach at the **cgroup2 mount
+root** and each one gates on:
+
+```
+enforced = (uid == const_sandbox_uid) || (cgroup_id == const_km_cgid)
+```
+
+Nothing is migrated, so the silent-join-failure class is gone rather than
+repaired. The uid clause covers interactive sessions wherever logind or the SSM
+agent puts them, and it has no entry-point coverage gap: a non-login
+`sudo -u sandbox bash -c` is enforced too, because there is no interception
+point to miss.
+
+**The cgroup clause is not redundant.** It keeps a root process *deliberately*
+placed in the scope enforced, which is what preserves EBPF-NET-12
+(`pkg/ebpf/enforcer_integration_test.go`). With a bare uid filter, `sudo` would
+become a way *out* of enforcement.
+
+**`cgroup_skb/egress` needs its own predicate variant.** It fires in softirq
+with no current task, so `bpf_get_current_uid_gid()` is rejected by the verifier
+(`bpf.c:118`). It uses `bpf_get_socket_uid(skb)`, which reads the uid off the
+socket and is valid there — verified on AL2023 kernel 6.1.182.
+
+**`sockops` is a deliberate, documented exemption.**
+`BPF_PROG_TYPE_SOCK_OPS` has no `bpf_get_current_uid_gid` at all, so gating it
+makes the verifier reject the program — and under a root-cgroup attach one
+rejected program means the enforcer never starts, i.e. a box with no enforcement
+rather than partial enforcement. Nothing catches this before the kernel: clang
+compiles it, `make generate-ebpf` succeeds, the Go tests pass. It is safe
+ungated because it enforces nothing, and the guard test requires the reason to
+stay written down in `bpf.c`.
+
+**Both constants fail OPEN**, and that disposition is load-bearing.
+`const_sandbox_uid` defaults to `0xFFFFFFFF` and `const_km_cgid` to `0`, so a
+loader that fails to set one enforces *nothing*. These programs are now in the
+path of every packet on the box: the failure to prefer is an unenforced
+sandbox, never an unreachable instance.
+
+**The cgroup id is a directory inode**, so it changes across reboots. The
+enforcer `stat`s the scope it just created and sets the constant in the same
+breath. Never persist it and never pass it through userdata.
+
+**Behaviour change.** On a locked profile an interactive session is now subject
+to the allow-trie for the first time — the same shape as Phase 132's "this
+switches BPF enforcement on for agent traffic for the first time ever". A
+profile whose allowlist was subtly too loose to be caught by DNS and the proxy
+alone may behave differently in a `km shell` after the next
+`km destroy && km create`.
+
+**Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.**
+NOT `--sidecars`. **Do not split the deploy**, and note that both halves fail
+*quietly*:
+
+- new enforcer binary + old userdata ⇒ userdata passes `--cgroup <scope>`, the
+  enforcer honours it (the flag is real now), and enforcement stays exactly as
+  broken as before.
+- old enforcer binary + new userdata ⇒ the old binary ignores `--cgroup`
+  entirely and rejects nothing, but never sets the predicate constants, which
+  fail open. Also unenforced.
+
+Neither combination logs an error or fails a boot. The check that matters is
+`journalctl -u km-ebpf-enforcer | grep 'enforcement predicate'`, which prints
+the resolved uid and attach path.
+
+**A note on measuring this.** Two traps make it easy to get a false negative.
+`$$` inside a `( … )` subshell reports the *invoking* shell's pid, not the
+subshell's — which is why the shipped dispatch code uses `$BASHPID`. And when
+driving the SSM session document from the CLI, `$$` must be written `\\$\\$`:
+the `shellProfile` interpolates the parameter inside double quotes, so an
+unescaped form is eaten by the outer shell and reports a misleading `EINVAL`
+instead of `EPERM`.
+
+
 ### Ubuntu userdata constraints (vs Amazon Linux)
 
 The EC2 userdata bootstrap (`pkg/compiler/userdata.go` + the remote-create stub in

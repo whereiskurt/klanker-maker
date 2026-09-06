@@ -85,6 +85,15 @@ placeholder rather than a kill switch.
 Every env var and flag is emitted **only when the profile sets the
 corresponding list**, so a sandbox without denies is unchanged.
 
+**All four rows apply everywhere as of Phase 135.** The DNS and HTTP/HTTPS
+layers were never uid- or cgroup-scoped, so a deny always held in a `km shell`,
+a Herdr pane and a VS Code terminal exactly as in an agent turn. BPF seeding is
+enforced by cgroup-attached programs, and before Phase 135 no interactive
+session was inside that cgroup — so on a sandbox created before that deploy, a
+deny rests on the resolver and the proxy alone for an operator shell. See
+`docs/operational-gotchas.md` § Interactive sessions and the eBPF enforcement
+cgroup.
+
 ### Known limitation: `"*"` allowlist under eBPF
 
 With `allowedHosts: ["*"]`, `km ebpf-attach` seeds `0.0.0.0/0` into the BPF

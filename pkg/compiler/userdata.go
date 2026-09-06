@@ -5293,7 +5293,7 @@ ExecStart=/usr/local/bin/km ebpf-attach \
 {{- if .LearnMode }}
   --observe \
 {{- end }}
-  --cgroup /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope
+  --cgroup /sys/fs/cgroup
 Restart=always
 RestartSec=2
 [Install]
@@ -5329,13 +5329,27 @@ fi
 # This ensures ALL sandbox user sessions (SSM, su, login) are enforced by eBPF.
 cat > /usr/local/bin/km-sandbox-shell << 'SHELLEOF'
 #!/bin/bash
-# km-sandbox-shell: moves into sandbox cgroup then execs bash.
+# km-sandbox-shell: best-effort cgroup join, then exec bash.
+#
+# THE JOIN BELOW FAILS FOR EVERY INTERACTIVE SESSION AND ALWAYS HAS.
+# cgroup v2 permits a migration only if the caller can write the cgroup.procs
+# of the COMMON ANCESTOR of the source and destination cgroups. For an ssh
+# session that is user.slice -> km.slice; for km shell it is
+# system.slice/amazon-ssm-agent.service -> km.slice. Either way the ancestor is
+# the root cgroup (root:root 0644), so uid sandbox gets EPERM -- swallowed by
+# the 2>/dev/null below. For ssh there is a second, independent blocker:
+# pam_systemd places the session in user.slice before this shell ever runs.
+#
+# Enforcement does NOT depend on this. Since Phase 135 the BPF programs attach
+# at the root cgroup and select callers by uid or scope membership, so an
+# interactive session is enforced wherever logind or the SSM agent puts it.
+# The join is kept only so a caller already inside the scope stays there.
+# See docs/operational-gotchas.md.
+#
 # Compound-command redirect ({ ...; } 2>/dev/null) suppresses the
 # redirect-open ENOENT error if the cgroup dir is missing. The bare
 # form (echo $$ > path 2>/dev/null) does NOT suppress because bash
 # opens the redirect target BEFORE applying stderr redirect (Phase 56.2).
-# km-bootstrap.service guarantees the dir exists post-resume; the
-# compound form is defense-in-depth.
 CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs"
 { echo $$ > "$CGROUP_PROCS"; } 2>/dev/null || true
 exec /bin/bash --login "$@"
@@ -5371,7 +5385,9 @@ chmod +x /usr/local/bin/km-session-entry
 
 # Also keep profile.d as belt-and-suspenders for interactive sessions
 cat > /etc/profile.d/km-cgroup.sh << 'CGROUPEOF'
-# Move current process into sandbox cgroup for eBPF enforcement.
+# Best-effort cgroup join. Like km-sandbox-shell's, this is EPERM for every
+# interactive session -- see that script for why. Enforcement does not depend
+# on it: since Phase 135 the BPF predicate selects by uid, not placement.
 # Compound-command redirect ({ ...; } 2>/dev/null) suppresses the
 # redirect-open ENOENT error that the bare form leaks past 2>/dev/null
 # (Phase 56.2: bash opens redirect targets before applying stderr redirect).

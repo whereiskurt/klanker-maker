@@ -12,6 +12,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"os/user"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -62,6 +64,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		observeOutput string
 		minIPLifetime time.Duration
 		flowlogDir    string
+		sandboxUID    uint32
 	)
 
 	cmd := &cobra.Command{
@@ -73,7 +76,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
 				allowedDNS, allowedHosts, deniedDNS, deniedHosts, netpolicyFile, netpolicyPins, proxyHosts, cgroupPath,
 				enableTLS, allowedRepos, httpProxyPID, observe, observeOutput,
-				minIPLifetime, flowlogDir)
+				minIPLifetime, flowlogDir, sandboxUID)
 		},
 	}
 
@@ -99,7 +102,9 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().StringVar(&proxyHosts, "proxy-hosts", "",
 		"Comma-separated hosts whose resolved IPs are redirected to L7 proxy")
 	cmd.Flags().StringVar(&cgroupPath, "cgroup", "",
-		"Override cgroup path (default: auto-detected from sandbox ID)")
+		"Cgroup to attach the BPF programs to (default: the cgroup2 mount root)")
+	cmd.Flags().Uint32Var(&sandboxUID, "sandbox-uid", 0,
+		"uid the enforcement predicate selects on (0 = look up the 'sandbox' user)")
 	cmd.Flags().BoolVar(&enableTLS, "tls", false,
 		"Enable TLS uprobe observability (attaches to libssl.so.3)")
 	cmd.Flags().StringVar(&allowedRepos, "allowed-repos", "",
@@ -251,6 +256,7 @@ func runEbpfAttach(
 	observeOutput string,
 	minIPLifetime time.Duration,
 	flowlogDir string,
+	sandboxUID uint32,
 ) error {
 	logger := log.With().Str("sandbox_id", sandboxID).Logger()
 
@@ -269,15 +275,38 @@ func runEbpfAttach(
 	// 127.0.0.1 in network byte order.
 	mitmAddr := ipToUint32(net.ParseIP("127.0.0.1"))
 
+	// Resolve the uid the enforcement predicate selects on. Looked up rather
+	// than hardcoded so a profile that provisions the user differently still
+	// enforces.
+	//
+	// Fatal on failure, deliberately. Falling back to "no uid clause" would
+	// boot a box whose enforcer is running, whose programs are attached, and
+	// which silently enforces nothing for any interactive session — which is
+	// precisely the failure this phase exists to end, and it is invisible.
+	resolvedUID := sandboxUID
+	if resolvedUID == 0 {
+		u, err := user.Lookup("sandbox")
+		if err != nil {
+			return fmt.Errorf("look up sandbox user for the enforcement predicate: %w", err)
+		}
+		n, err := strconv.ParseUint(u.Uid, 10, 32)
+		if err != nil {
+			return fmt.Errorf("parse sandbox uid %q: %w", u.Uid, err)
+		}
+		resolvedUID = uint32(n)
+	}
+
 	cfg := ebpf.Config{
-		SandboxID:      sandboxID,
-		DNSProxyPort:   dnsPort,
-		HTTPProxyPort:  httpPort,
-		HTTPSProxyPort: httpPort,
-		ProxyPID:       uint32(os.Getpid()),
-		HTTPProxyPID:   httpProxyPID,
-		FirewallMode:   fwMode,
-		MITMProxyAddr:  mitmAddr,
+		SandboxID:        sandboxID,
+		DNSProxyPort:     dnsPort,
+		HTTPProxyPort:    httpPort,
+		HTTPSProxyPort:   httpPort,
+		ProxyPID:         uint32(os.Getpid()),
+		HTTPProxyPID:     httpProxyPID,
+		FirewallMode:     fwMode,
+		MITMProxyAddr:    mitmAddr,
+		SandboxUID:       resolvedUID,
+		CgroupAttachPath: cgroupOverride,
 	}
 
 	// In block mode, the HTTP proxy must be exempt or its outbound connections
@@ -286,6 +315,11 @@ func runEbpfAttach(
 	if httpProxyPID == 0 && fwMode == ebpf.ModeBlock {
 		logger.Warn().Msg("no --proxy-pid set in block mode; HTTP proxy may experience redirect loops")
 	}
+
+	logger.Info().
+		Uint32("sandbox_uid", resolvedUID).
+		Str("cgroup_attach", cgroupOverride).
+		Msg("enforcement predicate")
 
 	logger.Info().
 		Str("firewall_mode", firewallMode).

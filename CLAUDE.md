@@ -8,6 +8,96 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 135 (2026-09-06) — Interactive sessions are enforced: the eBPF programs move to the root cgroup (complete; deployed and live-UAT'd end to end, including resume):**
+- **Nothing interactive had EVER been inside the enforcement cgroup.** `km shell`
+  lands in `system.slice/amazon-ssm-agent.service`; `km herdr`, `km vscode` and
+  direct `ssh` land in `user.slice/user-1001.slice/session-N.scope`. Both fail
+  `km-sandbox-shell`'s join with `EPERM`, swallowed by `2>/dev/null`. **This
+  corrects the Phase 132 claim above** that "only an interactive `km shell`
+  session … was ever actually inside the cgroup" — it never was. The Phase 132
+  `runuser` dispatch fix is verified working and was the *only* thing in there.
+- **The cause is cgroup v2's common-ancestor rule, and the `root:sandbox 0664`
+  chown on the destination does not satisfy it.** A migration is permitted only
+  if the caller can write the `cgroup.procs` of the COMMON ANCESTOR of source
+  and destination; for every interactive session that ancestor is the root
+  cgroup (`root:root 0644`). For `ssh` there is a second, independent blocker —
+  `pam_systemd` places the session in `user.slice` before the login shell runs.
+- **The fix deletes the failure mode instead of repairing it.** The four
+  programs now attach at the **cgroup2 mount root** and each gates on
+  `uid == const_sandbox_uid || cgroup_id == const_km_cgid`. Nothing is
+  migrated, so there is no join left to fail silently — and no entry-point
+  coverage gap either: a non-login `sudo -u sandbox bash -c` is enforced too,
+  because there is no interception point to miss. The rejected alternative (a
+  root-side join helper) covered login shells only and could be verified solely
+  on a live box.
+- **The cgroup clause is NOT redundant with the uid clause — it is what keeps
+  `sudo` from being a way OUT.** It holds a root process deliberately placed in
+  the scope, preserving EBPF-NET-12 (`pkg/ebpf/enforcer_integration_test.go`).
+  A bare uid filter passes the interactive case and silently repeals that
+  guarantee. Proven live: root inside `km.slice` is denied.
+- **`cgroup_skb/egress` needs its own predicate variant.** It fires in softirq
+  with no current task, so `bpf_get_current_uid_gid()` is rejected by the
+  verifier (`bpf.c:118`). `bpf_get_socket_uid(skb)` reads the uid off the socket
+  and IS valid there — the single riskiest assumption in the design, settled by
+  a live spike before any code was written, along with `bpf_skb_cgroup_id`.
+- **`sockops` CANNOT be gated, and finding out cost a live boot.**
+  `BPF_PROG_TYPE_SOCK_OPS` has no `bpf_get_current_uid_gid` in
+  `sock_ops_func_proto`, so the verifier rejects the whole program
+  (`unknown func bpf_get_current_uid_gid#15`). **Under a root-cgroup attach one
+  rejected program means the enforcer does not start at all** — a box with NO
+  enforcement, not a box missing a quarter of it — and nothing catches it before
+  the kernel: clang compiles the call happily, `make generate-ebpf` succeeds, and
+  every Go test passes. The `bpf.c:118` comment naming sockops as safe is about
+  `bpf_get_current_pid_tgid`, not uid. It is now a **documented carve-out**: safe
+  ungated because it enforces nothing (it writes local-port → socket-cookie for
+  the proxy's pid attribution), a local source port is unique box-wide at any
+  instant so no non-sandbox socket can be mistaken for a sandbox one, and
+  `src_port_to_sock` holds 262144 entries against at most 65536 ports so it
+  cannot be made to evict. It is an improvement in fact — interactive sessions
+  previously had no attribution at all. The guard test requires the carve-out to
+  stay *documented*, so it cannot decay into a silent omission.
+- **Both constants fail OPEN, and that disposition is load-bearing.**
+  `const_sandbox_uid` defaults to `0xFFFFFFFF`, `const_km_cgid` to `0`, so a
+  loader that fails to set one enforces NOTHING. These programs now sit in the
+  path of every packet on the box: the failure to prefer is an unenforced
+  sandbox, never an unreachable instance. `SandboxUID == 0` is likewise treated
+  as "no uid clause" — enforcing on root would put the SSM agent and every km
+  sidecar under the sandbox's own allowlist.
+- **The cgroup id is a directory inode**, so it changes across reboots. The
+  enforcer `stat`s the scope it just created and sets the constant in the same
+  breath (`pkg/ebpf/predicate.CgroupID`). Never persist it, never pass it
+  through userdata.
+- **`km ebpf-attach --cgroup` was accepted and silently ignored** — threaded in
+  as `cgroupOverride` and never referenced in the body, so the userdata had been
+  passing a value that did nothing. It is real now, which is also why shipping
+  half this deploy is dangerous. New `--sandbox-uid` arms the other clause,
+  looked up from the `sandbox` user; the lookup is **fatal** on failure, because
+  falling back to "no uid clause" boots a box whose enforcer runs, whose
+  programs attach, and which enforces nothing interactive.
+- **`pkg/ebpf/predicate` exists as its own package because `pkg/ebpf` does not
+  build on macOS at all** (it carries `bpf.c` and no darwin Go files), and
+  `ebpf_attach.go` is `//go:build linux && amd64`. The wiring guards live there
+  so `go test ./...` on a dev machine actually runs them — the original gap
+  survived for months precisely because nothing about it was reachable from a
+  dev machine. `TestEveryCgroupProgramConsultsThePredicate` is name-agnostic, so
+  a fifth program added later is covered without an edit.
+- **Behaviour change:** on a locked profile an interactive session is subject to
+  the allow-trie for the first time — the same shape as Phase 132's "switches
+  BPF enforcement on for agent traffic for the first time ever."
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.**
+  NOT `--sidecars`. **Do not split the deploy — both halves fail QUIETLY:** new
+  binary + old userdata means `--cgroup <scope>` is now honoured and enforcement
+  stays exactly as broken; old binary + new userdata means the old binary
+  ignores `--cgroup`, never sets the constants, and they fail open. Neither logs
+  an error. The check that matters is
+  `journalctl -u km-ebpf-enforcer | grep 'enforcement predicate'`. Existing
+  sandboxes keep the gap until `km destroy && km create` — the enforcer is
+  fetched at boot.
+- See `docs/operational-gotchas.md` § Interactive sessions and the eBPF
+  enforcement cgroup, and
+  `docs/superpowers/specs/2026-09-06-ssh-session-cgroup-gap-design.md` for the
+  evidence and the spike.
+
 **Phase 134 (2026-09-04) — `km herdr`: persistent remote attach for sandbox agent panes (code-complete; live UAT pending):**
 - `km herdr start|status <sandbox-id>` — a **sibling of `km vscode`, not a
   `km tunnel` mode.** `km tunnel` carries a network path from the workstation
@@ -462,9 +552,19 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   subshell and dropping with `runuser`, which preserves the cgroup where
   `sudo`/`su` do not. **Consequence beyond this phase: the eBPF
   `connect4`/`sendmsg4`/`sockops`/`egress` programs had been inert for agent
-  traffic since `ebpf`/`both` enforcement was introduced** — only an
+  traffic since `ebpf`/`both` enforcement was introduced** — ~~only an
   interactive `km shell` session (which joins via `km-session-entry` →
-  `km-sandbox-shell`, never `sudo`) was ever actually inside the cgroup. What
+  `km-sandbox-shell`, never `sudo`) was ever actually inside the cgroup~~
+  **CORRECTED 2026-09-06: nothing interactive was ever inside the cgroup
+  either.** `km shell` fails the same join with the same `EPERM` and lands in
+  `system.slice/amazon-ssm-agent.service`; ssh (`km herdr`, `km vscode`) lands
+  in `user.slice/user-1001.slice/session-N.scope`. The cause is cgroup v2's
+  common-ancestor rule, which the `root:sandbox 0664` chown on the destination
+  does not satisfy. The Phase 132 `runuser` dispatch fix itself is verified
+  working — it is the ONLY thing ever inside the cgroup. See
+  `docs/operational-gotchas.md` § Interactive sessions run OUTSIDE the eBPF
+  enforcement cgroup and
+  `docs/superpowers/specs/2026-09-06-ssh-session-cgroup-gap-design.md`. What
   had been enforcing a profile's allowlist for every poller-dispatched and
   `km agent run` turn was the DNS resolver and the HTTP proxy alone, neither of
   which is cgroup-scoped. **This fix switches BPF enforcement on for agent
@@ -1634,6 +1734,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | kubectl in a sandbox against a cluster only your laptop can reach — `km tunnel` operator runbook: prerequisites, flags, troubleshooting, the `socks` mode, deploy surface | `docs/k8s-reverse-tunnel.md` (Phase 130) |
 | **How the k8s tunnel actually works** — the three nested tunnels and why SSM forced SSH-inside-SSM, the ExecCredential proxy and why the broker is deliberately dumb, the `tls-server-name`-vs-CA split, the exec apiVersion exact-match trap, the precise trust boundary, and why the deploy surface is `make build` alone | `docs/k8s-reverse-tunnel-internals.md` (Phase 130) |
 | Persistent agent panes that survive detach — `km herdr start`, the base/tools/herdr fragment, km-presence signal 8, the pause-vs-stop lifecycle trap, the ssh-config conflict, deploy surface | `docs/herdr-remote-attach.md` |
+| How interactive sessions came to be enforced (Phase 135) — the cgroup v2 common-ancestor rule, the uid-or-scope predicate and why both clauses, fail-open constants, and the quiet half-deploy | `docs/operational-gotchas.md` § Interactive sessions and the eBPF enforcement cgroup |
 | Why a detached herdr session did or did not keep a sandbox awake — signal 8's busy-pane rule, why it detects work rather than the server, and why a quiet session is still reaped | `docs/herdr-remote-attach.md` § Signal 8 |
 | Cross-account capacity borrowing — `km account add/register/list/rm`, `spec.runtime.launchAccount`, the two-credential enrollment sequence, the launcher-role security model, capacity/teardown/doctor cross-account wiring, deploy surface | `docs/cross-account-capacity-borrowing.md` (Phase 126) |
 | Private-subnet sandboxes + per-AZ NAT gateways — `network.nat_gateway` / `spec.network.privateSubnet` toggles, cost, the one-time route-table split, reversal, guards, deploy surface | `docs/private-subnet-nat.md` (Phase 125) |

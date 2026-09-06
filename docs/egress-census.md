@@ -229,6 +229,18 @@ km-netpolicy pin: the census is empty, so this pin would deny ALL egress.
   Pass --allow-empty if sealing the box is genuinely what you want.
 ```
 
+**On sandboxes created before Phase 135, the eBPF producer is blind to
+interactive sessions and a pin does not constrain them at the IP layer.** Those
+builds attach the `connect4`/`egress` programs to the per-sandbox cgroup, which
+no `km shell`, Herdr pane or VS Code terminal ever entered — so no ring-buffer
+event was emitted for them, and the boot pre-seed half of a pin never bit an
+operator shell. Such sessions still appeared in the census via the DNS and proxy
+producers, which are not cgroup-scoped; what was missing was the `src=ebpf` view,
+i.e. a direct-to-literal-IP connection from a pane was recorded nowhere. Phase 135
+attaches at the root cgroup and selects by uid, so both hold for every session on
+a sandbox created after that deploy. See `docs/operational-gotchas.md`
+§ Interactive sessions and the eBPF enforcement cgroup.
+
 **Pin is a snapshot, not a mode.** It freezes the census as of the instant it
 runs; anything genuinely new the box reaches afterwards is denied, same as any
 other destination outside the allowlist. The workflow is *finish setup, then
