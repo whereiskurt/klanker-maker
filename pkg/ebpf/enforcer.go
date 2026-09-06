@@ -6,13 +6,16 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
+
 	"github.com/rs/zerolog/log"
+	"github.com/whereiskurt/klanker-maker/pkg/ebpf/predicate"
 )
 
 // Config holds the runtime parameters injected into BPF volatile constants at
@@ -91,6 +94,29 @@ func NewEnforcer(cfg Config) (*Enforcer, error) {
 		return nil, fmt.Errorf("set const_mitm_proxy_address: %w", err)
 	}
 
+	// Phase 135 enforcement predicate. The cgroup id is the scope directory's
+	// inode, so it MUST be read now rather than persisted or passed in — it
+	// changes across reboots. A failure here is fatal: leaving the constant at
+	// its 0 sentinel would silently drop the cgroup clause, and with it
+	// EBPF-NET-12's guarantee that root inside the scope stays enforced.
+	kmCgroupID, err := predicate.CgroupID(cgroupPath)
+	if err != nil {
+		return nil, fmt.Errorf("read km.slice scope cgroup id: %w", err)
+	}
+	if err := spec.Variables["const_km_cgid"].Set(kmCgroupID); err != nil {
+		return nil, fmt.Errorf("set const_km_cgid: %w", err)
+	}
+	// 0 is root. Enforcing on root would put the SSM agent and every km
+	// sidecar under the sandbox's own allowlist and strand the instance, so
+	// treat it as "no uid clause" and fall through to the cgroup clause alone.
+	sandboxUID := cfg.SandboxUID
+	if sandboxUID == 0 {
+		sandboxUID = math.MaxUint32
+	}
+	if err := spec.Variables["const_sandbox_uid"].Set(sandboxUID); err != nil {
+		return nil, fmt.Errorf("set const_sandbox_uid: %w", err)
+	}
+
 	var objs bpfObjects
 	if err := spec.LoadAndAssign(&objs, &ebpf.CollectionOptions{
 		Maps: ebpf.MapOptions{PinPath: pinPath},
@@ -98,9 +124,21 @@ func NewEnforcer(cfg Config) (*Enforcer, error) {
 		return nil, fmt.Errorf("load bpf objects: %w", err)
 	}
 
-	// Step 5: attach all four programs to the sandbox cgroup.
+	// Step 5: attach all four programs.
+	//
+	// Phase 135: attach ABOVE every slice rather than inside km.slice. No
+	// interactive session ever reached that scope — cgroup v2 permits a
+	// migration only if the caller can write the common ancestor's
+	// cgroup.procs, and for any interactive session that ancestor is the root
+	// cgroup — so the programs saw agent dispatch and nothing else. The
+	// predicate compiled into them, not the attach point, now decides who is
+	// enforced.
+	attachPath := cfg.CgroupAttachPath
+	if attachPath == "" {
+		attachPath = detectCgroup2Mount()
+	}
 	connectLink, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    cgroupPath,
+		Path:    attachPath,
 		Attach:  ebpf.AttachCGroupInet4Connect,
 		Program: objs.Connect4,
 	})
@@ -110,7 +148,7 @@ func NewEnforcer(cfg Config) (*Enforcer, error) {
 	}
 
 	sendmsgLink, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    cgroupPath,
+		Path:    attachPath,
 		Attach:  ebpf.AttachCGroupUDP4Sendmsg,
 		Program: objs.Sendmsg4,
 	})
@@ -121,7 +159,7 @@ func NewEnforcer(cfg Config) (*Enforcer, error) {
 	}
 
 	sockopsLink, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    cgroupPath,
+		Path:    attachPath,
 		Attach:  ebpf.AttachCGroupSockOps,
 		Program: objs.BpfSockops,
 	})
@@ -133,7 +171,7 @@ func NewEnforcer(cfg Config) (*Enforcer, error) {
 	}
 
 	egressLink, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    cgroupPath,
+		Path:    attachPath,
 		Attach:  ebpf.AttachCGroupInetEgress,
 		Program: objs.EgressFilter,
 	})

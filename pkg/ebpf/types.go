@@ -13,6 +13,17 @@ type Config struct {
 	HTTPProxyPID   uint32 // HTTPProxyPID exempts the HTTP proxy from BPF interception (gatekeeper mode)
 	FirewallMode   uint16 // 0=log, 1=allow, 2=block (matches ModeLog/Allow/Block)
 	MITMProxyAddr  uint32 // MITM proxy loopback IP in network byte order (127.0.0.1)
+
+	// SandboxUID is the uid enforcement selects on. Since Phase 135 the BPF
+	// programs attach at the ROOT cgroup, so identity — not cgroup placement —
+	// decides who is enforced. 0 means "no uid clause": 0 is root, and
+	// enforcing on root would take the box out.
+	SandboxUID uint32
+	// CgroupAttachPath is where the programs attach. Empty means the cgroup2
+	// mount root, which is the Phase 135 default. The per-sandbox scope is
+	// still created and still forms the second clause of the predicate; this
+	// only decides where the programs hang.
+	CgroupAttachPath string
 }
 
 // LpmKey is the Go representation of struct ip4_trie_key for LPM_TRIE lookups.
