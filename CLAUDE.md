@@ -8,7 +8,7 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
-**Phase 135 (2026-09-06) — Interactive sessions are enforced: the eBPF programs move to the root cgroup (live-UAT'd; deploy surface not yet exercised):**
+**Phase 135 (2026-09-06) — Interactive sessions are enforced: the eBPF programs move to the root cgroup (complete; deployed and live-UAT'd end to end, including resume):**
 - **Nothing interactive had EVER been inside the enforcement cgroup.** `km shell`
   lands in `system.slice/amazon-ssm-agent.service`; `km herdr`, `km vscode` and
   direct `ssh` land in `user.slice/user-1001.slice/session-N.scope`. Both fail
