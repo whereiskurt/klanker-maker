@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -119,12 +120,31 @@ func herdrBanner(w io.Writer, sandboxID, alias string, localPort int, st herdrBo
 	fmt.Fprintf(w, "  Named session:  herdr --remote %s --session agents\n", alias)
 	fmt.Fprintf(w, "  Detach:         ctrl+b q          (panes keep running)\n")
 	fmt.Fprintf(w, "  Reattach:       rerun the same command\n\n")
+	herdrSSHConfigNote(w, alias)
+	fmt.Fprintf(w, "The tunnel auto-reconnects if it drops; Ctrl-C closes it. Detached panes\n")
+	fmt.Fprintf(w, "survive both — but `km herdr status %s` shows what the idle timer sees.\n\n", sandboxID)
+}
+
+// herdrAttachBanner is the shorter block printed when km launches herdr itself.
+// It omits the "in another terminal" instructions, which are the whole thing
+// that flow removes.
+func herdrAttachBanner(w io.Writer, sandboxID, alias string, localPort int, st herdrBoxState) {
+	fmt.Fprintf(w, "✓ Updated ~/.ssh/config (Host: %s)\n", alias)
+	fmt.Fprintf(w, "✓ herdr v%s present at %s\n", st.HerdrVersion, st.HerdrPath)
+	fmt.Fprintf(w, "✓ Forwarding localhost:%d → sandbox:22\n", localPort)
+	herdrSSHConfigNote(w, alias)
+	fmt.Fprintf(w, "  Detach:  ctrl+b q   (panes keep running; quitting herdr closes the tunnel)\n")
+	fmt.Fprintf(w, "  Status:  km herdr status %s\n\n", sandboxID)
+	fmt.Fprintf(w, "✓ Attaching…\n\n")
+}
+
+// herdrSSHConfigNote warns about the two writers of ~/.ssh/config. Shared by
+// both banners so the advice cannot drift between them.
+func herdrSSHConfigNote(w io.Writer, alias string) {
 	fmt.Fprintf(w, "  Herdr rewrites ~/.ssh/config by default and km owns the %s block\n", alias)
 	fmt.Fprintf(w, "  in that file. Add this to ~/.config/herdr/config.toml so they do not\n")
 	fmt.Fprintf(w, "  fight over it:\n\n")
 	fmt.Fprintf(w, "      [remote]\n      manage_ssh_config = false\n\n")
-	fmt.Fprintf(w, "The tunnel auto-reconnects if it drops; Ctrl-C closes it. Detached panes\n")
-	fmt.Fprintf(w, "survive both — but `km herdr status %s` shows what the idle timer sees.\n\n", sandboxID)
 }
 
 // NewHerdrCmd returns the `km herdr` parent command.
@@ -146,17 +166,24 @@ func newHerdrCmdInternal(cfg *config.Config, fetcher SandboxFetcher, execFn Shel
 func newHerdrStartCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI) *cobra.Command {
 	var localPort int
 	var noInstall bool
+	var noAttach bool
+	var session string
 	cmd := &cobra.Command{
 		Use:   "start <sandbox-id>",
-		Short: "Hold open the transport for a Herdr remote attach",
-		Long: `Prepare a sandbox to accept a Herdr remote attach and hold the transport open.
+		Short: "Open a Herdr remote attach to a sandbox",
+		Long: `Bring up the transport to a sandbox and attach Herdr to it.
 
-Run this in one terminal and ` + "`herdr --remote km-<id>`" + ` in another. Panes keep
-running when you detach with ctrl+b q, and survive this command being Ctrl-C'd —
-but a Herdr session does NOT survive a reboot, so km stop kills every pane's
-process. km pause hibernates and keeps them. An idle stop under teardownPolicy:
-stop follows spec.runtime.hibernation: it hibernates (panes survive) when that is
-set, and stops (panes die) when it is not.`,
+By default this is one command in one terminal: km holds the SSM forward in the
+background, waits for sshd, then runs herdr against it. Quitting herdr closes the
+tunnel. Pass --no-attach to hold the transport open and print the herdr command
+instead, which is what you want to drive several herdr clients over one forward,
+or to attach from something other than the herdr CLI.
+
+Panes keep running when you detach with ctrl+b q, and survive this command being
+Ctrl-C'd — but a Herdr session does NOT survive a reboot, so km stop kills every
+pane's process. km pause hibernates and keeps them. An idle stop under
+teardownPolicy: stop follows spec.runtime.hibernation: it hibernates (panes
+survive) when that is set, and stops (panes die) when it is not.`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -168,12 +195,14 @@ set, and stops (panes die) when it is not.`,
 			if err != nil {
 				return err
 			}
-			return runHerdrStart(c.Context(), f, e, s, sandboxID, localPort, noInstall)
+			return runHerdrStart(c.Context(), f, e, s, sandboxID, localPort, noInstall, noAttach, session)
 		},
 	}
 	// 2224: km vscode owns 2222, both km tunnel modes own 2223.
 	cmd.Flags().IntVar(&localPort, "local-port", 2224, "Local port for the SSM forward to sshd")
 	cmd.Flags().BoolVar(&noInstall, "no-install", false, "Fail instead of installing herdr when it is absent from the sandbox")
+	cmd.Flags().BoolVar(&noAttach, "no-attach", false, "Hold the transport open and print the herdr command instead of launching herdr")
+	cmd.Flags().StringVar(&session, "session", "", "Named herdr session to attach to (passed through as --session)")
 	return cmd
 }
 
@@ -197,7 +226,7 @@ func newHerdrStatusCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSM
 	}
 }
 
-func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int, noInstall bool) error {
+func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int, noInstall, noAttach bool, session string) error {
 	instanceID, region, hostNames, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, localPort+100)
 	if err != nil {
 		return err
@@ -247,12 +276,84 @@ func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExec
 		return fmt.Errorf("upsert ssh-config: %w", err)
 	}
 
-	herdrBanner(os.Stdout, sandboxID, primaryHostName(hostNames), localPort, st)
-
+	host := primaryHostName(hostNames)
 	buildPF := func(c context.Context) *exec.Cmd {
 		return buildPortForwardCmd(c, instanceID, region, strconv.Itoa(localPort), "22")
 	}
-	return runReconnectingPortForward(ctx, execFn, buildPF, sshBannerTunnelProbe(localPort), true, os.Stdout)
+
+	// --no-attach, or no local herdr to launch: hold the forward in the
+	// foreground and tell the operator what to run. A missing local binary is
+	// a fall-back rather than an error — the transport is still useful, and
+	// failing here would strand someone who attaches with something else.
+	herdrBin, lookErr := exec.LookPath("herdr")
+	if noAttach || lookErr != nil {
+		if lookErr != nil && !noAttach {
+			fmt.Fprintf(os.Stderr, "  [note] herdr not found on PATH — holding the tunnel open instead of attaching.\n"+
+				"         Install it from https://herdr.dev, or use --no-attach to silence this.\n\n")
+		}
+		herdrBanner(os.Stdout, sandboxID, host, localPort, st)
+		return runReconnectingPortForward(ctx, execFn, buildPF, sshBannerTunnelProbe(localPort), true, os.Stdout)
+	}
+
+	// Attach flow. The forward runs in the BACKGROUND under its own context so
+	// herdr can own the terminal — the same shape as km tunnel, whose forward
+	// has to stay live underneath a session we own. io.Discard because the
+	// reconnect chatter would otherwise scribble over the TUI.
+	//
+	// Deliberately NOT a detached daemon: the forward's lifetime is exactly the
+	// herdr session, so there is no pid file, no `km herdr stop`, and no way to
+	// leave an invisible session-manager-plugin holding the port.
+	fwdCtx, cancelFwd := context.WithCancel(ctx)
+	defer cancelFwd()
+
+	fwdDone := make(chan error, 1)
+	go func() {
+		fwdDone <- runReconnectingPortForward(fwdCtx, execFn, buildPF, sshBannerTunnelProbe(localPort), true, io.Discard)
+	}()
+
+	if err := waitForSSHD(fwdCtx, localPort, 60*time.Second); err != nil {
+		cancelFwd()
+		return fmt.Errorf("SSM port-forward to sshd never came up: %w", err)
+	}
+
+	herdrAttachBanner(os.Stdout, sandboxID, host, localPort, st)
+
+	herdrCmd := exec.CommandContext(ctx, herdrBin, herdrAttachArgs(host, session)...)
+	herdrCmd.Stdin = os.Stdin
+	herdrCmd.Stdout = os.Stdout
+	herdrCmd.Stderr = os.Stderr
+	err = execFn(herdrCmd)
+
+	// Cancel, then WAIT for the forward to actually die.
+	//
+	// exec.Cmd delivers Cancel from a goroutine watching ctx.Done(), so
+	// returning straight after cancelFwd() lets the process exit before that
+	// goroutine ever runs — leaving session-manager-plugin holding the local
+	// port, and the next `km herdr start` failing with "local port N is already
+	// in use". Measured: four strays and two live listeners on one port.
+	//
+	// Bounded so a wedged plugin delays the command rather than hanging it.
+	cancelFwd()
+	select {
+	case <-fwdDone:
+	case <-time.After(5 * time.Second):
+		fmt.Fprintf(os.Stderr, "  [warn] the SSM port-forward did not exit within 5s; check for a stray session-manager-plugin on port %d\n", localPort)
+	}
+
+	if err != nil {
+		return fmt.Errorf("herdr exited: %w", err)
+	}
+	return nil
+}
+
+// herdrAttachArgs builds the local herdr invocation. session is optional and
+// passed through verbatim as --session.
+func herdrAttachArgs(host, session string) []string {
+	args := []string{"--remote", host}
+	if s := strings.TrimSpace(session); s != "" {
+		args = append(args, "--session", s)
+	}
+	return args
 }
 
 // herdrPresenceSignal8Script reports whether the box's km-presence binary carries

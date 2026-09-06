@@ -14,31 +14,44 @@
 [Herdr](https://herdr.dev) is a terminal multiplexer built for coding agents:
 named panes, workspace organization, and — the property this document is about —
 **panes that keep running after you detach.** `km herdr start` makes sure a
-sandbox is ready to accept a Herdr remote attach, holds the SSM+SSH transport open
-in one terminal, and prints the line to run in another.
+sandbox is ready to accept a Herdr remote attach, brings the SSM+SSH transport up,
+and attaches you to it — one command, one terminal.
 
 ```bash
 km herdr start my-sandbox
 ```
 
 ```
-✓ Updated ~/.ssh/config (Host: km-my-sandbox)
+✓ Updated ~/.ssh/config (Host: my-sandbox)
 ✓ herdr v0.8.2 present at /usr/local/bin/herdr
 ✓ Forwarding localhost:2224 → sandbox:22
-
-In another terminal:
-
-    herdr --remote km-my-sandbox
-
-  Named session:  herdr --remote km-my-sandbox --session agents
-  Detach:         ctrl+b q          (panes keep running)
-  Reattach:       rerun the same command
   ...
+  Detach:  ctrl+b q   (panes keep running; quitting herdr closes the tunnel)
+  Status:  km herdr status my-sandbox
+
+✓ Attaching…
 ```
 
-Run the printed `herdr --remote` command in a second terminal to actually attach.
-`km herdr start` itself does not attach anything — it only proves the box is
-reachable and holds the tunnel open, exactly like `km vscode start`.
+The forward runs in the background for the life of the herdr session and is torn
+down when you quit. It is deliberately **not** a daemon: there is no pid file, no
+`km herdr stop`, and no way to leave an invisible `session-manager-plugin` holding
+the local port.
+
+`--session agents` attaches to a named session.
+
+### `--no-attach`
+
+To hold the transport open and print the `herdr --remote` line instead — which is
+what you want to drive several herdr clients over one forward, or to attach with
+something other than the herdr CLI:
+
+```bash
+km herdr start my-sandbox --no-attach
+```
+
+That is the older two-terminal flow, and it is also the automatic fallback when
+the herdr client is not installed on your workstation: the transport is still
+useful, so km says so and holds the tunnel rather than failing.
 
 ---
 

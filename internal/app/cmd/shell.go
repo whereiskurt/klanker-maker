@@ -736,12 +736,37 @@ func parsePortSpecs(specs []string) []portSpec {
 
 // buildPortForwardCmd constructs the AWS SSM port forwarding command.
 func buildPortForwardCmd(ctx context.Context, instanceID, region, localPort, remotePort string) *exec.Cmd {
-	return exec.CommandContext(ctx, "aws", "ssm", "start-session",
+	cmd := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID,
 		"--region", region,
 		"--profile", "klanker-terraform",
 		"--document-name", "AWS-StartPortForwardingSession",
 		"--parameters", fmt.Sprintf(`{"portNumber":["%s"],"localPortNumber":["%s"]}`, remotePort, localPort))
+
+	// `aws ssm start-session` is a launcher: the process that actually binds
+	// the local port is session-manager-plugin, its CHILD. exec.CommandContext
+	// signals only the process it started, so cancelling the context killed the
+	// aws wrapper and left session-manager-plugin holding the socket — an
+	// invisible listener that makes the NEXT run fail with "local port N is
+	// already in use". Observed repeatedly; four strays and two live listeners
+	// on one port at once.
+	//
+	// So put the launcher in its own process group and signal the whole group
+	// on cancel. Ctrl-C still works: runReconnectingPortForward installs its
+	// own signal.NotifyContext, so the interrupt reaches km, which cancels the
+	// context, which lands here.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		// Negative pid = the whole process group.
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	// If the group ignores SIGTERM, Wait stops blocking and the kernel reaps on
+	// exit; without this a wedged plugin would hang the command forever.
+	cmd.WaitDelay = 5 * time.Second
+	return cmd
 }
 
 // tunnelProbe reports whether the forwarded local port is carrying live traffic.
