@@ -15,6 +15,23 @@
   scripts/draft-release-highlights.sh, then curated.
 -->
 
+## 🐑 `km herdr` — agent panes you can walk away from
+
+`km herdr start|status <sandbox-id>` attaches Herdr over the same SSM+SSH transport
+`km vscode` already terminates, in one terminal, with the forward torn down when the session
+ends. A new `km-presence` signal keeps a sandbox awake while a detached pane is doing real
+work — and correctly reaps one that is merely sitting there, because it detects the *work*,
+never the server.
+
+Read the lifecycle note before relying on it: Herdr sessions do not survive a reboot.
+`km pause` preserves them; `km stop` kills every pane's process outright.
+
+## 📦 Every artifact fetched at boot or build is now pinned and verified
+
+External downloads reached the box by version alone, or by piping an installer straight to a
+shell. Each is now pinned and checked against a source-pinned digest, so a compromised or
+silently re-tagged upstream fails the fetch rather than executing.
+
 ## 🕳️ The eBPF allowlist never applied to anything you did by hand
 
 No interactive session had **ever** been inside the cgroup the eBPF network programs are
@@ -70,23 +87,6 @@ UAT still outstanding.
 
 On `privileged: true` none of this holds — sudo can stop the daemon or read the ciphertext
 directly. The real control remains `privileged: false`.
-
-## 🐑 `km herdr` — agent panes you can walk away from
-
-`km herdr start|status <sandbox-id>` attaches Herdr over the same SSM+SSH transport
-`km vscode` already terminates, in one terminal, with the forward torn down when the session
-ends. A new `km-presence` signal keeps a sandbox awake while a detached pane is doing real
-work — and correctly reaps one that is merely sitting there, because it detects the *work*,
-never the server.
-
-Read the lifecycle note before relying on it: Herdr sessions do not survive a reboot.
-`km pause` preserves them; `km stop` kills every pane's process outright.
-
-## 📦 Every artifact fetched at boot or build is now pinned and verified
-
-External downloads reached the box by version alone, or by piping an installer straight to a
-shell. Each is now pinned and checked against a source-pinned digest, so a compromised or
-silently re-tagged upstream fails the fetch rather than executing.
 
 ## 📋 Upgrading
 
