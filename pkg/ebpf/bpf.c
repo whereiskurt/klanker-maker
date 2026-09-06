@@ -354,9 +354,26 @@ int sendmsg4(struct bpf_sock_addr *ctx)
 SEC("sockops")
 int bpf_sockops(struct bpf_sock_ops *skops)
 {
-    /* Phase 135: attached at the ROOT cgroup — pass anything that is not ours. */
-    if (!km_enforced_task())
-        return 1;
+    /* SOCKOPS IS DELIBERATELY UNGATED — do not "fix" this by adding
+     * km_enforced_task().
+     *
+     * BPF_PROG_TYPE_SOCK_OPS cannot call bpf_get_current_uid_gid(): the helper
+     * is absent from sock_ops_func_proto and the verifier rejects the program
+     * outright with "unknown func bpf_get_current_uid_gid#15". Measured live on
+     * AL2023 kernel 6.1.182 — the enforcer failed to load at all, which under
+     * the root-cgroup attach means a box with no enforcement whatsoever.
+     *
+     * Leaving it ungated is safe here because this program enforces nothing.
+     * It writes one bookkeeping entry, local TCP source port -> socket cookie,
+     * consumed by the HTTP proxy to attribute a flow to a pid. Two properties
+     * make the extra entries harmless: a local source port is unique box-wide
+     * at any instant, so a non-sandbox socket can never be mistaken for a
+     * sandbox one; and src_port_to_sock holds 262144 entries against at most
+     * 65536 possible ports, so it cannot be made to evict.
+     *
+     * It is in fact an improvement: before Phase 135 an interactive session's
+     * sockets were outside the attached cgroup and had no attribution at all.
+     */
 
     if (skops->op != BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB)
         return 1;

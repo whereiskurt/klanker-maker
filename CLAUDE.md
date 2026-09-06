@@ -8,7 +8,7 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
-**Phase 135 (2026-09-06) — Interactive sessions are enforced: the eBPF programs move to the root cgroup (code-complete; live UAT pending):**
+**Phase 135 (2026-09-06) — Interactive sessions are enforced: the eBPF programs move to the root cgroup (live-UAT'd; deploy surface not yet exercised):**
 - **Nothing interactive had EVER been inside the enforcement cgroup.** `km shell`
   lands in `system.slice/amazon-ssm-agent.service`; `km herdr`, `km vscode` and
   direct `ssh` land in `user.slice/user-1001.slice/session-N.scope`. Both fail
@@ -40,6 +40,22 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   verifier (`bpf.c:118`). `bpf_get_socket_uid(skb)` reads the uid off the socket
   and IS valid there — the single riskiest assumption in the design, settled by
   a live spike before any code was written, along with `bpf_skb_cgroup_id`.
+- **`sockops` CANNOT be gated, and finding out cost a live boot.**
+  `BPF_PROG_TYPE_SOCK_OPS` has no `bpf_get_current_uid_gid` in
+  `sock_ops_func_proto`, so the verifier rejects the whole program
+  (`unknown func bpf_get_current_uid_gid#15`). **Under a root-cgroup attach one
+  rejected program means the enforcer does not start at all** — a box with NO
+  enforcement, not a box missing a quarter of it — and nothing catches it before
+  the kernel: clang compiles the call happily, `make generate-ebpf` succeeds, and
+  every Go test passes. The `bpf.c:118` comment naming sockops as safe is about
+  `bpf_get_current_pid_tgid`, not uid. It is now a **documented carve-out**: safe
+  ungated because it enforces nothing (it writes local-port → socket-cookie for
+  the proxy's pid attribution), a local source port is unique box-wide at any
+  instant so no non-sandbox socket can be mistaken for a sandbox one, and
+  `src_port_to_sock` holds 262144 entries against at most 65536 ports so it
+  cannot be made to evict. It is an improvement in fact — interactive sessions
+  previously had no attribution at all. The guard test requires the carve-out to
+  stay *documented*, so it cannot decay into a silent omission.
 - **Both constants fail OPEN, and that disposition is load-bearing.**
   `const_sandbox_uid` defaults to `0xFFFFFFFF`, `const_km_cgid` to `0`, so a
   loader that fails to set one enforces NOTHING. These programs now sit in the

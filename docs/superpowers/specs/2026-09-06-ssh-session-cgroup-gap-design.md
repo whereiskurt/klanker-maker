@@ -235,6 +235,26 @@ was itself live traffic through a root-attached egress program — and the marke
 IP was reachable again immediately after detach, so nothing leaked past the
 probe process.
 
+### What the spike MISSED, found by the live UAT
+
+The spike probed `cgroup/connect4` and `cgroup_skb/egress` and generalised the
+result to all four programs. That was wrong. **`BPF_PROG_TYPE_SOCK_OPS` cannot
+call `bpf_get_current_uid_gid` at all** — the helper is absent from
+`sock_ops_func_proto` and the verifier rejects the program with
+`unknown func bpf_get_current_uid_gid#15`. The `bpf.c:118` comment naming
+sockops alongside connect4 and sendmsg4 is about `bpf_get_current_pid_tgid`, and
+was over-read.
+
+Under a root-cgroup attach the consequence is worse than a missing gate: one
+rejected program means the enforcer fails to load entirely, so the box runs with
+**no** enforcement. Nothing catches it short of a kernel — clang compiles the
+call, `make generate-ebpf` succeeds, and every Go test passes.
+
+The lesson generalises past this phase: a spike that establishes a helper is
+available in *some* program types has established nothing about the others, and
+BPF program types differ in exactly this way. Probe every program type you
+intend to change.
+
 ### Three implementation notes the spike surfaced
 
 - **The cgroup id must be read at attach time, never persisted.** It is the

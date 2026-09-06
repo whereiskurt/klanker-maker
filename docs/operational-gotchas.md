@@ -445,6 +445,15 @@ with no current task, so `bpf_get_current_uid_gid()` is rejected by the verifier
 (`bpf.c:118`). It uses `bpf_get_socket_uid(skb)`, which reads the uid off the
 socket and is valid there — verified on AL2023 kernel 6.1.182.
 
+**`sockops` is a deliberate, documented exemption.**
+`BPF_PROG_TYPE_SOCK_OPS` has no `bpf_get_current_uid_gid` at all, so gating it
+makes the verifier reject the program — and under a root-cgroup attach one
+rejected program means the enforcer never starts, i.e. a box with no enforcement
+rather than partial enforcement. Nothing catches this before the kernel: clang
+compiles it, `make generate-ebpf` succeeds, the Go tests pass. It is safe
+ungated because it enforces nothing, and the guard test requires the reason to
+stay written down in `bpf.c`.
+
 **Both constants fail OPEN**, and that disposition is load-bearing.
 `const_sandbox_uid` defaults to `0xFFFFFFFF` and `const_km_cgid` to `0`, so a
 loader that fails to set one enforces *nothing*. These programs are now in the

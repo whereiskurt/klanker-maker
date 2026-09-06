@@ -41,6 +41,20 @@ func TestEveryCgroupProgramConsultsThePredicate(t *testing.T) {
 		prog := body[start:end]
 		seen++
 
+		// sockops is the one deliberate exemption: BPF_PROG_TYPE_SOCK_OPS
+		// cannot call bpf_get_current_uid_gid() at all (absent from
+		// sock_ops_func_proto — the verifier rejects the whole program, which
+		// under a root-cgroup attach means NO enforcement anywhere). It is
+		// safe to leave ungated because it enforces nothing; the carve-out
+		// must stay documented in the source, which is what this asserts.
+		if sec == "sockops" {
+			if !strings.Contains(prog, "SOCKOPS IS DELIBERATELY UNGATED") {
+				t.Errorf("SEC(%q) is exempt from the predicate but no longer says why; "+
+					"an undocumented exemption reads as an oversight", sec)
+			}
+			continue
+		}
+
 		// cgroup_skb/* fires in softirq with no current task, so
 		// bpf_get_current_uid_gid() is rejected by the verifier (bpf.c:118).
 		// It reads the uid off the socket instead.
@@ -53,8 +67,9 @@ func TestEveryCgroupProgramConsultsThePredicate(t *testing.T) {
 				"run for every process on the box", sec, wantGate)
 		}
 	}
-	if seen < 4 {
-		t.Errorf("only inspected %d programs, expected at least 4", seen)
+	if seen < 3 {
+		t.Errorf("only inspected %d gated programs, expected at least 3 "+
+			"(four programs, of which sockops is the documented exemption)", seen)
 	}
 }
 
