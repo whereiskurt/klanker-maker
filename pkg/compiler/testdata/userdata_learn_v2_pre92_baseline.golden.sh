@@ -4509,6 +4509,11 @@ chmod +x /usr/local/bin/km-sandbox-shell
 # Set sandbox user's login shell to the wrapper
 usermod -s /usr/local/bin/km-sandbox-shell sandbox
 
+# Register the wrapper as a legitimate login shell. Tools that validate $SHELL
+# against /etc/shells otherwise reject it silently -- herdr falls back to
+# /bin/sh. See TestUserdataRegistersSandboxShellInEtcShells. Idempotent.
+grep -qxF '/usr/local/bin/km-sandbox-shell' /etc/shells 2>/dev/null || echo '/usr/local/bin/km-sandbox-shell' >> /etc/shells
+
 # SSM session entry script invoked by the KM-Sandbox-Session document's
 # shellProfile.linux with the command parameter as $1.
 # Empty argument → interactive bash login shell (km shell, idle attach)
