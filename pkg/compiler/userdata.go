@@ -5282,7 +5282,6 @@ ExecStart=/usr/local/bin/km ebpf-attach \
   --netpolicy-file "{{ .RuntimeDenyFile }}" \
   --netpolicy-pins "{{ .NetpolicyPinFile }}" \
   --flowlog-dir "{{ .FlowLogDir }}" \
-  --sandbox-uid $(id -u sandbox) \
   --proxy-hosts "{{ .L7ProxyHosts }}" \
 {{- if eq .Enforcement "both" }}
   --proxy-pid ${KM_HTTP_PROXY_PID} \

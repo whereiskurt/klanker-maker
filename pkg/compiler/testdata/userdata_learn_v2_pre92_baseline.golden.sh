@@ -4454,7 +4454,6 @@ ExecStart=/usr/local/bin/km ebpf-attach \
   --netpolicy-file "/var/lib/km/netpolicy/deny.list" \
   --netpolicy-pins "/var/lib/km/netpolicy/allow.pins" \
   --flowlog-dir "/var/lib/km/flows" \
-  --sandbox-uid $(id -u sandbox) \
   --proxy-hosts "github.com,api.github.com,raw.githubusercontent.com,codeload.githubusercontent.com" \
   --proxy-pid ${KM_HTTP_PROXY_PID} \
   --tls \
