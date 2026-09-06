@@ -24,6 +24,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -69,11 +72,11 @@ func TestRootIPTablesFlushIrrelevant(t *testing.T) {
 
 	sandboxID := fmt.Sprintf("test-ibp-%d", os.Getpid())
 	cfg := Config{
-		SandboxID:    sandboxID,
-		DNSProxyPort: 15353,
+		SandboxID:     sandboxID,
+		DNSProxyPort:  15353,
 		HTTPProxyPort: 13128,
-		FirewallMode: ModeBlock,
-		ProxyPID:     uint32(os.Getpid()),
+		FirewallMode:  ModeBlock,
+		ProxyPID:      uint32(os.Getpid()),
 	}
 
 	enforcer, err := NewEnforcer(cfg)
@@ -138,11 +141,11 @@ func TestRootDirectConnectBlocked(t *testing.T) {
 
 	sandboxID := fmt.Sprintf("test-dcb-%d", os.Getpid())
 	cfg := Config{
-		SandboxID:    sandboxID,
-		DNSProxyPort: 15354,
+		SandboxID:     sandboxID,
+		DNSProxyPort:  15354,
 		HTTPProxyPort: 13129,
-		FirewallMode: ModeBlock,
-		ProxyPID:     uint32(os.Getpid()),
+		FirewallMode:  ModeBlock,
+		ProxyPID:      uint32(os.Getpid()),
 	}
 
 	enforcer, err := NewEnforcer(cfg)
@@ -212,11 +215,11 @@ func TestRootCannotDetachBPF(t *testing.T) {
 
 	sandboxID := fmt.Sprintf("test-bpf-%d", os.Getpid())
 	cfg := Config{
-		SandboxID:    sandboxID,
-		DNSProxyPort: 15355,
+		SandboxID:     sandboxID,
+		DNSProxyPort:  15355,
 		HTTPProxyPort: 13130,
-		FirewallMode: ModeBlock,
-		ProxyPID:     uint32(os.Getpid()),
+		FirewallMode:  ModeBlock,
+		ProxyPID:      uint32(os.Getpid()),
 	}
 
 	enforcer, err := NewEnforcer(cfg)
@@ -330,11 +333,11 @@ func TestHardcodedIPBlocked(t *testing.T) {
 
 	sandboxID := fmt.Sprintf("test-hib-%d", os.Getpid())
 	cfg := Config{
-		SandboxID:    sandboxID,
-		DNSProxyPort: 15356,
+		SandboxID:     sandboxID,
+		DNSProxyPort:  15356,
 		HTTPProxyPort: 13131,
-		FirewallMode: ModeBlock,
-		ProxyPID:     uint32(os.Getpid()),
+		FirewallMode:  ModeBlock,
+		ProxyPID:      uint32(os.Getpid()),
 	}
 
 	enforcer, err := NewEnforcer(cfg)
@@ -374,4 +377,133 @@ func TestHardcodedIPBlocked(t *testing.T) {
 	t.Log("  - Attacker cannot add IPs to trie without CAP_BPF")
 	t.Log("  - cgroup/connect4 denies ALL connections to non-trie IPs")
 	t.Log("  - Root uid does not bypass cgroup BPF hooks")
+}
+
+// TestPredicateEnforcesInteractiveSessions is the Phase 135 regression test.
+//
+// Before Phase 135 the programs attached to the per-sandbox scope, which no
+// interactive session ever entered: km shell landed in
+// system.slice/amazon-ssm-agent.service, ssh in user.slice/user-N.slice, and
+// km-sandbox-shell's join failed EPERM with the error swallowed by 2>/dev/null.
+// Enforcement applied to Phase 132 agent dispatch and to nothing else.
+//
+// Two of the four rows carry the whole phase:
+//
+//   - sandbox uid OUTSIDE km.slice must be denied — that is an interactive
+//     session, and it is what was broken.
+//   - root INSIDE km.slice must be denied — EBPF-NET-12. A bare uid filter
+//     passes the first row and fails this one, which is exactly why the
+//     predicate has two clauses and why sudo must not be a way out.
+func TestPredicateEnforcesInteractiveSessions(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("integration test requires root (uid=0)")
+	}
+	if _, err := exec.LookPath("runuser"); err != nil {
+		t.Skip("runuser not available")
+	}
+	sandboxUID, err := lookupSandboxUID()
+	if err != nil {
+		t.Skipf("no sandbox user on this host: %v", err)
+	}
+
+	const blockedIP = "1.1.1.1"
+	// Establish that the host can reach the target at all. Without this the
+	// "allowed" row is unfalsifiable: a box with no egress would look like a
+	// perfectly enforcing one.
+	if denied, _ := dialIsDenied(t, blockedIP, "", false, ""); denied {
+		t.Skipf("%s unreachable before enforcement; cannot distinguish deny from no network", blockedIP)
+	}
+
+	sandboxID := fmt.Sprintf("test-pred-%d", os.Getpid())
+	enforcer, err := NewEnforcer(Config{
+		SandboxID:     sandboxID,
+		DNSProxyPort:  15355,
+		HTTPProxyPort: 13130,
+		FirewallMode:  ModeBlock,
+		ProxyPID:      uint32(os.Getpid()),
+		SandboxUID:    sandboxUID,
+	})
+	if err != nil {
+		t.Fatalf("NewEnforcer: %v", err)
+	}
+	defer func() {
+		enforcer.Close()
+		_ = Cleanup(sandboxID)
+	}()
+
+	// Loopback only: everything else, including blockedIP, is outside the trie.
+	if err := enforcer.AllowCIDR("127.0.0.0/8"); err != nil {
+		t.Fatalf("AllowCIDR(127.0.0.0/8): %v", err)
+	}
+	scope := CgroupPath(sandboxID)
+
+	cases := []struct {
+		name       string
+		asUser     string // "" means run as root
+		inScope    bool
+		wantDenied bool
+	}{
+		{"sandbox uid outside km.slice (an interactive session)", "sandbox", false, true},
+		{"sandbox uid inside km.slice (agent dispatch)", "sandbox", true, true},
+		{"root inside km.slice (EBPF-NET-12)", "", true, true},
+		{"root outside km.slice (the box itself)", "", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cg := ""
+			if tc.inScope {
+				cg = scope
+			}
+			denied, detail := dialIsDenied(t, blockedIP, tc.asUser, tc.inScope, cg)
+			if denied != tc.wantDenied {
+				t.Errorf("denied=%v want=%v (%s)", denied, tc.wantDenied, detail)
+			}
+		})
+	}
+}
+
+func lookupSandboxUID() (uint32, error) {
+	u, err := user.Lookup("sandbox")
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(n), nil
+}
+
+// dialIsDenied attempts a TCP connect to ip:443 from a chosen identity and
+// cgroup, and reports whether enforcement stopped it.
+//
+// Both denial shapes count. A connect4 denial surfaces immediately as EPERM
+// ("operation not permitted"); an egress denial is a silent packet drop and
+// shows up as a connect timeout. Treating only one as "denied" would make the
+// egress layer untestable.
+func dialIsDenied(t *testing.T, ip, asUser string, inScope bool, scope string) (bool, string) {
+	t.Helper()
+	dial := fmt.Sprintf("timeout 4 bash -c 'exec 3<>/dev/tcp/%s/443'", ip)
+	if asUser != "" {
+		dial = fmt.Sprintf("runuser -u %s -- %s", asUser, dial)
+	}
+	if inScope {
+		// The Phase 132 pattern: join as root in a forked subshell, then exec.
+		// $BASHPID, never $$ — inside ( ... ) the latter reports the invoking
+		// shell's pid and would migrate the test process itself.
+		dial = fmt.Sprintf("( echo $BASHPID > %s/cgroup.procs; exec %s )", scope, dial)
+	}
+	out, err := exec.Command("bash", "-c", dial+" 2>&1").CombinedOutput()
+	detail := fmt.Sprintf("cmd=%q out=%q err=%v", dial, strings.TrimSpace(string(out)), err)
+	if err == nil {
+		return false, detail
+	}
+	lower := strings.ToLower(string(out))
+	if strings.Contains(lower, "not permitted") || strings.Contains(lower, "permission denied") {
+		return true, detail
+	}
+	if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 124 {
+		return true, detail // timeout: the egress program dropped the packet
+	}
+	return true, detail
 }
