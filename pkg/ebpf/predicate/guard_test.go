@@ -90,6 +90,42 @@ func TestPredicateClausesAreSentinelGuarded(t *testing.T) {
 	}
 }
 
+// The enforcer's CLI must actually arm both clauses of the predicate.
+//
+// This guard lives here rather than beside ebpf_attach.go because that file is
+// //go:build linux && amd64 and so is invisible to `go test ./...` on a dev
+// machine — the same blind spot that let the original gap survive for months.
+// Same cross-tree scanning pattern as pkg/secrets' wiring guard.
+func TestEbpfAttachArmsBothPredicateClauses(t *testing.T) {
+	src := readSibling(t, "../../../internal/app/cmd/ebpf_attach.go")
+
+	// Before Phase 135 --cgroup was a parameter nothing read.
+	if !strings.Contains(src, "CgroupAttachPath: cgroupOverride") {
+		t.Error("cgroupOverride must reach Config.CgroupAttachPath; a flag that " +
+			"silently does nothing is worse than no flag")
+	}
+	if !strings.Contains(src, "SandboxUID:") {
+		t.Error("Config.SandboxUID must be set from the resolved sandbox uid, or the " +
+			"uid clause is never armed and interactive sessions stay unenforced " +
+			"on a box that looks entirely healthy")
+	}
+
+	// The uid lookup must be fatal. Warning and continuing would boot a box
+	// whose enforcer is running and whose programs are attached, enforcing
+	// nothing interactive — the exact silent-success shape this phase ends.
+	idx := strings.Index(src, `user.Lookup("sandbox")`)
+	if idx < 0 {
+		t.Fatal(`expected user.Lookup("sandbox") to resolve the predicate uid`)
+	}
+	end := idx + 400
+	if end > len(src) {
+		end = len(src)
+	}
+	if !strings.Contains(src[idx:end], "return fmt.Errorf") {
+		t.Error("a failed sandbox-uid lookup must return an error, not warn and continue")
+	}
+}
+
 func readSibling(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)
