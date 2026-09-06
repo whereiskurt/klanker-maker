@@ -309,9 +309,21 @@ km just doesn't make that choice for you.
   another reason the real control is `spec.execution.privileged: false`.
 - **Unlike `km tunnel`, nothing here bypasses km's egress enforcement.** No
   sandbox traffic routes through your workstation. The MITM proxy still meters
-  AI spend, the eBPF allowlist still holds, and the flow/exec census
-  (`docs/egress-census.md`, `docs/exec-capture.md`) still records what the panes
-  do.
+  AI spend, and the flow/exec census (`docs/egress-census.md`,
+  `docs/exec-capture.md`) still records what the panes do.
+- **But the eBPF allowlist does NOT hold in a Herdr pane.** An ssh session lands
+  in `user.slice/user-1001.slice/session-N.scope`, not the per-sandbox
+  `km.slice` scope the cgroup-attached BPF programs are bound to, so the
+  allow-trie never sees pane traffic. This is **not specific to Herdr** — it is
+  true of `km vscode`, direct `ssh`, and `km shell` alike, and the wrapper that
+  is supposed to perform the join fails silently (`EPERM`, swallowed by
+  `2>/dev/null`). The DNS resolver and the HTTP proxy still apply, so this is a
+  defence-in-depth loss rather than an open door: what is lost is enforcement
+  against traffic that bypasses *both* — a connection to a literal IP, or a
+  process that ignores the proxy environment. It makes no practical difference
+  on `profiles/herdr.yaml`, which is wide open at every layer. See
+  `docs/operational-gotchas.md` § Interactive sessions run OUTSIDE the eBPF
+  enforcement cgroup.
 
 ---
 

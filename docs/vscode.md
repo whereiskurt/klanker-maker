@@ -481,6 +481,16 @@ The sandbox was created with `runtime.vscode.enabled: false` or without VS Code 
 - **Existing sandboxes need reprovisioning.** Sandboxes created without `runtime.vscode.enabled: true` do NOT get
   sshd provisioning retroactively. `km destroy` + `km create` required.
 
+- **A Remote-SSH session is outside the eBPF enforcement cgroup.** The session
+  lands in `user.slice/user-1001.slice/session-N.scope`, not the per-sandbox
+  `km.slice` scope the cgroup-attached BPF programs are bound to, so the
+  allow-trie does not apply to anything you do in VS Code's terminal or to
+  anything `vscode-server` spawns. The DNS resolver and the HTTP proxy still do
+  apply — this is a defence-in-depth loss, not an open door. Not specific to VS
+  Code: `km herdr`, direct `ssh`, and `km shell` are all affected identically.
+  See `docs/operational-gotchas.md` § Interactive sessions run OUTSIDE the eBPF
+  enforcement cgroup.
+
 ---
 
 ## Security model
@@ -497,6 +507,12 @@ The sandbox was created with `runtime.vscode.enabled: false` or without VS Code 
 The SSM tunnel is the real security boundary. SSH on top adds key-based authentication,
 encrypted file transfer, and terminal access, and enables the VS Code Remote-SSH extension
 to work without a custom protocol.
+
+**Network enforcement is not part of this boundary.** A Remote-SSH session is
+policed by the DNS resolver and the HTTP proxy, but *not* by the eBPF
+allow-trie — see Limitations above. Nothing in the table changes; the point is
+that the sandbox's network policy is one layer thinner inside an interactive
+session than it is for an agent turn.
 
 ---
 

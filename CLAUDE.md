@@ -462,9 +462,19 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   subshell and dropping with `runuser`, which preserves the cgroup where
   `sudo`/`su` do not. **Consequence beyond this phase: the eBPF
   `connect4`/`sendmsg4`/`sockops`/`egress` programs had been inert for agent
-  traffic since `ebpf`/`both` enforcement was introduced** — only an
+  traffic since `ebpf`/`both` enforcement was introduced** — ~~only an
   interactive `km shell` session (which joins via `km-session-entry` →
-  `km-sandbox-shell`, never `sudo`) was ever actually inside the cgroup. What
+  `km-sandbox-shell`, never `sudo`) was ever actually inside the cgroup~~
+  **CORRECTED 2026-09-06: nothing interactive was ever inside the cgroup
+  either.** `km shell` fails the same join with the same `EPERM` and lands in
+  `system.slice/amazon-ssm-agent.service`; ssh (`km herdr`, `km vscode`) lands
+  in `user.slice/user-1001.slice/session-N.scope`. The cause is cgroup v2's
+  common-ancestor rule, which the `root:sandbox 0664` chown on the destination
+  does not satisfy. The Phase 132 `runuser` dispatch fix itself is verified
+  working — it is the ONLY thing ever inside the cgroup. See
+  `docs/operational-gotchas.md` § Interactive sessions run OUTSIDE the eBPF
+  enforcement cgroup and
+  `docs/superpowers/specs/2026-09-06-ssh-session-cgroup-gap-design.md`. What
   had been enforcing a profile's allowlist for every poller-dispatched and
   `km agent run` turn was the DNS resolver and the HTTP proxy alone, neither of
   which is cgroup-scoped. **This fix switches BPF enforcement on for agent
@@ -1634,6 +1644,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | kubectl in a sandbox against a cluster only your laptop can reach — `km tunnel` operator runbook: prerequisites, flags, troubleshooting, the `socks` mode, deploy surface | `docs/k8s-reverse-tunnel.md` (Phase 130) |
 | **How the k8s tunnel actually works** — the three nested tunnels and why SSM forced SSH-inside-SSM, the ExecCredential proxy and why the broker is deliberately dumb, the `tls-server-name`-vs-CA split, the exec apiVersion exact-match trap, the precise trust boundary, and why the deploy surface is `make build` alone | `docs/k8s-reverse-tunnel-internals.md` (Phase 130) |
 | Persistent agent panes that survive detach — `km herdr start`, the base/tools/herdr fragment, km-presence signal 8, the pause-vs-stop lifecycle trap, the ssh-config conflict, deploy surface | `docs/herdr-remote-attach.md` |
+| Why the eBPF allowlist does not apply in `km shell`, `km herdr`, `km vscode` or direct `ssh` — the cgroup v2 common-ancestor rule, what DNS/proxy still cover, and the two measurement traps | `docs/operational-gotchas.md` § Interactive sessions run OUTSIDE the eBPF enforcement cgroup |
 | Why a detached herdr session did or did not keep a sandbox awake — signal 8's busy-pane rule, why it detects work rather than the server, and why a quiet session is still reaped | `docs/herdr-remote-attach.md` § Signal 8 |
 | Cross-account capacity borrowing — `km account add/register/list/rm`, `spec.runtime.launchAccount`, the two-credential enrollment sequence, the launcher-role security model, capacity/teardown/doctor cross-account wiring, deploy surface | `docs/cross-account-capacity-borrowing.md` (Phase 126) |
 | Private-subnet sandboxes + per-AZ NAT gateways — `network.nat_gateway` / `spec.network.privateSubnet` toggles, cost, the one-time route-table split, reversal, guards, deploy surface | `docs/private-subnet-nat.md` (Phase 125) |

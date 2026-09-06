@@ -384,6 +384,69 @@ attribute); delete only on explicit `km destroy`.
 
 ## Sandbox runtime & OS bootstrap
 
+### Interactive sessions run OUTSIDE the eBPF enforcement cgroup
+
+**Every interactive entry point — `km shell`, `km herdr`, `km vscode`, direct
+`ssh`, `sudo -u sandbox` — runs outside the per-sandbox cgroup the eBPF network
+programs are attached to.** The cgroup-attached allow-trie therefore does not
+apply to anything an operator does interactively. Measured 2026-09-06 on a live
+`enforcement: both` sandbox; see
+`docs/superpowers/specs/2026-09-06-ssh-session-cgroup-gap-design.md` for the raw
+evidence and reproduction steps.
+
+| entry path | lands in | in `km.slice`? |
+|---|---|---|
+| agent dispatch (Phase 132, `runuser` after a root join) | `km.slice/km-<id>.scope` | **yes** |
+| `km shell` (SSM session document, `runAs sandbox`) | `system.slice/amazon-ssm-agent.service` | no |
+| `km herdr` / `km vscode` / direct `ssh` | `user.slice/user-1001.slice/session-N.scope` | no |
+| `sudo -u sandbox` | `user.slice/user-1001.slice/session-N.scope` | no |
+
+**Why.** `km-sandbox-shell` and `/etc/profile.d/km-cgroup.sh` both try to join
+by writing `$$` into the scope's `cgroup.procs`. km-bootstrap chowns that file
+`root:sandbox 0664`, which is necessary but **not sufficient**: cgroup v2
+requires write access to the `cgroup.procs` of the **common ancestor** of the
+source and destination cgroups. Every interactive source cgroup has the *root*
+cgroup as its common ancestor with `km.slice/…`, and that file is
+`root:root 0644`. The write fails `EPERM` from every direction — and
+`2>/dev/null || true` swallows it, so the wrapper looks like it works.
+
+For `ssh` there is a second, independent blocker: `pam_systemd` places the
+session in `user.slice` before the login shell ever runs.
+
+**This is the same family as the Phase 132 finding**, which fixed the 15 agent
+dispatch sites by joining as root in a forked subshell and dropping privileges
+with `runuser` (never `sudo`/`su`, which re-migrate via PAM). That fix works —
+verified — but it cannot reach sshd or the SSM session document, because in
+both cases km does not own the process placement at the moment the uid drops.
+
+**What still applies, and what does not:**
+
+| layer | applies to an interactive session? | why |
+|---|---|---|
+| DNS resolver allow/deny | **yes** | `/etc/resolv.conf` → `127.0.0.1`; the resolver is neither uid- nor cgroup-scoped |
+| HTTP/S proxy (metering, GitHub filter, MITM intercepts) | **yes** | `HTTPS_PROXY` is exported into the sandbox user's environment |
+| eBPF `connect4`/`sendmsg4`/`sockops`/`egress` allow-trie | **no** | attached to the cgroup |
+
+So this is a **defence-in-depth loss, not an open door**. What the BPF layer
+uniquely catches is traffic that bypasses both DNS and the proxy — a connection
+to a literal IP, or a process that ignores the proxy environment. An operator
+in a herdr pane or a `km shell` can do both. It makes no practical difference on
+a wide-open profile (`allowedDNSSuffixes: ["*"]`); it bites on
+`base/network/locked`-style profiles and on anything relying on
+`km-netpolicy deny` or `pin` to hold against an interactive user.
+
+**Corollary for `km-netpolicy pin`:** a pin narrows the DNS resolver and the
+proxy, both of which still apply — but its boot pre-seed of the BPF allow-trie
+has never constrained an interactive session.
+
+**Debugging note.** Two traps make this easy to measure wrong. `$$` inside a
+`( … )` subshell reports the *invoking* shell's pid, not the subshell's — which
+is exactly why the shipped dispatch code uses `$BASHPID`; using `$$` produces a
+false negative. And when driving the SSM session document from the CLI, `$$`
+must be written `\\$\\$` — the `shellProfile` interpolates the parameter inside
+double quotes, so an unescaped form is eaten by the outer shell and reports a
+misleading `EINVAL` instead of `EPERM`.
+
 ### Ubuntu userdata constraints (vs Amazon Linux)
 
 The EC2 userdata bootstrap (`pkg/compiler/userdata.go` + the remote-create stub in
