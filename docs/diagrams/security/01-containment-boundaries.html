@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Containment boundaries — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper:      #0a0a0f;
+      --paper-2:    #111118;
+      --ink:        #e4e4ef;
+      --muted:      #9090a8;
+      --soft:       #7e7e98;
+      --rule:       #2a2a3a;
+      --accent:     #00d4aa;
+      --link:       #6a95d8;
+      --boundary:   #ff5c5c;
+      --font-sans:  'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono:  'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1360px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--ink); margin-bottom: 0.5rem;
+    }
+    .standfirst {
+      font-family: var(--font-sans); font-size: 0.9rem; line-height: 1.5;
+      color: var(--muted); max-width: 76ch; margin-bottom: 1.75rem;
+    }
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Nested containment · Klanker Maker security model</p>
+    <h1>Six boundaries between the agent and your account</h1>
+    <p class="standfirst">Each ring is enforced by a different system, by a different principal, at a different moment. Read the right-hand caption of each ring as the answer to “what does crossing this cost an attacker?” Only the innermost ring can be erased from inside the box.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="containment-title containment-desc">
+      <title id="containment-title">Containment boundaries around a Klanker Maker sandbox</title>
+      <desc id="containment-desc">Six nested trust boundaries — AWS Organization with a Service Control Policy, the application account under a region lock, the VPC, the subnet and its security group, the EC2 host running as root, and innermost the sandbox uid inside a cgroup. The agent process sits in the innermost ring; a note marks that a privileged profile collapses the two innermost rings, while the outer four are enforced off-box and still hold.</desc>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ═══ RING 1 — AWS Organization ═══ -->
+      <rect x="40" y="48" width="1200" height="572" rx="8" fill="rgba(228,228,239,0.010)" stroke="rgba(255,92,92,0.28)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="56" y="42" width="104" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="60" y="51" fill="rgba(255,92,92,0.75)" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">AWS ORGANIZATION</text>
+      <rect x="972" y="42" width="252" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1224" y="51" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.04em">SCP DENIES SG · VPC · IGW · IAM · RUNINSTANCES</text>
+
+      <!-- ═══ RING 2 — Application account ═══ -->
+      <rect x="68" y="80" width="1144" height="508" rx="8" fill="rgba(228,228,239,0.014)" stroke="rgba(255,92,92,0.34)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="84" y="74" width="124" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="88" y="83" fill="rgba(255,92,92,0.75)" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">APPLICATION ACCOUNT</text>
+      <rect x="964" y="74" width="232" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1196" y="83" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.04em">REGION LOCK · DENY OUTSIDE ALLOWED REGIONS</text>
+
+      <!-- ═══ RING 3 — VPC ═══ -->
+      <rect x="96" y="112" width="1088" height="444" rx="8" fill="rgba(228,228,239,0.018)" stroke="rgba(255,92,92,0.40)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="112" y="106" width="36" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="116" y="115" fill="rgba(255,92,92,0.75)" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">VPC</text>
+      <rect x="924" y="106" width="244" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1168" y="115" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.04em">ONE PER INSTALL · PRIVATE SUBNET + NAT OPTIONAL</text>
+
+      <!-- ═══ RING 4 — Subnet + security group ═══ -->
+      <rect x="124" y="144" width="1032" height="380" rx="8" fill="rgba(228,228,239,0.022)" stroke="rgba(255,92,92,0.46)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="140" y="138" width="148" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="144" y="147" fill="rgba(255,92,92,0.75)" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">SUBNET + SECURITY GROUP</text>
+      <rect x="908" y="138" width="232" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1140" y="147" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.04em">ZERO INGRESS RULES · EGRESS TCP/443 UDP/53</text>
+
+      <!-- ═══ RING 5 — EC2 host, root ═══ -->
+      <rect x="152" y="176" width="976" height="316" rx="8" fill="rgba(228,228,239,0.026)" stroke="rgba(255,92,92,0.54)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="168" y="170" width="100" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="172" y="179" fill="rgba(255,92,92,0.85)" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">EC2 HOST · ROOT</text>
+      <rect x="856" y="170" width="256" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1112" y="179" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.04em">IMDS FENCE · KM-SECRETSD · EBPF AT CGROUP2 ROOT</text>
+
+      <!-- ═══ RING 6 — uid sandbox, focal ═══ -->
+      <rect x="180" y="208" width="920" height="252" rx="8" fill="rgba(0,212,170,0.06)" stroke="#00d4aa" stroke-width="1.2"/>
+      <rect x="196" y="202" width="184" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="200" y="211" fill="#00d4aa" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">UID SANDBOX · CGROUP KM.SLICE</text>
+      <rect x="868" y="202" width="216" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1084" y="211" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.04em">ALLOW-TRIE · NXDOMAIN DEFAULT · NO IMDS</text>
+
+      <!-- ── innermost contents ── -->
+      <rect x="300" y="284" width="280" height="88" rx="6" fill="#0a0a0f"/>
+      <rect x="300" y="284" width="280" height="88" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1"/>
+      <rect x="308" y="290" width="44" height="12" rx="2" fill="transparent" stroke="rgba(0,212,170,0.40)" stroke-width="0.8"/>
+      <text x="330" y="299" fill="rgba(0,212,170,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">PROC</text>
+      <text x="440" y="332" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">The AI agent</text>
+      <text x="440" y="352" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">runuser -u sandbox -- bash -lc</text>
+
+      <rect x="644" y="284" width="336" height="88" rx="6" fill="#0a0a0f"/>
+      <rect x="644" y="284" width="336" height="88" rx="6" fill="rgba(255,92,92,0.06)" stroke="rgba(255,92,92,0.60)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="652" y="290" width="68" height="12" rx="2" fill="transparent" stroke="rgba(255,92,92,0.45)" stroke-width="0.8"/>
+      <text x="686" y="299" fill="rgba(255,92,92,0.85)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">RESIDUAL</text>
+      <text x="812" y="332" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">privileged: true</text>
+      <text x="812" y="352" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">sudo erases ring 6, then ring 5</text>
+
+      <text x="640" y="412" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">RINGS 1–4 ARE ENFORCED OFF-BOX. NOTHING RUNNING ON THE INSTANCE CAN REACH THEM.</text>
+
+      <!-- ── editorial aside ── -->
+      <text x="1240" y="648" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">the security group is not the egress boundary — the kernel is</text>
+
+      <!-- ── legend ── -->
+      <line x1="40" y1="668" x2="1240" y2="668" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="40" y="692" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <line x1="140" y1="688" x2="168" y2="688" stroke="rgba(255,92,92,0.54)" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="176" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Trust boundary — a deny is enforced here</text>
+
+      <rect x="516" y="682" width="28" height="12" rx="3" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1"/>
+      <text x="552" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Innermost scope — what the agent actually is</text>
+
+      <rect x="908" y="682" width="28" height="12" rx="3" fill="rgba(255,92,92,0.06)" stroke="rgba(255,92,92,0.60)" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="944" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Residual risk the operator accepts</text>
+    </svg>
+  </div>
+</body>
+</html>

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Compensating layers — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #0a0a0f; --paper-2: #111118; --ink: #e4e4ef; --muted: #9090a8;
+      --soft: #7e7e98; --rule: #2a2a3a; --accent: #00d4aa; --link: #6a95d8;
+      --boundary: #ff5c5c;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--paper); color: var(--ink);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1360px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 0.5rem; }
+    .standfirst { font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 78ch; margin-bottom: 1.75rem; }
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Layer stack · compensating security layers</p>
+    <h1>What each layer stops, and what gets past it anyway</h1>
+    <p class="standfirst">No layer here is trusted to hold on its own. Each one exists because the layer above it has a known escape, and the right-hand column names that escape rather than hiding it. Read down the right column and you have the honest threat model.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="layers-title layers-desc">
+      <title id="layers-title">Compensating security layers around a sandbox agent</title>
+      <desc id="layers-desc">Five defensive layers stacked from agent tool gating down through process and filesystem, the host kernel, account IAM, and the organization Service Control Policy. Each row names what the layer stops and the escape route it leaves open, so the risk that survives each layer is visible. The host kernel is marked as the layer doing the most work, and a final band states the residual risk and the detection-based response.</desc>
+
+      <defs>
+        <marker id="arrow-risk" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="rgba(255,92,92,0.60)"/>
+        </marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ── threat input ── -->
+      <rect x="128" y="48" width="1112" height="52" rx="6" fill="rgba(255,92,92,0.06)" stroke="rgba(255,92,92,0.50)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="144" y="58" width="52" height="12" rx="2" fill="transparent" stroke="rgba(255,92,92,0.45)" stroke-width="0.8"/>
+      <text x="170" y="67" fill="rgba(255,92,92,0.85)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">THREAT</text>
+      <text x="212" y="80" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Assume the agent is compromised and is reaching for a host, a credential, or another box.</text>
+
+      <!-- ── risk direction indicator (outside the stack) ── -->
+      <text x="80" y="112" fill="rgba(255,92,92,0.75)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">RISK</text>
+      <line x1="80" y1="124" x2="80" y2="464" stroke="rgba(255,92,92,0.40)" stroke-width="1" marker-end="url(#arrow-risk)"/>
+
+      <!-- ── column headers ── -->
+      <text x="184" y="112" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">DEFENSIVE LAYER</text>
+      <text x="516" y="112" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">WHAT IT STOPS</text>
+      <text x="872" y="112" fill="rgba(255,92,92,0.70)" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">WHAT STILL GETS THROUGH</text>
+
+      <!-- ═══ L1 ═══ -->
+      <rect x="128" y="120" width="1112" height="72" fill="#111118"/>
+      <text x="144" y="152" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.10em">L1</text>
+      <text x="184" y="152" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Agent tool gating</text>
+      <text x="184" y="170" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace">spec.agent.claude.tools · settings.json · write-time</text>
+      <text x="516" y="148" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">A tool absent from permissions.allow never runs</text>
+      <text x="516" y="166" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">deny beats allow, unconditionally</text>
+      <text x="872" y="148" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">Bash is usually allowed — and Bash is everything</text>
+      <text x="872" y="166" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">Codex has no native gating; its hooks ship inert</text>
+
+      <!-- ═══ L2 ═══ -->
+      <line x1="128" y1="192" x2="1240" y2="192" stroke="#2a2a3a" stroke-width="1"/>
+      <rect x="128" y="192" width="1112" height="72" fill="#111118"/>
+      <text x="144" y="224" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.10em">L2</text>
+      <text x="184" y="224" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Process and filesystem</text>
+      <text x="184" y="242" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace">uid sandbox · /opt/km/shims · socket 0660 root:sandbox</text>
+      <text x="516" y="220" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">No plaintext secret on disk or in any environ</text>
+      <text x="516" y="238" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">km-env exec only — there is no export verb</text>
+      <text x="872" y="220" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">uid sandbox can speak the broker protocol itself</text>
+      <text x="872" y="238" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">--as claude is a claim, not an authentication</text>
+
+      <!-- ═══ L3 — focal ═══ -->
+      <line x1="128" y1="264" x2="1240" y2="264" stroke="#2a2a3a" stroke-width="1"/>
+      <rect x="128" y="264" width="1112" height="72" fill="rgba(0,212,170,0.09)"/>
+      <rect x="128" y="264" width="4" height="72" fill="#00d4aa"/>
+      <text x="148" y="296" fill="#00d4aa" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.10em">L3</text>
+      <text x="184" y="296" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Host kernel</text>
+      <text x="184" y="314" fill="#00d4aa" font-size="8" font-family="'Geist Mono', monospace">eBPF at the cgroup2 root · iptables · on-box resolver</text>
+      <text x="516" y="292" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">An unlisted destination never leaves the box</text>
+      <text x="516" y="310" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">uid sandbox cannot reach 169.254.169.254</text>
+      <text x="872" y="292" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">sudo unloads all of it when privileged: true</text>
+      <text x="872" y="310" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">An allowed host is allowed — exfil included</text>
+
+      <!-- ═══ L4 ═══ -->
+      <line x1="128" y1="336" x2="1240" y2="336" stroke="#2a2a3a" stroke-width="1"/>
+      <rect x="128" y="336" width="1112" height="72" fill="#111118"/>
+      <text x="144" y="368" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.10em">L4</text>
+      <text x="184" y="368" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Account IAM</text>
+      <text x="184" y="386" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace">instance role · session policy · tag conditions</text>
+      <text x="516" y="364" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">Every grant is scoped to this sandbox's own id</text>
+      <text x="516" y="382" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">Fenced creds are the role minus exactly two Denies</text>
+      <text x="872" y="364" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">The role permanently holds both halves of the</text>
+      <text x="872" y="382" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">decrypt — AWS cannot see which uid is calling</text>
+
+      <!-- ═══ L5 ═══ -->
+      <line x1="128" y1="408" x2="1240" y2="408" stroke="#2a2a3a" stroke-width="1"/>
+      <rect x="128" y="408" width="1112" height="72" fill="#111118"/>
+      <text x="144" y="440" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.10em">L5</text>
+      <text x="184" y="440" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Organization SCP</text>
+      <text x="184" y="458" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace">aws:PrincipalArn · aws:RequestedRegion · deny-only</text>
+      <text x="516" y="436" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">No IAM policy in the account can grant it back</text>
+      <text x="516" y="454" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">No SG, VPC, IGW, snapshot, AMI copy or region hop</text>
+      <text x="872" y="436" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">ec2:RunInstances cannot be tag-gated at all</text>
+      <text x="872" y="454" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">The management account is exempt by AWS design</text>
+
+      <!-- stack silhouette -->
+      <rect x="128" y="120" width="1112" height="360" fill="none" stroke="rgba(228,228,239,0.22)" stroke-width="1"/>
+
+      <!-- ── residual ── -->
+      <rect x="128" y="496" width="1112" height="72" rx="6" fill="rgba(255,92,92,0.06)" stroke="rgba(255,92,92,0.55)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="144" y="506" width="68" height="12" rx="2" fill="transparent" stroke="rgba(255,92,92,0.45)" stroke-width="0.8"/>
+      <text x="178" y="515" fill="rgba(255,92,92,0.85)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">RESIDUAL</text>
+      <text x="228" y="528" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">An unprivileged box with a compromised agent still reaches every allowlisted host.</text>
+      <text x="144" y="552" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">RESPONSE IS DETECTION, NOT PREVENTION — secret_unseal + exec capture + the flow census, joined on pid. The one control that changes this line is privileged: false.</text>
+
+      <!-- ── editorial aside ── -->
+      <text x="1240" y="604" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">every row below L3 is enforced by something the box cannot reach</text>
+
+      <!-- ── legend ── -->
+      <line x1="40" y1="668" x2="1240" y2="668" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="40" y="692" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="140" y="682" width="28" height="12" fill="rgba(0,212,170,0.09)" stroke="#00d4aa" stroke-width="1"/>
+      <text x="176" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">The layer carrying the most load</text>
+
+      <text x="516" y="692" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace">RED TEXT</text>
+      <text x="600" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Escape this layer leaves open, on purpose</text>
+
+      <rect x="908" y="682" width="28" height="12" rx="3" fill="rgba(255,92,92,0.06)" stroke="rgba(255,92,92,0.55)" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="944" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Risk entering, and risk surviving</text>
+    </svg>
+  </div>
+</body>
+</html>

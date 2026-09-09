@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How Terraform is invoked — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #0a0a0f; --paper-2: #111118; --ink: #e4e4ef; --muted: #9090a8;
+      --soft: #7e7e98; --rule: #2a2a3a; --accent: #00d4aa; --link: #6a95d8; --boundary: #ff5c5c;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--paper); color: var(--ink);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1360px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 0.5rem; }
+    .standfirst { font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 78ch; margin-bottom: 1.75rem; }
+    code { font-family: var(--font-mono); font-size: 0.85em; color: var(--ink); }
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · infrastructure-as-code invocation path</p>
+    <h1>Who runs Terraform, from where, and where the state actually lives</h1>
+    <p class="standfirst">You never invoke <code>terraform</code> yourself, and no local state file exists anywhere in the project. <code>km</code> resolves <code>km-config.yaml</code> into <code>KM_*</code> environment variables, sets the working directory to one committed unit, and execs a pinned <code>terragrunt</code>. The same tree, the same binaries and the same S3 backend are used again inside a Lambda for remote creates — which is why the deploy surface for a schema change includes rebuilding that Lambda.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="tgrun-title tgrun-desc">
+      <title id="tgrun-title">How Klanker Maker invokes Terragrunt and where Terraform state lives</title>
+      <desc id="tgrun-desc">On the operator workstation, km-config.yaml and the committed infra tree feed the km binary, which execs a pinned terragrunt and terraform against one unit directory. Terragrunt reads and writes state in a named S3 bucket with a named DynamoDB lock table; no state is ever local. km also uploads the same toolchain and a tarball of the infra tree to the artifacts bucket, from which the create-handler Lambda fetches it at cold start and runs the identical terragrunt against the identical backend.</desc>
+
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9090a8"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#00d4aa"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ═══ zones ═══ -->
+      <rect x="40" y="104" width="560" height="424" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.12)" stroke-width="0.8"/>
+      <rect x="56" y="108" width="132" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="60" y="117" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">OPERATOR WORKSTATION</text>
+
+      <rect x="632" y="104" width="608" height="260" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.12)" stroke-width="0.8"/>
+      <rect x="648" y="108" width="160" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="652" y="117" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">AWS · APPLICATION ACCOUNT</text>
+
+      <rect x="632" y="388" width="608" height="176" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.12)" stroke-width="0.8"/>
+      <rect x="648" y="392" width="204" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="652" y="401" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LAMBDA RUNTIME · NO GO TOOLCHAIN</text>
+
+      <!-- ═══ paths ═══ -->
+
+      <!-- P1 config → km -->
+      <line x1="176" y1="220" x2="176" y2="268" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="184" y="238" width="92" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="188" y="247" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">LOAD + MERGE</text>
+
+      <!-- P3 tree → km -->
+      <line x1="432" y1="220" x2="432" y2="268" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="440" y="238" width="64" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="444" y="247" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">UNIT DIR</text>
+
+      <!-- P2 km → terragrunt -->
+      <line x1="304" y1="360" x2="304" y2="412" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="312" y="380" width="196" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="316" y="389" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">exec · cwd = unit dir · KM_* in env</text>
+
+      <!-- P4 terragrunt → backend -->
+      <path d="M 544,460 H 604 Q 612,460 612,452 V 208 Q 612,200 620,200 H 676" fill="none" stroke="#00d4aa" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <rect x="620" y="246" width="76" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="624" y="255" fill="#00d4aa" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">STATE+LOCK</text>
+
+      <!-- P5 km → artifacts (deploy-time, bridged over P4) -->
+      <path d="M 544,300 H 604 a 6,6 0 0,1 12,0 H 676" fill="none" stroke="#9090a8" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <rect x="548" y="278" width="96" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="596" y="287" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">UPLOAD toolchain</text>
+
+      <!-- P6 artifacts → lambda -->
+      <line x1="944" y1="340" x2="944" y2="416" stroke="#9090a8" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <rect x="952" y="370" width="112" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="956" y="379" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">FETCH AT COLD START</text>
+
+      <!-- P7 lambda → backend -->
+      <path d="M 1208,480 H 1216 Q 1224,480 1224,472 V 208 Q 1224,200 1216,200 H 1212" fill="none" stroke="#00d4aa" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <rect x="1084" y="370" width="132" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1212" y="379" fill="#00d4aa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">SAME BACKEND, SAME KEYS</text>
+
+      <!-- ═══ nodes ═══ -->
+
+      <!-- N1 km-config.yaml -->
+      <rect x="64" y="136" width="224" height="84" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="136" width="224" height="84" rx="6" fill="rgba(228,228,239,0.10)" stroke="#7e7e98" stroke-width="1"/>
+      <rect x="72" y="142" width="48" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="96" y="151" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">HUMAN</text>
+      <text x="176" y="180" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">km-config.yaml</text>
+      <text x="176" y="198" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">the only file a person writes</text>
+      <text x="176" y="214" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">gitignored · per install</text>
+
+      <!-- N3 infra tree -->
+      <rect x="320" y="136" width="224" height="84" rx="6" fill="#0a0a0f"/>
+      <rect x="320" y="136" width="224" height="84" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="328" y="142" width="32" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="344" y="151" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GIT</text>
+      <text x="432" y="180" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">infra/live + infra/modules</text>
+      <text x="432" y="198" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">28 regional units, in order</text>
+      <text x="432" y="214" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">modules pinned by directory</text>
+
+      <!-- N2 km binary — FOCAL -->
+      <rect x="64" y="272" width="480" height="88" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="272" width="480" height="88" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <rect x="72" y="278" width="32" height="12" rx="2" fill="transparent" stroke="rgba(0,212,170,0.40)" stroke-width="0.8"/>
+      <text x="88" y="287" fill="rgba(0,212,170,0.85)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CLI</text>
+      <text x="304" y="316" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">km init · km create · km destroy</text>
+      <text x="304" y="334" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">km-config.yaml → KM_* env → get_env() in site.hcl</text>
+      <text x="304" y="350" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">a SandboxProfile compiles to service.hcl + user-data.sh</text>
+
+      <!-- N4 pinned tools -->
+      <rect x="64" y="416" width="480" height="88" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="416" width="480" height="88" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="72" y="422" width="52" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="98" y="431" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">PINNED</text>
+      <text x="304" y="460" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">terragrunt 0.99.1 + terraform 1.9.8</text>
+      <text x="304" y="478" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">exec'd one unit at a time — never run-all</text>
+      <text x="304" y="494" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">writes backend.tf + provider.tf into .terragrunt-cache/</text>
+
+      <!-- N5 remote backend — ACCENT -->
+      <rect x="680" y="136" width="528" height="104" rx="6" fill="#0a0a0f"/>
+      <rect x="680" y="136" width="528" height="104" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <rect x="688" y="142" width="44" height="12" rx="2" fill="transparent" stroke="rgba(0,212,170,0.40)" stroke-width="0.8"/>
+      <text x="710" y="151" fill="rgba(0,212,170,0.85)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STATE</text>
+      <text x="944" y="180" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Remote backend — no local state exists, anywhere</text>
+      <text x="696" y="202" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">bucket   tf-{prefix}-state-{regionLabel}     e.g. tf-km-state-use1</text>
+      <text x="696" y="218" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">lock     tf-{prefix}-locks-{regionLabel}     e.g. tf-km-locks-use1</text>
+      <text x="696" y="234" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">key      tf-{prefix}/{regionLabel}/{unit}/terraform.tfstate</text>
+
+      <!-- N6 artifacts bucket -->
+      <rect x="680" y="264" width="528" height="76" rx="6" fill="#0a0a0f"/>
+      <rect x="680" y="264" width="528" height="76" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="688" y="270" width="28" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="702" y="279" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">S3</text>
+      <text x="944" y="308" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">{prefix}-artifacts-{account-id}</text>
+      <text x="944" y="328" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">toolchain/{km, terraform, terragrunt, infra.tar.gz, km-config.yaml}</text>
+
+      <!-- N7 create-handler -->
+      <rect x="680" y="420" width="528" height="120" rx="6" fill="#0a0a0f"/>
+      <rect x="680" y="420" width="528" height="120" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="688" y="426" width="52" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="714" y="435" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">LAMBDA</text>
+      <text x="944" y="466" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">{prefix}-create-handler</text>
+      <text x="944" y="488" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">unpacks infra.tar.gz into /tmp/toolchain, runs the same terragrunt</text>
+      <text x="944" y="506" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">no Go toolchain, no checkout — the tree travels as an artifact</text>
+      <text x="944" y="526" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">this is why a schema change needs make build-lambdas + km init</text>
+
+      <!-- ── editorial callout ── -->
+      <text x="40" y="600" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">backend.tf and provider.tf are generated at runtime, never committed</text>
+      <path d="M 476 592 Q 404 560 308 508" fill="none" stroke="rgba(228,228,239,0.35)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="304" cy="506" r="2" fill="#e4e4ef"/>
+
+      <!-- ── legend ── -->
+      <line x1="40" y1="668" x2="1240" y2="668" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="40" y="692" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="140" y="682" width="28" height="12" rx="3" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1"/>
+      <text x="176" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Authoritative — no local copy exists</text>
+
+      <line x1="452" y1="688" x2="480" y2="688" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="496" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Runtime invocation</text>
+
+      <line x1="668" y1="688" x2="696" y2="688" stroke="#9090a8" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <text x="712" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Deploy-time artifact copy</text>
+
+      <rect x="916" y="682" width="28" height="12" rx="3" fill="rgba(228,228,239,0.10)" stroke="#7e7e98" stroke-width="1"/>
+      <text x="952" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Hand-authored</text>
+    </svg>
+  </div>
+</body>
+</html>

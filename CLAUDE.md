@@ -1725,6 +1725,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 
 | You want to… | Look at |
 |---|---|
+| **Visual walkthrough of the security model** — nested containment boundaries, what each defensive layer stops vs. what it lets through, brokered secret unsealing, the bridge Lambda's trust boundary, the IMDS fence as paired policy traces | `docs/diagrams/security/` (single-file HTML, open in a browser) |
+| **How terraform/terragrunt is actually invoked** — the one exec site, the named state bucket + lock table, why there is no committed `backend.tf`/`provider.tf`/`region.hcl`, and which process authors every file an apply touches | `docs/diagrams/security/06-terragrunt-invocation.html` + `07-iac-provenance.html` |
 | Push webhook ingress — `webhooks:` block, Wiz Automation Rule setup, canonical km payload template, storm control (replay/cooldown/group_by/rate ceiling), deploy surface | `docs/webhook-ingress.md` |
 | Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the eight `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
 | Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
