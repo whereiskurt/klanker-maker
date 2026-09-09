@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bootstrap and init — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #0a0a0f; --paper-2: #111118; --ink: #e4e4ef; --muted: #9090a8;
+      --soft: #7e7e98; --rule: #2a2a3a; --accent: #00d4aa; --link: #6a95d8; --boundary: #ff5c5c;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--paper); color: var(--ink);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1360px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 0.5rem; }
+    .standfirst { font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 78ch; margin-bottom: 1.75rem; }
+    code { font-family: var(--font-mono); font-size: 0.85em; color: var(--ink); }
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · bootstrap then init</p>
+    <h1>What each command applies, and the two things that aren't Terraform</h1>
+    <p class="standfirst"><code>km bootstrap</code> and <code>km init</code> are not two halves of one apply — they run different units, in different accounts, with different credentials, and two of bootstrap's resources are created by direct SDK calls with no state file at all. That is a deliberate chicken-and-egg answer, not an oversight: the KMS key and the artifacts bucket have to exist before anything can be stored in them.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="binit-title binit-desc">
+      <title id="binit-title">The order km bootstrap and km init apply infrastructure</title>
+      <desc id="binit-desc">A flow from km configure through a conditional on whether an organization account is configured. When it is, km bootstrap applies the management SCP unit using organization-account credentials; when it is not, the SCP is skipped. Both paths rejoin at a step that creates the platform KMS key and the artifacts bucket through direct AWS SDK calls rather than Terraform. Two opt-in shared units follow, then km init applies twenty-eight regional units one at a time in a fixed order, ending with the install ready for km create.</desc>
+
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9090a8"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#00d4aa"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ═══ connectors (before nodes) ═══ -->
+
+      <!-- A1 configure → decision -->
+      <line x1="200" y1="160" x2="200" y2="188" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- A2 decision → YES branch -->
+      <line x1="304" y1="240" x2="396" y2="240" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="336" y="220" width="32" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="352" y="229" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <!-- A3 decision → NO, straight to the merge -->
+      <line x1="200" y1="288" x2="200" y2="340" stroke="#9090a8" stroke-width="1.2"/>
+      <rect x="208" y="306" width="96" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="212" y="315" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">NO · SCP SKIPPED</text>
+
+      <!-- A4 SCP → merge -->
+      <path d="M 528,288 V 332 Q 528,340 520,340 H 208" fill="none" stroke="#9090a8" stroke-width="1.2"/>
+
+      <!-- merge dot -->
+      <circle cx="200" cy="340" r="4" fill="#9090a8"/>
+
+      <!-- A5 merge → SDK step -->
+      <line x1="200" y1="344" x2="200" y2="380" stroke="#00d4aa" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+
+      <!-- A6 SDK step → shared units -->
+      <line x1="368" y1="448" x2="452" y2="448" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- A7 shared → km init -->
+      <line x1="736" y1="448" x2="820" y2="448" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- A8 km init → ready -->
+      <line x1="964" y1="512" x2="964" y2="556" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- ═══ nodes ═══ -->
+
+      <!-- N1 start oval -->
+      <rect x="88" y="104" width="224" height="56" rx="20" fill="#0a0a0f"/>
+      <rect x="88" y="104" width="224" height="56" rx="20" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="200" y="130" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">km configure</text>
+      <text x="200" y="148" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">writes km-config.yaml</text>
+
+      <!-- N2 decision diamond -->
+      <polygon points="96,240 200,192 304,240 200,288" fill="#0a0a0f"/>
+      <polygon points="96,240 200,192 304,240 200,288" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="200" y="236" fill="#e4e4ef" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">accounts.organization</text>
+      <text x="200" y="254" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">set?</text>
+
+      <!-- N3 SCP unit -->
+      <rect x="396" y="192" width="264" height="96" rx="6" fill="#0a0a0f"/>
+      <rect x="396" y="192" width="264" height="96" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="404" y="198" width="92" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="450" y="207" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">01 · TERRAGRUNT</text>
+      <text x="528" y="238" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">live/management/scp</text>
+      <text x="528" y="258" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">assumes {prefix}-org-admin</text>
+      <text x="528" y="276" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">the only unit outside the app acct</text>
+
+      <!-- N4 SDK step — FOCAL -->
+      <rect x="88" y="380" width="280" height="136" rx="6" fill="#0a0a0f"/>
+      <rect x="88" y="380" width="280" height="136" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <rect x="96" y="386" width="80" height="12" rx="2" fill="transparent" stroke="rgba(0,212,170,0.40)" stroke-width="0.8"/>
+      <text x="136" y="395" fill="rgba(0,212,170,0.85)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">02 · AWS SDK</text>
+      <text x="228" y="426" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">KMS key + artifacts bucket</text>
+      <text x="104" y="448" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">alias/{prefix}-platform</text>
+      <text x="104" y="464" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">{prefix}-artifacts-{account-id}</text>
+      <text x="104" y="488" fill="#00d4aa" font-size="9" font-family="'Geist Mono', monospace">NOT Terraform — kms.CreateKey</text>
+      <text x="104" y="504" fill="#00d4aa" font-size="9" font-family="'Geist Mono', monospace">and s3.CreateBucket, called direct</text>
+
+      <!-- N5 opt-in shared units -->
+      <rect x="452" y="380" width="284" height="136" rx="6" fill="#0a0a0f"/>
+      <rect x="452" y="380" width="284" height="136" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="460" y="386" width="72" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="496" y="395" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">03 · OPT-IN</text>
+      <text x="594" y="426" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">km bootstrap --shared-*</text>
+      <text x="468" y="448" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">use1/ses-shared-rule-set</text>
+      <text x="468" y="464" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">use1/sandbox-secrets-key</text>
+      <text x="468" y="488" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">both pinned to use1 · idempotent</text>
+      <text x="468" y="504" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">rule set has prevent_destroy</text>
+
+      <!-- N6 km init -->
+      <rect x="824" y="380" width="280" height="136" rx="6" fill="#0a0a0f"/>
+      <rect x="824" y="380" width="280" height="136" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="832" y="386" width="92" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="878" y="395" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">04 · TERRAGRUNT</text>
+      <text x="964" y="426" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">km init --dry-run=false</text>
+      <text x="840" y="448" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">28 regional units, fixed order</text>
+      <text x="840" y="464" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">one apply at a time, never run-all</text>
+      <text x="840" y="488" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">network first — efs reads its</text>
+      <text x="840" y="504" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">outputs.json, so order is load-bearing</text>
+
+      <!-- N7 end oval -->
+      <rect x="824" y="556" width="280" height="56" rx="20" fill="#0a0a0f"/>
+      <rect x="824" y="556" width="280" height="56" rx="20" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="964" y="582" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">ready for km create</text>
+      <text x="964" y="600" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">the backend appeared on apply #1</text>
+
+      <!-- ── editorial callout ── -->
+      <text x="1240" y="136" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">the state bucket is created by the first apply, not by a module</text>
+      <path d="M 848 148 Q 760 172 656 224" fill="none" stroke="rgba(228,228,239,0.35)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="654" cy="226" r="2" fill="#e4e4ef"/>
+
+      <!-- ── note ── -->
+      <text x="640" y="648" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">STEP 02 IS STILL CODE AND STILL REPEATABLE — BUT IT IS IN NO STATE FILE, SO NO PLAN WILL EVER SHOW IT AND km uninit WILL NOT REMOVE IT.</text>
+
+      <!-- ── legend ── -->
+      <line x1="40" y1="668" x2="1240" y2="668" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="40" y="692" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="140" y="682" width="28" height="12" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="176" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Start / end</text>
+
+      <rect x="296" y="682" width="28" height="12" rx="3" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="332" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">A step — the unit or the call it runs</text>
+
+      <polygon points="540,688 552,680 564,688 552,696" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="576" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Conditional, read from km-config.yaml</text>
+
+      <rect x="832" y="682" width="28" height="12" rx="3" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1"/>
+      <text x="868" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Not Terraform</text>
+    </svg>
+  </div>
+</body>
+</html>

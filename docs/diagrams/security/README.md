@@ -19,6 +19,7 @@ authoritative, these exist to make the shape of the thing legible in one look.
 | 6 | [Terragrunt invocation path](06-terragrunt-invocation.html) | Who runs Terraform, from where, against which named bucket and lock table |
 | 7 | [IaC file provenance](07-iac-provenance.html) | Which process authors every file an apply touches — and why `backend.tf` is not in the repo |
 | 8 | [YAML → HCL compiler](08-yaml-to-hcl-compiler.html) | How the two YAML inputs travel separate routes, and what `compiler.Compile()` actually emits |
+| 9 | [Bootstrap and init](09-bootstrap-and-init.html) | What each command applies, in which account, and the two resources that are not Terraform |
 
 ## YAML → HCL, in prose
 
@@ -92,6 +93,146 @@ derive, so `km create` uploads it under `artifacts/<sandbox-id>/`:
 The same resolved profile is also dumped on the box at
 `/opt/km/.km-profile.yaml`, which is what makes the `klanker:sandbox`
 self-census possible.
+
+## The HCL for bootstrap and init
+
+Diagram 9 is the order. This is the wiring.
+
+### `km bootstrap` — three things, only one of them Terraform
+
+| What | How | Where |
+|---|---|---|
+| SCP `{prefix}-sandbox-containment` | `terragrunt apply` | `infra/live/management/scp` → `infra/modules/scp/v2.0.0` |
+| KMS key `alias/{prefix}-platform` | `kms.CreateKey` + `CreateAlias`, direct SDK | no unit, no state |
+| S3 `{prefix}-artifacts-{account-id}` | `s3.CreateBucket` + `PutBucketVersioning`, direct SDK | no unit, no state |
+
+The last two are a chicken-and-egg answer, not an oversight — the artifacts bucket
+is where Lambda zips and the toolchain live, so it has to exist before anything
+can be uploaded to it, and the KMS key encrypts the SSM parameters the rest of
+the platform writes. They are created imperatively and idempotently
+(`HeadBucket` / `DescribeKey` first, create only on a miss).
+
+The consequence worth knowing: **no `terragrunt plan` will ever show them, and
+`km uninit` will not remove them.** `km unbootstrap` is the command that does.
+
+`km bootstrap --shared-ses` and `--shared-secrets-key` are separate, opt-in
+subcommands applying one unit each — `infra/live/use1/ses-shared-rule-set` and
+`infra/live/use1/sandbox-secrets-key`. Both paths are **hardcoded to `use1`**,
+not derived from `primary_region`.
+
+### The SCP unit is the one that does not `include "root"`
+
+Every other unit in the tree inherits `root.hcl`'s backend and provider. The SCP
+unit declares its own, because it has to run against a different account:
+
+```hcl
+# infra/live/management/scp/terragrunt.hcl
+locals {
+  site     = read_terragrunt_config(find_in_parent_folders("site.hcl")).locals.site
+  accounts = read_terragrunt_config(find_in_parent_folders("site.hcl")).locals.accounts
+}
+
+generate "provider" {
+  path      = "provider.tf"
+  if_exists = "overwrite_terragrunt"
+  contents  = <<-EOF
+    provider "aws" {
+      region = "us-east-1"
+      assume_role {
+        role_arn = "arn:aws:iam::${local.accounts.organization}:role/${local.site.label}-org-admin"
+      }
+      ...
+    }
+  EOF
+}
+
+remote_state {
+  config = {
+    # state key is NOT region-prefixed — Organizations is a global service
+    key = "${local.site.tf_state_prefix}/management/scp/terraform.tfstate"
+    ...
+  }
+}
+
+terraform {
+  source = "${dirname(find_in_parent_folders("CLAUDE.md"))}/infra/modules/scp//v2.0.0"
+}
+```
+
+Two details there are load-bearing. The role it assumes is
+`{prefix}-org-admin`, so a non-default install assumes **its own** org-admin role
+rather than the canonical install's. And the state key omits the region, because
+an SCP is global — putting it under a region label would have made a second
+region's apply create a second, competing policy.
+
+### `km init` — 28 units, and why the order is not cosmetic
+
+`regionalModules()` in `internal/app/cmd/init.go` is the ordered list. Two
+different wiring mechanisms decide that order:
+
+- **`efs` reads a file.** Its `terragrunt.hcl` does
+  `jsondecode(file("${get_terragrunt_dir()}/../network/outputs.json"))`, so
+  `network` must have applied first and `outputs.json` must be on disk. That file
+  is a gitignored local cache, written from `terragrunt output -json` or fetched
+  straight out of the state object in S3 (`fetchAndCacheOutputs`). This is why
+  `km init --plan` on a fresh install *skips* `efs` and exits 0 rather than
+  failing.
+- **The five bridge Lambdas use `dependency` blocks** with
+  `mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]`.
+  Terragrunt resolves those itself. `"show"` in that list is not optional — the
+  destroy-class plan gate runs `terragrunt show` on the plan file, and a unit
+  missing it fails there rather than during apply.
+
+A representative unit, start to finish:
+
+```hcl
+# infra/live/use1/network/terragrunt.hcl
+locals {
+  repo_root     = dirname(find_in_parent_folders("CLAUDE.md"))
+  site_vars     = read_terragrunt_config("${local.repo_root}/infra/live/site.hcl")
+  region_config = read_terragrunt_config("${get_terragrunt_dir()}/../region.hcl")
+}
+
+include "root" { path = find_in_parent_folders("root.hcl") }
+
+terraform { source = "${local.repo_root}/infra/modules/network/v1.1.0" }
+
+inputs = {
+  km_label     = local.site_vars.locals.site.label
+  region_label = local.region_config.locals.region_label
+  vpc = { cidr_block = "10.0.0.0/16", ... }
+  nat_gateway = { enabled = tobool(get_env("KM_NAT_GATEWAY_ENABLED", "false")) }
+}
+```
+
+### One value, all the way through
+
+`resource_prefix` is the clearest trace, because it names almost every resource
+in the install:
+
+```text
+km-config.yaml            resource_prefix: km
+      │
+      ▼  ExportTerragruntEnvVars()
+KM_RESOURCE_PREFIX=km     process env, before every terragrunt exec
+      │
+      ▼  infra/live/site.hcl
+locals.site.label            = get_env("KM_RESOURCE_PREFIX", "km")
+locals.site.tf_state_prefix  = "tf-${get_env("KM_RESOURCE_PREFIX", "km")}"
+locals.backend.bucket        = "${local.site.tf_state_prefix}-state-${local.region.label}"
+locals.backend.dynamodb_table= "${local.site.tf_state_prefix}-locks-${local.region.label}"
+      │
+      ├──▼  infra/live/root.hcl        remote_state.config.bucket / dynamodb_table
+      └──▼  a unit's inputs            km_label = local.site_vars.locals.site.label
+              │
+              ▼  infra/modules/<name>/<vN>/variables.tf
+           var.km_label → every resource name and every tag
+```
+
+Set `resource_prefix: rg` and the same tree provisions a second, fully isolated
+install in the same account — different state bucket, different lock table,
+different SCP, different SES rules. Nothing in `infra/` needs editing, which is
+the whole point of routing it through `get_env()` rather than hardcoding it.
 
 ## Reading the colour
 
