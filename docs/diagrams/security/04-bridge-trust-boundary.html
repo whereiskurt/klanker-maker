@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bridge Lambda trust boundary — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #0a0a0f; --paper-2: #111118; --ink: #e4e4ef; --muted: #9090a8;
+      --soft: #7e7e98; --rule: #2a2a3a; --accent: #00d4aa; --link: #6a95d8; --boundary: #ff5c5c;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--paper); color: var(--ink);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1360px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 0.5rem; }
+    .standfirst { font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 78ch; margin-bottom: 1.75rem; }
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · secure paved road</p>
+    <h1>A public URL that GitHub and Slack can reach, and nothing else can use</h1>
+    <p class="standfirst">The Function URL is deliberately unauthenticated at the AWS layer — the auth is the webhook HMAC the sender already computes, verified before a single byte of the payload is parsed. The interesting property is what is missing: the Lambda has no <code>vpc_config</code>, so there is no network path from the bridge into the sandbox subnet. Work reaches a box only because the box asked for it.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="bridge-title bridge-desc">
+      <title id="bridge-title">Trust boundary around the Klanker Maker webhook bridge Lambda</title>
+      <desc id="bridge-desc">GitHub and Slack post HMAC-signed webhooks to a bridge Lambda's public Function URL in the AWS account. An unauthenticated caller is stopped at the account boundary with a 401. The Lambda reads its signing secret from SSM, dedupes and routes through DynamoDB, enqueues onto a per-sandbox FIFO queue and writes an audit trail. The sandbox in the VPC long-polls that queue; a second blocked path shows the Lambda has no VPC attachment and therefore no route into the sandbox subnet.</desc>
+
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9090a8"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#00d4aa"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#6a95d8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ═══ zones (drawn first) ═══ -->
+      <rect x="40" y="120" width="248" height="312" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(255,92,92,0.35)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="56" y="124" width="100" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="60" y="133" fill="rgba(255,92,92,0.75)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">PUBLIC INTERNET</text>
+
+      <rect x="320" y="104" width="584" height="496" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(255,92,92,0.45)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="336" y="108" width="196" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="340" y="117" fill="rgba(255,92,92,0.80)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">AWS ACCOUNT · NO VPC ATTACHMENT</text>
+
+      <rect x="936" y="376" width="304" height="128" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(255,92,92,0.45)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="952" y="380" width="132" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="956" y="389" fill="rgba(255,92,92,0.80)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">VPC · SANDBOX SUBNET</text>
+
+      <!-- ═══ paths (before nodes) ═══ -->
+
+      <!-- P1 permitted ingress -->
+      <line x1="264" y1="188" x2="476" y2="188" stroke="#6a95d8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="306" y="168" width="132" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="372" y="177" fill="#6a95d8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">POST · HMAC-SIGNED</text>
+
+      <!-- P2 forbidden ingress — stops in the gutter between zones -->
+      <line x1="200" y1="372" x2="308" y2="372" stroke="rgba(255,92,92,0.80)" stroke-width="1.2" stroke-dasharray="4,4"/>
+      <line x1="312" y1="356" x2="312" y2="388" stroke="#ff5c5c" stroke-width="3"/>
+      <rect x="208" y="352" width="96" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="256" y="361" fill="rgba(255,92,92,0.85)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">401 · UNSIGNED</text>
+
+      <!-- P3 lambda → SSM -->
+      <path d="M 520,240 V 256 Q 520,264 512,264 H 448 Q 440,264 440,272 V 284" fill="none" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="420" y="244" width="120" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="480" y="253" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">FETCH SECRET</text>
+
+      <!-- P4 lambda → dynamodb -->
+      <line x1="728" y1="240" x2="728" y2="284" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="604" y="262" width="112" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="712" y="271" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">DEDUP + ROUTE</text>
+
+      <!-- P5 lambda → sqs -->
+      <line x1="560" y1="240" x2="560" y2="404" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="568" y="378" width="84" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="572" y="387" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">ENQUEUE</text>
+
+      <!-- P6 sandbox pulls (focal) -->
+      <line x1="752" y1="444" x2="956" y2="444" stroke="#00d4aa" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <rect x="784" y="424" width="144" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="856" y="433" fill="#00d4aa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LONG POLL — BOX PULLS</text>
+
+      <!-- P7 lambda → audit -->
+      <path d="M 476,216 H 344 Q 336,216 336,224 V 532 Q 336,540 344,540" fill="none" stroke="#9090a8" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <rect x="388" y="196" width="48" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="412" y="205" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">AUDIT</text>
+
+      <!-- P8 forbidden — no route into the VPC -->
+      <path d="M 756,176 H 1080 Q 1088,176 1088,184 V 348" fill="none" stroke="rgba(255,92,92,0.80)" stroke-width="1.2" stroke-dasharray="4,4"/>
+      <line x1="1064" y1="352" x2="1112" y2="352" stroke="#ff5c5c" stroke-width="3"/>
+      <rect x="1012" y="326" width="152" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1088" y="335" fill="rgba(255,92,92,0.85)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">NO vpc_config · NO ROUTE IN</text>
+
+      <!-- ═══ nodes ═══ -->
+
+      <!-- N1 senders -->
+      <rect x="64" y="152" width="200" height="72" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="152" width="200" height="72" rx="6" fill="rgba(228,228,239,0.03)" stroke="rgba(228,228,239,0.30)" stroke-width="1"/>
+      <rect x="72" y="158" width="52" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="98" y="167" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SENDER</text>
+      <text x="164" y="192" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">GitHub · Slack · Wiz</text>
+      <text x="164" y="210" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">holds the shared secret</text>
+
+      <!-- N2 attacker -->
+      <rect x="64" y="336" width="136" height="72" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="336" width="136" height="72" rx="6" fill="rgba(255,92,92,0.06)" stroke="rgba(255,92,92,0.60)" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="132" y="372" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Anyone else</text>
+      <text x="132" y="390" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">has the URL</text>
+
+      <!-- N3 bridge lambda — FOCAL -->
+      <rect x="480" y="136" width="272" height="104" rx="6" fill="#0a0a0f"/>
+      <rect x="480" y="136" width="272" height="104" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <rect x="488" y="142" width="52" height="12" rx="2" fill="transparent" stroke="rgba(0,212,170,0.40)" stroke-width="0.8"/>
+      <text x="514" y="151" fill="rgba(0,212,170,0.85)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">LAMBDA</text>
+      <text x="616" y="184" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">km-{slack,github,h1}-bridge</text>
+      <text x="616" y="202" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Function URL · auth NONE</text>
+      <line x1="496" y1="212" x2="736" y2="212" stroke="rgba(0,212,170,0.25)" stroke-width="0.8"/>
+      <text x="616" y="228" fill="#00d4aa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">HMAC → DEDUP → ALLOWLIST → ROUTE</text>
+
+      <!-- N4 ssm -->
+      <rect x="344" y="284" width="192" height="76" rx="6" fill="#0a0a0f"/>
+      <rect x="344" y="284" width="192" height="76" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="440" y="318" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">SSM SecureString</text>
+      <text x="440" y="336" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">signing secret · KMS</text>
+      <text x="440" y="352" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">verify-only, mints nothing</text>
+
+      <!-- N5 dynamodb -->
+      <rect x="584" y="284" width="288" height="76" rx="6" fill="#0a0a0f"/>
+      <rect x="584" y="284" width="288" height="76" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="728" y="318" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">nonces · threads · sandboxes</text>
+      <text x="728" y="336" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">replay guard + channel→sandbox map</text>
+      <text x="728" y="352" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">grants scoped to {prefix}-*</text>
+
+      <!-- N6 sqs -->
+      <rect x="480" y="404" width="272" height="76" rx="6" fill="#0a0a0f"/>
+      <rect x="480" y="404" width="272" height="76" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="616" y="438" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Per-sandbox SQS FIFO</text>
+      <text x="616" y="456" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">MessageGroupId = thread ts</text>
+      <text x="616" y="472" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">poison messages fall to a DLQ</text>
+
+      <!-- N8 audit -->
+      <rect x="344" y="504" width="232" height="72" rx="6" fill="#0a0a0f"/>
+      <rect x="344" y="504" width="232" height="72" rx="6" fill="rgba(228,228,239,0.03)" stroke="rgba(228,228,239,0.30)" stroke-width="1"/>
+      <text x="460" y="538" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">CloudWatch + CloudTrail</text>
+      <text x="460" y="556" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">every drop is logged with a reason</text>
+
+      <!-- N7 sandbox -->
+      <rect x="960" y="408" width="256" height="72" rx="6" fill="#0a0a0f"/>
+      <rect x="960" y="408" width="256" height="72" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="1088" y="442" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Sandbox inbound poller</text>
+      <text x="1088" y="460" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">instance role · outbound only</text>
+
+      <!-- ── editorial callout ── -->
+      <text x="1240" y="632" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">the only thing that crosses into the VPC is a message the box asked for</text>
+      <path d="M 1120 642 Q 1000 600 864 452" fill="none" stroke="rgba(228,228,239,0.35)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="862" cy="450" r="2" fill="#e4e4ef"/>
+
+      <!-- ── legend ── -->
+      <line x1="40" y1="668" x2="1240" y2="668" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="40" y="692" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <line x1="140" y1="688" x2="168" y2="688" stroke="#6a95d8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="184" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Permitted, authenticated ingress</text>
+
+      <line x1="384" y1="688" x2="408" y2="688" stroke="rgba(255,92,92,0.80)" stroke-width="1.2" stroke-dasharray="4,4"/>
+      <line x1="412" y1="682" x2="412" y2="694" stroke="#ff5c5c" stroke-width="3"/>
+      <text x="428" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Blocked — stops at the boundary</text>
+
+      <line x1="628" y1="688" x2="656" y2="688" stroke="#00d4aa" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <text x="672" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">The sandbox pulls; nothing pushes in</text>
+
+      <line x1="896" y1="688" x2="924" y2="688" stroke="#9090a8" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <text x="940" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Audit write</text>
+    </svg>
+  </div>
+</body>
+</html>

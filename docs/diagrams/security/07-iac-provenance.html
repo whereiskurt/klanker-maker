@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Who writes each file — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #0a0a0f; --paper-2: #111118; --ink: #e4e4ef; --muted: #9090a8;
+      --soft: #7e7e98; --rule: #2a2a3a; --accent: #00d4aa; --link: #6a95d8; --boundary: #ff5c5c;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--paper); color: var(--ink);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1360px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 0.5rem; }
+    .standfirst { font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 78ch; margin-bottom: 1.75rem; }
+    code { font-family: var(--font-mono); font-size: 0.85em; color: var(--ink); }
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Swimlane · file provenance</p>
+    <h1>Two files are hand-written. Everything else is produced.</h1>
+    <p class="standfirst">The reason you cannot find a <code>backend.tf</code>, a <code>provider.tf</code>, or a <code>region.hcl</code> in this repository is not that someone configured them by hand somewhere else — it is that Terragrunt's <code>generate</code> blocks write them into <code>.terragrunt-cache/</code> at runtime, and that directory is gitignored. Follow a lane and you can name the process that authored every file the apply touches.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="prov-title prov-desc">
+      <title id="prov-title">Which process authors each file in a Klanker Maker apply</title>
+      <desc id="prov-desc">Five lanes — human, the km CLI, terragrunt, terraform and AWS — trace a single apply. The human lane holds only two steps, writing km-config.yaml and a SandboxProfile. km resolves configuration into environment variables, compiles the profile into service.hcl and user-data.sh, and execs terragrunt in one unit directory. Terragrunt reads root.hcl and site.hcl and generates backend.tf and provider.tf into a gitignored cache directory, terraform applies from a version-pinned module, and AWS holds the resources and the state object.</desc>
+
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9090a8"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#00d4aa"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ── lane bands ── -->
+      <rect x="40" y="192" width="1200" height="96" fill="rgba(228,228,239,0.016)"/>
+      <rect x="40" y="384" width="1200" height="96" fill="rgba(228,228,239,0.016)"/>
+
+      <!-- ── lane dividers + silhouette ── -->
+      <line x1="40" y1="192" x2="1240" y2="192" stroke="#2a2a3a" stroke-width="1"/>
+      <line x1="40" y1="288" x2="1240" y2="288" stroke="#2a2a3a" stroke-width="1"/>
+      <line x1="40" y1="384" x2="1240" y2="384" stroke="#2a2a3a" stroke-width="1"/>
+      <line x1="40" y1="480" x2="1240" y2="480" stroke="#2a2a3a" stroke-width="1"/>
+      <rect x="40" y="96" width="1200" height="480" fill="none" stroke="rgba(228,228,239,0.22)" stroke-width="1"/>
+      <line x1="168" y1="96" x2="168" y2="576" stroke="rgba(228,228,239,0.22)" stroke-width="1"/>
+
+      <!-- ── lane labels ── -->
+      <text x="56" y="144" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.14em">HUMAN</text>
+      <text x="56" y="160" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace">two files, ever</text>
+      <text x="56" y="240" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.14em">km</text>
+      <text x="56" y="256" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace">resolves, compiles</text>
+      <text x="56" y="336" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.14em">terragrunt</text>
+      <text x="56" y="352" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace">generates</text>
+      <text x="56" y="432" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.14em">terraform</text>
+      <text x="56" y="448" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace">applies</text>
+      <text x="56" y="528" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace" letter-spacing="0.14em">AWS</text>
+      <text x="56" y="544" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace">holds state</text>
+
+      <!-- ═══ arrows ═══ -->
+      <path d="M 284,172 V 232 Q 284,240 292,240 H 396" fill="none" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="700" y1="172" x2="700" y2="208" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="600" y1="240" x2="612" y2="240" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="816" y1="240" x2="828" y2="240" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="932" y1="268" x2="932" y2="304" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="940" y="282" width="88" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="944" y="291" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">cwd = unit dir</text>
+
+      <line x1="1032" y1="336" x2="1044" y2="336" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <line x1="1144" y1="364" x2="1144" y2="400" stroke="#00d4aa" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <rect x="1000" y="376" width="136" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1136" y="385" fill="#00d4aa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">backend.tf + provider.tf</text>
+
+      <line x1="1144" y1="460" x2="1144" y2="496" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="1060" y="472" width="76" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1136" y="481" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">tfstate → S3</text>
+
+      <!-- ═══ steps ═══ -->
+
+      <!-- S1 -->
+      <rect x="184" y="116" width="200" height="56" rx="6" fill="#0a0a0f"/>
+      <rect x="184" y="116" width="200" height="56" rx="6" fill="rgba(228,228,239,0.10)" stroke="#7e7e98" stroke-width="1"/>
+      <text x="284" y="142" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Write km-config.yaml</text>
+      <text x="284" y="160" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">accounts, region, prefix</text>
+
+      <!-- S2 -->
+      <rect x="616" y="116" width="200" height="56" rx="6" fill="#0a0a0f"/>
+      <rect x="616" y="116" width="200" height="56" rx="6" fill="rgba(228,228,239,0.10)" stroke="#7e7e98" stroke-width="1"/>
+      <text x="716" y="142" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Write a SandboxProfile</text>
+      <text x="716" y="160" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">profiles/*.yaml</text>
+
+      <!-- S3 -->
+      <rect x="400" y="212" width="200" height="56" rx="6" fill="#0a0a0f"/>
+      <rect x="400" y="212" width="200" height="56" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="500" y="238" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Resolve to KM_* env</text>
+      <text x="500" y="256" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">ExportTerragruntEnvVars()</text>
+
+      <!-- S4 -->
+      <rect x="616" y="212" width="200" height="56" rx="6" fill="#0a0a0f"/>
+      <rect x="616" y="212" width="200" height="56" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="716" y="238" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Compile the profile</text>
+      <text x="716" y="256" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">service.hcl, user-data.sh</text>
+
+      <!-- S5 -->
+      <rect x="832" y="212" width="200" height="56" rx="6" fill="#0a0a0f"/>
+      <rect x="832" y="212" width="200" height="56" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="932" y="238" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Pick one unit, exec</text>
+      <text x="932" y="256" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">infra/live/use1/&lt;unit&gt;</text>
+
+      <!-- S6 -->
+      <rect x="832" y="308" width="200" height="56" rx="6" fill="#0a0a0f"/>
+      <rect x="832" y="308" width="200" height="56" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="932" y="334" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Read root.hcl + site.hcl</text>
+      <text x="932" y="352" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">get_env() resolves knobs</text>
+
+      <!-- S7 — FOCAL -->
+      <rect x="1048" y="308" width="192" height="56" rx="6" fill="#0a0a0f"/>
+      <rect x="1048" y="308" width="192" height="56" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <text x="1144" y="334" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Generate the .tf files</text>
+      <text x="1144" y="352" fill="#00d4aa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">.terragrunt-cache/ · ignored</text>
+
+      <!-- S8 -->
+      <rect x="1048" y="404" width="192" height="56" rx="6" fill="#0a0a0f"/>
+      <rect x="1048" y="404" width="192" height="56" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="1144" y="430" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">apply -auto-approve</text>
+      <text x="1144" y="448" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">source = modules/&lt;v&gt;</text>
+
+      <!-- S9 -->
+      <rect x="1048" y="500" width="192" height="56" rx="6" fill="#0a0a0f"/>
+      <rect x="1048" y="500" width="192" height="56" rx="6" fill="rgba(228,228,239,0.03)" stroke="rgba(228,228,239,0.30)" stroke-width="1"/>
+      <text x="1144" y="526" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Resources + tfstate</text>
+      <text x="1144" y="544" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">S3 object, DynamoDB lock</text>
+
+      <!-- ── editorial callout ── -->
+      <text x="1240" y="72" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">this is why you will never find a backend.tf in the repo</text>
+      <path d="M 1100 84 Q 1120 200 1146 300" fill="none" stroke="rgba(228,228,239,0.35)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="1144" cy="304" r="2" fill="#e4e4ef"/>
+
+      <!-- ── note ── -->
+      <text x="640" y="616" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">NOTHING HERE IS TYPED INTO A CONSOLE. THE TWO GREY BOXES ARE THE ONLY HAND-AUTHORED ARTIFACTS IN THE SYSTEM.</text>
+
+      <!-- ── legend ── -->
+      <line x1="40" y1="668" x2="1240" y2="668" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="40" y="692" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="140" y="682" width="28" height="12" rx="3" fill="rgba(228,228,239,0.10)" stroke="#7e7e98" stroke-width="1"/>
+      <text x="176" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Hand-authored by a person</text>
+
+      <rect x="424" y="682" width="28" height="12" rx="3" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="460" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Produced by a program</text>
+
+      <rect x="676" y="682" width="28" height="12" rx="3" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1"/>
+      <text x="712" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Generated at runtime, gitignored</text>
+
+      <line x1="1024" y1="688" x2="1052" y2="688" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="1068" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Handoff</text>
+    </svg>
+  </div>
+</body>
+</html>

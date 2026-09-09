@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The IMDS fence — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #0a0a0f; --paper-2: #111118; --ink: #e4e4ef; --muted: #9090a8;
+      --soft: #7e7e98; --rule: #2a2a3a; --accent: #00d4aa; --link: #6a95d8;
+      --boundary: #ff5c5c; --ok: #22c55e;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--paper); color: var(--ink);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1360px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 0.5rem; }
+    .standfirst { font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 78ch; margin-bottom: 1.75rem; }
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · paired policy-evaluation traces</p>
+    <h1>Two processes on one box ask for the same credential</h1>
+    <p class="standfirst">AWS has no notion of which uid on an instance is calling, so a uid-granular fence can only exist at the OS layer. These two traces run the same four rules against the same instance role. The interesting cell is not the first divergence — it is rule three, where a Deny inside a session policy stops a request the IAM role would otherwise have allowed.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fence-title fence-desc">
+      <title id="fence-title">Two credential traces on one sandbox, root versus uid sandbox</title>
+      <desc id="fence-desc">Two ordered traces evaluate the same four rules — reaching the instance metadata service directly, obtaining credentials another way, decrypting the secrets bundle key, and fetching the bundle object. The root broker passes, skipping only the fallback rule, and decrypts the bundle. The sandbox uid fails at the first rule because an iptables owner match rejects its metadata traffic, obtains brokered credentials instead, and is then denied at the KMS rule by an explicit Deny in a session policy, leaving the final rule not reached.</desc>
+
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9090a8"/></marker>
+        <marker id="arrow-faint" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="rgba(228,228,239,0.25)"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ── row bands ── -->
+      <rect x="88" y="152" width="1104" height="64" rx="4" fill="rgba(228,228,239,0.016)"/>
+      <rect x="88" y="240" width="1104" height="64" rx="4" fill="rgba(228,228,239,0.016)"/>
+      <rect x="88" y="328" width="1104" height="64" rx="4" fill="rgba(228,228,239,0.016)"/>
+      <rect x="88" y="416" width="1104" height="64" rx="4" fill="rgba(228,228,239,0.016)"/>
+
+      <!-- ── column headers ── -->
+      <text x="240" y="36" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">TRACE A</text>
+      <text x="640" y="36" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">RULE, IN ORDER</text>
+      <text x="1040" y="36" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">TRACE B</text>
+
+      <!-- ═══ connectors (before nodes) ═══ -->
+      <line x1="240" y1="104" x2="240" y2="148" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="240" y1="216" x2="240" y2="236" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="240" y1="304" x2="240" y2="324" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="240" y1="392" x2="240" y2="412" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="240" y1="480" x2="240" y2="516" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <line x1="1040" y1="104" x2="1040" y2="148" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="1040" y1="216" x2="1040" y2="236" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="1040" y1="304" x2="1040" y2="324" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="1040" y1="392" x2="1040" y2="412" stroke="rgba(228,228,239,0.25)" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-faint)"/>
+      <line x1="1040" y1="480" x2="1040" y2="516" stroke="rgba(228,228,239,0.25)" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-faint)"/>
+
+      <!-- ═══ start ovals ═══ -->
+      <rect x="104" y="48" width="272" height="56" rx="20" fill="#0a0a0f"/>
+      <rect x="104" y="48" width="272" height="56" rx="20" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="240" y="76" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">root — km-secretsd</text>
+      <text x="240" y="94" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">unseal on behalf of a consumer</text>
+
+      <rect x="904" y="48" width="272" height="56" rx="20" fill="#0a0a0f"/>
+      <rect x="904" y="48" width="272" height="56" rx="20" fill="rgba(255,92,92,0.06)" stroke="rgba(255,92,92,0.60)" stroke-width="1"/>
+      <text x="1040" y="76" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">uid sandbox — the agent</text>
+      <text x="1040" y="94" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">curl 169.254.169.254</text>
+
+      <!-- ═══ first divergence marker ═══ -->
+      <rect x="776" y="126" width="112" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="884" y="135" fill="rgba(255,92,92,0.85)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.14em">FIRST DIVERGENCE</text>
+      <path d="M 892,152 H 884 V 216 H 892" fill="none" stroke="#ff5c5c" stroke-width="1.4"/>
+
+      <!-- ═══ RULE 1 ═══ -->
+      <rect x="456" y="152" width="368" height="64" rx="6" fill="#0a0a0f"/>
+      <rect x="456" y="152" width="368" height="64" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="472" y="180" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">1 · Reach 169.254.169.254 directly</text>
+      <text x="472" y="198" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">iptables OUTPUT --uid-owner sandbox -j REJECT</text>
+
+      <rect x="104" y="152" width="272" height="64" rx="6" fill="#111118" stroke="rgba(228,228,239,0.16)" stroke-width="1"/>
+      <circle cx="124" cy="178" r="4" fill="#22c55e"/>
+      <text x="140" y="182" fill="#e4e4ef" font-size="10" font-family="'Geist Mono', monospace" letter-spacing="0.08em">PASS</text>
+      <text x="120" y="202" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace">the rule matches uid sandbox only</text>
+
+      <rect x="904" y="152" width="272" height="64" rx="6" fill="rgba(255,92,92,0.07)" stroke="rgba(255,92,92,0.45)" stroke-width="1"/>
+      <rect x="920" y="174" width="8" height="8" fill="#ff5c5c"/>
+      <text x="940" y="182" fill="#e4e4ef" font-size="10" font-family="'Geist Mono', monospace" letter-spacing="0.08em">FAIL</text>
+      <text x="920" y="202" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace">REJECT — closed for this uid alone</text>
+
+      <!-- ═══ RULE 2 ═══ -->
+      <rect x="456" y="240" width="368" height="64" rx="6" fill="#0a0a0f"/>
+      <rect x="456" y="240" width="368" height="64" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="472" y="268" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">2 · Obtain credentials another way</text>
+      <text x="472" y="286" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">the AWS SDK provider chain, in order</text>
+
+      <rect x="104" y="240" width="272" height="64" rx="6" fill="#111118" stroke="rgba(228,228,239,0.16)" stroke-width="1"/>
+      <circle cx="124" cy="266" r="4" fill="none" stroke="#9090a8" stroke-width="1.4"/>
+      <text x="140" y="270" fill="#e4e4ef" font-size="10" font-family="'Geist Mono', monospace" letter-spacing="0.08em">SKIPPED</text>
+      <text x="120" y="290" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace">rule 1 already returned the role</text>
+
+      <rect x="904" y="240" width="272" height="64" rx="6" fill="#111118" stroke="rgba(228,228,239,0.16)" stroke-width="1"/>
+      <circle cx="924" cy="266" r="4" fill="#22c55e"/>
+      <text x="940" y="270" fill="#e4e4ef" font-size="10" font-family="'Geist Mono', monospace" letter-spacing="0.08em">PASS</text>
+      <text x="920" y="290" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace">credential_process → km-creds → broker</text>
+
+      <!-- ═══ RULE 3 — focal ═══ -->
+      <rect x="456" y="328" width="368" height="64" rx="6" fill="#0a0a0f"/>
+      <rect x="456" y="328" width="368" height="64" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <text x="472" y="356" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">3 · Decrypt the bundle key</text>
+      <text x="472" y="374" fill="#00d4aa" font-size="9" font-family="'Geist Mono', monospace">kms:Decrypt on alias/{prefix}-sandbox-secrets</text>
+
+      <rect x="104" y="328" width="272" height="64" rx="6" fill="#111118" stroke="rgba(228,228,239,0.16)" stroke-width="1"/>
+      <circle cx="124" cy="354" r="4" fill="#22c55e"/>
+      <text x="140" y="358" fill="#e4e4ef" font-size="10" font-family="'Geist Mono', monospace" letter-spacing="0.08em">PASS</text>
+      <text x="120" y="378" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace">instance role grant, unconditioned</text>
+
+      <rect x="904" y="328" width="272" height="64" rx="6" fill="rgba(255,92,92,0.07)" stroke="rgba(255,92,92,0.45)" stroke-width="1"/>
+      <rect x="920" y="350" width="8" height="8" fill="#ff5c5c"/>
+      <text x="940" y="358" fill="#e4e4ef" font-size="10" font-family="'Geist Mono', monospace" letter-spacing="0.08em">FAIL</text>
+      <text x="920" y="378" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace">explicit deny in a session policy</text>
+
+      <!-- ═══ RULE 4 ═══ -->
+      <rect x="456" y="416" width="368" height="64" rx="6" fill="#0a0a0f"/>
+      <rect x="456" y="416" width="368" height="64" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="472" y="444" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">4 · Fetch the bundle object</text>
+      <text x="472" y="462" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">s3:GetObject sandboxes/{id}/secrets.enc.yaml</text>
+
+      <rect x="104" y="416" width="272" height="64" rx="6" fill="#111118" stroke="rgba(228,228,239,0.16)" stroke-width="1"/>
+      <circle cx="124" cy="442" r="4" fill="#22c55e"/>
+      <text x="140" y="446" fill="#e4e4ef" font-size="10" font-family="'Geist Mono', monospace" letter-spacing="0.08em">PASS</text>
+      <text x="120" y="466" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace">instance role grant, exact resource</text>
+
+      <rect x="904" y="416" width="272" height="64" rx="6" fill="#111118" stroke="rgba(228,228,239,0.10)" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="920" y1="442" x2="932" y2="442" stroke="#7e7e98" stroke-width="2"/>
+      <text x="944" y="446" fill="#7e7e98" font-size="10" font-family="'Geist Mono', monospace" letter-spacing="0.08em">NOT REACHED</text>
+      <text x="920" y="466" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace">evaluation stopped at rule 3</text>
+
+      <!-- ═══ outcomes ═══ -->
+      <rect x="104" y="516" width="272" height="56" rx="20" fill="#0a0a0f"/>
+      <rect x="104" y="516" width="272" height="56" rx="20" fill="rgba(34,197,94,0.08)" stroke="#22c55e" stroke-width="1"/>
+      <text x="240" y="544" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Bundle decrypted</text>
+      <text x="240" y="562" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">one request, then zeroed</text>
+
+      <rect x="904" y="516" width="272" height="56" rx="20" fill="#0a0a0f"/>
+      <rect x="904" y="516" width="272" height="56" rx="20" fill="rgba(255,92,92,0.08)" stroke="#ff5c5c" stroke-width="1"/>
+      <text x="1040" y="544" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">AccessDenied</text>
+      <text x="1040" y="562" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">every other grant still works</text>
+
+      <!-- ── note ── -->
+      <text x="640" y="616" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">A POLICY SIMULATOR REPORTS AN UNSATISFIABLE CONDITION EXACTLY LIKE A MISSING STATEMENT — ONLY A LIVE CALL PROVES THIS FENCE.</text>
+
+      <!-- ── legend ── -->
+      <line x1="40" y1="668" x2="1240" y2="668" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="40" y="692" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <circle cx="148" cy="688" r="4" fill="#22c55e"/>
+      <text x="164" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">PASS — the rule allowed it</text>
+
+      <rect x="384" y="684" width="8" height="8" fill="#ff5c5c"/>
+      <text x="404" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">FAIL — a deny actually fired</text>
+
+      <circle cx="656" cy="688" r="4" fill="none" stroke="#9090a8" stroke-width="1.4"/>
+      <text x="672" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">SKIPPED — applicable, bypassed</text>
+
+      <line x1="932" y1="688" x2="944" y2="688" stroke="#7e7e98" stroke-width="2"/>
+      <text x="956" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">NOT REACHED — stopped earlier</text>
+    </svg>
+  </div>
+</body>
+</html>
