@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YAML to HCL — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #0a0a0f; --paper-2: #111118; --ink: #e4e4ef; --muted: #9090a8;
+      --soft: #7e7e98; --rule: #2a2a3a; --accent: #00d4aa; --link: #6a95d8; --boundary: #ff5c5c;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--paper); color: var(--ink);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1360px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 0.5rem; }
+    .standfirst { font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 78ch; margin-bottom: 1.75rem; }
+    code { font-family: var(--font-mono); font-size: 0.85em; color: var(--ink); }
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · the YAML → HCL compiler</p>
+    <h1>Two YAML files in, one <code>locals</code> block out</h1>
+    <p class="standfirst">The two inputs travel completely separate routes. <code>km-config.yaml</code> never reaches the compiler at all — it becomes process environment that <code>site.hcl</code> reads with <code>get_env()</code>. Only the SandboxProfile is compiled, and what comes out is not Terraform: it is a <code>locals</code> block that a byte-for-byte copy of the unit template reads back with <code>read_terragrunt_config()</code>.</p>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="y2h-title y2h-desc">
+      <title id="y2h-title">How Klanker Maker turns YAML into Terragrunt inputs</title>
+      <desc id="y2h-desc">km-config.yaml is loaded into KM_ star environment variables, shown as a band spanning the diagram, which only site.hcl reads. Separately, a SandboxProfile plus its base fragments are resolved through an extends deep-merge and validated, then compiled into two generated files in the sandbox unit directory: service.hcl, a locals block carrying every Terraform variable, and user-data.sh, whose bytes are base64-embedded into it. Beside them sits terragrunt.hcl, copied byte-for-byte from a template, which reads service.hcl, root.hcl and site.hcl and carries the module version pin.</desc>
+
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9090a8"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#00d4aa"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ═══ zones ═══ -->
+      <rect x="40" y="120" width="256" height="336" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.12)" stroke-width="0.8"/>
+      <rect x="56" y="124" width="92" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="60" y="133" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">AUTHORED YAML</text>
+
+      <rect x="344" y="280" width="344" height="304" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.12)" stroke-width="0.8"/>
+      <rect x="360" y="284" width="80" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="364" y="293" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">GO PIPELINE</text>
+
+      <rect x="736" y="240" width="504" height="352" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.12)" stroke-width="0.8"/>
+      <rect x="752" y="244" width="168" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="756" y="253" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">THE SANDBOX UNIT DIRECTORY</text>
+
+      <!-- ═══ paths ═══ -->
+
+      <!-- P1 config → env -->
+      <line x1="272" y1="188" x2="364" y2="188" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="280" y="168" width="80" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="320" y="177" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">config.Load()</text>
+
+      <!-- P2 profile → resolve -->
+      <line x1="272" y1="372" x2="364" y2="372" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="284" y="352" width="72" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="320" y="361" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">extends DAG</text>
+
+      <!-- P3 resolve → compile -->
+      <line x1="516" y1="432" x2="516" y2="460" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="524" y="442" width="92" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="528" y="451" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">*SandboxProfile</text>
+
+      <!-- P4 compile → service.hcl (FOCAL) -->
+      <path d="M 664,512 H 704 Q 712,512 712,504 V 352 Q 712,344 720,344 H 756" fill="none" stroke="#00d4aa" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <rect x="720" y="434" width="148" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="724" y="443" fill="#00d4aa" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">locals{} · module_inputs{}</text>
+
+      <!-- P5 compile → user-data.sh -->
+      <path d="M 664,536 H 720 Q 728,536 728,528 V 516 Q 728,508 736,508 H 756" fill="none" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- P6 user-data.sh embedded into service.hcl -->
+      <line x1="876" y1="444" x2="876" y2="420" stroke="#9090a8" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+      <!-- P7 service.hcl read by the unit -->
+      <line x1="992" y1="344" x2="1012" y2="344" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- P8 env → the unit, via site.hcl -->
+      <line x1="1116" y1="224" x2="1116" y2="268" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="1124" y="242" width="104" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1128" y="251" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">site.hcl get_env()</text>
+
+      <!-- ═══ nodes ═══ -->
+
+      <!-- N1 km-config.yaml -->
+      <rect x="64" y="152" width="208" height="72" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="152" width="208" height="72" rx="6" fill="rgba(228,228,239,0.10)" stroke="#7e7e98" stroke-width="1"/>
+      <rect x="72" y="158" width="48" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="96" y="167" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">HUMAN</text>
+      <text x="168" y="196" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">km-config.yaml</text>
+      <text x="168" y="214" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">accounts · region · prefix</text>
+
+      <!-- N2 profile -->
+      <rect x="64" y="312" width="208" height="120" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="312" width="208" height="120" rx="6" fill="rgba(228,228,239,0.10)" stroke="#7e7e98" stroke-width="1"/>
+      <rect x="72" y="318" width="48" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="96" y="327" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">HUMAN</text>
+      <text x="168" y="358" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">profiles/&lt;name&gt;.yaml</text>
+      <text x="168" y="378" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">+ profiles/base/** fragments</text>
+      <text x="168" y="396" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">extends: is a list</text>
+      <text x="168" y="414" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">apiVersion v1alpha2</text>
+
+      <!-- N5 env band (ambient — deliberately in no zone) -->
+      <rect x="368" y="152" width="848" height="72" rx="6" fill="#0a0a0f"/>
+      <rect x="368" y="152" width="848" height="72" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1" stroke-dasharray="6,4"/>
+      <rect x="384" y="158" width="36" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="402" y="167" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ENV</text>
+      <text x="440" y="186" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">KM_* process environment</text>
+      <text x="440" y="208" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">ExportTerragruntEnvVars() before every exec · KM_RESOURCE_PREFIX, KM_REGION, KM_ARTIFACTS_BUCKET, … · nothing else reads these</text>
+
+      <!-- N3 resolve + validate -->
+      <rect x="368" y="312" width="296" height="120" rx="6" fill="#0a0a0f"/>
+      <rect x="368" y="312" width="296" height="120" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="376" y="318" width="32" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="392" y="327" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GO</text>
+      <text x="516" y="358" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">profile.Resolve() → Validate</text>
+      <text x="516" y="378" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">deep-merge, left → right, child last</text>
+      <text x="516" y="396" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">maps recurse · scalars win · lists union</text>
+      <text x="516" y="414" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">ValidateSchema + ValidateSemantic</text>
+
+      <!-- N4 compile -->
+      <rect x="368" y="464" width="296" height="96" rx="6" fill="#0a0a0f"/>
+      <rect x="368" y="464" width="296" height="96" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="376" y="470" width="32" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="392" y="479" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GO</text>
+      <text x="516" y="510" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">compiler.Compile()</text>
+      <text x="516" y="530" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">substrate switch: ec2spot | ecs | docker</text>
+      <text x="516" y="548" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">returns one CompiledArtifacts</text>
+
+      <!-- N6 service.hcl — FOCAL -->
+      <rect x="760" y="272" width="232" height="144" rx="6" fill="#0a0a0f"/>
+      <rect x="760" y="272" width="232" height="144" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <rect x="768" y="278" width="64" height="12" rx="2" fill="transparent" stroke="rgba(0,212,170,0.40)" stroke-width="0.8"/>
+      <text x="800" y="287" fill="rgba(0,212,170,0.85)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GENERATED</text>
+      <text x="876" y="318" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">service.hcl</text>
+      <text x="776" y="340" fill="#00d4aa" font-size="9" font-family="'Geist Mono', monospace">one locals{} block</text>
+      <text x="776" y="356" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">no resource{}, no module{}</text>
+      <text x="776" y="380" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">sandbox_id, region_label</text>
+      <text x="776" y="396" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">substrate_module = ec2spot</text>
+      <text x="776" y="412" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">module_inputs = { … }</text>
+
+      <!-- N7 user-data.sh -->
+      <rect x="760" y="448" width="232" height="120" rx="6" fill="#0a0a0f"/>
+      <rect x="760" y="448" width="232" height="120" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="768" y="454" width="64" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="800" y="463" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GENERATED</text>
+      <text x="876" y="494" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">user-data.sh</text>
+      <text x="776" y="516" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">the whole boot script</text>
+      <text x="776" y="532" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">base64 → user_data_base64</text>
+      <text x="776" y="550" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">&gt;12KB: stub, body to S3</text>
+
+      <!-- N8 terragrunt.hcl — verbatim -->
+      <rect x="1016" y="272" width="200" height="296" rx="6" fill="#0a0a0f"/>
+      <rect x="1016" y="272" width="200" height="296" rx="6" fill="rgba(228,228,239,0.03)" stroke="rgba(228,228,239,0.30)" stroke-width="1"/>
+      <rect x="1024" y="278" width="56" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="1052" y="287" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">VERBATIM</text>
+      <text x="1116" y="318" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">terragrunt.hcl</text>
+      <text x="1032" y="344" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">copied byte-for-byte</text>
+      <text x="1032" y="360" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">from infra/templates/</text>
+      <text x="1032" y="376" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">sandbox/</text>
+      <text x="1032" y="404" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">READS</text>
+      <text x="1032" y="422" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">· service.hcl</text>
+      <text x="1032" y="438" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">· root.hcl (merge deep)</text>
+      <text x="1032" y="454" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">· site.hcl</text>
+      <text x="1032" y="482" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">SOURCE</text>
+      <text x="1032" y="500" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">modules/ec2spot/v1.7.0</text>
+      <text x="1032" y="528" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">the version pin lives</text>
+      <text x="1032" y="544" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">here, not in the profile</text>
+
+      <!-- ── editorial callout ── -->
+      <text x="1240" y="100" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">this one is copied, never generated</text>
+      <path d="M 1232 112 Q 1240 200 1224 296" fill="none" stroke="rgba(228,228,239,0.35)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="1220" cy="298" r="2" fill="#e4e4ef"/>
+
+      <!-- ── note ── -->
+      <text x="640" y="628" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">THE COMPILER NEVER WRITES A TERRAFORM RESOURCE. IT WRITES ONE locals{} BLOCK, AND A VERBATIM TEMPLATE READS IT BACK.</text>
+
+      <!-- ── legend ── -->
+      <line x1="40" y1="668" x2="1240" y2="668" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="40" y="692" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="140" y="682" width="28" height="12" rx="3" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1"/>
+      <text x="176" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">The only HCL the compiler emits</text>
+
+      <rect x="416" y="682" width="28" height="12" rx="3" fill="rgba(228,228,239,0.10)" stroke="#7e7e98" stroke-width="1"/>
+      <text x="452" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Hand-authored</text>
+
+      <line x1="588" y1="688" x2="616" y2="688" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="632" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Produces, or reads at parse time</text>
+
+      <line x1="876" y1="688" x2="904" y2="688" stroke="#9090a8" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <text x="920" y="692" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Embedded into, not read from</text>
+    </svg>
+  </div>
+</body>
+</html>

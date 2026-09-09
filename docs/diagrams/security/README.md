@@ -18,6 +18,80 @@ authoritative, these exist to make the shape of the thing legible in one look.
 | 5 | [The IMDS fence](05-imds-fence-traces.html) | Two processes on one box asking for the same credential, rule by rule |
 | 6 | [Terragrunt invocation path](06-terragrunt-invocation.html) | Who runs Terraform, from where, against which named bucket and lock table |
 | 7 | [IaC file provenance](07-iac-provenance.html) | Which process authors every file an apply touches — and why `backend.tf` is not in the repo |
+| 8 | [YAML → HCL compiler](08-yaml-to-hcl-compiler.html) | How the two YAML inputs travel separate routes, and what `compiler.Compile()` actually emits |
+
+## YAML → HCL, in prose
+
+Diagram 8 is the picture; these are the details that belong in text rather than
+on a canvas.
+
+### The two inputs never meet
+
+`km-config.yaml` and the SandboxProfile look like peers and are not. Only the
+profile is compiled.
+
+| Input | Route | Ends up as |
+|---|---|---|
+| `km-config.yaml` | `config.Load()` → `ExportTerragruntEnvVars()` | `KM_*` process env, read by `site.hcl` via `get_env()`. Never touches the compiler. |
+| `profiles/<name>.yaml` | `profile.Resolve()` → `ValidateSchema` + `ValidateSemantic` → `compiler.Compile()` | `service.hcl` (a `locals` block) and `user-data.sh` |
+
+### What `extends:` does, exactly
+
+`profile.Resolve(name, searchPaths)` walks the `extends` DAG left to right, child
+applied last, and `deepMerge`s each result (`pkg/profile/inherit.go`). Diamonds
+are memoised per resolved path, cycles are rejected on an ancestry check, and the
+chain is capped at 10 hops.
+
+| Value shape | Merge rule |
+|---|---|
+| map | recurse, key-union — both sides survive at every depth |
+| scalar | right-hand side wins, so the child always wins |
+| list | `concatDedup` — concatenate, drop duplicates, keep first occurrence and order |
+| object list | same, compared with `reflect.DeepEqual` (this is what de-dups `additionalSnapshots`) |
+
+Two consequences worth knowing before you author a fragment:
+
+- **A child cannot narrow a base's list.** Lists union, so a leaf that wants a
+  tighter `allowedDNSSuffixes` than its base must compose from a narrower base
+  or keep the field in-leaf. `execution.initCommandsAppend` exists precisely
+  because `initCommands` itself always unions.
+- **Non-pointer bools push their zero value.** A fragment that writes a whole
+  block with plain `bool` fields sends `false` down to every child. Keep
+  mixed-bool blocks like `spec.runtime` in the leaf.
+
+### What `compiler.Compile()` emits
+
+One `CompiledArtifacts` struct. It contains no Terraform — no `resource`, no
+`module`, no `provider`. The parts that reach disk:
+
+| Field | Written to | Note |
+|---|---|---|
+| `ServiceHCL` | `infra/live/<region>/sandboxes/<id>/service.hcl` | a `locals` block; `module_inputs` carries every Terraform variable |
+| `UserData` | `.../user-data.sh` | base64-embedded into `service.hcl` as `user_data_base64` |
+| `FullUserData` | `s3://<artifacts>/artifacts/<id>/km-userdata.sh` | only when the script exceeds the 16KB EC2 limit — `UserData` becomes a fetch stub |
+| `BudgetEnforcerHCL` | `.../budget-enforcer/terragrunt.hcl` | only when the profile declares a budget |
+| `GitHubTokenHCL` | `.../github-token/terragrunt.hcl` | only when `sourceAccess.github` is set |
+
+The unit's own `terragrunt.hcl` is **copied byte-for-byte** from
+`infra/templates/sandbox/` by `terragrunt.CreateSandboxDir` — the compiler never
+writes it. That template is what carries the module version pin
+(`locals.substrate_module_versions`), looked up by the `substrate_module` key the
+compiler put in `service.hcl`.
+
+### The S3 artifact set
+
+A remote (`--remote`) create needs everything the create-handler Lambda cannot
+derive, so `km create` uploads it under `artifacts/<sandbox-id>/`:
+
+| Key | What it is |
+|---|---|
+| `.km-profile.yaml` | the **resolved** profile — flattened, with `extends` already applied, because the Lambda cannot resolve `profiles/base/**` |
+| `km-userdata.sh` | the full boot script, when it exceeded the inline limit |
+| `km-init.sh` | the profile's `initCommands`, fetched by the box at boot |
+
+The same resolved profile is also dumped on the box at
+`/opt/km/.km-profile.yaml`, which is what makes the `klanker:sandbox`
+self-census possible.
 
 ## Reading the colour
 

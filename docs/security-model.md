@@ -2,12 +2,13 @@
 
 This document describes the security architecture of Klanker Maker, a policy-driven sandbox platform for running AI agent workloads in AWS. It is intended for operators evaluating the platform's trust boundaries, security engineers reviewing the design, and contributors extending the enforcement layers.
 
-**Diagrams.** Seven single-file HTML diagrams live in
+**Diagrams.** Eight single-file HTML diagrams live in
 [`docs/diagrams/security/`](diagrams/security/README.md) and cover the same
 ground visually: the nested containment boundaries, what each defensive layer
 stops and what it lets through, brokered secret unsealing, the bridge Lambda's
-trust boundary, the IMDS fence as a pair of policy traces, and two on how the
-Terraform/Terragrunt layer is actually invoked. Open any of them in a browser.
+trust boundary, the IMDS fence as a pair of policy traces, and three on the
+infrastructure-as-code layer — how Terragrunt is invoked, who authors each file,
+and what the YAML-to-HCL compiler actually emits. Open any of them in a browser.
 
 ---
 
