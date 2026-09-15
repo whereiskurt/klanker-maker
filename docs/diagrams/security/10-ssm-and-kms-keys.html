@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSM parameters and KMS keys — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #0a0a0f; --paper-2: #111118; --ink: #e4e4ef; --muted: #9090a8;
+      --soft: #7e7e98; --rule: #2a2a3a; --accent: #00d4aa; --link: #6a95d8; --boundary: #ff5c5c;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--paper); color: var(--ink);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1360px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 0.5rem; }
+    .standfirst { font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 78ch; margin-bottom: 1.75rem; }
+    code { font-family: var(--font-mono); font-size: 0.85em; color: var(--ink); }
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · SSM Parameter Store + KMS</p>
+    <h1>Where every secret lives, and which key seals it</h1>
+    <p class="standfirst">One SSM namespace per install under <code>/{prefix}/</code>, three customer-managed keys, and the AWS-managed default that catches everything written without a <code>KeyId</code>. The SOPS bundle is the odd one out — it is an S3 object, not a parameter, and its key is the one that Terraform refuses to destroy.</p>
+
+    <svg viewBox="0 0 1280 1048" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="ssmkms-title ssmkms-desc">
+      <title id="ssmkms-title">SSM parameter paths and the KMS keys that encrypt them</title>
+      <desc id="ssmkms-desc">The install's SSM namespace is split into slack, per-sandbox, GitHub, HackerOne, webhook and check branches, each listing its real parameter names and the command that writes them. Arrows connect each branch to the KMS key its SecureStrings are encrypted under: the platform key created by km bootstrap, a per-sandbox GitHub-token key, the shared sandbox-secrets key that seals the SOPS bundle in S3, and the AWS-managed alias/aws/ssm key that receives every parameter written with no KeyId.</desc>
+
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9090a8"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#00d4aa"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#6a95d8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ═══ zones (painted first) ═══ -->
+      <!-- Zone A: SSM namespace -->
+      <rect x="32" y="72" width="384" height="744" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <rect x="44" y="76" width="344" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="48" y="85" fill="rgba(228,228,239,0.45)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">SSM PARAMETER STORE · /{prefix}/ · ONE NAMESPACE PER INSTALL</text>
+
+      <!-- Zone B: S3, not SSM -->
+      <rect x="32" y="840" width="384" height="104" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <rect x="44" y="844" width="248" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="48" y="853" fill="rgba(228,228,239,0.45)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">S3 · {artifacts} BUCKET · NOT A PARAMETER</text>
+
+      <!-- Zone C: KMS -->
+      <rect x="816" y="72" width="432" height="904" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <rect x="828" y="76" width="212" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="832" y="85" fill="rgba(228,228,239,0.45)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">KMS · CUSTOMER MANAGED + AWS MANAGED</text>
+
+      <!-- ═══ connectors (drawn before nodes) ═══ -->
+      <!-- E1 slack → platform (straight, y=156) -->
+      <line x1="384" y1="156" x2="832" y2="156" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- E2 sandbox/{id} → platform (up, mid 680) -->
+      <path d="M 384,272 H 672 Q 680,272 680,264 V 196 Q 680,188 688,188 H 832" fill="none" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="576" y="220" width="96" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="668" y="229" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">IDENTITY KEYS</text>
+
+      <!-- E3 sandbox/{id} → github-token key (straight, y=312) -->
+      <line x1="384" y1="312" x2="832" y2="312" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="500" y="292" width="96" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="548" y="301" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">GITHUB-TOKEN</text>
+
+      <!-- E4 config/github → aws/ssm (down, mid 640) -->
+      <path d="M 384,428 H 632 Q 640,428 640,436 V 520 Q 640,528 648,528 H 832" fill="none" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- E5 config/h1 → aws/ssm (straight, y=548) -->
+      <line x1="384" y1="548" x2="832" y2="548" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- E6 config/webhooks → aws/ssm (up, mid 720) -->
+      <path d="M 384,664 H 712 Q 720,664 720,656 V 580 Q 720,572 728,572 H 832" fill="none" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- E7 checks → aws/ssm (up, mid 760) -->
+      <path d="M 384,768 H 752 Q 760,768 760,760 V 600 Q 760,592 768,592 H 832" fill="none" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- E8 sops bundle → sandbox-secrets (straight, y=904) -->
+      <line x1="384" y1="904" x2="832" y2="904" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="556" y="884" width="104" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="608" y="893" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SOPS ENVELOPE</text>
+
+      <!-- ═══ left column: SSM branches ═══ -->
+
+      <!-- L1 slack/ -->
+      <rect x="48" y="104" width="336" height="104" rx="6" fill="#0a0a0f"/>
+      <rect x="48" y="104" width="336" height="104" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="56" y="110" width="28" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="70" y="119" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SSM</text>
+      <text x="376" y="119" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km slack init</text>
+      <text x="96" y="120" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">slack/</text>
+      <text x="60" y="148" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● bot-token</text>
+      <text x="60" y="162" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● signing-secret</text>
+      <text x="60" y="176" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">○ bot-user-id · workspace · shared-channel-id</text>
+      <text x="60" y="190" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">○ bridge-url · invite-email · bot-scopes-cache</text>
+
+      <!-- L2 sandbox/{id}/ -->
+      <rect x="48" y="232" width="336" height="120" rx="6" fill="#0a0a0f"/>
+      <rect x="48" y="232" width="336" height="120" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="56" y="238" width="28" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="70" y="247" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SSM</text>
+      <text x="376" y="247" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km create · refresher λ</text>
+      <text x="96" y="248" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">sandbox/{id}/</text>
+      <text x="60" y="276" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● github-token</text>
+      <text x="60" y="290" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● signing-key · ● encryption-key</text>
+      <text x="60" y="304" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● safe-phrase</text>
+      <text x="60" y="318" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">○ slack-channel-id</text>
+      <text x="60" y="332" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">○ {slack,github,h1,webhook}-inbound-queue-url</text>
+
+      <!-- L3 config/github/ -->
+      <rect x="48" y="376" width="336" height="104" rx="6" fill="#0a0a0f"/>
+      <rect x="48" y="376" width="336" height="104" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="56" y="382" width="28" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="70" y="391" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SSM</text>
+      <text x="376" y="391" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km configure github</text>
+      <text x="96" y="392" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">config/github/</text>
+      <text x="60" y="420" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● private-key</text>
+      <text x="60" y="434" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● webhook-secret</text>
+      <text x="60" y="448" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">○ app-client-id · installation-id · installations/{org}</text>
+      <text x="60" y="462" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">○ bot-login · bridge-url · commands</text>
+
+      <!-- L4 config/h1/ -->
+      <rect x="48" y="504" width="336" height="92" rx="6" fill="#0a0a0f"/>
+      <rect x="48" y="504" width="336" height="92" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="56" y="510" width="28" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="70" y="519" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SSM</text>
+      <text x="376" y="519" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km h1 init</text>
+      <text x="96" y="520" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">config/h1/</text>
+      <text x="60" y="548" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● webhook-secret</text>
+      <text x="60" y="562" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● api-token <tspan fill="#7e7e98">· ○ api-username</tspan></text>
+      <text x="60" y="576" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">○ bridge-url · commands</text>
+
+      <!-- L5 config/webhooks/ + remote-create -->
+      <rect x="48" y="620" width="336" height="92" rx="6" fill="#0a0a0f"/>
+      <rect x="48" y="620" width="336" height="92" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="56" y="626" width="28" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="70" y="635" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SSM</text>
+      <text x="376" y="635" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km init</text>
+      <text x="96" y="636" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">config/webhooks/ · remote-create/</text>
+      <text x="60" y="664" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● {secret_path} <tspan fill="#7e7e98">e.g. webhooks/wiz/token · minted by km init</tspan></text>
+      <text x="60" y="678" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● remote-create/safe-phrase</text>
+      <text x="60" y="692" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">○ webhooks/bridge-url</text>
+
+      <!-- L6 checks/{name}/ -->
+      <rect x="48" y="736" width="336" height="60" rx="6" fill="#0a0a0f"/>
+      <rect x="48" y="736" width="336" height="60" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="56" y="742" width="28" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="70" y="751" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SSM</text>
+      <text x="376" y="751" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km check deploy</text>
+      <text x="96" y="752" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">checks/{name}/</text>
+      <text x="60" y="780" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">● {key} <tspan fill="#7e7e98">— one per --secret path or --sops bundle entry</tspan></text>
+
+      <!-- L7 SOPS bundle in S3 -->
+      <rect x="48" y="872" width="336" height="64" rx="6" fill="#0a0a0f"/>
+      <rect x="48" y="872" width="336" height="64" rx="6" fill="rgba(228,228,239,0.03)" stroke="rgba(228,228,239,0.30)" stroke-width="1"/>
+      <rect x="56" y="878" width="28" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="70" y="887" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">S3</text>
+      <text x="376" y="887" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km create</text>
+      <text x="96" y="888" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">SOPS bundle</text>
+      <text x="60" y="912" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">sandboxes/{id}/secrets.enc.yaml</text>
+      <text x="60" y="926" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">ciphertext at rest · decrypted per unseal, never to disk</text>
+
+      <!-- ═══ right column: KMS keys ═══ -->
+
+      <!-- R1 platform key — FOCAL -->
+      <rect x="832" y="120" width="400" height="104" rx="6" fill="#0a0a0f"/>
+      <rect x="832" y="120" width="400" height="104" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <rect x="840" y="126" width="56" height="12" rx="2" fill="transparent" stroke="rgba(0,212,170,0.40)" stroke-width="0.8"/>
+      <text x="868" y="135" fill="rgba(0,212,170,0.9)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">KMS · CMK</text>
+      <text x="1224" y="135" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km bootstrap</text>
+      <text x="840" y="160" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist Mono', monospace">alias/km-platform-{prefix}-{regionLabel}</text>
+      <text x="840" y="180" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">CreateKey + CreateAlias by direct SDK call — no Terraform state</text>
+      <text x="840" y="194" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">seals: slack tokens · sandbox + operator identity keys · safe phrases</text>
+      <text x="840" y="208" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">only km unbootstrap removes it (7–30 day deletion window)</text>
+
+      <!-- R2 per-sandbox github-token key -->
+      <rect x="832" y="260" width="400" height="104" rx="6" fill="#0a0a0f"/>
+      <rect x="832" y="260" width="400" height="104" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="840" y="266" width="112" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="896" y="275" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">KMS · CMK · PER SANDBOX</text>
+      <text x="1224" y="275" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km create</text>
+      <text x="840" y="300" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist Mono', monospace">alias/{prefix}-github-token-{sandbox-id}</text>
+      <text x="840" y="320" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">Terraform github-token/v1.0.0 · rotation on · one per sandbox</text>
+      <text x="840" y="334" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">km create writes the first token under the platform key; the refresher</text>
+      <text x="840" y="348" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">Lambda re-mints under this key every 45 min · gone on km destroy</text>
+
+      <!-- Callout 1: platform key -->
+      <text x="1224" y="404" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">No plan ever shows the platform key — it was never Terraform.</text>
+      <text x="1224" y="424" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">Its alias keeps a literal km-platform- brand prefix regardless</text>
+      <text x="1224" y="444" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">of resource_prefix; the install name follows, then the region.</text>
+      <line x1="1104" y1="452" x2="1224" y2="452" stroke="rgba(0,212,170,0.50)" stroke-width="0.8"/>
+
+      <!-- R3 aws/ssm — FOCAL -->
+      <rect x="832" y="508" width="400" height="104" rx="6" fill="#0a0a0f"/>
+      <rect x="832" y="508" width="400" height="104" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <rect x="840" y="514" width="96" height="12" rx="2" fill="transparent" stroke="rgba(0,212,170,0.40)" stroke-width="0.8"/>
+      <text x="888" y="523" fill="rgba(0,212,170,0.9)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">KMS · AWS MANAGED</text>
+      <text x="1224" y="523" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">AWS</text>
+      <text x="840" y="548" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist Mono', monospace">alias/aws/ssm</text>
+      <text x="840" y="568" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">every PutParameter with no KeyId lands here — not on the platform CMK</text>
+      <text x="840" y="582" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">encrypts: GitHub App private key · both webhook secrets · H1 api-token</text>
+      <text x="840" y="596" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">no per-key kms:Decrypt to manage — ssm:GetParameter is the boundary</text>
+
+      <!-- Callout 2: no KeyId -->
+      <text x="1224" y="652" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">Four install-level secrets are SecureStrings written with no</text>
+      <text x="1224" y="672" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">KeyId. Encrypted — but by the account's AWS-managed key, so</text>
+      <text x="1224" y="692" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="end">scoping the platform CMK's key policy does not fence them.</text>
+      <line x1="1104" y1="700" x2="1224" y2="700" stroke="rgba(0,212,170,0.50)" stroke-width="0.8"/>
+
+      <!-- R4 shared sandbox-secrets key -->
+      <rect x="832" y="852" width="400" height="104" rx="6" fill="#0a0a0f"/>
+      <rect x="832" y="852" width="400" height="104" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="840" y="858" width="92" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="886" y="867" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">KMS · CMK · SHARED</text>
+      <text x="1224" y="867" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km bootstrap --shared-secrets-key</text>
+      <text x="840" y="892" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist Mono', monospace">alias/{prefix}-sandbox-secrets</text>
+      <text x="840" y="912" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">Terraform sandbox-secrets-key/v1.0.0 · prevent_destroy · rotation on</text>
+      <text x="840" y="926" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">box role gets kms:Decrypt scoped by kms:ResourceAliases to this alias</text>
+      <text x="840" y="940" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">named in .sops.yaml creation_rules — the operator encrypts against it</text>
+
+      <!-- ═══ legend ═══ -->
+      <line x1="32" y1="992" x2="1248" y2="992" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="40" y="1012" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <text x="120" y="1012" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">●</text>
+      <text x="136" y="1012" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">SecureString</text>
+
+      <text x="232" y="1012" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace">○</text>
+      <text x="248" y="1012" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Plain String — not encrypted, not a secret</text>
+
+      <line x1="480" y1="1008" x2="508" y2="1008" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="520" y="1012" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Encrypted under — the KeyId on PutParameter (or the SOPS envelope)</text>
+
+      <rect x="904" y="1002" width="28" height="12" rx="3" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1"/>
+      <text x="940" y="1012" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Where the key is not the one you would assume</text>
+    </svg>
+  </div>
+</body>
+</html>
