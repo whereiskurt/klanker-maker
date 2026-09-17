@@ -315,16 +315,45 @@ caught at boot).
 
 **Shim lost the PATH race** (selftest assertion 5 fails, or `claude`
 authenticates as an unexpected identity): confirm with `command -v claude`
-inside a real `km shell` session — it must resolve to `/opt/km/shims/claude`.
-If it resolves somewhere under `~/.nvm/versions/node/...` instead, something
-is prepending ahead of `/opt/km/shims` on `PATH` (nvm's own `profile.d`
-script prepends too, and `zz-km-shims.sh` is named to sort after it and win —
-if a third script sorts after `zz-`, it can still win the race). Every
-`dispatch_as_sandbox` call site explicitly sets `PATH=/opt/km/shims:$PATH`
-ahead of invoking the turn's command specifically so this does not depend on
-`/etc/profile.d` ordering; if a new dispatch site is ever added without that
-prepend, `pkg/secrets/wiring_guard_test.go` is the mechanical guard against
-it going unnoticed.
+inside a real `km shell` session — it must resolve to `/opt/km/shims/claude`,
+and `echo "$PATH" | tr : '\n' | grep -c '^/opt/km/shims$'` must print `1`.
+
+How the race is actually won, because the mechanism is easy to get wrong and
+was wrong once (2026-09-17): nvm installs **no** `profile.d` script — its
+installer appends to `~/.bashrc`. A login shell reads `/etc/profile.d/*`
+(where `zz-km-shims.sh` adds `/opt/km/shims`) *first*, then `~/.bashrc`, where
+`~/.local/bin`, `~/bin` and nvm each prepend themselves. km's block at the end
+of `~/.bashrc` therefore runs with `/opt/km/shims` **already on PATH**, so an
+"if it's already there, do nothing" guard takes the no-op branch and leaves
+nvm's bin ahead — which is exactly what both hooks used to do. Proven live: the
+shim dir appeared once, in the position `profile.d` left it, behind nvm. Both
+hooks now **strip `/opt/km/shims` and re-prepend it**, so the last hook to run
+always wins and PATH never accumulates a duplicate; the compiler test
+`TestUserdataSopsBlock_ShimPathHooksWinOverNvm` runs the real hook text under
+`sh` against a PATH seeded that way and asserts the order, rather than
+checking the text is present.
+
+The second half of the same incident: Claude Code self-updates, and as uid
+`sandbox` it cannot write root's `/usr/lib/node_modules`, so the update lands
+in nvm's prefix while the boot-time `/usr/bin/claude` still exists. The shim
+used to fall back to a PATH search **only when its baked target was gone**, so
+it kept pointing at the stale copy. It now prefers whatever `command -v` finds
+on a PATH with the shim dir removed (`KM_LIVE`), and uses the baked path only
+when nothing is found — so it wraps the version the box actually has. The
+baked literal stays on its own column-0 `KM_REAL=` line because the selftest
+parses it; merging the two lines would blind assertion 5.
+
+Every `dispatch_as_sandbox` call site explicitly sets `PATH=/opt/km/shims:$PATH`
+ahead of invoking the turn's command, so poller-dispatched turns never
+depended on the hooks and were correctly shimmed throughout — only interactive
+and login-shell paths (`km shell`, `km herdr`, `km vscode`, anything a human
+typed) were losing the race. If a new dispatch site is ever added without that
+prepend, `pkg/secrets/wiring_guard_test.go` is the mechanical guard against it
+going unnoticed.
+
+Sandboxes created before this fix keep the old hooks and shims until
+`km destroy && km create`; a resume on such a box correctly goes red on
+assertion 5 once an update has landed in nvm's prefix.
 
 **Ungranted consumer** (`km-env` fails with `secrets: unknown consumer:
 "<name>"`): the caller's `--as <name>` (or the shim's baked `--as`) does not

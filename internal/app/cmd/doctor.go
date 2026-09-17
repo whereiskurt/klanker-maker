@@ -4744,6 +4744,14 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// 2026-09-17: a profile whose init aborted boots green and reports READY
+	// with every later initCommand silently missing. The bootstrap now writes
+	// an init_failed audit event; this reads it back for every running sandbox.
+	// Same deps and same skip rule as the presence check above.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkInitFailed(ctx, cwFilter, presenceLister, presenceLogGroupPrefix)
+	})
+
 	// Phase 70 — Codex parity doctor checks (Plan 70-07).
 	// Both checks are WARN-only — Codex parity drift is never a hard platform
 	// failure. SKIPPED when deps are nil (production: SSM SendCommand is blocked

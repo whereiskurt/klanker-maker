@@ -4658,12 +4658,39 @@ echo "[km-bootstrap] Budget enforcement environment configured"
 # ============================================================
 echo "[km-bootstrap] Downloading init payload from S3..."
 KM_INIT_BUCKET="my-bucket"
-aws s3 cp "s3://${KM_INIT_BUCKET}/artifacts/sb-phase92-baseline/km-init.sh" /tmp/km-init.sh 2>/dev/null && {
+if aws s3 cp "s3://${KM_INIT_BUCKET}/artifacts/sb-phase92-baseline/km-init.sh" /tmp/km-init.sh 2>/dev/null; then
   chmod +x /tmp/km-init.sh
+  rm -f /var/lib/km/init-failed
   echo "[km-bootstrap] Running init script..."
-  /tmp/km-init.sh
-  echo "[km-bootstrap] Init complete"
-} || echo "[km-bootstrap] No init script found in S3 (skipped)"
+  # The old form — cmd && { ...; /tmp/km-init.sh; echo "Init complete"; } —
+  # printed "Init complete" AFTER a failed init, because errexit is suspended
+  # inside an && list, and nothing off-box ever heard about it. Deliberately
+  # NON-FATAL: aborting the boot over one bad initCommand is a worse trade than
+  # a box that is up and honestly labelled. But it must be SAID — here, in the
+  # audit stream (km doctor / km status read it), and on disk for km shell --root.
+  if /tmp/km-init.sh; then
+    echo "[km-bootstrap] Init complete"
+  else
+    KM_INIT_RC=$?
+    KM_INIT_EXIT="$KM_INIT_RC"; KM_INIT_STEP="?"; KM_INIT_TOTAL="?"; KM_INIT_CMD="(unknown)"
+    if [ -r /var/lib/km/init-failed ]; then
+      KM_INIT_EXIT="$(sed -n 's/^exit=//p' /var/lib/km/init-failed | head -1)"
+      KM_INIT_STEP="$(sed -n 's/^step=//p' /var/lib/km/init-failed | head -1)"
+      KM_INIT_TOTAL="$(sed -n 's/^total=//p' /var/lib/km/init-failed | head -1)"
+      KM_INIT_CMD="$(sed -n 's/^command=//p' /var/lib/km/init-failed | head -1)"
+    fi
+    KM_INIT_SKIPPED="?"
+    case "$KM_INIT_STEP$KM_INIT_TOTAL" in *\?*) ;; *) KM_INIT_SKIPPED=$((KM_INIT_TOTAL - KM_INIT_STEP)) ;; esac
+    echo "[km-bootstrap] WARNING: profile init FAILED (exit ${KM_INIT_EXIT}) at step ${KM_INIT_STEP}/${KM_INIT_TOTAL}: ${KM_INIT_CMD}" >&2
+    echo "[km-bootstrap] WARNING: ${KM_INIT_SKIPPED} later initCommand(s) were NOT run; see /var/lib/km/init-failed and the [km-init] FAILED line above" >&2
+    KM_INIT_CMD_JSON="$(printf '%s' "$KM_INIT_CMD" | sed 's/\\/\\\\/g; s/"/\\"/g' | head -c 500)"
+    printf '{"timestamp":"%s","sandbox_id":"%s","event_type":"init_failed","source":"bootstrap","detail":{"exit_code":"%s","step":"%s","total":"%s","skipped":"%s","command":"%s"}}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "sb-phase92-baseline" "$KM_INIT_EXIT" "$KM_INIT_STEP" "$KM_INIT_TOTAL" "$KM_INIT_SKIPPED" "$KM_INIT_CMD_JSON" \
+      | timeout 0.1 tee /run/km/audit-pipe > /dev/null 2>/dev/null || true
+  fi
+else
+  echo "[km-bootstrap] No init script found in S3 (skipped)"
+fi
 # ============================================================
 # 7.6. Config files (from profile spec.execution.configFiles)
 # Runs AFTER initCommands to ensure correct ownership.

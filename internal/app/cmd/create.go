@@ -1644,17 +1644,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Step 11c: Build and upload combined init script to S3.
 	// This keeps user-data small (under 16KB) by offloading init to S3.
 	if len(resolvedProfile.Spec.Execution.InitCommands) > 0 || len(resolvedProfile.Spec.Execution.InitScripts) > 0 {
-		var initScript strings.Builder
-		initScript.WriteString("#!/bin/bash\nset -e\n")
-		initScript.WriteString("echo '[km-init] Starting profile init...'\n")
-
-		// Inline commands.
-		for _, cmd := range resolvedProfile.Spec.Execution.InitCommands {
-			initScript.WriteString(formatInitCommandLines(cmd))
-		}
-
 		// Embedded init scripts (file contents inlined)
 		profileDir := filepath.Dir(profilePath)
+		var scripts []initScriptFile
 		for _, scriptFile := range resolvedProfile.Spec.Execution.InitScripts {
 			scriptPath := filepath.Join(profileDir, scriptFile)
 			if _, statErr := os.Stat(scriptPath); os.IsNotExist(statErr) {
@@ -1666,23 +1658,21 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 					Msg("failed to read init script (non-fatal)")
 				continue
 			}
-			initScript.WriteString(fmt.Sprintf("\necho '[km-init] Running %s'\n", filepath.Base(scriptFile)))
-			initScript.Write(scriptData)
-			initScript.WriteString("\n")
+			scripts = append(scripts, initScriptFile{Name: filepath.Base(scriptFile), Body: scriptData})
 		}
 
-		initScript.WriteString("echo '[km-init] Profile init complete'\n")
+		initScript := buildInitScript(resolvedProfile.Spec.Execution.InitCommands, scripts)
 
 		s3Key := fmt.Sprintf("artifacts/%s/km-init.sh", sandboxID)
 		if _, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:      aws.String(artifactBucket),
 			Key:         aws.String(s3Key),
-			Body:        bytes.NewReader([]byte(initScript.String())),
+			Body:        bytes.NewReader([]byte(initScript)),
 			ContentType: aws.String("application/x-shellscript"),
 		}); putErr != nil {
 			log.Warn().Err(putErr).Msg("failed to upload init script to S3 (non-fatal)")
 		} else {
-			fmt.Fprintf(os.Stderr, "  ✓ Init script uploaded to S3 (%d bytes)\n", initScript.Len())
+			fmt.Fprintf(os.Stderr, "  ✓ Init script uploaded to S3 (%d bytes)\n", len(initScript))
 		}
 	}
 
@@ -3655,6 +3645,64 @@ func applyBudgetOverrides(p *profile.SandboxProfile, computeOverride, aiOverride
 func formatInitCommandLines(cmd string) string {
 	quotedCmd := strings.ReplaceAll(cmd, "'", `'\''`)
 	return fmt.Sprintf("echo '[km-init] %s'\n%s\n", quotedCmd, cmd)
+}
+
+// initScriptFile is one spec.execution.initScripts entry, already read.
+type initScriptFile struct {
+	Name string
+	Body []byte
+}
+
+// initFailedMarker is where the generated init script records a failure for
+// the bootstrap (and a later km shell --root) to read. Overridable through
+// KM_INIT_STATE_DIR only so the script can be executed for real in a test.
+const initFailedMarker = `${KM_INIT_STATE_DIR:-/var/lib/km}/init-failed`
+
+// buildInitScript renders /tmp/km-init.sh: every initCommand (and every
+// initScript, inlined) as a numbered step under one `set -e`.
+//
+// Fail-fast is deliberate and stays: a profile whose CA-trust step failed must
+// not run the twenty commands that assume it succeeded. What was wrong was
+// SILENCE. A non-existent npm pin (`claude-code@2.1.171`, never published)
+// aborted the script at step 3 of 13, the caller printed "Init complete", and
+// the box reported SANDBOX_READY with no gh, no Playwright and no plugins —
+// the third recorded instance of exactly this shape. So the script now:
+//
+//   - numbers its steps (KM_INIT_STEP / KM_INIT_TOTAL), so a failure can say
+//     how many commands were abandoned, not just which one died;
+//   - traps ERR to name the failing command, its exit code and its position on
+//     stderr, and to write the same facts to /var/lib/km/init-failed for the
+//     bootstrap to turn into a WARNING line and an init_failed audit event.
+//
+// set -E (errtrace) makes the trap fire inside functions and subshells an
+// inlined initScript may define, so BASH_COMMAND names the real culprit.
+func buildInitScript(initCommands []string, scripts []initScriptFile) string {
+	var b strings.Builder
+	total := len(initCommands) + len(scripts)
+	b.WriteString("#!/bin/bash\nset -eE\n")
+	fmt.Fprintf(&b, "KM_INIT_TOTAL=%d\nKM_INIT_STEP=0\n", total)
+	b.WriteString(`trap 'rc=$?; echo "[km-init] FAILED (exit $rc) at step $KM_INIT_STEP/$KM_INIT_TOTAL: ${BASH_COMMAND}" >&2; ` +
+		`mkdir -p "$(dirname "` + initFailedMarker + `")" 2>/dev/null; ` +
+		`printf "exit=%s\nstep=%s\ntotal=%s\ncommand=%s\n" "$rc" "$KM_INIT_STEP" "$KM_INIT_TOTAL" ` +
+		`"$(printf %s "$BASH_COMMAND" | tr "\n" " " | head -c 500)" > "` + initFailedMarker + `" 2>/dev/null; ` +
+		`exit $rc' ERR` + "\n")
+	b.WriteString("echo '[km-init] Starting profile init...'\n")
+
+	step := 0
+	for _, cmd := range initCommands {
+		step++
+		fmt.Fprintf(&b, "KM_INIT_STEP=%d\n", step)
+		b.WriteString(formatInitCommandLines(cmd))
+	}
+	for _, sc := range scripts {
+		step++
+		fmt.Fprintf(&b, "\nKM_INIT_STEP=%d\necho '[km-init] Running %s'\n", step, sc.Name)
+		b.Write(sc.Body)
+		b.WriteString("\n")
+	}
+
+	b.WriteString("echo '[km-init] Profile init complete'\n")
+	return b.String()
 }
 
 func normalizeDuration(s string) string {

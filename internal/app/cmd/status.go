@@ -489,6 +489,16 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 		}
 	}
 
+	// 2026-09-17: an aborted profile init leaves the box up and green with
+	// part of its profile never applied. The bootstrap records it in the audit
+	// stream; say so here, where an operator looks first when "gh is missing".
+	if rec.Status != "failed" && rec.Status != "nocap" {
+		if f := statusInitFailureLookup(ctx, rec.SandboxID, resourcePrefix); f != nil {
+			fmt.Fprintf(out, "Init:        %s\n", f.String())
+			fmt.Fprintf(out, "             fix the profile and km destroy && km create; details in /var/lib/km/init-failed on the box\n")
+		}
+	}
+
 	fmt.Fprintf(out, "Created At:  %s\n", rec.CreatedAt.Local().Format("2006-01-02 3:04:05 PM MST"))
 	if rec.TTLExpiry != nil {
 		fmt.Fprintf(out, "TTL Expiry:  %s\n", rec.TTLExpiry.Local().Format("2006-01-02 3:04:05 PM MST"))

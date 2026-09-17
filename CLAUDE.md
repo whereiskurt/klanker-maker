@@ -8,6 +8,38 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**A failed initCommand no longer aborts the rest silently (2026-09-17):**
+- **`set -e` in `/tmp/km-init.sh` is correct and stays; the SILENCE was the bug.**
+  An unpublished npm pin (`claude-code@2.1.171`) killed step 3 of 13 and the ten
+  commands after it — Playwright, both plugin marketplaces, both plugins, `gh` —
+  never ran, while the caller `aws s3 cp … && { …; /tmp/km-init.sh; echo "Init
+  complete"; }` printed "Init complete" regardless: **errexit is suspended inside
+  an `&&` list**, so the failure never reached anything. Green `km list`,
+  `SANDBOX_READY`, empty audit stream. Third recorded instance of the shape.
+- **Fix, four places, all non-fatal:** the script numbers its steps and traps
+  `ERR` (`[km-init] FAILED (exit N) at step S/T: <cmd>`; `set -E` so it fires
+  inside inlined-script functions), writes `/var/lib/km/init-failed`; the 7.5
+  bootstrap block prints "Init complete" only on success and otherwise a WARNING
+  with the step and the skipped count, then emits an **`init_failed` audit event**
+  over the FIFO; `km status` prints an `Init: FAILED …` line and `km doctor` gains
+  **Sandbox profile init** (WARN per running sandbox). No continue-on-error
+  schema knob — `|| true` already says that.
+- **Tests execute the real bash**: the generated script under `bash` with a
+  failing step (`TestBuildInitScript_FailureIsLoudAndCounted`), and the rendered
+  bootstrap block under `bash -euo pipefail` with a fake `aws` delivering a
+  failing script (`TestUserdataInitBlock_FailureIsReportedNotSwallowed`). The
+  frozen pre-92 golden was hand-spliced for the 7.5 block only — never re-captured.
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.**
+  NOT `--sidecars`. Existing sandboxes keep the old bootstrap until
+  `km destroy && km create`. See `docs/operational-gotchas.md` § A failed
+  initCommand aborts the rest.
+
+**Shim PATH hooks and stale shim targets (2026-09-17) — see the Phase 133 Wave 1
+bullet "The nvm PATH race" below for the full account.** Both hooks now
+strip-then-prepend; the shim prefers a live `command -v` (`KM_LIVE`) over its
+baked path; `realShimTemplate` and the generator pin to one golden. Same deploy
+surface as above; existing sops sandboxes keep the old hooks until recreate.
+
 **Phase 135 (2026-09-06) — Interactive sessions are enforced: the eBPF programs move to the root cgroup (complete; deployed and live-UAT'd end to end, including resume):**
 - **Nothing interactive had EVER been inside the enforcement cgroup.** `km shell`
   lands in `system.slice/amazon-ssm-agent.service`; `km herdr`, `km vscode` and
@@ -266,6 +298,21 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   check in the whole design: every OTHER selftest failure is loud, but a lost
   PATH race boots clean, the daemon runs, the shim exists, and `claude` just
   runs with no secrets and dies on a confusing 401 with nothing else noticing.
+  **The race was being lost after all (found live 2026-09-17, two boxes).** Both
+  PATH hooks guarded with "already on PATH → do nothing", and the `~/.bashrc`
+  block — the one that exists to beat nvm — always found `/opt/km/shims` already
+  there (profile.d put it there first), took the no-op arm, and left nvm's bin
+  ahead. Profiles escaped only because `base/userinit` installs claude as root
+  outside nvm; the first `claude` self-update as uid `sandbox` landed in nvm's
+  prefix, and the shim's "fall back only if the baked path is gone" never fired
+  because `/usr/bin/claude` still existed. Both hooks now strip-then-prepend
+  (idempotent AND always first), the shim prefers a live `command -v` with the
+  shim dir stripped (`KM_LIVE`) over its baked path, and the tests are
+  behavioural: the hook text is run under `sh` and the shim is executed with a
+  decoy ahead on PATH. `realShimTemplate` in `cmd/km-secretsd` had ALSO drifted
+  from the generator (unquoted names) — both now pin to
+  `pkg/compiler/testdata/consumer_shim_claude.golden.sh`. Boot selftest assertion
+  5 was correct throughout; it just only runs at boot and resume.
 - **Boot-fatal, resume-red: the same check, two dispositions, for a structural
   reason.** `km-secretsd selftest` runs at boot as a plain userdata command
   under `set -euo pipefail` (non-zero aborts the boot, same disposition as the
