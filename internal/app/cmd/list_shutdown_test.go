@@ -206,3 +206,87 @@ func TestListCmd_WideShowsInfinityButJSONStaysNumeric(t *testing.T) {
 		t.Errorf("--json must keep the numeric ttl_remaining:\n%s", out)
 	}
 }
+
+// The IDLE column (--wide) and km status printed IdleRemaining raw — Go's
+// Duration.String(), so a large idleTimeout read "86000h0m0s". The stored
+// string must stay a parseable duration (shutdownLabel re-parses it, and it
+// reaches --json), so the fix is at the display: the same ladder as TTL,
+// ∞ from three years.
+func TestListCmd_WideIdleColumnUsesTheLadder(t *testing.T) {
+	soon := time.Now().Add(400 * 24 * time.Hour)
+	recs := []kmaws.SandboxRecord{
+		{SandboxID: "a-000000001", Alias: "huge", Status: "running", TTLExpiry: &soon, IdleRemaining: "86000h0m0s remaining", CreatedAt: time.Now()},
+		{SandboxID: "a-000000002", Alias: "days", Status: "running", TTLExpiry: &soon, IdleRemaining: "167h0m0s remaining", CreatedAt: time.Now()},
+		{SandboxID: "a-000000003", Alias: "soon", Status: "running", TTLExpiry: &soon, IdleRemaining: "23m10s remaining", CreatedAt: time.Now()},
+		{SandboxID: "a-000000004", Alias: "now", Status: "running", TTLExpiry: &soon, IdleRemaining: "imminent", CreatedAt: time.Now()},
+	}
+	root := &cobra.Command{Use: "km"}
+	root.AddCommand(NewListCmdWithLister(&config.Config{}, &fakeShutdownLister{records: recs}))
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetErr(&buf)
+	root.SetArgs([]string{"list", "--wide"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("list --wide: %v\n%s", err, buf.String())
+	}
+	out := stripANSI(buf.String())
+	for alias, want := range map[string]string{"huge": " ∞ ", "days": " 6d23h ", "soon": " 23m ", "now": " imminent "} {
+		var line string
+		for _, l := range strings.Split(out, "\n") {
+			if strings.Contains(l, alias) {
+				line = l
+			}
+		}
+		if !strings.Contains(line, want) {
+			t.Errorf("%s: IDLE cell should be %q; row:\n%s", alias, strings.TrimSpace(want), line)
+		}
+	}
+	if strings.Contains(out, "0m0s") {
+		t.Errorf("raw Duration.String() leaked into --wide:\n%s", out)
+	}
+	// --json keeps the parseable string.
+	root = &cobra.Command{Use: "km"}
+	root.AddCommand(NewListCmdWithLister(&config.Config{}, &fakeShutdownLister{records: recs[:1]}))
+	buf.Reset()
+	root.SetOut(&buf)
+	root.SetErr(&buf)
+	root.SetArgs([]string{"list", "--json"})
+	_ = root.Execute()
+	if !strings.Contains(buf.String(), `"idle_remaining":"86000h0m0s remaining"`) {
+		t.Errorf("--json must keep the parseable idle_remaining:\n%s", buf.String())
+	}
+}
+
+func TestIdleLabelForDisplay(t *testing.T) {
+	for in, want := range map[string]string{
+		"86000h0m0s remaining": "∞",
+		"167h0m0s remaining":   "6d23h",
+		"2h0m0s remaining":     "2h",
+		"23m10s remaining":     "23m",
+		"45s remaining":        "<1m",
+		"imminent":             "imminent",
+		"":                     "-",
+		"garbage":              "garbage", // unparseable: show what we have
+	} {
+		if got := idleLabelForDisplay(in); got != want {
+			t.Errorf("idleLabelForDisplay(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// km status's Idle line: the ladder, with the urgency colour kept.
+func TestIdleStatusForDisplay(t *testing.T) {
+	cases := map[string]string{
+		"86000h0m0s remaining":                         "∞ remaining",
+		ansiGreen + "86000h0m0s remaining" + ansiReset: ansiGreen + "∞ remaining" + ansiReset,
+		ansiRed + "3m2s remaining" + ansiReset:         ansiRed + "3m remaining" + ansiReset,
+		"imminent":                                     "imminent",
+		ansiRed + "imminent" + ansiReset:               ansiRed + "imminent" + ansiReset,
+		"":                                             "",
+	}
+	for in, want := range cases {
+		if got := idleStatusForDisplay(in); got != want {
+			t.Errorf("idleStatusForDisplay(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

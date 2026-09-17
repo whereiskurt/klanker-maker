@@ -504,12 +504,7 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		}
 
 		if wide {
-			idle := r.IdleRemaining
-			if idle == "" {
-				idle = "-"
-			}
-			// Strip " remaining" suffix for compact display
-			idle = strings.TrimSuffix(idle, " remaining")
+			idle := idleLabelForDisplay(r.IdleRemaining)
 			region := padVis(shortRegion(r.Region), regionColW)
 			if showThreads {
 				threads := "-"
@@ -875,6 +870,26 @@ func shutdownLabel(r kmaws.SandboxRecord) string {
 	default:
 		return "-"
 	}
+}
+
+// idleLabelForDisplay turns the stored IdleRemaining string — Go's
+// Duration.String() plus " remaining", or "imminent" — into the same ladder
+// the SHUTDOWN and TTL columns use. The stored form stays a parseable
+// duration on purpose: shutdownLabel re-parses it and it reaches --json; only
+// the human-facing cell changes. A large idleTimeout used to print as
+// "86000h0m0s" here.
+func idleLabelForDisplay(stored string) string {
+	switch stored {
+	case "":
+		return "-"
+	case "imminent":
+		return stored
+	}
+	d, err := time.ParseDuration(strings.TrimSuffix(stored, " remaining"))
+	if err != nil {
+		return stored // not ours to guess at; show what we have
+	}
+	return compactDuration(d)
 }
 
 // compactDuration renders a duration at the precision the SHUTDOWN column can
