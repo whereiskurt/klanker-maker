@@ -11,36 +11,42 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Drafted from CLAUDE.md phase blocks since v0.8.16 via
+  Drafted from CLAUDE.md phase blocks since v0.8.17 via
   scripts/draft-release-highlights.sh, then curated.
 -->
 
-## 🐳 Port-forwards from the operator container now reach your host
+## 🔇 A failed initCommand is no longer silent
 
-`session-manager-plugin` hard-codes its listener to `localhost` with no bind option, so
-from inside the container every `km vscode`, `km herdr`, `km desktop`, `km model` and
-`km tunnel` forward (and `km shell --ports`, codex OAuth) landed on the *container's*
-loopback — which `docker run -p` can never reach. The "connect to `localhost:2222`" line
-was silently false.
+`/tmp/km-init.sh` runs every `initCommands` entry under one `set -e` — correct, and kept.
+What was wrong was that the abort was invisible: an unpublished npm pin killed step 3 of 13,
+the ten commands after it never ran, and the boot printed `Init complete` anyway (errexit is
+suspended inside an `&&` list), went on to `SANDBOX_READY`, and `km list` was green.
 
-`KM_FORWARD_BIND` makes km start the plugin on a private loopback port and relay
-`<addr>:<local-port>` onto it. The image sets `0.0.0.0` and `EXPOSE`s the default ports;
-`make operator-shell` publishes each on the **host's loopback only** — never a bare `-p`,
-which would offer an SSH tunnel into a sandbox to your LAN. Unset, nothing changes.
+The script now numbers its steps and traps `ERR`, so the log reads
+`[km-init] FAILED (exit 1) at step 3/13: npm install -g …`; the bootstrap prints a WARNING
+with the count of commands skipped and emits an `init_failed` audit event; `km status` shows
+an `Init: FAILED …` line and `km doctor` gains a **Sandbox profile init** check. Still
+non-fatal — a box that is up and honestly labelled beats an aborted boot.
 
-## 🧱 Sidecar images no longer compile Go under Rosetta
+## 🔑 The secret shims were losing the PATH race after all
 
-`--platform linux/amd64` cascades to every Dockerfile stage, so on Apple Silicon the
-`golang` builder ran the whole toolchain under emulation and segfaulted intermittently in
-the scheduler — a `[warn]` partway through `km init`. The builder stage is now pinned to
-`$BUILDPLATFORM` and the existing `GOARCH=amd64` cross-compiles; the published manifest
-is unchanged and a guard test covers every Dockerfile that runs `go build`.
+Both PATH hooks guarded with "already on PATH → do nothing". profile.d adds `/opt/km/shims`
+first, so the `~/.bashrc` block — the one that exists to beat nvm — always found it already
+there, took the no-op arm, and left nvm's bin ahead. Profiles escaped only because claude was
+npm-installed as root outside nvm; the first `claude` self-update as the sandbox user landed
+in nvm's prefix and ended the accident. And the shim fell back to a PATH search only if its
+baked target had *vanished*, so it kept wrapping the stale copy.
 
-## 🗺️ Ten security and IaC diagrams
+Both hooks now strip-then-prepend, the shim prefers whatever `command -v` finds with the
+shim dir removed, and the pollers' own `~/.local/bin` prepend re-asserts the shims after it —
+a third way to lose the same race, found while confirming Slack-dispatched turns are shimmed.
+Tests execute the real hook text and the real shim, not a string-presence check.
 
-`docs/diagrams/security/` — containment boundaries, compensating layers, brokered secret
-unsealing, the bridge Lambda trust boundary, the IMDS fence as paired policy traces, how
-terragrunt is actually invoked and which process authors every file it touches, the YAML →
-HCL compiler, what `km bootstrap` vs `km init` apply, and every SSM parameter path with
-the KMS key that seals it — including the two keys that are not where you would assume.
-Single-file HTML; open any of them in a browser.
+## ∞ `km list` no longer overflows on a huge TTL
+
+`ttl: 86000h` rendered as `85999h42m ttl`, three characters wider than the column. Detail
+now matters more the closer the deadline is: `46m` → `1h30m` → `6d23h` → `364d` → `2y364d`,
+and past three years simply `∞`. `--json` keeps a numeric string.
+
+All three are create-time: existing sandboxes keep the old behaviour until
+`km destroy && km create`.
