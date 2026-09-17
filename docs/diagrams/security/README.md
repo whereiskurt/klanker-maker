@@ -1,6 +1,6 @@
 # Security and infrastructure diagrams
 
-Seven self-contained HTML diagrams. Each is one file with inline SVG — no build
+Ten self-contained HTML diagrams. Each is one file with inline SVG — no build
 step, no external assets beyond a Google Fonts stylesheet. Open any of them
 directly in a browser.
 
@@ -20,6 +20,7 @@ authoritative, these exist to make the shape of the thing legible in one look.
 | 7 | [IaC file provenance](07-iac-provenance.html) | Which process authors every file an apply touches — and why `backend.tf` is not in the repo |
 | 8 | [YAML → HCL compiler](08-yaml-to-hcl-compiler.html) | How the two YAML inputs travel separate routes, and what `compiler.Compile()` actually emits |
 | 9 | [Bootstrap and init](09-bootstrap-and-init.html) | What each command applies, in which account, and the two resources that are not Terraform |
+| 10 | [SSM parameters and KMS keys](10-ssm-and-kms-keys.html) | Every `/{prefix}/` parameter by branch and the command that writes it, the four KMS keys with their aliases and creators, and which key each SecureString is actually written under |
 
 ## YAML → HCL, in prose
 
