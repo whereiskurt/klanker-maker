@@ -97,6 +97,7 @@ Only `~/.aws` is required. The rest each buy one specific thing.
 | `~/.km` | `/root/.km` | per-sandbox SSH keys, so `km vscode`/`desktop`/`tunnel` don't rekey every run |
 | `./profiles` | `/root/.km/profiles` | your profiles, **layered over** the baked library |
 | `$PWD` | `/work` | somewhere for output to outlive the container |
+| `-p 127.0.0.1:<port>:<port>` | (published port) | the SSM forwards from `km vscode`/`herdr`/`desktop`/`model`/`tunnel` — see below |
 
 ```bash
 docker run --rm -it \
@@ -105,6 +106,7 @@ docker run --rm -it \
   -v "$PWD/profiles:/root/.km/profiles" \
   -v "$PWD:/work" \
   -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
+  -p 127.0.0.1:2222:2222 -p 127.0.0.1:2224:2224 -p 127.0.0.1:8444:8444 \
   ghcr.io/whereiskurt/klanker-maker/km:latest
 ```
 
@@ -129,6 +131,45 @@ has none and the image ships only `km-config.example.yaml`. Mounting the file
 means host edits take effect with no rebuild. If you have one from
 `km configure`, mount it; otherwise run `km configure` inside the container and
 copy the result out.
+
+### Port-forwards: `km vscode`, `herdr`, `desktop`, `model`, `tunnel`
+
+Every one of those verbs opens an SSM port-forward and tells you to connect to
+`localhost:<port>`. From a container that is a lie unless two things are true:
+
+1. **km relays the forward off the container's loopback.** `session-manager-plugin`
+   hard-codes its listener to `localhost` and has no bind option, so a plain
+   forward inside a container is unreachable from the host — `docker run -p`
+   forwards to the container's interface, never to its loopback. The image sets
+   `KM_FORWARD_BIND=0.0.0.0`; with that set, km starts the plugin on a private
+   loopback port and relays `0.0.0.0:<local-port>` onto it. The banner's
+   `ports :` line and a `relay: 0.0.0.0:2222 → 127.0.0.1:NNNNN` line when a
+   forward starts confirm it. Unset the variable and you get native behaviour.
+2. **docker published the port.** `make operator-shell` passes
+   `-p 127.0.0.1:<port>:<port>` for every default local port; a hand-written
+   `docker run` must do the same.
+
+| Verb | Default local port | Flag |
+|---|---|---|
+| `km vscode start` | 2222 | `--local-port` |
+| `km tunnel k8s` / `km tunnel socks` | 2223 | `--local-port` |
+| `km herdr start` | 2224 | `--local-port` |
+| `km model start` | 8001 | `--local-port` |
+| `km desktop start` | 8444 | `--local-port` |
+| `km agent auth --codex` | 1455, 1457 fallback | fixed by codex |
+
+Publish on the **host's loopback only**. `0.0.0.0` inside the container is
+what docker needs to route to; `-p 2222:2222` without the `127.0.0.1:` prefix
+would offer an SSH tunnel into a sandbox to everything on your LAN.
+
+A port a native `km` on the host is already holding makes `docker run` fail
+with "port is already allocated". Trim the list:
+`make operator-shell KM_PUBLISH_PORTS="2224 8444"`, or pick another
+`--local-port` and publish that.
+
+Two things stay native-only: `km configure github` (its OAuth callback server
+binds an ephemeral loopback port that cannot be pre-published) and `km shell`
+with no `--ports` (an interactive session, nothing to publish).
 
 ### Profiles layer, they don't replace
 
