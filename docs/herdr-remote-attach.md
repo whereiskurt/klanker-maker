@@ -13,12 +13,12 @@
 
 [Herdr](https://herdr.dev) is a terminal multiplexer built for coding agents:
 named panes, workspace organization, and — the property this document is about —
-**panes that keep running after you detach.** `km herdr start` makes sure a
-sandbox is ready to accept a Herdr remote attach, brings the SSM+SSH transport up,
-and attaches you to it — one command, one terminal.
+**panes that keep running after you detach.** `km herdr <sandbox-id>` makes sure
+a sandbox is ready to accept a Herdr remote attach, brings the SSM+SSH transport
+up, and attaches you to it — one command, one terminal, no subcommand.
 
 ```bash
-km herdr start my-sandbox
+km herdr my-sandbox
 ```
 
 ```
@@ -39,19 +39,23 @@ the local port.
 
 `--session agents` attaches to a named session.
 
-### `--no-attach`
+### `km herdr start` — transport only
 
-To hold the transport open and print the `herdr --remote` line instead — which is
-what you want to drive several herdr clients over one forward, or to attach with
-something other than the herdr CLI:
+To bring up the forward and the ssh-config entry and just hold them open,
+printing the `herdr --remote` line instead of running it — which is what you
+want to drive several herdr clients over one forward, to attach with something
+other than the herdr CLI, or to keep a tunnel up in one terminal while working
+in others:
 
 ```bash
-km herdr start my-sandbox --no-attach
+km herdr start my-sandbox
 ```
 
-That is the older two-terminal flow, and it is also the automatic fallback when
-the herdr client is not installed on your workstation: the transport is still
-useful, so km says so and holds the tunnel rather than failing.
+`start` never launches herdr locally. It used to need `--no-attach` to behave
+this way; that flag is still accepted as a no-op so existing habits keep working.
+The same transport-only flow is also the automatic fallback of `km herdr <id>`
+when the herdr client is not installed on your workstation: the transport is
+still useful, so km says so and holds the tunnel rather than failing.
 
 ---
 
@@ -369,12 +373,24 @@ exit.
 
 ## Flags
 
-### `km herdr start <sandbox-id>`
+### `km herdr <sandbox-id>` (attach)
 
 | Flag | Default | Purpose |
 |---|---|---|
 | `--local-port` | `2224` | Laptop port for the SSM forward to sshd |
 | `--no-install` | off | Fail instead of installing herdr when it's absent, so you can see the failure |
+| `--session` | — | Named herdr session to attach to (passed through as `--session`) |
+
+### `km herdr start <sandbox-id>` (transport only)
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--local-port` | `2224` | Laptop port for the SSM forward to sshd |
+| `--no-install` | off | Fail instead of installing herdr when it's absent, so you can see the failure |
+| `--no-attach` | — | Accepted and ignored — `start` never attaches |
+
+`--session` is rejected on `start`: nothing is attached, so there is nothing for
+it to name.
 
 `--local-port` defaults to `2224` because `km vscode start` owns `2222` and both
 `km tunnel` modes own `2223` — having VS Code, a tunnel, and a Herdr attach all

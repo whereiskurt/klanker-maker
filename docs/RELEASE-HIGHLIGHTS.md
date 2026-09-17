@@ -42,6 +42,15 @@ shim dir removed, and the pollers' own `~/.local/bin` prepend re-asserts the shi
 a third way to lose the same race, found while confirming Slack-dispatched turns are shimmed.
 Tests execute the real hook text and the real shim, not a string-presence check.
 
+## 🐑 `km herdr <sandbox-id>` attaches; `km herdr start` is transport only
+
+The daily verb no longer needs a subcommand: `km herdr my-sandbox` brings up the
+SSM+SSH transport and attaches Herdr in one terminal. `km herdr start my-sandbox` now
+does what `--no-attach` used to: holds the forward and the ssh-config entry open and
+prints the `herdr --remote` line, never launching herdr locally — for driving several
+clients over one forward, or keeping a tunnel up in one terminal while working in
+others. `--no-attach` is still accepted as a no-op.
+
 ## ∞ `km list` no longer overflows on a huge TTL
 
 `ttl: 86000h` rendered as `85999h42m ttl`, three characters wider than the column. Detail

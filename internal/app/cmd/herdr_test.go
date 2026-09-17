@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -17,6 +18,8 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/spf13/cobra"
+
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
@@ -681,5 +684,73 @@ func TestRunHerdrStart_MissingLocalHerdrFallsBackToHoldingTheForward(t *testing.
 	execFn := func(c *exec.Cmd) error { return nil }
 	if err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", 34592, false, false, ""); err != nil {
 		t.Fatalf("missing local herdr should fall back, not fail: %v", err)
+	}
+}
+
+// The two entry points and what each must do. `km herdr <id>` is the daily
+// verb — bring up the transport AND attach — so it should not need "start".
+// `km herdr start <id>` is transport-only: forward + ssh config held open in
+// the foreground, herdr NOT launched, for driving several clients over one
+// forward or attaching from another tool. --no-attach is what start used to
+// need to behave that way; it is kept as an accepted no-op so scripts and
+// habits do not break, and --session lives on the bare form, which is the
+// only one that attaches.
+func TestHerdrCmd_BareAttachesStartIsTransportOnly(t *testing.T) {
+	type call struct {
+		id      string
+		attach  bool
+		session string
+		port    int
+	}
+	var got []call
+	orig := herdrRun
+	t.Cleanup(func() { herdrRun = orig })
+	herdrRun = func(_ context.Context, _ *config.Config, _ SandboxFetcher, _ ShellExecFunc, _ SSMSendAPI, ref string, localPort int, _ bool, attach bool, session string) error {
+		got = append(got, call{id: ref, attach: attach, session: session, port: localPort})
+		return nil
+	}
+	run := func(args ...string) error {
+		root := &cobra.Command{Use: "km"}
+		root.AddCommand(NewHerdrCmd(&config.Config{}))
+		root.SetOut(io.Discard)
+		root.SetErr(io.Discard)
+		root.SetArgs(append([]string{"herdr"}, args...))
+		return root.Execute()
+	}
+
+	if err := run("kphtest1"); err != nil {
+		t.Fatalf("km herdr <id>: %v", err)
+	}
+	if err := run("kphtest1", "--session", "agents", "--local-port", "2299"); err != nil {
+		t.Fatalf("km herdr <id> --session: %v", err)
+	}
+	if err := run("start", "kphtest1"); err != nil {
+		t.Fatalf("km herdr start <id>: %v", err)
+	}
+	if err := run("start", "kphtest1", "--no-attach"); err != nil {
+		t.Fatalf("km herdr start --no-attach must still be accepted: %v", err)
+	}
+	if err := run("start", "kphtest1", "--session", "agents"); err == nil {
+		t.Error("km herdr start does not attach, so --session must be rejected rather than silently ignored")
+	}
+
+	want := []call{
+		{id: "kphtest1", attach: true, session: "", port: 2224},
+		{id: "kphtest1", attach: true, session: "agents", port: 2299},
+		{id: "kphtest1", attach: false, session: "", port: 2224},
+		{id: "kphtest1", attach: false, session: "", port: 2224},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d calls, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("call %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// The bare form must not swallow the subcommands.
+	if err := run("status"); err == nil {
+		t.Error("km herdr status with no id should fail on args, not be treated as sandbox \"status\"")
 	}
 }

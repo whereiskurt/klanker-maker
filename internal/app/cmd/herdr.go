@@ -153,56 +153,87 @@ func NewHerdrCmd(cfg *config.Config) *cobra.Command {
 }
 
 func newHerdrCmdInternal(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI) *cobra.Command {
-	parent := &cobra.Command{
-		Use:          "herdr",
-		Short:        "Attach a Herdr terminal multiplexer to a sandbox over SSM",
-		SilenceUsage: true,
-	}
-	parent.AddCommand(newHerdrStartCmd(cfg, fetcher, execFn, ssmClient))
-	parent.AddCommand(newHerdrStatusCmd(cfg, fetcher, ssmClient))
-	return parent
-}
-
-func newHerdrStartCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI) *cobra.Command {
 	var localPort int
 	var noInstall bool
-	var noAttach bool
 	var session string
-	cmd := &cobra.Command{
-		Use:   "start <sandbox-id>",
-		Short: "Open a Herdr remote attach to a sandbox",
-		Long: `Bring up the transport to a sandbox and attach Herdr to it.
+	parent := &cobra.Command{
+		Use:   "herdr <sandbox-id>",
+		Short: "Attach a Herdr terminal multiplexer to a sandbox over SSM",
+		Long: `Bring up the transport to a sandbox and attach Herdr to it, in one terminal.
 
-By default this is one command in one terminal: km holds the SSM forward in the
-background, waits for sshd, then runs herdr against it. Quitting herdr closes the
-tunnel. Pass --no-attach to hold the transport open and print the herdr command
-instead, which is what you want to drive several herdr clients over one forward,
-or to attach from something other than the herdr CLI.
+km holds the SSM forward in the background, waits for sshd, then runs herdr
+against it; quitting herdr closes the tunnel. This is the daily verb, so it needs
+no subcommand: km herdr <sandbox-id>.
+
+  km herdr <sandbox-id>          bring up the transport and attach herdr
+  km herdr start <sandbox-id>    transport only — hold the forward open, print the herdr command
+  km herdr status <sandbox-id>   report sshd, keys, the herdr binary, and presence signal 8
 
 Panes keep running when you detach with ctrl+b q, and survive this command being
 Ctrl-C'd — but a Herdr session does NOT survive a reboot, so km stop kills every
 pane's process. km pause hibernates and keeps them. An idle stop under
 teardownPolicy: stop follows spec.runtime.hibernation: it hibernates (panes
 survive) when that is set, and stops (panes die) when it is not.`,
+		// Exactly one positional, and only when it is not a subcommand name;
+		// cobra dispatches "start"/"status" before this RunE ever runs.
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
-			f, e, s, err := resolveVSCodeDeps(c.Context(), cfg, fetcher, execFn, ssmClient)
-			if err != nil {
-				return err
-			}
-			sandboxID, err := ResolveSandboxID(c.Context(), cfg, args[0])
-			if err != nil {
-				return err
-			}
-			return runHerdrStart(c.Context(), f, e, s, sandboxID, localPort, noInstall, noAttach, session)
+			return herdrRun(c.Context(), cfg, fetcher, execFn, ssmClient, args[0], localPort, noInstall, true, session)
+		},
+	}
+	// 2224: km vscode owns 2222, both km tunnel modes own 2223.
+	parent.Flags().IntVar(&localPort, "local-port", 2224, "Local port for the SSM forward to sshd")
+	parent.Flags().BoolVar(&noInstall, "no-install", false, "Fail instead of installing herdr when it is absent from the sandbox")
+	parent.Flags().StringVar(&session, "session", "", "Named herdr session to attach to (passed through as --session)")
+	parent.AddCommand(newHerdrStartCmd(cfg, fetcher, execFn, ssmClient))
+	parent.AddCommand(newHerdrStatusCmd(cfg, fetcher, ssmClient))
+	return parent
+}
+
+// herdrRun resolves deps and the sandbox reference, then runs the start flow.
+// A package var so the cobra layer can be tested for ROUTING (which entry point
+// attaches, which flags reach which flow) without AWS.
+var herdrRun = func(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ref string, localPort int, noInstall, attach bool, session string) error {
+	f, e, s, err := resolveVSCodeDeps(ctx, cfg, fetcher, execFn, ssmClient)
+	if err != nil {
+		return err
+	}
+	sandboxID, err := ResolveSandboxID(ctx, cfg, ref)
+	if err != nil {
+		return err
+	}
+	return runHerdrStart(ctx, f, e, s, sandboxID, localPort, noInstall, !attach, session)
+}
+
+func newHerdrStartCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI) *cobra.Command {
+	var localPort int
+	var noInstall bool
+	var noAttach bool
+	cmd := &cobra.Command{
+		Use:   "start <sandbox-id>",
+		Short: "Bring up the transport to a sandbox and hold it open (no local herdr)",
+		Long: `Bring up the SSM forward and ssh-config entry for a sandbox and hold them open.
+
+This is transport only: herdr is NOT launched locally. Use it to drive several
+herdr clients over one forward, to attach from something other than the herdr
+CLI, or to keep a tunnel up in one terminal while working in others. The banner
+prints the herdr command to run. Ctrl-C closes the tunnel.
+
+To bring up the transport AND attach in one terminal, use km herdr <sandbox-id>.`,
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			return herdrRun(c.Context(), cfg, fetcher, execFn, ssmClient, args[0], localPort, noInstall, false, "")
 		},
 	}
 	// 2224: km vscode owns 2222, both km tunnel modes own 2223.
 	cmd.Flags().IntVar(&localPort, "local-port", 2224, "Local port for the SSM forward to sshd")
 	cmd.Flags().BoolVar(&noInstall, "no-install", false, "Fail instead of installing herdr when it is absent from the sandbox")
-	cmd.Flags().BoolVar(&noAttach, "no-attach", false, "Hold the transport open and print the herdr command instead of launching herdr")
-	cmd.Flags().StringVar(&session, "session", "", "Named herdr session to attach to (passed through as --session)")
+	// Transport-only is now what start does; the flag that used to ask for it
+	// stays accepted so existing scripts and habits keep working.
+	cmd.Flags().BoolVar(&noAttach, "no-attach", false, "No-op: km herdr start never attaches (kept for compatibility)")
+	_ = cmd.Flags().MarkHidden("no-attach")
 	return cmd
 }
 
@@ -281,15 +312,16 @@ func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExec
 		return buildPortForwardCmd(c, instanceID, region, strconv.Itoa(localPort), "22")
 	}
 
-	// --no-attach, or no local herdr to launch: hold the forward in the
-	// foreground and tell the operator what to run. A missing local binary is
-	// a fall-back rather than an error — the transport is still useful, and
-	// failing here would strand someone who attaches with something else.
+	// Transport-only (km herdr start), or no local herdr to launch: hold the
+	// forward in the foreground and tell the operator what to run. A missing
+	// local binary is a fall-back rather than an error — the transport is
+	// still useful, and failing here would strand someone who attaches with
+	// something else.
 	herdrBin, lookErr := exec.LookPath("herdr")
 	if noAttach || lookErr != nil {
 		if lookErr != nil && !noAttach {
 			fmt.Fprintf(os.Stderr, "  [note] herdr not found on PATH — holding the tunnel open instead of attaching.\n"+
-				"         Install it from https://herdr.dev, or use --no-attach to silence this.\n\n")
+				"         Install it from https://herdr.dev, or use `km herdr start` for transport only.\n\n")
 		}
 		herdrBanner(os.Stdout, sandboxID, host, localPort, st)
 		return runReconnectingPortForward(ctx, execFn, buildPF, sshBannerTunnelProbe(localPort), true, os.Stdout)
