@@ -25,7 +25,7 @@ func TestShutdownLabel(t *testing.T) {
 			rec: kmaws.SandboxRecord{
 				Status: "running", TTLExpiry: at(19 * time.Hour), IdleRemaining: "2h0m0s remaining",
 			},
-			want: "2h0m idle",
+			want: "2h idle",
 		},
 		{
 			name: "ttl sooner than idle -> ttl wins",
@@ -46,7 +46,7 @@ func TestShutdownLabel(t *testing.T) {
 			rec: kmaws.SandboxRecord{
 				Status: "paused", TTLExpiry: at(19 * time.Hour), IdleRemaining: "2h0m0s remaining",
 			},
-			want: "19h0m ttl",
+			want: "19h ttl",
 		},
 		{
 			name: "expired ttl",
@@ -73,5 +73,36 @@ func TestShutdownLabel(t *testing.T) {
 				t.Errorf("shutdownLabel() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// A profile with spec.lifecycle.ttl: 86000h (a "never expire" idiom) used to
+// render as "85999h42m ttl" — 14 characters in an 11-wide column, pushing UP
+// and AUTH off their headers on every row. Past a day the hours stop being
+// information and start being noise: roll to days, and drop the trailing unit
+// that is under 1% of the value, the same shape formatUptime already uses.
+func TestCompactDuration_LargeValuesRollToDays(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{30 * time.Second, "<1m"},
+		{46 * time.Minute, "46m"},
+		{90 * time.Minute, "1h30m"},
+		{23*time.Hour + 59*time.Minute, "23h59m"},
+		{24 * time.Hour, "1d"},
+		{25*time.Hour + 30*time.Minute, "1d1h"}, // minutes dropped past a day
+		{6*24*time.Hour + 23*time.Hour, "6d23h"},
+		{7 * 24 * time.Hour, "7d"},
+		{86000 * time.Hour, "3583d"}, // hours dropped past a week
+		{365 * 24 * time.Hour, "365d"},
+	}
+	for _, tc := range cases {
+		if got := compactDuration(tc.d); got != tc.want {
+			t.Errorf("compactDuration(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+		if got := compactDuration(tc.d); len(got) > 7 {
+			t.Errorf("compactDuration(%v) = %q is %d chars; the SHUTDOWN column is 11 wide and needs room for \" ttl\"", tc.d, got, len(got))
+		}
 	}
 }

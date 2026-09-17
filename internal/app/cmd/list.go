@@ -873,17 +873,37 @@ func shutdownLabel(r kmaws.SandboxRecord) string {
 	}
 }
 
-// compactDuration renders a duration as "1h30m" or "46m", dropping the seconds
-// that time.Duration.String() would otherwise spend a column on.
+// compactDuration renders a duration at the precision the SHUTDOWN column can
+// afford: "46m", "1h30m", "6d23h", "3583d". Two units at most, and past a week
+// only days — a "never expire" ttl of 86000h used to render as "85999h42m ttl",
+// three characters wider than the column, and pushed UP and AUTH off their
+// headers on every row. Rounded to the minute (a label computed from
+// time.Until is a few hundred ms short of the whole minute it means), with a
+// "<1m" floor so a box about to go is never shown as "1m" or "0m".
 func compactDuration(d time.Duration) string {
+	if d < time.Minute {
+		return "<1m"
+	}
 	d = d.Round(time.Minute)
-	h := int(d.Hours())
-	m := int(d.Minutes()) % 60
-	if h > 0 {
-		return fmt.Sprintf("%dh%dm", h, m)
-	}
-	if m > 0 {
+	m := int(d.Minutes())
+	h := m / 60
+	days := h / 24
+	switch {
+	case days >= 7:
+		return fmt.Sprintf("%dd", days)
+	case days > 0:
+		if h%24 == 0 {
+			return fmt.Sprintf("%dd", days)
+		}
+		return fmt.Sprintf("%dd%dh", days, h%24)
+	case h > 0:
+		if m%60 == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh%dm", h, m%60)
+	case m > 0:
 		return fmt.Sprintf("%dm", m)
+	default:
+		return "<1m"
 	}
-	return "<1m"
 }
