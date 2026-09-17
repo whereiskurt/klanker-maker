@@ -11,51 +11,37 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Drafted from CLAUDE.md phase blocks since v0.8.17 via
+  Drafted from CLAUDE.md phase blocks since v0.8.18 via
   scripts/draft-release-highlights.sh, then curated.
 -->
 
-## 🔇 A failed initCommand is no longer silent
+## ⌨️ Port-forwards no longer leave you with a dead keyboard
 
-`/tmp/km-init.sh` runs every `initCommands` entry under one `set -e` — correct, and kept.
-What was wrong was that the abort was invisible: an unpublished npm pin killed step 3 of 13,
-the ten commands after it never ran, and the boot printed `Init complete` anyway (errexit is
-suspended inside an `&&` list), went on to `SANDBOX_READY`, and `km list` was green.
+`km herdr start` (and every other SSM forward — `vscode`, `desktop`, `model`, `tunnel`,
+`shell --ports`) handed `session-manager-plugin` the terminal's stdin. A port-forward
+carries no input, but given the tty the plugin set its own modes, and when the liveness
+watcher killed a hung plugin nothing restored them: echo off, keyboard dead, fixed only by
+killing the tab. The plugin now gets `/dev/null`, and the terminal is snapshotted before the
+first spawn and restored after every exit. If you hit it on an older binary: blind-type
+`stty sane`.
 
-The script now numbers its steps and traps `ERR`, so the log reads
-`[km-init] FAILED (exit 1) at step 3/13: npm install -g …`; the bootstrap prints a WARNING
-with the count of commands skipped and emits an `init_failed` audit event; `km status` shows
-an `Init: FAILED …` line and `km doctor` gains a **Sandbox profile init** check. Still
-non-fatal — a box that is up and honestly labelled beats an aborted boot.
+## 📄 `.yml` works everywhere `.yaml` does
 
-## 🔑 The secret shims were losing the PATH race after all
+`km validate spot.yml` failed with "profile not found": the leaf name kept its extension
+and the resolver only ever looked for `name.yaml`. One extension list now feeds the resolver
+and every CLI site that turns a path into a profile name; a `.yaml` still wins a name tie.
 
-Both PATH hooks guarded with "already on PATH → do nothing". profile.d adds `/opt/km/shims`
-first, so the `~/.bashrc` block — the one that exists to beat nvm — always found it already
-there, took the no-op arm, and left nvm's bin ahead. Profiles escaped only because claude was
-npm-installed as root outside nvm; the first `claude` self-update as the sandbox user landed
-in nvm's prefix and ended the accident. And the shim fell back to a PATH search only if its
-baked target had *vanished*, so it kept wrapping the stale copy.
+## ⏳ The idle countdown joins the TTL ladder
 
-Both hooks now strip-then-prepend, the shim prefers whatever `command -v` finds with the
-shim dir removed, and the pollers' own `~/.local/bin` prepend re-asserts the shims after it —
-a third way to lose the same race, found while confirming Slack-dispatched turns are shimmed.
-Tests execute the real hook text and the real shim, not a string-presence check.
+v0.8.18 fixed `86000h` in the SHUTDOWN and TTL columns; the **IDLE** column and `km status`'s
+`Idle Stop:` line were a separate path and still printed `86000h0m0s`. They — and
+`km extend`'s "new expiry in" — now use the same ladder: `23m` → `6d23h` → `2y364d` → `∞`.
+`--json` keeps parseable strings.
 
-## 🐑 `km herdr <sandbox-id>` attaches; `km herdr start` is transport only
+## 🪣 Diagram: the three S3 buckets and what a presign really carries
 
-The daily verb no longer needs a subcommand: `km herdr my-sandbox` brings up the
-SSM+SSH transport and attaches Herdr in one terminal. `km herdr start my-sandbox` now
-does what `--no-attach` used to: holds the forward and the ssh-config entry open and
-prints the `herdr --remote` line, never launching herdr locally — for driving several
-clients over one forward, or keeping a tunnel up in one terminal while working in
-others. `--no-attach` is still accepted as a no-op.
-
-## ∞ `km list` no longer overflows on a huge TTL
-
-`ttl: 86000h` rendered as `85999h42m ttl`, three characters wider than the column. Detail
-now matters more the closer the deadline is: `46m` → `1h30m` → `6d23h` → `364d` → `2y364d`,
-and past three years simply `∞`. `--json` keeps a numeric string.
-
-All three are create-time: existing sandboxes keep the old behaviour until
-`km destroy && km create`.
+`docs/diagrams/security/11-s3-buckets-and-presign.html`. Its focal finding, read from
+source: `ec2spot_region_lock` grants `Action "*" Resource "*"` conditioned only on
+`aws:RequestedRegion`, and every shipped profile carries it via `base/platform` — so the
+scoped S3 statements describe the intent, not what AWS evaluates, and a sandbox can presign
+any key in the artifacts bucket with no km record. Documented, not yet changed.
