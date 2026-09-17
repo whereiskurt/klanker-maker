@@ -3,6 +3,7 @@ package cmd_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -48,5 +49,81 @@ func TestUserdataDownloadsMatchSidecarBuilds(t *testing.T) {
 		if !built[n] {
 			t.Errorf("userdata downloads %s but km init never uploads it", n)
 		}
+	}
+}
+
+// TestGoBuilderStagesPinBuildPlatform: every Dockerfile that compiles Go must
+// pin its builder stage to $BUILDPLATFORM.
+//
+// buildAndPushSidecarImages passes --platform linux/amd64, which cascades to
+// EVERY stage of the Dockerfile. Without the pin, the golang builder image is
+// pulled as amd64 and the whole Go toolchain runs under Rosetta/qemu on an
+// arm64 host, where the compiler segfaults intermittently in
+// runtime.findRunnable (observed 2026-09-16 during km init). The fix is to run
+// the builder natively and let the Dockerfile's own GOARCH=amd64 cross-compile,
+// which is what it always asked for. Name-agnostic so a fourth Go-compiling
+// sidecar added later is covered without an edit.
+//
+// The predicate is a non-comment `go build` line, so containers/operator's
+// prose mention and containers/Dockerfile.ebpf-generate (bpf2go, built with a
+// plain native `docker build` by the Makefile) are correctly left out.
+func TestGoBuilderStagesPinBuildPlatform(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	goBuild := regexp.MustCompile(`\bgo build\b`)
+	fromGolang := regexp.MustCompile(`^\s*FROM\b.*\bgolang:`)
+
+	var checked []string
+	walkErr := filepath.WalkDir(repoRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".claude", "node_modules", "build", "dist", ".terragrunt-cache", ".terraform":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasPrefix(d.Name(), "Dockerfile") {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		lines := strings.Split(string(body), "\n")
+		compilesGo := false
+		for _, l := range lines {
+			if strings.HasPrefix(strings.TrimSpace(l), "#") {
+				continue
+			}
+			if goBuild.MatchString(l) {
+				compilesGo = true
+				break
+			}
+		}
+		if !compilesGo {
+			return nil
+		}
+		rel, _ := filepath.Rel(repoRoot, path)
+		checked = append(checked, rel)
+		for i, l := range lines {
+			if fromGolang.MatchString(l) && !strings.Contains(l, "--platform=$BUILDPLATFORM") {
+				t.Errorf("%s:%d: builder stage %q is not pinned to $BUILDPLATFORM — "+
+					"--platform linux/amd64 on the buildx call cascades here and runs the Go "+
+					"toolchain under emulation; write `FROM --platform=$BUILDPLATFORM golang:...`",
+					rel, i+1, strings.TrimSpace(l))
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatal(walkErr)
+	}
+	if len(checked) < 3 {
+		t.Fatalf("expected at least the three Go sidecar Dockerfiles to be checked, got %v", checked)
 	}
 }
