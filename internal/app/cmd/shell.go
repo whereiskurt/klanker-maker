@@ -26,6 +26,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	"github.com/whereiskurt/klanker-maker/pkg/allowlistgen"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"golang.org/x/term"
 )
 
 // preflightError wraps errors that occur before any interactive session is started
@@ -847,10 +848,22 @@ func runReconnectingPortForward(ctx context.Context, execFn ShellExecFunc, build
 	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// A port-forward carries no input, so the plugin gets /dev/null, NOT our
+	// stdin. Given the tty, session-manager-plugin sets its own modes on it,
+	// and when the liveness watcher kills a hung plugin nothing puts them
+	// back: echo and canonical mode stay off and the terminal reads as
+	// "keyboard dead" until the tab is killed — every reconnect inherited the
+	// same broken tty, so it never self-healed. Observed live under Ghostty
+	// with km herdr start. The snapshot/restore below is the belt to this
+	// brace: whatever a child does to the terminal, it is undone before this
+	// function returns or spawns the next attempt.
+	restoreTTY := snapshotTerminal()
+	defer restoreTTY()
+
 	attempt := 0
 	for {
 		cmd := buildCmd(sigCtx)
-		cmd.Stdin = os.Stdin
+		cmd.Stdin = nil // /dev/null
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 
@@ -874,6 +887,7 @@ func runReconnectingPortForward(ctx context.Context, execFn ShellExecFunc, build
 			return err
 		}
 		attempt++
+		restoreTTY() // a killed plugin may have left raw mode behind; fix it before the next spawn
 		fmt.Fprintf(out, "\n⚠ SSM tunnel dropped (%v) — reconnecting (attempt %d; Ctrl-C to stop)...\n", err, attempt)
 		select {
 		case <-sigCtx.Done():
@@ -881,6 +895,21 @@ func runReconnectingPortForward(ctx context.Context, execFn ShellExecFunc, build
 		case <-time.After(portForwardReconnectBackoff):
 		}
 	}
+}
+
+// snapshotTerminal records the controlling terminal's modes and returns a
+// function that restores them. A no-op when stdin is not a terminal (CI,
+// pipes, the operator container without -t), so it is always safe to call.
+func snapshotTerminal() func() {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return func() {}
+	}
+	state, err := term.GetState(fd)
+	if err != nil {
+		return func() {}
+	}
+	return func() { _ = term.Restore(fd, state) }
 }
 
 // watchTunnelLiveness kills cmd when the probe reports the tunnel unresponsive for
