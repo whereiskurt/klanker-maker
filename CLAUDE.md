@@ -39,6 +39,19 @@ bullet "The nvm PATH race" below for the full account.** Both hooks now
 strip-then-prepend; the shim prefers a live `command -v` (`KM_LIVE`) over its
 baked path; `realShimTemplate` and the generator pin to one golden. Same deploy
 surface as above; existing sops sandboxes keep the old hooks until recreate.
+**The pollers' own `~/.local/bin` prepend was a third way to lose the same
+race.** Inside every dispatched turn script, after the exec-line shim prepend
+and after re-sourcing profile.d, all four pollers `export
+PATH="/home/sandbox/.local/bin:$PATH"` ("prefer the standalone claude") — which
+puts `~/.local/bin` ahead of `/opt/km/shims` again. Harmless only because nothing
+installs `claude` there today; `~/.local/bin/claude` is exactly where Claude
+Code's native installer and its `claude install` npm→native migration put it, so
+the first box to migrate would have run every Slack/GitHub/H1/webhook turn
+unshimmed. Thirteen sites now re-assert `/opt/km/shims` on the same line, gated
+on the bundle (dormant byte-identical); `TestEveryLocalBinPrependReassertsShimDir`
+(`pkg/secrets`) is name-agnostic over the file, and the compiler test checks the
+rendered text on both sides of the gate. `km agent run`'s tmux path never had
+this. Same deploy surface; existing sandboxes keep the gap until recreate.
 
 **Phase 135 (2026-09-06) — Interactive sessions are enforced: the eBPF programs move to the root cgroup (complete; deployed and live-UAT'd end to end, including resume):**
 - **Nothing interactive had EVER been inside the enforcement cgroup.** `km shell`

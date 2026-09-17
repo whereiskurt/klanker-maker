@@ -76,6 +76,43 @@ func TestEveryDispatchSitePrependsShimDir(t *testing.T) {
 	}
 }
 
+// The exec-line prepend above is necessary but not sufficient: INSIDE the
+// dispatched turn script, every poller then does
+//
+//	export PATH="/home/sandbox/.local/bin:$PATH"
+//
+// ("prefer the standalone claude binary"), which puts ~/.local/bin AHEAD of
+// /opt/km/shims again. Nothing installs claude there today, so it was
+// harmless — but ~/.local/bin/claude is exactly where Claude Code's native
+// installer and its `claude install` npm→native migration put the binary. The
+// day a box has one, every Slack/GitHub/H1/webhook turn runs it unshimmed and
+// dies on a 401: the 2026-09-17 shape again, thirteen sites, invisible to the
+// exec-line guard. So every such line must re-assert the shim dir right after,
+// gated on the bundle so the dormant case stays byte-identical. Name-agnostic:
+// a fourteenth site added by copy-paste is covered.
+func TestEveryLocalBinPrependReassertsShimDir(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), "pkg/compiler/userdata.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const localBin = `export PATH=\"/home/sandbox/.local/bin:\$PATH\"`
+	const reassert = `{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}`
+	found := 0
+	for i, line := range strings.Split(string(body), "\n") {
+		if !strings.Contains(line, localBin) {
+			continue
+		}
+		found++
+		if !strings.Contains(line, localBin+reassert) {
+			t.Errorf("userdata.go:%d prepends ~/.local/bin inside a dispatched turn without re-asserting "+
+				"/opt/km/shims after it: a native-installed claude there would run unshimmed", i+1)
+		}
+	}
+	if found == 0 {
+		t.Fatal("no ~/.local/bin prepend found — the dispatch scripts changed shape; update this guard")
+	}
+}
+
 // km agent run is the SIXTH agent-dispatch path and the only one that does not
 // live in pkg/compiler/userdata.go, which is exactly why it was missed: the
 // guard above reads one file and is structurally blind to everything else.
