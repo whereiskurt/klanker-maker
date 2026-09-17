@@ -495,6 +495,79 @@ unescaped form is eaten by the outer shell and reports a misleading `EINVAL`
 instead of `EPERM`.
 
 
+### A failed initCommand aborts the rest — and used to do it silently
+
+**Fixed 2026-09-17. Sandboxes created before that deploy still have the old
+bootstrap** — userdata is rendered at create time, so an existing box keeps it
+until `km destroy && km create`.
+
+**The shape.** `/tmp/km-init.sh` runs every `initCommands` /
+`initCommandsAppend` entry under one `set -e`. That is deliberate and stays: a
+profile whose CA-trust step failed must not run the twenty commands that assume
+it succeeded. What was wrong was that the abort was *invisible*. Live example,
+two sandboxes, same profile:
+
+```
+[km-init] npm install -g @anthropic-ai/claude-code@2.1.171
+npm error notarget No matching version found for @anthropic-ai/claude-code@2.1.171
+[km-bootstrap] Init complete                      ← printed anyway
+```
+
+`2.1.171` was never published (npm went `2.1.170 → 2.1.172`), so step 3 of 13
+exited non-zero, `set -e` ended the script, and the ten commands after it —
+Playwright, both plugin marketplaces, both plugins, `gh` — were never run. The
+caller was `aws s3 cp … && { …; /tmp/km-init.sh; echo "Init complete"; }`, and
+errexit is *suspended* inside an `&&` list, so the `echo` ran after the failure
+and the `{ }` group exited 0. The boot went on to the shim generator, the
+secrets selftest and `SANDBOX_READY`; `km list` was green; nothing off-box said a
+word. This was the **third** recorded instance of the pattern (a `claude plugin
+enable` that exits non-zero on "already enabled"; an Amazon-Linux CA path under
+Ubuntu). The pattern, not the pin, was the bug.
+
+**What the fix does — the failure is now said, in four places.**
+
+1. **In the script.** `km-init.sh` numbers its steps (`KM_INIT_STEP` /
+   `KM_INIT_TOTAL`) and traps `ERR`, so `/var/log/cloud-init-output.log` carries
+   `[km-init] FAILED (exit 1) at step 3/13: npm install -g …` instead of trailing
+   off. `set -E` makes the trap fire inside functions an inlined `initScripts`
+   file defines, so `BASH_COMMAND` names the real culprit.
+2. **On disk.** The trap writes `exit=`, `step=`, `total=`, `command=` to
+   `/var/lib/km/init-failed` for a later `km shell --root`.
+3. **In the bootstrap log.** "Init complete" is printed only on success. On
+   failure: `[km-bootstrap] WARNING: profile init FAILED (exit 1) at step 3/13:
+   …` and `… 10 later initCommand(s) were NOT run`. Still non-fatal — aborting
+   the boot over one bad initCommand is a worse trade than a box that is up and
+   honestly labelled.
+4. **Off the box.** An `init_failed` audit event (`source: bootstrap`, with
+   `exit_code`, `step`, `total`, `skipped`, `command`) goes to the sandbox's
+   CloudWatch stream. `km status <id>` prints an `Init: FAILED …` line from it,
+   and `km doctor` gains **Sandbox profile init**, a WARN naming every running
+   sandbox that booted that way.
+
+**The general check, worth keeping in any UAT:** the number of `[km-init]` echo
+lines in `/var/log/cloud-init-output.log` must equal the number of commands in
+`/tmp/km-init.sh` (plus the start/complete lines). Any shortfall is a silent
+truncation, whatever the cause.
+
+**What it is not.** It does not make a bad command succeed, and it deliberately
+does not add a per-step continue-on-error knob — `|| true` already expresses
+that, and widening the schema before the failure was even visible would have
+been the wrong order. Recovery is still: fix the profile (or the network /
+registry the command needs), then `km destroy && km create`.
+
+Tests are behavioural: `TestBuildInitScript_FailureIsLoudAndCounted` executes
+the generated script under `bash` with a failing step, and
+`TestUserdataInitBlock_FailureIsReportedNotSwallowed` executes the rendered
+bootstrap block under `bash -euo pipefail` with a fake `aws` that delivers a
+failing script, asserting no "Init complete", the WARNING lines, and a valid
+`init_failed` JSON event.
+
+**Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.**
+The script generator is in the `km` binary (`buildInitScript`, run by the
+create-handler's bundled `toolchain/km` on `--remote` creates) and the caller
+block rides in the create-handler-rendered userdata — NOT `--sidecars`. The
+`km doctor` / `km status` readers are operator-binary only.
+
 ### Ubuntu userdata constraints (vs Amazon Linux)
 
 The EC2 userdata bootstrap (`pkg/compiler/userdata.go` + the remote-create stub in
