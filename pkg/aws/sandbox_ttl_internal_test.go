@@ -27,7 +27,9 @@ func TestComputeTTLRemaining_LargeValuesRollToDays(t *testing.T) {
 		{364 * 24 * time.Hour, "364d"},
 		{365 * 24 * time.Hour, "1y"},
 		{400 * 24 * time.Hour, "1y35d"},
-		{86000 * time.Hour, "9y298d"},
+		{(2*365 + 364) * 24 * time.Hour, "2y364d"},
+		{(3*365 + 200) * 24 * time.Hour, "3y"},
+		{86000 * time.Hour, "9y"},
 	}
 	for _, tc := range cases {
 		if got := computeTTLRemaining(at(tc.d)); got != tc.want {
