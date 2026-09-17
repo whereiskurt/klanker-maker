@@ -3215,12 +3215,11 @@ func sandboxUsesAMIInDoctor(sb kmaws.SandboxRecord, searchPaths []string, amiID 
 		if err != nil {
 			continue
 		}
-		wantBase := sb.Profile + ".yaml"
 		for _, entry := range entries {
 			if entry.IsDir() {
 				continue
 			}
-			if !strings.EqualFold(entry.Name(), wantBase) {
+			if !strings.EqualFold(profilepkg.LeafName(entry.Name()), sb.Profile) || !profilepkg.HasProfileExtension(entry.Name()) {
 				continue
 			}
 			// Found a match — parse and check the AMI field.
@@ -5804,7 +5803,7 @@ func anyProfileMentionOnly(searchDirs []string) bool {
 			continue // dir absent or unreadable — skip
 		}
 		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			if e.IsDir() || !profilepkg.HasProfileExtension(e.Name()) {
 				continue
 			}
 			data, err := os.ReadFile(filepath.Join(dir, e.Name()))

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -288,7 +287,7 @@ func resolveCapacityTarget(cfg *config.Config, args []string, typeFlag, regionFl
 
 	var resolved *profile.SandboxProfile
 	if parsed.Extends.IsSet() {
-		leafName := strings.TrimSuffix(filepath.Base(profilePath), ".yaml")
+		leafName := profile.LeafName(profilePath)
 		fileDir := filepath.Dir(profilePath)
 		searchPaths := []string{fileDir}
 		resolved, err = profile.Resolve(leafName, searchPaths)

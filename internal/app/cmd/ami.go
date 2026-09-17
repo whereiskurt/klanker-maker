@@ -280,9 +280,13 @@ func sandboxUsesAMI(cfg *config.Config, rec kmaws.SandboxRecord, amiID string) b
 	}
 	for _, dir := range cfg.ProfileSearchPaths {
 		expanded := expandAMIPath(dir)
-		matches, err := filepath.Glob(filepath.Join(expanded, "*.yaml"))
-		if err != nil {
-			continue
+		var matches []string
+		for _, ext := range profilepkg.ProfileExtensions {
+			m, err := filepath.Glob(filepath.Join(expanded, "*"+ext))
+			if err != nil {
+				continue
+			}
+			matches = append(matches, m...)
 		}
 		for _, path := range matches {
 			data, err := os.ReadFile(path)
