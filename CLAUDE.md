@@ -144,7 +144,7 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
   evidence and the spike.
 
 **Phase 134 (2026-09-04) — `km herdr`: persistent remote attach for sandbox agent panes (code-complete; live UAT pending):**
-- `km herdr start|status <sandbox-id>` — a **sibling of `km vscode`, not a
+- `km herdr <sandbox-id>` (attach) / `km herdr start|status <sandbox-id>` — a **sibling of `km vscode`, not a
   `km tunnel` mode.** `km tunnel` carries a network path from the workstation
   *into* the sandbox, and its security note (km's egress enforcement can't see
   traffic crossing the tunnel) follows from that direction; `km herdr` points
@@ -1944,7 +1944,8 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km tunnel` — parent verb for carrying a network path from the operator's workstation into a sandbox. A **family**, not one command: every mode shares the SSM+SSH transport and differs only in what it forwards and what it provisions on the box
 - `km tunnel k8s <sandbox-id> --context <kube-context>` — interactive sandbox shell carrying a reverse tunnel to a Kubernetes cluster only the operator's workstation can reach; credentials are minted locally by the operator's own exec plugin and proxied over a unix socket, so no VPN/SSO/AWS credential reaches the box (`--dry-run`, `--print-ssh`, `--verbose`, `--local-port`, `--bind-port`, `--kubeconfig`). Dies with the shell — no daemon mode by design
 - `km tunnel socks <sandbox-id>` — interactive sandbox shell with a SOCKS5 proxy on the box's loopback (`--bind-port`, default 1080) egressing via the operator's workstation, so the box reaches whatever the VPN reaches. No broker, nothing written on the box. `--set-proxy-env` pre-sets ALL_PROXY/HTTPS_PROXY/HTTP_PROXY (off by default — it stops km metering AI spend). Wider than `k8s` by design; dies with the shell
-- `km herdr start <sandbox-id>` — bring up the SSM+SSH transport and attach Herdr to it in one terminal; the forward runs in the background for the life of the session and dies with it (`--no-attach` to hold the transport and print the `herdr --remote` line instead, `--session`, `--local-port`, `--no-install`)
+- `km herdr <sandbox-id>` — bring up the SSM+SSH transport and attach Herdr to it in one terminal; the forward runs in the background for the life of the session and dies with it (`--session`, `--local-port`, `--no-install`)
+- `km herdr start <sandbox-id>` — transport only: hold the forward + ssh-config entry open in the foreground and print the `herdr --remote` line; herdr is never launched locally (`--local-port`, `--no-install`; `--no-attach` accepted as a no-op)
 - `km herdr status <sandbox-id>` — report sshd, authorized_keys, the herdr binary, and whether the box's km-presence carries signal 8
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
