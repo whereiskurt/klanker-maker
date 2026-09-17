@@ -951,6 +951,28 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   per-sandbox ed25519 keys, absent which `km vscode`/`desktop`/`tunnel` rekey every run and strand
   an `authorized_keys` entry), `./profiles` → `/root/.km/profiles`, `$PWD` → `/work`.
 - **Image grows 1.12GB → 1.78GB** (zips 215M, terraform 82M, terragrunt 70M, infra 2M).
+- **SSM port-forwards from the container reach the host only through a km-side relay
+  (2026-09-16).** `session-manager-plugin` hard-codes its listener to `localhost` with no
+  bind option, so inside a container every `km vscode/herdr/desktop/model/tunnel` forward
+  lands on the CONTAINER's loopback and `docker run -p` can never reach it (proven with a
+  bare alpine `nc -s 127.0.0.1` vs `-s 0.0.0.0`). `KM_FORWARD_BIND=<addr>`
+  (`internal/app/cmd/forward_bind.go`) makes `buildPortForwardCmd` — the one chokepoint every
+  forward goes through, `km shell --ports` and codex OAuth included — start the plugin on a
+  private ephemeral loopback port and relay `<addr>:<local-port>` onto it, memoised per port
+  so reconnects reuse it. Unset or loopback ⇒ byte-identical to before. The image sets
+  `0.0.0.0` and `EXPOSE`s 1455 1457 2222 2223 2224 8001 8444; `make operator-shell` publishes
+  each on the **host's loopback only** (`-p 127.0.0.1:<p>:<p>`, list overridable via
+  `KM_PUBLISH_PORTS`) — never bare `-p`, which would offer an SSH tunnel into a sandbox to
+  the LAN. `km configure github` stays native-only (ephemeral callback port).
+- **Go sidecar images pin their builder stage to `$BUILDPLATFORM` (2026-09-16).**
+  `buildAndPushSidecarImages` passes `--platform linux/amd64`, which cascades to every
+  stage, so the `golang:1.25-alpine` builder ran the whole Go toolchain under Rosetta on
+  arm64 hosts and segfaulted intermittently in `runtime.findRunnable` — a `[warn]` mid
+  `km init`, ECS-substrate images only, EC2 sandboxes unaffected. The three
+  `sidecars/*/Dockerfile`s now read `FROM --platform=$BUILDPLATFORM golang:...` and let the
+  existing `GOARCH=amd64` on the build line cross-compile; output manifest unchanged (verified
+  `x86-64`). `TestGoBuilderStagesPinBuildPlatform` is name-agnostic over every Dockerfile
+  with a non-comment `go build`.
 - **Applying from the container is DECIDED AGAINST (2026-08-29), not blocked.** Do not
   re-open it on the grounds that the plumbing looks tractable — it is tractable, and that
   was considered. It is **not** a permissions boundary (the image holds whatever `~/.aws`

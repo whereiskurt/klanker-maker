@@ -736,6 +736,9 @@ func parsePortSpecs(specs []string) []portSpec {
 
 // buildPortForwardCmd constructs the AWS SSM port forwarding command.
 func buildPortForwardCmd(ctx context.Context, instanceID, region, localPort, remotePort string) *exec.Cmd {
+	// KM_FORWARD_BIND (operator container): the plugin binds a private loopback
+	// port and km relays bind:localPort onto it. Unset, this is localPort as-is.
+	localPort = relayPluginPort(ctx, localPort, os.Stderr)
 	cmd := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID,
 		"--region", region,

@@ -59,6 +59,14 @@ if [ -t 1 ]; then
     echo "  plan   : unavailable — image lacks terragrunt, infra/, or build/*.zip"
   fi
 
+  # Forwards are only usable from the host when km relays them off the
+  # container's loopback (KM_FORWARD_BIND) AND docker published the ports.
+  # The second half is invisible from in here, so name it.
+  if [ -n "${KM_FORWARD_BIND:-}" ]; then
+    echo "  ports  : forwards bind ${KM_FORWARD_BIND} — reachable from the host only where docker published them (-p 127.0.0.1:2222:2222 …)"
+  else
+    echo "  ports  : KM_FORWARD_BIND unset — km vscode/herdr/desktop forwards stay on the container loopback"
+  fi
   echo "  try    : km list · km validate profiles/spot.yaml · km init --dry-run"
   echo
 fi

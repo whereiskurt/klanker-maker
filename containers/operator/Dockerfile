@@ -13,9 +13,11 @@
 #     -v "$PWD/profiles:/root/.km/profiles" \
 #     -v "$PWD:/work" \
 #     -v "$PWD/km-config.yaml:/klanker-maker/km-config.yaml" \
+#     -p 127.0.0.1:2222:2222 -p 127.0.0.1:2224:2224 -p 127.0.0.1:8444:8444 \
 #     km
 #
-# Only ~/.aws is required. ~/.km carries the per-sandbox ed25519 keypairs that
+# Only ~/.aws is required. The -p lines publish the SSM port-forwards (km
+# vscode / herdr / desktop here; see KM_FORWARD_BIND below for the full list). ~/.km carries the per-sandbox ed25519 keypairs that
 # km vscode / km desktop / km tunnel reuse (without it every container start
 # rekeys); $PWD/profiles layers your profiles over the baked library; $PWD as
 # /work gives output somewhere that outlives the container.
@@ -328,6 +330,21 @@ ENV KM_PROFILE_SEARCH_PATHS="/root/.km/profiles /klanker-maker/profiles /work"
 # outlive the container (km rsync, artifacts, a generated learned.*.yaml)
 # belongs there rather than in the image's own filesystem.
 RUN mkdir -p /root/.aws /root/.km/profiles /work
+
+# SSM port-forwards must be reachable from the HOST. session-manager-plugin
+# hard-codes its listener to "localhost" with no bind option, so inside a
+# container every `km vscode/herdr/desktop/model/tunnel` forward lands on the
+# container's own loopback and `docker run -p` can never reach it. With
+# KM_FORWARD_BIND set, km starts the plugin on a private loopback port and
+# relays 0.0.0.0:<local-port> onto it (internal/app/cmd/forward_bind.go), which
+# is what a published port needs to see. Publish on the host's loopback only
+# (`-p 127.0.0.1:2222:2222`) — `make operator-shell` does — so an SSH tunnel
+# into a sandbox is never offered to the LAN.
+#
+# Default local ports, one per verb: vscode 2222, tunnel k8s|socks 2223,
+# herdr 2224, model 8001, desktop 8444, codex OAuth callback 1455/1457.
+ENV KM_FORWARD_BIND=0.0.0.0
+EXPOSE 1455 1457 2222 2223 2224 8001 8444
 
 COPY containers/operator/entrypoint.sh /usr/local/bin/km-entrypoint
 RUN chmod +x /usr/local/bin/km-entrypoint

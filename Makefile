@@ -227,6 +227,15 @@ operator-image:
 ## shadows the baked profile library with an empty dir. Guarding by adding the
 ## flag only when the source is there keeps a missing optional mount a no-op
 ## instead of a confusing failure.
+##
+## KM_PUBLISH_PORTS: host-loopback ports published into the container so the
+## SSM port-forwards (km vscode 2222, tunnel 2223, herdr 2224, model 8001,
+## desktop 8444, codex OAuth 1455/1457) are usable from the host. The image
+## sets KM_FORWARD_BIND=0.0.0.0 so km relays each forward off the container's
+## loopback. Override to free a port a native km is already holding:
+##   make operator-shell KM_PUBLISH_PORTS="2224 8444"
+KM_PUBLISH_PORTS ?= 1455 1457 2222 2223 2224 8001 8444
+
 operator-shell:
 	@test -f km-config.yaml || { \
 	  echo "km-config.yaml not found in $(PWD)."; \
@@ -240,6 +249,7 @@ operator-shell:
 	  $(if $(wildcard $(HOME)/.km/.),-v "$(HOME)/.km:/root/.km",) \
 	  $(if $(wildcard profiles/.),-v "$(PWD)/profiles:/root/.km/profiles",) \
 	  $(if $(AWS_PROFILE),-e AWS_PROFILE=$(AWS_PROFILE),) \
+	  $(foreach p,$(KM_PUBLISH_PORTS),-p 127.0.0.1:$(p):$(p)) \
 	  km:latest
 
 ## smoke-test-sandbox: build and smoke-test the km-sandbox container image
