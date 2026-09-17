@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	goyaml "github.com/goccy/go-yaml"
 )
@@ -328,18 +329,49 @@ func loadRaw(name string, searchPaths []string) ([]byte, string, string, error) 
 		return raw, "", "builtin:" + name, nil
 	}
 
-	// Search in provided paths.
+	// Search in provided paths. .yaml first, then .yml, per directory — so a
+	// .yml profile resolves, and a .yaml still wins a name tie.
 	for _, dir := range searchPaths {
-		path := filepath.Join(dir, name+".yaml")
-		data, err := os.ReadFile(path)
-		if err == nil {
-			abs, _ := filepath.Abs(path)
-			resolvedDir := filepath.Dir(abs)
-			return data, resolvedDir, abs, nil
+		for _, ext := range ProfileExtensions {
+			path := filepath.Join(dir, name+ext)
+			data, err := os.ReadFile(path)
+			if err == nil {
+				abs, _ := filepath.Abs(path)
+				resolvedDir := filepath.Dir(abs)
+				return data, resolvedDir, abs, nil
+			}
 		}
 	}
 
 	return nil, "", "", fmt.Errorf("profile %q not found in built-in profiles or search paths %v", name, searchPaths)
+}
+
+// ProfileExtensions are the file extensions a profile may carry, in the order
+// the resolver tries them. Every place that turns a file name into a profile
+// name, or a profile name into a file, must go through this list or LeafName —
+// a bare ".yaml" literal is how .yml stayed broken for as long as it did.
+var ProfileExtensions = []string{".yaml", ".yml"}
+
+// LeafName derives a profile's name from its path: the base name with a
+// trailing .yaml or .yml removed. "profiles/dc34.ami.yml" → "dc34.ami".
+func LeafName(path string) string {
+	base := filepath.Base(path)
+	for _, ext := range ProfileExtensions {
+		if strings.HasSuffix(base, ext) {
+			return strings.TrimSuffix(base, ext)
+		}
+	}
+	return base
+}
+
+// HasProfileExtension reports whether path ends in a profile extension.
+func HasProfileExtension(path string) bool {
+	for _, ext := range ProfileExtensions {
+		if strings.HasSuffix(path, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 // ─── Legacy typed-merge shims (kept for test backward-compatibility) ──────────

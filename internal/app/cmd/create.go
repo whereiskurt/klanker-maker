@@ -739,7 +739,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		log.Debug().Str("extends", strings.Join(parsed.Extends.List(), ",")).Msg("resolving full inheritance DAG")
 		// Resolve the LEAF by name so the full multi-parent DAG is walked (Plan 03).
 		// Derive leaf name: strip .yaml suffix from the base filename.
-		leafName := strings.TrimSuffix(filepath.Base(profilePath), ".yaml")
+		leafName := profile.LeafName(profilePath)
 		fileDir := filepath.Dir(profilePath)
 		searchPaths := append([]string{fileDir}, cfg.ProfileSearchPaths...)
 		resolvedProfile, err = profile.Resolve(leafName, searchPaths)
@@ -2808,7 +2808,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 
 		// Resolve the LEAF by name so the full multi-parent DAG is walked (Plan 03).
 		// Derive leaf name: strip .yaml suffix from the base filename.
-		leafName := strings.TrimSuffix(filepath.Base(profilePath), ".yaml")
+		leafName := profile.LeafName(profilePath)
 		fileDir := filepath.Dir(profilePath)
 		searchPaths := append([]string{fileDir}, cfg.ProfileSearchPaths...)
 		resolvedProfile, err = profile.Resolve(leafName, searchPaths)

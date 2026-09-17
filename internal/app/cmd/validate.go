@@ -91,9 +91,9 @@ func validateFile(cfg *config.Config, filePath string) bool {
 			Str("extends", strings.Join(parsed.Extends.List(), ",")).
 			Msg("resolving full inheritance DAG")
 
-		// Derive the leaf name: strip the .yaml suffix from the base filename.
+		// Derive the leaf name: the base filename minus .yaml/.yml.
 		// e.g. "profiles/dc34.ami.yaml" → leaf name "dc34.ami"
-		leafName := strings.TrimSuffix(filepath.Base(filePath), ".yaml")
+		leafName := profile.LeafName(filePath)
 
 		// Include the file's directory in search paths (FIRST) so that relative
 		// sibling/base profiles resolve correctly (RESEARCH Pitfall 6).
