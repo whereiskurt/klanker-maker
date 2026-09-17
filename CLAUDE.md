@@ -266,6 +266,21 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   check in the whole design: every OTHER selftest failure is loud, but a lost
   PATH race boots clean, the daemon runs, the shim exists, and `claude` just
   runs with no secrets and dies on a confusing 401 with nothing else noticing.
+  **The race was being lost after all (found live 2026-09-17, two boxes).** Both
+  PATH hooks guarded with "already on PATH → do nothing", and the `~/.bashrc`
+  block — the one that exists to beat nvm — always found `/opt/km/shims` already
+  there (profile.d put it there first), took the no-op arm, and left nvm's bin
+  ahead. Profiles escaped only because `base/userinit` installs claude as root
+  outside nvm; the first `claude` self-update as uid `sandbox` landed in nvm's
+  prefix, and the shim's "fall back only if the baked path is gone" never fired
+  because `/usr/bin/claude` still existed. Both hooks now strip-then-prepend
+  (idempotent AND always first), the shim prefers a live `command -v` with the
+  shim dir stripped (`KM_LIVE`) over its baked path, and the tests are
+  behavioural: the hook text is run under `sh` and the shim is executed with a
+  decoy ahead on PATH. `realShimTemplate` in `cmd/km-secretsd` had ALSO drifted
+  from the generator (unquoted names) — both now pin to
+  `pkg/compiler/testdata/consumer_shim_claude.golden.sh`. Boot selftest assertion
+  5 was correct throughout; it just only runs at boot and resume.
 - **Boot-fatal, resume-red: the same check, two dispositions, for a structural
   reason.** `km-secretsd selftest` runs at boot as a plain userdata command
   under `set -euo pipefail` (non-zero aborts the boot, same disposition as the

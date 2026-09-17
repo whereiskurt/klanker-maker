@@ -1,6 +1,9 @@
 package compiler
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -454,37 +457,111 @@ func TestUserdataSopsBlock_BootCheckAborts(t *testing.T) {
 	}
 }
 
-// TestUserdataSopsBlock_ShimPathHeredocByteCheck locks down the heredoc body
-// between << 'KMSHIMPATH' and KMSHIMPATH so Go template trim-semantics ({{- }})
-// cannot silently elide leading whitespace or newlines. A mangled case statement
-// here fails open: PATH keeps its default and every interactive km shell runs
-// the unshimmed agent with no secrets.
-func TestUserdataSopsBlock_ShimPathHeredocByteCheck(t *testing.T) {
-	const expectedHeredocBody = "case \":$PATH:\" in\n  *\":/opt/km/shims:\"*) ;;\n  *) PATH=\"/opt/km/shims:$PATH\"; export PATH ;;\nesac"
+// heredocBody returns the text between "<< <marker>\n" (quoted or not) and
+// "\n<marker>\n" in out, or fails the test. It exists so the PATH-hook and shim
+// tests below exercise the EXACT bytes a boot writes, not a hand-copied stand-in.
+func heredocBody(t *testing.T, out, marker string) string {
+	t.Helper()
+	startMarker := "<< '" + marker + "'\n"
+	startIdx := strings.Index(out, startMarker)
+	if startIdx < 0 {
+		startMarker = "<< " + marker + "\n"
+		startIdx = strings.Index(out, startMarker)
+	}
+	if startIdx < 0 {
+		t.Fatalf("heredoc marker %q not found in rendered userdata", marker)
+	}
+	bodyStart := startIdx + len(startMarker)
+	endMarker := "\n" + marker + "\n"
+	endIdx := strings.Index(out[bodyStart:], endMarker)
+	if endIdx < 0 {
+		t.Fatalf("heredoc terminator for %q not found", marker)
+	}
+	return out[bodyStart : bodyStart+endIdx]
+}
 
-	p := sopsBundleProfile()
-	out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
+// TestUserdataSopsBlock_ShimPathHooksWinOverNvm is BEHAVIOURAL, not textual:
+// it runs both PATH hooks the way a login shell does and inspects the PATH
+// that results. Its predecessor byte-checked the hook body — and the body it
+// pinned had never once worked: an "already on PATH → do nothing" guard is
+// dead code in exactly the scenario the ~/.bashrc block exists for, because
+// profile.d has ALREADY added /opt/km/shims by the time ~/.bashrc runs, so the
+// guard took the no-op arm and nvm's later prepend won. Proven live 2026-09-17
+// on two sandboxes: /opt/km/shims exactly once, behind nvm's bin.
+//
+// The seed PATH reproduces that state — the shim dir present but behind
+// ~/.nvm and ~/.local/bin — and the assertion is the property that matters:
+// after the hook, /opt/km/shims is FIRST and occurs EXACTLY ONCE.
+func TestUserdataSopsBlock_ShimPathHooksWinOverNvm(t *testing.T) {
+	out, err := generateUserData(sopsBundleProfile(), "sb-test", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
-
-	startMarker := "<< 'KMSHIMPATH'\n"
-	endMarker := "\nKMSHIMPATH\n"
-
-	startIdx := strings.Index(out, startMarker)
-	if startIdx < 0 {
-		t.Fatal("expected heredoc marker \"<< 'KMSHIMPATH'\\n\" in output; not found")
+	// Trim-semantics guard from the old byte-check, kept: a {{- }} that ate the
+	// leading "case" would make sh -c below fail loudly rather than pass.
+	for _, marker := range []string{"KMSHIMPATH", "KMSHIMBASHRC"} {
+		body := heredocBody(t, out, marker)
+		if !strings.Contains(body, "case \":$PATH:\" in") {
+			t.Fatalf("%s: hook body no longer starts with the case statement:\n%s", marker, body)
+		}
+		seed := "/home/sandbox/.nvm/versions/node/v22.23.2/bin:/home/sandbox/.local/bin:/home/sandbox/bin:/opt/km/shims:/usr/local/bin:/usr/bin:/bin"
+		cmd := exec.Command("sh", "-c", body+"\nprintf '%s' \"$PATH\"")
+		cmd.Env = []string{"PATH=" + seed}
+		got, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s: running the hook failed: %v", marker, err)
+		}
+		parts := strings.Split(string(got), ":")
+		if parts[0] != "/opt/km/shims" {
+			t.Errorf("%s: /opt/km/shims must be FIRST after the hook runs; PATH=%s", marker, got)
+		}
+		n := 0
+		for _, e := range parts {
+			if e == "/opt/km/shims" {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s: /opt/km/shims must occur exactly once, got %d; PATH=%s", marker, n, got)
+		}
+		// Idempotent: a second run (profile.d then ~/.bashrc, or a re-sourced
+		// ~/.bashrc) must not grow PATH.
+		cmd2 := exec.Command("sh", "-c", body+"\n"+body+"\nprintf '%s' \"$PATH\"")
+		cmd2.Env = []string{"PATH=" + seed}
+		got2, err := cmd2.Output()
+		if err != nil {
+			t.Fatalf("%s: running the hook twice failed: %v", marker, err)
+		}
+		if string(got2) != string(got) {
+			t.Errorf("%s: hook is not idempotent\nonce:  %s\ntwice: %s", marker, got, got2)
+		}
 	}
-	bodyStart := startIdx + len(startMarker)
+}
 
-	endIdx := strings.Index(out[bodyStart:], endMarker)
-	if endIdx < 0 {
-		t.Fatal("expected heredoc terminator '\\nKMSHIMPATH\\n' after body start; not found")
+// TestUserdataSopsBlock_ShimMatchesSecretsdGolden pins the generator to the
+// shim text cmd/km-secretsd's tests exercise. The heredoc is UNQUOTED, so a
+// boot expands $KM_SHIM_TARGET and turns every "\$" into "$"; this test applies
+// exactly that expansion and compares the result to testdata/consumer_shim_claude.golden.sh.
+// cmd/km-secretsd/selftest_test.go asserts its realShimTemplate against the
+// SAME file, so the two can no longer drift apart silently — which they had:
+// the constant carried unquoted consumer names where the generator quotes them.
+func TestUserdataSopsBlock_ShimMatchesSecretsdGolden(t *testing.T) {
+	out, err := generateUserData(sopsBundleProfile(), "sb-test", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
 	}
+	body := heredocBody(t, out, "KMSHIM")
+	// The range renders one heredoc per consumer; the first is claude
+	// (secrets.DefaultConsumers order). heredocBody returns the first.
+	rendered := strings.ReplaceAll(body, "$KM_SHIM_TARGET", "/usr/bin/claude")
+	rendered = strings.ReplaceAll(rendered, "\\$", "$") + "\n"
 
-	actualBody := out[bodyStart : bodyStart+endIdx]
-	if actualBody != expectedHeredocBody {
-		t.Errorf("shim PATH heredoc body mismatch\nwant: %q\n got: %q", expectedHeredocBody, actualBody)
+	want, err := os.ReadFile(filepath.Join("testdata", "consumer_shim_claude.golden.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered != string(want) {
+		t.Errorf("rendered shim differs from testdata/consumer_shim_claude.golden.sh\n--- want ---\n%s\n--- got ---\n%s", want, rendered)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -74,26 +75,123 @@ func find(checks []Check, name string) *Check {
 // with the consumer name and the baked target as the only variables. Tests
 // exercise this literal artifact — not an idealized stand-in — so shimTarget
 // and the generator cannot silently drift apart the way they did once
-// already (a Task 7 fixture that didn't match Task 8's real output).
+// already (a Task 7 fixture that didn't match Task 8's real output) — and then
+// AGAIN (the constant carried unquoted consumer names where the generator
+// quotes them, unnoticed for months). TestRealShimTemplate_MatchesCompilerGolden
+// now pins this constant to pkg/compiler/testdata/consumer_shim_claude.golden.sh,
+// which pkg/compiler asserts against its own rendered output, so the pairing
+// is mechanical rather than remembered.
 const realShimTemplate = `#!/bin/sh
 # Phase 133: exec an ABSOLUTE path, never the bare name — resolving by name here
-# would re-find this shim on PATH and recurse. If the baked target has since
-# moved (userdata re-runs Claude's install.cjs idempotently), fall back to a
-# PATH search with the shim directory removed.
-# NOTE: km-secretsd selftest (shimTarget) parses this KM_REAL= line to verify the target exists. Keep the literal path here.
+# would re-find this shim on PATH and recurse.
+# NOTE: km-secretsd selftest (shimTarget) parses this KM_REAL= line to verify the target exists. Keep the literal path here, at column 0.
 KM_REAL="%s"
-if [ ! -x "$KM_REAL" ]; then
-  KM_REAL="$(PATH="$(echo "$PATH" | tr ':' '\n' | grep -v '^/opt/km/shims$' | paste -sd: -)" command -v %s 2>/dev/null)"
-fi
+# Prefer the %s the box has NOW. An in-place update (claude self-updating
+# into nvm's prefix) lands a newer copy elsewhere on PATH while the baked target
+# still exists, so a "baked path missing" fallback never fires. The shim dir is
+# stripped from PATH first so this can never resolve to the shim itself.
+KM_LIVE="$(PATH="$(echo "$PATH" | tr ':' '\n' | grep -v '^/opt/km/shims$' | paste -sd: -)" command -v '%s' 2>/dev/null)"
+[ -x "$KM_LIVE" ] && KM_REAL="$KM_LIVE"
 [ -x "$KM_REAL" ] || { echo "km-shim: cannot locate the real %s" >&2; exit 127; }
-exec /opt/km/bin/km-env exec --as %s -- "$KM_REAL" "$@"
+exec /opt/km/bin/km-env exec --as '%s' -- "$KM_REAL" "$@"
 `
 
 // realShim renders realShimTemplate for consumer with target baked into the
 // KM_REAL= assignment, matching what a real boot writes to
 // /opt/km/shims/<consumer>.
 func realShim(consumer, target string) string {
-	return fmt.Sprintf(realShimTemplate, target, consumer, consumer, consumer)
+	return fmt.Sprintf(realShimTemplate, target, consumer, consumer, consumer, consumer)
+}
+
+// TestRealShimTemplate_MatchesCompilerGolden is one half of the drift guard;
+// pkg/compiler's TestUserdataSopsBlock_ShimMatchesSecretsdGolden is the other.
+// Both read the same file, so the generator and this constant agree or one of
+// the two tests fails.
+func TestRealShimTemplate_MatchesCompilerGolden(t *testing.T) {
+	want, err := os.ReadFile(filepath.Join("..", "..", "pkg", "compiler", "testdata", "consumer_shim_claude.golden.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := realShim("claude", "/usr/bin/claude"); got != string(want) {
+		t.Errorf("realShimTemplate has drifted from the generator's golden\n--- want ---\n%s\n--- got ---\n%s", want, got)
+	}
+}
+
+// TestShimTarget_ParsesLiveSearchShim guards the one structural constraint the
+// 2026-09-17 shim carries: the live PATH search lives on a SEPARATE KM_LIVE=
+// line so the column-0 KM_REAL= line stays a literal path. Merging the two
+// (KM_REAL="$(...)") would make shimTarget return "" and blind assertion 5 —
+// the single highest-value check in the design — while every boot still
+// passed.
+func TestShimTarget_ParsesLiveSearchShim(t *testing.T) {
+	if got := shimTarget(realShim("claude", "/usr/bin/claude")); got != "/usr/bin/claude" {
+		t.Fatalf("shimTarget = %q, want the baked literal /usr/bin/claude", got)
+	}
+}
+
+// writeExec writes an executable shell script at path that prints tag and its
+// argv, so a test can tell WHICH binary a shim selected.
+func writeExec(t *testing.T, path, tag string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '"+tag+" %s\\n' \"$*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runShim executes the real shim text with ONE substitution: /opt/km/bin/km-env
+// (root-owned on a box, absent here) is swapped for a stub that prints its
+// argv. Everything else — the PATH strip, the live search, the baked fallback,
+// the exec line — is the shipped text.
+func runShim(t *testing.T, consumer, baked, pathEnv string) string {
+	t.Helper()
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "km-env")
+	writeExec(t, stub, "KM-ENV")
+	shim := filepath.Join(dir, consumer)
+	body := strings.ReplaceAll(realShim(consumer, baked), "/opt/km/bin/km-env", stub)
+	if err := os.WriteFile(shim, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", shim, "--version")
+	cmd.Env = []string{"PATH=" + pathEnv}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("shim failed: %v\n%s", err, out)
+	}
+	return string(out)
+}
+
+// TestShim_FollowsInPlaceUpdate is the case no prior test covered: the baked
+// target still EXISTS, but a newer copy of the same consumer sits earlier on
+// PATH (claude self-updating into nvm's prefix as uid sandbox). The old shim's
+// "fallback only if the baked path is gone" never fired, so it kept wrapping
+// the stale binary — or, with the PATH race lost, was bypassed entirely.
+func TestShim_FollowsInPlaceUpdate(t *testing.T) {
+	root := t.TempDir()
+	baked := filepath.Join(root, "usr", "bin", "claude")
+	live := filepath.Join(root, "nvm", "bin", "claude")
+	writeExec(t, baked, "BAKED")
+	writeExec(t, live, "LIVE")
+	// /opt/km/shims is on PATH too, ahead of nvm, as the fixed hooks leave it.
+	out := runShim(t, "claude", baked, "/opt/km/shims:"+filepath.Dir(live)+":/usr/bin:/bin")
+	if !strings.Contains(out, "-- "+live+" --version") {
+		t.Fatalf("shim must exec the LIVE binary on PATH, got: %s", out)
+	}
+}
+
+// TestShim_FallsBackToBakedTarget: with no consumer anywhere on PATH (a cron
+// job, a minimal environment) the baked path is what runs.
+func TestShim_FallsBackToBakedTarget(t *testing.T) {
+	root := t.TempDir()
+	baked := filepath.Join(root, "usr", "bin", "claude")
+	writeExec(t, baked, "BAKED")
+	out := runShim(t, "claude", baked, "/opt/km/shims:/usr/bin:/bin")
+	if !strings.Contains(out, "-- "+baked+" --version") {
+		t.Fatalf("shim must fall back to the baked target, got: %s", out)
+	}
 }
 
 func TestSelftest_LiveUnsealFailureIsFatal(t *testing.T) {

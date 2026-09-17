@@ -5692,14 +5692,15 @@ if [ -n "$KM_SHIM_TARGET" ]; then
   cat > "/opt/km/shims/{{ . }}" << KMSHIM
 #!/bin/sh
 # Phase 133: exec an ABSOLUTE path, never the bare name — resolving by name here
-# would re-find this shim on PATH and recurse. If the baked target has since
-# moved (userdata re-runs Claude's install.cjs idempotently), fall back to a
-# PATH search with the shim directory removed.
-# NOTE: km-secretsd selftest (shimTarget) parses this KM_REAL= line to verify the target exists. Keep the literal path here.
+# would re-find this shim on PATH and recurse.
+# NOTE: km-secretsd selftest (shimTarget) parses this KM_REAL= line to verify the target exists. Keep the literal path here, at column 0.
 KM_REAL="$KM_SHIM_TARGET"
-if [ ! -x "\$KM_REAL" ]; then
-  KM_REAL="\$(PATH="\$(echo "\$PATH" | tr ':' '\n' | grep -v '^/opt/km/shims$' | paste -sd: -)" command -v '{{ . }}' 2>/dev/null)"
-fi
+# Prefer the {{ . }} the box has NOW. An in-place update (claude self-updating
+# into nvm's prefix) lands a newer copy elsewhere on PATH while the baked target
+# still exists, so a "baked path missing" fallback never fires. The shim dir is
+# stripped from PATH first so this can never resolve to the shim itself.
+KM_LIVE="\$(PATH="\$(echo "\$PATH" | tr ':' '\n' | grep -v '^/opt/km/shims$' | paste -sd: -)" command -v '{{ . }}' 2>/dev/null)"
+[ -x "\$KM_LIVE" ] && KM_REAL="\$KM_LIVE"
 [ -x "\$KM_REAL" ] || { echo "km-shim: cannot locate the real {{ . }}" >&2; exit 127; }
 exec /opt/km/bin/km-env exec --as '{{ . }}' -- "\$KM_REAL" "\$@"
 KMSHIM
@@ -5719,11 +5720,21 @@ fi
 # would leave the shim inert with no error wherever nvm owns the agent: km shell
 # would run the unshimmed binary with no secrets, and km-secretsd's selftest
 # asserts the login-shell resolution and treats a miss as FATAL, so the boot
-# would abort. Today's profiles escape only by accident — base/userinit.yaml
-# npm-installs claude as ROOT before nvm exists, so it lands outside nvm's bin.
+# would abort.
+#
+# BOTH hooks strip-then-prepend, and that is the whole point (2026-09-17). An
+# "already on PATH → do nothing" guard is dead code in exactly the case the
+# ~/.bashrc block exists for: profile.d has ALREADY put /opt/km/shims on PATH
+# by the time ~/.bashrc runs, so the guard takes the no-op arm and nvm's later
+# prepend wins anyway. Proven live: PATH carried /opt/km/shims exactly once, in
+# the position profile.d left it, BEHIND nvm's bin. Profiles had escaped only
+# by accident — base/userinit.yaml npm-installs claude as ROOT before nvm
+# exists — and the accident ended the first time claude self-updated into
+# nvm's prefix as the sandbox user. Stripping first keeps it idempotent
+# (never duplicates) AND makes the last hook to run the one that wins.
 cat > /etc/profile.d/zz-km-shims.sh << 'KMSHIMPATH'
 case ":$PATH:" in
-  *":/opt/km/shims:"*) ;;
+  *":/opt/km/shims:"*) PATH="$(echo "$PATH" | tr ':' '\n' | grep -v '^/opt/km/shims$' | paste -sd: -)"; PATH="/opt/km/shims:$PATH"; export PATH ;;
   *) PATH="/opt/km/shims:$PATH"; export PATH ;;
 esac
 KMSHIMPATH
@@ -5738,9 +5749,10 @@ if ! grep -q '/opt/km/shims' "$KM_SANDBOX_BASHRC"; then
   cat >> "$KM_SANDBOX_BASHRC" << 'KMSHIMBASHRC'
 
 # Phase 133: the km secret shims must win over nvm, which prepends from this
-# same file. Keep this block LAST.
+# same file. Keep this block LAST. It strips /opt/km/shims (profile.d already
+# added it) and re-prepends, so it always ends up first and never duplicates.
 case ":$PATH:" in
-  *":/opt/km/shims:"*) ;;
+  *":/opt/km/shims:"*) PATH="$(echo "$PATH" | tr ':' '\n' | grep -v '^/opt/km/shims$' | paste -sd: -)"; PATH="/opt/km/shims:$PATH"; export PATH ;;
   *) PATH="/opt/km/shims:$PATH"; export PATH ;;
 esac
 KMSHIMBASHRC
