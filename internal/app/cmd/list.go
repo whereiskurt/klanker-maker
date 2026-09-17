@@ -874,12 +874,13 @@ func shutdownLabel(r kmaws.SandboxRecord) string {
 }
 
 // compactDuration renders a duration at the precision the SHUTDOWN column can
-// afford: "46m", "1h30m", "6d23h", "3583d". Two units at most, and past a week
-// only days — a "never expire" ttl of 86000h used to render as "85999h42m ttl",
-// three characters wider than the column, and pushed UP and AUTH off their
-// headers on every row. Rounded to the minute (a label computed from
-// time.Until is a few hundred ms short of the whole minute it means), with a
-// "<1m" floor so a box about to go is never shown as "1m" or "0m".
+// afford: "46m", "1h30m", "6d23h", "364d", "9y298d". Two adjacent units at
+// most, and past a week only days, past a year years+days — a "never expire"
+// ttl of 86000h used to render as "85999h42m ttl", three characters wider than
+// the column, and pushed UP and AUTH off their headers on every row. A year is
+// 365 days here; this is a countdown, not a calendar. Rounded to the minute (a
+// label computed from time.Until is a few hundred ms short of the whole minute
+// it means), with a "<1m" floor so a box about to go is never shown as "1m".
 func compactDuration(d time.Duration) string {
 	if d < time.Minute {
 		return "<1m"
@@ -888,7 +889,13 @@ func compactDuration(d time.Duration) string {
 	m := int(d.Minutes())
 	h := m / 60
 	days := h / 24
+	years := days / 365
 	switch {
+	case years > 0:
+		if days%365 == 0 {
+			return fmt.Sprintf("%dy", years)
+		}
+		return fmt.Sprintf("%dy%dd", years, days%365)
 	case days >= 7:
 		return fmt.Sprintf("%dd", days)
 	case days > 0:

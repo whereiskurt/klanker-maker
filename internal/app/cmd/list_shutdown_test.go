@@ -94,8 +94,11 @@ func TestCompactDuration_LargeValuesRollToDays(t *testing.T) {
 		{25*time.Hour + 30*time.Minute, "1d1h"}, // minutes dropped past a day
 		{6*24*time.Hour + 23*time.Hour, "6d23h"},
 		{7 * 24 * time.Hour, "7d"},
-		{86000 * time.Hour, "3583d"}, // hours dropped past a week
-		{365 * 24 * time.Hour, "365d"},
+		{364 * 24 * time.Hour, "364d"}, // hours dropped past a week
+		{365 * 24 * time.Hour, "1y"},
+		{400 * 24 * time.Hour, "1y35d"},
+		{86000 * time.Hour, "9y298d"}, // the "never expire" idiom
+		{10 * 365 * 24 * time.Hour, "10y"},
 	}
 	for _, tc := range cases {
 		if got := compactDuration(tc.d); got != tc.want {
