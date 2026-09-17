@@ -2448,7 +2448,7 @@ while true; do
           dispatch_as_sandbox "
             export HOME=/home/sandbox
             set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-            export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+            export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
             export KM_CODEX_RUN_ID='$RUN_ID'
             export KM_SLACK_THREAD_TS='$THREAD_TS'
             cd /workspace 2>/dev/null || true
@@ -2462,7 +2462,7 @@ while true; do
           dispatch_as_sandbox "
             export HOME=/home/sandbox
             set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-            export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+            export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
             export KM_CODEX_RUN_ID='$RUN_ID'
             export KM_SLACK_THREAD_TS='$THREAD_TS'
             cd /workspace 2>/dev/null || true
@@ -2486,7 +2486,7 @@ while true; do
           export HOME=/home/sandbox
           set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
           # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
-          export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+          export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
           export KM_SLACK_THREAD_TS='$THREAD_TS'
           cd /workspace 2>/dev/null || true
           claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
@@ -2921,7 +2921,7 @@ $COMMENT_BODY"
       dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
         export KM_GITHUB_REPLY_AGENT='codex'
         export KM_GITHUB_TURN_ID='$RUN_ID'
         cd /workspace 2>/dev/null || true
@@ -2935,7 +2935,7 @@ $COMMENT_BODY"
       dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
         export KM_GITHUB_REPLY_AGENT='codex'
         export KM_GITHUB_TURN_ID='$RUN_ID'
         cd /workspace 2>/dev/null || true
@@ -2950,7 +2950,7 @@ $COMMENT_BODY"
     dispatch_as_sandbox "
       export HOME=/home/sandbox
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
       export KM_GITHUB_REPLY_AGENT='claude'
       export KM_GITHUB_TURN_ID='$RUN_ID'
       cd /workspace 2>/dev/null || true
@@ -2982,7 +2982,7 @@ $COMMENT_BODY"
       dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
         export KM_GITHUB_REPLY_AGENT='claude'
         export KM_GITHUB_TURN_ID='$RUN_ID'
         cd /workspace 2>/dev/null || true
@@ -3298,7 +3298,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
       dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
         export KM_H1_REPLY_AGENT='codex'
         cd /workspace 2>/dev/null || true
         codex exec resume '$H1_SESSION' \"\$(cat '$PROMPT_FILE')\" \
@@ -3310,7 +3310,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
       dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
         export KM_H1_REPLY_AGENT='codex'
         cd /workspace 2>/dev/null || true
         codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
@@ -3323,7 +3323,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
     dispatch_as_sandbox "
       export HOME=/home/sandbox
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
       export KM_H1_REPLY_AGENT='claude'
       cd /workspace 2>/dev/null || true
       claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
@@ -3349,7 +3349,7 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
       dispatch_as_sandbox "
         export HOME=/home/sandbox
         set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
         export KM_H1_REPLY_AGENT='claude'
         cd /workspace 2>/dev/null || true
         claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
@@ -3572,7 +3572,7 @@ channels this sandbox is configured with (e.g. Slack) to report status."
     dispatch_as_sandbox "
       export HOME=/home/sandbox
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
       cd /workspace 2>/dev/null || true
       codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
         > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
@@ -3582,7 +3582,7 @@ channels this sandbox is configured with (e.g. Slack) to report status."
     dispatch_as_sandbox "
       export HOME=/home/sandbox
       set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      export PATH=\"/home/sandbox/.local/bin:\$PATH\"{{ if .SopsBundlePresent }}; export PATH=\"/opt/km/shims:\$PATH\"{{ end }}
       cd /workspace 2>/dev/null || true
       claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
         --dangerously-skip-permissions \

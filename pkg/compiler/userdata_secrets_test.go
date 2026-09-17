@@ -590,3 +590,48 @@ func TestUserdataSopsBlock_DispatchPrependIsGatedAndRendered(t *testing.T) {
 		t.Error("dispatch sites must be byte-identical to pre-Phase-133 when no bundle is present")
 	}
 }
+
+// TestUserdataSopsBlock_PollerLocalBinPrependKeepsShimsFirst checks the
+// RENDERED text on both sides of the gate: with a bundle, every ~/.local/bin
+// prepend inside a poller's turn script is followed by the shim re-prepend;
+// without one, no trace — the dormant userdata is byte-identical.
+func TestUserdataSopsBlock_PollerLocalBinPrependKeepsShimsFirst(t *testing.T) {
+	withSlack := func(p *profile.SandboxProfile) *profile.SandboxProfile {
+		if p.Spec.Notification == nil {
+			p.Spec.Notification = &profile.NotificationSpec{}
+		}
+		if p.Spec.Notification.Slack == nil {
+			p.Spec.Notification.Slack = &profile.NotificationSlackSpec{}
+		}
+		yes := true
+		p.Spec.Notification.Slack.Enabled = &yes
+		p.Spec.Notification.Slack.PerSandbox = &yes
+		p.Spec.Notification.Slack.Inbound = &profile.NotificationSlackInboundSpec{Enabled: &yes}
+		if p.Spec.CLI == nil {
+			p.Spec.CLI = &profile.CLISpec{}
+		}
+		return p
+	}
+	const localBin = `export PATH=\"/home/sandbox/.local/bin:\$PATH\"`
+	const reassert = `; export PATH=\"/opt/km/shims:\$PATH\"`
+
+	with, err := generateUserData(withSlack(sopsBundleProfile()), "sb-poll1", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := strings.Count(with, localBin)
+	if n == 0 {
+		t.Fatal("expected the Slack poller's ~/.local/bin prepend in rendered userdata")
+	}
+	if got := strings.Count(with, localBin+reassert); got != n {
+		t.Errorf("with a bundle: %d of %d ~/.local/bin prepends re-assert /opt/km/shims", got, n)
+	}
+
+	without, err := generateUserData(withSlack(baseProfile()), "sb-poll2", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(without, reassert) {
+		t.Error("without a bundle the re-prepend must not render (dormant ⇒ byte-identical)")
+	}
+}
