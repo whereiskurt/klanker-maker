@@ -542,7 +542,7 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 			if rec.TeardownPolicy == "stop" || rec.TeardownPolicy == "retain" {
 				idleLabel = "Idle Stop"
 			}
-			fmt.Fprintf(out, "%s:  %s\n", idleLabel, idleStr)
+			fmt.Fprintf(out, "%s:  %s\n", idleLabel, idleStatusForDisplay(idleStr))
 		}
 	}
 
@@ -700,6 +700,28 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 	}
 }
 
+// idleStatusForDisplay rewrites a (possibly colour-wrapped) stored idle label
+// for the status line: "86000h0m0s remaining" → "∞ remaining", "23m10s
+// remaining" → "23m remaining", keeping the ANSI colour the urgency picked.
+func idleStatusForDisplay(label string) string {
+	prefix, suffix := "", ""
+	for _, c := range []string{ansiRed, ansiYellow, ansiGreen} {
+		if strings.HasPrefix(label, c) && strings.HasSuffix(label, ansiReset) {
+			prefix, suffix = c, ansiReset
+			label = strings.TrimSuffix(strings.TrimPrefix(label, c), ansiReset)
+			break
+		}
+	}
+	if label == "imminent" || label == "" {
+		return prefix + label + suffix
+	}
+	human := idleLabelForDisplay(label)
+	if human == label { // unparseable: leave it
+		return prefix + label + suffix
+	}
+	return prefix + human + " remaining" + suffix
+}
+
 // getIdleCountdown checks CloudWatch audit events and budget AI activity to find
 // the most recent sandbox activity, then returns a countdown string like "12m remaining"
 // colored by urgency. createdAt is the fallback when no activity signals are found.
@@ -799,7 +821,11 @@ func parseStateTransitionTime(reason string) (time.Time, error) {
 	return time.Parse("2006-01-02 15:04:05 MST", reason[start+1:end])
 }
 
-// formatIdleLabel returns a human-readable idle countdown, optionally color-coded.
+// formatIdleLabel returns the idle countdown in its STORED form — Go's
+// Duration.String() plus " remaining", or "imminent" — optionally color-coded.
+// That string is what km list keeps in IdleRemaining and re-parses, so it
+// must stay a parseable duration; anything shown to a person goes through
+// idleLabelForDisplay / compactDuration instead (see the status Idle line).
 func formatIdleLabel(remaining time.Duration, isTTY bool) string {
 	label := fmt.Sprintf("%s remaining", remaining)
 	if remaining == 0 {
