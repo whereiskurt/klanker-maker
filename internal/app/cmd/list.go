@@ -444,6 +444,8 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		ttl := r.TTLRemaining
 		if ttl == "" {
 			ttl = "-"
+		} else if r.TTLExpiry != nil && time.Until(*r.TTLExpiry) >= 3*365*24*time.Hour {
+			ttl = "∞" // same rung as compactDuration; --json keeps the numeric string
 		}
 		alias := r.Alias
 		if alias == "" {
@@ -544,6 +546,8 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 			}
 		} else {
 			if showAuth {
+				// %-11s pads by rune, and "∞" is one rune one column wide, so the
+				// SHUTDOWN cell needs no padVis (unlike the two-column STATUS emoji).
 				fmt.Fprintf(out, "%s %s  %s %s %-11s %-7s %s%s\n",
 					num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
 					colorStatus, bw(shutdownLabel(r)), bw(uptime), bw(authStr), lock)
@@ -874,10 +878,12 @@ func shutdownLabel(r kmaws.SandboxRecord) string {
 }
 
 // compactDuration renders a duration at the precision the SHUTDOWN column can
-// afford: "46m", "1h30m", "6d23h", "364d", "2y364d", "9y". The rule is that
+// afford: "46m", "1h30m", "6d23h", "364d", "2y364d", "∞". The rule is that
 // detail matters more the closer the deadline is: two adjacent units at most,
 // and each rung drops its smaller unit once the value is comfortably past it —
-// minutes go past a day, hours past a week, days past three years. A "never
+// minutes go past a day, hours past a week, and past three years the number
+// itself: that is a "never expire" ttl, and "∞" says so. (Human-facing only;
+// --json keeps computeTTLRemaining's numeric string.) A "never
 // expire" ttl of 86000h used to render as "85999h42m ttl", three characters
 // wider than the column, and pushed UP and AUTH off their headers on every
 // row. A year is 365 days here; this is a countdown, not a calendar. Rounded to the minute (a
@@ -893,7 +899,9 @@ func compactDuration(d time.Duration) string {
 	days := h / 24
 	years := days / 365
 	switch {
-	case years >= 3 || (years > 0 && days%365 == 0):
+	case years >= 3:
+		return "∞" // effectively never; nobody plans around "9y"
+	case years > 0 && days%365 == 0:
 		return fmt.Sprintf("%dy", years)
 	case years > 0:
 		return fmt.Sprintf("%dy%dd", years, days%365)
