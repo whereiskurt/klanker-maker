@@ -130,18 +130,36 @@ func computeTTLRemaining(ttlExpiry *time.Time) string {
 	if remaining <= 0 {
 		return "expired"
 	}
-	// Round to seconds, format as human-readable duration
+	// Round to seconds, format as human-readable duration. Two adjacent units
+	// at most, and each rung drops its smaller unit once the value is
+	// comfortably past it: hours go past a week, days past three (365-day)
+	// years. A "never expire" ttl of 86000h otherwise renders as "85999h42m"
+	// and overflows every column that prints it.
 	remaining = remaining.Round(time.Second)
 	h := int(remaining.Hours())
 	m := int(remaining.Minutes()) % 60
 	s := int(remaining.Seconds()) % 60
-	if h > 0 {
+	days := h / 24
+	years := days / 365
+	switch {
+	case years >= 3 || (years > 0 && days%365 == 0):
+		return fmt.Sprintf("%dy", years)
+	case years > 0:
+		return fmt.Sprintf("%dy%dd", years, days%365)
+	case days >= 7:
+		return fmt.Sprintf("%dd", days)
+	case days > 0:
+		if h%24 == 0 {
+			return fmt.Sprintf("%dd", days)
+		}
+		return fmt.Sprintf("%dd%dh", days, h%24)
+	case h > 0:
 		return fmt.Sprintf("%dh%02dm", h, m)
-	}
-	if m > 0 {
+	case m > 0:
 		return fmt.Sprintf("%dm%02ds", m, s)
+	default:
+		return fmt.Sprintf("%ds", s)
 	}
-	return fmt.Sprintf("%ds", s)
 }
 
 // ListAllSandboxesByS3 scans S3 tf-km/sandboxes/ prefix for sandbox directories,

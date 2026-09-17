@@ -444,6 +444,8 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		ttl := r.TTLRemaining
 		if ttl == "" {
 			ttl = "-"
+		} else if r.TTLExpiry != nil && time.Until(*r.TTLExpiry) >= 3*365*24*time.Hour {
+			ttl = "∞" // same rung as compactDuration; --json keeps the numeric string
 		}
 		alias := r.Alias
 		if alias == "" {
@@ -544,6 +546,8 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 			}
 		} else {
 			if showAuth {
+				// %-11s pads by rune, and "∞" is one rune one column wide, so the
+				// SHUTDOWN cell needs no padVis (unlike the two-column STATUS emoji).
 				fmt.Fprintf(out, "%s %s  %s %s %-11s %-7s %s%s\n",
 					num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
 					colorStatus, bw(shutdownLabel(r)), bw(uptime), bw(authStr), lock)
@@ -873,17 +877,49 @@ func shutdownLabel(r kmaws.SandboxRecord) string {
 	}
 }
 
-// compactDuration renders a duration as "1h30m" or "46m", dropping the seconds
-// that time.Duration.String() would otherwise spend a column on.
+// compactDuration renders a duration at the precision the SHUTDOWN column can
+// afford: "46m", "1h30m", "6d23h", "364d", "2y364d", "∞". The rule is that
+// detail matters more the closer the deadline is: two adjacent units at most,
+// and each rung drops its smaller unit once the value is comfortably past it —
+// minutes go past a day, hours past a week, and past three years the number
+// itself: that is a "never expire" ttl, and "∞" says so. (Human-facing only;
+// --json keeps computeTTLRemaining's numeric string.) A "never
+// expire" ttl of 86000h used to render as "85999h42m ttl", three characters
+// wider than the column, and pushed UP and AUTH off their headers on every
+// row. A year is 365 days here; this is a countdown, not a calendar. Rounded to the minute (a
+// label computed from time.Until is a few hundred ms short of the whole minute
+// it means), with a "<1m" floor so a box about to go is never shown as "1m".
 func compactDuration(d time.Duration) string {
+	if d < time.Minute {
+		return "<1m"
+	}
 	d = d.Round(time.Minute)
-	h := int(d.Hours())
-	m := int(d.Minutes()) % 60
-	if h > 0 {
-		return fmt.Sprintf("%dh%dm", h, m)
-	}
-	if m > 0 {
+	m := int(d.Minutes())
+	h := m / 60
+	days := h / 24
+	years := days / 365
+	switch {
+	case years >= 3:
+		return "∞" // effectively never; nobody plans around "9y"
+	case years > 0 && days%365 == 0:
+		return fmt.Sprintf("%dy", years)
+	case years > 0:
+		return fmt.Sprintf("%dy%dd", years, days%365)
+	case days >= 7:
+		return fmt.Sprintf("%dd", days)
+	case days > 0:
+		if h%24 == 0 {
+			return fmt.Sprintf("%dd", days)
+		}
+		return fmt.Sprintf("%dd%dh", days, h%24)
+	case h > 0:
+		if m%60 == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh%dm", h, m%60)
+	case m > 0:
 		return fmt.Sprintf("%dm", m)
+	default:
+		return "<1m"
 	}
-	return "<1m"
 }

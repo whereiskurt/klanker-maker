@@ -420,7 +420,7 @@ func TestListCmd_ShutdownColumnNamesTheDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list command returned error: %v", err)
 	}
-	if !strings.Contains(out, "2h0m idle") {
+	if !strings.Contains(out, "2h idle") {
 		t.Errorf("expected the idle deadline to win over a distant TTL:\n%s", out)
 	}
 	if strings.Contains(out, "19h") {
