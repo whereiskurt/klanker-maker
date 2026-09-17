@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>S3 buckets and presigned URLs — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #0a0a0f; --paper-2: #111118; --ink: #e4e4ef; --muted: #9090a8;
+      --soft: #7e7e98; --rule: #2a2a3a; --accent: #00d4aa; --link: #6a95d8; --boundary: #ff5c5c;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--paper); color: var(--ink);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1360px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 0.5rem; }
+    .standfirst { font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 78ch; margin-bottom: 1.75rem; }
+    code { font-family: var(--font-mono); font-size: 0.85em; color: var(--ink); }
+    svg { width: 100%; min-width: 960px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · S3 + presigned URLs</p>
+    <h1>Three buckets, one the sandbox can reach — and what a presign really carries</h1>
+    <p class="standfirst">A presigned URL is not a grant. It is the box role's <em>own</em> credentials, SigV4-signed over one request and handed to someone without them. Whoever holds it can do exactly what the box could, on that one key, until it expires — so the interesting question is not <em>how</em> the klanker signs (it already has the credentials) but <em>what those credentials are allowed to do</em>.</p>
+
+    <svg viewBox="0 0 1280 1040" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="s3presign-title s3presign-desc">
+      <title id="s3presign-title">Klanker Maker S3 buckets and how a sandbox presigns a URL</title>
+      <desc id="s3presign-desc">The artifacts bucket is the one bucket a sandbox can reach; the Terraform state and the linked-account results buckets are shown for contrast, unreachable from the box. The artifacts bucket's prefixes are listed with who reads and writes each. A sandbox process signs a request with the instance role's credentials from IMDS (or, under the IMDS fence, the narrowed credentials km-creds brokers), producing a URL a recipient can use without credentials. A callout explains that every profile carries a region-lock policy granting all actions in-region, so the presign can name any key in the bucket, and that S3 checks the signer's permissions at redemption time, so revoking the role invalidates outstanding URLs.</desc>
+
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9090a8"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#00d4aa"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#6a95d8"/></marker>
+        <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ff5c5c"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ═══ zones ═══ -->
+      <!-- Zone: the sandbox (trust boundary, red dashed) -->
+      <rect x="32" y="72" width="432" height="472" rx="8" fill="rgba(255,92,92,0.03)" stroke="#ff5c5c" stroke-width="1" stroke-dasharray="4,4" opacity="0.7"/>
+      <rect x="44" y="76" width="252" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="48" y="85" fill="rgba(255,92,92,0.8)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">SANDBOX EC2 · INSTANCE ROLE {prefix}-ec2spot-ssm-{id}</text>
+
+      <!-- Zone: home account S3 -->
+      <rect x="496" y="72" width="752" height="600" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <rect x="508" y="76" width="208" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="512" y="85" fill="rgba(228,228,239,0.45)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">S3 · APPLICATION ACCOUNT · us-east-1</text>
+
+      <!-- Zone: outside -->
+      <rect x="32" y="592" width="432" height="80" rx="8" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <rect x="44" y="596" width="180" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="48" y="605" fill="rgba(228,228,239,0.45)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">ANYONE HOLDING THE URL · NO CREDENTIALS</text>
+
+      <!-- ═══ connectors (before nodes) ═══ -->
+      <!-- E1 IMDS → process: credentials (vertical, x=232) -->
+      <line x1="232" y1="200" x2="232" y2="256" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="244" y="220" width="176" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="248" y="229" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">ROLE CREDS · AKIA/secret/token</text>
+
+      <!-- E2 process → SigV4 (vertical, x=232) -->
+      <line x1="232" y1="336" x2="232" y2="392" stroke="#00d4aa" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="244" y="356" width="176" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="248" y="365" fill="#00d4aa" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">SIGN: bucket+key+verb+expiry</text>
+
+      <!-- E3 SigV4 → recipient (vertical, x=232) -->
+      <line x1="232" y1="472" x2="232" y2="616" stroke="#00d4aa" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <rect x="244" y="536" width="120" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="248" y="545" fill="#00d4aa" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">URL · X-Amz-Signature</text>
+
+      <!-- E4 recipient → artifacts bucket: redeem (right then up, mid 456) -->
+      <path d="M 440,632 H 464 Q 472,632 472,624 V 316 Q 472,308 480,308 H 528" fill="none" stroke="#6a95d8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="376" y="644" width="60" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="406" y="653" fill="#6a95d8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">GET / PUT</text>
+
+      <!-- E5 process → artifacts bucket direct (SDK, own creds) -->
+      <line x1="440" y1="296" x2="528" y2="296" stroke="#6a95d8" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-link)"/>
+      <rect x="446" y="276" width="76" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="484" y="285" fill="#6a95d8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">aws s3 cp</text>
+
+      <!-- E6 process → state bucket: denied (red, terminates) -->
+      <path d="M 440,320 H 480 Q 488,320 488,328 V 580 Q 488,588 496,588 H 528" fill="none" stroke="#ff5c5c" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-red)"/>
+      <rect x="496" y="560" width="40" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="516" y="569" fill="#ff5c5c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DENY</text>
+
+      <!-- ═══ sandbox column ═══ -->
+      <!-- N1 IMDS / km-creds -->
+      <rect x="64" y="128" width="376" height="72" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="128" width="376" height="72" rx="6" fill="rgba(228,228,239,0.03)" stroke="rgba(228,228,239,0.30)" stroke-width="1"/>
+      <rect x="72" y="134" width="60" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="102" y="143" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CREDENTIALS</text>
+      <text x="80" y="164" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">IMDS 169.254.169.254</text>
+      <text x="80" y="180" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">or under fenceIMDS: credential_process → km-creds → km-secretsd</text>
+      <text x="80" y="192" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">(self-assumed role, session policy minus two Denies)</text>
+
+      <!-- N2 the process -->
+      <rect x="64" y="256" width="376" height="80" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="256" width="376" height="80" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <rect x="72" y="262" width="52" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="98" y="271" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">uid sandbox</text>
+      <text x="80" y="292" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">agent / any process on the box</text>
+      <text x="80" y="310" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">aws s3 presign s3://{bucket}/transcripts/{id}/x --expires-in 900</text>
+      <text x="80" y="324" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">boto3 generate_presigned_url · SDK PresignClient — same thing</text>
+
+      <!-- N3 SigV4 — FOCAL -->
+      <rect x="64" y="392" width="376" height="80" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="392" width="376" height="80" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <rect x="72" y="398" width="72" height="12" rx="2" fill="transparent" stroke="rgba(0,212,170,0.40)" stroke-width="0.8"/>
+      <text x="108" y="407" fill="rgba(0,212,170,0.9)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">LOCAL · NO AWS CALL</text>
+      <text x="80" y="428" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">SigV4 over one request</text>
+      <text x="80" y="446" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">HMAC(secret, date/region/s3) → X-Amz-Credential, -Signature,</text>
+      <text x="80" y="460" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">-Expires, -Security-Token (the session token rides in the URL)</text>
+
+      <!-- N4 recipient -->
+      <rect x="64" y="616" width="376" height="40" rx="6" fill="#0a0a0f"/>
+      <rect x="64" y="616" width="376" height="40" rx="6" fill="rgba(144,144,168,0.10)" stroke="#7e7e98" stroke-width="1"/>
+      <text x="80" y="634" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif">operator laptop · Slack · a curl anywhere</text>
+      <text x="80" y="648" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">identity irrelevant — S3 checks the SIGNER's permissions at redemption</text>
+
+      <!-- ═══ buckets column ═══ -->
+      <!-- B1 artifacts — FOCAL -->
+      <rect x="528" y="120" width="688" height="392" rx="6" fill="#0a0a0f"/>
+      <rect x="528" y="120" width="688" height="392" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <rect x="536" y="126" width="88" height="12" rx="2" fill="transparent" stroke="rgba(0,212,170,0.40)" stroke-width="0.8"/>
+      <text x="580" y="135" fill="rgba(0,212,170,0.9)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">S3 · REACHABLE</text>
+      <text x="1208" y="135" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km bootstrap · direct SDK, no state</text>
+      <text x="544" y="160" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist Mono', monospace">{prefix}-artifacts-{account}</text>
+      <text x="544" y="176" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">versioned · one bucket policy (ses module) · every km artifact lives here</text>
+
+      <!-- prefix table header -->
+      <line x1="544" y1="192" x2="1200" y2="192" stroke="rgba(228,228,239,0.15)" stroke-width="0.8"/>
+      <text x="544" y="206" fill="rgba(228,228,239,0.5)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.12em">PREFIX</text>
+      <text x="808" y="206" fill="rgba(228,228,239,0.5)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.12em">WRITTEN BY</text>
+      <text x="1024" y="206" fill="rgba(228,228,239,0.5)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.12em">READ BY</text>
+
+      <!-- rows -->
+      <text x="544" y="226" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">sidecars/ · binaries/ · toolchain/</text>
+      <text x="808" y="226" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">km init (operator)</text>
+      <text x="1024" y="226" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">every box at boot · create λ</text>
+
+      <text x="544" y="244" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">artifacts/{id}/ profile · km-init.sh</text>
+      <text x="808" y="244" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">km create</text>
+      <text x="1024" y="244" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">the box · ttl-handler</text>
+
+      <text x="544" y="262" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">sandboxes/{id}/secrets.enc.yaml</text>
+      <text x="808" y="262" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">km create (ciphertext)</text>
+      <text x="1024" y="262" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">km-secretsd (root) per unseal</text>
+
+      <text x="544" y="280" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">transcripts/{id}/ captures/ learn/ execs/</text>
+      <text x="808" y="280" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">the box (scoped Put)</text>
+      <text x="1024" y="280" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">operator · slack bridge</text>
+
+      <text x="544" y="298" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">mail/{id}/ · mail/create/{prefix}/</text>
+      <text x="808" y="298" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">SES (bucket policy)</text>
+      <text x="1024" y="298" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">the box — its OWN prefix only</text>
+
+      <text x="544" y="316" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">rsync/ · logs/ · checks/ · check-runs/</text>
+      <text x="800" y="316" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">km rsync · CW logs · km check</text>
+      <text x="1008" y="316" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">the box · check-runner λ</text>
+
+      <!-- the policy that actually applies -->
+      <line x1="544" y1="336" x2="1200" y2="336" stroke="rgba(228,228,239,0.15)" stroke-width="0.8"/>
+      <text x="544" y="352" fill="rgba(228,228,239,0.5)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.12em">WHAT THE BOX ROLE IS ACTUALLY ALLOWED — THE GRANTS, IN ORDER OF WIDTH</text>
+      <text x="544" y="372" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">ec2spot_region_lock   Action "*" Resource "*"  Condition aws:RequestedRegion ∈ allowedRegions</text>
+      <text x="544" y="386" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">                      ↑ base/platform sets [us-east-1]; every shipped profile extends it</text>
+      <text x="544" y="404" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">S3PutSandboxArtifacts s3:PutObject on transcripts/captures/learn/execs/{id}/*</text>
+      <text x="544" y="418" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">S3GetOwnSecretsBundle s3:GetObject on sandboxes/{id}/secrets.enc.yaml</text>
+      <text x="544" y="432" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">mail inbox (service.hcl) Get+ListObjectsV2 on mail/{id}/*, ListBucket prefix-conditioned</text>
+      <text x="544" y="452" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">the three scoped statements are what the design INTENDS; the first is what AWS EVALUATES —</text>
+      <text x="544" y="466" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">an Allow "*" is a union, not an override; the narrow ones add nothing while it stands.</text>
+      <text x="544" y="486" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">this is how the box reads sidecars/ at boot with no read statement anywhere. (fenceIMDS</text>
+      <text x="544" y="500" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">denies only kms:Decrypt on the secrets alias + Get on the bundle; the region-lock stays.)</text>
+
+      <!-- B2 state bucket -->
+      <rect x="528" y="544" width="336" height="104" rx="6" fill="#0a0a0f"/>
+      <rect x="528" y="544" width="336" height="104" rx="6" fill="rgba(228,228,239,0.03)" stroke="rgba(228,228,239,0.30)" stroke-width="1"/>
+      <rect x="536" y="550" width="88" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="580" y="559" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">S3 · TERRAFORM</text>
+      <text x="856" y="559" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">first apply</text>
+      <text x="544" y="584" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist Mono', monospace">tf-{prefix}-state-{regionLabel}</text>
+      <text x="544" y="602" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">every unit's tfstate · operator + create/ttl-handler λ</text>
+      <text x="544" y="616" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">named in region.hcl, never in a profile — the box has</text>
+      <text x="544" y="630" fill="#ff5c5c" font-size="9" font-family="'Geist Mono', monospace">no reason to know it. "No reason to" is not "cannot".</text>
+
+      <!-- B3 results bucket (linked account) -->
+      <rect x="880" y="544" width="336" height="104" rx="6" fill="#0a0a0f"/>
+      <rect x="880" y="544" width="336" height="104" rx="6" fill="rgba(228,228,239,0.02)" stroke="rgba(228,228,239,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <rect x="888" y="550" width="108" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="942" y="559" fill="rgba(228,228,239,0.8)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">S3 · LINKED ACCOUNT</text>
+      <text x="1208" y="559" fill="#7e7e98" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">km account add</text>
+      <text x="896" y="584" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist Mono', monospace">{prefix}-results-{target-account}</text>
+      <text x="896" y="602" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">Phase 126 only · a borrowed-capacity box writes, home reads</text>
+      <text x="896" y="616" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">it reads home's artifacts via the bucket policy (Get+List)</text>
+      <text x="896" y="630" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">— the one box role named IN a bucket policy; read-only</text>
+
+      <!-- ═══ callout ═══ -->
+      <text x="32" y="720" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">A presign is a bearer token for the signer's permissions, not for the key it names. On a box carrying</text>
+      <text x="32" y="740" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">the region-lock Allow "*", the agent can sign a GET on sidecars/km, a PUT over another sandbox's</text>
+      <text x="32" y="760" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">transcripts, or a read of the state bucket — and the URL works for fifteen minutes from anywhere,</text>
+      <text x="32" y="780" fill="#e4e4ef" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">with no km component in the path and no km record. The narrow S3 statements describe the intent.</text>
+      <line x1="32" y1="788" x2="152" y2="788" stroke="rgba(0,212,170,0.50)" stroke-width="0.8"/>
+
+      <!-- three facts strip -->
+      <rect x="32" y="816" width="392" height="120" rx="6" fill="#0a0a0f"/>
+      <rect x="32" y="816" width="392" height="120" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="48" y="836" fill="rgba(228,228,239,0.5)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.12em">WHAT BOUNDS A PRESIGNED URL</text>
+      <text x="48" y="856" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">expiry     ≤ 7 days with IAM user keys; with a ROLE it is</text>
+      <text x="48" y="870" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">           min(X-Amz-Expires, session token lifetime)</text>
+      <text x="48" y="884" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">           — iam.roleSessionDuration: 1h caps it at 1h</text>
+      <text x="48" y="902" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">one request · one verb · one key · only signed headers enforced</text>
+      <text x="48" y="920" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">revoke = revoke the SIGNER (role policy, km destroy); S3 re-checks</text>
+
+      <rect x="440" y="816" width="392" height="120" rx="6" fill="#0a0a0f"/>
+      <rect x="440" y="816" width="392" height="120" rx="6" fill="rgba(228,228,239,0.05)" stroke="#9090a8" stroke-width="1"/>
+      <text x="456" y="836" fill="rgba(228,228,239,0.5)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.12em">WHAT km DOES NOT DO TODAY</text>
+      <text x="456" y="856" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">no km-* helper presigns anything (zero Presign calls in the tree)</text>
+      <text x="456" y="870" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">no audit event for a presign (it is a local HMAC; nothing to observe)</text>
+      <text x="456" y="884" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">no S3 access logs / CloudTrail data events on the artifacts bucket,</text>
+      <text x="456" y="898" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">so a redeemed URL leaves no record either</text>
+      <text x="456" y="920" fill="#9090a8" font-size="9" font-family="'Geist Mono', monospace">a klanker CAN presign; km just neither helps nor sees it</text>
+
+      <rect x="848" y="816" width="400" height="120" rx="6" fill="#0a0a0f"/>
+      <rect x="848" y="816" width="400" height="120" rx="6" fill="rgba(255,92,92,0.05)" stroke="rgba(255,92,92,0.6)" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="864" y="836" fill="rgba(255,92,92,0.8)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.12em">IF YOU WANT PRESIGNS TO BE A BOUNDARY</text>
+      <text x="864" y="856" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">1. replace the Action "*" region-lock with a Deny-outside-region,</text>
+      <text x="864" y="870" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">   so the scoped S3 grants are what remains — and they bite</text>
+      <text x="864" y="884" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">2. a km-share helper: km-secretsd presigns with a session policy</text>
+      <text x="864" y="898" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">   narrowed to ONE key, and writes a share_url audit event</text>
+      <text x="864" y="920" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace">3. S3 data events on the bucket, so a redemption is at least seen</text>
+
+      <!-- ═══ legend ═══ -->
+      <line x1="32" y1="968" x2="1248" y2="968" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="40" y="988" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+      <line x1="120" y1="984" x2="148" y2="984" stroke="#00d4aa" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="160" y="988" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">The presign path — local, no AWS call until redemption</text>
+      <line x1="480" y1="984" x2="508" y2="984" stroke="#6a95d8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="520" y="988" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">An S3 request (dashed = the box's own SDK call)</text>
+      <line x1="800" y1="984" x2="828" y2="984" stroke="#ff5c5c" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-red)"/>
+      <text x="840" y="988" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Should be denied — and is not, while the region-lock stands</text>
+      <text x="40" y="1012" fill="#9090a8" font-size="9" font-family="'Geist', sans-serif">Sources: infra/modules/ec2spot/v1.7.0/main.tf (region_lock, S3PutSandboxArtifacts, S3GetOwnSecretsBundle) · pkg/compiler/service_hcl.go (mail inbox) · infra/modules/ses/v2.0.0 (bucket policy) · profiles/base/platform.yaml</text>
+    </svg>
+  </div>
+</body>
+</html>
