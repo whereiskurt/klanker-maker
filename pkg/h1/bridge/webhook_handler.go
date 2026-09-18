@@ -211,7 +211,8 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	// ── Step 4.5: resolve program handle → targets ───────────────────────────
 	targets, allow, events, commands, matched := Resolve(payload.ProgramHandle(), h.Entries, h.DefaultProfile)
 	if !matched {
-		h.log().Info("h1-bridge: no program config, silent drop", "program", payload.ProgramHandle())
+		h.log().Info("h1-bridge: no program config, silent drop", "program", payload.ProgramHandle(),
+			"event", eventType, "top_level_keys", TopLevelKeys(req.RawBody))
 		return ok200()
 	}
 
@@ -219,7 +220,8 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	_, isAutoTriageEvent := events[eventType]
 	isComment := eventType == "report_comment_created"
 	if !isAutoTriageEvent && !isComment {
-		h.log().Info("h1-bridge: event not a trigger, dropping", "event", eventType, "program", payload.ProgramHandle())
+		h.log().Info("h1-bridge: event not a trigger, dropping", "event", eventType, "program", payload.ProgramHandle(),
+			"top_level_keys", TopLevelKeys(req.RawBody))
 		return ok200()
 	}
 

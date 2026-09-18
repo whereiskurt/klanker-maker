@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -283,4 +284,32 @@ func VerifyH1Signature(secret, sigHeader string, rawBody []byte) error {
 		return fmt.Errorf("h1-bridge: signature mismatch")
 	}
 	return nil
+}
+
+// TopLevelKeys returns the sorted root-object keys of raw, followed by
+// "data.<key>" for each key under a root "data" object. Used only on the
+// drop-path log lines so an unexpected wrapper shape is visible in CloudWatch
+// without debug_capture. nil when raw is not a JSON object.
+func TopLevelKeys(raw []byte) []string {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(root))
+	for k := range root {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if d, ok := root["data"]; ok {
+		var data map[string]json.RawMessage
+		if err := json.Unmarshal(d, &data); err == nil {
+			sub := make([]string, 0, len(data))
+			for k := range data {
+				sub = append(sub, "data."+k)
+			}
+			sort.Strings(sub)
+			keys = append(keys, sub...)
+		}
+	}
+	return keys
 }
