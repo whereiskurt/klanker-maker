@@ -3238,7 +3238,7 @@ while true; do
   if [ "$REPLY_MODE" = "none" ]; then
     POSTING_SECTION="--- Posting your response ---
 Do NOT post anything to HackerOne for this trigger (no km-h1 comment). Deliver your
-output where the task below says. A human will decide whether it reaches HackerOne."
+output where the task above says. A human will decide whether it reaches HackerOne."
   else
     POSTING_SECTION="--- Posting your response (REQUIRED) ---
 Your reply reaches HackerOne ONLY if you post it with km-h1. Replies are INTERNAL
