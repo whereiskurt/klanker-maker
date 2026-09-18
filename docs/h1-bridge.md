@@ -149,7 +149,11 @@ h1:
           # comment-keyword-only (auto-triage dormant).
           events:
             report_created:
-                prompt: '@profiles/h1.report_created.prompt.txt'
+                prompt: '@profiles/prompts/h1.report_created.prompt.txt'
+                # reply: none | internal (default). none ⇒ NOTHING writes to the report on
+                # this event: no bridge "On it" ack, no agent km-h1 comment, no resume hint.
+                # Use it when a human blesses the triage later via "@km /triage".
+                reply: none
           # COMMENT-context /commands. /claude, /codex, /reply_to_researcher are RESERVED
           # built-ins — do not redefine them here.
           commands:
@@ -173,6 +177,8 @@ h1:
 | `programs[].events{}` | event-type → prompt (auto-triage); absent ⇒ dormant |
 | `programs[].commands{}` | `/command` name → `{description, prompt}` |
 | `programs[].default_command` | command dispatched on a bare-handle comment |
+| `programs[].events.<event>.reply` | `internal` (default) or `none`. Per-event. `none` silences every write to the report on that auto-triage event; comment-keyword triggers are never silenced |
+| `debug_capture` | install-wide bool, default `false`. `true` ⇒ every raw delivery `{received_at, headers, body}` is written to `s3://<artifacts>/h1-captures/<X-H1-Delivery>.json` **before** signature verification. Turn on for the first live deliveries to pin the real payload shape; contains the full report body — treat as sensitive |
 
 ### `@file` prompts
 
@@ -199,6 +205,43 @@ and `{{args}}`.
 A comment in a **known thread** (a report the bridge has already dispatched into) bypasses
 the handle requirement — follow-up comments continue the conversation (GitHub thread-bypass
 analog).
+
+### Silent auto-triage (`reply: none`)
+
+Auto-triage events default to the Phase 103 behaviour: the bridge posts an INTERNAL
+"On it" ack, the poller tells the agent to post an INTERNAL reply with `km-h1 comment`,
+and the first turn adds a resume-hint comment. Set `reply: none` on an event to make
+that path **write-free** toward HackerOne — useful when the agent's output goes to
+Slack (or anywhere else your prompt says) and an analyst decides whether it ever
+reaches the report by typing `@km /triage` as an internal comment (the ordinary
+comment-keyword flow, which still acks and still posts).
+
+What changes under `reply: none`:
+
+| Site | default | `reply: none` |
+|---|---|---|
+| bridge "On it — dispatched…" internal ack | posted | skipped |
+| poller preamble | "Posting your response (REQUIRED)… post it with km-h1" | "Do NOT post anything to HackerOne for this trigger… A human will decide" |
+| poller resume hint (`<details>🔧 Resume…`) | posted on session mint | skipped |
+| poller codex-missing notice | posted | logged only |
+
+Your prompt file must therefore say **where** the output goes — the preamble no longer
+does. `{{report_id}} {{title}} {{state}} {{program}}` are still expanded, and
+`km-h1 read --report N` still works (it is a read).
+
+The envelope carries `reply_mode:"none"`; an older sandbox (pre-recreate) ignores the
+field and behaves as before — `reply: none` on the bridge alone still removes the ack.
+
+### Capturing the real payload (`debug_capture`)
+
+The Phase 103 parser was pinned against a synthetic payload (`103-CAPTURE/field-paths.md`).
+With `h1.debug_capture: true`, `km init --h1` gives the bridge `s3:PutObject` on
+`h1-captures/*` and it writes every delivery there as step 0 — before HMAC, so a
+mis-pasted secret still yields a capture. Inspect with
+`aws s3 ls s3://<artifacts>/h1-captures/` then `aws s3 cp … -`. The drop-path log lines
+(`no program config, silent drop`, `event not a trigger, dropping`) also now carry
+`top_level_keys`, so a wrong wrapper is visible in CloudWatch without capture. Turn it off
+again once the shape is confirmed.
 
 ---
 
@@ -353,6 +396,11 @@ Existing sandboxes need `km destroy && km create` to gain the `h1-inbound` queue
 > zip (still `make build-lambdas` + full `km init`) and does NOT provision new resources.
 > A subsequent `km init --plan` shows the bridge as a no-op (zero drift).
 
+- `reply:` / `debug_capture:` edits: `make build` + `km init --h1 --dry-run=false` refreshes the
+  bridge env + IAM. The poller half of `reply: none` (preamble, resume hint) rides in the
+  create-handler userdata: `make build-lambdas` + `km init --dry-run=false`, then
+  `km destroy && km create` the `h1-<handle>` sandbox.
+
 ---
 
 ## Dormant invariant
@@ -415,6 +463,9 @@ A `RUN_H1_E2E=1`-gated harness lives at `test/e2e/h1/e2e_test.go` (skips clean w
 | Researcher saw a reply unexpectedly | check the `allow:` list + that the comment really carried `/reply_to_researcher`; verify only `targets[0]` replied externally |
 | `KM_H1_PROGRAMS` drift WARN at `km init` | a shell `KM_H1_PROGRAMS` env var overrides `km-config.yaml`; unset it (yaml wins by default) |
 | Remote `km create profiles/h1-triage.yaml` rejects the schema | `km init --sidecars` not run after deploy (the `notification.h1.inbound` field) |
+| `reply: none` set but an "On it" comment still appears | bridge env not refreshed — `km init --h1 --dry-run=false`; confirm with `aws lambda get-function-configuration --function-name <prefix>-h1-bridge --query 'Environment.Variables.KM_H1_PROGRAMS'` contains `"reply":"none"` |
+| `reply: none` set, no ack, but the agent still posted / a resume hint appeared | sandbox predates the poller change — `km destroy && km create` |
+| Every event drops with `program=""` | routing key path not present in the real payload — enable `debug_capture`, read one object under `h1-captures/`, compare against `pkg/h1/bridge/payload.go` struct tags |
 
 > `km doctor` does not yet have HackerOne checks — a candidate fast-follow (mirroring the
 > Slack/GitHub doctor groups).

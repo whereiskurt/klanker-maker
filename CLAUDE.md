@@ -1852,6 +1852,7 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | GitHub bridge agent verbs — `/claude` / `/codex` per-thread agent select in PR comments | `docs/github-bridge.md` § Phase 102 |
 | GitHub generic event→prompt router — `github.events:` rules fire a sandbox agent on `repository`/`push`/`release` webhooks (warm `alias:` or cold-create); "All repositories" install gotcha | `docs/github-bridge.md` § Phase 115 |
 | HackerOne comment-trigger bridge — program webhook → sandbox agent → report comment (auto-triage + `@`-handle, multi-target fanout, internal-by-default replies) | `docs/h1-bridge.md` (Phase 103) |
+| Silent auto-triage — `events.<event>.reply: none` (no ack, no agent post, no resume hint), `h1.debug_capture` raw-delivery capture to `h1-captures/`, why the analyst blesses via `@km /triage` | `docs/h1-bridge.md` § Silent auto-triage + § Capturing the real payload; spec `docs/superpowers/specs/2026-09-18-h1-report-created-triage-to-slack-design.md`; diagram `docs/diagrams/h1-triage/` |
 | O(1) Slack channel resolution on alias reuse, `km-slack-channels` table, `km slack adopt`, `KM_SLACK_RESOLVE_BUDGET` | `docs/slack-notifications.md` § Phase 104 |
 | Scoped `km init` — `--only <module>` / `--github` / `--slack` / `--h1` / `--email` (tier-1 env+IAM fast-path) + `--only ses` (tier-2 destroy-class gated) | `klanker:init` skill § Fast-path variants |
 | Ask the operator to do something via email | `klanker:operator` skill |

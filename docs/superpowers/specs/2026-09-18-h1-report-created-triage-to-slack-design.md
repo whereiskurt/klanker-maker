@@ -39,12 +39,15 @@ map already accepts any event name.
 
 ## 3. What is wrong for this goal today
 
-1. **Two sites push onto the H1 report on every auto-triage dispatch.**
+1. **Three sites push onto the H1 report on every auto-triage dispatch.**
    - `webhook_handler.go:377` posts a synchronous INTERNAL "On it — dispatched to a
      sandbox agent." comment.
    - The poller preamble (`userdata.go:~3245`) says *"Posting your response
      (REQUIRED) … Do NOT only print your answer — it is discarded unless you post it
      with km-h1."* An obedient agent will post.
+   - The poller's Phase 106 resume hint (`userdata.go:~3397`) posts a `<details>🔧 Resume…</details>`
+     internal comment on the first turn of every report; the codex-missing guard (`:~3286`)
+     posts too. Both are poller-owned and must gate on `reply_mode`.
 2. **The bridge has never received a real HackerOne delivery.** `103-CAPTURE/field-paths.md`
    is a synthetic fallback; UAT is `awaiting-operator`. The routing key —
    `data.report.relationships.program.data.attributes.handle` — was confirmed against the
