@@ -36,6 +36,7 @@
 //	KM_COMMANDS_PATH         — SSM path for the h1 command set (default: /{prefix}/config/h1/commands)
 //	KM_ARTIFACTS_BUCKET      — S3 artifacts bucket (for EventBridge artifact_bucket field)
 //	KM_ARTIFACTS_PREFIX      — S3 artifacts prefix (for EventBridge artifact_prefix field)
+//	KM_H1_DEBUG_CAPTURE      — "true" ⇒ every raw delivery is written to s3://$KM_ARTIFACTS_BUCKET/h1-captures/<guid>.json before verification (optional; default off)
 package main
 
 import (
@@ -55,6 +56,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
@@ -105,6 +107,9 @@ func init() {
 	// ── Artifacts (for cold-create EventBridge event) ─────────────────────────
 	artifactsBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
 	artifactsPrefix := os.Getenv("KM_ARTIFACTS_PREFIX")
+
+	// ── Raw-delivery capture (h1.debug_capture) ──────────────────────────────
+	debugCapture := strings.EqualFold(os.Getenv("KM_H1_DEBUG_CAPTURE"), "true")
 
 	// ── HackerOne customer-API base URL (Basic Auth back-channel) ─────────────
 	apiBaseURL := os.Getenv("KM_H1_API_BASE_URL")
@@ -231,6 +236,20 @@ func init() {
 		DefaultCommand: defaultCommand,
 	}
 
+	// Step-0 raw capture — dormant unless KM_H1_DEBUG_CAPTURE=true. Needs the
+	// artifacts bucket; without it we log once and stay dormant rather than fail
+	// every delivery's capture.
+	if debugCapture {
+		if artifactsBucket == "" {
+			slog.Warn("km-h1-bridge: KM_H1_DEBUG_CAPTURE=true but KM_ARTIFACTS_BUCKET is empty; capture disabled")
+		} else {
+			webhookHandler.Capture = &bridge.S3RawCapturer{
+				Client: s3.NewFromConfig(cfg),
+				Bucket: artifactsBucket,
+			}
+		}
+	}
+
 	// Phase 121 follow-up: wire action-quota + auto-freeze enforcement (dormant
 	// unless KM_QUOTA_TABLE is set on the Lambda env by the TF module).
 	WireActionQuota(webhookHandler, ddbClient, sandboxesTable)
@@ -246,6 +265,7 @@ func init() {
 		"command_count", len(commands),
 		"default_command", defaultCommand,
 		"api_username_set", apiUsername != "",
+		"debug_capture", webhookHandler.Capture != nil,
 	)
 }
 
