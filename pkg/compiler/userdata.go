@@ -3178,6 +3178,10 @@ while true; do
   # SAFETY: reply_to_researcher defaults to false (internal). The poller passes
   # --reply-to-researcher to km-h1 ONLY when this flag is explicitly true.
   REPLY_TO_RESEARCHER=$(echo "$BODY" | jq -r '.reply_to_researcher // false' 2>/dev/null || echo false)
+  # reply_mode: "none" ⇒ nothing (poller or agent) writes to the HackerOne report
+  # for this trigger. Set by the bridge only on auto-triage events whose config
+  # says reply: none. Empty/absent ⇒ pre-existing internal-reply behaviour.
+  REPLY_MODE=$(echo "$BODY" | jq -r '.reply_mode // empty' 2>/dev/null || true)
 
   # Validate envelope.
   if [ -z "$REPORT_ID" ]; then
@@ -3229,6 +3233,23 @@ while true; do
   km-h1 comment --report $REPORT_ID --reply-to-researcher --body '<external reply, markdown>'"
   fi
 
+  # The posting section depends on reply_mode. The DEFAULT text below is verbatim
+  # what shipped before reply_mode existed — do not reflow it.
+  if [ "$REPLY_MODE" = "none" ]; then
+    POSTING_SECTION="--- Posting your response ---
+Do NOT post anything to HackerOne for this trigger (no km-h1 comment). Deliver your
+output where the task below says. A human will decide whether it reaches HackerOne."
+  else
+    POSTING_SECTION="--- Posting your response (REQUIRED) ---
+Your reply reaches HackerOne ONLY if you post it with km-h1. Replies are INTERNAL
+(team-only) by DEFAULT — this is the safety default; never message an external
+researcher unless explicitly authorized for THIS trigger.
+
+$REPLY_GUIDANCE
+
+Do NOT only print your answer — it is discarded unless you post it with km-h1."
+  fi
+
   PREAMBLE="[HackerOne Comment Trigger]
 Program: $PROGRAM
 Report: $REPORT_ID
@@ -3244,14 +3265,7 @@ Fetch the full report JSON (title, state, severity, the researcher's writeup):
 --- Trigger context ---
 $COMMENT_BODY
 
---- Posting your response (REQUIRED) ---
-Your reply reaches HackerOne ONLY if you post it with km-h1. Replies are INTERNAL
-(team-only) by DEFAULT — this is the safety default; never message an external
-researcher unless explicitly authorized for THIS trigger.
-
-$REPLY_GUIDANCE
-
-Do NOT only print your answer — it is discarded unless you post it with km-h1."
+$POSTING_SECTION"
 
   RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
   RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
@@ -3284,8 +3298,11 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
   # codex-missing guard — post a helpful INTERNAL note and ack rather than stranding
   # the turn when /codex is used on a profile without Codex installed.
   if [ "$EFFECTIVE_AGENT" = "codex" ] && ! command -v codex >/dev/null 2>&1; then
-    /opt/km/bin/km-h1 comment --report "$REPORT_ID" \
-      --body "This sandbox's profile has no Codex; /codex is unavailable here."
+    echo "[km-h1-inbound-poller] WARN: /codex requested but codex is not installed — report=$REPORT_ID"
+    if [ "$REPLY_MODE" != "none" ]; then
+      /opt/km/bin/km-h1 comment --report "$REPORT_ID" \
+        --body "This sandbox's profile has no Codex; /codex is unavailable here."
+    fi
     aws sqs delete-message --queue-url "$QUEUE_URL" --receipt-handle "$RECEIPT" --region "$REGION" 2>/dev/null || true
     continue
   fi
@@ -3388,7 +3405,8 @@ Do NOT only print your answer — it is discarded unless you post it with km-h1.
       # Phase 106: post resume-hint fold on session mint (internal by default — the hint
       # never goes external; safety layer preserved). Best-effort (|| true) — a failed
       # hint post MUST NOT block the SQS ack or turn completion.
-      if [ -n "$NEW_H1_SESSION" ] && [ "$NEW_H1_SESSION" != "${H1_SESSION:-}" ]; then
+      # reply_mode:none ⇒ no hint either — it is a comment on the report.
+      if [ -n "$NEW_H1_SESSION" ] && [ "$NEW_H1_SESSION" != "${H1_SESSION:-}" ] && [ "$REPLY_MODE" != "none" ]; then
         if [ "$EFFECTIVE_AGENT" = "codex" ]; then
           RESUME_CMD="codex exec resume $NEW_H1_SESSION"
         else
