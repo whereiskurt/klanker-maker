@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HackerOne report_created → silent triage → Slack — Klanker Maker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper: #0a0a0f; --paper-2: #111118; --ink: #e4e4ef; --muted: #9090a8;
+      --soft: #7e7e98; --rule: #2a2a3a; --accent: #00d4aa; --link: #6a95d8; --boundary: #ff5c5c;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); background: var(--paper); color: var(--ink);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1480px; width: 100%; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 2.6vw + 0.75rem, 2.25rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 0.5rem; }
+    .standfirst { font-size: 0.9rem; line-height: 1.5; color: var(--muted); max-width: 84ch; margin-bottom: 1.75rem; }
+    .standfirst code { font-family: var(--font-mono); font-size: 0.82em; color: var(--ink); white-space: nowrap; }
+    svg { width: 100%; min-width: 1080px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Swimlane · HackerOne bridge · the analyst-blessed triage path</p>
+    <h1>A report is triaged before anyone opens it, and HackerOne never hears about it until a human says so</h1>
+    <p class="standfirst">Above the red line the pipeline is autonomous and <em>write-free</em> toward HackerOne: <code>events.report_created.reply: none</code> silences the bridge's own "On it" ack and tells the agent not to post, and the <code>klanker:h1-triage</code> skill delivers a card and a PDF to Slack instead. The only thing that crosses the line is an analyst typing <code>@km /triage</code> as an internal comment — the existing comment-keyword flow, unchanged.</p>
+
+    <svg viewBox="0 0 1440 744" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="h1-triage-title h1-triage-desc">
+      <title id="h1-triage-title">HackerOne report_created to Slack triage, blessed by an analyst</title>
+      <desc id="h1-triage-desc">Swimlane with five columns: HackerOne, bridge Lambda, sandbox, Slack, analyst. A new report fires a webhook; the bridge captures, verifies and dispatches it with no acknowledgement back; the sandbox runs the triage skill and posts a summary card and PDF to Slack; the analyst reads it and, if they agree, types an internal @km /triage comment on the report, which crosses a red boundary into the human-initiated half where the bridge dispatches again and the agent posts the triage as an internal HackerOne comment.</desc>
+
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9090a8"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#00d4aa"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#6a95d8"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#0a0a0f"/>
+
+      <!-- ═══ lanes (columns, drawn first) ═══ -->
+      <rect x="32"   y="96" width="272" height="568" rx="8" fill="#111118" stroke="#2a2a3a" stroke-width="1"/>
+      <rect x="312"  y="96" width="272" height="568" rx="8" fill="#111118" stroke="#2a2a3a" stroke-width="1"/>
+      <rect x="592"  y="96" width="272" height="568" rx="8" fill="#111118" stroke="#2a2a3a" stroke-width="1"/>
+      <rect x="872"  y="96" width="272" height="568" rx="8" fill="#111118" stroke="#2a2a3a" stroke-width="1"/>
+      <rect x="1152" y="96" width="272" height="568" rx="8" fill="#111118" stroke="#2a2a3a" stroke-width="1"/>
+
+      <text x="168"  y="80" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">HACKERONE</text>
+      <text x="448"  y="80" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">km-h1-bridge · LAMBDA</text>
+      <text x="728"  y="80" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SANDBOX · h1-&lt;handle&gt;</text>
+      <text x="1008" y="80" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SLACK · #sb-h1-&lt;handle&gt;</text>
+      <text x="1288" y="80" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">ANALYST</text>
+
+      <!-- ═══ the boundary: nothing above it writes to HackerOne ═══ -->
+      <line x1="32" y1="384" x2="1424" y2="384" stroke="rgba(255,92,92,0.55)" stroke-width="1" stroke-dasharray="4,4"/>
+      <rect x="192" y="364" width="404" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="196" y="373" fill="rgba(255,92,92,0.85)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">ABOVE THIS LINE NOTHING WRITES TO HACKERONE · reply: none + skill rule</text>
+      <rect x="1176" y="392" width="248" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1420" y="401" fill="rgba(255,92,92,0.85)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.14em">BELOW · HUMAN-INITIATED, EXISTING FLOW</text>
+
+      <!-- ═══ paths (before nodes) ═══ -->
+
+      <!-- a1 webhook: S1 → S2 -->
+      <line x1="256" y1="144" x2="360" y2="144" stroke="#6a95d8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="276" y="124" width="64" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="308" y="133" fill="#6a95d8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">POST · HMAC</text>
+
+      <!-- a-blocked: the "On it" ack the bridge no longer sends -->
+      <line x1="360" y1="176" x2="296" y2="176" stroke="rgba(255,92,92,0.80)" stroke-width="1.2" stroke-dasharray="4,4"/>
+      <line x1="292" y1="160" x2="292" y2="192" stroke="#ff5c5c" stroke-width="3"/>
+      <rect x="308" y="184" width="40" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="328" y="193" fill="rgba(255,92,92,0.85)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">NO ACK</text>
+
+      <!-- a2 enqueue: S2 → S3 -->
+      <path d="M 448,200 V 272 Q 448,280 456,280 H 640" fill="none" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="520" y="260" width="56" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="548" y="269" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">ENQUEUE</text>
+
+      <!-- a3 the deliverable: S3 → S4 (focal) -->
+      <line x1="816" y1="280" x2="920" y2="280" stroke="#00d4aa" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <rect x="832" y="260" width="72" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="868" y="269" fill="#00d4aa" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">CARD + PDF</text>
+
+      <!-- a4 ping: S4 → S5 -->
+      <line x1="1096" y1="280" x2="1200" y2="280" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="1128" y="260" width="40" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="1148" y="269" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">PING</text>
+
+      <!-- a5 bless: S5 → S6, crossing the boundary -->
+      <path d="M 1288,320 V 344 Q 1288,352 1280,352 H 176 Q 168,352 168,360 V 440" fill="none" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="176" y="400" width="44" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="180" y="409" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">BLESS</text>
+
+      <!-- a6 comment webhook: S6 → S7 -->
+      <line x1="256" y1="472" x2="360" y2="472" stroke="#6a95d8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <rect x="272" y="452" width="72" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="308" y="461" fill="#6a95d8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">COMMENT EVT</text>
+
+      <!-- a7 dispatch: S7 → S8 -->
+      <line x1="536" y1="472" x2="640" y2="472" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="560" y="452" width="56" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="588" y="461" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DISPATCH</text>
+
+      <!-- a8 the internal comment lands: S8 → S9 -->
+      <path d="M 728,520 V 600 Q 728,608 720,608 H 256" fill="none" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <rect x="448" y="588" width="80" height="12" rx="2" fill="#0a0a0f"/>
+      <text x="488" y="597" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">km-h1 COMMENT</text>
+
+      <!-- ═══ nodes ═══ -->
+
+      <!-- S1 report_created (external) -->
+      <rect x="80" y="120" width="176" height="72" rx="6" fill="#0a0a0f"/>
+      <rect x="80" y="120" width="176" height="72" rx="6" fill="rgba(228,228,239,0.03)" stroke="rgba(228,228,239,0.30)" stroke-width="1"/>
+      <rect x="88" y="126" width="44" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="110" y="135" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EVENT</text>
+      <text x="168" y="160" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">New report submitted</text>
+      <text x="168" y="178" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">X-H1-Event: report_created</text>
+
+      <!-- S2 auto-triage dispatch (bridge) -->
+      <rect x="360" y="112" width="176" height="88" rx="6" fill="#0a0a0f"/>
+      <rect x="360" y="112" width="176" height="88" rx="6" fill="#0a0a0f" stroke="#e4e4ef" stroke-width="1"/>
+      <text x="448" y="144" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Auto-triage dispatch</text>
+      <text x="448" y="162" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">capture → verify → route</text>
+      <text x="448" y="178" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">events.report_created</text>
+      <text x="448" y="192" fill="#e4e4ef" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">reply: none</text>
+
+      <!-- S3 the skill (sandbox) -->
+      <rect x="640" y="224" width="176" height="112" rx="6" fill="#0a0a0f"/>
+      <rect x="640" y="224" width="176" height="112" rx="6" fill="#0a0a0f" stroke="#e4e4ef" stroke-width="1"/>
+      <rect x="648" y="230" width="36" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
+      <text x="666" y="239" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SKILL</text>
+      <text x="728" y="264" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">klanker:h1-triage</text>
+      <text x="728" y="282" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">km-h1 read → assess → md → pdf</text>
+      <text x="728" y="298" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">s3 cp transcripts/&lt;id&gt;/h1/</text>
+      <text x="728" y="322" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">never km-h1 comment</text>
+
+      <!-- S4 Slack card + PDF — FOCAL -->
+      <rect x="920" y="240" width="176" height="80" rx="6" fill="#0a0a0f"/>
+      <rect x="920" y="240" width="176" height="80" rx="6" fill="rgba(0,212,170,0.10)" stroke="#00d4aa" stroke-width="1.2"/>
+      <text x="1008" y="272" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Triage card + PDF</text>
+      <text x="1008" y="290" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">severity · validity · next step</text>
+      <text x="1008" y="306" fill="#00d4aa" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">"reply @km /triage to post"</text>
+
+      <!-- S5 analyst reads (user) -->
+      <rect x="1200" y="240" width="176" height="80" rx="6" fill="#0a0a0f"/>
+      <rect x="1200" y="240" width="176" height="80" rx="6" fill="rgba(144,144,168,0.10)" stroke="#7e7e98" stroke-width="1"/>
+      <text x="1288" y="276" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Reads, decides</text>
+      <text x="1288" y="294" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">agree → bless · else ignore</text>
+
+      <!-- S6 the bless comment (external) -->
+      <rect x="80" y="440" width="176" height="80" rx="6" fill="#0a0a0f"/>
+      <rect x="80" y="440" width="176" height="80" rx="6" fill="rgba(228,228,239,0.03)" stroke="rgba(228,228,239,0.30)" stroke-width="1"/>
+      <text x="168" y="472" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">"@km /triage"</text>
+      <text x="168" y="490" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">INTERNAL comment by analyst</text>
+      <text x="168" y="506" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">→ report_comment_created</text>
+
+      <!-- S7 comment-keyword dispatch (bridge) -->
+      <rect x="360" y="440" width="176" height="80" rx="6" fill="#0a0a0f"/>
+      <rect x="360" y="440" width="176" height="80" rx="6" fill="#0a0a0f" stroke="#e4e4ef" stroke-width="1"/>
+      <text x="448" y="472" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Comment dispatch</text>
+      <text x="448" y="490" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">allow gate · triage command</text>
+      <text x="448" y="506" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">acks "On it" — a human asked</text>
+
+      <!-- S8 agent posts (sandbox) -->
+      <rect x="640" y="440" width="176" height="80" rx="6" fill="#0a0a0f"/>
+      <rect x="640" y="440" width="176" height="80" rx="6" fill="#0a0a0f" stroke="#e4e4ef" stroke-width="1"/>
+      <text x="728" y="472" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Agent posts triage</text>
+      <text x="728" y="490" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">reuses h1/&lt;n&gt;/triage.md</text>
+      <text x="728" y="506" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">--reply-to-researcher: never</text>
+
+      <!-- S9 triage on the report (external) -->
+      <rect x="80" y="568" width="176" height="80" rx="6" fill="#0a0a0f"/>
+      <rect x="80" y="568" width="176" height="80" rx="6" fill="rgba(228,228,239,0.03)" stroke="rgba(228,228,239,0.30)" stroke-width="1"/>
+      <text x="168" y="600" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Triage on the report</text>
+      <text x="168" y="618" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">internal · team-only</text>
+      <text x="168" y="634" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">researcher never sees it</text>
+
+      <!-- ═══ legend strip ═══ -->
+      <line x1="32" y1="688" x2="1424" y2="688" stroke="rgba(228,228,239,0.10)" stroke-width="0.8"/>
+      <text x="32" y="708" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <line x1="128" y1="704" x2="160" y2="704" stroke="#6a95d8" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+      <text x="168" y="708" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">HACKERONE WEBHOOK (HMAC)</text>
+
+      <line x1="352" y1="704" x2="384" y2="704" stroke="#9090a8" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="392" y="708" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">INTERNAL HANDOFF</text>
+
+      <line x1="528" y1="704" x2="560" y2="704" stroke="#00d4aa" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <text x="568" y="708" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">THE DELIVERABLE</text>
+
+      <line x1="704" y1="704" x2="736" y2="704" stroke="rgba(255,92,92,0.80)" stroke-width="1.2" stroke-dasharray="4,4"/>
+      <line x1="740" y1="696" x2="740" y2="712" stroke="#ff5c5c" stroke-width="3"/>
+      <text x="748" y="708" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">SUPPRESSED WRITE · reply: none</text>
+
+      <line x1="960" y1="704" x2="992" y2="704" stroke="rgba(255,92,92,0.55)" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="1000" y="708" fill="#9090a8" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">HUMAN-ONLY CROSSING</text>
+    </svg>
+  </div>
+</body>
+</html>
