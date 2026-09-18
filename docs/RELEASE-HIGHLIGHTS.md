@@ -11,37 +11,39 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Drafted from CLAUDE.md phase blocks since v0.8.18 via
+  Drafted from CLAUDE.md phase blocks since v0.8.19 via
   scripts/draft-release-highlights.sh, then curated.
 -->
 
-## ⌨️ Port-forwards no longer leave you with a dead keyboard
+## 🤫 HackerOne auto-triage can now run without touching the report
 
-`km herdr start` (and every other SSM forward — `vscode`, `desktop`, `model`, `tunnel`,
-`shell --ports`) handed `session-manager-plugin` the terminal's stdin. A port-forward
-carries no input, but given the tty the plugin set its own modes, and when the liveness
-watcher killed a hung plugin nothing restored them: echo off, keyboard dead, fixed only by
-killing the tab. The plugin now gets `/dev/null`, and the terminal is snapshotted before the
-first spawn and restored after every exit. If you hit it on an older binary: blind-type
-`stty sane`.
+`h1.programs[].events.<event>.reply: none` makes an auto-triage event write-free toward
+HackerOne: no bridge "On it" ack, no Phase 121 frozen/quota notices, no Phase 106
+resume-hint comment, and the sandbox poller's preamble stops telling the agent to post —
+it now says *do NOT post; a human will decide*. The agent runs whatever your `@file` prompt
+names (your own triage skill, Slack, PDFs) and an analyst blesses the result later with an
+internal `@km /triage`, which is the unchanged comment-keyword flow and is never silenced.
+Per-event, absent/`internal` ⇒ byte-identical to before.
 
-## 📄 `.yml` works everywhere `.yaml` does
+## 🎥 Capture what HackerOne actually sends
 
-`km validate spot.yml` failed with "profile not found": the leaf name kept its extension
-and the resolver only ever looked for `name.yaml`. One extension list now feeds the resolver
-and every CLI site that turns a path into a profile name; a `.yaml` still wins a name tie.
+`h1.debug_capture: true` writes every raw delivery — `{received_at, headers, body}` — to
+`s3://<artifacts>/h1-captures/<X-H1-Delivery>.json` as step 0, **before** signature
+verification, so a mis-pasted secret still yields a capture. Phase 103 pinned the parser
+against a synthetic payload; the routing key
+(`data.report.relationships.program.data.attributes.handle`) has never been seen in a live
+webhook. Turn it on for the first real `report_created`, confirm the path exists, turn it
+off (captures hold full vulnerability reports). The drop-path log lines also now carry
+`top_level_keys`, so a wrong wrapper is visible in CloudWatch without capture.
 
-## ⏳ The idle countdown joins the TTL ladder
+## ⚠️ Known: an H1 cold-create loses the prompt (pre-existing)
 
-v0.8.18 fixed `86000h` in the SHUTDOWN and TTL columns; the **IDLE** column and `km status`'s
-`Idle Stop:` line were a separate path and still printed `86000h0m0s`. They — and
-`km extend`'s "new expiry in" — now use the same ladder: `23m` → `6d23h` → `2y364d` → `∞`.
-`--json` keeps parseable strings.
+The create-handler drains only `github_envelope`, never `h1_envelope`, so an auto-triage
+event arriving with no `h1-<handle>` sandbox row cold-creates a box that never receives the
+prompt — and under `reply: none` nothing on HackerOne reveals the loss. Keep the target
+sandbox created (stopped or paused resumes fine). Draining `h1_envelope` is the next
+fast-follow.
 
-## 🪣 Diagram: the three S3 buckets and what a presign really carries
-
-`docs/diagrams/security/11-s3-buckets-and-presign.html`. Its focal finding, read from
-source: `ec2spot_region_lock` grants `Action "*" Resource "*"` conditioned only on
-`aws:RequestedRegion`, and every shipped profile carries it via `base/platform` — so the
-scoped S3 statements describe the intent, not what AWS evaluates, and a sandbox can presign
-any key in the artifacts bucket with no km record. Documented, not yet changed.
+**Deploy:** `make build` → `make build-lambdas` → `km init --dry-run=false` (not `--sidecars`),
+then `km destroy && km create` the `h1-<handle>` sandbox. See `docs/h1-bridge.md`
+§ Silent auto-triage and § Capturing the real payload.
