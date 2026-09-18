@@ -36,6 +36,7 @@ map already accepts any event name.
 | Box may `s3:PutObject` under `transcripts/<sandbox-id>/*` | `infra/modules/ec2spot/v1.7.0` | shipped |
 | Per-sandbox Slack channel `sb-h1-<handle>` | `profiles/base/slack-persandbox.yaml` | shipped |
 | Analyst bless path: `@km /triage` internal comment → `triage` command → INTERNAL comment | Phase 103 comment-keyword flow | shipped |
+| Cold-create envelope drain: `cmd/create-handler/main.go` reads `github_envelope` from `SandboxCreate` detail but has no `h1_envelope` reader | — | **NOT shipped for H1** — pre-existing Phase 103 gap, out of scope for this phase; a cold-created `h1-<handle>` box never receives the triage prompt (fast-follow) |
 
 ## 3. What is wrong for this goal today
 
@@ -48,6 +49,10 @@ map already accepts any event name.
    - The poller's Phase 106 resume hint (`userdata.go:~3397`) posts a `<details>🔧 Resume…</details>`
      internal comment on the first turn of every report; the codex-missing guard (`:~3286`)
      posts too. Both are poller-owned and must gate on `reply_mode`.
+   - Two Phase 121 bridge notices in `enqueueAndUpsert` also post to the report on
+     every dispatch (auto-triage included): the frozen-sandbox notice (`🛑 This sandbox
+     is frozen…`) and the quota notice (`⚠️`/`🛑 Quota…` on a WARN/BLOCK/FREEZE trip).
+     Found in final review; gated on `silent` alongside the other three sites (§4.2).
 2. **The bridge has never received a real HackerOne delivery.** `103-CAPTURE/field-paths.md`
    is a synthetic fallback; UAT is `awaiting-operator`. The routing key —
    `data.report.relationships.program.data.attributes.handle` — was confirmed against the
@@ -110,6 +115,8 @@ travels inside the existing `KM_H1_PROGRAMS` JSON.
   envelopes decode as `""` (≡ internal).
 - `Handle()` step 10: the ack is skipped when the auto-triage event's `Reply == "none"`.
   Comment-keyword dispatches are unaffected.
+- `dispatchTarget`/`enqueueAndUpsert` take `silent bool`; the frozen and quota INTERNAL
+  notices are skipped (logged only) when silent.
 - New `WebhookHandler.Capture RawCapturer` (interface `Put(ctx, key string, body []byte) error`),
   nil ⇒ dormant. Called first in `Handle()`. `cmd/km-h1-bridge/main.go` wires an S3
   adapter when `KM_H1_DEBUG_CAPTURE=true`.

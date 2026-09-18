@@ -221,6 +221,8 @@ What changes under `reply: none`:
 | Site | default | `reply: none` |
 |---|---|---|
 | bridge "On it — dispatched…" internal ack | posted | skipped |
+| bridge frozen-sandbox notice (🛑 This sandbox is frozen…) | posted | logged only |
+| bridge quota notice (⚠️/🛑 Quota…) | posted | logged only (quota still enforced) |
 | poller preamble | "Posting your response (REQUIRED)… post it with km-h1" | "Do NOT post anything to HackerOne for this trigger… A human will decide" |
 | poller resume hint (`<details>🔧 Resume…`) | posted on session mint | skipped |
 | poller codex-missing notice | posted | logged only |
@@ -231,6 +233,13 @@ does. `{{report_id}} {{title}} {{state}} {{program}}` are still expanded, and
 
 The envelope carries `reply_mode:"none"`; an older sandbox (pre-recreate) ignores the
 field and behaves as before — `reply: none` on the bridge alone still removes the ack.
+
+> **Cold-create caveat (pre-existing, Phase 103):** the create-handler drains only
+> `github_envelope`, not `h1_envelope`, so an auto-triage event that arrives when no
+> `h1-<handle>` sandbox row exists cold-creates a box that **never receives the
+> prompt** — and under `reply: none` nothing on HackerOne reveals the loss. Keep the
+> target sandbox created (stopped or paused is fine — the resume path enqueues
+> correctly). Draining `h1_envelope` in the create-handler is a tracked fast-follow.
 
 ### Capturing the real payload (`debug_capture`)
 
@@ -466,6 +475,7 @@ A `RUN_H1_E2E=1`-gated harness lives at `test/e2e/h1/e2e_test.go` (skips clean w
 | `reply: none` set but an "On it" comment still appears | bridge env not refreshed — `km init --h1 --dry-run=false`; confirm with `aws lambda get-function-configuration --function-name <prefix>-h1-bridge --query 'Environment.Variables.KM_H1_PROGRAMS'` contains `"reply":"none"` |
 | `reply: none` set, no ack, but the agent still posted / a resume hint appeared | sandbox predates the poller change — `km destroy && km create` |
 | Every event drops with `program=""` | routing key path not present in the real payload — enable `debug_capture`, read one object under `h1-captures/`, compare against `pkg/h1/bridge/payload.go` struct tags |
+| Auto-triage fired, sandbox was cold-created, but no triage ran | pre-existing Phase 103 gap — the create-handler does not drain h1_envelope; pre-create the h1-<handle> sandbox (see the cold-create caveat) |
 
 > `km doctor` does not yet have HackerOne checks — a candidate fast-follow (mirroring the
 > Slack/GitHub doctor groups).
