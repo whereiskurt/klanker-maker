@@ -231,6 +231,27 @@ resource "aws_iam_role_policy" "dynamodb_action_quota" {
   })
 }
 
+# 2026-09-18: raw-delivery capture. Gated on var.debug_capture so a dormant install
+# grants nothing. Scoped to the h1-captures/ prefix only — the bridge never needs
+# to read the bucket and never writes anywhere else in it.
+resource "aws_iam_role_policy" "s3_debug_capture" {
+  count = var.debug_capture && var.artifacts_bucket != "" ? 1 : 0
+  name  = "${local.function_name}-s3-debug-capture"
+  role  = aws_iam_role.h1_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "H1RawCaptureWrite"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "arn:aws:s3:::${var.artifacts_bucket}/h1-captures/*"
+      }
+    ]
+  })
+}
+
 # Policy: SQS — send inbound messages to per-sandbox h1-inbound FIFO queues (warm path)
 # Per-sandbox queues follow the naming convention {resource_prefix}-h1-inbound-{sandbox_id}.fifo
 resource "aws_iam_role_policy" "sqs_send_h1_inbound" {
@@ -365,6 +386,8 @@ resource "aws_lambda_function" "h1_bridge" {
       KM_COMMANDS_PATH        = var.commands_path
       KM_ARTIFACTS_BUCKET     = var.artifacts_bucket
       KM_ARTIFACTS_PREFIX     = var.artifacts_prefix
+      # 2026-09-18 — raw-delivery capture toggle (see aws_iam_role_policy.s3_debug_capture)
+      KM_H1_DEBUG_CAPTURE = var.debug_capture ? "true" : "false"
       # Phase 121 — action-quota table name for bridge-side quota enforcement
       KM_QUOTA_TABLE = var.quota_table_arn != "" ? "${var.resource_prefix}-action-quota" : ""
     }

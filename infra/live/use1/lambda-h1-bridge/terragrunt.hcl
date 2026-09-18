@@ -107,6 +107,10 @@ inputs = {
   h1_bot_handle      = get_env("KM_H1_BOT_HANDLE", "")
   h1_api_base_url    = get_env("KM_H1_API_BASE_URL", "")
 
+  # 2026-09-18: raw-delivery capture. km init exports KM_H1_DEBUG_CAPTURE=true only when
+  # km-config.yaml h1.debug_capture is true; absent ⇒ "false" ⇒ dormant.
+  debug_capture = get_env("KM_H1_DEBUG_CAPTURE", "false") == "true"
+
   # SSM paths for HackerOne config (GetSsmPrefix() = "/{prefix}/")
   webhook_secret_path = "/${local.site_vars.locals.site.label}/config/h1/webhook-secret"
   api_username_path   = "/${local.site_vars.locals.site.label}/config/h1/api-username"
