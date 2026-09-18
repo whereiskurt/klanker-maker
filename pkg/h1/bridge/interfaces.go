@@ -177,3 +177,16 @@ type H1ActionLimitsFetcher interface {
 type H1FrozenChecker interface {
 	IsFrozen(ctx context.Context, sandboxID string) (frozen bool, reason string, err error)
 }
+
+// RawCapturer persists one verbatim webhook delivery for payload-shape
+// diagnosis (h1.debug_capture). It is invoked as step 0 of Handle(), BEFORE
+// signature verification, so a rejected or unparseable delivery is captured too.
+// Implementations must be fail-soft in spirit: the handler logs a returned error
+// and continues; a capture failure never changes the HTTP response.
+//
+// deliveryGUID is the X-H1-Delivery header ("" when absent). headers are the
+// lowercase-keyed request headers as received. rawBody is the already
+// base64-DECODED body. Implemented by S3RawCapturer (capture.go).
+type RawCapturer interface {
+	Capture(ctx context.Context, deliveryGUID string, headers map[string]string, rawBody []byte) error
+}

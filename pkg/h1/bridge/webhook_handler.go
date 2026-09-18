@@ -119,6 +119,10 @@ type WebhookHandler struct {
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
 
+	// Capture, when non-nil, persists every raw delivery before any gate
+	// (h1.debug_capture). nil ⇒ dormant.
+	Capture RawCapturer
+
 	// Phase 121 (H1-01) — quota enforcement on h1_comment dispatch.
 	// When both Quota and Limits are non-nil, quota.Record is called before each
 	// SQS enqueue. nil Quota or nil Limits → dormant (byte-identical to pre-Phase-121).
@@ -158,6 +162,15 @@ func ok200() WebhookResponse { return WebhookResponse{StatusCode: 200, Body: "ok
 // verify → event-gate → parse → loop-guard → resolve → thread-bypass →
 // trigger-gate → authz → dedup → command-pass → fanout-dispatch → internal-ACK.
 func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) WebhookResponse {
+	// ── Step 0: raw capture (debug) ──────────────────────────────────────────
+	// Runs before verification on purpose: the point is to see what HackerOne
+	// actually sent, including deliveries we then reject. Fail-soft.
+	if h.Capture != nil {
+		if cErr := h.Capture.Capture(ctx, req.Headers["x-h1-delivery"], req.Headers, req.RawBody); cErr != nil {
+			h.log().Warn("h1-bridge: raw capture failed (non-fatal)", "err", cErr)
+		}
+	}
+
 	// ── Step 1: verify signature ─────────────────────────────────────────────
 	secret, err := h.Secret.Fetch(ctx)
 	if err != nil {
