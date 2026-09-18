@@ -283,3 +283,63 @@ h1:
 		t.Errorf("GetH1Programs(): got %+v, want one program acme-corp", progs)
 	}
 }
+
+// TestLoadH1_ReplyAndDebugCapture verifies the two additive keys from the
+// 2026-09-18 report_created→Slack design decode through the REAL loader (not a
+// struct literal — project_struct_level_tests_bypass_schema): events.<name>.reply
+// and h1.debug_capture. Absent ⇒ zero values ("" / false), which are the
+// pre-existing behaviour.
+func TestLoadH1_ReplyAndDebugCapture(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfigH1(t, dir, `
+domain: example.com
+region: us-east-1
+h1:
+  bot_handle: "@km"
+  debug_capture: true
+  programs:
+    - handle: acme-corp
+      targets:
+        - {alias: h1-acme, profile: h1}
+      events:
+        report_created: {prompt: "run my skill for {{report_id}}", reply: none}
+        report_reopened: {prompt: "re-look"}
+`)
+	chdirH1(t, dir)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.H1.DebugCapture {
+		t.Errorf("H1.DebugCapture: got false, want true")
+	}
+	p := cfg.H1.Programs[0]
+	if got := p.Events["report_created"].Reply; got != "none" {
+		t.Errorf("Events[report_created].Reply: got %q, want %q", got, "none")
+	}
+	if got := p.Events["report_reopened"].Reply; got != "" {
+		t.Errorf("Events[report_reopened].Reply: got %q, want \"\" (absent ⇒ internal)", got)
+	}
+}
+
+// TestLoadH1_DebugCaptureAbsentIsFalse pins the dormant default.
+func TestLoadH1_DebugCaptureAbsentIsFalse(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfigH1(t, dir, `
+domain: example.com
+region: us-east-1
+h1:
+  programs:
+    - handle: acme-corp
+      targets: [{alias: h1-acme}]
+`)
+	chdirH1(t, dir)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.H1.DebugCapture {
+		t.Errorf("H1.DebugCapture: got true, want false when absent")
+	}
+}

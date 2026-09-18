@@ -130,3 +130,12 @@ variable "quota_table_arn" {
   type        = string
   default     = ""
 }
+
+# 2026-09-18: raw-delivery capture for payload-shape diagnosis. When true the
+# Lambda gets KM_H1_DEBUG_CAPTURE=true and s3:PutObject on <artifacts>/h1-captures/*.
+# false (default) = env var "false" and NO IAM grant (dormant byte-identity).
+variable "debug_capture" {
+  description = "Write every raw HackerOne delivery to s3://<artifacts_bucket>/h1-captures/<guid>.json before signature verification. Requires artifacts_bucket."
+  type        = bool
+  default     = false
+}

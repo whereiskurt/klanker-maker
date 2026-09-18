@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/pkg/h1/bridge"
@@ -247,5 +248,23 @@ func TestVerifyH1Signature_Base64(t *testing.T) {
 	}
 	if err := bridge.VerifyH1Signature(secret, sig, decoded); err != nil {
 		t.Errorf("VerifyH1Signature over DECODED bytes = %v want nil", err)
+	}
+}
+
+// TopLevelKeys is what the drop-path log lines carry so a wrong wrapper (the
+// program handle path was never live-confirmed against a webhook) is diagnosable
+// from CloudWatch alone.
+func TestTopLevelKeys(t *testing.T) {
+	raw := []byte(`{"data":{"report":{},"activity":{}},"meta":1}`)
+	got := bridge.TopLevelKeys(raw)
+	want := []string{"data", "meta", "data.activity", "data.report"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("TopLevelKeys = %v; want %v", got, want)
+	}
+	if bridge.TopLevelKeys([]byte(`[1,2]`)) != nil {
+		t.Errorf("non-object JSON must yield nil")
+	}
+	if bridge.TopLevelKeys([]byte(`{"x":1}`)) == nil {
+		t.Errorf("object without data must still list root keys")
 	}
 }

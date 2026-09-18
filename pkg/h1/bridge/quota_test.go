@@ -185,6 +185,85 @@ func TestQuotaRecord_H1_FrozenDispatch(t *testing.T) {
 	}
 }
 
+// TestQuotaRecord_H1_FrozenDispatch_ReplyNone_NoNotice (final-review Important 1) —
+// on the silent (reply:none) auto-triage path, a frozen sandbox must still refuse
+// dispatch (no SQS) but must NOT post the internal frozen notice to the report.
+func TestQuotaRecord_H1_FrozenDispatch_ReplyNone_NoNotice(t *testing.T) {
+	fakes := newFakes()
+
+	events := map[string]bridge.EventEntry{
+		"report_created": {Prompt: "x", Reply: bridge.ReplyModeNone},
+	}
+	programs := singleProgram("km-sandbox", []string{"alice"}, events)
+	h := baseHandler(programs, fakes)
+	h.FrozenCheck = &fakeH1FrozenCheck{frozen: true, reason: "quota: h1_comment lifetime exceeded"}
+
+	body := h1Body("km-sandbox", "100", "external-reporter", "", false)
+	req := newRequest(body, "report_created", "guid-frozen-h1-replynone")
+
+	resp := h.Handle(context.Background(), req)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("frozen/reply:none: want 200, got %d", resp.StatusCode)
+	}
+
+	// Dispatch still refused — no SQS.
+	if len(fakes.sqs.sends) != 0 {
+		t.Errorf("frozen/reply:none: SQS must not be called; got %d sends", len(fakes.sqs.sends))
+	}
+
+	// No comment posted to the report — silent means silent, even for the
+	// control-plane frozen notice. The reason lives in the log, not the report.
+	fakes.commenter.mu.Lock()
+	posts := fakes.commenter.posts
+	fakes.commenter.mu.Unlock()
+	if len(posts) != 0 {
+		t.Errorf("frozen/reply:none: expected zero PostComment calls; got posts=%v", posts)
+	}
+}
+
+// TestQuotaRecord_H1_WarnTrip_ReplyNone_NoNotice (final-review Important 1) — on the
+// silent (reply:none) auto-triage path, a WARN quota trip must still enqueue (WARN
+// never blocks) but must NOT post the internal quota notice to the report.
+func TestQuotaRecord_H1_WarnTrip_ReplyNone_NoNotice(t *testing.T) {
+	fakes := newFakes()
+
+	limitsJSON := `{"h1_comment":{"perHour":1,"onBreach":"warn"}}`
+	quotaClient := bridge.NewFakeH1QuotaClient(2) // count=2 > limit=1 → WARN
+
+	events := map[string]bridge.EventEntry{
+		"report_created": {Prompt: "x", Reply: bridge.ReplyModeNone},
+	}
+	programs := singleProgram("km-sandbox", []string{"alice"}, events)
+	h := baseHandler(programs, fakes)
+	h.Quota = quotaClient
+	h.QuotaTable = "km-action-quota"
+	h.Limits = &fakeH1ActionLimits{limitsJSON: limitsJSON}
+
+	body := h1Body("km-sandbox", "100", "external-reporter", "", false)
+	req := newRequest(body, "report_created", "guid-warn-h1-replynone")
+
+	resp := h.Handle(context.Background(), req)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("WARN trip/reply:none: want 200, got %d", resp.StatusCode)
+	}
+
+	// WARN never blocks — SQS dispatch still fires exactly once.
+	if len(fakes.sqs.sends) != 1 {
+		t.Errorf("WARN trip/reply:none: want exactly 1 SQS send, got %d", len(fakes.sqs.sends))
+	}
+
+	// No comment posted to the report — silent means silent, even for the
+	// control-plane quota notice.
+	fakes.commenter.mu.Lock()
+	posts := fakes.commenter.posts
+	fakes.commenter.mu.Unlock()
+	if len(posts) != 0 {
+		t.Errorf("WARN trip/reply:none: expected zero PostComment calls; got posts=%v", posts)
+	}
+}
+
 // fakeH1FrozenCheck is a test double for bridge.H1FrozenChecker.
 type fakeH1FrozenCheck struct {
 	frozen bool

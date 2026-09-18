@@ -2103,3 +2103,50 @@ func TestLoadNetworkOutputs_NATGatewayIDsEmptyWhenDisabled(t *testing.T) {
 		t.Errorf("NATGatewayIDs = %v, want empty", out.NATGatewayIDs)
 	}
 }
+
+// ---- 2026-09-18: KM_H1_DEBUG_CAPTURE export tests ----
+
+// TestInitExportsH1DebugCapture_True: h1.debug_capture: true ⇒ KM_H1_DEBUG_CAPTURE=true.
+func TestInitExportsH1DebugCapture_True(t *testing.T) {
+	t.Setenv("KM_H1_DEBUG_CAPTURE", "")
+	os.Unsetenv("KM_H1_DEBUG_CAPTURE")
+
+	cfg := &config.Config{}
+	cfg.H1.DebugCapture = true
+
+	cmd.ExportTerragruntEnvVars(cfg)
+
+	if got := os.Getenv("KM_H1_DEBUG_CAPTURE"); got != "true" {
+		t.Errorf("KM_H1_DEBUG_CAPTURE = %q, want %q", got, "true")
+	}
+}
+
+// TestInitExportsH1DebugCapture_FalseIsUnset: false/absent ⇒ env var NOT set, so the
+// terragrunt default "false" applies (dormant byte-identity).
+func TestInitExportsH1DebugCapture_FalseIsUnset(t *testing.T) {
+	t.Setenv("KM_H1_DEBUG_CAPTURE", "")
+	os.Unsetenv("KM_H1_DEBUG_CAPTURE")
+
+	cfg := &config.Config{} // DebugCapture false
+
+	cmd.ExportTerragruntEnvVars(cfg)
+
+	if _, ok := os.LookupEnv("KM_H1_DEBUG_CAPTURE"); ok {
+		t.Errorf("KM_H1_DEBUG_CAPTURE should not be set when h1.debug_capture is false; got %q", os.Getenv("KM_H1_DEBUG_CAPTURE"))
+	}
+}
+
+// TestInitExportsH1DebugCapture_DriftWarn: env already set to a different value ⇒
+// env wins, not overwritten (same env-wins rule as every other KM_* export).
+func TestInitExportsH1DebugCapture_DriftWarn(t *testing.T) {
+	t.Setenv("KM_H1_DEBUG_CAPTURE", "false")
+
+	cfg := &config.Config{}
+	cfg.H1.DebugCapture = true
+
+	cmd.ExportTerragruntEnvVars(cfg)
+
+	if got := os.Getenv("KM_H1_DEBUG_CAPTURE"); got != "false" {
+		t.Errorf("env-wins: KM_H1_DEBUG_CAPTURE = %q, want %q (pre-set env must not be overwritten)", got, "false")
+	}
+}

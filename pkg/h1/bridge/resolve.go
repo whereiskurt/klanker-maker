@@ -21,7 +21,17 @@ type Target struct {
 // dormant by default).
 type EventEntry struct {
 	Prompt string `json:"prompt"`
+	// Reply is "" | "internal" | ReplyModeNone. "none" suppresses the bridge's
+	// synchronous internal ack AND is carried to the poller as reply_mode so the
+	// sandbox never posts to the report on this event. JSON tag matches
+	// config.H1EventEntry so KM_H1_PROGRAMS decodes directly.
+	Reply string `json:"reply,omitempty"`
 }
+
+// ReplyModeNone is the EventEntry.Reply / H1Envelope.ReplyMode value meaning
+// "nothing — bridge or sandbox — writes to the HackerOne report for this trigger".
+// Any other value (including "") is the pre-existing internal-reply behaviour.
+const ReplyModeNone = "none"
 
 // CommandEntry (the comment-context /command name -> prompt map referenced by
 // ProgramEntry.Commands and the Resolve commands return value) is declared in

@@ -119,6 +119,10 @@ type WebhookHandler struct {
 	// Logger; defaults to slog.Default() when nil.
 	Logger *slog.Logger
 
+	// Capture, when non-nil, persists every raw delivery before any gate
+	// (h1.debug_capture). nil ⇒ dormant.
+	Capture RawCapturer
+
 	// Phase 121 (H1-01) — quota enforcement on h1_comment dispatch.
 	// When both Quota and Limits are non-nil, quota.Record is called before each
 	// SQS enqueue. nil Quota or nil Limits → dormant (byte-identical to pre-Phase-121).
@@ -158,6 +162,15 @@ func ok200() WebhookResponse { return WebhookResponse{StatusCode: 200, Body: "ok
 // verify → event-gate → parse → loop-guard → resolve → thread-bypass →
 // trigger-gate → authz → dedup → command-pass → fanout-dispatch → internal-ACK.
 func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) WebhookResponse {
+	// ── Step 0: raw capture (debug) ──────────────────────────────────────────
+	// Runs before verification on purpose: the point is to see what HackerOne
+	// actually sent, including deliveries we then reject. Fail-soft.
+	if h.Capture != nil {
+		if cErr := h.Capture.Capture(ctx, req.Headers["x-h1-delivery"], req.Headers, req.RawBody); cErr != nil {
+			h.log().Warn("h1-bridge: raw capture failed (non-fatal)", "err", cErr)
+		}
+	}
+
 	// ── Step 1: verify signature ─────────────────────────────────────────────
 	secret, err := h.Secret.Fetch(ctx)
 	if err != nil {
@@ -198,7 +211,8 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	// ── Step 4.5: resolve program handle → targets ───────────────────────────
 	targets, allow, events, commands, matched := Resolve(payload.ProgramHandle(), h.Entries, h.DefaultProfile)
 	if !matched {
-		h.log().Info("h1-bridge: no program config, silent drop", "program", payload.ProgramHandle())
+		h.log().Info("h1-bridge: no program config, silent drop", "program", payload.ProgramHandle(),
+			"event", eventType, "top_level_keys", TopLevelKeys(req.RawBody))
 		return ok200()
 	}
 
@@ -206,7 +220,8 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	_, isAutoTriageEvent := events[eventType]
 	isComment := eventType == "report_comment_created"
 	if !isAutoTriageEvent && !isComment {
-		h.log().Info("h1-bridge: event not a trigger, dropping", "event", eventType, "program", payload.ProgramHandle())
+		h.log().Info("h1-bridge: event not a trigger, dropping", "event", eventType, "program", payload.ProgramHandle(),
+			"top_level_keys", TopLevelKeys(req.RawBody))
 		return ok200()
 	}
 
@@ -240,12 +255,19 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	var promptBody string
 	var agentVerb string
 	var replyToResearcherIntent bool // /reply_to_researcher present in this comment?
+	var replyMode string             // ReplyModeNone only on the auto-triage path
 
 	if isAutoTriageEvent && !isComment {
 		// Auto-triage path: the event presence IS the trigger; does NOT gate on allow
 		// (OQ3 — the operator's events: choice is the authorization). Build the prompt
 		// from the event template, pre-expanding the report fields.
 		entry := events[eventType]
+		// Only ReplyModeNone propagates to the envelope/ack gate — "" and "internal"
+		// both mean the pre-existing internal-ack behaviour, and the envelope must
+		// omit reply_mode entirely for those (dormant byte-identity).
+		if entry.Reply == ReplyModeNone {
+			replyMode = entry.Reply
+		}
 		fields := ReportFields{
 			ReportID: payload.ReportID(),
 			Title:    payload.Title(),
@@ -354,6 +376,7 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 			Body:              promptBody,
 			Agent:             agentVerb,
 			ReplyToResearcher: researcherReply && i == 0,
+			ReplyMode:         replyMode,
 		}
 		envJSON, mErr := json.Marshal(env)
 		if mErr != nil {
@@ -364,7 +387,7 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 		groupID := fmt.Sprintf("h1-%s-%s", payload.ReportID(), target.Alias)
 		dedupID := fmt.Sprintf("%s-%s", deliveryGUID, groupID)
 
-		if h.dispatchTarget(ctx, target, payload.ReportID(), string(envJSON), groupID, dedupID) {
+		if h.dispatchTarget(ctx, target, payload.ReportID(), string(envJSON), groupID, dedupID, replyMode == ReplyModeNone) {
 			dispatched = true
 		}
 	}
@@ -373,7 +396,10 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	// Post exactly one internal "on it" comment (never researcher-visible). The ack is
 	// always internal regardless of the reply gate — the gate governs the AGENT's reply
 	// from the sandbox, not this synchronous acknowledgement.
-	if dispatched && h.Commenter != nil {
+	//
+	// reply: none (auto-triage only) suppresses it: the operator has declared that
+	// nothing on this event writes to the report until a human does.
+	if dispatched && h.Commenter != nil && replyMode != ReplyModeNone {
 		if cErr := h.Commenter.PostComment(ctx, payload.ReportID(), "On it — dispatched to a sandbox agent.", true); cErr != nil {
 			h.log().Warn("h1-bridge: internal ack failed (non-fatal)", "err", cErr)
 		}
@@ -384,8 +410,10 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 
 // dispatchTarget performs the 3-way dispatch for ONE target. Returns true when a
 // dispatch (enqueue or cold-create) was attempted. All errors are non-fatal (logged)
-// so the handler still returns 200.
-func (h *WebhookHandler) dispatchTarget(ctx context.Context, target Target, reportID, envJSON, groupID, dedupID string) bool {
+// so the handler still returns 200. silent is true only on the reply:none auto-triage
+// path — it suppresses the Phase 121 frozen/quota INTERNAL notices in enqueueAndUpsert
+// (the enforcement itself, and its Warn logs, are unaffected).
+func (h *WebhookHandler) dispatchTarget(ctx context.Context, target Target, reportID, envJSON, groupID, dedupID string, silent bool) bool {
 	alias := target.Alias
 	profile := target.Profile
 
@@ -400,7 +428,7 @@ func (h *WebhookHandler) dispatchTarget(ctx context.Context, target Target, repo
 			}
 			return true
 		}
-		h.enqueueAndUpsert(ctx, sandboxID, reportID, target.Alias, envJSON, groupID, dedupID)
+		h.enqueueAndUpsert(ctx, sandboxID, reportID, target.Alias, envJSON, groupID, dedupID, silent)
 		return true
 	}
 
@@ -448,20 +476,23 @@ func (h *WebhookHandler) dispatchTarget(ctx context.Context, target Target, repo
 				h.log().Warn("h1-bridge: status write-back failed (non-fatal)", "err", swErr, "sandbox_id", sandboxID)
 			}
 		}
-		h.enqueueAndUpsert(ctx, sandboxID, reportID, target.Alias, envJSON, groupID, dedupID)
+		h.enqueueAndUpsert(ctx, sandboxID, reportID, target.Alias, envJSON, groupID, dedupID, silent)
 		return true
 	}
 
 	// Running (or stopped without a Resumer) → warm enqueue.
 	h.log().Info("h1-bridge: warm enqueue", "alias", alias, "sandbox_id", sandboxID)
-	h.enqueueAndUpsert(ctx, sandboxID, reportID, target.Alias, envJSON, groupID, dedupID)
+	h.enqueueAndUpsert(ctx, sandboxID, reportID, target.Alias, envJSON, groupID, dedupID, silent)
 	return true
 }
 
 // enqueueAndUpsert resolves the per-sandbox h1-inbound queue URL, enqueues the
 // envelope, and (on success) upserts the (report_id, target) thread row. All errors
-// are non-fatal (logged).
-func (h *WebhookHandler) enqueueAndUpsert(ctx context.Context, sandboxID, reportID, target, envJSON, groupID, dedupID string) {
+// are non-fatal (logged). silent is true only on the reply:none auto-triage path — it
+// suppresses the Phase 121 frozen/quota INTERNAL notices below (the Warn logs, and the
+// enforcement itself — refusing dispatch, blocking the enqueue, freezing — are
+// unaffected; reply:none silences writes to the report, not enforcement).
+func (h *WebhookHandler) enqueueAndUpsert(ctx context.Context, sandboxID, reportID, target, envJSON, groupID, dedupID string, silent bool) {
 	// Phase 121 (H1-01): frozen gate — refuse dispatch when sandbox is quarantine-latched.
 	// Notice is posted INTERNALLY (never researcher-visible). Fail-open on checker error.
 	if h.FrozenCheck != nil {
@@ -472,8 +503,11 @@ func (h *WebhookHandler) enqueueAndUpsert(ctx context.Context, sandboxID, report
 			if reason == "" {
 				reason = "quota limit exceeded or operator action"
 			}
-			notice := "🛑 This sandbox is frozen (" + reason + "). No further actions or replies until your operator releases it."
-			h.postInternalReply(ctx, reportID, notice)
+			if !silent {
+				notice := "🛑 This sandbox is frozen (" + reason + "). No further actions or replies until your operator releases it."
+				h.postInternalReply(ctx, reportID, notice)
+			}
+			// reply: none ⇒ no comment on the report; the reason is in the log below.
 			h.log().Warn("h1-bridge: dispatch refused (sandbox frozen)", "sandbox", sandboxID, "reason", reason)
 			return
 		}
@@ -493,7 +527,10 @@ func (h *WebhookHandler) enqueueAndUpsert(ctx context.Context, sandboxID, report
 					if recErr != nil {
 						h.log().Warn("h1-bridge: quota record failed (fail-open)", "sandbox", sandboxID, "err", recErr)
 					} else if d.Tripped {
-						h.postH1QuotaNotice(ctx, reportID, d)
+						if !silent {
+							h.postH1QuotaNotice(ctx, reportID, d)
+						}
+						// reply: none ⇒ no comment on the report; quota is still enforced below.
 						switch d.OnBreach {
 						case quota.BreachFreeze:
 							// Auto-latch: write action_frozen=true so the frozen-dispatch gate fires on

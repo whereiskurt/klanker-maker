@@ -408,6 +408,14 @@ type H1EventEntry struct {
 	// Prompt is the template injected as the initial agent turn when this event
 	// fires. May reference report fields / {{args}} like GithubCommandEntry.Prompt.
 	Prompt string `mapstructure:"prompt" yaml:"prompt" json:"prompt"`
+
+	// Reply controls whether the bridge and the sandbox may write to the HackerOne
+	// report on this auto-triage event. "" or "internal" (default) is today's
+	// behaviour: the bridge posts its INTERNAL "On it" ack and the poller tells the
+	// agent to post an INTERNAL reply. "none" suppresses both — nothing touches the
+	// report; the operator's prompt says where output goes. Per-event on purpose:
+	// comment-keyword triggers are a human asking and are never silenced.
+	Reply string `mapstructure:"reply" yaml:"reply,omitempty" json:"reply,omitempty"`
 }
 
 // H1CommandEntry defines a named, operator-declared command parsed from a
@@ -487,6 +495,12 @@ type H1Config struct {
 	// bridge Lambda to resolve which sandbox(es) to dispatch a report event to.
 	// Uses UnmarshalKey (structured list-of-objects) — same pattern as Github.Repos.
 	Programs []H1ProgramEntry `mapstructure:"programs" yaml:"programs,omitempty" json:"programs,omitempty"`
+
+	// DebugCapture, when true, makes the bridge write every raw delivery
+	// ({received_at, headers, body}) to s3://<artifacts>/h1-captures/<delivery-guid>.json
+	// as step 0 — before signature verification — so the real payload shape can be
+	// pinned. Off by default. Exported as KM_H1_DEBUG_CAPTURE by km init.
+	DebugCapture bool `mapstructure:"debug_capture" yaml:"debug_capture,omitempty" json:"debug_capture,omitempty"`
 }
 
 // ChecksConfig holds the install-level serverless check-runner defaults (Phase 116).
