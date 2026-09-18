@@ -87,6 +87,13 @@ type CreateEvent struct {
 	// on SandboxCreateDetail. After provisioning, this is drained into the new
 	// sandbox's github-inbound FIFO queue. Empty for non-github creates (dormant).
 	GithubEnvelope string `json:"github_envelope,omitempty"`
+
+	// H1Envelope carries the JSON-serialized HackerOne bridge envelope for the
+	// h1 cold-create path (pkg/h1/bridge.EventBridgeAdapter sets h1_envelope).
+	// Drained into the new sandbox's h1-inbound FIFO after provisioning, exactly
+	// like GithubEnvelope. Empty for non-h1 creates (dormant). Until 2026-09-18
+	// nothing read this field, so an h1 cold-create silently lost its prompt.
+	H1Envelope string `json:"h1_envelope,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download files.
@@ -122,9 +129,9 @@ type EC2DescribeAPI interface {
 
 // CreateHandler holds injected dependencies for testability.
 type CreateHandler struct {
-	S3Client          S3GetAPI
-	SESClient         SESV2API
-	DynamoClient      DynamoAPI
+	S3Client     S3GetAPI
+	SESClient    SESV2API
+	DynamoClient DynamoAPI
 	// EC2Client backs the idempotency guard. Nil in unit tests (RunCommand mode) →
 	// the guard is skipped. main() injects *ec2.Client.
 	EC2Client         EC2DescribeAPI
@@ -134,10 +141,9 @@ type CreateHandler struct {
 	IdentityTableName string                  // DynamoDB identity table (default: "km-identities")
 	Domain            string
 	ToolchainDir      string // directory containing km, terraform, terragrunt binaries + infra/
-	// SQSClient is used to drain the carried GithubEnvelope into the per-sandbox
-	// github-inbound FIFO queue after provisioning (Phase 97, Task 3).
-	// When nil, the enqueue step is skipped — only non-nil when the event has a
-	// non-empty GithubEnvelope (dormant for non-github creates). In production,
+	// SQSClient is used to drain a carried GithubEnvelope / H1Envelope into the
+	// matching per-sandbox inbound FIFO queue after provisioning (Phase 97 Task 3;
+	// h1 added 2026-09-18). When nil, the enqueue step is skipped. In production,
 	// the main() function injects *sqs.Client from the shared AWS config.
 	SQSClient GithubInboundSQSAPI
 	// RunCommand is called to execute the km create subprocess.
@@ -459,19 +465,26 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 	// re-mention to trigger a new event. Non-github creates have GithubEnvelope=""
 	// so this block is entirely dormant for non-github sandboxes.
 	if event.GithubEnvelope != "" && h.SQSClient != nil {
-		if enqErr := h.drainGithubEnvelope(ctx, event.SandboxID, event.GithubEnvelope); enqErr != nil {
+		queue := awspkg.GitHubInboundQueueName(resourcePrefix(), event.SandboxID)
+		if enqErr := h.drainInboundEnvelope(ctx, event.SandboxID, queue, event.GithubEnvelope, "github"); enqErr != nil {
 			log.Warn().Err(enqErr).Str("sandbox_id", event.SandboxID).
 				Msg("failed to enqueue github envelope into github-inbound queue (non-fatal — operator can re-mention)")
+		}
+	}
+
+	// Step 6b (2026-09-18): the same drain for the HackerOne bridge's cold-create
+	// path. Non-h1 creates have H1Envelope="" so this is dormant for them.
+	if event.H1Envelope != "" && h.SQSClient != nil {
+		queue := awspkg.H1InboundQueueName(resourcePrefix(), event.SandboxID)
+		if enqErr := h.drainInboundEnvelope(ctx, event.SandboxID, queue, event.H1Envelope, "hackerone"); enqErr != nil {
+			log.Warn().Err(enqErr).Str("sandbox_id", event.SandboxID).
+				Msg("failed to enqueue h1 envelope into h1-inbound queue (non-fatal — the next report event re-dispatches)")
 		}
 	}
 
 	return nil
 }
 
-// drainGithubEnvelope resolves the per-sandbox github-inbound FIFO queue URL and
-// sends the carried envelope as a FIFO message (MessageGroupId = sandboxID,
-// MessageDeduplicationId = SHA-256 hex of the envelope body). Both fields are
-// required by FIFO queues with ContentBasedDeduplication=false.
 // existingInstanceID returns the ID of a non-terminated EC2 instance already tagged
 // with the given sandbox-id, or "" if none (the Bug J idempotency check). A transient
 // DescribeInstances error returns "" (fail-open) so a genuine first create is never
@@ -495,15 +508,18 @@ func (h *CreateHandler) existingInstanceID(ctx context.Context, sandboxID string
 	return ""
 }
 
-func (h *CreateHandler) drainGithubEnvelope(ctx context.Context, sandboxID, envelope string) error {
-	prefix := resourcePrefix()
-	queueName := awspkg.GitHubInboundQueueName(prefix, sandboxID)
-
+// drainInboundEnvelope resolves a per-sandbox inbound FIFO queue by name and
+// sends the carried envelope as a FIFO message (MessageGroupId = sandboxID,
+// MessageDeduplicationId = SHA-256 hex of the envelope body). Both fields are
+// required by FIFO queues with ContentBasedDeduplication=false. One function
+// serves every bridge's cold-create path (github, hackerone) so the queue-name
+// and dedup semantics cannot drift between them; source only labels the log.
+func (h *CreateHandler) drainInboundEnvelope(ctx context.Context, sandboxID, queueName, envelope, source string) error {
 	urlOut, err := h.SQSClient.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{
 		QueueName: aws.String(queueName),
 	})
 	if err != nil {
-		return fmt.Errorf("get github-inbound queue URL for %s: %w", queueName, err)
+		return fmt.Errorf("get %s inbound queue URL for %s: %w", source, queueName, err)
 	}
 	queueURL := aws.ToString(urlOut.QueueUrl)
 
@@ -520,10 +536,10 @@ func (h *CreateHandler) drainGithubEnvelope(ctx context.Context, sandboxID, enve
 		MessageDeduplicationId: aws.String(dedupID),
 	})
 	if err != nil {
-		return fmt.Errorf("send github envelope to %s: %w", queueURL, err)
+		return fmt.Errorf("send %s envelope to %s: %w", source, queueURL, err)
 	}
-	log.Info().Str("sandbox_id", sandboxID).Str("queue", queueName).
-		Msg("github envelope drained into github-inbound queue")
+	log.Info().Str("sandbox_id", sandboxID).Str("queue", queueName).Str("source", source).
+		Msg("inbound envelope drained into per-sandbox queue")
 	return nil
 }
 
@@ -537,7 +553,7 @@ func (h *CreateHandler) downloadToolchain(ctx context.Context, bucket string) er
 
 	// Download binaries
 	binaries := []struct {
-		s3Key    string
+		s3Key     string
 		localName string
 	}{
 		{s3Key: "toolchain/km", localName: "km"},
@@ -758,10 +774,10 @@ func main() {
 
 	dynClient := awsdynamodb.NewFromConfig(awsCfg)
 	h := &CreateHandler{
-		S3Client:          s3.NewFromConfig(awsCfg),
-		SESClient:         sesv2.NewFromConfig(awsCfg),
-		DynamoClient:      dynClient,
-		EC2Client:         ec2.NewFromConfig(awsCfg), // Bug J idempotency guard
+		S3Client:     s3.NewFromConfig(awsCfg),
+		SESClient:    sesv2.NewFromConfig(awsCfg),
+		DynamoClient: dynClient,
+		EC2Client:    ec2.NewFromConfig(awsCfg), // Bug J idempotency guard
 
 		SSMClient:         ssm.NewFromConfig(awsCfg),
 		IdentityClient:    dynClient,
