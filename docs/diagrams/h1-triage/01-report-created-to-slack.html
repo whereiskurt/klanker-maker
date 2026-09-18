@@ -30,11 +30,11 @@
   <div class="frame">
     <p class="eyebrow">Swimlane · HackerOne bridge · the analyst-blessed triage path</p>
     <h1>A report is triaged before anyone opens it, and HackerOne never hears about it until a human says so</h1>
-    <p class="standfirst">Above the red line the pipeline is autonomous and <em>write-free</em> toward HackerOne: <code>events.report_created.reply: none</code> silences the bridge's own "On it" ack and tells the agent not to post, and the <code>klanker:h1-triage</code> skill delivers a card and a PDF to Slack instead. The only thing that crosses the line is an analyst typing <code>@km /triage</code> as an internal comment — the existing comment-keyword flow, unchanged.</p>
+    <p class="standfirst">Above the red line the pipeline is autonomous and <em>write-free</em> toward HackerOne: <code>events.report_created.reply: none</code> silences the bridge's own "On it" ack and tells the agent not to post, and the operator's own triage skill — named in the prompt file, not by km — delivers its output to Slack instead. The only thing that crosses the line is an analyst typing <code>@km /triage</code> as an internal comment — the existing comment-keyword flow, unchanged.</p>
 
     <svg viewBox="0 0 1440 744" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="h1-triage-title h1-triage-desc">
       <title id="h1-triage-title">HackerOne report_created to Slack triage, blessed by an analyst</title>
-      <desc id="h1-triage-desc">Swimlane with five columns: HackerOne, bridge Lambda, sandbox, Slack, analyst. A new report fires a webhook; the bridge captures, verifies and dispatches it with no acknowledgement back; the sandbox runs the triage skill and posts a summary card and PDF to Slack; the analyst reads it and, if they agree, types an internal @km /triage comment on the report, which crosses a red boundary into the human-initiated half where the bridge dispatches again and the agent posts the triage as an internal HackerOne comment.</desc>
+      <desc id="h1-triage-desc">Swimlane with five columns: HackerOne, bridge Lambda, sandbox, Slack, analyst. A new report fires a webhook; the bridge captures, verifies and dispatches it with no acknowledgement back; the sandbox runs the operator's own triage skill and posts a summary card and PDF to Slack; the analyst reads it and, if they agree, types an internal @km /triage comment on the report, which crosses a red boundary into the human-initiated half where the bridge dispatches again and the agent posts the triage as an internal HackerOne comment.</desc>
 
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#9090a8"/></marker>
@@ -135,9 +135,9 @@
       <rect x="640" y="224" width="176" height="112" rx="6" fill="#0a0a0f" stroke="#e4e4ef" stroke-width="1"/>
       <rect x="648" y="230" width="36" height="12" rx="2" fill="transparent" stroke="rgba(228,228,239,0.30)" stroke-width="0.8"/>
       <text x="666" y="239" fill="#7e7e98" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SKILL</text>
-      <text x="728" y="264" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">klanker:h1-triage</text>
-      <text x="728" y="282" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">km-h1 read → assess → md → pdf</text>
-      <text x="728" y="298" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">s3 cp transcripts/&lt;id&gt;/h1/</text>
+      <text x="728" y="264" fill="#e4e4ef" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Operator's triage skill</text>
+      <text x="728" y="282" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">named in the prompt file</text>
+      <text x="728" y="298" fill="#7e7e98" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">output where the prompt says</text>
       <text x="728" y="322" fill="rgba(255,92,92,0.85)" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">never km-h1 comment</text>
 
       <!-- S4 Slack card + PDF — FOCAL -->

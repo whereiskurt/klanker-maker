@@ -6,12 +6,18 @@
 
 ## 1. Goal
 
-When a new report lands on a bug-bounty program, a sandbox agent triages it
-*before* an analyst looks at it, and delivers the result to Slack — a summary
-card and a PDF — **without touching the HackerOne report**. The analyst reads
-the card, opens the report, and "blesses" the triage by typing `@km /triage`
-as an internal comment, which posts it to HackerOne through the existing
+When a new report lands on a bug-bounty program, a sandbox agent runs the
+operator's own triage skill *before* an analyst looks at it, and delivers the
+result to Slack — **without touching the HackerOne report**. The analyst reads
+it, opens the report, and "blesses" the triage by typing `@km /triage` as an
+internal comment, which posts it to HackerOne through the existing
 comment-keyword flow.
+
+The triage logic itself is **operator-owned and out of scope**: an existing
+skill on the box does the reading, assessment, PDF generation and Slack post.
+km's job is only to (a) hand the agent the operator's prompt file on
+`report_created`, and (b) guarantee nothing is written to HackerOne on that
+path.
 
 Only `report_created` triggers. HackerOne exposes 32 program webhook events
 (`api.hackerone.com/webhooks`); the operator has decided the other 31 are
@@ -39,10 +45,7 @@ map already accepts any event name.
    - The poller preamble (`userdata.go:~3245`) says *"Posting your response
      (REQUIRED) … Do NOT only print your answer — it is discarded unless you post it
      with km-h1."* An obedient agent will post.
-2. **The triage "logic" is a three-line prompt** (`profiles/prompts/h1.report_created.prompt.txt`)
-   with no structure, no PDF, no Slack.
-3. **No PDF tooling** is installed by any profile.
-4. **The bridge has never received a real HackerOne delivery.** `103-CAPTURE/field-paths.md`
+2. **The bridge has never received a real HackerOne delivery.** `103-CAPTURE/field-paths.md`
    is a synthetic fallback; UAT is `awaiting-operator`. The routing key —
    `data.report.relationships.program.data.attributes.handle` — was confirmed against the
    REST report object, not a webhook, and HackerOne's own webhook example shows
@@ -66,12 +69,14 @@ h1:
               profile: profiles/h1.yaml
           events:
             report_created:
-                prompt: '@profiles/prompts/h1.report_created.prompt.txt'
+                prompt: '@prompts/h1-new-report.txt'   # operator's file, relative to km-config.yaml;
+                                                       # read at km init, inlined into KM_H1_PROGRAMS,
+                                                       # {{report_id}} {{title}} {{state}} {{program}} expanded
                 reply: none               # NEW: none | internal (default internal)
           commands:
             triage:
                 description: Post the triage assessment as an INTERNAL comment
-                prompt: '@profiles/prompts/h1.triage.prompt.txt'
+                prompt: '@prompts/h1-bless.txt'        # operator's file
           default_command: triage
 ```
 
@@ -128,38 +133,22 @@ output where the task below says. A human will decide whether it reaches HackerO
 For `internal`/absent the rendered script is byte-identical to today, so the frozen
 H1 byte-identity golden (`TestUserdataH1ByteIdentity`) stays untouched.
 
-### 4.4 Sandbox — the triage logic as a skill
+### 4.4 Sandbox — operator-owned prompt files, no km skill
 
-**`skills/h1-triage/SKILL.md`** (`klanker:h1-triage`; plugin version bump in
-`plugin.json` + `marketplace.json`). Steps:
+Nothing new ships on the box. The operator's `report_created` prompt file names
+their own triage skill, its output locations, and the Slack post; the bless-path
+prompt (`commands.triage.prompt`) names how to post that output as an INTERNAL
+comment. Both are ordinary `@file` prompts resolved by `ResolveH1EventPrompts` /
+`PublishH1CommandsToSSM` at `km init` (relative to the directory containing
+`km-config.yaml`; a missing file is a hard `km init` error).
 
-1. `km-h1 read --report $REPORT_ID` → `/workspace/h1/<report>/report.json`.
-2. Assess and write `/workspace/h1/<report>/triage.md` with fixed headings:
-   Summary · Validity (valid / needs-info / likely-invalid, with reasoning) · Severity
-   (proposed, with rationale; note the researcher's own rating) · Affected asset / scope ·
-   Reproduction summary · Duplicate / known-issue check (against
-   `/workspace/h1/*/triage.md` from prior reports on this box) · Recommended next state
-   and questions for the researcher.
-3. `markdown-pdf` → `triage-<report>.pdf`.
-4. `aws s3 cp` both files to `s3://$KM_ARTIFACTS_BUCKET/transcripts/$KM_SANDBOX_ID/h1/<report>/`.
-5. `km-slack post` a Block-Kit card: title, program, proposed severity, validity, one-line
-   recommendation, report URL; then `km-slack upload --s3-key … --thread <ts>` the PDF.
-6. The card ends with the exact bless line: *"To post this to HackerOne as an internal
-   comment, reply on the report with `@km /triage`."*
-7. **Never calls `km-h1 comment`.** The skill states this as a hard rule.
+Two things the operator's prompt must carry, because the poller's preamble no
+longer does on `reply: none` (see 4.3): where the output goes, and that the agent
+must not call `km-h1 comment`. Whatever the skill needs on the box (the skill
+itself, PDF tooling) is installed by the operator's profile
+(`initCommandsAppend` / plugin marketplace), exactly as for any other sandbox.
 
-`profiles/prompts/h1.report_created.prompt.txt` becomes:
-`New report #{{report_id}} ("{{title}}") on {{program}}. Run the klanker:h1-triage skill.`
-
-`profiles/prompts/h1.triage.prompt.txt` (the bless path) is updated to prefer the existing
-`/workspace/h1/<report>/triage.md` when present and post it verbatim as the INTERNAL comment,
-re-triaging only if absent.
-
-**`profiles/h1.yaml`**: `initCommandsAppend` adds `pip3 install --user markdown-pdf` for the
-sandbox user (pure-Python wheels on x86_64; no system libraries on the RedHat base). If it
-fails to hold at implementation, fall back to `pandoc` from a pinned GitHub release tarball.
-Slack channel stays `sb-h1-<handle>`; set `notification.slack.channelOverride` to route to an
-existing analyst channel.
+The shipped `profiles/prompts/h1.*.prompt.txt` files stay as examples.
 
 ### 4.5 Bless path — unchanged
 
@@ -179,9 +168,9 @@ gate → `triage` command → agent posts the INTERNAL comment. `reply: none` do
 ## 6. Deploy surface
 
 `make build` (config keys) → `make build-lambdas` (bridge + create-handler userdata) →
-`km init --dry-run=false` (env block + IAM; **not** `--sidecars`) → plugin version bump.
+`km init --dry-run=false` (env block + IAM; **not** `--sidecars`). No plugin bump.
 The existing `h1-<handle>` sandbox needs `km destroy && km create` to gain the new poller
-and the PDF tooling. `km init --h1` is sufficient for a later `debug_capture` flip alone.
+(the `reply_mode` preamble switch). Prompt-file edits alone need only `km init --h1`. `km init --h1` is sufficient for a later `debug_capture` flip alone.
 
 ## 7. Tests
 
@@ -200,6 +189,7 @@ and the PDF tooling. `km init --h1` is sufficient for a later `debug_capture` fl
 
 ## 8. Out of scope
 
-The other 31 events; a Lambda-direct Slack firehose (decided against — B was chosen);
-per-report sandboxes; un-silencing the ack for comment triggers; any change to
-`km-h1 state`.
+The triage skill, its PDF generation and its Slack post (operator-owned, already
+built); the other 31 events; a Lambda-direct Slack firehose (decided against — B was
+chosen); per-report sandboxes; un-silencing the ack for comment triggers; any change
+to `km-h1 state`.
