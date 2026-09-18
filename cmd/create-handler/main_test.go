@@ -198,10 +198,10 @@ func TestCreateHandler_HappyPath(t *testing.T) {
 
 	commandRan := false
 	h := &CreateHandler{
-		S3Client:      mockS3,
-		SESClient:     mockSES,
-		Domain:        "sandboxes.example.com",
-		ToolchainDir:  "/tmp", // test toolchain dir
+		S3Client:     mockS3,
+		SESClient:    mockSES,
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp", // test toolchain dir
 		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
 			commandRan = true
 			return []byte("sandbox created"), nil
@@ -922,6 +922,9 @@ type mockSQSSendAPI struct {
 	sendMessageCalled int
 	sendMessageInput  *sqs.SendMessageInput
 	sendMessageErr    error
+	// sends records (queueURL, body) for every SendMessage call, in order —
+	// sendMessageInput only keeps the last one.
+	sends []struct{ queueURL, body string }
 }
 
 func (m *mockSQSSendAPI) GetQueueUrl(_ context.Context, input *sqs.GetQueueUrlInput, _ ...func(*sqs.Options)) (*sqs.GetQueueUrlOutput, error) {
@@ -943,6 +946,7 @@ func (m *mockSQSSendAPI) GetQueueUrl(_ context.Context, input *sqs.GetQueueUrlIn
 func (m *mockSQSSendAPI) SendMessage(_ context.Context, input *sqs.SendMessageInput, _ ...func(*sqs.Options)) (*sqs.SendMessageOutput, error) {
 	m.sendMessageCalled++
 	m.sendMessageInput = input
+	m.sends = append(m.sends, struct{ queueURL, body string }{aws.ToString(input.QueueUrl), aws.ToString(input.MessageBody)})
 	if m.sendMessageErr != nil {
 		return nil, m.sendMessageErr
 	}
@@ -1049,6 +1053,133 @@ func TestCreateHandler_GithubEnvelope_EnqueueError_NonFatal(t *testing.T) {
 	// Handle must succeed even if SQS errors — enqueue is best-effort
 	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
 		t.Fatalf("Handle should succeed even when enqueue fails, got: %v", err)
+	}
+}
+
+// ---- H1 cold-create drain (2026-09-18) ----
+//
+// The H1 bridge's cold-create path publishes SandboxCreate with h1_envelope, but
+// the create-handler only ever drained github_envelope — so a report_created
+// arriving with no h1-<handle> sandbox cold-created a box that never received
+// the triage prompt. These pin the H1 drain, mirroring the GitHub trio above.
+
+func newDrainTestHandler(mockSQS *mockSQSSendAPI) *CreateHandler {
+	return &CreateHandler{
+		S3Client:     &mockS3GetAPI{getBody: minimalProfile},
+		SESClient:    &mockSESAPI{},
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp",
+		SQSClient:    mockSQS,
+		RunCommand: func(_ string, _ []string, _ []string) ([]byte, error) {
+			return []byte("ok"), nil
+		},
+	}
+}
+
+// TestCreateHandler_H1Envelope_EnqueuesToH1InboundQueue: a non-empty h1_envelope
+// is sent, verbatim, to the sandbox's h1-inbound FIFO (NOT the github one), with
+// the FIFO group + dedup ids set.
+func TestCreateHandler_H1Envelope_EnqueuesToH1InboundQueue(t *testing.T) {
+	mockSQS := &mockSQSSendAPI{}
+	h := newDrainTestHandler(mockSQS)
+	envelope := `{"source":"hackerone","program":"acme","report_id":"42","kind":"report_created","body":"run my skill","reply_mode":"none"}`
+	event := CreateEvent{
+		SandboxID:      "sb-h1cold",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "h1-profiles/h1",
+		H1Envelope:     envelope,
+	}
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle returned error: %v", err)
+	}
+	if mockSQS.sendMessageCalled != 1 {
+		t.Fatalf("expected 1 SendMessage call, got %d", mockSQS.sendMessageCalled)
+	}
+	got := mockSQS.sends[0]
+	wantQueue := awspkg.H1InboundQueueName(resourcePrefix(), "sb-h1cold")
+	if !strings.HasSuffix(got.queueURL, "/"+wantQueue) {
+		t.Errorf("queue URL %q must end in the h1-inbound queue name %q", got.queueURL, wantQueue)
+	}
+	if strings.Contains(got.queueURL, "github-inbound") {
+		t.Errorf("h1 envelope must never be sent to the github-inbound queue: %q", got.queueURL)
+	}
+	if got.body != envelope {
+		t.Errorf("envelope must be forwarded verbatim; got %q", got.body)
+	}
+	in := mockSQS.sendMessageInput
+	if aws.ToString(in.MessageGroupId) == "" || aws.ToString(in.MessageDeduplicationId) == "" {
+		t.Errorf("FIFO send needs MessageGroupId and MessageDeduplicationId; got %+v", in)
+	}
+}
+
+// TestCreateHandler_H1Envelope_Empty_NoEnqueue: no h1_envelope ⇒ no send (a plain
+// create is untouched).
+func TestCreateHandler_H1Envelope_Empty_NoEnqueue(t *testing.T) {
+	mockSQS := &mockSQSSendAPI{}
+	h := newDrainTestHandler(mockSQS)
+	event := CreateEvent{
+		SandboxID:      "sb-h1none",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-h1none",
+	}
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle returned error: %v", err)
+	}
+	if mockSQS.sendMessageCalled != 0 {
+		t.Errorf("expected 0 SendMessage calls, got %d", mockSQS.sendMessageCalled)
+	}
+}
+
+// TestCreateHandler_H1Envelope_EnqueueError_NonFatal: a failed drain never fails
+// the create — the box exists; the operator can re-trigger.
+func TestCreateHandler_H1Envelope_EnqueueError_NonFatal(t *testing.T) {
+	mockSQS := &mockSQSSendAPI{sendMessageErr: errors.New("sqs unavailable")}
+	h := newDrainTestHandler(mockSQS)
+	event := CreateEvent{
+		SandboxID:      "sb-h1err",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "h1-profiles/h1",
+		H1Envelope:     `{"source":"hackerone","report_id":"1"}`,
+	}
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle should succeed even when the h1 drain fails, got: %v", err)
+	}
+	if mockSQS.sendMessageCalled != 1 {
+		t.Errorf("drain must still be attempted once; got %d", mockSQS.sendMessageCalled)
+	}
+}
+
+// TestCreateHandler_GithubAndH1Envelopes_BothDrained: an event carrying both is
+// drained to both queues, each to its own.
+func TestCreateHandler_GithubAndH1Envelopes_BothDrained(t *testing.T) {
+	mockSQS := &mockSQSSendAPI{}
+	h := newDrainTestHandler(mockSQS)
+	event := CreateEvent{
+		SandboxID:      "sb-both",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-both",
+		GithubEnvelope: `{"source":"github","pr":1}`,
+		H1Envelope:     `{"source":"hackerone","report_id":"2"}`,
+	}
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle returned error: %v", err)
+	}
+	if mockSQS.sendMessageCalled != 2 {
+		t.Fatalf("expected 2 SendMessage calls, got %d", mockSQS.sendMessageCalled)
+	}
+	seen := map[string]string{}
+	for _, s := range mockSQS.sends {
+		switch {
+		case strings.Contains(s.queueURL, "/"+awspkg.GitHubInboundQueueName(resourcePrefix(), "sb-both")):
+			seen["github"] = s.body
+		case strings.Contains(s.queueURL, "/"+awspkg.H1InboundQueueName(resourcePrefix(), "sb-both")):
+			seen["h1"] = s.body
+		default:
+			t.Errorf("unexpected queue %q", s.queueURL)
+		}
+	}
+	if seen["github"] != `{"source":"github","pr":1}` || seen["h1"] != `{"source":"hackerone","report_id":"2"}` {
+		t.Errorf("each envelope must land on its own queue; got %+v", seen)
 	}
 }
 

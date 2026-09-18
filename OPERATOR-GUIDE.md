@@ -1530,18 +1530,19 @@ make build && make build-lambdas && km init --dry-run=false
 
 `reply:` / `debug_capture:` edits afterwards need only `km init --h1 --dry-run=false`.
 
-### 4. Create the target sandbox once, and keep it
+### 4. Create the target sandbox once (recommended), or let the first event do it
 
 ```bash
 km create profiles/h1.yaml h1-<program-handle>
 ```
 
-The alias must match `targets[].alias`. **Keep this sandbox in existence.** The bridge
-wakes a *stopped or paused* box on the next event (`StartInstances`, then the prompt drains
-on boot) — so `profiles/h1.yaml`'s `idleTimeout: 20m` / `teardownPolicy: stop` is the
-intended steady state. But if the row is *absent*, the bridge cold-creates a box that never
-receives the prompt (pre-existing Phase 103 gap: the create-handler drains `github_envelope`,
-not `h1_envelope`) — and under `reply: none` nothing on HackerOne reveals the loss.
+The alias must match `targets[].alias`. All three states work: a *running* box gets the
+prompt immediately; a *stopped or paused* box is woken by the bridge (`StartInstances`,
+then the prompt drains on boot) — so `profiles/h1.yaml`'s `idleTimeout: 20m` /
+`teardownPolicy: stop` is the intended steady state; an *absent* row is cold-created and
+the create-handler drains the prompt into the new box's queue after provisioning. Pre-create
+it anyway: a cold-create is a multi-minute provision before the first triage runs, a
+stopped box resumes in under a minute.
 
 ### 5. First live event, then turn capture off
 

@@ -36,7 +36,7 @@ map already accepts any event name.
 | Box may `s3:PutObject` under `transcripts/<sandbox-id>/*` | `infra/modules/ec2spot/v1.7.0` | shipped |
 | Per-sandbox Slack channel `sb-h1-<handle>` | `profiles/base/slack-persandbox.yaml` | shipped |
 | Analyst bless path: `@km /triage` internal comment → `triage` command → INTERNAL comment | Phase 103 comment-keyword flow | shipped |
-| Cold-create envelope drain: `cmd/create-handler/main.go` reads `github_envelope` from `SandboxCreate` detail but has no `h1_envelope` reader | — | **NOT shipped for H1** — pre-existing Phase 103 gap, out of scope for this phase; a cold-created `h1-<handle>` box never receives the triage prompt (fast-follow) |
+| Cold-create envelope drain: `cmd/create-handler/main.go` `drainInboundEnvelope` reads `h1_envelope` | `cmd/create-handler` | shipped 2026-09-18 (follow-up PR; also added the missing `h1-inbound-*` / `webhook-inbound-*` create-handler SQS grants) |
 
 ## 3. What is wrong for this goal today
 

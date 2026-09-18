@@ -238,12 +238,16 @@ does. `{{report_id}} {{title}} {{state}} {{program}}` are still expanded, and
 The envelope carries `reply_mode:"none"`; an older sandbox (pre-recreate) ignores the
 field and behaves as before — `reply: none` on the bridge alone still removes the ack.
 
-> **Cold-create caveat (pre-existing, Phase 103):** the create-handler drains only
-> `github_envelope`, not `h1_envelope`, so an auto-triage event that arrives when no
-> `h1-<handle>` sandbox row exists cold-creates a box that **never receives the
-> prompt** — and under `reply: none` nothing on HackerOne reveals the loss. Keep the
-> target sandbox created (stopped or paused is fine — the resume path enqueues
-> correctly). Draining `h1_envelope` in the create-handler is a tracked fast-follow.
+> **Cold-create works (fixed 2026-09-18).** Until then the create-handler drained only
+> `github_envelope`, not `h1_envelope`, so an auto-triage event arriving with no
+> `h1-<handle>` row cold-created a box that never received the prompt — and the
+> create-handler role had no `h1-inbound-*` SQS grant at all, so a remote `km create` of
+> an h1-inbound profile 403'd on `sqs:CreateQueue` (Phase 103's UAT was never run). Both
+> are fixed: `drainInboundEnvelope` now serves github and h1, and
+> `km-operator-policy` grants `h1-inbound-*` (and `webhook-inbound-*`) lifecycle.
+> Pre-creating the sandbox is still the better *latency* choice — a cold-create is a
+> multi-minute provision before the first triage runs, while a stopped box resumes in
+> under a minute.
 
 ### Capturing the real payload (`debug_capture`)
 
@@ -479,7 +483,8 @@ A `RUN_H1_E2E=1`-gated harness lives at `test/e2e/h1/e2e_test.go` (skips clean w
 | `reply: none` set but an "On it" comment still appears | bridge env not refreshed — `km init --h1 --dry-run=false`; confirm with `aws lambda get-function-configuration --function-name <prefix>-h1-bridge --query 'Environment.Variables.KM_H1_PROGRAMS'` contains `"reply":"none"` |
 | `reply: none` set, no ack, but the agent still posted / a resume hint appeared | sandbox predates the poller change — `km destroy && km create` |
 | Every event drops with `program=""` | routing key path not present in the real payload — enable `debug_capture`, read one object under `h1-captures/`, compare against `pkg/h1/bridge/payload.go` struct tags |
-| Auto-triage fired, sandbox was cold-created, but no triage ran | pre-existing Phase 103 gap — the create-handler does not drain h1_envelope; pre-create the h1-<handle> sandbox (see the cold-create caveat) |
+| Auto-triage fired, sandbox was cold-created, but no triage ran | create-handler predates 2026-09-18 (no `h1_envelope` drain) — `make build-lambdas` + `km init --dry-run=false`; check `/aws/lambda/<prefix>-create-handler` for `inbound envelope drained` |
+| Remote `km create` of an h1-inbound profile fails: `sqs:CreateQueue ... AccessDenied` | create-handler role predates 2026-09-18 (no `h1-inbound-*` grant) — `km init --dry-run=false` applies `km-operator-policy`; `--local` works meanwhile |
 
 > `km doctor` does not yet have HackerOne checks — a candidate fast-follow (mirroring the
 > Slack/GitHub doctor groups).

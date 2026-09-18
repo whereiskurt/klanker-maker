@@ -688,6 +688,74 @@ resource "aws_iam_role_policy" "sqs_github_inbound" {
   })
 }
 
+# Policy: SQS for Phase 103 h1-inbound queue lifecycle (per-sandbox FIFO queues
+# named {prefix}-h1-inbound-<sandbox-id>.fifo). km create provisions the queue at
+# create time (rollback deletes it on failure); the cold-create path
+# (create-handler drainInboundEnvelope) also SendMessages the carried h1 envelope
+# into it after provisioning. Mirrors sqs_github_inbound exactly. Absent until
+# 2026-09-18 — every remote `km create` of an h1-inbound profile 403'd on
+# sqs:CreateQueue (pinned by pkg/terragrunt TestCreateHandlerRole_EveryInboundQueueKindHasALifecycleGrant).
+resource "aws_iam_role_policy" "sqs_h1_inbound" {
+  name = "${var.resource_prefix}-create-handler-sqs-h1-inbound"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "H1InboundQueueLifecycle"
+        Effect = "Allow"
+        Action = [
+          "sqs:CreateQueue",
+          "sqs:DeleteQueue",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ListQueues",
+          "sqs:SetQueueAttributes",
+          "sqs:TagQueue",
+          "sqs:SendMessage",
+        ]
+        # sqs:ListQueues is account-wide (no resource scoping); grouped here for
+        # cohesion. All other actions are scoped to the h1-inbound pattern.
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-h1-inbound-*.fifo"
+      }
+    ]
+  })
+}
+
+# Policy: SQS for Phase 127 webhook-inbound queue lifecycle (per-sandbox FIFO
+# queues named {prefix}-webhook-inbound-<sandbox-id>.fifo). km create provisions
+# the queue at create time; rollback deletes it on failure. No SendMessage: the
+# webhook bridge cold-creates via the Prompt field (km create --prompt), not by
+# carrying an envelope for the create-handler to drain. Mirrors sqs_slack_inbound.
+# Absent until 2026-09-18 (same guard test as above).
+resource "aws_iam_role_policy" "sqs_webhook_inbound" {
+  name = "${var.resource_prefix}-create-handler-sqs-webhook-inbound"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "WebhookInboundQueueLifecycle"
+        Effect = "Allow"
+        Action = [
+          "sqs:CreateQueue",
+          "sqs:DeleteQueue",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ListQueues",
+          "sqs:SetQueueAttributes",
+          "sqs:TagQueue",
+        ]
+        # sqs:ListQueues is account-wide (no resource scoping); grouped here for
+        # cohesion. All other actions are scoped to the webhook-inbound pattern.
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-webhook-inbound-*.fifo"
+      }
+    ]
+  })
+}
+
 # Phase 124.07 — Policy: DynamoDB {prefix}-capacity read/write for the km create subprocess.
 # The AZ sweep loop calls RecordSuccess/RecordICE (UpdateItem) after each apply attempt so
 # the capacity store is populated and RankAZs can produce a non-empty ranking on the next
