@@ -11,39 +11,36 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Drafted from CLAUDE.md phase blocks since v0.8.19 via
+  Drafted from CLAUDE.md phase blocks since v0.8.20 via
   scripts/draft-release-highlights.sh, then curated.
 -->
 
-## 🤫 HackerOne auto-triage can now run without touching the report
+## 🧊 A HackerOne cold-create now delivers the prompt
 
-`h1.programs[].events.<event>.reply: none` makes an auto-triage event write-free toward
-HackerOne: no bridge "On it" ack, no Phase 121 frozen/quota notices, no Phase 106
-resume-hint comment, and the sandbox poller's preamble stops telling the agent to post —
-it now says *do NOT post; a human will decide*. The agent runs whatever your `@file` prompt
-names (your own triage skill, Slack, PDFs) and an analyst blesses the result later with an
-internal `@km /triage`, which is the unchanged comment-keyword flow and is never silenced.
-Per-event, absent/`internal` ⇒ byte-identical to before.
+Since Phase 103 the H1 bridge's absent-sandbox path published `SandboxCreate` with
+`h1_envelope`, but the create-handler only ever drained `github_envelope` — a
+`report_created` arriving with no `h1-<handle>` box provisioned one that never received
+the triage. `drainInboundEnvelope` now serves both bridges from one function. All three
+states work: running (immediate), stopped/paused (bridge wakes it, prompt drains on boot),
+absent (cold-create, then drain). Pre-creating the box is still the faster first triage.
 
-## 🎥 Capture what HackerOne actually sends
+## 🔑 Remote `km create` of an H1 or webhook profile no longer 403s
 
-`h1.debug_capture: true` writes every raw delivery — `{received_at, headers, body}` — to
-`s3://<artifacts>/h1-captures/<X-H1-Delivery>.json` as step 0, **before** signature
-verification, so a mis-pasted secret still yields a capture. Phase 103 pinned the parser
-against a synthetic payload; the routing key
-(`data.report.relationships.program.data.attributes.handle`) has never been seen in a live
-webhook. Turn it on for the first real `report_created`, confirm the path exists, turn it
-off (captures hold full vulnerability reports). The drop-path log lines also now carry
-`top_level_keys`, so a wrong wrapper is visible in CloudWatch without capture.
+The create-handler role had SQS lifecycle grants for `slack-inbound-*` and
+`github-inbound-*` only. A remote `km create` runs *inside* that Lambda and the H1 /
+webhook queue provisioning is fatal, so the very first `km create profiles/h1.yaml` would
+have died on `sqs:CreateQueue AccessDenied` — unnoticed because Phase 103's UAT was never
+run. `km-operator-policy` now grants `h1-inbound-*` (with `SendMessage` for the drain)
+and `webhook-inbound-*`. A name-agnostic guard derives the queue kinds from `pkg/aws`'s
+`*InboundQueueName` helpers, so the next bridge cannot ship without its grant.
 
-## ⚠️ Known: an H1 cold-create loses the prompt (pre-existing)
+## 📖 The bundled operator guide has the HackerOne quick-start
 
-The create-handler drains only `github_envelope`, never `h1_envelope`, so an auto-triage
-event arriving with no `h1-<handle>` sandbox row cold-creates a box that never receives the
-prompt — and under `reply: none` nothing on HackerOne reveals the loss. Keep the target
-sandbox created (stopped or paused resumes fine). Draining `h1_envelope` is the next
-fast-follow.
+The release tarball ships `OPERATOR-GUIDE.md` but not `docs/`, so the guide now carries
+the whole sequence — `km h1 init` → `km-config.yaml` (`reply: none`, `debug_capture`) →
+full-apply deploy → create the box → the first-event capture check with the exact `jq`.
+`docs/h1-bridge.md`'s example also stops pointing at `profiles/h1-triage.yaml` (never
+existed) and the pre-Phase-120 prompt paths.
 
-**Deploy:** `make build` → `make build-lambdas` → `km init --dry-run=false` (not `--sidecars`),
-then `km destroy && km create` the `h1-<handle>` sandbox. See `docs/h1-bridge.md`
-§ Silent auto-triage and § Capturing the real payload.
+**Deploy:** `make build` → `make build-lambdas` → `km init --dry-run=false` (create-handler
+zip + IAM; not `--sidecars`). No sandbox recreate for this release.
