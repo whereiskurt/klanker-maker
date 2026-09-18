@@ -2215,6 +2215,19 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 		}
 	}
 
+	// 2026-09-18: KM_H1_DEBUG_CAPTURE — raw-delivery capture toggle for the H1
+	// bridge. Consumed by infra/live/use1/lambda-h1-bridge/terragrunt.hcl
+	// get_env("KM_H1_DEBUG_CAPTURE", "false"). Only exported when true so an absent
+	// or false key leaves the env var unset (terragrunt default "false" ⇒ the bridge's
+	// Capture stays nil ⇒ byte-identical to before). env-wins drift WARN as elsewhere.
+	if cfg.H1.DebugCapture {
+		if envVal := os.Getenv("KM_H1_DEBUG_CAPTURE"); envVal != "" && envVal != "true" {
+			fmt.Fprintf(os.Stderr, "WARN: KM_H1_DEBUG_CAPTURE=%s (env) overrides km-config.yaml h1.debug_capture=true\n", envVal)
+		} else if envVal == "" {
+			os.Setenv("KM_H1_DEBUG_CAPTURE", "true") //nolint:errcheck
+		}
+	}
+
 	// Phase 127: KM_WEBHOOK_SOURCES — JSON-encoded webhook source routing.
 	// Consumed by infra/live/use1/lambda-webhook-bridge/terragrunt.hcl
 	// get_env("KM_WEBHOOK_SOURCES") and parsed by cmd/km-webhook-bridge.

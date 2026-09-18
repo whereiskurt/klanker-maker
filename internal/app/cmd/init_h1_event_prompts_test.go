@@ -1,6 +1,7 @@
 package cmd_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,4 +107,43 @@ func TestResolveH1EventPrompts(t *testing.T) {
 			t.Errorf("KM_H1_PROGRAMS missing inlined file content; got: %s", got)
 		}
 	})
+}
+
+// TestResolveH1EventPrompts_PreservesReply: the reply field must survive @file
+// inlining AND appear in the JSON that becomes KM_H1_PROGRAMS — a dropped field
+// here would make `reply: none` silently a no-op at the bridge.
+func TestResolveH1EventPrompts_PreservesReply(t *testing.T) {
+	configDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(configDir, "p.txt"), []byte("run my skill"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	programs := []config.H1ProgramEntry{{
+		Handle: "acme",
+		Events: map[string]config.H1EventEntry{
+			"report_created": {Prompt: "@p.txt", Reply: "none"},
+			"report_triaged": {Prompt: "inline"},
+		},
+	}}
+	got, err := cmd.ResolveH1EventPrompts(programs, configDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got[0].Events["report_created"].Reply != "none" {
+		t.Errorf("reply dropped by ResolveH1EventPrompts: %+v", got[0].Events["report_created"])
+	}
+	if got[0].Events["report_created"].Prompt != "run my skill" {
+		t.Errorf("prompt not inlined: %q", got[0].Events["report_created"].Prompt)
+	}
+
+	// The JSON form (what KM_H1_PROGRAMS carries) must contain "reply":"none" for
+	// report_created and NO reply key for report_triaged (omitempty ⇒ byte-identical
+	// for the dormant entry).
+	b, _ := json.Marshal(got)
+	s := string(b)
+	if !strings.Contains(s, `"reply":"none"`) {
+		t.Errorf("KM_H1_PROGRAMS JSON missing reply:none: %s", s)
+	}
+	if strings.Count(s, `"reply"`) != 1 {
+		t.Errorf("reply key must be omitted when empty (want exactly 1 occurrence): %s", s)
+	}
 }
