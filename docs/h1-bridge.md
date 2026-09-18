@@ -96,7 +96,7 @@ Source map (ported from `pkg/github/bridge`):
 | CLI | `internal/app/cmd/h1.go` |
 | Config | `internal/app/config/config.go` (`H1Config`/`H1ProgramEntry`/…) |
 | Poller | `pkg/compiler/userdata.go` (`km-h1-inbound-poller`, gated on `notification.h1.inbound.enabled`) |
-| Profile | `profiles/h1-triage.yaml` |
+| Profile | `profiles/h1.yaml` |
 
 ---
 
@@ -132,7 +132,11 @@ h1:
     # Install-wide comment trigger token (literal substring match in the comment body).
     bot_handle: "@km"
     # Fallback SandboxProfile when a target sets no profile.
-    default_profile: profiles/h1-triage.yaml
+    default_profile: profiles/h1.yaml
+    # Raw-delivery capture: every webhook → s3://<artifacts>/h1-captures/<guid>.json BEFORE
+    # signature verification. Turn on for the first live events, then off (captures hold
+    # full vulnerability reports). See § Capturing the real payload.
+    debug_capture: true
     programs:
         - handle: prodsec_klanker_maker_test_h1b   # routing key — exact match, deny-by-default
           # HackerOne usernames allowed to TRIGGER via comment AND to use
@@ -141,10 +145,10 @@ h1:
             - your-hackerone-username
           # bot_handle: "@km"                       # optional per-program override
           targets:                                  # multi-target fanout — one trigger → N sandboxes
-            - alias: h1-test-a
-              profile: profiles/h1-triage.yaml
+            - alias: h1-test-a                      # `km create profiles/h1.yaml h1-test-a` — create it once,
+              profile: profiles/h1.yaml             # keep it (stopped is fine); see § Silent auto-triage caveat
             # - alias: h1-test-b                     # uncomment to exercise fanout
-            #   profile: profiles/h1-triage.yaml
+            #   profile: profiles/h1.yaml
           # AUTO-TRIAGE map. Present ⇒ opt-in on those lifecycle events. Remove ⇒
           # comment-keyword-only (auto-triage dormant).
           events:
@@ -159,10 +163,10 @@ h1:
           commands:
             triage:
                 description: Re-run triage on this report (internal)
-                prompt: '@profiles/h1.triage.prompt.txt'
+                prompt: '@profiles/prompts/h1.triage.prompt.txt'
             summarize:
                 description: Summarize the report and its activity (internal)
-                prompt: '@profiles/h1.summarize.prompt.txt'
+                prompt: '@profiles/prompts/h1.summarize.prompt.txt'
           # Dispatched when a comment carries the bot handle but no /command. Names a Commands key.
           default_command: triage
 ```
@@ -184,7 +188,7 @@ h1:
 
 Both `events[*].prompt` and `commands[*].prompt` accept the `@file` convention:
 
-- `@profiles/h1.triage.prompt.txt` — explicit path (relative to `km-config.yaml`).
+- `@profiles/prompts/h1.triage.prompt.txt` — explicit path (relative to `km-config.yaml`).
 - `@h1.triage.prompt.txt` — bare name resolves to `profiles/h1.triage.prompt.txt`.
 - `@@literal` — escape: yields a literal leading `@`, no file read.
 
@@ -307,7 +311,7 @@ This is the HackerOne-specific capability with no GitHub precedent ("fan out to 
 
 ## The h1-triage profile
 
-`profiles/h1-triage.yaml` — a lean inbound profile (mirror of `github-review.yaml`):
+`profiles/h1.yaml` — a lean inbound profile (mirror of `github-review.yaml`):
 
 - spot `t3.medium`, short TTL/idle,
 - `sourceAccess: none`, network allowlist includes `api.hackerone.com`,
@@ -390,7 +394,7 @@ km h1 init --api-username <user> --api-token <token>
 #    (or "send everything"). Click "Test request" → expect 200 in Recent Deliveries.
 
 # 7. Create a sandbox (or let auto-triage cold-create one on first event).
-km create profiles/h1-triage.yaml
+km create profiles/h1.yaml
 ```
 
 Existing sandboxes need `km destroy && km create` to gain the `h1-inbound` queue + poller.
@@ -471,7 +475,7 @@ A `RUN_H1_E2E=1`-gated harness lives at `test/e2e/h1/e2e_test.go` (skips clean w
 | Agent prompt literally contains `@profiles/…txt` | event prompt not inlined — re-run `km init` (the exporter inlines `@file`; a missing file hard-errors) |
 | Researcher saw a reply unexpectedly | check the `allow:` list + that the comment really carried `/reply_to_researcher`; verify only `targets[0]` replied externally |
 | `KM_H1_PROGRAMS` drift WARN at `km init` | a shell `KM_H1_PROGRAMS` env var overrides `km-config.yaml`; unset it (yaml wins by default) |
-| Remote `km create profiles/h1-triage.yaml` rejects the schema | `km init --sidecars` not run after deploy (the `notification.h1.inbound` field) |
+| Remote `km create profiles/h1.yaml` rejects the schema | `km init --sidecars` not run after deploy (the `notification.h1.inbound` field) |
 | `reply: none` set but an "On it" comment still appears | bridge env not refreshed — `km init --h1 --dry-run=false`; confirm with `aws lambda get-function-configuration --function-name <prefix>-h1-bridge --query 'Environment.Variables.KM_H1_PROGRAMS'` contains `"reply":"none"` |
 | `reply: none` set, no ack, but the agent still posted / a resume hint appeared | sandbox predates the poller change — `km destroy && km create` |
 | Every event drops with `program=""` | routing key path not present in the real payload — enable `debug_capture`, read one object under `h1-captures/`, compare against `pkg/h1/bridge/payload.go` struct tags |
@@ -567,7 +571,7 @@ km init --dry-run=false
 
 # 3. Existing sandboxes must be recreated to gain the new poller.
 km destroy <sandbox-id> --remote --yes
-km create profiles/h1-triage.yaml --alias h1-myprogram
+km create profiles/h1.yaml --alias h1-myprogram
 
 # 4. Verify.
 km doctor

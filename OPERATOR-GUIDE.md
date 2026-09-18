@@ -1474,6 +1474,89 @@ for the full operator guide, rollout sequence, and troubleshooting matrix.
 
 ---
 
+## HackerOne bridge — silent auto-triage quick-start
+
+The HackerOne bridge (`km-h1-bridge`) turns a program's webhook events into sandbox agent
+turns. This is the shortest path to: *a new report arrives → a sandbox runs your triage
+prompt → the result lands wherever your prompt says (Slack, S3, …) → nothing touches the
+HackerOne report until an analyst types `@km /triage` as an internal comment.* Full runbook
+(trigger models, commands, `/reply_to_researcher` safety gate, fanout, troubleshooting) in
+[docs/h1-bridge.md](docs/h1-bridge.md) — the release tarball ships only this guide, so
+read that one on GitHub.
+
+### 1. One-time: bridge credentials
+
+```bash
+km h1 init          # mints the webhook secret, captures the customer-API Basic-Auth creds
+km h1 status        # prints the Function URL to paste into HackerOne → Program → Webhooks
+```
+
+Subscribe the webhook to `report_created` and `report_comment_created`.
+
+### 2. `km-config.yaml`
+
+```yaml
+h1:
+    bot_handle: "@km"
+    default_profile: profiles/h1.yaml
+    debug_capture: true                 # first live events only — see step 5
+    programs:
+        - handle: <program-handle>       # exact HackerOne program handle
+          allow: [<analyst-usernames>]   # who may bless via "@km /triage" (deny-by-default)
+          targets:
+            - alias: h1-<program-handle>
+              profile: profiles/h1.yaml  # or your own — it must install your triage skill
+          events:
+            report_created:
+                prompt: '@prompts/h1-new-report.txt'   # YOUR file, relative to km-config.yaml
+                reply: none                            # nothing writes to the report
+          commands:
+            triage:
+                description: Post the triage as an INTERNAL comment
+                prompt: '@prompts/h1-bless.txt'        # YOUR file
+          default_command: triage
+```
+
+The `report_created` prompt file names your skill and where its output goes;
+`{{report_id}} {{title}} {{state}} {{program}}` are expanded for you. Under `reply: none`
+the poller no longer tells the agent to post, so the prompt must say where the output
+lands — and `km-h1 read --report N` still works (it is a read).
+
+### 3. Deploy (full apply — NOT `--sidecars`)
+
+```bash
+make build && make build-lambdas && km init --dry-run=false
+```
+
+`reply:` / `debug_capture:` edits afterwards need only `km init --h1 --dry-run=false`.
+
+### 4. Create the target sandbox once, and keep it
+
+```bash
+km create profiles/h1.yaml h1-<program-handle>
+```
+
+The alias must match `targets[].alias`. **Keep this sandbox in existence.** The bridge
+wakes a *stopped or paused* box on the next event (`StartInstances`, then the prompt drains
+on boot) — so `profiles/h1.yaml`'s `idleTimeout: 20m` / `teardownPolicy: stop` is the
+intended steady state. But if the row is *absent*, the bridge cold-creates a box that never
+receives the prompt (pre-existing Phase 103 gap: the create-handler drains `github_envelope`,
+not `h1_envelope`) — and under `reply: none` nothing on HackerOne reveals the loss.
+
+### 5. First live event, then turn capture off
+
+```bash
+aws s3 ls s3://<artifacts>/h1-captures/           # one object per delivery
+aws s3 cp s3://<artifacts>/h1-captures/<guid>.json - | jq '.body.data.report.relationships.program.data.attributes.handle'
+```
+
+The bridge's routing key was pinned against a synthetic payload; if that `jq` prints
+`null`, every event is being silently dropped — fix `pkg/h1/bridge/payload.go` before
+anything else. Once the path is confirmed, set `debug_capture: false` and
+`km init --h1 --dry-run=false` (captures contain full vulnerability reports).
+
+---
+
 ## SOPS secret injection
 
 Declarative secret injection into sandboxes via `spec.secrets.sopsFile`. Full
