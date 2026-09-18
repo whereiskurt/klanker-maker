@@ -240,12 +240,19 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	var promptBody string
 	var agentVerb string
 	var replyToResearcherIntent bool // /reply_to_researcher present in this comment?
+	var replyMode string             // ReplyModeNone only on the auto-triage path
 
 	if isAutoTriageEvent && !isComment {
 		// Auto-triage path: the event presence IS the trigger; does NOT gate on allow
 		// (OQ3 — the operator's events: choice is the authorization). Build the prompt
 		// from the event template, pre-expanding the report fields.
 		entry := events[eventType]
+		// Only ReplyModeNone propagates to the envelope/ack gate — "" and "internal"
+		// both mean the pre-existing internal-ack behaviour, and the envelope must
+		// omit reply_mode entirely for those (dormant byte-identity).
+		if entry.Reply == ReplyModeNone {
+			replyMode = entry.Reply
+		}
 		fields := ReportFields{
 			ReportID: payload.ReportID(),
 			Title:    payload.Title(),
@@ -354,6 +361,7 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 			Body:              promptBody,
 			Agent:             agentVerb,
 			ReplyToResearcher: researcherReply && i == 0,
+			ReplyMode:         replyMode,
 		}
 		envJSON, mErr := json.Marshal(env)
 		if mErr != nil {
@@ -373,7 +381,10 @@ func (h *WebhookHandler) Handle(ctx context.Context, req WebhookRequest) Webhook
 	// Post exactly one internal "on it" comment (never researcher-visible). The ack is
 	// always internal regardless of the reply gate — the gate governs the AGENT's reply
 	// from the sandbox, not this synchronous acknowledgement.
-	if dispatched && h.Commenter != nil {
+	//
+	// reply: none (auto-triage only) suppresses it: the operator has declared that
+	// nothing on this event writes to the report until a human does.
+	if dispatched && h.Commenter != nil && replyMode != ReplyModeNone {
 		if cErr := h.Commenter.PostComment(ctx, payload.ReportID(), "On it — dispatched to a sandbox agent.", true); cErr != nil {
 			h.log().Warn("h1-bridge: internal ack failed (non-fatal)", "err", cErr)
 		}

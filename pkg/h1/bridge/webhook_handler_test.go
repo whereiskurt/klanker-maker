@@ -631,3 +631,79 @@ func TestHandle_BadSignature(t *testing.T) {
 		t.Errorf("bad signature must return 401; got %d", r.StatusCode)
 	}
 }
+
+// ============================================================
+// TestHandle_AutoTriage_ReplyNone — 2026-09-18 report_created→Slack design
+// ============================================================
+
+// reply: none on an auto-triage event ⇒ NO internal "On it" ack, and the envelope
+// carries reply_mode:"none" so the poller can silence the agent-side post.
+func TestHandle_AutoTriage_ReplyNone_SkipsAckAndStampsEnvelope(t *testing.T) {
+	events := map[string]bridge.EventEntry{
+		"report_created": {Prompt: "run my skill for {{report_id}}", Reply: bridge.ReplyModeNone},
+	}
+	fakes := newFakes()
+	h := baseHandler(singleProgram("km-sandbox", []string{"alice"}, events), fakes)
+	body := h1Body("km-sandbox", "300", "external-reporter", "", false)
+	r := h.Handle(context.Background(), newRequest(body, "report_created", "g-none"))
+	if r.StatusCode != 200 {
+		t.Fatalf("status=%d; want 200", r.StatusCode)
+	}
+	if len(fakes.sqs.sends) != 1 {
+		t.Fatalf("must still dispatch; sends=%d", len(fakes.sqs.sends))
+	}
+	if len(fakes.commenter.posts) != 0 {
+		t.Errorf("reply:none must NOT post the internal ack; posts=%+v", fakes.commenter.posts)
+	}
+	var env bridge.H1Envelope
+	if err := json.Unmarshal([]byte(fakes.sqs.sends[0].body), &env); err != nil {
+		t.Fatalf("envelope decode: %v", err)
+	}
+	if env.ReplyMode != bridge.ReplyModeNone {
+		t.Errorf("envelope reply_mode=%q; want %q", env.ReplyMode, bridge.ReplyModeNone)
+	}
+	if !strings.Contains(fakes.sqs.sends[0].body, `"reply_mode":"none"`) {
+		t.Errorf("raw envelope must carry reply_mode:none: %s", fakes.sqs.sends[0].body)
+	}
+}
+
+// reply absent / "internal" ⇒ byte-identical to before: ack posted, no reply_mode key.
+func TestHandle_AutoTriage_ReplyDefault_AcksAndOmitsReplyMode(t *testing.T) {
+	for _, reply := range []string{"", "internal"} {
+		events := map[string]bridge.EventEntry{
+			"report_created": {Prompt: "Triage {{report_id}}", Reply: reply},
+		}
+		fakes := newFakes()
+		h := baseHandler(singleProgram("km-sandbox", []string{"alice"}, events), fakes)
+		body := h1Body("km-sandbox", "301", "external-reporter", "", false)
+		h.Handle(context.Background(), newRequest(body, "report_created", "g-"+reply))
+		if len(fakes.commenter.posts) != 1 || !fakes.commenter.posts[0].internal {
+			t.Errorf("reply=%q: want exactly one INTERNAL ack; posts=%+v", reply, fakes.commenter.posts)
+		}
+		if strings.Contains(fakes.sqs.sends[0].body, "reply_mode") {
+			t.Errorf("reply=%q: envelope must omit reply_mode (dormant byte-identity): %s", reply, fakes.sqs.sends[0].body)
+		}
+	}
+}
+
+// The comment-keyword path never carries reply_mode and always acks, even when the
+// program's events map sets reply:none — a human typed the handle and expects a
+// response.
+func TestHandle_Comment_IgnoresEventReplyNone(t *testing.T) {
+	events := map[string]bridge.EventEntry{
+		"report_created": {Prompt: "x", Reply: bridge.ReplyModeNone},
+	}
+	fakes := newFakes()
+	h := baseHandler(singleProgram("km-sandbox", []string{"alice"}, events), fakes)
+	body := h1Body("km-sandbox", "302", "alice", "@km please look", false)
+	h.Handle(context.Background(), newRequest(body, "report_comment_created", "g-c"))
+	if len(fakes.sqs.sends) != 1 {
+		t.Fatalf("comment must dispatch; sends=%d", len(fakes.sqs.sends))
+	}
+	if len(fakes.commenter.posts) != 1 {
+		t.Errorf("comment trigger must still ack; posts=%+v", fakes.commenter.posts)
+	}
+	if strings.Contains(fakes.sqs.sends[0].body, "reply_mode") {
+		t.Errorf("comment envelope must not carry reply_mode: %s", fakes.sqs.sends[0].body)
+	}
+}
