@@ -3073,3 +3073,15 @@ preamble rides in the create-handler zip (which `--sidecars` does not rebuild) w
 sandboxes gain the renderer fix and `--mention` on the next sidecar refresh and the sender
 preamble only on `km destroy && km create`. No schema, IAM, Terraform, DynamoDB or bridge
 Lambda change.
+
+### Back-porting to a sandbox that already exists
+
+`scripts/backport-slack-mentions.sh <sandbox-id> [--restart]` puts both halves on a running
+box over SSM, no recreate: it re-fetches `/opt/km/bin/km-slack` from the install's
+`sidecars/` (so the v0.8.22 deploy must have run first — the script refuses if the S3 copy
+has no `--mention`), and patches `/opt/km/bin/km-slack-inbound-poller` in place with the
+preamble block and the three `KM_SLACK_SENDER_ID` exports — byte-identical to what v0.8.22
+renders, idempotent, `bash -n`-checked, original kept as `.bak`. The poller change takes
+effect only on `systemctl restart km-slack-inbound-poller`, which kills an in-flight turn
+(the message returns to the queue; that turn's reply is lost), so the restart is opt-in
+via `--restart` — run it when the box is quiet.
