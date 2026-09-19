@@ -6,11 +6,11 @@
 //
 // Subcommands:
 //
-//	km-slack post           --channel C... --body /tmp/body.txt [--subject ...] [--thread ts]
+//	km-slack post           --channel C... --body /tmp/body.txt [--subject ...] [--thread ts] [--mention U…,here]
 //	km-slack upload         --channel C... --thread ts --s3-key transcripts/sb-x/y --filename name.gz \
 //	                        --content-type application/gzip --size-bytes 12345
 //	km-slack record-mapping --channel C... --slack-ts 1.2 --offset 1024 --session sid
-//	km-slack reply          [--session id] [--thread ts [--channel C...]] [--body /file] [--render plain|mrkdwn|blocks]
+//	km-slack reply          [--session id] [--thread ts [--channel C...]] [--body /file] [--render plain|mrkdwn|blocks] [--mention U…,here]
 //
 // Required env (post + upload): KM_SANDBOX_ID, KM_SLACK_BRIDGE_URL, AWS_REGION
 // (or AWS_DEFAULT_REGION).
@@ -91,7 +91,10 @@ Subcommands:
   permalink      Resolve a Slack permalink URL for --channel + --ts.
   update         Edit a previously-posted bot message via --channel, --ts, and --text/--body.
   reply          Post a reply into the thread bound to the current session (4-step resolution chain).
-                 Resolution: --thread > $KM_SLACK_THREAD_TS > session-id lookup > channel root.`)
+                 Resolution: --thread > $KM_SLACK_THREAD_TS > session-id lookup > channel root.
+  post/reply     --mention U…[,U…|here|channel] notifies people: the ids are prepended as <@U…>
+                 tokens so Slack resolves them. Names are rejected — use the id from the
+                 "[Slack] From:" line of the incoming turn or a <@U…> the sender typed.`)
 }
 
 // runPost is the Phase 63 post subcommand entry point. Returns a process exit
@@ -101,19 +104,39 @@ Subcommands:
 // flag beats the KM_SLACK_RENDER environment variable. Unknown values fall
 // back to plain with a stderr warning. "blocks" is accepted by the flag but
 // treated as plain until Plan 74-02 (PR2) lands.
+// mentionFlag collects --mention values. The flag may be repeated and each
+// value may be a comma-separated list; slack.ParseMentions does the
+// normalisation and rejects anything that is not an id, "here", or "channel".
+type mentionFlag []string
+
+const mentionFlagUsage = "Notify people: Slack user id (U…/W…), 'here', or 'channel'; comma-separated or repeated. Prepended as a <@U…> line so Slack actually resolves it — names are rejected (km cannot look them up)."
+
+func (m *mentionFlag) String() string { return strings.Join(*m, ",") }
+func (m *mentionFlag) Set(v string) error {
+	*m = append(*m, v)
+	return nil
+}
+
 func runPost(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("post", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var channel, subject, bodyPath, thread string
 	var renderMode string
 	var newMessage bool
+	var mentions mentionFlag
 	fs.StringVar(&channel, "channel", "", "Slack channel ID (C...)")
 	fs.StringVar(&subject, "subject", "", "Optional subject text (rendered as bold header by bridge; omit for clean threaded replies)")
 	fs.StringVar(&bodyPath, "body", "", "Path to body file (stdin '-' NOT supported)")
 	fs.StringVar(&thread, "thread", "", "Thread parent ts")
 	fs.StringVar(&renderMode, "render", "", "Render mode: plain (default, no-op), mrkdwn (Phase 74 Tier 1 transformer), blocks (Phase 74 PR2 Tier 2 Block Kit; falls back to mrkdwn on 50-block cap), blocks-rich (Phase 111 Tier 3 markdown/table blocks, opt-in; falls back to blocks then mrkdwn)")
 	fs.BoolVar(&newMessage, "new-message", false, "Post as new top-level message (omits thread_ts); prints ts=<value> to stdout for poller capture. Phase 70.")
+	fs.Var(&mentions, "mention", mentionFlagUsage)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	mentionTokens, err := slack.ParseMentions(mentions)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack post: --mention: %v\n", err)
 		return 2
 	}
 	// Resolve render mode precedence: explicit flag > KM_SLACK_RENDER env > "plain".
@@ -146,7 +169,7 @@ func runPost(args []string, stderr io.Writer) int {
 		threadArg = ""
 	}
 
-	ts, err := run(channel, subject, bodyPath, threadArg, renderMode)
+	ts, err := run(channel, subject, bodyPath, threadArg, renderMode, mentionTokens)
 	if err != nil {
 		fmt.Fprintf(stderr, "km-slack post: %v\n", err)
 		return 1
@@ -294,7 +317,7 @@ func runRecordMapping(args []string, stderr io.Writer) int {
 // calling runWith. Separated so tests can inject an ephemeral key via runWith.
 // renderMode is one of "plain", "mrkdwn", "blocks" — resolved by runPost before calling run.
 // Returns the message ts on success (empty string if the bridge didn't return one).
-func run(channel, subject, bodyPath, thread, renderMode string) (string, error) {
+func run(channel, subject, bodyPath, thread, renderMode string, mentions []string) (string, error) {
 	sandboxID := os.Getenv("KM_SANDBOX_ID")
 	if sandboxID == "" {
 		return "", errors.New("KM_SANDBOX_ID env var not set")
@@ -324,7 +347,7 @@ func run(channel, subject, bodyPath, thread, renderMode string) (string, error) 
 		return "", fmt.Errorf("load signing key: %w", err)
 	}
 
-	return runWith(ctx, priv, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode)
+	return runWith(ctx, priv, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode, mentions...)
 }
 
 // runWith is the testable inner entry point. Tests inject an ephemeral key and
@@ -347,7 +370,14 @@ func run(channel, subject, bodyPath, thread, renderMode string) (string, error) 
 // Returns the message ts from the bridge 200 response on success (empty string
 // if the bridge didn't include one). Phase 70 made this the return value so
 // runPost --new-message can print ts= to stdout for poller capture.
-func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode string) (string, error) {
+//
+// mentions are Slack mention tokens (<@U…>, <!here>) already normalised by
+// slack.ParseMentions. When present, MentionLine(mentions) is prepended to the
+// rendered text in EVERY mode — Slack builds the notification from `text` even
+// when blocks are sent — and, in block modes, a leading section/mrkdwn block
+// carries it visibly (see slack.PrependMentionBlock for why not the markdown
+// block). Empty ⇒ byte-identical to before.
+func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode string, mentions ...string) (string, error) {
 	if sandboxID == "" {
 		return "", errors.New("sandboxID is required")
 	}
@@ -400,6 +430,19 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 		rendered = slack.Mrkdwnify(string(body))
 	default: // "plain" and any unknown value (already normalised in runPost)
 		rendered = string(body)
+	}
+	if line := slack.MentionLine(mentions); line != "" {
+		rendered = line + "\n" + rendered
+		if blocksJSON != "" {
+			if withMention, ok := slack.PrependMentionBlock(blocksJSON, line); ok {
+				blocksJSON = withMention
+			} else {
+				// At the 50-block cap (or unparseable): drop blocks rather than
+				// have Slack reject the whole post; the text still mentions.
+				fmt.Fprintf(os.Stderr, "km-slack: cannot add mention block (block cap); posting text only\n")
+				blocksJSON = ""
+			}
+		}
 	}
 	if len(rendered) > slack.MaxRenderedBytes {
 		rendered = rendered[:slack.MaxRenderedBytes] +
@@ -704,6 +747,8 @@ type runReplyOptions struct {
 	bodyPath string
 	// render is the --render flag value (default "plain").
 	render string
+	// mentions are normalised Slack mention tokens from --mention (may be empty).
+	mentions []string
 }
 
 // runReply is the dispatch entry point for the "reply" subcommand.
@@ -717,7 +762,14 @@ func runReply(args []string, stderr io.Writer) int {
 	fs.StringVar(&opts.subject, "subject", "", "Optional subject text")
 	fs.StringVar(&opts.bodyPath, "body", "", "Path to body file (required)")
 	fs.StringVar(&opts.render, "render", "", "Render mode: plain (default), mrkdwn, blocks, blocks-rich (Phase 111 Tier 3 opt-in)")
+	var mentions mentionFlag
+	fs.Var(&mentions, "mention", mentionFlagUsage)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	var err error
+	if opts.mentions, err = slack.ParseMentions(mentions); err != nil {
+		fmt.Fprintf(stderr, "km-slack reply: --mention: %v\n", err)
 		return 2
 	}
 
@@ -859,7 +911,7 @@ func runReplyWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridg
 	}
 
 	// Reuse the existing runWith post path with the resolved (channel, thread).
-	_, err := runWith(ctx, priv, sandboxID, bridgeURL, resolvedChannel, opts.subject, opts.bodyPath, resolvedThread, opts.render)
+	_, err := runWith(ctx, priv, sandboxID, bridgeURL, resolvedChannel, opts.subject, opts.bodyPath, resolvedThread, opts.render, opts.mentions...)
 	return err
 }
 

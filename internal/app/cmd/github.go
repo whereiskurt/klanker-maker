@@ -232,16 +232,19 @@ func RunGitHubInit(ctx context.Context, ssmClient SSMWriteAPI, cfg *config.Confi
 	}
 	fmt.Fprintf(out, "Written: %sbot-login (%s)\n", ghPrefix, botLogin)
 
-	// Write bridge-url (String) — may be empty string on first run before Lambda deploy.
+	// Write bridge-url (String). SKIPPED when empty — SSM PutParameter rejects a
+	// zero-length Value with a ValidationException, and on the first run (before
+	// the Lambda is deployed) empty is the normal case. Same defect and same fix
+	// as the h1 twin this was forked into.
 	bridgeURL := opts.BridgeURL
-	if err := putSSMParam(ctx, ssmClient, ghPrefix+"bridge-url",
-		bridgeURL, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
-		return fmt.Errorf("writing bridge-url to SSM: %w", err)
-	}
 	if bridgeURL != "" {
+		if err := putSSMParam(ctx, ssmClient, ghPrefix+"bridge-url",
+			bridgeURL, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
+			return fmt.Errorf("writing bridge-url to SSM: %w", err)
+		}
 		fmt.Fprintf(out, "Written: %sbridge-url (%s)\n", ghPrefix, bridgeURL)
 	} else {
-		fmt.Fprintf(out, "Written: %sbridge-url (empty — update after Lambda deploy with --bridge-url)\n", ghPrefix)
+		fmt.Fprintf(out, "Skipped: %sbridge-url (not known yet — re-run with --force --bridge-url <url> after Lambda deploy)\n", ghPrefix)
 	}
 
 	fmt.Fprintf(out, "GitHub bridge config stored. Run 'km github manifest --bridge-url %s' to generate the App manifest.\n", bridgeURL)

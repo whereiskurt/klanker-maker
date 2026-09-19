@@ -1,6 +1,6 @@
 ---
 name: slack
-description: Post messages from inside a sandbox to its per-sandbox Slack channel using km-slack — for end-of-task status, progress notes, operator pings, threaded transcript replies, and Block-Kit-rendered output
+description: Post messages from inside a sandbox to its per-sandbox Slack channel using km-slack — for end-of-task status, progress notes, operator pings, @-mentioning people (the sender, someone they named, @here), threaded transcript replies, and Block-Kit-rendered output
 ---
 
 # Sandbox → Slack Notifications
@@ -105,7 +105,7 @@ THREAD_FLAG=""
 
 Default for no-flag callers is `plain` (preserves the behavior of legacy callers).
 
-The Phase-68 streaming hook (`_km_stream_drain`) and the inbound poller reply both pass `--render "${KM_SLACK_RENDER:-blocks}"`, so new sandboxes render as Block Kit by default. To override per-sandbox (operator-side safety valve):
+The Phase-68 streaming hook (`_km_stream_drain`) and the inbound poller reply both pass `--render "${KM_SLACK_RENDER:-blocks-rich}"` (Phase 112), so new sandboxes render as rich Block Kit by default. To override per-sandbox (operator-side safety valve):
 
 ```bash
 echo 'KM_SLACK_RENDER=plain' | sudo tee -a /etc/km/notify.env
@@ -216,6 +216,45 @@ aws dynamodb get-item \
 
 On the very first turn of a thread the row isn't written yet (the poller stores `claude_session_id` only after `claude -p` exits). If the lookup returns empty, tell the user to ask again after this reply lands.
 
+### Mentioning people ("@ me back", "@ Ron", "@here")
+
+Slack notifies a person **only** from the literal token `<@U…>` (user id) or `<!here>` /
+`<!channel>`. `@Kurt`, `@U0KURT` without angle brackets, and display names are plain text —
+they render as typed and ping nobody. That is the failure to avoid.
+
+**Where the ids come from — never invent one:**
+
+| You want to @ | The id is in |
+|---|---|
+| the person who sent this turn ("@ me back") | the `[Slack] From: <@U…>` line at the top of your prompt, also `$KM_SLACK_SENDER_ID` |
+| someone the sender @-mentioned ("@ Ron") | the incoming message itself — Slack delivers `@Ron` as `<@U0RON>`, verbatim in your prompt |
+| everyone active in the channel | `<!here>` — **only when explicitly asked**; it pages the whole channel |
+
+km cannot look up a name (the bot never enumerates the workspace directory). If asked to @ someone
+whose id is not in the prompt, say so and ask them to @-mention that person in the thread.
+
+**Two ways to do it — both notify:**
+
+```bash
+# 1. Inline — write the token in the body. Works in every render mode, including the
+#    default blocks-rich; the renderer preserves <@U…>/<!here>/<#C…> and escapes everything else.
+cat > /tmp/reply.txt << 'EOF'
+<@U0KURT> done — tests green, PR is up.
+EOF
+/opt/km/bin/km-slack reply --body /tmp/reply.txt
+
+# 2. --mention — guaranteed notification independent of the body: prepends a "<@U…>" line
+#    (and a leading section block in block modes). Accepts U…, @U…, <@U…>, here, channel;
+#    comma-separated or repeated. Rejects names.
+/opt/km/bin/km-slack reply --body /tmp/reply.txt --mention "$KM_SLACK_SENDER_ID"
+/opt/km/bin/km-slack post --channel "$KM_SLACK_CHANNEL_ID" --thread "$KM_SLACK_THREAD_TS" \
+  --body /tmp/reply.txt --mention U0KURT,U0RON
+```
+
+The Stop-hook auto-post of your final answer uses the inline path — a `<@U…>` in your reply
+text is enough for the normal bridge turn. Reach for `--mention` when you post explicitly and
+want the ping regardless of how the body renders.
+
 ## Limits
 
 | Limit | Value | Notes |
@@ -271,6 +310,7 @@ km-slack reply [flags]
   --session <id>    Explicit session ID; bypasses auto-detect
   --body <file>     Path to the message body file (required; stdin rejected)
   --render plain|mrkdwn|blocks  Render mode (default: plain)
+  --mention <U…|here|channel>  Notify people (comma-separated or repeated); see "Mentioning people"
 ```
 
 ### Basic usage

@@ -2467,6 +2467,27 @@ while true; do
         chown sandbox:sandbox "$PROMPT_FILE" || true
       fi
 
+      # --- km-slack-sender-preamble ---
+      # Who sent this turn. Slack resolves a mention ONLY from a literal <@U…>
+      # token; the bridge forwards the raw event text, so any <@U…> the human
+      # typed is already in TEXT — but the sender's OWN id lives only in the SQS
+      # body's .user, and without it "can you @ me back" is unanswerable (an
+      # agent that guesses writes "@Kurt", which Slack renders as plain text).
+      # Prepend it as a one-line preamble and export it into every dispatched
+      # turn (below) so the agent can write <@$SENDER_ID> inline or pass
+      # --mention "$KM_SLACK_SENDER_ID" to km-slack post/reply. Self-contained
+      # (derives SENDER_ID from BODY here) so the compiler test can run it as-is.
+      SENDER_ID=$(echo "$BODY" | jq -r '.user // empty' 2>/dev/null || true)
+      if [ -n "$SENDER_ID" ]; then
+        HDR_FILE="$(mktemp)"
+        printf '[Slack] From: <@%s> (also in $KM_SLACK_SENDER_ID). To notify this person in your reply write <@%s> inline, or pass --mention %s to km-slack post/reply. A bare @name is plain text to Slack — never invent an id; use this one or a <@U…> token from the message.\n\n' "$SENDER_ID" "$SENDER_ID" "$SENDER_ID" > "$HDR_FILE"
+        cat "$PROMPT_FILE" >> "$HDR_FILE"
+        mv "$HDR_FILE" "$PROMPT_FILE"
+        chmod 644 "$PROMPT_FILE"
+        chown sandbox:sandbox "$PROMPT_FILE" 2>/dev/null || true
+      fi
+      # --- end km-slack-sender-preamble ---
+
       # Phase 70 Plan 70-06: cross-agent switch sequence (executed when DO_SWITCH=1).
       # Locked ordering per CONTEXT.md: fetch OLD permalink FIRST (THREAD_TS already known
       # from the inbound SQS event — no dep on the new top-level) → post new top-level
@@ -2609,6 +2630,7 @@ while true; do
             export PATH=\"/home/sandbox/.local/bin:\$PATH\"
             export KM_CODEX_RUN_ID='$RUN_ID'
             export KM_SLACK_THREAD_TS='$THREAD_TS'
+            export KM_SLACK_SENDER_ID='$SENDER_ID'
             cd /workspace 2>/dev/null || true
             codex exec resume '$CLAUDE_SESSION' \"\$(cat '$PROMPT_FILE')\" \
               --json --dangerously-bypass-approvals-and-sandbox \
@@ -2623,6 +2645,7 @@ while true; do
             export PATH=\"/home/sandbox/.local/bin:\$PATH\"
             export KM_CODEX_RUN_ID='$RUN_ID'
             export KM_SLACK_THREAD_TS='$THREAD_TS'
+            export KM_SLACK_SENDER_ID='$SENDER_ID'
             cd /workspace 2>/dev/null || true
             codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
               > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
@@ -2646,6 +2669,7 @@ while true; do
           # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
           export PATH=\"/home/sandbox/.local/bin:\$PATH\"
           export KM_SLACK_THREAD_TS='$THREAD_TS'
+          export KM_SLACK_SENDER_ID='$SENDER_ID'
           cd /workspace 2>/dev/null || true
           claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
             --dangerously-skip-permissions $RESUME_ARG \

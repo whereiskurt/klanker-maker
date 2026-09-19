@@ -2,17 +2,17 @@
 // Phase 99.1 Plan 04: km doctor visibility on poison messages stranded in the
 // shared per-install FIFO dead-letter queues.
 //
-// checkInboundDLQDepth probes the two shared DLQs
-// ({prefix}-github-inbound-dlq.fifo / {prefix}-slack-inbound-dlq.fifo) — created
+// checkInboundDLQDepth probes the shared DLQs
+// ({prefix}-{github,slack,webhook,h1}-inbound-dlq.fifo) — created
 // by the sqs-inbound-dlq Terraform module (Plan 03) and targeted by the
 // per-sandbox inbound FIFO queues' RedrivePolicy (Plan 01). A non-zero depth
 // means a poison envelope dead-lettered after maxReceiveCount=3 instead of
 // head-of-line-blocking its FIFO group.
 //
 // States (RESEARCH Finding 6):
-//   - CheckSkipped: nil SQS client, OR neither DLQ exists (dormant — inbound
+//   - CheckSkipped: nil SQS client, OR no DLQ exists (dormant — inbound
 //     integrations never configured / DLQs never provisioned).
-//   - CheckOK:      both DLQs resolvable and empty.
+//   - CheckOK:      every resolvable DLQ is empty.
 //   - CheckWarn:    at least one DLQ holds >0 messages (count + remediation).
 package cmd
 
@@ -50,6 +50,13 @@ func checkInboundDLQDepth(ctx context.Context, sqsClient kmaws.SQSClient, resour
 	}{
 		{"github", kmaws.GitHubInboundDLQName(resourcePrefix)},
 		{"slack", kmaws.SlackInboundDLQName(resourcePrefix)},
+		// Phase 127 / v1.2.0 (2026-09-19): the webhook and h1 DLQs were provisioned
+		// (h1 only since sqs-inbound-dlq v1.2.0) but never probed — a poison
+		// envelope could sit there with km doctor green. Absent DLQs still count
+		// as dormant via the QueueDoesNotExist path below, so a pre-v1.2.0 install
+		// is not made red by the probe.
+		{"webhook", kmaws.WebhookInboundDLQName(resourcePrefix)},
+		{"h1", kmaws.H1InboundDLQName(resourcePrefix)},
 	}
 
 	resolved := 0

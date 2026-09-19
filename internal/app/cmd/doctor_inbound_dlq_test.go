@@ -25,14 +25,33 @@ import (
 // URLs by their QueueNamePrefix. resourcePrefix "km" ⇒
 // km-github-inbound-dlq.fifo and km-slack-inbound-dlq.fifo.
 func dlqURLs(resourcePrefix string) *fakeSQS {
-	gh := kmaws.GitHubInboundDLQName(resourcePrefix)
-	sl := kmaws.SlackInboundDLQName(resourcePrefix)
-	return &fakeSQS{
-		listByPrefix: true,
-		listResult: []string{
-			"https://sqs.us-east-1.amazonaws.com/123456789012/" + gh,
-			"https://sqs.us-east-1.amazonaws.com/123456789012/" + sl,
-		},
+	var urls []string
+	for _, name := range []string{
+		kmaws.GitHubInboundDLQName(resourcePrefix),
+		kmaws.SlackInboundDLQName(resourcePrefix),
+		kmaws.WebhookInboundDLQName(resourcePrefix),
+		kmaws.H1InboundDLQName(resourcePrefix),
+	} {
+		urls = append(urls, "https://sqs.us-east-1.amazonaws.com/123456789012/"+name)
+	}
+	return &fakeSQS{listByPrefix: true, listResult: urls}
+}
+
+// Every shared DLQ the sqs-inbound-dlq module provisions must be probed — a
+// poison H1 or webhook envelope stranded in a DLQ nobody looks at is the exact
+// "silent, invisible" shape this check exists to prevent. Before 2026-09-19 only
+// github/slack were probed; h1 and webhook DLQs could fill up with km doctor green.
+func TestCheckInboundDLQDepth_WarnsOnEveryKind(t *testing.T) {
+	for _, name := range []string{
+		kmaws.WebhookInboundDLQName("km"),
+		kmaws.H1InboundDLQName("km"),
+	} {
+		fs := dlqURLs("km")
+		fs.depthByName = map[string]string{name: "1"}
+		r := checkInboundDLQDepth(context.Background(), fs, "km")
+		if r.Status != CheckWarn {
+			t.Errorf("%s holds 1 message: want CheckWarn, got %s (%s)", name, r.Status, r.Message)
+		}
 	}
 }
 

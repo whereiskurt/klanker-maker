@@ -29,7 +29,7 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/sqs-inbound-dlq/v1.1.0"
+  source = "${local.repo_root}/infra/modules/sqs-inbound-dlq/v1.2.0"
 }
 
 inputs = {
@@ -40,6 +40,11 @@ inputs = {
   # derives deterministically via pkg/aws.DLQArn — no terragrunt dependency needed on
   # this module from lambda-webhook-bridge (same pattern as github/slack/h1).
   webhook_dlq_name = "${local.site_vars.locals.site.label}-webhook-inbound-dlq.fifo"
+  # v1.2.0 (2026-09-19): shared HackerOne inbound FIFO DLQ. Matches
+  # pkg/aws.H1InboundDLQName(prefix) exactly — create_h1_inbound.go derives the
+  # RedrivePolicy ARN from that name, and SQS rejects the per-sandbox queue at
+  # CreateQueue (after the EC2 apply) if the target does not exist.
+  h1_dlq_name = "${local.site_vars.locals.site.label}-h1-inbound-dlq.fifo"
   tags = {
     "km:component" = "km-inbound-dlq"
     "km:managed"   = "true"

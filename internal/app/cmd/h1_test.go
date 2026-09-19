@@ -262,3 +262,63 @@ func TestH1Status_Dormant(t *testing.T) {
 		t.Errorf("dormant status should print a 'not configured' message; got:\n%s", out.String())
 	}
 }
+
+// TestH1Init_EmptyBridgeURLIsSkippedNotWritten pins the fix for a live failure:
+// `km h1 init` with no --bridge-url (the normal FIRST run — the Function URL does
+// not exist until a later `km init` deploys the Lambda) unconditionally called
+// PutParameter with an empty Value, and real SSM rejects that:
+//
+//	ValidationException: Value at 'value' failed to satisfy constraint:
+//	Member must have length greater than or equal to 1
+//
+// The write is last, so init aborted AFTER webhook-secret/api-username/api-token
+// had already landed — the minted webhook secret is printed after it and was
+// never shown, and the partial write made every re-run need --force.
+//
+// Both existing tests passed a non-empty BridgeURL, and the mock enforces no
+// length constraint, so nothing caught it. Assert on the CALL LIST, not on the
+// mock erroring, so this stays true regardless of mock behaviour.
+func TestH1Init_EmptyBridgeURLIsSkippedNotWritten(t *testing.T) {
+	mock := &mockSSMWrite{}
+	cfg := &config.Config{}
+	out := &bytes.Buffer{}
+
+	err := cmd.RunH1Init(context.Background(), mock, cfg, cmd.H1InitOpts{
+		APIUsername: "h1_triage_token",
+		APIToken:    "tok-abc-123",
+		BridgeURL:   "", // first run — Lambda not deployed yet
+		Force:       true,
+	}, out)
+	if err != nil {
+		t.Fatalf("RunH1Init with empty BridgeURL must succeed, got: %v", err)
+	}
+
+	if call := findSSMCall(mock.calls, "/km/config/h1/bridge-url"); call != nil {
+		got := ""
+		if call.Value != nil {
+			got = *call.Value
+		}
+		t.Errorf("bridge-url must NOT be written when empty; got a PutParameter with Value=%q", got)
+	}
+
+	// The other three must still land — a skipped bridge-url is not a skipped init.
+	for _, name := range []string{
+		"/km/config/h1/webhook-secret",
+		"/km/config/h1/api-username",
+		"/km/config/h1/api-token",
+	} {
+		if findSSMCall(mock.calls, name) == nil {
+			t.Errorf("expected SSM write for %s", name)
+		}
+	}
+
+	// The minted secret must reach the operator — it is the value they paste into
+	// the HackerOne Webhooks UI and it is printed AFTER the bridge-url branch.
+	s := out.String()
+	if !strings.Contains(s, "Secret:") {
+		t.Errorf("init must print the minted webhook secret; got:\n%s", s)
+	}
+	if !strings.Contains(s, "Skipped:") {
+		t.Errorf("init should say bridge-url was skipped; got:\n%s", s)
+	}
+}
