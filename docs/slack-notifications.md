@@ -39,6 +39,7 @@ signed payloads and the Lambda forwards to the Slack Web API.
 17. [Phase 96: Default router](#phase-96--default-router-orphan-channel--mention-reply)
 18. [Phase 99.1: Inbound DLQ](#phase-991--inbound-poison-message-dlq-fifo-wedge-fix)
 19. [Phase 104: O(1) channel resolution](#phase-104--o1-channel-resolution-on-alias-reuse)
+20. [Mentioning people from a sandbox reply](#mentioning-people-from-a-sandbox-reply-2026-09-19)
 
 ---
 
@@ -3019,3 +3020,56 @@ The live synthetic-HMAC E2E (`.planning/phases/119-*/119-UAT.md`) proved all six
 assertions: parallel-across-threads (3 overlapping RUN_DIRs in a 4s window from one poller
 PID), serial-within-thread, cap enforcement, heartbeat/no-dup, dormancy regression
 (cap=1 → no env line), and event_id dedup.
+
+## Mentioning people from a sandbox reply (2026-09-19)
+
+**The symptom this fixes:** an agent asked to "@ me back" replied with the literal text
+`<@U0ABC…>` or `@Kurt`, visible to everyone and notifying no one.
+
+### Why it happened
+
+Slack resolves a mention **only** from the literal token `<@U…>` (or `<!here>`/`<!channel>`).
+Three things stood between the agent and that token:
+
+1. **The sender's id never reached the agent.** The bridge writes `InboundQueueBody.User` on
+   every inbound turn, but the poller extracted only `channel`/`thread_ts`/`text`/`attachments`.
+   "Me" was unknowable, so the agent guessed a display name. (Mentions the *human* typed were
+   already fine — the bridge forwards the raw event text, so `@Ron` arrives as `<@U0RON>`.)
+2. **The renderer escaped the token.** `mrkdwn` and `blocks` modes HTML-escape every `<`/`>`
+   except `<url|label>` links, so a correctly written `<@U…>` became `&lt;@U…&gt;` — which
+   Slack renders as the literal `<@U…>`.
+3. **Nothing documented the correct form**, so an agent had no reason to prefer it.
+
+### What changed
+
+| Piece | Change |
+|---|---|
+| `km-slack-inbound-poller` (userdata) | Reads the body's `.user`; prepends `[Slack] From: <@U…> …` to the prompt with the two ways to use it; exports `KM_SLACK_SENDER_ID` inline in every dispatched turn. No preamble when `.user` is absent. Slack-inbound profiles only. |
+| `pkg/slack` renderer | `htmlEscape` preserves exactly `<@U…>`, `<@W…>`, `<#C…>`, `<!here>`, `<!channel>`. Nothing wider — `<script>`, `<!subteam^…>` (no `usergroups:*` scope) and other angle-bracketed text still escape. |
+| `km-slack post` / `reply` | New `--mention U…[,U…\|here\|channel]` (repeatable). Normalises `U1`, `@U1`, `<@U1>`, `here`, `@here`; prepends a `<@U…>` line to the plain `text` in **every** mode (Slack builds the push notification from `text` even when blocks are sent) and, in block modes, a leading `section`/`mrkdwn` block. At the 50-block cap the block is dropped rather than the post. **Names are rejected at parse time.** |
+| `klanker:slack` skill | "Mentioning people" section: where the ids come from, the two forms, `<!here>` only on explicit ask. Plugin `0.4.16`. |
+
+### Verified live (2026-09-19)
+
+Posted against the real workspace with the bot token: a `markdown` block containing `<@U…>`,
+`<!here>` and `<#C…>` came back from `chat.postMessage` as `rich_text` with `user`, `broadcast`
+and `channel` elements — i.e. the default `blocks-rich` path resolves inline mentions natively.
+`RenderRich`/`RenderBlocks` fallback text carries the tokens verbatim, so notifications fire
+from `text` as well. `--mention` is therefore the explicit/guaranteed form, not the only one.
+
+### Names are deliberately unsupported
+
+km never enumerates the workspace directory — `users:read`/`users:read.email` exist only to
+resolve an operator-supplied email for invites (see the scope table above). A
+`users.list`-backed "find Ron" would contradict that commitment. The ids an agent legitimately
+holds are the sender's (from the preamble) and any `<@U…>` the sender typed. If a plain-name
+path is ever wanted, it is `users.lookupByEmail` on an explicit address, not a directory search.
+
+### Deploy surface
+
+`make build` + `make build-lambdas` + `km init --dry-run=false`. **Do not split:** the poller
+preamble rides in the create-handler zip (which `--sidecars` does not rebuild) while the
+`km-slack` binary carrying `--mention` and the renderer fix rides in `sidecars/`. Existing
+sandboxes gain the renderer fix and `--mention` on the next sidecar refresh and the sender
+preamble only on `km destroy && km create`. No schema, IAM, Terraform, DynamoDB or bridge
+Lambda change.

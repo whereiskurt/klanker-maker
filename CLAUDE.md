@@ -8,6 +8,35 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Slack replies can @-mention people (2026-09-19):**
+- **An agent asked to "@ me back" posted the literal text `<@U0ABC…>` (or `@Kurt`) and
+  notified nobody.** Three causes, all real: the poller extracted `channel`/`thread_ts`/
+  `text`/`attachments` from the SQS body and dropped `.user`, so the sender's id never reached
+  the agent; `htmlEscape` in `pkg/slack` turned every `<…>` except `<url|label>` into
+  `&lt;…&gt;`, so even a correctly written token rendered literally in `mrkdwn`/`blocks`; and
+  nothing told the agent the token form. (Mentions the *human* typed were already fine —
+  the bridge forwards raw event text, so `@Ron` arrives as `<@U0RON>`.)
+- **Fix, three pieces.** The Slack poller prepends `[Slack] From: <@U…> …` to the prompt and
+  exports `KM_SLACK_SENDER_ID` inline in all three dispatch sites (Slack-inbound profiles only;
+  the compiler test executes the rendered bash, not a grep). The renderer preserves exactly
+  `<@U…>`/`<@W…>`/`<#C…>`/`<!here>`/`<!channel>` and nothing wider. `km-slack post|reply
+  --mention U…[,U…|here|channel]` prepends a `<@U…>` line to the plain `text` in every mode
+  (Slack builds the push notification from `text` even with blocks) plus a leading
+  `section`/`mrkdwn` block in block modes; **names are rejected at parse time.**
+- **Proven live, not assumed:** a `markdown` block with `<@U…>`/`<!here>`/`<#C…>` came back
+  from `chat.postMessage` as `rich_text` `user`/`broadcast`/`channel` elements — the default
+  `blocks-rich` path resolves inline mentions natively, so `--mention` is the guaranteed form,
+  not the only one.
+- **Names are deliberately unsupported.** `docs/slack-notifications.md`'s scope table commits
+  that the bot never enumerates the workspace directory; a `users.list`-backed "find Ron"
+  would break that. The ids an agent holds are the sender's and whatever the sender typed.
+  `<!subteam^…>` is out too (`usergroups:*` is a deliberately-unrequested scope).
+- **Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false`.** NOT
+  `--sidecars` alone: the poller preamble rides in the create-handler zip, `km-slack` rides in
+  sidecars. Existing sandboxes gain the renderer fix + `--mention` on a sidecar refresh and the
+  sender preamble only on `km destroy && km create`. Plugin `0.4.16`. See
+  `docs/slack-notifications.md` § Mentioning people.
+
 **A failed initCommand no longer aborts the rest silently (2026-09-17):**
 - **`set -e` in `/tmp/km-init.sh` is correct and stays; the SILENCE was the bug.**
   An unpublished npm pin (`claude-code@2.1.171`) killed step 3 of 13 and the ten
@@ -1836,6 +1865,7 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | Serverless `km check` runner (deploy/run/ls/sync/rm, KM_CHECK_TRIGGER, CheckDispatch) | `docs/check-runner.md` (Phase 116) |
 | Inject secrets into a `km check` Lambda — `--secret <ssm-path>` + `--sops <file>` (deploy-time unpack to per-check SSM SecureString params; no Lambda KMS) | `docs/check-runner.md` § Secrets |
 | Post to Slack from inside a sandbox (incl. transcript streaming, inbound, attachments) | `klanker:slack` skill |
+| @-mentioning people from a sandbox reply — where the ids come from (`[Slack] From:` preamble, `KM_SLACK_SENDER_ID`, tokens the sender typed), `km-slack --mention`, why the renderer used to escape `<@U…>`, why names are unsupported | `docs/slack-notifications.md` § Mentioning people |
 | Polite-bot mode, `KM_SLACK_MENTION_ONLY`, per-channel @-mention-only inbound | `docs/slack-notifications.md` § Phase 91 |
 | Federated bridge relay — one Slack App across multiple km installs | `docs/slack-notifications.md` § Phase 95 |
 | Default router: orphan-channel @-mention reply, `slack.default_router`, cooldown | `docs/slack-notifications.md` § Phase 96 |
