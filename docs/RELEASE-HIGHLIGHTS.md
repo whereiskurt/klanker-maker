@@ -11,36 +11,40 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Drafted from CLAUDE.md phase blocks since v0.8.20 via
+  Drafted from CLAUDE.md phase blocks since v0.8.21 via
   scripts/draft-release-highlights.sh, then curated.
 -->
 
-## 🧊 A HackerOne cold-create now delivers the prompt
+## 👋 A sandbox reply can @-mention people — and it actually pings them
 
-Since Phase 103 the H1 bridge's absent-sandbox path published `SandboxCreate` with
-`h1_envelope`, but the create-handler only ever drained `github_envelope` — a
-`report_created` arriving with no `h1-<handle>` box provisioned one that never received
-the triage. `drainInboundEnvelope` now serves both bridges from one function. All three
-states work: running (immediate), stopped/paused (bridge wakes it, prompt drains on boot),
-absent (cold-create, then drain). Pre-creating the box is still the faster first triage.
+Ask a sandbox over Slack to "@ me back" and it used to post the literal text `<@U0ABC…>`
+(or `@Kurt`), visible to everyone and notifying no one. Three km-side causes, all fixed:
+the inbound poller dropped the sender's Slack id (so "me" was unknowable), the renderer
+HTML-escaped `<@U…>` into `&lt;@U…&gt;`, and nothing told the agent the token form. Now
+every Slack turn starts with `[Slack] From: <@U…>` (also `$KM_SLACK_SENDER_ID`), the
+renderer preserves exactly `<@U…>`/`<#C…>`/`<!here>`/`<!channel>`, and
+`km-slack post|reply --mention U…[,U…|here|channel]` is the explicit form. Verified live:
+Slack's markdown block resolves inline mentions natively. Names are rejected by design —
+the bot never enumerates the workspace directory; the ids come from the sender and from
+whatever they @-typed. Plugin `0.4.16` carries the skill guidance.
 
-## 🔑 Remote `km create` of an H1 or webhook profile no longer 403s
+## 🪦 H1 inbound was non-functional since Phase 103: the DLQ nothing created
 
-The create-handler role had SQS lifecycle grants for `slack-inbound-*` and
-`github-inbound-*` only. A remote `km create` runs *inside* that Lambda and the H1 /
-webhook queue provisioning is fatal, so the very first `km create profiles/h1.yaml` would
-have died on `sqs:CreateQueue AccessDenied` — unnoticed because Phase 103's UAT was never
-run. `km-operator-policy` now grants `h1-inbound-*` (with `SendMessage` for the drain)
-and `webhook-inbound-*`. A name-agnostic guard derives the queue kinds from `pkg/aws`'s
-`*InboundQueueName` helpers, so the next bridge cannot ship without its grant.
+`pkg/aws.H1InboundDLQName` named `{prefix}-h1-inbound-dlq.fifo`; no module ever provisioned
+it, and SQS validates a RedrivePolicy target at `CreateQueue` — not at redrive — so the first
+`km create` of any `notification.h1.inbound.enabled` profile failed *after* the EC2 apply,
+leaving a running instance on a `failed` row. `sqs-inbound-dlq/v1.2.0` creates it; a
+name-agnostic guard now pairs every `*InboundDLQName` helper with a resource in the pinned
+module, and `km doctor`'s DLQ-depth check probes the webhook and h1 DLQs too.
 
-## 📖 The bundled operator guide has the HackerOne quick-start
+## 🔐 `km h1 init` no longer fails its own first run, or echo the API token
 
-The release tarball ships `OPERATOR-GUIDE.md` but not `docs/`, so the guide now carries
-the whole sequence — `km h1 init` → `km-config.yaml` (`reply: none`, `debug_capture`) →
-full-apply deploy → create the box → the first-event capture check with the exact `jq`.
-`docs/h1-bridge.md`'s example also stops pointing at `profiles/h1-triage.yaml` (never
-existed) and the pre-Phase-120 prompt paths.
+With no `--bridge-url` (the documented first run, before the Lambda exists) init wrote an
+empty SSM Value, which SSM rejects — after the other three params had landed, so the minted
+webhook secret was never shown and the retry needed `--force`. `km github init` had the
+identical defect. Both skip the write. The `HackerOne API token:` prompt reads without echo.
 
-**Deploy:** `make build` → `make build-lambdas` → `km init --dry-run=false` (create-handler
-zip + IAM; not `--sidecars`). No sandbox recreate for this release.
+**Deploy:** `make build` → `make build-lambdas` → `km init --dry-run=false` — unsplittable
+(poller userdata in the create-handler zip, `km-slack` in sidecars, the DLQ needs a
+terraform apply). Existing sandboxes gain the renderer fix and `--mention` on a sidecar
+refresh; the `[Slack] From:` preamble needs `km destroy && km create`.
