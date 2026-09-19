@@ -8,6 +8,34 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**H1 inbound was non-functional since Phase 103; `km h1 init` failed its own first run (2026-09-18/19):**
+- **Nothing ever created `{prefix}-h1-inbound-dlq.fifo`.** `pkg/aws.H1InboundDLQName`,
+  `DLQArn` and `create_h1_inbound.go` agreed on a name the `sqs-inbound-dlq` module never
+  provisioned — a gap v1.1.0's own comment recorded and scoped out of Phase 127 as latent.
+  **It was not latent: SQS validates a RedrivePolicy's target at `CreateQueue`, not at
+  redrive**, so the first `km create` of any `notification.h1.inbound.enabled` profile
+  400'd — *after* the EC2 apply, leaving an m7i.2xlarge running on a `failed` row until
+  `km destroy`. No shipped profile set the flag and Phase 103's UAT was never run, so the
+  first operator to turn it on was the first to hit it (second defect from that un-run UAT
+  in two days, after `03c999fd`'s missing IAM grant). Fixed by new immutable
+  `infra/modules/sqs-inbound-dlq/v1.2.0` + live pin; **the name is a contract, not a
+  reference** (the Go side never reads the module output). `pkg/terragrunt`'s
+  `TestSqsInboundDLQModule_EveryDLQNameHelperHasAQueueResource` now pairs every
+  `*InboundDLQName` helper with a resource in the pinned module — name-agnostic, covers a
+  fifth bridge without an edit. Deploy = `km init --dry-run=false`; `--only sqs-inbound-dlq`
+  is not in the scoped allowlist.
+- **`km h1 init` with no `--bridge-url` (the documented first run) always failed**: it wrote
+  `bridge-url` unconditionally and SSM rejects a zero-length Value, *after* the other three
+  params had landed — so the minted webhook secret (printed last) was never shown and the
+  retry needed `--force`, silently rotating it. `RunGitHubInit` had the identical defect.
+  Both now skip the write and print `Skipped:`; `putSSMParam` deliberately NOT taught to
+  accept empty. The `HackerOne API token:` prompt also echoed a program-wide credential;
+  now `term.ReadPassword` on a TTY. Operator-binary only (`make build`).
+- **Two related, known, NOT fixed:** a missing `@file` event prompt is a WARN (docs say
+  hard-error) and ships the literal `@profiles/…` string; event prompts are inlined into
+  `KM_H1_PROGRAMS` and hit Lambda's 4 KB env cap while command prompts go to SSM. See
+  `docs/h1-bridge.md` § Troubleshooting.
+
 **Slack replies can @-mention people (2026-09-19):**
 - **An agent asked to "@ me back" posted the literal text `<@U0ABC…>` (or `@Kurt`) and
   notified nobody.** Three causes, all real: the poller extracted `channel`/`thread_ts`/
