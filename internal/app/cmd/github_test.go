@@ -381,3 +381,35 @@ func TestRunGitHubManifest_EventUnion(t *testing.T) {
 		t.Errorf("default_permissions.metadata: got %q, want %q (required for repository events)", perms["metadata"], "read")
 	}
 }
+
+// TestGitHubInit_EmptyBridgeURLIsSkippedNotWritten is the github twin of
+// TestH1Init_EmptyBridgeURLIsSkippedNotWritten (h1.go was forked from github.go
+// and carried the defect with it). An empty BridgeURL — the normal first run,
+// before `km init` has deployed the Lambda — must skip the SSM write entirely:
+// real SSM rejects a zero-length Value, and the mock does not model that, so
+// assert on the call list rather than on an error.
+func TestGitHubInit_EmptyBridgeURLIsSkippedNotWritten(t *testing.T) {
+	mock := &mockSSMWrite{}
+	cfg := &config.Config{}
+	out := &bytes.Buffer{}
+
+	err := cmd.RunGitHubInit(context.Background(), mock, cfg, cmd.GitHubInitOpts{
+		BotLogin:  "mykm-bot[bot]",
+		BridgeURL: "",
+		Force:     true,
+	}, out)
+	if err != nil {
+		t.Fatalf("RunGitHubInit with empty BridgeURL must succeed, got: %v", err)
+	}
+	if call := findSSMCall(mock.calls, "/km/config/github/bridge-url"); call != nil {
+		t.Errorf("bridge-url must NOT be written when empty; got a PutParameter call")
+	}
+	for _, name := range []string{"/km/config/github/webhook-secret", "/km/config/github/bot-login"} {
+		if findSSMCall(mock.calls, name) == nil {
+			t.Errorf("expected SSM write for %s", name)
+		}
+	}
+	if !strings.Contains(out.String(), "Skipped:") {
+		t.Errorf("init should say bridge-url was skipped; got:\n%s", out.String())
+	}
+}

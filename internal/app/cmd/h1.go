@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -32,6 +33,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"golang.org/x/term"
 )
 
 // H1SSMReadAPI is a narrow read interface for `km h1 status`.
@@ -114,15 +116,20 @@ func RunH1Init(ctx context.Context, ssmClient SSMWriteAPI, cfg *config.Config, o
 	}
 	fmt.Fprintf(out, "Written: %sapi-token (SecureString)\n", h1Prefix)
 
-	// bridge-url — String (may be empty before the Lambda is deployed).
-	if err := putSSMParam(ctx, ssmClient, h1Prefix+"bridge-url",
-		opts.BridgeURL, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
-		return fmt.Errorf("writing bridge-url to SSM: %w", err)
-	}
+	// bridge-url — String. SKIPPED when empty: SSM PutParameter rejects a
+	// zero-length Value with a ValidationException, and on the FIRST run the URL
+	// legitimately does not exist yet (the Lambda is deployed by a later
+	// `km init`). Writing it unconditionally aborted init after the three
+	// parameters above had already been written, so the minted webhook secret —
+	// printed at the very end — was never shown and a re-run needed --force.
 	if opts.BridgeURL != "" {
+		if err := putSSMParam(ctx, ssmClient, h1Prefix+"bridge-url",
+			opts.BridgeURL, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
+			return fmt.Errorf("writing bridge-url to SSM: %w", err)
+		}
 		fmt.Fprintf(out, "Written: %sbridge-url (%s)\n", h1Prefix, opts.BridgeURL)
 	} else {
-		fmt.Fprintf(out, "Written: %sbridge-url (empty — re-run with --bridge-url after `km init` provides the Function URL)\n", h1Prefix)
+		fmt.Fprintf(out, "Skipped: %sbridge-url (not known yet — re-run with --force --bridge-url <url> after `km init` provides the Function URL)\n", h1Prefix)
 	}
 
 	// Operator paste instructions. The Function URL + secret go into the
@@ -160,7 +167,7 @@ func newH1InitCmd(cfg *config.Config) *cobra.Command {
 				apiUsername = promptH1Line(c.InOrStdin(), c.OutOrStdout(), "HackerOne API username: ")
 			}
 			if apiToken == "" {
-				apiToken = promptH1Line(c.InOrStdin(), c.OutOrStdout(), "HackerOne API token: ")
+				apiToken = promptH1Secret(c.InOrStdin(), c.OutOrStdout(), "HackerOne API token: ")
 			}
 			if apiUsername == "" || apiToken == "" {
 				return fmt.Errorf("api-username and api-token are required (provide --api-username/--api-token or enter at the prompt)")
@@ -201,6 +208,26 @@ func promptH1Line(in io.Reader, out io.Writer, prompt string) string {
 	r := bufio.NewReader(in)
 	line, _ := r.ReadString('\n')
 	return strings.TrimSpace(line)
+}
+
+// promptH1Secret reads a secret from in WITHOUT echoing it, when in is a real
+// terminal. The API token is a long-lived credential for the whole program's
+// customer API; echoing it leaves a copy in terminal scrollback and in any
+// transcript of the session, which is how one gets pasted somewhere it should
+// not be. Falls back to the echoing line reader when stdin is not a terminal
+// (pipes, tests, CI) — there is nothing to echo to in that case.
+func promptH1Secret(in io.Reader, out io.Writer, prompt string) string {
+	f, ok := in.(*os.File)
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		return promptH1Line(in, out, prompt)
+	}
+	fmt.Fprint(out, prompt)
+	b, err := term.ReadPassword(int(f.Fd()))
+	fmt.Fprintln(out)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
