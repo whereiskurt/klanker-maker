@@ -254,6 +254,15 @@ func applyText(seg string) string {
 // The URL portion may contain spaces (from malformed markdown link targets).
 var reSlackLink = regexp.MustCompile(`<[^<>]+\|[^<>]+>`)
 
+// reSlackMention matches the exact Slack mention grammar and nothing wider:
+// <@U…>/<@W…> user mentions, <#C…> channel links, and the two broadcast
+// keywords <!here>/<!channel>. Slack resolves a mention ONLY from this literal
+// token, so escaping it (as htmlEscape did before) renders the agent's reply as
+// the visible text "<@U0KURT>" and notifies nobody. The alternation is
+// deliberately closed — <!subteam^…> (usergroups:* is not a requested scope),
+// <!date…>, and any other angle-bracketed text still escape.
+var reSlackMention = regexp.MustCompile(`<(@[UW][A-Z0-9]+|#C[A-Z0-9]+|!here|!channel)>`)
+
 // reExistingEntity matches already-escaped HTML entities (&lt; &gt; &amp;)
 // so htmlEscape does not double-encode them on a second pass.
 var reExistingEntity = regexp.MustCompile(`&(lt|gt|amp);`)
@@ -286,6 +295,8 @@ func htmlEscape(s string) string {
 
 	// Preserve Slack links first (they contain < > that must not be escaped).
 	s = reSlackLink.ReplaceAllStringFunc(s, addPreserved)
+	// Preserve mention tokens (<@U…>, <#C…>, <!here>, <!channel>) — same reason.
+	s = reSlackMention.ReplaceAllStringFunc(s, addPreserved)
 	// Preserve existing HTML entities (& must not be re-escaped).
 	s = reExistingEntity.ReplaceAllStringFunc(s, addPreserved)
 
