@@ -44,14 +44,26 @@ onbox() {
   [ -n "${KM_ARTIFACTS_BUCKET:-}" ] || { echo "KM_ARTIFACTS_BUCKET unset and km-identity.sh unreadable" >&2; exit 1; }
 
   echo "== 1/2 km-slack sidecar"
-  aws s3 cp "s3://$KM_ARTIFACTS_BUCKET/sidecars/km-slack" /opt/km/bin/km-slack.new --only-show-errors
+  KEY="s3://$KM_ARTIFACTS_BUCKET/sidecars/km-slack"
+  echo "   source: $KEY ($(aws s3 ls "$KEY" | awk '{print "uploaded "$1" "$2" UTC, "$3" bytes"}'))"
+  aws s3 cp "$KEY" /opt/km/bin/km-slack.new --only-show-errors
   chmod 0755 /opt/km/bin/km-slack.new
-  if /opt/km/bin/km-slack.new post -h 2>&1 | grep -q -- '-mention'; then
+  PROBE=$(/opt/km/bin/km-slack.new post -h 2>&1) && true; PRC=$?
+  if printf '%s' "$PROBE" | grep -q -- '-mention'; then
     mv /opt/km/bin/km-slack.new /opt/km/bin/km-slack
     echo "   km-slack: replaced (has --mention)"
   else
     rm -f /opt/km/bin/km-slack.new
-    echo "   km-slack: the object in S3 has no --mention — deploy v0.8.22 (km init --dry-run=false) first" >&2
+    echo "   km-slack: the object in S3 does not advertise --mention" >&2
+    echo "   probe exit=$PRC, first line: $(printf '%s' "$PROBE" | head -1)" >&2
+    if [ "$PRC" -ge 126 ]; then
+      echo "   → the binary did not run at all (wrong arch / not executable?)" >&2
+    else
+      echo "   → the binary ran but predates v0.8.22: the deploy that ran km init --dry-run=false" >&2
+      echo "     did not upload a new sidecar (partial init? built from an older tree?)." >&2
+      echo "     Compare the upload time above with your deploy; re-run 'km init --sidecars' from a" >&2
+      echo "     checkout at v0.8.22+ (km --version) to refresh sidecars/ alone." >&2
+    fi
     exit 1
   fi
 
