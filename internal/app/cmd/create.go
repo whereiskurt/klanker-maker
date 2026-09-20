@@ -1100,6 +1100,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			}
 			network.VSCodeSSHPubKey = pubLine
 			fmt.Fprintf(os.Stderr, "  ✓ VS Code keypair written to %s\n", privPath)
+			publishCreateCredential(ctx, cfg, sshKeyKind, sandboxID, privPath, nil)
 		}
 	}
 
@@ -1113,12 +1114,14 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		if err != nil {
 			return fmt.Errorf("locate home directory for desktop credential: %w", err)
 		}
-		if err := GenerateDesktopCredential(homeDir, sandboxID, network); err != nil {
+		cred, err := GenerateDesktopCredential(homeDir, sandboxID, network)
+		if err != nil {
 			return fmt.Errorf("desktop credential: %w", err)
 		}
-		if network.DesktopKasmPass != os.Getenv("KM_DESKTOP_KASM_PASS") || os.Getenv("KM_DESKTOP_KASM_PASS") == "" {
+		if cred != "" {
 			credPath := filepath.Join(homeDir, ".km", "desktop", sandboxID)
 			fmt.Fprintf(os.Stderr, "  + Desktop credential written to %s\n", credPath)
+			publishCreateCredential(ctx, cfg, desktopCredKind, sandboxID, credPath, []byte(cred))
 		}
 	}
 
@@ -3011,6 +3014,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		}
 		network.VSCodeSSHPubKey = pubLine
 		fmt.Fprintf(os.Stderr, "  ✓ VS Code keypair written to %s\n", privPath)
+		publishCreateCredential(ctx, cfg, sshKeyKind, sandboxID, privPath, nil)
 	}
 
 	// Phase 93: generate per-sandbox KasmVNC credential on the operator's laptop
@@ -3024,11 +3028,15 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		if err != nil {
 			return "", fmt.Errorf("locate home directory for desktop credential: %w", err)
 		}
-		if err := GenerateDesktopCredential(homeDir, sandboxID, network); err != nil {
+		cred, err := GenerateDesktopCredential(homeDir, sandboxID, network)
+		if err != nil {
 			return "", fmt.Errorf("desktop credential (remote): %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "  ✓ Desktop credential written to %s\n",
-			filepath.Join(homeDir, ".km", "desktop", sandboxID))
+		credPath := filepath.Join(homeDir, ".km", "desktop", sandboxID)
+		fmt.Fprintf(os.Stderr, "  ✓ Desktop credential written to %s\n", credPath)
+		if cred != "" {
+			publishCreateCredential(ctx, cfg, desktopCredKind, sandboxID, credPath, []byte(cred))
+		}
 	}
 
 	// Step 7: Compile profile into artifacts
@@ -3788,36 +3796,42 @@ func randomPassword(n int) (string, error) {
 // the env values are used directly and no file is written — the operator's laptop already
 // holds the credential file.
 //
+// Returns the "user:pass" credential when it was generated here, so the caller can
+// publish it to SSM for the other analysts (shared_cred.go); "" on the env path, because
+// the create-handler subprocess must not publish — the laptop already did, and the
+// Lambda has no grant on /{prefix}/access/.
+//
 // Phase 93 (DSK-08-CREDENTIAL). Mirrors the VSCode keypair pattern at lines 616-638.
-func GenerateDesktopCredential(homeDir, sandboxID string, network *compiler.NetworkConfig) error {
+func GenerateDesktopCredential(homeDir, sandboxID string, network *compiler.NetworkConfig) (string, error) {
 	// Lambda subprocess path: reuse the operator-generated credential.
 	if envUser := os.Getenv("KM_DESKTOP_KASM_USER"); envUser != "" {
 		if envPass := os.Getenv("KM_DESKTOP_KASM_PASS"); envPass != "" {
 			network.DesktopKasmUser = envUser
 			network.DesktopKasmPass = envPass
-			return nil
+			return "", nil
 		}
 	}
 
 	// Local path: generate a fresh random password.
 	pass, err := randomPassword(16)
 	if err != nil {
-		return fmt.Errorf("generate desktop password: %w", err)
+		return "", fmt.Errorf("generate desktop password: %w", err)
 	}
 	const user = "kasm"
 
 	desktopDir := filepath.Join(homeDir, ".km", "desktop")
 	if err := os.MkdirAll(desktopDir, 0o700); err != nil {
-		return fmt.Errorf("create desktop credential dir: %w", err)
+		return "", fmt.Errorf("create desktop credential dir: %w", err)
 	}
 	credPath := filepath.Join(desktopDir, sandboxID)
-	if err := os.WriteFile(credPath, []byte(user+":"+pass), 0o600); err != nil {
-		return fmt.Errorf("write desktop credential: %w", err)
+	cred := user + ":" + pass
+	if err := os.WriteFile(credPath, []byte(cred), 0o600); err != nil {
+		return "", fmt.Errorf("write desktop credential: %w", err)
 	}
 
 	network.DesktopKasmUser = user
 	network.DesktopKasmPass = pass
-	return nil
+	return cred, nil
 }
 
 // installLimitsToQuota converts a config.LimitsConfig (install-level action quota

@@ -856,6 +856,17 @@ func CleanupSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, dynCl
 		return err
 	}
 
+	// Shared access credentials (SSH key + desktop password) published for
+	// km vscode|desktop|herdr|tunnel start (access.go). Same idempotency as
+	// the others. The ttl-handler's ssm:DeleteParameter grant is per exact
+	// name — TestTTLHandlerModule_EveryCleanupSSMParamHasADeleteGrant pairs
+	// every path deleted here with an ARN in that module.
+	for _, p := range []string{SSHKeyPath(resourcePrefix, sandboxID), DesktopCredPath(resourcePrefix, sandboxID)} {
+		if err := deleteSSMParameter(ctx, ssmClient, p); err != nil {
+			return err
+		}
+	}
+
 	// Delete DynamoDB identity row
 	_, err := dynClient.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: awssdk.String(tableName),

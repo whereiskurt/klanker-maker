@@ -135,7 +135,7 @@ func resolveDesktopDeps(ctx context.Context, cfg *config.Config, fetcher Sandbox
 // runDesktopStart resolves the sandbox, verifies the local credential file, runs the SSM
 // pre-flight check, prints the browser URL + credential, then opens the foreground SSM
 // port-forward to the remote KasmVNC port (8444).
-func runDesktopStart(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
+func runDesktopStart(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
 	// Probe the local port before doing any AWS work.
 	// KasmVNC's default remote port (8444) may already be locally occupied.
 	probeLn, probeErr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
@@ -153,18 +153,17 @@ func runDesktopStart(ctx context.Context, _ *config.Config, fetcher SandboxFetch
 		return fmt.Errorf("find EC2 instance: %w", err)
 	}
 
-	// Locate the local credential file; fail fast with a clear hint if absent.
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("locate home directory: %w", err)
+	// Reconcile the local credential with the shared one in SSM (spec §4.1) —
+	// this is what lets a laptop that never ran km create for this sandbox in.
+	// A store that cannot be built is a WARN; the local file still works.
+	store, serr := NewSharedCredStoreFunc(ctx, cfg)
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "  [warn] shared credential store unavailable (%v); using the local credential only\n", serr)
+		store = nil
 	}
-	credPath := filepath.Join(home, ".km", "desktop", sandboxID)
-	if _, statErr := os.Stat(credPath); statErr != nil {
-		if os.IsNotExist(statErr) {
-			return fmt.Errorf("desktop credential for %s not found at %s. If you created this sandbox on a different machine, copy the ~/.km/desktop/%s file over",
-				sandboxID, credPath, sandboxID)
-		}
-		return fmt.Errorf("stat desktop credential: %w", statErr)
+	credPath, err := syncSharedCredential(ctx, store, desktopCredKind, sandboxID, os.Stdout)
+	if err != nil {
+		return err
 	}
 
 	// Read and split the "user:pass" credential file.
@@ -525,12 +524,18 @@ sudo -u sandbox test -s /home/sandbox/.kasmpasswd && echo "kasmpasswd-updated"`,
 		return fmt.Errorf("commit new credential: %w", err)
 	}
 
-	// Step 7: final output.
 	action := "replaced"
 	if localCredAbsent {
 		action = "created"
 	}
-	fmt.Printf("✓ Local credential %s atomically (~/.km/desktop/%s)\n\n", action, sandboxID)
+	fmt.Printf("✓ Local credential %s atomically (~/.km/desktop/%s)\n", action, sandboxID)
+
+	// Step 7: publish (box → local → SSM; see runVSCodeRekey for why this order).
+	if err := publishSharedCredential(ctx, cfg, desktopCredKind, sandboxID, []byte(user+":"+newPass)); err != nil {
+		return fmt.Errorf("rekey applied on the sandbox and locally, but publishing to SSM failed: %w\nOther analysts will get a stale password until you re-run: km desktop rekey %s --yes", err, sandboxID)
+	}
+	fmt.Printf("✓ Published to SSM (%s)\n\n", kmaws.DesktopCredPath(cfg.GetResourcePrefix(), sandboxID))
+
 	fmt.Printf("Rekey complete. KasmVNC re-reads the password file per login, so any open\nsession stays connected; the new password applies on the next login —\nrun: km desktop start %s\n", sandboxID)
 	return nil
 }

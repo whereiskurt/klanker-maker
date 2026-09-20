@@ -85,6 +85,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewOtelCmd(cfg))
 	root.AddCommand(NewEnvCmd(cfg))
 	root.AddCommand(NewInfoCmd(cfg))
+	root.AddCommand(NewVersionCmd())
 	root.AddCommand(NewEmailCmd(cfg))
 	root.AddCommand(NewAMICmd(cfg))
 	root.AddCommand(NewSlackCmd(cfg))

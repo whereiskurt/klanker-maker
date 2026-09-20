@@ -413,7 +413,7 @@ func TestDesktopCredential(t *testing.T) {
 	t.Run("enabled profile writes file and threads NetworkConfig", func(t *testing.T) {
 		home := t.TempDir()
 		network := &compiler.NetworkConfig{}
-		if err := cmd.GenerateDesktopCredential(home, "sbx-test-01", network); err != nil {
+		if _, err := cmd.GenerateDesktopCredential(home, "sbx-test-01", network); err != nil {
 			t.Fatalf("GenerateDesktopCredential: %v", err)
 		}
 
@@ -463,10 +463,10 @@ func TestDesktopCredential(t *testing.T) {
 		home := t.TempDir()
 		n1 := &compiler.NetworkConfig{}
 		n2 := &compiler.NetworkConfig{}
-		if err := cmd.GenerateDesktopCredential(home, "sbx-a", n1); err != nil {
+		if _, err := cmd.GenerateDesktopCredential(home, "sbx-a", n1); err != nil {
 			t.Fatalf("first GenerateDesktopCredential: %v", err)
 		}
-		if err := cmd.GenerateDesktopCredential(home, "sbx-b", n2); err != nil {
+		if _, err := cmd.GenerateDesktopCredential(home, "sbx-b", n2); err != nil {
 			t.Fatalf("second GenerateDesktopCredential: %v", err)
 		}
 		if n1.DesktopKasmPass == n2.DesktopKasmPass {
@@ -481,7 +481,7 @@ func TestDesktopCredential(t *testing.T) {
 
 		home := t.TempDir()
 		network := &compiler.NetworkConfig{}
-		if err := cmd.GenerateDesktopCredential(home, "sbx-override", network); err != nil {
+		if _, err := cmd.GenerateDesktopCredential(home, "sbx-override", network); err != nil {
 			t.Fatalf("GenerateDesktopCredential with env override: %v", err)
 		}
 
@@ -503,6 +503,33 @@ func TestDesktopCredential(t *testing.T) {
 
 // TestDesktopCredentialSource verifies that create.go contains the required
 // call sites and source patterns for desktop credential integration.
+// TestGenerateDesktopCredential_ReturnsCredOnlyWhenGenerated pins the
+// contract the create-time SSM publish relies on: the helper returns the
+// "user:pass" it generated on THIS machine, and "" on the env path — the
+// create-handler subprocess, which must never publish (the laptop already did
+// and the Lambda has no grant).
+func TestGenerateDesktopCredential_ReturnsCredOnlyWhenGenerated(t *testing.T) {
+	home := t.TempDir()
+	network := &compiler.NetworkConfig{}
+	cred, err := cmd.GenerateDesktopCredential(home, "sbx-gen", network)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred == "" || cred != network.DesktopKasmUser+":"+network.DesktopKasmPass {
+		t.Errorf("cred = %q, want user:pass of the generated credential", cred)
+	}
+
+	t.Setenv("KM_DESKTOP_KASM_USER", "kasm")
+	t.Setenv("KM_DESKTOP_KASM_PASS", "frompipe")
+	cred, err = cmd.GenerateDesktopCredential(home, "sbx-env", &compiler.NetworkConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred != "" {
+		t.Errorf("env path (create-handler subprocess) must return \"\" so nothing publishes; got %q", cred)
+	}
+}
+
 func TestDesktopCredentialSource(t *testing.T) {
 	src, err := os.ReadFile("create.go")
 	if err != nil {

@@ -256,7 +256,7 @@ func TestRunHerdrStart_UnhealthyPreflightDoesNotWriteSSHConfig(t *testing.T) {
 	mockSSM := &vsCodeSSMMock{output: "=== sshd ===\ninactive\n=== authkeys exists ===\nyes\n"}
 	fetcher := newVSCodeEC2Sandbox("sb-abc123")
 
-	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34568, false, true, "")
+	err := runHerdrStart(context.Background(), nil, fetcher, nil, mockSSM, "sb-abc123", 34568, false, true, "")
 	if err == nil {
 		t.Fatal("expected error for unhealthy sshd, got nil")
 	}
@@ -291,7 +291,7 @@ func TestRunHerdrStart_UnhealthyPreflightUsesHerdrWording(t *testing.T) {
 	mockSSM := &vsCodeSSMMock{output: "=== sshd ===\ninactive\n=== authkeys exists ===\nno\n"}
 	fetcher := newVSCodeEC2Sandbox("sb-abc123")
 
-	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34571, false, true, "")
+	err := runHerdrStart(context.Background(), nil, fetcher, nil, mockSSM, "sb-abc123", 34571, false, true, "")
 	if err == nil {
 		t.Fatal("expected error for unhealthy sshd+authkeys, got nil")
 	}
@@ -346,7 +346,7 @@ func TestRunHerdrStart_NoInstallShortCircuitsWithoutSendingInstallCommand(t *tes
 	}
 	fetcher := newVSCodeEC2Sandbox("sb-abc123")
 
-	err := runHerdrStart(context.Background(), fetcher, nil, mockSSM, "sb-abc123", 34569, true, true, "")
+	err := runHerdrStart(context.Background(), nil, fetcher, nil, mockSSM, "sb-abc123", 34569, true, true, "")
 	if err == nil {
 		t.Fatal("expected error when herdr is absent and --no-install is set")
 	}
@@ -386,7 +386,7 @@ func TestRunHerdrStart_RepairInstallPreservesPreflightFields(t *testing.T) {
 	fetcher := newVSCodeEC2Sandbox("sb-abc123")
 	execFn := func(c *exec.Cmd) error { return nil }
 
-	err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", 34570, false, true, "")
+	err := runHerdrStart(context.Background(), nil, fetcher, execFn, mockSSM, "sb-abc123", 34570, false, true, "")
 	if err != nil {
 		t.Fatalf("expected success after a repair install, got: %v", err)
 	}
@@ -630,7 +630,7 @@ func TestRunHerdrStart_AttachLaunchesHerdr(t *testing.T) {
 		return nil
 	}
 
-	err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", port, false, false, "agents")
+	err := runHerdrStart(context.Background(), nil, fetcher, execFn, mockSSM, "sb-abc123", port, false, false, "agents")
 	if err != nil {
 		t.Fatalf("attach flow returned: %v", err)
 	}
@@ -665,7 +665,7 @@ func TestRunHerdrStart_NoAttachDoesNotLaunchHerdr(t *testing.T) {
 		return nil
 	}
 
-	if err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", 34591, false, true, ""); err != nil {
+	if err := runHerdrStart(context.Background(), nil, fetcher, execFn, mockSSM, "sb-abc123", 34591, false, true, ""); err != nil {
 		t.Fatalf("no-attach flow returned: %v", err)
 	}
 	for _, cmd := range ran {
@@ -682,7 +682,7 @@ func TestRunHerdrStart_MissingLocalHerdrFallsBackToHoldingTheForward(t *testing.
 	fetcher, mockSSM := herdrStartFixture(t)
 
 	execFn := func(c *exec.Cmd) error { return nil }
-	if err := runHerdrStart(context.Background(), fetcher, execFn, mockSSM, "sb-abc123", 34592, false, false, ""); err != nil {
+	if err := runHerdrStart(context.Background(), nil, fetcher, execFn, mockSSM, "sb-abc123", 34592, false, false, ""); err != nil {
 		t.Fatalf("missing local herdr should fall back, not fail: %v", err)
 	}
 }

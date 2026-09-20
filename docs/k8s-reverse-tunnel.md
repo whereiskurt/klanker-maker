@@ -150,8 +150,13 @@ Two consequences worth knowing before you see them:
    `km tunnel` is not a way to fix a broken kubectl — it forwards a working one.
 2. **A running sandbox** whose profile did not set `spec.runtime.vscode.enabled: false`.
    That default is `true`, so unless you deliberately opted out, every sandbox qualifies.
-3. **The sandbox's private key** at `~/.km/keys/<sandbox-id>`. If you created the sandbox
-   on another machine, copy the `~/.km/keys/<sandbox-id>*` files across.
+3. **The sandbox's private key** at `~/.km/keys/<sandbox-id>`. It is shared via SSM and
+   `km tunnel` pulls or refreshes it before connecting, so a laptop that never ran
+   `km create` for the sandbox still qualifies. `km tunnel` makes no SSM pre-flight,
+   so unlike `km vscode start` it cannot warn when the box's `authorized_keys` disagrees
+   with the shared key — that surfaces as `Permission denied (publickey)` inside ssh, and
+   the fix is `km vscode rekey <id>`. See
+   [docs/vscode.md § Sharing a sandbox between analysts](vscode.md#sharing-a-sandbox-between-analysts).
 4. **`curl` on the sandbox.** Every stock km AMI has it; `km tunnel` checks and fails
    with a clear message if it is somehow absent.
 
@@ -332,8 +337,14 @@ The SSM forward never came up. Check `km status <id>`, and that
 `aws ssm start-session` works for you at all. `km vscode status <id>` reports whether
 sshd is actually running on the box.
 
-**`private key for <id> not found`.**
-The sandbox was created on a different machine. Copy `~/.km/keys/<id>*` across.
+**`no shared key for <id> in SSM and none at ~/.km/keys/<id>`.**
+Neither SSM nor this laptop holds the key (a pre-shared-key sandbox whose creator
+never ran `start` since). Run `km vscode rekey <id>`; it mints, installs and publishes.
+
+**`Permission denied (publickey)` inside the ssh leg.**
+The box's `authorized_keys` disagrees with the shared key (a hand rekey that was never
+published, or an AMI restore). `km vscode start <id>` names this explicitly; the fix
+either way is `km vscode rekey <id>`.
 
 **Mint failures.**
 Every credential mint logs one line on your terminal, and a failure carries your

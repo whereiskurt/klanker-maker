@@ -8,6 +8,7 @@ import (
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
@@ -61,6 +62,12 @@ func TestMain(m *testing.M) {
 	// build-func contract override it locally (save/restore), so this global no-op
 	// is safe.
 	BuildLambdaZipsFunc = func(string) error { return nil }
+
+	// Shared access-credential store: nil means "no SSM, legacy local-file
+	// behaviour", which keeps every pre-existing vscode/desktop/herdr/tunnel
+	// test byte-identical. Tests exercising the sync override this locally
+	// (save/restore).
+	NewSharedCredStoreFunc = func(context.Context, *config.Config) (*sharedCredStore, error) { return nil, nil }
 
 	// Shrink the select-loop / ticker durations that the `sleep` seam does NOT
 	// cover (these are time.After / time.NewTicker waits, not time.Sleep). The

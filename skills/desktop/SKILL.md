@@ -47,6 +47,8 @@ spec:
 
 The credential file is written by `km create` when `desktop.enabled: true` and read by `km desktop start` to print the login URL. It is deleted by `km destroy`.
 
+**It is a cache of the shared credential in SSM** (`/{prefix}/access/<id>/desktop-cred`). `km desktop start` pulls it on a laptop that has never seen the sandbox, refreshes it after someone else's `km desktop rekey`, and publishes it if SSM has no copy yet — so several analysts on several machines just run `start`. There is no pre-flight guard for a stale password (the box stores a hash); a browser login failure means `km desktop rekey $SB`.
+
 ## One-time setup
 
 The default `km create` is **remote**: the create-handler Lambda runs `km create` as a subprocess and compiles the userdata itself, so its bundled `km` must carry the desktop schema + OS-aware bootstrap. After a build that changes either, redeploy:

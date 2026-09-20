@@ -846,6 +846,10 @@ resource "aws_iam_role_policy" "identity_cleanup" {
         Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.identities_table_name}"
       },
       {
+        # Grant is per EXACT parameter name. Every path pkg/aws.CleanupSandboxIdentity
+        # deletes must appear here — paired mechanically by
+        # TestTTLHandlerModule_EveryCleanupSSMParamHasADeleteGrant (cmd/ttl-handler).
+        # access/* is the shared SSH key + desktop password (pkg/aws/access.go).
         Sid    = "IdentitySSMDelete"
         Effect = "Allow"
         Action = ["ssm:DeleteParameter"]
@@ -853,6 +857,8 @@ resource "aws_iam_role_policy" "identity_cleanup" {
           "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/sandbox/*/signing-key",
           "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/sandbox/*/encryption-key",
           "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/sandbox/*/safe-phrase",
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/access/*/ssh-key",
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/access/*/desktop-cred",
         ]
       }
     ]

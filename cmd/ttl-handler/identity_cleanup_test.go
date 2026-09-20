@@ -65,6 +65,11 @@ func TestCleanupSandboxIdentityWith_DeletesAllExpectedKeys(t *testing.T) {
 		"/km/sandbox/sb-aabbccdd/signing-key",
 		"/km/sandbox/sb-aabbccdd/encryption-key",
 		"/km/sandbox/sb-aabbccdd/safe-phrase",
+		// Shared access credentials (pkg/aws/access.go). Every path here must
+		// also be granted in the ttl-handler module — see
+		// TestTTLHandlerModule_EveryCleanupSSMParamHasADeleteGrant.
+		"/km/access/sb-aabbccdd/ssh-key",
+		"/km/access/sb-aabbccdd/desktop-cred",
 	}
 	if len(ssmMock.deletedParams) != len(wantParams) {
 		t.Fatalf("expected %d SSM DeleteParameter calls, got %d: %v", len(wantParams), len(ssmMock.deletedParams), ssmMock.deletedParams)

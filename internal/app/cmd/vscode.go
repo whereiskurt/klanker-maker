@@ -123,7 +123,8 @@ func resolveVSCodeDeps(ctx context.Context, cfg *config.Config, fetcher SandboxF
 
 // connectPrep is everything km vscode start and km herdr start do identically:
 // probe the local port, resolve the sandbox and its instance, and locate the
-// local private key. It deliberately stops short of the SSM pre-flight (each
+// local private key — pulling or refreshing it from the shared copy in SSM
+// first (sandboxKeyPath). It deliberately stops short of the SSM pre-flight (each
 // command probes different facts) AND of upserting ~/.ssh/config — each caller
 // runs its own pre-flight FIRST and only then calls upsertSandboxHost, so an
 // unhealthy sandbox never gets an ssh-config entry written for it. That
@@ -135,7 +136,7 @@ func resolveVSCodeDeps(ctx context.Context, cfg *config.Config, fetcher SandboxF
 //
 // Returns the instance id, the AWS region, the ssh-config alias, and the local
 // private key path.
-func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, localPort, portSuggestion int) (instanceID, region string, hostNames []string, privPath string, err error) {
+func connectPrep(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, sandboxID string, localPort, portSuggestion int) (instanceID, region string, hostNames []string, privPath string, err error) {
 	// Probe the local port before doing any AWS work or writing ssh-config.
 	// Common debug ports (9222 Chrome DevTools, 9229 Node, 5900 VNC) often
 	// already have a process bound — session-manager-plugin will silently
@@ -156,7 +157,7 @@ func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, 
 		return "", "", nil, "", fmt.Errorf("find EC2 instance: %w", err)
 	}
 
-	privPath, err = sandboxKeyPath(sandboxID)
+	privPath, err = sandboxKeyPath(ctx, cfg, sandboxID)
 	if err != nil {
 		return "", "", nil, "", err
 	}
@@ -307,11 +308,11 @@ func upsertSandboxHost(hostNames []string, privPath string, localPort int) error
 // runVSCodeStart resolves the sandbox, verifies the local private key, runs the SSM pre-flight
 // check, upserts the ssh-config entry, prints the operator instruction block, then opens the
 // foreground SSM port-forward.
-func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
+func runVSCodeStart(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
 	// 22122 was chosen deliberately (Phase 73 UAT) and is still documented as
 	// the escape hatch in docs/vscode.md and docs/user-manual.md — keep it a
 	// fixed literal here rather than an offset off localPort.
-	instanceID, region, hostNames, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, 22122)
+	instanceID, region, hostNames, privPath, err := connectPrep(ctx, cfg, fetcher, sandboxID, localPort, 22122)
 	if err != nil {
 		return err
 	}
@@ -322,7 +323,7 @@ func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetche
 	if err != nil {
 		return fmt.Errorf("ssm pre-flight check: %w", err)
 	}
-	if err := parseVSCodeStatus(out, sandboxID); err != nil {
+	if err := parseVSCodeStatusWithKey(out, sandboxID, privPath+".pub"); err != nil {
 		return err
 	}
 
@@ -538,12 +539,26 @@ head -1 /home/sandbox/.ssh/authorized_keys`, newPubKeyLine)
 		return fmt.Errorf("commit new private key: %w", err)
 	}
 
-	// Step 7: Final output
 	actionWord := "replaced"
 	if localKeyAbsent {
 		actionWord = "created"
 	}
-	fmt.Printf("✓ Local key %s atomically (~/.km/keys/%s)\n\n", actionWord, sandboxID)
+	fmt.Printf("✓ Local key %s atomically (~/.km/keys/%s)\n", actionWord, sandboxID)
+
+	// Step 7: publish to SSM so every other laptop picks the new key up on its
+	// next start. Order is box → local → SSM on purpose: if this fails the
+	// operator who ran rekey is working and everyone else is stale until it is
+	// re-run; SSM-first would have handed everyone a key the box rejects had
+	// the push failed.
+	privBytes, err := os.ReadFile(privFinalPath)
+	if err != nil {
+		return fmt.Errorf("read committed key for publish: %w", err)
+	}
+	if err := publishSharedCredential(ctx, cfg, sshKeyKind, sandboxID, privBytes); err != nil {
+		return fmt.Errorf("rekey applied on the sandbox and locally, but publishing to SSM failed: %w\nOther analysts will get a stale key until you re-run: km vscode rekey %s --yes", err, sandboxID)
+	}
+	fmt.Printf("✓ Published to SSM (%s)\n\n", kmaws.SSHKeyPath(cfg.GetResourcePrefix(), sandboxID))
+
 	fmt.Printf("Rekey complete. Active VS Code sessions stay on the old key until reconnect.\n")
 	return nil
 }
@@ -567,6 +582,15 @@ func pubkeyFingerprint(pubPath string) string {
 // parseVSCodeStatus interprets the combined SSM script output and returns a descriptive error
 // for each failure mode, or nil when both sshd and authorized_keys are healthy.
 func parseVSCodeStatus(out, sandboxID string) error {
+	return parseVSCodeStatusWithKey(out, sandboxID, "")
+}
+
+// parseVSCodeStatusWithKey is parseVSCodeStatus plus the shared-key guard:
+// when localPubPath is given and the box's authorized_keys line parses as a
+// key whose fingerprint differs from it, the error names `km vscode rekey`
+// rather than letting VS Code meet "Permission denied (publickey)". An empty
+// localPubPath skips the guard (km vscode status has no key to compare).
+func parseVSCodeStatusWithKey(out, sandboxID, localPubPath string) error {
 	sshdActive := strings.Contains(out, "=== sshd ===\nactive")
 	authkeysPresent := strings.Contains(out, "=== authkeys exists ===\nyes")
 
@@ -577,6 +601,9 @@ func parseVSCodeStatus(out, sandboxID string) error {
 		return fmt.Errorf("unexpected state: sshd is running but /home/sandbox/.ssh/authorized_keys is absent — recreate the sandbox")
 	case !sshdActive:
 		return fmt.Errorf("sshd is not running on the sandbox; try `km shell %s -- sudo systemctl start sshd`", sandboxID)
+	}
+	if authorizedKeyMismatch(strings.TrimSpace(sectionOf(out, "=== authkeys content ===")), localPubPath) {
+		return sharedKeyMismatchError(sandboxID)
 	}
 	return nil
 }

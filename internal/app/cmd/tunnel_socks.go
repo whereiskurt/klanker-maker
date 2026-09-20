@@ -102,7 +102,7 @@ func runTunnelSocks(ctx context.Context, cfg *config.Config, fetcher SandboxFetc
 	if err != nil {
 		return err
 	}
-	keyPath, err := sandboxKeyPath(sandboxID)
+	keyPath, err := sandboxKeyPath(ctx, cfg, sandboxID)
 	if err != nil {
 		return err
 	}

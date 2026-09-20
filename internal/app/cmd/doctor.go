@@ -4327,6 +4327,15 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkStaleKMSKeys(ctx, kmsCleanup, listerForCleanup, dryRun, kmsResourcePrefix)
 	})
 
+	// Orphan shared access credentials (SSH key / desktop password in SSM
+	// for a sandbox that no longer has a row). Read-only.
+	accessSSM := deps.SSMReadClient
+	accessLister := deps.Lister
+	accessPrefix := cfg.GetResourcePrefix()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkOrphanAccessParams(ctx, accessSSM, accessLister, accessPrefix)
+	})
+
 	// Stale IAM roles check.
 	iamCleanup := deps.IAMCleanupClient
 	iamResourcePrefix := cfg.GetResourcePrefix()

@@ -75,11 +75,11 @@ km destroy $SB --remote --yes
 km vscode rekey <sandbox-id> --yes
 ```
 
-Generates a fresh ed25519 pair on the operator workstation, pushes the new public key to the sandbox's `~/.ssh/authorized_keys`, and rewrites the local `~/.ssh/config` block. Active VS Code sessions stay on the old key until reconnect.
+Generates a fresh ed25519 pair on the operator workstation, pushes the new public key to the sandbox's `~/.ssh/authorized_keys`, commits it locally, then publishes it to SSM (`/{prefix}/access/<id>/ssh-key`) so every other operator picks it up on their next `start`. Active VS Code sessions stay on the old key until reconnect.
 
 Solves:
 1. **Baked-AMI relaunch** carries stale `authorized_keys` from the bake-time sandbox.
-2. **Cross-laptop portability** — `km vscode rekey` on a second laptop bootstraps a fresh key without manual file copy.
+2. **Bootstrap when neither SSM nor this laptop holds a key** (a sandbox created before shared keys shipped, whose creator never ran `start` since) — `start` names this case and points here.
 3. **Post-incident rotation** if a private key is suspected compromised.
 
 Pre-flight gates (any failure = no key changes):
@@ -90,8 +90,8 @@ Pre-flight gates (any failure = no key changes):
 ## Operator notes
 
 - **Existing sandboxes** provisioned without `runtime.vscode.enabled: true` do NOT get sshd retroactively. `km destroy && km create` to provision.
-- **Cross-machine portability:** keys live on the creation machine only. Operators who want to `km vscode start` from a different laptop must run `km vscode rekey` there, OR manually copy `~/.km/keys/<sandbox-id>*` from the original laptop.
-- **One operator per sandbox** (single authorized_keys entry in v1).
+- **The key is shared via SSM.** `~/.km/keys/<id>` is a cache; `km vscode start` (and `km herdr`, `km tunnel`) pulls it on a laptop that has never seen the sandbox, refreshes it after someone else's rekey, and publishes it if SSM has no copy yet. Just run `start` — no file copying. If `start` says the box's `authorized_keys` doesn't match the shared key, run `km vscode rekey <id>`.
+- **One shared key per sandbox**, not one per analyst (single `authorized_keys` entry; sshd cannot tell analysts apart).
 - **`km destroy` cleans up** the local keypair files AND the ssh-config Host block. Manual cleanup is only needed when a sandbox is wiped out-of-band (region deleted, DynamoDB row removed, etc.).
 
 See `docs/vscode.md` for the full operator guide and troubleshooting matrix.

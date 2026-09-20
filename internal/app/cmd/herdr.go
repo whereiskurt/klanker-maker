@@ -51,6 +51,7 @@ if [ -n "$HERDR_BIN" ]; then "$HERDR_BIN" --version 2>/dev/null || true; fi`
 type herdrBoxState struct {
 	SSHDActive      bool
 	AuthKeysPresent bool
+	AuthKeysLine    string // first line of authorized_keys, "" when absent — for the shared-key guard
 	HerdrPath       string // "" when absent
 	HerdrVersion    string // "" when absent or unparseable
 }
@@ -67,6 +68,7 @@ func parseHerdrStatus(out string) herdrBoxState {
 	return herdrBoxState{
 		SSHDActive:      strings.Contains(out, "=== sshd ===\nactive"),
 		AuthKeysPresent: strings.Contains(out, "=== authkeys exists ===\nyes"),
+		AuthKeysLine:    strings.TrimSpace(sectionOf(out, "=== authkeys content ===")),
 		HerdrPath:       strings.TrimSpace(sectionOf(out, "=== herdr path ===")),
 		HerdrVersion:    herdrSemverRe.FindString(sectionOf(out, "=== herdr version ===")),
 	}
@@ -203,7 +205,7 @@ var herdrRun = func(ctx context.Context, cfg *config.Config, fetcher SandboxFetc
 	if err != nil {
 		return err
 	}
-	return runHerdrStart(ctx, f, e, s, sandboxID, localPort, noInstall, !attach, session)
+	return runHerdrStart(ctx, cfg, f, e, s, sandboxID, localPort, noInstall, !attach, session)
 }
 
 func newHerdrStartCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI) *cobra.Command {
@@ -257,8 +259,8 @@ func newHerdrStatusCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSM
 	}
 }
 
-func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int, noInstall, noAttach bool, session string) error {
-	instanceID, region, hostNames, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, localPort+100)
+func runHerdrStart(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int, noInstall, noAttach bool, session string) error {
+	instanceID, region, hostNames, privPath, err := connectPrep(ctx, cfg, fetcher, sandboxID, localPort, localPort+100)
 	if err != nil {
 		return err
 	}
@@ -279,6 +281,12 @@ func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExec
 	// same way.
 	if !st.SSHDActive || !st.AuthKeysPresent {
 		return herdrHealthError(st, sandboxID)
+	}
+	// Shared-key guard (same as km vscode start): a box whose authorized_keys
+	// disagrees with the key SSM just handed us fails here with a named fix,
+	// not inside `herdr --remote` with "Permission denied (publickey)".
+	if authorizedKeyMismatch(st.AuthKeysLine, privPath+".pub") {
+		return sharedKeyMismatchError(sandboxID)
 	}
 
 	if st.HerdrPath == "" {

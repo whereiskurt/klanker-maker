@@ -207,6 +207,74 @@ func TestListCmd_WideShowsInfinityButJSONStaysNumeric(t *testing.T) {
 	}
 }
 
+// computeTTLRemaining's "expired" is seven characters in a %-6s TTL column, so
+// the one expired row pushed IDLE, UP and 💬 a column to the right of every
+// other row's. The wide table renders "exp."; --json keeps "expired" and the
+// narrow SHUTDOWN column (11 wide) is untouched.
+func TestListCmd_WideExpiredTTLStaysInColumn(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	soon := time.Now().Add(400 * 24 * time.Hour)
+	recs := []kmaws.SandboxRecord{
+		{SandboxID: "learn-cf07fb24", Alias: "ezra-v1", Profile: "learn", Region: "us-east-1", Status: "stopped", TTLExpiry: &past, TTLRemaining: "expired", CreatedAt: time.Now()},
+		{SandboxID: "always-11dbf1f5", Alias: "hackerone-v1", Profile: "hackerone.v1", Region: "us-east-1", Status: "running", TTLExpiry: &soon, TTLRemaining: "400d", IdleRemaining: "4h0m0s remaining", CreatedAt: time.Now()},
+	}
+	run := func(args ...string) string {
+		root := &cobra.Command{Use: "km"}
+		root.AddCommand(NewListCmdWithLister(&config.Config{}, &fakeShutdownLister{records: recs}))
+		var buf bytes.Buffer
+		root.SetOut(&buf)
+		root.SetErr(&buf)
+		root.SetArgs(append([]string{"list"}, args...))
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list %v: %v\n%s", args, err, buf.String())
+		}
+		return buf.String()
+	}
+	out := stripANSI(run("--wide"))
+	if strings.Contains(out, "expired") {
+		t.Errorf("wide table must render exp., not expired:\n%s", out)
+	}
+	var header, expiredRow, normalRow string
+	for _, l := range strings.Split(out, "\n") {
+		switch {
+		case strings.Contains(l, "SANDBOX ID"):
+			header = l
+		case strings.Contains(l, "ezra-v1"):
+			expiredRow = l
+		case strings.Contains(l, "hackerone-v1"):
+			normalRow = l
+		}
+	}
+	if header == "" || expiredRow == "" || normalRow == "" {
+		t.Fatalf("missing lines in:\n%s", out)
+	}
+	// Rune column of a cell. The TTL/IDLE cells sit after the STATUS icon;
+	// the icons in these two rows (⏹ + VS16, 🟢) are each padded by visual
+	// width to the same 10 columns, so rune offsets past STATUS differ by a
+	// constant per row — compare each row's IDLE against its own TTL instead
+	// of against the header.
+	col := func(line, cell string) int {
+		i := strings.Index(line, cell)
+		if i < 0 {
+			t.Fatalf("no %q in %q", cell, line)
+		}
+		return len([]rune(line[:i]))
+	}
+	// The TTL cell is %-6s + one separator: IDLE begins 7 runes after TTL on
+	// EVERY row. "expired" (7 runes) broke that; "exp." keeps it.
+	const ttlToIdle = 7
+	if got := col(normalRow, "4h") - col(normalRow, "400d"); got != ttlToIdle {
+		t.Errorf("normal row: IDLE is %d runes after TTL, want %d\n%s", got, ttlToIdle, out)
+	}
+	expIdle := strings.Index(expiredRow[strings.Index(expiredRow, "exp.")+len("exp."):], "-")
+	if got := len("exp.") + expIdle; got != ttlToIdle {
+		t.Errorf("expired row: IDLE is %d runes after TTL, want %d\n%s", got, ttlToIdle, out)
+	}
+	if j := run("--json"); !strings.Contains(j, `"ttl_remaining":"expired"`) {
+		t.Errorf("--json must keep ttl_remaining=expired:\n%s", j)
+	}
+}
+
 // The IDLE column (--wide) and km status printed IdleRemaining raw — Go's
 // Duration.String(), so a large idleTimeout read "86000h0m0s". The stored
 // string must stay a parseable duration (shutdownLabel re-parses it, and it
