@@ -11,36 +11,50 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Drafted from CLAUDE.md phase blocks since v0.8.22 via
+  Drafted from CLAUDE.md phase blocks since v0.8.23 via
   scripts/draft-release-highlights.sh, then curated.
 -->
 
-## ⚡ `km list` is ~8× faster and flat in the number of sandboxes
 
-It made 4–5 serial AWS calls per sandbox — three of them the identical
-`DescribeInstances`-by-tag, plus a per-row AWS config reload — so six boxes cost ~30 round
-trips. Now one `DescribeInstances` per launch account covers the whole list (status,
-hibernation, the idle floor, and the instance id SSM needs), and the remaining per-row
-lookups fan out on a bounded pool. **Measured live on 7 sandboxes: 11.5 s → 1.5 s**, tables
-identical. `km status` drops from three describes to one for free. Cross-account boxes are
-still described where they live; a transient EC2 error still never mislabels a live box.
+## 🛡️ Hibernate/resume no longer cross-writes additional EBS volumes
 
-## 🩺 km-presence signal 5 had been dead on every sandbox since it shipped
+On resume from hibernation the additional NVMe namespaces could come back **cross-wired** —
+the kernel re-read each namespace's size but kept its cached identity and page cache, so the
+fstab mount by UUID succeeded against the wrong disk and flushed both volumes onto each
+other. Reproduced on the first `km pause`/`km resume` of a two-volume box: a 1 MiB known file
+failed its checksum 33 s after resume. Only a **live** NVMe Identify told the truth; sysfs and
+`blkid` both lied.
 
-The "headless claude/codex/km-agent-run is running" signal ran `pgrep -afE` — and procps-ng
-has no `-E` flag at all. It exited 2 with a usage error that the code read as "no matches",
-so a detached `km agent run` with nobody attached could be reaped mid-turn by `idleTimeout`,
-silently. Verified on four boxes across AL2023 and Ubuntu; two had a live `claude` it should
-have seen. Fixed, with a guard test that fails on any pgrep flag carrying an `E`. Existing
-sandboxes keep the dead signal until recreate or a hot swap of `/opt/km/bin/km-presence`.
+New sidecar **`km-volumes`** owns every additional volume: a first-boot manifest of physical
+identity, a validated mount on **every** boot (resolve by live serial — never BDM letter or
+UUID — then size, fs UUID, superblock), an unmount before hibernate, and an unconditional PCI
+re-probe of every non-root controller after resume. A persistent mismatch is **refused**
+(marker + state, loud in `km status`/`km resume`/`km doctor`, and the on-box agent is told
+not to misdiagnose it) or, with `spec.runtime.onVolumeMismatch: reboot`, rebooted once for
+headless boxes. `km-volumes repair` recovers already cross-written snapshot volumes from
+their backup superblocks. Existing sandboxes need a recreate; `hibernation: false` is the
+mitigation until then. See `docs/hibernate-volumes.md`.
 
-## 🔁 Back-port the Slack @-mention fixes onto a running sandbox
+## 🔑 Sandboxes are shareable between analysts
 
-`scripts/backport-slack-mentions.sh <sandbox-id> [--restart]` re-fetches the `km-slack`
-sidecar and patches the inbound poller in place (byte-identical to what v0.8.22 renders,
-idempotent, `bash -n`-checked), so an already-created box can "@ you back" without
-`km destroy && km create`. It refuses with a diagnosis if the install's `sidecars/` copy
-predates the fix.
+`km vscode|desktop|herdr|tunnel start` from a laptop that never ran `km create` now just
+works. The per-sandbox SSH key and KasmVNC password live in SSM (`/{prefix}/access/<id>/`);
+`~/.km/keys` and `~/.km/desktop` are a cache that `start` pulls, refreshes after someone
+else's `rekey`, or publishes if SSM is empty — so every existing sandbox joins on the first
+`start` from a laptop that holds its key. `rekey` publishes box → local → SSM; the
+vscode/herdr pre-flight names `km vscode rekey` when the box's key disagrees with the shared
+one. Upgrade every laptop before anyone rekeys.
 
-**Deploy:** `make build` (for `km list`) + `km init --sidecars` (for `km-presence`). No
-Lambda, Terraform, schema or userdata change; no sandbox recreate for `km list`.
+## 🩺 `km status` no longer reports a working claude as logged out
+
+The auth probes trusted profile.d to put `/opt/km/shims` first on PATH; nvm's prepend wins
+in a login shell, so on a brokered-secrets box the probe asked the real binary (no key →
+`loggedIn:false`) while every agent turn worked. The three probes now prepend the shim dir
+explicitly, like every dispatch site, with a source guard so a fourth can't ship without it.
+
+## ✨ Small things
+
+- `km version` is an alias for `km --version`.
+- `km list --wide`: an expired TTL renders `exp.` and the ⏸/⏹ icons are measured at their real
+  one-column width, so stopped/paused rows line up with the rest.
+- RedHat base profile installs `gh`.
