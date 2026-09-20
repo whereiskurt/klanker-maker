@@ -28,8 +28,11 @@ Three layers, in order of preference:
 
 1. **Avoid.** `pre:hibernate` unmounts every additional volume (bounded, never
    blocking) so no filesystem state survives into the resumed image.
-   `post:hibernate` PCI-removes and rescans **every non-root NVMe controller**, the
-   same from-scratch probe a reboot gives (0.7 s live), then mounts.
+   `post:hibernate` starts `km-volumes-resume.service`, which waits for the hypervisor
+   to finish restoring the EBS functions, PCI-removes and rescans **every non-root NVMe
+   controller** (the same from-scratch probe a reboot gives), re-binds any controller a
+   too-early probe left without a driver, then mounts. It runs as a unit, not inline in
+   the hook, because that settling can take longer than any sleep hook may hold.
 2. **Detect.** Every mount — cold boot and resume — goes through `km-volumes mount`:
    each volume is found by its **live Identify serial** (never the BDM letter, never
    the UUID), then size and filesystem UUID are checked against the **manifest** the
@@ -48,7 +51,8 @@ There are no fstab lines for additional volumes any more.
 | `<mountpoint>/.km-mount-refused` | written into the *underlying* directory on refuse, removed before a successful mount — an empty `/repos` is never mistakable for a healthy empty volume. |
 | `/var/log/km-volumes.log` | the sleep hook's output. |
 | `/etc/systemd/system/km-volumes.service` | oneshot, every boot, before sshd and the pollers. |
-| `/usr/lib/systemd/system-sleep/km-volumes` | the hook; `timeout`-bounded, always exit 0. |
+| `/etc/systemd/system/km-volumes-resume.service` | oneshot started by the hook after resume: settle → re-probe → re-bind → mount, `TimeoutStartSec=240`. |
+| `/usr/lib/systemd/system-sleep/km-volumes` | the hook; `pre` unmounts under `timeout`, `post` only starts the unit; always exit 0. |
 
 ### What `km status` prints
 
@@ -118,8 +122,9 @@ terragrunt state list | grep aws_ebs_volume.snapshot        # e.g. aws_ebs_volum
 km stop <id>                                                # the volume must not be in use
 terragrunt taint 'aws_ebs_volume.snapshot["0"]'
 terragrunt apply                                            # recreates from the snapshot, re-attaches
-km shell --root <id> -- rm -f /var/lib/km/volumes.json       # after resume: forget the OLD volume id …
-km shell --root <id> -- reboot                              # … so the next cold boot writes a fresh manifest
+km resume <id>
+km shell --root <id>            # then, on the box:
+#   rm -f /var/lib/km/volumes.json && reboot       # forget the OLD volume id; the next cold boot writes a fresh manifest
 ```
 
 (`km resume` alone would refuse the new volume: the manifest still names the old

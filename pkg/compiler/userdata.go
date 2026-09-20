@@ -4067,6 +4067,26 @@ ExecStart=/opt/km/bin/km-volumes mount{{ range .AdditionalVolumeMounts }} --fall
 [Install]
 WantedBy=multi-user.target
 KMVOLUNIT
+# The post-resume re-probe is a separate unit, NOT run inline by the sleep
+# hook: at resume time the hypervisor is still restoring the EBS PCI
+# functions (proven live — a re-probe issued from the hook found one
+# controller unresponsive, the nvme probe failed silently and the device sat
+# present-but-unbound). The unit waits for the devices to settle, re-probes,
+# and re-binds any controller left without a driver, under a budget no sleep
+# hook may hold. The hook only starts it, --no-block.
+cat > /etc/systemd/system/km-volumes-resume.service << 'KMVOLRESUMEUNIT'
+[Unit]
+Description=Klankrmkr additional EBS volumes — post-hibernate settle, re-probe, validate, mount
+After=km-volumes.service
+[Service]
+Type=oneshot
+TimeoutStartSec=240
+Environment=KM_SANDBOX_ID={{ .SandboxID }}
+Environment=KM_VOLUMES_ON_MISMATCH={{ .VolumeMismatchPolicy }}
+ExecStart=/opt/km/bin/km-volumes post-sleep
+StandardOutput=append:/var/log/km-volumes.log
+StandardError=append:/var/log/km-volumes.log
+KMVOLRESUMEUNIT
 systemctl daemon-reload
 systemctl enable km-volumes.service
 # Run it now as well: the volume block above mounted directly for this first
@@ -4080,8 +4100,8 @@ cat > /usr/lib/systemd/system-sleep/km-volumes << 'KMVOLSLEEP'
 # machine, after which the box stops hibernating until a state file is
 # hand-deleted. km-volumes itself exits 0 on every path; timeout is the belt.
 case "$1:$2" in
-  pre:hibernate)  timeout 15 /opt/km/bin/km-volumes pre-sleep  >> /var/log/km-volumes.log 2>&1 ;;
-  post:hibernate) timeout 45 /opt/km/bin/km-volumes post-sleep >> /var/log/km-volumes.log 2>&1 ;;
+  pre:hibernate)  timeout 15 /opt/km/bin/km-volumes pre-sleep >> /var/log/km-volumes.log 2>&1 ;;
+  post:hibernate) systemctl start --no-block km-volumes-resume.service >> /var/log/km-volumes.log 2>&1 || true ;;
 esac
 exit 0
 KMVOLSLEEP

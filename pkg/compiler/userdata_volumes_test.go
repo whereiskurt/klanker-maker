@@ -62,12 +62,22 @@ func TestUserdataVolumes_SleepShimIsBoundedAndExitsZero(t *testing.T) {
 	for _, phase := range []string{"pre", "post"} {
 		start := time.Now()
 		cmd := exec.Command("sh", "-c", shim, "sh", phase, "hibernate")
+		cmd.Env = append(os.Environ(), "PATH="+dir) // no systemctl on the test host: the post branch must still exit 0
 		if err := cmd.Run(); err != nil {
-			t.Fatalf("%s: shim must exit 0 even when km-volumes hangs: %v", phase, err)
+			t.Fatalf("%s: shim must exit 0 even when km-volumes hangs or systemctl is absent: %v", phase, err)
 		}
 		if d := time.Since(start); d > 5*time.Second {
 			t.Fatalf("%s: shim did not bound km-volumes (took %s)", phase, d)
 		}
+	}
+	// The post branch must NOT run the binary inline: the re-probe has to wait
+	// for the hypervisor to finish restoring the EBS functions, which takes
+	// longer than any budget a sleep hook may hold. It hands off to a unit.
+	if !strings.Contains(shim, "systemctl start --no-block km-volumes-resume.service") {
+		t.Errorf("post:hibernate must hand off to km-volumes-resume.service; shim:\n%s", shim)
+	}
+	if strings.Contains(shim, "km-volumes post-sleep") {
+		t.Errorf("post-sleep must not run inline in the hook; shim:\n%s", shim)
 	}
 	// A non-hibernate transition must be a no-op that still exits 0.
 	if err := exec.Command("sh", "-c", shim, "sh", "pre", "suspend").Run(); err != nil {
@@ -91,6 +101,9 @@ func TestUserdataVolumes_NoFstabLineAndUnitPresent(t *testing.T) {
 		"ExecStart=/opt/km/bin/km-volumes mount --fallback /data:f --fallback /repos:g",
 		"systemctl enable km-volumes.service",
 		"systemctl start km-volumes.service",
+		"/etc/systemd/system/km-volumes-resume.service",
+		"TimeoutStartSec=240",
+		"ExecStart=/opt/km/bin/km-volumes post-sleep",
 		`/opt/km/bin/km-volumes manifest --mountpoint "/data" --bdm "f"`,
 		`/opt/km/bin/km-volumes manifest --mountpoint "/repos" --bdm "g"`,
 		`--from-snapshot "snap-0d7b1093da2702612"`,

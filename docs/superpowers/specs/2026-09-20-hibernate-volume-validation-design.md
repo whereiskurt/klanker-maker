@@ -181,8 +181,17 @@ the stunnel). Separate work item; recorded in §11.
 
 ### 5.4 `post-sleep`
 
-Bounded to the hook's `timeout 45`. Unconditionally, for every NVMe controller whose
-namespace is **not** the root volume:
+**Revised after live UAT (§13.5): runs in its own unit, not the hook.** At resume time
+the hypervisor is still restoring the EBS PCI functions; a re-probe issued from inside the
+post-hibernate hook found one controller unresponsive — the nvme driver's probe failed
+silently and the device sat present-but-unbound, which a plain bus rescan never revisits.
+So the hook only does `systemctl start --no-block km-volumes-resume.service`, and that
+oneshot (`TimeoutStartSec=240`) does the work in three bounded phases:
+
+1. **Settle** — poll live Identify until every manifest vol-id is visible and the node
+   count is stable for two polls (≤ 60 s; proceed anyway if it never settles).
+2. **Re-probe + bind** — unconditionally, for every NVMe controller whose namespace is
+   **not** the root volume:
 
 ```
 echo 1 > /sys/bus/pci/devices/<bdf>/remove
@@ -190,12 +199,17 @@ echo 1 > /sys/bus/pci/rescan
 wait (≤10 s) for the node to reappear
 ```
 
-then run `mount` (§5.1). The re-probe is not a reaction to a detected mismatch — it is
-the normal path, because the from-scratch probe is what the write-up showed to be
-correct and detection of staleness is the part we trust least. If `mount` refuses an
-entry with a *serial-or-size* mismatch, re-probe that controller once more and retry
-that entry; a second refusal goes to policy. The root volume's controller is never
-touched: it is the resume device and is mounted.
+   then re-list, and while any manifest vol-id still has no node, remove+rescan every EBS
+   controller present on the bus with no driver bound (`vendor 1d0f`, `device 8061`, no
+   `driver` symlink), with backoff, ≤ 60 s.
+3. **Mount** (§5.1) with the existing one-retry, then policy.
+
+The re-probe is not a reaction to a detected mismatch — it is the normal path, because
+the from-scratch probe is what the write-up showed to be correct and detection of
+staleness is the part we trust least. The root volume's controller is never touched: it
+is the resume device and is mounted. `mount` itself (every run) performs one heal pass
+when a manifest device is absent — re-probe unbound controllers, else a bus rescan —
+so a cold boot or `systemctl restart km-volumes` recovers the same way.
 
 ### 5.5 Policy on persistent mismatch — `spec.runtime.onVolumeMismatch`
 
@@ -381,3 +395,15 @@ first `km pause` / `km resume` cycle.
 Consequences for the plan: `post-sleep`'s reappearance wait can stay at 10 s (observed
 0.7 s); `ListDevices` must be re-run after every re-probe (names move); the `repair`
 UAT step has a real cross-written pair to work on.
+
+### 13.5 Live UAT cycle 1 (`sb-302a43c0`, first build) — the re-probe races the hypervisor
+
+`pre-sleep` unmounted both volumes; after resume `/repos` re-probed and mounted, the 1 MiB
+known file verified, zero `EXT4-fs error` lines — the corruption is gone. But `/data` came
+back **absent**: the post-hook re-probe removed `0000:00:1f.0` and the rescan's nvme probe
+never completed (`nvme nvme1: pci function 0000:00:1f.0` with no queues line), because the
+hypervisor had not finished restoring that function. The device stayed on the bus with no
+driver; a later plain rescan did nothing. Removing that function again + rescan bound it
+in 4 s and `km-volumes mount` mounted `/data` with its marker file intact — nothing was
+lost, only not mounted. Hence the revised §5.4: settle first, re-probe from a unit with a
+real budget, and re-bind unbound controllers; plus the heal pass in `mount`.
