@@ -107,11 +107,25 @@ func checkInboundSlack(slackStampPath, presenceStampPath string) bool {
 
 // checkAgentProcess returns true when a headless Claude / Codex / km-agent-run
 // process is found via pgrep. Signal 5.
-// Decision: pgrep -E for ERE alternation. AL2023's pgrep defaults to BRE and
-// would not match | in the regex without -E. Single subprocess call (vs three
-// separate pgrep -af invocations) keeps the loop body simple.
+//
+// NO -E FLAG. An earlier version passed -afE on the stated rationale that
+// "AL2023's pgrep defaults to BRE and would not match | without -E". Both
+// halves of that are false, and the cost was that this signal returned false
+// unconditionally on every sandbox from the day it shipped: procps-ng has no
+// -E option at ALL, so pgrep exits 2 with "invalid option -- 'E'" and the
+// err != nil arm below reads a usage error as "no matches". Verified live on
+// the whole fleet — AL2023 (procps-ng 3.3.17) and Ubuntu 24.04 (procps-ng
+// 4.0.4) BOTH reject -E and BOTH match this exact alternation without it,
+// because procps-ng compiles the pattern with REG_EXTENDED already.
+//
+// The unit tests could not catch this: the fake runner keys on the literal
+// argv string, so it happily answered a command no real pgrep accepts.
+// Changing these flags again means re-checking against a live box, not a test.
+//
+// Single subprocess call (vs three separate pgrep -af invocations) keeps the
+// loop body simple.
 func checkAgentProcess(r commandRunner) bool {
-	out, err := r.Output("pgrep", "-afE", `(^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\.sh`)
+	out, err := r.Output("pgrep", "-af", `(^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\.sh`)
 	if err != nil {
 		// exit 1 = no matches; this is not an error condition.
 		return false
