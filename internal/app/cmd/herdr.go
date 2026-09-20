@@ -203,7 +203,7 @@ var herdrRun = func(ctx context.Context, cfg *config.Config, fetcher SandboxFetc
 	if err != nil {
 		return err
 	}
-	return runHerdrStart(ctx, f, e, s, sandboxID, localPort, noInstall, !attach, session)
+	return runHerdrStart(ctx, cfg, f, e, s, sandboxID, localPort, noInstall, !attach, session)
 }
 
 func newHerdrStartCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI) *cobra.Command {
@@ -257,8 +257,8 @@ func newHerdrStatusCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSM
 	}
 }
 
-func runHerdrStart(ctx context.Context, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int, noInstall, noAttach bool, session string) error {
-	instanceID, region, hostNames, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, localPort+100)
+func runHerdrStart(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int, noInstall, noAttach bool, session string) error {
+	instanceID, region, hostNames, privPath, err := connectPrep(ctx, cfg, fetcher, sandboxID, localPort, localPort+100)
 	if err != nil {
 		return err
 	}

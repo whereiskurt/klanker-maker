@@ -265,6 +265,38 @@ func TestPublishSharedCredential_WritesParamVerbatim(t *testing.T) {
 	}
 }
 
+func TestSandboxKeyPath_PullsFromSSM(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	pem := genKeyPEM(t)
+	f := &fakeAccessSSM{params: map[string]string{"/km/access/sbx/ssh-key": string(pem)}}
+	withTestStore(t, f)
+
+	p, err := sandboxKeyPath(context.Background(), nil, "sbx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("key not materialised at %s: %v", p, err)
+	}
+	if _, err := os.Stat(p + ".pub"); err != nil {
+		t.Fatalf(".pub not materialised: %v", err)
+	}
+}
+
+func TestSandboxKeyPath_StoreErrorFallsBackToLocal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	local := seedLocal(t, home, filepath.Join(".km", "keys", "sbx"), genKeyPEM(t))
+	saved := NewSharedCredStoreFunc
+	NewSharedCredStoreFunc = func(context.Context, *config.Config) (*sharedCredStore, error) { return nil, errors.New("sso expired") }
+	defer func() { NewSharedCredStoreFunc = saved }()
+
+	p, err := sandboxKeyPath(context.Background(), nil, "sbx")
+	if err != nil || p != local {
+		t.Errorf("got (%q,%v), want local path and nil", p, err)
+	}
+}
+
 func TestPublishSharedCredential_StoreErrorPropagates(t *testing.T) {
 	saved := NewSharedCredStoreFunc
 	NewSharedCredStoreFunc = func(context.Context, *config.Config) (*sharedCredStore, error) { return nil, errors.New("sso expired") }

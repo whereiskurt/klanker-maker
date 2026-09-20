@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -162,7 +161,7 @@ func runTunnelK8s(ctx context.Context, cfg *config.Config, fetcher SandboxFetche
 		return err
 	}
 
-	keyPath, err := sandboxKeyPath(sandboxID)
+	keyPath, err := sandboxKeyPath(ctx, cfg, sandboxID)
 	if err != nil {
 		return err
 	}
@@ -314,21 +313,17 @@ func waitForSSHD(ctx context.Context, localPort int, timeout time.Duration) erro
 	}
 }
 
-// sandboxKeyPath locates the per-sandbox private key written at create time.
-func sandboxKeyPath(sandboxID string) (string, error) {
-	home, err := os.UserHomeDir()
+// sandboxKeyPath locates the per-sandbox private key, reconciling the local
+// copy with the shared one in SSM first (syncSharedCredential) so a laptop
+// that never ran km create for this sandbox still gets in. A store that cannot
+// be built (no creds, no network) is a WARN and falls back to the local file.
+func sandboxKeyPath(ctx context.Context, cfg *config.Config, sandboxID string) (string, error) {
+	store, err := NewSharedCredStoreFunc(ctx, cfg)
 	if err != nil {
-		return "", fmt.Errorf("locate home directory: %w", err)
+		fmt.Fprintf(os.Stderr, "  [warn] shared credential store unavailable (%v); using the local key only\n", err)
+		store = nil
 	}
-	p := filepath.Join(home, ".km", "keys", sandboxID)
-	if _, statErr := os.Stat(p); statErr != nil {
-		if os.IsNotExist(statErr) {
-			return "", fmt.Errorf("private key for %s not found at %s. If you created this sandbox on a different machine, copy the ~/.km/keys/%s* files over",
-				sandboxID, p, sandboxID)
-		}
-		return "", fmt.Errorf("stat private key: %w", statErr)
-	}
-	return p, nil
+	return syncSharedCredential(ctx, store, sshKeyKind, sandboxID, os.Stdout)
 }
 
 func resolveTunnelDeps(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc) (SandboxFetcher, ShellExecFunc, error) {

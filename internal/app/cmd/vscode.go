@@ -123,7 +123,8 @@ func resolveVSCodeDeps(ctx context.Context, cfg *config.Config, fetcher SandboxF
 
 // connectPrep is everything km vscode start and km herdr start do identically:
 // probe the local port, resolve the sandbox and its instance, and locate the
-// local private key. It deliberately stops short of the SSM pre-flight (each
+// local private key — pulling or refreshing it from the shared copy in SSM
+// first (sandboxKeyPath). It deliberately stops short of the SSM pre-flight (each
 // command probes different facts) AND of upserting ~/.ssh/config — each caller
 // runs its own pre-flight FIRST and only then calls upsertSandboxHost, so an
 // unhealthy sandbox never gets an ssh-config entry written for it. That
@@ -135,7 +136,7 @@ func resolveVSCodeDeps(ctx context.Context, cfg *config.Config, fetcher SandboxF
 //
 // Returns the instance id, the AWS region, the ssh-config alias, and the local
 // private key path.
-func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, localPort, portSuggestion int) (instanceID, region string, hostNames []string, privPath string, err error) {
+func connectPrep(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, sandboxID string, localPort, portSuggestion int) (instanceID, region string, hostNames []string, privPath string, err error) {
 	// Probe the local port before doing any AWS work or writing ssh-config.
 	// Common debug ports (9222 Chrome DevTools, 9229 Node, 5900 VNC) often
 	// already have a process bound — session-manager-plugin will silently
@@ -156,7 +157,7 @@ func connectPrep(ctx context.Context, fetcher SandboxFetcher, sandboxID string, 
 		return "", "", nil, "", fmt.Errorf("find EC2 instance: %w", err)
 	}
 
-	privPath, err = sandboxKeyPath(sandboxID)
+	privPath, err = sandboxKeyPath(ctx, cfg, sandboxID)
 	if err != nil {
 		return "", "", nil, "", err
 	}
@@ -307,11 +308,11 @@ func upsertSandboxHost(hostNames []string, privPath string, localPort int) error
 // runVSCodeStart resolves the sandbox, verifies the local private key, runs the SSM pre-flight
 // check, upserts the ssh-config entry, prints the operator instruction block, then opens the
 // foreground SSM port-forward.
-func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
+func runVSCodeStart(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
 	// 22122 was chosen deliberately (Phase 73 UAT) and is still documented as
 	// the escape hatch in docs/vscode.md and docs/user-manual.md — keep it a
 	// fixed literal here rather than an offset off localPort.
-	instanceID, region, hostNames, privPath, err := connectPrep(ctx, fetcher, sandboxID, localPort, 22122)
+	instanceID, region, hostNames, privPath, err := connectPrep(ctx, cfg, fetcher, sandboxID, localPort, 22122)
 	if err != nil {
 		return err
 	}
