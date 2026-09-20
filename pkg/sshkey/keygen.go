@@ -52,3 +52,20 @@ func GenerateAndWrite(privPath, pubPath, comment string) (pubContent string, err
 
 	return pubLine, nil
 }
+
+// PublicKeyLine derives the single-line authorized_keys entry
+// ("ssh-ed25519 <base64> <comment>", no trailing newline) from an OpenSSH
+// private-key PEM, so a laptop that pulls only the private key from SSM can
+// rewrite the .pub file the fingerprint and doctor code read. The comment is
+// supplied rather than recovered from the PEM so the output is byte-identical
+// to what GenerateAndWrite returned for the same key.
+func PublicKeyLine(privPEM []byte, comment string) (string, error) {
+	signer, err := gossh.ParsePrivateKey(privPEM)
+	if err != nil {
+		return "", fmt.Errorf("sshkey: parse private key: %w", err)
+	}
+	return fmt.Sprintf("%s %s %s",
+		signer.PublicKey().Type(),
+		base64.StdEncoding.EncodeToString(signer.PublicKey().Marshal()),
+		comment), nil
+}
