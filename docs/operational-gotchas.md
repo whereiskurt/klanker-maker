@@ -923,6 +923,37 @@ not apply terragrunt modules.
 
 **No SandboxProfile schema change, no bridge Lambda change, no sandbox recreate required.**
 
+## Shared sandbox access credentials — two halves, one of them a Lambda
+
+`km vscode|desktop|herdr|tunnel start` reconcile `~/.km/keys/<id>` and
+`~/.km/desktop/<id>` with SSM SecureStrings at `/{prefix}/access/<id>/{ssh-key,desktop-cred}`
+(runbook: `docs/vscode.md` § Sharing a sandbox between analysts). The deploy surface
+splits in a way that is easy to get half of:
+
+- **The feature is the laptop's binary.** `make build` on a laptop makes every sandbox in
+  the install shareable from that laptop, whatever its age. Nothing is fetched at boot,
+  nothing rides in userdata, no sidecar, no recreate. A sandbox never runs `km`.
+- **Cleanup is the ttl-handler's binary.** `CleanupSandboxIdentity` deletes the two
+  parameters, and it runs inside the ttl-handler Lambda for a TTL expiry AND for a
+  default `km destroy` (which is `--remote`). Until `make build-lambdas` +
+  `km init --dry-run=false` land in that account, both paths leave the parameters behind
+  — harmless, and `km doctor` (`Shared access credentials`) reports them. Only
+  `km destroy --remote=false` runs the laptop's copy. The same apply adds the two
+  exact-name `ssm:DeleteParameter` ARNs the Lambda role needs;
+  `TestTTLHandlerModule_EveryCleanupSSMParamHasADeleteGrant` pairs every path cleanup
+  deletes with a module ARN, so the next parameter added to cleanup cannot ship without
+  its grant.
+- **Order across laptops: upgrade everyone before anyone rekeys.** `rekey` rotates the
+  box; a laptop on the new binary picks the new key up on its next `start`, a laptop on
+  the old binary has no sync and is locked out until it upgrades. If a laptop already
+  holds a box's key, `start` publishes it with nothing rotated — rekey is only for a box
+  whose key is on a laptop you don't have, and it needs the box `running`.
+- **Operator IAM needs nothing.** The operator policy already grants
+  `ssm:Get/Put/DeleteParameter` on `parameter/{prefix}/*`, and the platform KMS key is
+  what `km create` already writes the `safe-phrase` SecureString with. The instance
+  role reads `/{prefix}/sandbox/<id>/*`, which is exactly why the parameters are NOT
+  under that path.
+
 ## `km shell` → "km-session-entry: not found" on an Ubuntu sandbox
 
 **Symptom.** `km shell <id>` connects, then:
