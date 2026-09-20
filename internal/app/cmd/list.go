@@ -11,6 +11,7 @@ import (
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -145,68 +146,31 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, check
 	}
 
 	if ec2Err == nil {
-		ec2Client := ec2.NewFromConfig(awsCfg)
-		// A cross-account sandbox's instance does NOT exist in the home account, so
-		// describing it here returns nothing and reconcileStatusFromInstances
-		// downgrades it to "killed" — a RUNNING GPU box reported as dead in the
-		// operator's primary view, which is the expensive direction to be wrong in.
-		// Resolve a per-link EC2 client so linked boxes are described where they
-		// actually live. Lazily built and cached: one AssumeRole per link, not per row.
+		// Status/hibernation reconcile (bidirectional — a box restarted after an
+		// idle-stop, or a resume whose status write raced, leaves DDB "stopped"
+		// while the instance is running), the idle countdown the default view's
+		// SHUTDOWN column needs (TTL alone is misleading: a box with 19h of TTL
+		// is routinely reaped in 2h by the idle timer), and --wide's thread
+		// counts — all from one batched describe plus a bounded fan-out; see
+		// list_enrich.go for why it is shaped that way.
+		//
+		// A cross-account sandbox's instance does NOT exist in the home account,
+		// so describing it there returns nothing and the reconcile downgrades a
+		// RUNNING GPU box to "killed" — the expensive direction to be wrong in.
+		// Linked boxes are described where they live, one AssumeRole per link.
 		linkClients := newLaunchAccountEC2Cache(cfg, awsCfg)
-		for i := range records {
-			if strings.HasPrefix(records[i].Substrate, "ec2") {
-				client := ec2Client
-				if lc := linkClients.clientFor(ctx, records[i].LaunchAccount); lc != nil {
-					client = lc
+		enrichRecords(ctx, listEnrichDeps{
+			ec2: ec2.NewFromConfig(awsCfg),
+			linkEC2: func(ctx context.Context, link string) ec2DescribeInstancesAPI {
+				if lc := linkClients.clientFor(ctx, link); lc != nil {
+					return lc
 				}
-				// Reconcile in both directions — a box restarted after an idle-stop
-				// (or a resume whose status write raced) leaves DDB "stopped" while
-				// the instance is actually running; without this it looks terminated.
-				records[i].Status = reconcileSandboxStatus(ctx, client, records[i].SandboxID, records[i].Status)
-				records[i].Hibernation = checkEC2Hibernation(ctx, client, records[i].SandboxID)
-			}
-		}
-	}
-
-	// Compute idle remaining for every running sandbox. This costs one
-	// CloudWatch lookup per running box and is no longer gated on --wide,
-	// because the default view's SHUTDOWN column needs it: TTL alone is
-	// misleading, not merely incomplete -- a box with 19h of TTL left is
-	// routinely reaped in 2h by the idle timer.
-	{
-		for i := range records {
-			if records[i].Status == "running" && records[i].IdleTimeout != "" {
-				remaining := computeIdleRemaining(ctx, records[i].SandboxID, records[i].IdleTimeout, records[i].CreatedAt, nil, cfg.GetResourcePrefix())
-				if remaining >= 0 {
-					records[i].IdleRemaining = formatIdleLabel(remaining, false)
-				}
-			}
-		}
-	}
-
-	// Load active thread counts for --wide display (km-slack-threads, grouped by channel_id).
-	// Only attempted when at least one sandbox has SlackInboundQueueURL set.
-	if wide && ec2Err == nil {
-		hasInbound := false
-		for _, r := range records {
-			if r.SlackInboundQueueURL != "" {
-				hasInbound = true
-				break
-			}
-		}
-		if hasInbound {
-			ddbClient := dynamodb.NewFromConfig(awsCfg)
-			threadsTable := cfg.GetSlackThreadsTableName()
-			for i := range records {
-				if records[i].SlackChannelID == "" {
-					continue
-				}
-				count, countErr := countActiveThreads(ctx, ddbClient, threadsTable, records[i].SlackChannelID)
-				if countErr == nil {
-					records[i].ActiveThreads = count
-				}
-			}
-		}
+				return nil
+			},
+			cw:  cloudwatchlogs.NewFromConfig(awsCfg),
+			ssm: ssm.NewFromConfig(awsCfg),
+			ddb: dynamodb.NewFromConfig(awsCfg),
+		}, records, cfg.GetResourcePrefix(), cfg.GetSlackThreadsTableName(), wide)
 	}
 
 	// Reconcile local sandbox numbers with live DynamoDB state.
@@ -708,30 +672,6 @@ func colorizeRaw(status string, _ bool, display string) string {
 	default:
 		return display
 	}
-}
-
-// checkEC2Hibernation looks up the EC2 instance for a sandbox by tag and returns
-// whether hibernation is configured on the instance.
-func checkEC2Hibernation(ctx context.Context, client *ec2.Client, sandboxID string) bool {
-	out, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		Filters: []ec2types.Filter{
-			{
-				Name:   awssdk.String("tag:km:sandbox-id"),
-				Values: []string{sandboxID},
-			},
-		},
-	})
-	if err != nil || len(out.Reservations) == 0 {
-		return false
-	}
-	for _, res := range out.Reservations {
-		for _, inst := range res.Instances {
-			if inst.HibernationOptions != nil && inst.HibernationOptions.Configured != nil {
-				return *inst.HibernationOptions.Configured
-			}
-		}
-	}
-	return false
 }
 
 // reconcileSandboxStatus cross-checks the stored DDB status against the live EC2

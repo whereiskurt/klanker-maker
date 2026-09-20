@@ -8,6 +8,42 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**`km list` is flat in the number of sandboxes; km-presence signal 5 had been dead fleet-wide (2026-09-19):**
+- **`km list` made 4–5 serial AWS calls PER sandbox, three of them the identical
+  `DescribeInstances`-by-tag** — status reconcile, hibernation, then
+  `computeIdleRemaining` reloaded the AWS config (SSO resolution), described a third time,
+  read CloudWatch, and `hasActiveSSMSession` described a FOURTH time before
+  `DescribeSessions`; `--wide` added a DynamoDB Query. Six boxes ≈ 30 round trips ≈ 6–12 s,
+  and `ls` is the most-typed verb. Now `internal/app/cmd/list_enrich.go`: **one
+  `DescribeInstances` per launch account for the whole list** (the tag filter takes 200
+  values; chunked above that) answers status, hibernation, the launch/resume-time floor
+  AND the instance id SSM needs; the remaining per-row lookups fan out on a pool of 8 (the
+  shape `--auth` already used). `computeIdleRemaining` is now a thin wrapper over a
+  deps-injected `computeIdleRemainingWith` that takes already-described instances, so
+  `km status` also dropped from three describes to one. Semantics preserved and pinned:
+  a failed batch keeps the stored status (never mislabel a live box on a blip), an empty
+  describe still downgrades a stale "running", linked-account boxes are described in their
+  own account. `TestEnrichRecords_PerRowLookupsRunConcurrently` gates every SSM call and
+  waits for all six to be in flight — verified to fail with the pool set to 1. Not timed
+  live from the dev machine (SSO expired); the call-count shape is what the tests pin.
+- **km-presence signal 5 (`pgrep` for a headless claude/codex/km-agent-run) returned false
+  unconditionally on every sandbox since it shipped.** `pgrep -afE`: procps-ng has no `-E`
+  at all, exits 2 with a usage error, and the `err != nil` arm read that as "no matches".
+  The stated rationale ("AL2023's pgrep defaults to BRE") was false on both counts —
+  REG_EXTENDED is the default. Verified live on four boxes across both OS families; two had
+  a live `claude` the signal should have seen. So a detached `km agent run` with nobody
+  attached could be reaped mid-turn by `idleTimeout`, silently. The tests were green because
+  the fake runner keys on the literal argv and answered a command no real pgrep accepts —
+  the Phase 132 endianness shape again. A guard now fails on any pgrep flag carrying an `E`,
+  with its limit stated (it cannot prove a real pgrep accepts the flags). Related, NOT
+  fixed: signal 8 treats an idle agent REPL in a detached Herdr pane as work, pinning the
+  box awake — contradicts the Phase 134 "quiet pane is reaped" claim, which holds only for
+  a *shell* prompt.
+- **Deploy:** `km list` is operator-binary only (`make build`). `km-presence` is a sidecar:
+  `make build` + `km init --sidecars`; existing sandboxes keep the dead signal until
+  recreate or a hot swap of `/opt/km/bin/km-presence` (same S3-fetch shape as
+  `scripts/backport-slack-mentions.sh`).
+
 **H1 inbound was non-functional since Phase 103; `km h1 init` failed its own first run (2026-09-18/19):**
 - **Nothing ever created `{prefix}-h1-inbound-dlq.fifo`.** `pkg/aws.H1InboundDLQName`,
   `DLQArn` and `create_h1_inbound.go` agreed on a name the `sqs-inbound-dlq` module never
