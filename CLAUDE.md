@@ -2063,6 +2063,7 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km uninit` — tear down all shared regional infrastructure for a region (`--yes`, `--force` if active sandboxes exist, `--include-scp`; NO `--dry-run` — confirmation is `--yes`)
 - `km unbootstrap` — tear down platform-foundational resources: SSM params, buckets, KMS key (`--include-zone` to also delete the Route53 zone, `--kms-deletion-window`, `--yes`)
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
+- `km version` — print the km version (alias for `km --version`)
 - `km doctor` — validate platform health (config, credentials, SES, Lambda, VPC, stale resources, AMIs, EBS, Slack inbound, presence daemon, etc.; `--all-regions`, `--backfill-tags`, `--ignore-prefix=<csv>` to treat sibling installs' cross-install resources as known)
 
 ## Architecture
