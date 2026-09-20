@@ -204,3 +204,42 @@ func TestMount_AlreadyMountedFromValidatedSourceIsIdempotent(t *testing.T) {
 		t.Errorf("/repos mounted from the wrong device must be refused at mounted-elsewhere: %+v", st.Volumes[1])
 	}
 }
+
+// Cold boot / `systemctl restart km-volumes`: an unbound controller gets ONE
+// heal pass (re-probe the unbound functions, or a bare rescan when there are
+// none), never a loop.
+func TestMount_AbsentTriggersOneHealPass(t *testing.T) {
+	sys := healthy()
+	sys.absentUntilReprobes["0000:00:1f.0"] = 1
+	st, err := runMount(context.Background(), sys, twoVolumeManifest(), MountOpts{Policy: "refuse"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Volumes[0].Outcome != "mounted" || sys.mounted["/data"] != "/dev/nvme1n1" {
+		t.Errorf("%+v mounted=%v", st.Volumes[0], sys.mounted)
+	}
+	if !reflect.DeepEqual(sys.reprobed, []string{"0000:00:1f.0"}) {
+		t.Errorf("reprobed = %v", sys.reprobed)
+	}
+
+	sys = healthy()
+	sys.absentUntilReprobes["0000:00:1f.0"] = 1 << 30 // never binds
+	st, _ = runMount(context.Background(), sys, twoVolumeManifest(), MountOpts{Policy: "refuse"})
+	if st.Volumes[0].Outcome != "absent" {
+		t.Errorf("%+v", st.Volumes[0])
+	}
+	if n := count(sys.reprobed, "0000:00:1f.0"); n != 1 {
+		t.Errorf("heal attempts = %d, want exactly 1", n)
+	}
+	if st.Volumes[1].Outcome != "mounted" {
+		t.Errorf("the other entry must still mount: %+v", st.Volumes[1])
+	}
+
+	// Nothing unbound but a volume still missing → one bare rescan, no loop.
+	sys = healthy()
+	sys.devices = sys.devices[:1]
+	st, _ = runMount(context.Background(), sys, twoVolumeManifest(), MountOpts{Policy: "refuse"})
+	if st.Volumes[1].Outcome != "absent" || sys.rescans != 1 || len(sys.reprobed) != 0 {
+		t.Errorf("%+v rescans=%d reprobed=%v", st.Volumes[1], sys.rescans, sys.reprobed)
+	}
+}

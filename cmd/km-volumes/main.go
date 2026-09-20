@@ -172,6 +172,10 @@ func cmdPreSleep(sys System) {
 	printState(runPreSleep(context.Background(), sys, m))
 }
 
+// cmdPostSleep runs under km-volumes-resume.service (TimeoutStartSec=240), not
+// inline in the sleep hook: settle + bind can outlast anything a hook may hold.
+// The internal budgets (settleBudget, bindBudget, the bounded re-probe waits)
+// are sized to finish well inside that; see TestPostSleep_BudgetsFitTheUnitTimeout.
 func cmdPostSleep(sys System) {
 	m, err := loadManifest(manifestPath)
 	if err != nil {

@@ -5,9 +5,26 @@ import (
 	"reflect"
 	"syscall"
 	"testing"
+	"time"
 )
 
-func init() { holderGrace = 0 } // the real 1s grace between kill and retry is not under test
+// Production values, captured before the test overrides below so a guard test
+// can still see them.
+var prodSettleBudget, prodBindBudget = settleBudget, bindBudget
+
+func init() {
+	holderGrace = 0 // the real 1s grace between kill and retry is not under test
+	settleInterval, bindInterval = 0, 0
+	settleBudget, bindBudget = 20*time.Millisecond, 20*time.Millisecond
+}
+
+// post-sleep now runs under its unit's TimeoutStartSec=240; the budgets plus
+// the bounded re-probe waits must land well inside it.
+func TestPostSleep_BudgetsFitTheUnitTimeout(t *testing.T) {
+	if sum := prodSettleBudget + prodBindBudget; sum > 150*time.Second {
+		t.Errorf("settleBudget+bindBudget = %s, must leave room under TimeoutStartSec=240s", sum)
+	}
+}
 
 func TestPreSleep_CleanUnmount(t *testing.T) {
 	sys := healthy()
@@ -174,5 +191,69 @@ func TestPostSleep_NilManifestIsNoop(t *testing.T) {
 	runPostSleep(context.Background(), sys, nil, "reboot", "boot-1")
 	if len(sys.reprobed) != 0 || len(sys.reboots) != 0 {
 		t.Errorf("no manifest → touch nothing: reprobed=%v reboots=%v", sys.reprobed, sys.reboots)
+	}
+}
+
+// Live UAT: the unconditional re-probe hit a controller the hypervisor had not
+// finished restoring; the nvme probe failed silently and left the PCI function
+// on the bus with no driver. A plain rescan never revisits it — only removing
+// THAT function again and rescanning binds it.
+func TestPostSleep_UnboundControllerIsReprobedUntilBound(t *testing.T) {
+	sys := healthy()
+	sys.absentUntilReprobes["0000:00:1e.0"] = 3 // the unconditional pass + two more
+	st := runPostSleep(context.Background(), sys, twoVolumeManifest(), "refuse", "boot-1")
+	if len(sys.mounted) != 2 {
+		t.Errorf("mounted = %v", sys.mounted)
+	}
+	for _, v := range st.Volumes {
+		if v.Outcome != "mounted" {
+			t.Errorf("%+v", v)
+		}
+	}
+	if n := count(sys.reprobed, "0000:00:1e.0"); n < 3 {
+		t.Errorf("reprobed 1e.0 %d times, want >= 3", n)
+	}
+}
+
+func TestPostSleep_SettlesBeforeReprobing(t *testing.T) {
+	sys := healthy()
+	// The hypervisor is still restoring: the first two listings see one device.
+	sys.listSequence = [][]Device{{sys.devices[0]}, {sys.devices[0]}}
+	runPostSleep(context.Background(), sys, twoVolumeManifest(), "refuse", "boot-1")
+	if len(sys.reprobed) == 0 {
+		t.Fatal("expected the unconditional re-probe to run")
+	}
+	if sys.fullListsAtReprobe[0] < 1 {
+		t.Errorf("first Reprobe happened after %d full listings; must settle first", sys.fullListsAtReprobe[0])
+	}
+	if len(sys.mounted) != 2 {
+		t.Errorf("mounted = %v", sys.mounted)
+	}
+}
+
+func TestPostSleep_BindBudgetExhaustedRefusesAbsent(t *testing.T) {
+	sys := healthy()
+	sys.absentUntilReprobes["0000:00:1e.0"] = 1 << 30 // never binds
+	st := runPostSleep(context.Background(), sys, twoVolumeManifest(), "refuse", "boot-1")
+	if st.Volumes[1].Outcome != "absent" || sys.mounted["/repos"] != "" {
+		t.Errorf("%+v mounted=%v", st.Volumes[1], sys.mounted)
+	}
+	if st.Volumes[0].Outcome != "mounted" {
+		t.Errorf("the bound volume must still mount: %+v", st.Volumes[0])
+	}
+	if len(sys.reboots) != 0 {
+		t.Error("refuse must not reboot")
+	}
+
+	sys = healthy()
+	sys.absentUntilReprobes["0000:00:1e.0"] = 1 << 30
+	st = runPostSleep(context.Background(), sys, twoVolumeManifest(), "reboot", "boot-1")
+	if len(sys.reboots) != 1 || st.Volumes[1].Outcome != "rebooting" {
+		t.Errorf("reboots=%v state=%+v", sys.reboots, st.Volumes[1])
+	}
+	sys.reboots = nil
+	st = runPostSleep(context.Background(), sys, twoVolumeManifest(), "reboot", "boot-1")
+	if len(sys.reboots) != 0 || st.Volumes[1].Outcome != "absent" {
+		t.Errorf("second pass on the same resume: reboots=%v state=%+v", sys.reboots, st.Volumes[1])
 	}
 }

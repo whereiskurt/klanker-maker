@@ -12,9 +12,15 @@
 // /var/lib/km/volumes.state and emits a volume_mount_refused audit event.
 //
 // Around hibernation a system-sleep shim runs `pre-sleep` (a bounded unmount
-// ladder) and `post-sleep` (an unconditional PCI remove+rescan of every non-root
-// NVMe controller — the same from-scratch probe a reboot gives — then `mount`
-// again, one retry, then the refuse|reboot policy). Both always exit 0.
+// ladder) and starts km-volumes-resume.service, which runs `post-sleep`:
+// SETTLE (poll until every manifest volume is live and the node count is
+// stable — the hypervisor is still restoring the EBS PCI functions when the
+// hook fires, and re-probing one too early leaves it on the bus with no
+// driver), RE-PROBE every non-root NVMe controller unconditionally (the same
+// from-scratch probe a reboot gives), BIND (re-probe any EBS function left
+// driverless until every volume is live, bounded), then `mount`, one retry,
+// then the refuse|reboot policy. `mount` itself makes one heal pass for an
+// absent volume so a cold boot recovers too. pre-/post-sleep always exit 0.
 // `repair` is operator-only: e2fsck against ext4 backup superblocks for a
 // refused volume. Every kernel-facing call sits behind the System interface so
 // the decision logic is unit-tested with a fake.

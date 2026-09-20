@@ -44,6 +44,14 @@ type System interface {
 	// Reprobe removes the PCI device and rescans the bus, then waits (bounded)
 	// for the node count to be restored.
 	Reprobe(bdf string) error
+	// Rescan is a bare bus rescan (no remove): picks up a function that
+	// dropped off the bus, but does NOT revisit one that is present and
+	// driverless — that needs Reprobe of that exact function.
+	Rescan() error
+	// UnboundEBSControllers lists the BDFs of EBS NVMe PCI functions (vendor
+	// 0x1d0f, device 0x8061) present on the bus with no driver bound — the
+	// live-UAT shape left behind when a probe races the hypervisor's restore.
+	UnboundEBSControllers() ([]string, error)
 	// Ext4BlockCount reads "Block count"/"Block size" from dumpe2fs -h.
 	Ext4BlockCount(source string) (count, blockSize uint64, err error)
 	// BackupSuperblocks lists the backup superblocks mke2fs -n would place.

@@ -280,6 +280,52 @@ func (realSystem) Reprobe(bdf string) error {
 	return fmt.Errorf("reprobe %s: node did not reappear within %s", bdf, reprobeWait)
 }
 
+func (realSystem) Rescan() error {
+	if err := os.WriteFile("/sys/bus/pci/rescan", []byte("1"), 0); err != nil {
+		return fmt.Errorf("rescan: %w", err)
+	}
+	return nil
+}
+
+const (
+	ebsVendorID = "0x1d0f"
+	ebsDeviceID = "0x8061"
+)
+
+// UnboundEBSControllers walks /sys/bus/pci/devices for EBS NVMe functions
+// with no `driver` symlink. The root controller is never in this list: it is
+// the resume device and is bound by definition.
+func (realSystem) UnboundEBSControllers() ([]string, error) {
+	entries, err := os.ReadDir("/sys/bus/pci/devices")
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		bdf := e.Name()
+		if !bdfRe.MatchString(bdf) {
+			continue
+		}
+		dir := filepath.Join("/sys/bus/pci/devices", bdf)
+		if sysfsValue(filepath.Join(dir, "vendor")) != ebsVendorID || sysfsValue(filepath.Join(dir, "device")) != ebsDeviceID {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "driver")); err == nil {
+			continue
+		}
+		out = append(out, bdf)
+	}
+	return out, nil
+}
+
+func sysfsValue(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
 func (realSystem) Ext4BlockCount(source string) (uint64, uint64, error) {
 	out, err := run(dumpe2fsTimout, "dumpe2fs", "-h", source)
 	if err != nil {

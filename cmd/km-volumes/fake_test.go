@@ -37,6 +37,19 @@ type fakeSystem struct {
 	synced                int
 	listErr               error // ListDevices fails with this when set
 
+	// Live-UAT shape: a PCI function present on the bus but with no nvme
+	// driver bound (probe raced the hypervisor). ListDevices omits the device
+	// while the count is positive; UnboundEBSControllers reports its BDF;
+	// each Reprobe of that BDF decrements the count.
+	absentUntilReprobes map[string]int
+	// listSequence serves the first N ListDevices calls (the hypervisor still
+	// restoring) before the normal device table takes over.
+	listSequence       [][]Device
+	listCalls          int
+	fullLists          int   // ListDevices calls answered from the device table
+	fullListsAtReprobe []int // fullLists at the time of each Reprobe call
+	rescans            int
+
 	state             State
 	backupSuperblocks map[string][]uint64
 	fscks             map[string][]uint64
@@ -45,19 +58,20 @@ type fakeSystem struct {
 
 func newFake() *fakeSystem {
 	return &fakeSystem{
-		blkid:             map[string][3]string{},
-		ext4:              map[string][2]uint64{},
-		bdm:               map[string]string{},
-		files:             map[string]bool{},
-		contents:          map[string][]byte{},
-		mounted:           map[string]string{},
-		lazyUnmounts:      map[string]bool{},
-		kills:             map[string][]syscall.Signal{},
-		busy:              map[string]int{},
-		fixOnReprobe:      map[string]int{},
-		backupSuperblocks: map[string][]uint64{},
-		fscks:             map[string][]uint64{},
-		fsckSucceedsAt:    map[string]uint64{},
+		blkid:               map[string][3]string{},
+		ext4:                map[string][2]uint64{},
+		bdm:                 map[string]string{},
+		files:               map[string]bool{},
+		contents:            map[string][]byte{},
+		mounted:             map[string]string{},
+		lazyUnmounts:        map[string]bool{},
+		kills:               map[string][]syscall.Signal{},
+		busy:                map[string]int{},
+		fixOnReprobe:        map[string]int{},
+		backupSuperblocks:   map[string][]uint64{},
+		fscks:               map[string][]uint64{},
+		fsckSucceedsAt:      map[string]uint64{},
+		absentUntilReprobes: map[string]int{},
 	}
 }
 
@@ -65,9 +79,19 @@ func (f *fakeSystem) ListDevices(context.Context) ([]Device, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
+	f.listCalls++
+	if len(f.listSequence) > 0 {
+		out := f.listSequence[0]
+		f.listSequence = f.listSequence[1:]
+		return append([]Device(nil), out...), nil
+	}
+	f.fullLists++
 	var out []Device
 	for _, d := range f.devices {
 		if f.rootBDF != "" && d.BDF == f.rootBDF {
+			continue
+		}
+		if f.absentUntilReprobes[d.BDF] > 0 {
 			continue
 		}
 		out = append(out, d)
@@ -133,8 +157,27 @@ func (f *fakeSystem) KillHolders(target string, sig syscall.Signal) error {
 
 func (f *fakeSystem) Sync() { f.synced++ }
 
+func (f *fakeSystem) UnboundEBSControllers() ([]string, error) {
+	var out []string
+	for _, d := range f.devices {
+		if f.absentUntilReprobes[d.BDF] > 0 {
+			out = append(out, d.BDF)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeSystem) Rescan() error {
+	f.rescans++
+	return nil
+}
+
 func (f *fakeSystem) Reprobe(bdf string) error {
 	f.reprobed = append(f.reprobed, bdf)
+	f.fullListsAtReprobe = append(f.fullListsAtReprobe, f.fullLists)
+	if f.absentUntilReprobes[bdf] > 0 {
+		f.absentUntilReprobes[bdf]--
+	}
 	if f.swapBDFOnFirstReprobe && len(f.reprobed) == 1 && len(f.devices) >= 2 {
 		f.devices[0].BDF, f.devices[1].BDF = f.devices[1].BDF, f.devices[0].BDF
 	}
