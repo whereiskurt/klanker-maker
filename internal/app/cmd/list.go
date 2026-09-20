@@ -621,8 +621,17 @@ func visualWidth(s string) int {
 		case r == 0xFE0E || r == 0xFE0F:
 			// variation selectors: no display width
 		case r >= 0x1F000,
-			r >= 0x2600 && r <= 0x27BF,
-			r >= 0x2300 && r <= 0x23FF:
+			r >= 0x2600 && r <= 0x27BF:
+			w += 2
+		case r == 0x231A || r == 0x231B, // ⌚⌛
+			r == 0x2329 || r == 0x232A, // 〈〉
+			r >= 0x23E9 && r <= 0x23EC, // ⏩⏪⏫⏬
+			r == 0x23F0, r == 0x23F3:   // ⏰ ⏳
+			// The only East-Asian-Wide code points in U+2300–23FF
+			// (EastAsianWidth.txt). The rest of the block — including the
+			// ⏸ ⏹ ⏺ media controls the STATUS labels use — is Narrow and
+			// terminals draw it one column wide; counting the whole block as
+			// 2 padded `⏹  stop` one column short of `⏹  stop(h)`.
 			w += 2
 		default:
 			w++
