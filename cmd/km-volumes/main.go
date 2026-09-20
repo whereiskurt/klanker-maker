@@ -215,13 +215,15 @@ func cmdRepair(sys System, args []string) error {
 
 func printState(st State) {
 	for _, v := range st.Volumes {
-		line := fmt.Sprintf("km-volumes: %-12s %s", v.Mountpoint, v.Outcome)
+		extra := ""
 		if v.Step != "" {
-			line += " at " + v.Step
+			extra += " at " + v.Step
 		}
 		if v.Reason != "" {
-			line += ": " + v.Reason
+			extra += ": " + v.Reason
 		}
-		fmt.Fprintln(os.Stderr, line)
+		// Log tag in the format string, as the other sidecars do — pkg/hygiene's
+		// prefix guard reads a concatenated/Sprintf'd "km-…" as name construction.
+		fmt.Fprintf(os.Stderr, "km-volumes: %-12s %s%s\n", v.Mountpoint, v.Outcome, extra)
 	}
 }
