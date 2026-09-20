@@ -537,7 +537,9 @@ func verifyCredentialsWritten(ctx context.Context, ssmClient SSMSendAPI, instanc
 // is the same one the caller wrote to, by convention.
 func verifyClaudeAuthStatus(ctx context.Context, ssmClient SSMSendAPI, instanceID, sandboxID string, sessionErr error) error {
 	const cliName = "claude"
-	statusCmd := "sudo -u sandbox bash -lc 'claude auth status 2>&1' 2>&1"
+	// Shim prepend: same reason as checkAgentAuth — on a brokered-secrets box
+	// the real binary and the shimmed one answer differently.
+	statusCmd := "sudo -u sandbox bash -lc 'PATH=/opt/km/shims:$PATH; claude auth status 2>&1' 2>&1"
 	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, statusCmd)
 	if err != nil {
 		if sessionErr != nil {

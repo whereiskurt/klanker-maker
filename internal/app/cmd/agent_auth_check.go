@@ -149,8 +149,17 @@ func resolveInstanceIDByTag(ctx context.Context, client ec2DescribeInstancesAPI,
 //  1. Runs `claude auth status` as the sandbox user and prints its JSON output
 //     so the loggedIn field is visible.
 //  2. Tests whether /home/sandbox/.codex/auth.json exists and prints a sentinel.
+//
+// PATH=/opt/km/shims:$PATH is prepended explicitly, exactly as every
+// dispatch_as_sandbox site in userdata does, and must never be left to
+// profile.d ordering: a login shell puts nvm's bin AHEAD of the profile.d
+// prepend (proven live: `which claude` → ~/.nvm/.../bin/claude), and on a
+// brokered-secrets box only the shim injects ANTHROPIC_API_KEY. Probing the
+// real binary there reports loggedIn:false for a sandbox whose agent turns
+// work, so km status / km list --auth lied. Harmless when the dir is absent.
+// Pinned by TestEveryClaudeAuthStatusInvocationPrependsShimDir.
 func checkAgentAuth(ctx context.Context, ssmClient SSMSendAPI, instanceID string) (claudeLoggedIn bool, codexLoggedIn bool, err error) {
-	cmd := `sudo -u sandbox bash -lc 'claude auth status 2>/dev/null'
+	cmd := `sudo -u sandbox bash -lc 'PATH=/opt/km/shims:$PATH; claude auth status 2>/dev/null'
 test -f /home/sandbox/.codex/auth.json && echo KM_CODEX_OK || echo KM_CODEX_MISSING`
 
 	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, cmd)
@@ -187,7 +196,10 @@ func parseClaudeLoggedIn(out string) bool {
 // command error); callers MUST fail-open (proceed) on ok=false, preserving the
 // existing "proceed silently on SSM error" behavior.
 func claudeAuthedNoBedrock(ctx context.Context, ssmClient SSMSendAPI, instanceID string) (authed bool, ok bool) {
-	const probe = `sudo -u sandbox bash -lc 'unset CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL; claude auth status 2>/dev/null'`
+	// Shim prepend: see checkAgentAuth. The unset list deliberately leaves
+	// ANTHROPIC_API_KEY alone — the shim supplies it, and it IS a no-bedrock
+	// credential.
+	const probe = `sudo -u sandbox bash -lc 'PATH=/opt/km/shims:$PATH; unset CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL; claude auth status 2>/dev/null'`
 	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, probe)
 	if err != nil {
 		return false, false
