@@ -323,7 +323,7 @@ func runVSCodeStart(ctx context.Context, cfg *config.Config, fetcher SandboxFetc
 	if err != nil {
 		return fmt.Errorf("ssm pre-flight check: %w", err)
 	}
-	if err := parseVSCodeStatus(out, sandboxID); err != nil {
+	if err := parseVSCodeStatusWithKey(out, sandboxID, privPath+".pub"); err != nil {
 		return err
 	}
 
@@ -568,6 +568,15 @@ func pubkeyFingerprint(pubPath string) string {
 // parseVSCodeStatus interprets the combined SSM script output and returns a descriptive error
 // for each failure mode, or nil when both sshd and authorized_keys are healthy.
 func parseVSCodeStatus(out, sandboxID string) error {
+	return parseVSCodeStatusWithKey(out, sandboxID, "")
+}
+
+// parseVSCodeStatusWithKey is parseVSCodeStatus plus the shared-key guard:
+// when localPubPath is given and the box's authorized_keys line parses as a
+// key whose fingerprint differs from it, the error names `km vscode rekey`
+// rather than letting VS Code meet "Permission denied (publickey)". An empty
+// localPubPath skips the guard (km vscode status has no key to compare).
+func parseVSCodeStatusWithKey(out, sandboxID, localPubPath string) error {
 	sshdActive := strings.Contains(out, "=== sshd ===\nactive")
 	authkeysPresent := strings.Contains(out, "=== authkeys exists ===\nyes")
 
@@ -578,6 +587,9 @@ func parseVSCodeStatus(out, sandboxID string) error {
 		return fmt.Errorf("unexpected state: sshd is running but /home/sandbox/.ssh/authorized_keys is absent — recreate the sandbox")
 	case !sshdActive:
 		return fmt.Errorf("sshd is not running on the sandbox; try `km shell %s -- sudo systemctl start sshd`", sandboxID)
+	}
+	if authorizedKeyMismatch(strings.TrimSpace(sectionOf(out, "=== authkeys content ===")), localPubPath) {
+		return sharedKeyMismatchError(sandboxID)
 	}
 	return nil
 }

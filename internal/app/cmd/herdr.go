@@ -51,6 +51,7 @@ if [ -n "$HERDR_BIN" ]; then "$HERDR_BIN" --version 2>/dev/null || true; fi`
 type herdrBoxState struct {
 	SSHDActive      bool
 	AuthKeysPresent bool
+	AuthKeysLine    string // first line of authorized_keys, "" when absent — for the shared-key guard
 	HerdrPath       string // "" when absent
 	HerdrVersion    string // "" when absent or unparseable
 }
@@ -67,6 +68,7 @@ func parseHerdrStatus(out string) herdrBoxState {
 	return herdrBoxState{
 		SSHDActive:      strings.Contains(out, "=== sshd ===\nactive"),
 		AuthKeysPresent: strings.Contains(out, "=== authkeys exists ===\nyes"),
+		AuthKeysLine:    strings.TrimSpace(sectionOf(out, "=== authkeys content ===")),
 		HerdrPath:       strings.TrimSpace(sectionOf(out, "=== herdr path ===")),
 		HerdrVersion:    herdrSemverRe.FindString(sectionOf(out, "=== herdr version ===")),
 	}
@@ -279,6 +281,12 @@ func runHerdrStart(ctx context.Context, cfg *config.Config, fetcher SandboxFetch
 	// same way.
 	if !st.SSHDActive || !st.AuthKeysPresent {
 		return herdrHealthError(st, sandboxID)
+	}
+	// Shared-key guard (same as km vscode start): a box whose authorized_keys
+	// disagrees with the key SSM just handed us fails here with a named fix,
+	// not inside `herdr --remote` with "Permission denied (publickey)".
+	if authorizedKeyMismatch(st.AuthKeysLine, privPath+".pub") {
+		return sharedKeyMismatchError(sandboxID)
 	}
 
 	if st.HerdrPath == "" {

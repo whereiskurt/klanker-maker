@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -194,6 +195,38 @@ func syncSharedCredential(ctx context.Context, store *sharedCredStore, kind cred
 		return "", fmt.Errorf("no shared %s for %s in SSM and none at %s — run: %s %s", kind.name, sandboxID, localPath, kind.rekeyVerb, sandboxID)
 	}
 	return localPath, nil
+}
+
+// authorizedKeyMismatch reports whether the box's authorized_keys line is a
+// parseable key whose fingerprint differs from the local public key. It is
+// deliberately conservative: an empty or unparseable box line, an unreadable
+// local .pub, or an empty localPubPath all report "no mismatch", so a box with
+// odd content that started yesterday keeps starting today. The guard exists to
+// turn an inexplicable "Permission denied (publickey)" inside VS Code or herdr
+// into a named fix, not to add a new way to fail.
+func authorizedKeyMismatch(boxLine, localPubPath string) bool {
+	if localPubPath == "" || strings.TrimSpace(boxLine) == "" {
+		return false
+	}
+	boxKey, _, _, _, err := gossh.ParseAuthorizedKey([]byte(boxLine))
+	if err != nil {
+		return false
+	}
+	raw, err := os.ReadFile(localPubPath)
+	if err != nil {
+		return false
+	}
+	localKey, _, _, _, err := gossh.ParseAuthorizedKey(raw)
+	if err != nil {
+		return false
+	}
+	return gossh.FingerprintSHA256(boxKey) != gossh.FingerprintSHA256(localKey)
+}
+
+// sharedKeyMismatchError is the one message for a box whose authorized_keys
+// disagrees with the shared key every laptop now holds.
+func sharedKeyMismatchError(sandboxID string) error {
+	return fmt.Errorf("the sandbox's authorized_keys does not match the shared key in SSM — someone rekeyed the box without publishing, or the box was restored from an AMI. Run: km vscode rekey %s", sandboxID)
 }
 
 // publishSharedCredential writes content to SSM verbatim for one kind. Used by

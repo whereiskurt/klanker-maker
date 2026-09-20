@@ -297,6 +297,60 @@ func TestSandboxKeyPath_StoreErrorFallsBackToLocal(t *testing.T) {
 	}
 }
 
+func TestAuthorizedKeyMismatch(t *testing.T) {
+	dir := t.TempDir()
+	a, _ := sshkey.GenerateAndWrite(filepath.Join(dir, "a"), filepath.Join(dir, "a.pub"), "km-x")
+	b, _ := sshkey.GenerateAndWrite(filepath.Join(dir, "b"), filepath.Join(dir, "b.pub"), "km-x")
+	pubA := filepath.Join(dir, "a.pub")
+
+	if authorizedKeyMismatch(a, pubA) {
+		t.Error("same key must not mismatch")
+	}
+	if authorizedKeyMismatch(a+" trailing-comment-change", pubA) {
+		t.Error("comment differences must not mismatch (fingerprint compare)")
+	}
+	if !authorizedKeyMismatch(b, pubA) {
+		t.Error("different key must mismatch")
+	}
+	if authorizedKeyMismatch("", pubA) {
+		t.Error("empty box line is not a mismatch")
+	}
+	if authorizedKeyMismatch("garbage not a key", pubA) {
+		t.Error("unparseable box line is not a mismatch (pre-existing boxes must keep starting)")
+	}
+	if authorizedKeyMismatch(b, filepath.Join(dir, "missing.pub")) {
+		t.Error("unreadable local pub is not a mismatch")
+	}
+	if authorizedKeyMismatch(b, "") {
+		t.Error("empty local pub path disables the check")
+	}
+}
+
+func TestParseVSCodeStatusWithKey_MismatchNamesRekey(t *testing.T) {
+	dir := t.TempDir()
+	_, _ = sshkey.GenerateAndWrite(filepath.Join(dir, "a"), filepath.Join(dir, "a.pub"), "km-sbx")
+	other, _ := sshkey.GenerateAndWrite(filepath.Join(dir, "b"), filepath.Join(dir, "b.pub"), "km-sbx")
+	out := "=== sshd ===\nactive\n=== authkeys exists ===\nyes\n=== authkeys content ===\n" + other + "\n"
+	err := parseVSCodeStatusWithKey(out, "sbx", filepath.Join(dir, "a.pub"))
+	if err == nil || !strings.Contains(err.Error(), "km vscode rekey sbx") {
+		t.Errorf("err = %v", err)
+	}
+	if err := parseVSCodeStatusWithKey(out, "sbx", ""); err != nil {
+		t.Errorf("no local pub path must skip the check; got %v", err)
+	}
+	if err := parseVSCodeStatusWithKey(out, "sbx", filepath.Join(dir, "b.pub")); err != nil {
+		t.Errorf("matching key must pass; got %v", err)
+	}
+}
+
+func TestParseHerdrStatus_CapturesAuthKeysLine(t *testing.T) {
+	out := "=== sshd ===\nactive\n=== authkeys exists ===\nyes\n=== authkeys content ===\nssh-ed25519 AAAA km-sbx\n=== herdr path ===\n\n=== herdr version ===\n"
+	st := parseHerdrStatus(out)
+	if st.AuthKeysLine != "ssh-ed25519 AAAA km-sbx" {
+		t.Errorf("AuthKeysLine = %q", st.AuthKeysLine)
+	}
+}
+
 func TestPublishSharedCredential_StoreErrorPropagates(t *testing.T) {
 	saved := NewSharedCredStoreFunc
 	NewSharedCredStoreFunc = func(context.Context, *config.Config) (*sharedCredStore, error) { return nil, errors.New("sso expired") }
