@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -159,11 +160,11 @@ func TestSignal_Slack_NegativeStampMissing(t *testing.T) {
 // =============================================================================
 
 func TestSignal_AgentProcess_Positive(t *testing.T) {
-	// Decision: pgrep -afE for ERE alternation (AL2023's pgrep defaults to BRE).
-	// The -E flag is required for | alternation in the regex.
+	// NO -E: procps-ng has no such option and already compiles the pattern with
+	// REG_EXTENDED, so the alternation matches as written. See checkAgentProcess.
 	r := &fakeRunner{
 		responses: map[string][]byte{
-			`pgrep -afE (^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\.sh`: []byte("1234 /usr/local/bin/claude -p do task\n"),
+			`pgrep -af (^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\.sh`: []byte("1234 /usr/local/bin/claude -p do task\n"),
 		},
 	}
 	if !checkAgentProcess(r) {
@@ -174,10 +175,53 @@ func TestSignal_AgentProcess_Positive(t *testing.T) {
 func TestSignal_AgentProcess_NegativeEmpty(t *testing.T) {
 	r := &fakeRunner{
 		responses: map[string][]byte{},
-		errors:    map[string]error{`pgrep -afE (^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\.sh`: errExit1},
+		errors:    map[string]error{`pgrep -af (^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\.sh`: errExit1},
 	}
 	if checkAgentProcess(r) {
 		t.Fatalf("expected negative when pgrep returns no matches (exit 1)")
+	}
+}
+
+// recordingRunner captures the argv it was handed instead of answering it.
+// checkAgentProcess is the only caller, so an empty response + error is a
+// faithful "pgrep found nothing" and the call itself is what we inspect.
+type recordingRunner struct{ calls [][]string }
+
+func (r *recordingRunner) Output(name string, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, append([]string{name}, args...))
+	return nil, errExit1
+}
+
+// TestSignal_AgentProcess_PassesNoUnsupportedPgrepFlag pins the defect that
+// made this signal dead fleet-wide: `pgrep -afE` exits 2 with "invalid option
+// -- 'E'" on procps-ng 3.3.17 (AL2023) AND 4.0.4 (Ubuntu 24.04), and
+// checkAgentProcess cannot tell a usage error from "no matches" — so it
+// silently reported idle on every box from the day it shipped.
+//
+// This guard is deliberately narrow, and its limits are worth stating: it
+// proves only that no flag argument carries an E. It CANNOT prove the flags
+// are accepted by a real pgrep — the fake runner answers whatever it is asked,
+// which is exactly how the original defect passed a green suite. Changing this
+// invocation still requires running it against a live sandbox.
+func TestSignal_AgentProcess_PassesNoUnsupportedPgrepFlag(t *testing.T) {
+	r := &recordingRunner{}
+	checkAgentProcess(r)
+
+	if len(r.calls) != 1 {
+		t.Fatalf("expected exactly 1 pgrep invocation, got %d: %v", len(r.calls), r.calls)
+	}
+	call := r.calls[0]
+	if call[0] != "pgrep" {
+		t.Fatalf("expected pgrep, got %q", call[0])
+	}
+	for _, arg := range call[1:] {
+		if !strings.HasPrefix(arg, "-") {
+			continue // the pattern, not a flag
+		}
+		if strings.Contains(arg, "E") {
+			t.Fatalf("flag %q carries -E, which no procps-ng pgrep accepts; "+
+				"it exits 2 and checkAgentProcess reads that as 'no matches'", arg)
+		}
 	}
 }
 

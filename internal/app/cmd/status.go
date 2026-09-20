@@ -733,73 +733,134 @@ func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, create
 	return formatIdleLabel(remaining, isTTY)
 }
 
+// idleDeps are the AWS slices the idle computation reads. A nil member
+// disables that signal (it degrades to "no activity seen there").
+type idleDeps struct {
+	ec2 ec2DescribeInstancesAPI
+	cw  cwGetLogEventsAPI
+	ssm ssmDescribeSessionsAPI
+}
+
+// cwGetLogEventsAPI is the one CloudWatch Logs call the idle signal makes.
+type cwGetLogEventsAPI interface {
+	GetLogEvents(ctx context.Context, params *cloudwatchlogs.GetLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.GetLogEventsOutput, error)
+}
+
+// idleInput is one sandbox's idle question. When RunningKnown is true the
+// caller has already described the box's instances (km list does this ONCE
+// for the whole fleet) and Running is authoritative — even if empty; when
+// false the core describes them itself (km status, one box).
+type idleInput struct {
+	SandboxID      string
+	IdleTimeout    string
+	CreatedAt      time.Time
+	Budget         *kmaws.BudgetSummary
+	ResourcePrefix string
+	Running        []ec2types.Instance
+	RunningKnown   bool
+}
+
 // computeIdleRemaining returns the idle time remaining for a sandbox.
 // Returns -1 if idle timeout is not configured or cannot be determined.
-// Uses multiple activity signals: CloudWatch audit events, budget AI spend,
-// active SSM sessions, and sandbox creation time as fallback.
+// Uses multiple activity signals: EC2 launch/resume time, CloudWatch audit
+// events, budget AI spend, active SSM sessions, and creation time as fallback.
+//
+// Single-box convenience over computeIdleRemainingWith (km status). km list
+// calls the core directly with clients built once and instances already
+// described, because loading the AWS config and describing per row is what
+// made a six-box `km list` take ten seconds.
 func computeIdleRemaining(ctx context.Context, sandboxID, idleTimeout string, createdAt time.Time, budget *kmaws.BudgetSummary, resourcePrefix string) time.Duration {
-	idleDur, parseErr := time.ParseDuration(idleTimeout)
-	if parseErr != nil || idleDur == 0 {
+	if _, parseErr := time.ParseDuration(idleTimeout); parseErr != nil {
 		return -1
 	}
-
 	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
 		return -1
 	}
+	return computeIdleRemainingWith(ctx, idleDeps{
+		ec2: ec2.NewFromConfig(awsCfg),
+		cw:  cloudwatchlogs.NewFromConfig(awsCfg),
+		ssm: ssm.NewFromConfig(awsCfg),
+	}, idleInput{
+		SandboxID: sandboxID, IdleTimeout: idleTimeout, CreatedAt: createdAt,
+		Budget: budget, ResourcePrefix: resourcePrefix,
+	})
+}
+
+// computeIdleRemainingWith is the deps-injected core of computeIdleRemaining.
+func computeIdleRemainingWith(ctx context.Context, deps idleDeps, in idleInput) time.Duration {
+	idleDur, parseErr := time.ParseDuration(in.IdleTimeout)
+	if parseErr != nil || idleDur == 0 {
+		return -1
+	}
 
 	// Determine the most recent activity timestamp from multiple signals.
-	lastActivity := createdAt
+	lastActivity := in.CreatedAt
 
 	// Signal 1: EC2 instance launch/resume time — captures when the instance
 	// entered "running" state, including after hibernate resume. This prevents
 	// showing "imminent" immediately after resume when no audit events exist yet.
-	ec2Client := ec2.NewFromConfig(awsCfg)
-	descOut, descErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		Filters: []ec2types.Filter{
-			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
-			{Name: awssdk.String("instance-state-name"), Values: []string{"running"}},
-		},
-	})
-	if descErr == nil {
-		for _, res := range descOut.Reservations {
-			for _, inst := range res.Instances {
-				// StateTransitionReason contains the timestamp when the instance
-				// entered running state (e.g. after resume). LaunchTime is the
-				// original launch and doesn't change on hibernate/resume.
-				// Use the later of LaunchTime and the transition reason timestamp.
-				if inst.LaunchTime != nil && inst.LaunchTime.After(lastActivity) {
-					lastActivity = *inst.LaunchTime
-				}
-				// Parse transition reason for resume timestamp (format: "User initiated (YYYY-MM-DD HH:MM:SS GMT)")
-				if reason := awssdk.ToString(inst.StateTransitionReason); reason != "" {
-					if t, parseErr := parseStateTransitionTime(reason); parseErr == nil && t.After(lastActivity) {
-						lastActivity = t
-					}
+	running := in.Running
+	if !in.RunningKnown && deps.ec2 != nil {
+		descOut, descErr := deps.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			Filters: []ec2types.Filter{
+				{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{in.SandboxID}},
+				{Name: awssdk.String("instance-state-name"), Values: []string{"running"}},
+			},
+		})
+		if descErr == nil {
+			for _, res := range descOut.Reservations {
+				running = append(running, res.Instances...)
+			}
+		}
+	}
+	var instanceID string
+	for _, inst := range running {
+		if instanceID == "" && inst.InstanceId != nil {
+			instanceID = *inst.InstanceId
+		}
+		// StateTransitionReason contains the timestamp when the instance
+		// entered running state (e.g. after resume). LaunchTime is the
+		// original launch and doesn't change on hibernate/resume.
+		// Use the later of LaunchTime and the transition reason timestamp.
+		if inst.LaunchTime != nil && inst.LaunchTime.After(lastActivity) {
+			lastActivity = *inst.LaunchTime
+		}
+		// Parse transition reason for resume timestamp (format: "User initiated (YYYY-MM-DD HH:MM:SS GMT)")
+		if reason := awssdk.ToString(inst.StateTransitionReason); reason != "" {
+			if t, err := parseStateTransitionTime(reason); err == nil && t.After(lastActivity) {
+				lastActivity = t
+			}
+		}
+	}
+
+	// Signal 2: CloudWatch audit events (shell commands, heartbeats). Without
+	// StartFromHead the API returns the most recent events; the last is newest.
+	if deps.cw != nil {
+		logGroup := "/" + in.ResourcePrefix + "/sandboxes/" + in.SandboxID + "/"
+		out, err := deps.cw.GetLogEvents(ctx, &cloudwatchlogs.GetLogEventsInput{
+			LogGroupName:  awssdk.String(logGroup),
+			LogStreamName: awssdk.String("audit"),
+			Limit:         awssdk.Int32(10),
+		})
+		if err == nil && len(out.Events) > 0 {
+			if ts := out.Events[len(out.Events)-1].Timestamp; ts != nil {
+				if latest := time.UnixMilli(*ts); latest.After(lastActivity) {
+					lastActivity = latest
 				}
 			}
 		}
 	}
 
-	// Signal 2: CloudWatch audit events (shell commands, heartbeats)
-	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
-	logGroup := "/" + resourcePrefix + "/sandboxes/" + sandboxID + "/"
-	events, err := kmaws.GetLogEvents(ctx, cwClient, logGroup, "audit", 10)
-	if err == nil && len(events) > 0 {
-		// Events are returned from the tail; last element is most recent.
-		latest := time.UnixMilli(events[len(events)-1].Timestamp)
-		if latest.After(lastActivity) {
-			lastActivity = latest
-		}
-	}
-
 	// Signal 3: Budget AI spend updates (Bedrock/API usage)
-	if budget != nil && budget.LastAIActivity != nil && budget.LastAIActivity.After(lastActivity) {
-		lastActivity = *budget.LastAIActivity
+	if in.Budget != nil && in.Budget.LastAIActivity != nil && in.Budget.LastAIActivity.After(lastActivity) {
+		lastActivity = *in.Budget.LastAIActivity
 	}
 
-	// Signal 4: Active SSM sessions — if any session is connected, sandbox is in use.
-	if hasActiveSSMSession(ctx, awsCfg, sandboxID) {
+	// Signal 4: Active SSM sessions — if any session is connected, sandbox is in
+	// use. This catches km shell / ssm send-command activity that may not
+	// generate CloudWatch audit events.
+	if deps.ssm != nil && instanceID != "" && hasActiveSSMSessionOn(ctx, deps.ssm, instanceID) {
 		lastActivity = time.Now()
 	}
 
@@ -846,44 +907,10 @@ func formatIdleLabel(remaining time.Duration, isTTY bool) string {
 	}
 }
 
-// hasActiveSSMSession checks if there are any active SSM sessions targeting
-// the EC2 instance for the given sandbox. This catches activity from km shell
-// and ssm send-command that may not generate CloudWatch audit events.
-func hasActiveSSMSession(ctx context.Context, awsCfg awssdk.Config, sandboxID string) bool {
-	ssmClient := ssm.NewFromConfig(awsCfg)
-
-	// Look up the instance ID by sandbox tag
-	ec2Client := ec2.NewFromConfig(awsCfg)
-	descOut, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		Filters: []ec2types.Filter{
-			{
-				Name:   awssdk.String("tag:km:sandbox-id"),
-				Values: []string{sandboxID},
-			},
-			{
-				Name:   awssdk.String("instance-state-name"),
-				Values: []string{"running"},
-			},
-		},
-	})
-	if err != nil || len(descOut.Reservations) == 0 {
-		return false
-	}
-
-	var instanceID string
-	for _, res := range descOut.Reservations {
-		for _, inst := range res.Instances {
-			if inst.InstanceId != nil {
-				instanceID = *inst.InstanceId
-				break
-			}
-		}
-	}
-	if instanceID == "" {
-		return false
-	}
-
-	// Check for active SSM sessions on this instance
+// hasActiveSSMSessionOn reports whether any SSM session is active against the
+// instance. The instance id comes from the caller — the old form re-described
+// the instance by tag, a fourth identical EC2 call per box in km list.
+func hasActiveSSMSessionOn(ctx context.Context, ssmClient ssmDescribeSessionsAPI, instanceID string) bool {
 	sessOut, err := ssmClient.DescribeSessions(ctx, &ssm.DescribeSessionsInput{
 		State: ssmtypes.SessionStateActive,
 		Filters: []ssmtypes.SessionFilter{
