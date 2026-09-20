@@ -351,6 +351,79 @@ func TestParseHerdrStatus_CapturesAuthKeysLine(t *testing.T) {
 	}
 }
 
+func TestVSCodeRekey_PublishesToSSMAfterLocalCommit(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	seedRekeyTestKeys(t, homeDir, "sb-abc123")
+	f := &fakeAccessSSM{}
+	withTestStore(t, f)
+
+	var gotErr error
+	out := captureStdout(func() {
+		gotErr = runVSCodeRekey(context.Background(), &config.Config{}, newVSCodeEC2Sandbox("sb-abc123"), newRunningEC2Mock(),
+			&rekeyInstallSpyMock{preflightOutput: healthySSMOutput}, "sb-abc123", false, true)
+	})
+	if gotErr != nil {
+		t.Fatal(gotErr)
+	}
+	local, _ := os.ReadFile(filepath.Join(homeDir, ".km", "keys", "sb-abc123"))
+	if got := f.params["/km/access/sb-abc123/ssh-key"]; got != string(local) {
+		t.Errorf("SSM ssh-key != committed local key (ssm %d bytes, local %d bytes)", len(got), len(local))
+	}
+	if !strings.Contains(out, "Published to SSM") {
+		t.Errorf("output: %s", out)
+	}
+}
+
+func TestVSCodeRekey_PublishFailureNamesRerunAndKeepsLocal(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	orig, _ := seedRekeyTestKeys(t, homeDir, "sb-abc123")
+	withTestStore(t, &fakeAccessSSM{putErr: errors.New("denied")})
+
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runVSCodeRekey(context.Background(), &config.Config{}, newVSCodeEC2Sandbox("sb-abc123"), newRunningEC2Mock(),
+			&rekeyInstallSpyMock{preflightOutput: healthySSMOutput}, "sb-abc123", false, true)
+	})
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "km vscode rekey sb-abc123 --yes") {
+		t.Fatalf("err = %v, want it to name the re-run", gotErr)
+	}
+	priv := filepath.Join(homeDir, ".km", "keys", "sb-abc123")
+	now, err := os.ReadFile(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(now, orig) {
+		t.Error("local key must already be the NEW key (box → local → SSM order)")
+	}
+	if _, err := os.Stat(priv + ".new"); !os.IsNotExist(err) {
+		t.Error("no .new scratch file may remain")
+	}
+}
+
+func TestDesktopRekey_PublishesToSSM(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	seedLocal(t, homeDir, filepath.Join(".km", "desktop", "sb-abc123"), []byte("kasm:oldpass"))
+	f := &fakeAccessSSM{}
+	withTestStore(t, f)
+
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runDesktopRekey(context.Background(), &config.Config{}, newDesktopEC2Sandbox("sb-abc123"), newRunningEC2Mock(),
+			&vsCodeSSMMock{output: rekeyOKSSMOutput}, "sb-abc123", false, true)
+	})
+	if gotErr != nil {
+		t.Fatal(gotErr)
+	}
+	local, _ := os.ReadFile(filepath.Join(homeDir, ".km", "desktop", "sb-abc123"))
+	got := f.params["/km/access/sb-abc123/desktop-cred"]
+	if got == "" || got != string(local) || got == "kasm:oldpass" {
+		t.Errorf("SSM desktop-cred = %q, local = %q", got, local)
+	}
+}
+
 func TestPublishSharedCredential_StoreErrorPropagates(t *testing.T) {
 	saved := NewSharedCredStoreFunc
 	NewSharedCredStoreFunc = func(context.Context, *config.Config) (*sharedCredStore, error) { return nil, errors.New("sso expired") }

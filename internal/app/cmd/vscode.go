@@ -539,6 +539,20 @@ head -1 /home/sandbox/.ssh/authorized_keys`, newPubKeyLine)
 		return fmt.Errorf("commit new private key: %w", err)
 	}
 
+	// Step 6b: publish to SSM so every other laptop picks the new key up on its
+	// next start. Order is box → local → SSM on purpose: if this fails the
+	// operator who ran rekey is working and everyone else is stale until it is
+	// re-run; SSM-first would have handed everyone a key the box rejects had
+	// the push failed.
+	privBytes, err := os.ReadFile(privFinalPath)
+	if err != nil {
+		return fmt.Errorf("read committed key for publish: %w", err)
+	}
+	if err := publishSharedCredential(ctx, cfg, sshKeyKind, sandboxID, privBytes); err != nil {
+		return fmt.Errorf("rekey applied on the sandbox and locally, but publishing to SSM failed: %w\nOther analysts will get a stale key until you re-run: km vscode rekey %s --yes", err, sandboxID)
+	}
+	fmt.Printf("✓ Published to SSM (%s)\n", kmaws.SSHKeyPath(cfg.GetResourcePrefix(), sandboxID))
+
 	// Step 7: Final output
 	actionWord := "replaced"
 	if localKeyAbsent {
