@@ -90,6 +90,7 @@ func TestUserdataVolumes_NoFstabLineAndUnitPresent(t *testing.T) {
 		"Environment=KM_VOLUMES_ON_MISMATCH=refuse",
 		"ExecStart=/opt/km/bin/km-volumes mount --fallback /data:f --fallback /repos:g",
 		"systemctl enable km-volumes.service",
+		"systemctl start km-volumes.service",
 		`/opt/km/bin/km-volumes manifest --mountpoint "/data" --bdm "f"`,
 		`/opt/km/bin/km-volumes manifest --mountpoint "/repos" --bdm "g"`,
 		`--from-snapshot "snap-0d7b1093da2702612"`,

@@ -227,6 +227,14 @@ func (realSystem) Unmount(target string, lazy bool) error {
 	return err
 }
 
+func (realSystem) MountSource(target string) string {
+	out, err := run(findmntTimeout, "findmnt", "-no", "SOURCE", "--mountpoint", target)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
+}
+
 func (realSystem) IsMounted(target string) bool {
 	out, err := run(findmntTimeout, "findmnt", "-no", "TARGET", target)
 	return err == nil && strings.TrimSpace(out) == target

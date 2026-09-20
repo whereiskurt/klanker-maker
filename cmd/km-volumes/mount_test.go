@@ -180,3 +180,27 @@ func TestMount_EnumerationFailureRefusesAllLoudly(t *testing.T) {
 		t.Error("marker and state must still be written")
 	}
 }
+
+// A first boot mounts directly (the unit is enabled after the volume block);
+// the unit then runs mount on that same boot. An entry already mounted FROM
+// THE VALIDATED SOURCE is simply "mounted" — never a second mount call, never a
+// refusal — and one mounted from anything else is refused, because a mount km
+// did not make is exactly the situation this exists to catch.
+func TestMount_AlreadyMountedFromValidatedSourceIsIdempotent(t *testing.T) {
+	sys := healthy()
+	sys.mounted["/data"] = "/dev/nvme1n1"  // right device
+	sys.mounted["/repos"] = "/dev/nvme1n1" // WRONG device for /repos
+	st, err := runMount(context.Background(), sys, twoVolumeManifest(), MountOpts{Policy: "refuse"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Volumes[0].Outcome != OutcomeMounted {
+		t.Errorf("/data already mounted from its validated source must read mounted: %+v", st.Volumes[0])
+	}
+	if sys.mountCalls != 0 {
+		t.Errorf("no mount call may be issued for an already-mounted entry, got %d", sys.mountCalls)
+	}
+	if st.Volumes[1].Outcome != OutcomeRefused || st.Volumes[1].Step != "mounted-elsewhere" {
+		t.Errorf("/repos mounted from the wrong device must be refused at mounted-elsewhere: %+v", st.Volumes[1])
+	}
+}

@@ -60,12 +60,26 @@ func runMount(ctx context.Context, sys System, m *Manifest, opts MountOpts) (Sta
 		vs := validateOne(sys, devs, v)
 		marker := filepath.Join(v.Mountpoint, markerName)
 		if vs.Outcome == outcomeOK {
-			_ = sys.Remove(marker) // must go before the mount hides the underlying directory
-			if err := sys.Mount(vs.source, v.Mountpoint, v.FSType); err != nil {
-				vs.Outcome, vs.Step, vs.Reason = OutcomeRefused, "mount", err.Error()
-			} else {
+			switch cur := sys.MountSource(v.Mountpoint); {
+			case cur == vs.source:
+				// Already mounted from the validated device (the first boot
+				// mounts directly, then the unit runs on that same boot; a
+				// systemctl restart on a live box lands here too). Idempotent.
 				vs.Outcome = OutcomeMounted
 				emitAuditMounted(v)
+			case cur != "":
+				// Mounted, but not by us from this device — precisely the
+				// situation validation exists to catch. Never remount over it.
+				vs.Outcome, vs.Step = OutcomeRefused, "mounted-elsewhere"
+				vs.Reason = fmt.Sprintf("%s is mounted from %s, but the validated device for %s is %s", v.Mountpoint, cur, v.VolumeID, vs.source)
+			default:
+				_ = sys.Remove(marker) // must go before the mount hides the underlying directory
+				if err := sys.Mount(vs.source, v.Mountpoint, v.FSType); err != nil {
+					vs.Outcome, vs.Step, vs.Reason = OutcomeRefused, "mount", err.Error()
+				} else {
+					vs.Outcome = OutcomeMounted
+					emitAuditMounted(v)
+				}
 			}
 		}
 		switch vs.Outcome {

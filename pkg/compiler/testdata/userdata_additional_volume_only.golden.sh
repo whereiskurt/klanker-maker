@@ -2127,6 +2127,10 @@ WantedBy=multi-user.target
 KMVOLUNIT
 systemctl daemon-reload
 systemctl enable km-volumes.service
+# Run it now as well: the volume block above mounted directly for this first
+# boot, so this validates the same mounts (idempotent) and writes
+# /var/lib/km/volumes.state — km status has something to show from minute one.
+systemctl start km-volumes.service || echo "[km-bootstrap] WARNING: km-volumes.service failed on first boot; see journalctl -u km-volumes"
 cat > /usr/lib/systemd/system-sleep/km-volumes << 'KMVOLSLEEP'
 #!/bin/sh
 # Bounded and ALWAYS exit 0: a system-sleep script that blocks or fails stalls

@@ -14,10 +14,11 @@ import (
 // It never touches the kernel; every side effect is recorded so a test can
 // assert what would have happened to a real box.
 type fakeSystem struct {
-	devices []Device
-	blkid   map[string][3]string // node -> {uuid, fstype, source}
-	ext4    map[string][2]uint64 // source -> {block count, block size}
-	bdm     map[string]string    // letter -> node
+	mountCalls int
+	devices    []Device
+	blkid      map[string][3]string // node -> {uuid, fstype, source}
+	ext4       map[string][2]uint64 // source -> {block count, block size}
+	bdm        map[string]string    // letter -> node
 
 	files    map[string]bool
 	contents map[string][]byte
@@ -98,9 +99,12 @@ func (f *fakeSystem) Blkid(node string) (string, string, string, error) {
 }
 
 func (f *fakeSystem) Mount(source, target, fstype string) error {
+	f.mountCalls++
 	f.mounted[target] = source
 	return nil
 }
+
+func (f *fakeSystem) MountSource(target string) string { return f.mounted[target] }
 
 func (f *fakeSystem) Unmount(target string, lazy bool) error {
 	if lazy {

@@ -37,6 +37,8 @@ type System interface {
 	Mount(source, target, fstype string) error
 	Unmount(target string, lazy bool) error
 	IsMounted(target string) bool
+	// MountSource is the device currently mounted at target ("" when none).
+	MountSource(target string) string
 	KillHolders(target string, sig syscall.Signal) error
 	Sync()
 	// Reprobe removes the PCI device and rescans the bus, then waits (bounded)
