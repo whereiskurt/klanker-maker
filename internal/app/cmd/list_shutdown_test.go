@@ -358,3 +358,34 @@ func TestIdleStatusForDisplay(t *testing.T) {
 		}
 	}
 }
+
+// ⏸ (U+23F8) and ⏹ (U+23F9) are East Asian Width NARROW — terminals draw them
+// one column wide — but visualWidth counted the whole U+2300–23FF block as 2.
+// So `⏹  stop` measured 8, was padded to 10, and rendered 9: every stopped or
+// paused row without "(h)" sat one column left of its neighbours. The wide
+// code points in that block are only ⌚⌛ 〈〉 ⏩⏪⏫⏬ ⏰ ⏳ (EastAsianWidth.txt).
+func TestVisualWidth_MediaControlIconsAreNarrow(t *testing.T) {
+	cases := map[string]int{
+		"⏸  paus":    7,  // 1 + 2 + 4
+		"⏹  stop":    7,  //
+		"⏹  stop(h)": 10, //
+		"🟢 run":      6,  // 2 + 1 + 3
+		"🟢 run(h)":   9,
+		"⏰":          2, // U+23F0 IS wide
+		"⌚":          2, // U+231A
+		"⏩":          2, // U+23E9
+		"⏳":          2, // U+23F3
+		"⏺":          1, // U+23FA narrow, like its siblings
+		"REGION":     6,
+	}
+	for s, want := range cases {
+		if got := visualWidth(s); got != want {
+			t.Errorf("visualWidth(%q) = %d, want %d", s, got, want)
+		}
+	}
+	// The consequence padVis must deliver: a bare stop label and a hibernated
+	// one pad to the same rendered width, so TTL lands in one column.
+	if a, b := visualWidth(padVis("⏹  stop", 10)), visualWidth(padVis("⏹  stop(h)", 10)); a != b || a != 10 {
+		t.Errorf("padVis widths: stop=%d stop(h)=%d, want both 10", a, b)
+	}
+}
