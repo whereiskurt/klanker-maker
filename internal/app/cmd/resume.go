@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -18,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
@@ -133,9 +135,11 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 	}
 
 	resumed := 0
+	var resumedInstanceID string
 	for _, res := range descOut.Reservations {
 		for _, inst := range res.Instances {
 			instanceID := aws.ToString(inst.InstanceId)
+			resumedInstanceID = instanceID
 			if inst.State != nil && inst.State.Name == ec2types.InstanceStateNameStopping {
 				fmt.Printf("Instance "+ansiYellow+"%s"+ansiReset+" is still stopping; waiting for it to reach 'stopped'...\n", instanceID)
 				if werr := ec2.NewInstanceStoppedWaiter(ec2Client).Wait(ctx, &ec2.DescribeInstancesInput{
@@ -169,6 +173,12 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 	// the resume — but always reported, which is the point: a refresher that has
 	// been erroring on every tick is otherwise invisible until git 401s later.
 	refreshGitHubTokenOnResume(ctx, scheduler.NewFromConfig(awsCfg), lambda.NewFromConfig(awsCfg), cfg.GetResourcePrefix(), sandboxID)
+
+	// Additional volumes: after a hibernate/resume km-volumes re-probes and
+	// re-validates every additional EBS volume. Say what it decided at the
+	// moment the operator woke the box, not at the next turn's failure.
+	// Best-effort and bounded; never fails the resume.
+	resumeVolumeStateReport(ctx, ssm.NewFromConfig(awsCfg), resumedInstanceID, sandboxID, os.Stdout)
 
 	// Update metadata status back to "running" via DynamoDB (with S3 fallback on ResourceNotFoundException).
 	if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, dynamoClient, tableName, sandboxID, "running"); statusErr != nil {

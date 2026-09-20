@@ -4760,6 +4760,12 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkInitFailed(ctx, cwFilter, presenceLister, presenceLogGroupPrefix)
 	})
 
+	// Additional EBS volumes km-volumes refused to mount (latest event per
+	// mountpoint, so a resume that re-probed and mounted clears it). Same deps.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkAdditionalVolumes(ctx, cwFilter, presenceLister, presenceLogGroupPrefix, time.Now())
+	})
+
 	// Phase 70 — Codex parity doctor checks (Plan 70-07).
 	// Both checks are WARN-only — Codex parity drift is never a hard platform
 	// failure. SKIPPED when deps are nil (production: SSM SendCommand is blocked
