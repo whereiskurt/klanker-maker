@@ -167,6 +167,13 @@ echo "[km-bootstrap] Region: $REGION"
 # ============================================================
 # 2.6.0. EBS device resolver (shared by all additional-volume mounts)
 # ============================================================
+# km-volumes is fetched HERE, not with the other sidecars (section 7): the
+# mount block below calls km-volumes manifest on first boot, and the sidecar
+# download block runs later in this script. aws is ensured at the top.
+mkdir -p /opt/km/bin
+aws s3 cp "s3://my-bucket/sidecars/km-volumes" /opt/km/bin/km-volumes \
+  && chmod 0755 /opt/km/bin/km-volumes \
+  || echo "[km-bootstrap] WARNING: km-volumes sidecar not fetched; additional volumes will mount unvalidated"
 # On Nitro, EBS volumes appear as /dev/nvmeXn1 with no stable mapping to the AWS
 # block-device-mapping name (sdf, sdg, …) requested at attach time. AL2023 ships
 # the AWS udev rules + ebsnvme-id; Ubuntu ships neither (and has no /dev/sdX
@@ -622,16 +629,17 @@ if [ -n "$DEVICE" ]; then
   fi
   FSTYPE=$(blkid -s TYPE -o value "$MOUNT_SRC" 2>/dev/null || true)
   [ -z "$FSTYPE" ] && FSTYPE=ext4
-  UUID=$(blkid -s UUID -o value "$MOUNT_SRC" 2>/dev/null || true)
   mkdir -p "/data"
-  if [ -n "$UUID" ]; then
-    grep -q "$UUID" /etc/fstab 2>/dev/null || \
-      echo "UUID=${UUID} /data ${FSTYPE} defaults,nofail 0 2" >> /etc/fstab
-    mount -a
-  else
-    # No UUID resolvable — mount the source directly so the volume still comes up.
-    mount "$MOUNT_SRC" "/data" || true
-  fi
+  # km-volumes owns this volume from the next boot on. Record its PHYSICAL
+  # identity now — the first cold boot is the one moment the BDM letter →
+  # device binding is trusted — then mount directly for this boot only.
+  # No /etc/fstab line: fstab mounts by UUID with no check that the device
+  # behind the UUID is the volume it should be, which is how a hibernate/
+  # resume cross-wrote two volumes (spec 2026-09-20-hibernate-volume-validation).
+  /opt/km/bin/km-volumes manifest --mountpoint "/data" --bdm "f" \
+    --device "$MOUNT_SRC" --label "additional volume" \
+    || echo "[km-bootstrap] WARNING: km-volumes manifest failed for /data; it will mount unvalidated until recreate"
+  mount -t "${FSTYPE}" "$MOUNT_SRC" "/data" || true
   chown sandbox:sandbox "/data" 2>/dev/null || true
   echo "[km-bootstrap] additional volume ($DEVICE -> $MOUNT_SRC) mounted at /data"
 else
@@ -3558,6 +3566,48 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 echo "[km-bootstrap] km-presence.service installed"
+
+# ============================================================
+# 7.11. km-volumes: validated additional-volume mounts on every boot + hibernate hooks
+# ============================================================
+# /etc/fstab used to mount these by UUID. A hibernate/resume can swap which
+# physical volume sits behind an NVMe node while the kernel keeps its cached
+# identity and page cache, so the UUID mount succeeded against the wrong disk
+# and cross-wrote both volumes. km-volumes resolves by LIVE NVMe serial,
+# validates size + UUID against the first-boot manifest, unmounts before
+# hibernate, and PCI re-probes every non-root controller after resume.
+# Spec: docs/superpowers/specs/2026-09-20-hibernate-volume-validation-design.md
+mkdir -p /var/lib/km
+cat > /etc/systemd/system/km-volumes.service << 'KMVOLUNIT'
+[Unit]
+Description=Klankrmkr additional EBS volumes — validate by live NVMe identity, then mount
+After=local-fs.target cloud-final.service
+Before=km-presence.service sshd.service km-slack-inbound-poller.service km-github-inbound-poller.service km-h1-inbound-poller.service km-webhook-inbound-poller.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=KM_SANDBOX_ID=sb-phase92-baseline
+Environment=KM_VOLUMES_ON_MISMATCH=refuse
+ExecStart=/opt/km/bin/km-volumes mount --fallback /data:f
+[Install]
+WantedBy=multi-user.target
+KMVOLUNIT
+systemctl daemon-reload
+systemctl enable km-volumes.service
+cat > /usr/lib/systemd/system-sleep/km-volumes << 'KMVOLSLEEP'
+#!/bin/sh
+# Bounded and ALWAYS exit 0: a system-sleep script that blocks or fails stalls
+# systemd-hibernate.service and trips ec2-hibinit's retry/debounce state
+# machine, after which the box stops hibernating until a state file is
+# hand-deleted. km-volumes itself exits 0 on every path; timeout is the belt.
+case "$1:$2" in
+  pre:hibernate)  timeout 15 /opt/km/bin/km-volumes pre-sleep  >> /var/log/km-volumes.log 2>&1 ;;
+  post:hibernate) timeout 45 /opt/km/bin/km-volumes post-sleep >> /var/log/km-volumes.log 2>&1 ;;
+esac
+exit 0
+KMVOLSLEEP
+chmod 0755 /usr/lib/systemd/system-sleep/km-volumes
+echo "[km-bootstrap] km-volumes.service + sleep hook installed"
 
 # Phase 86: km-queue-runner bash script — drains /workspace/.km-agent/queue/ sequentially.
 # Seeded unconditionally on every EC2 sandbox. Launched by km-queue.service.

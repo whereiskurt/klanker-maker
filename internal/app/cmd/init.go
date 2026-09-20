@@ -3838,6 +3838,7 @@ func sidecarBuilds() []sidecarBuild {
 		{name: "km-secretsd", srcDir: "cmd/km-secretsd"},
 		{name: "km-env", srcDir: "cmd/km-env"},
 		{name: "km-creds", srcDir: "cmd/km-creds"},
+		{name: "km-volumes", srcDir: "cmd/km-volumes"},
 	}
 }
 
