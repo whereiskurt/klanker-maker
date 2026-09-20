@@ -328,6 +328,22 @@ relative rather than being pinned to wherever km was launched.
 
 ---
 
+## Hibernate/resume cross-wires additional EBS volumes — `km-volumes`
+
+`spec.runtime.hibernation: true` + any additional volume used to be silent data
+corruption on resume: the kernel re-reads namespace size but keeps cached controller
+identity and page cache, so sysfs serial and `blkid` both lie, and the fstab mount by
+UUID wrote both volumes onto the wrong disk. Reproduced on the first `km pause`/`km
+resume` of a two-volume box. **Only a live `nvme id-ctrl` Identify is truthful after a
+resume** — never `/sys/block/*/device/serial`, never BDM letter, never UUID. The
+`km-volumes` sidecar resolves by live serial, validates against a first-boot manifest on
+every boot, unmounts before hibernate, PCI re-probes every non-root controller after,
+and refuses rather than mounts wrong (`km status` → `Volumes:`; `km doctor` → `Additional
+volumes`). Existing sandboxes are unprotected until recreate — `hibernation: false` on
+volume-bearing profiles meanwhile. Runbook: `docs/hibernate-volumes.md`. The `/shared`
+EFS mount has its own hibernate problem (a `hard` NFS hang), deliberately not handled
+there.
+
 ## Teardown & orphan resources
 
 ### Teardown is two-layer — uninit before unbootstrap
