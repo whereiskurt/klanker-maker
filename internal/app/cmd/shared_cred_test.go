@@ -424,6 +424,22 @@ func TestDesktopRekey_PublishesToSSM(t *testing.T) {
 	}
 }
 
+func TestPublishCreateCredential_PublishesFileContentNonFatally(t *testing.T) {
+	home := t.TempDir()
+	pem := genKeyPEM(t)
+	local := seedLocal(t, home, filepath.Join(".km", "keys", "sbx"), pem)
+	f := &fakeAccessSSM{}
+	withTestStore(t, f)
+	publishCreateCredential(context.Background(), nil, sshKeyKind, "sbx", local, nil)
+	if f.params["/km/access/sbx/ssh-key"] != string(pem) {
+		t.Error("create did not publish the generated key verbatim")
+	}
+
+	// A failing store must not panic or error — create keeps going.
+	withTestStore(t, &fakeAccessSSM{putErr: errors.New("denied")})
+	publishCreateCredential(context.Background(), nil, desktopCredKind, "sbx", "", []byte("kasm:pw"))
+}
+
 func TestPublishSharedCredential_StoreErrorPropagates(t *testing.T) {
 	saved := NewSharedCredStoreFunc
 	NewSharedCredStoreFunc = func(context.Context, *config.Config) (*sharedCredStore, error) { return nil, errors.New("sso expired") }

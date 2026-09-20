@@ -197,6 +197,38 @@ func syncSharedCredential(ctx context.Context, store *sharedCredStore, kind cred
 	return localPath, nil
 }
 
+// publishCreateCredential publishes a credential km create just generated,
+// NON-fatally: the sandbox is being built either way, and the creator's next
+// `start` republishes it (syncSharedCredential's absent-in-SSM row). A nil
+// content reads localPath. Only ever called on the laptop path — the
+// create-handler subprocess receives its key material by env and never
+// reaches here.
+func publishCreateCredential(ctx context.Context, cfg *config.Config, kind credKind, sandboxID, localPath string, content []byte) {
+	startVerb := strings.TrimSuffix(kind.rekeyVerb, " rekey") + " start"
+	if content == nil {
+		b, err := os.ReadFile(localPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  [warn] could not read %s to publish the %s: %v — other analysts cannot connect until your next %s %s (which republishes)\n",
+				localPath, kind.name, err, startVerb, sandboxID)
+			return
+		}
+		content = b
+	}
+	store, err := NewSharedCredStoreFunc(ctx, cfg)
+	if err == nil && store == nil {
+		return // no store (test binary): nothing to publish to, nothing to say
+	}
+	if err == nil {
+		err = kmaws.PutAccessParam(ctx, store.ssm, kind.param(store.prefix, sandboxID), string(content), store.kmsKey)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  [warn] could not publish the %s to SSM: %v — other analysts cannot connect until your next %s %s (which republishes)\n",
+			kind.name, err, startVerb, sandboxID)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "  ✓ Shared %s published to SSM (%s)\n", kind.name, kind.param(store.prefix, sandboxID))
+}
+
 // authorizedKeyMismatch reports whether the box's authorized_keys line is a
 // parseable key whose fingerprint differs from the local public key. It is
 // deliberately conservative: an empty or unparseable box line, an unreadable
