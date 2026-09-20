@@ -524,18 +524,18 @@ sudo -u sandbox test -s /home/sandbox/.kasmpasswd && echo "kasmpasswd-updated"`,
 		return fmt.Errorf("commit new credential: %w", err)
 	}
 
-	// Step 6b: publish (box → local → SSM; see runVSCodeRekey for why this order).
-	if err := publishSharedCredential(ctx, cfg, desktopCredKind, sandboxID, []byte(user+":"+newPass)); err != nil {
-		return fmt.Errorf("rekey applied on the sandbox and locally, but publishing to SSM failed: %w\nOther analysts will get a stale password until you re-run: km desktop rekey %s --yes", err, sandboxID)
-	}
-	fmt.Printf("✓ Published to SSM (%s)\n", kmaws.DesktopCredPath(cfg.GetResourcePrefix(), sandboxID))
-
-	// Step 7: final output.
 	action := "replaced"
 	if localCredAbsent {
 		action = "created"
 	}
-	fmt.Printf("✓ Local credential %s atomically (~/.km/desktop/%s)\n\n", action, sandboxID)
+	fmt.Printf("✓ Local credential %s atomically (~/.km/desktop/%s)\n", action, sandboxID)
+
+	// Step 7: publish (box → local → SSM; see runVSCodeRekey for why this order).
+	if err := publishSharedCredential(ctx, cfg, desktopCredKind, sandboxID, []byte(user+":"+newPass)); err != nil {
+		return fmt.Errorf("rekey applied on the sandbox and locally, but publishing to SSM failed: %w\nOther analysts will get a stale password until you re-run: km desktop rekey %s --yes", err, sandboxID)
+	}
+	fmt.Printf("✓ Published to SSM (%s)\n\n", kmaws.DesktopCredPath(cfg.GetResourcePrefix(), sandboxID))
+
 	fmt.Printf("Rekey complete. KasmVNC re-reads the password file per login, so any open\nsession stays connected; the new password applies on the next login —\nrun: km desktop start %s\n", sandboxID)
 	return nil
 }

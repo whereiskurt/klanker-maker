@@ -539,7 +539,13 @@ head -1 /home/sandbox/.ssh/authorized_keys`, newPubKeyLine)
 		return fmt.Errorf("commit new private key: %w", err)
 	}
 
-	// Step 6b: publish to SSM so every other laptop picks the new key up on its
+	actionWord := "replaced"
+	if localKeyAbsent {
+		actionWord = "created"
+	}
+	fmt.Printf("✓ Local key %s atomically (~/.km/keys/%s)\n", actionWord, sandboxID)
+
+	// Step 7: publish to SSM so every other laptop picks the new key up on its
 	// next start. Order is box → local → SSM on purpose: if this fails the
 	// operator who ran rekey is working and everyone else is stale until it is
 	// re-run; SSM-first would have handed everyone a key the box rejects had
@@ -551,14 +557,8 @@ head -1 /home/sandbox/.ssh/authorized_keys`, newPubKeyLine)
 	if err := publishSharedCredential(ctx, cfg, sshKeyKind, sandboxID, privBytes); err != nil {
 		return fmt.Errorf("rekey applied on the sandbox and locally, but publishing to SSM failed: %w\nOther analysts will get a stale key until you re-run: km vscode rekey %s --yes", err, sandboxID)
 	}
-	fmt.Printf("✓ Published to SSM (%s)\n", kmaws.SSHKeyPath(cfg.GetResourcePrefix(), sandboxID))
+	fmt.Printf("✓ Published to SSM (%s)\n\n", kmaws.SSHKeyPath(cfg.GetResourcePrefix(), sandboxID))
 
-	// Step 7: Final output
-	actionWord := "replaced"
-	if localKeyAbsent {
-		actionWord = "created"
-	}
-	fmt.Printf("✓ Local key %s atomically (~/.km/keys/%s)\n\n", actionWord, sandboxID)
 	fmt.Printf("Rekey complete. Active VS Code sessions stay on the old key until reconnect.\n")
 	return nil
 }
