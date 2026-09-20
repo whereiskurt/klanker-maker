@@ -1635,3 +1635,20 @@ func TestPublishIdentity_NoAliasNoAllowedSenders_OmitsBothAttributes(t *testing.
 		t.Error("expected allowed_senders attribute to be omitted when nil")
 	}
 }
+
+func TestCleanupSandboxIdentity_DeletesSharedAccessParams(t *testing.T) {
+	mockSSM := &mockIdentitySSMAPI{}
+	mockDyn := &mockIdentityTableAPI{}
+	if err := kmaws.CleanupSandboxIdentity(context.Background(), mockSSM, mockDyn, "km-identities", "km", "sbx-1"); err != nil {
+		t.Fatal(err)
+	}
+	deleted := map[string]bool{}
+	for _, in := range mockSSM.deleteParameterInputs {
+		deleted[*in.Name] = true
+	}
+	for _, want := range []string{kmaws.SSHKeyPath("km", "sbx-1"), kmaws.DesktopCredPath("km", "sbx-1")} {
+		if !deleted[want] {
+			t.Errorf("CleanupSandboxIdentity did not delete %s; deleted: %v", want, deleted)
+		}
+	}
+}
