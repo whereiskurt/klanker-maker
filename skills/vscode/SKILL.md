@@ -92,6 +92,7 @@ Pre-flight gates (any failure = no key changes):
 - **Existing sandboxes** provisioned without `runtime.vscode.enabled: true` do NOT get sshd retroactively. `km destroy && km create` to provision.
 - **The key is shared via SSM.** `~/.km/keys/<id>` is a cache; `km vscode start` (and `km herdr`, `km tunnel`) pulls it on a laptop that has never seen the sandbox, refreshes it after someone else's rekey, and publishes it if SSM has no copy yet. Just run `start` — no file copying. If `start` says the box's `authorized_keys` doesn't match the shared key, run `km vscode rekey <id>`.
 - **One shared key per sandbox**, not one per analyst (single `authorized_keys` entry; sshd cannot tell analysts apart).
+- **Rollout order matters:** upgrade every laptop's `km` BEFORE anyone rekeys — rekey rotates the box, and a laptop on the old binary has no sync and is locked out until it upgrades. If you already hold the key, plain `start` publishes it with nothing rotated. `rekey` needs the sandbox `running`.
 - **`km destroy` cleans up** the local keypair files AND the ssh-config Host block. Manual cleanup is only needed when a sandbox is wiped out-of-band (region deleted, DynamoDB row removed, etc.).
 
 See `docs/vscode.md` for the full operator guide and troubleshooting matrix.

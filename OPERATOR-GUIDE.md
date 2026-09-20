@@ -1824,6 +1824,10 @@ The `spec.network` allowlist does **not** gate the desktop install. The stack is
 - SSL disabled at KasmVNC layer — acceptable because of loopback bind + SSM tunnel.
 - Per-sandbox credential is defense-in-depth against local port-riding.
 
+### Sharing a desktop between analysts
+
+The KasmVNC credential (and the VS Code / herdr / tunnel SSH key) is shared per sandbox via SSM; `~/.km/desktop/<id>` and `~/.km/keys/<id>` are per-laptop caches that `start` pulls, refreshes, or publishes. Close your browser, walk away, and the next analyst runs `km desktop start <id>` on a laptop that has never seen the sandbox. Full model, rollout order (upgrade every laptop before anyone rekeys) and limits: `docs/vscode.md` § Sharing a sandbox between analysts and `docs/desktop.md` § Sharing a desktop between analysts.
+
 ### Rollout
 
 The desktop schema + Ubuntu OS-aware bootstrap are compiled by the **create-handler Lambda** (it runs `km create` as a subprocess), which only updates on a full apply — so redeploy with `make build-lambdas` (clean) + `km init --dry-run=false`, not `--sidecars`. Existing sandboxes do not pick up `desktop` retroactively — `km destroy && km create`.
@@ -1837,7 +1841,7 @@ The desktop schema + Ubuntu OS-aware bootstrap are compiled by the **create-hand
 | Local port in use | `km desktop start` | Fails fast with `--local-port` hint |
 | KasmVNC unit not active | `km desktop start` pre-flight | Descriptive error; suggests `km desktop status` |
 | Desktop not enabled in profile | `km desktop start` pre-flight | "desktop not enabled — set `spec.runtime.desktop.enabled: true` and recreate" |
-| Credential file missing | `km desktop start` | Error with recovery hint (use `km shell` to read `~/.kasmpasswd`) |
+| Credential file missing | `km desktop start` | Pulled from SSM (`/{prefix}/access/<id>/desktop-cred`) — the credential is shared between analysts; only when SSM has none either does it error, naming `km desktop rekey` |
 | Slow first boot (no AMI) | boot time | Expected; nudge toward `km ami bake` |
 
 ## 11. Composable inheritance (multi-parent profiles)

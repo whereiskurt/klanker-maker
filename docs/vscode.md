@@ -8,6 +8,7 @@ Klanker supports `km vscode start | status` so operators can connect their **loc
 1. [How it works](#how-it-works)
 2. [One-time setup](#one-time-setup)
 3. [Per-sandbox lifecycle](#per-sandbox-lifecycle)
+3a. [Sharing a sandbox between analysts](#sharing-a-sandbox-between-analysts)
 4. [Rotating a sandbox key](#rotating-a-sandbox-key)
 5. [Profile field](#profile-field)
 6. [Idle timeout and Remote-SSH sessions](#idle-timeout-and-remote-ssh-sessions)
@@ -151,12 +152,39 @@ analysts. The parameter is deliberately *not* under `/{prefix}/sandbox/<id>/`, w
 sandbox's own instance role can read. `km destroy` (and the TTL handler) delete both
 parameters; `km doctor` warns about orphans.
 
-### Deploy
+### Rolling it out to an existing install
 
-`make build` — every existing sandbox joins on the first `start` from a laptop that
-holds its key. The TTL handler's cleanup grant additionally needs `make build-lambdas`
-+ `km init --dry-run=false`; until then a TTL-expired sandbox leaves two orphan
-parameters that `km doctor` reports.
+Nothing here lives on a sandbox: `authorized_keys`, sshd and `~/.kasmpasswd` are
+untouched, and no userdata, sidecar or instance IAM changed. **It is the laptop's `km`
+binary that participates, not the box** — the moment a laptop has the new binary, every
+sandbox in that install is in, whenever it was created. Per install:
+
+1. **Every laptop that uses the install gets the new binary** (`make build` or the
+   release). Do this first, on all of them — see the ordering note below.
+2. **`km init --dry-run=false` once in that account.** The ttl-handler is what runs
+   `CleanupSandboxIdentity` for a TTL expiry *and* for a default `km destroy`
+   (`--remote`), so until the Lambda is redeployed those paths leave the two parameters
+   behind. Harmless — `km doctor` reports them — but do it. Operator IAM needs nothing:
+   the policy already grants `ssm:Put/Get/DeleteParameter` on `parameter/{prefix}/*`,
+   and the platform KMS key is the one `km create` already writes SecureStrings with.
+3. **One `start` per sandbox from a laptop that holds its key** — the backfill row,
+   `✓ Published existing key to SSM` (and `km desktop start` for the password). After
+   that every other laptop just `start`s.
+
+**When the key is on a laptop you don't have**, `km vscode rekey <id> --yes` is the
+bootstrap: it mints, installs on the box with readback, commits locally and publishes.
+Rekey needs the sandbox `running` (it refuses on a paused or stopped one); `start`'s
+sync only needs the row to exist.
+
+**Upgrade before you rekey.** Rekey rotates the box. Any laptop that already held the
+old key is refreshed on its next `start` — *if* it has the new binary. A laptop still on
+the old binary has no sync and is locked out until it upgrades. So: everyone upgrades,
+then rekey wherever needed. If you already hold a box's key, plain `start` publishes it
+with nothing rotated, and rekey is unnecessary.
+
+A linked capacity account (`spec.runtime.launchAccount`) needs nothing: the parameters
+live in the home account with the control plane, and the linked account only hosts the
+instance, which never reads them.
 
 ---
 

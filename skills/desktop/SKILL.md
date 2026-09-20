@@ -47,7 +47,7 @@ spec:
 
 The credential file is written by `km create` when `desktop.enabled: true` and read by `km desktop start` to print the login URL. It is deleted by `km destroy`.
 
-**It is a cache of the shared credential in SSM** (`/{prefix}/access/<id>/desktop-cred`). `km desktop start` pulls it on a laptop that has never seen the sandbox, refreshes it after someone else's `km desktop rekey`, and publishes it if SSM has no copy yet — so several analysts on several machines just run `start`. There is no pre-flight guard for a stale password (the box stores a hash); a browser login failure means `km desktop rekey $SB`.
+**It is a cache of the shared credential in SSM** (`/{prefix}/access/<id>/desktop-cred`). `km desktop start` pulls it on a laptop that has never seen the sandbox, refreshes it after someone else's `km desktop rekey`, and publishes it if SSM has no copy yet — so several analysts on several machines just run `start`. There is no pre-flight guard for a stale password (the box stores a hash); a browser login failure means `km desktop rekey $SB` (needs the sandbox `running`). Upgrade every laptop's `km` before anyone rekeys — a laptop on the old binary has no sync and is locked out by a rotation.
 
 ## One-time setup
 

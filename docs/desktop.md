@@ -185,7 +185,7 @@ At `km create` time (when `desktop.enabled: true`):
 
 The credential is **never baked into an AMI** — it is always seeded fresh at boot — so one desktop AMI can serve many sandboxes with different credentials.
 
-`km destroy` (and the TTL handler) delete the SSM parameter; `km destroy` also removes the local `~/.km/desktop/<sandbox-id>` file. `km doctor` warns about orphan parameters.
+`km destroy` (and the TTL handler) delete the SSM parameter; `km doctor` warns about orphan parameters. The local `~/.km/desktop/<sandbox-id>` file is **not** removed by `km destroy` (only `~/.km/keys/<id>*` is) — stale entries there are harmless and can be deleted by hand.
 
 ### Sharing a desktop between analysts
 
@@ -205,8 +205,9 @@ names the re-run. Last rekey wins.
 **No mismatch guard for the password.** `km vscode start` can tell you when the box's
 key differs from the shared one; the desktop cannot — `~/.kasmpasswd` stores a hash and
 `kasmvncpasswd` has no verify mode. A stale password surfaces as a browser login
-failure; `km desktop rekey <id>` fixes it. The full model (who can read the
-parameter, why it is not under `/{prefix}/sandbox/`, deploy surface) is in
+failure; `km desktop rekey <id>` fixes it (needs the sandbox `running`). The full model
+(who can read the parameter, why it is not under `/{prefix}/sandbox/`, and the
+per-install rollout order — upgrade every laptop *before* anyone rekeys) is in
 [docs/vscode.md § Sharing a sandbox between analysts](vscode.md#sharing-a-sandbox-between-analysts).
 
 ---
