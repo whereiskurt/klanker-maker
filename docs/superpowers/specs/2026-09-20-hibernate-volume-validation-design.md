@@ -348,3 +348,36 @@ are userdata. Fleet mitigation until every volume-bearing box is recreated:
 was never affected), or an `idleTimeout` long enough that the box does not hibernate
 unattended — empirically why `irbot-v1` has never been hit. Plugin version bump for the
 skill change.
+
+## 13. Spike results (2026-09-20, `sb-3cf8e982`, t3.medium AL2023, 30 GB `/data` + 10 GB snapshot `/repos`)
+
+Plan Task 1, run before any hook code was written. All four questions answered on the
+first `km pause` / `km resume` cycle.
+
+1. **The hook fires under `km pause`.** `/usr/lib/systemd/system-sleep/km-spike` logged
+   `pre hibernate` and `post hibernate` exactly once each.
+2. **The cross-wiring reproduced on cycle 1** (33 s after resume, matching the write-up):
+   `nvme1n1: detected capacity change from 20971520 to 62914560` and the inverse on
+   `nvme2n1`. `/repos/known.bin` (1 MiB, sha256 recorded before) failed its checksum;
+   `/data/marker.txt` read back as garbage.
+3. **Only a live Identify tells the truth.** After resume, for `nvme1n1`: sysfs serial
+   `vol0b914…` (the 10 GB volume — stale, cached), **live `nvme id-ctrl` serial
+   `vol04d0b…` (the 30 GB volume — what is actually behind the node now)**, kernel size
+   62914560 (re-read), `blkid` UUID = the 10 GB filesystem's (served from the old page
+   cache). So the physical volumes really do swap controllers on resume; the kernel
+   re-reads namespace capacity but not controller identity, and the block layer keeps the
+   old cache. This corrects the write-up's "serials were right": sysfs was, live was not.
+   §5.1's rule — match by live serial, never sysfs, never BDM, never UUID — is confirmed.
+4. **PCI remove + rescan re-identifies in 0.7 s and does not touch root.** With both
+   volumes unmounted, `echo 1 > /sys/bus/pci/devices/<bdf>/remove` for `1e.0`/`1f.0`
+   then `/sys/bus/pci/rescan`: both nodes back in 0.70 s, sysfs serial == live serial ==
+   correct size, root (`nvme0n1`, xfs) still mounted and writable. Node names AND BDFs
+   changed across the re-probe (`nvme1n1` moved from `1f.0` to `1e.0`) — neither is a
+   stable key; the serial is. `blkid` after the re-probe shows the truth: the 10 GB volume
+   now carries the `/data` filesystem's UUID and vice-versa — the superblocks were
+   cross-written during cycle 1. The box is kept (cold-stopped) as the `repair` test
+   subject for plan Task 11.
+
+Consequences for the plan: `post-sleep`'s reappearance wait can stay at 10 s (observed
+0.7 s); `ListDevices` must be re-run after every re-probe (names move); the `repair`
+UAT step has a real cross-written pair to work on.
