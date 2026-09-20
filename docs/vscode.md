@@ -92,21 +92,90 @@ km destroy $SB --remote --yes
 
 ---
 
+## Sharing a sandbox between analysts
+
+The per-sandbox key is **shared** and lives in SSM. `~/.km/keys/<id>` on any laptop is a
+cache of it, reconciled every time you run `start`. So the workflow across several
+analysts on several machines is simply: whoever is done closes their session, and the
+next person types `km vscode start <id>` — on a laptop that has never seen the sandbox.
+
+```
+/{prefix}/access/<sandbox-id>/ssh-key        # OpenSSH private key (SecureString, platform KMS key)
+/{prefix}/access/<sandbox-id>/desktop-cred   # KasmVNC "user:pass" — see docs/desktop.md
+```
+
+The same key serves `km vscode`, `km herdr` and `km tunnel`; the sync runs before every
+one of their pre-flights.
+
+### What `start` prints
+
+| Situation | Line you see |
+|---|---|
+| Laptop has never had this key | `✓ Pulled shared key from SSM` |
+| Someone rekeyed since you last connected | `✓ Local key refreshed from SSM (rekeyed elsewhere)` |
+| Your copy already matches | (nothing) |
+| SSM has no copy yet — a sandbox created before this shipped | `✓ Published existing key to SSM` (your laptop backfills it) |
+| Neither SSM nor your laptop has one | error naming `km vscode rekey <id>`, which creates and publishes |
+| SSM unreachable (throttle, expired SSO) but you have a local copy | `[warn] … using local copy` — start continues |
+
+`start` never invalidates a credential. Only `rekey` does.
+
+### Rekey with a shared key
+
+`km vscode rekey` now ends with `✓ Published to SSM (...)`. The order is box → your
+laptop → SSM, on purpose: if the last step fails, you are working and everyone else is
+stale until you re-run it, and the error says exactly that. (SSM-first would have handed
+every laptop a key the box rejects had the push failed.) Last rekey wins; there is no
+lock.
+
+### The mismatch guard
+
+If the box's `authorized_keys` doesn't match the shared key — someone rekeyed by hand
+without publishing, or the box was restored from an AMI — `start` fails before VS Code
+ever sees `Permission denied (publickey)`:
+
+```
+the sandbox's authorized_keys does not match the shared key in SSM — someone rekeyed the
+box without publishing, or the box was restored from an AMI. Run: km vscode rekey <id>
+```
+
+`km herdr` runs the same check. `km tunnel` makes no SSM pre-flight (it SSHes straight
+through the forward), so it gets the sync but not the guard; a stale key there fails
+inside ssh and the fix is the same.
+
+### Who can read the key
+
+Anyone with the install's operator AWS credentials — the same people who can already
+`km shell --root` the box, so this is a convenience credential, not a boundary between
+analysts. The parameter is deliberately *not* under `/{prefix}/sandbox/<id>/`, which the
+sandbox's own instance role can read. `km destroy` (and the TTL handler) delete both
+parameters; `km doctor` warns about orphans.
+
+### Deploy
+
+`make build` — every existing sandbox joins on the first `start` from a laptop that
+holds its key. The TTL handler's cleanup grant additionally needs `make build-lambdas`
++ `km init --dry-run=false`; until then a TTL-expired sandbox leaves two orphan
+parameters that `km doctor` reports.
+
+---
+
 ## Rotating a sandbox key
 
 `km vscode rekey <sandbox-id>` rotates the per-sandbox VS Code Remote-SSH ed25519 keypair
-on a running sandbox without `km destroy && km create`. Three operator scenarios drove
-this command's existence:
+on a running sandbox without `km destroy && km create`, and publishes the new key to SSM
+for everyone else (see [Sharing a sandbox between analysts](#sharing-a-sandbox-between-analysts)).
+Three operator scenarios drove this command's existence:
 
 1. **Baked-AMI relaunch carries stale `authorized_keys`** — `km shell --learn --ami`
    snapshots the EC2 instance mid-session, capturing `/home/sandbox/.ssh/authorized_keys`
    from the bake-source sandbox. On relaunch from that AMI, cloud-init may mark itself
    "done" and skip the userdata block that writes the new pubkey, leaving the old key in
    place. Rekey forces the new key onto the sandbox via SSM.
-2. **Cross-laptop portability** — Keys live on the creation machine only. An
-   operator who wants to `km vscode start` from a different laptop currently has to
-   manually copy `~/.km/keys/<sandbox-id>*`. Rekey on the second laptop generates a fresh
-   keypair locally and pushes the public key to the sandbox — no manual file copy.
+2. **Cross-laptop bootstrap** — historically keys lived on the creation machine only,
+   and rekey on a second laptop was the way in. Since the key became shared (above),
+   `km vscode start` pulls it from SSM and rekey is only needed when *neither* SSM nor
+   the laptop has one — it still works as a bootstrap, and now publishes.
 3. **Post-incident rotation** — if a private key is suspected compromised, rotate without
    rebuilding the sandbox.
 
@@ -463,13 +532,11 @@ The sandbox was created with `runtime.vscode.enabled: false` or without VS Code 
 
 ## Limitations
 
-- **Per-machine keys (cross-machine create/connect gap).** Keys are generated on the creation
-  machine and are not stored in SSM or DynamoDB. Operators who want to `km vscode start` from a
-  different laptop must manually copy `~/.km/keys/<sandbox-id>*`. Export/import commands
-  (`km vscode export-key` / `import-key`) are deferred.
-
-- **One operator per sandbox.** v1 writes a single `authorized_keys` entry. Multi-operator
-  access (additional entries) is deferred.
+- **One shared key per sandbox, not one per analyst.** `authorized_keys` holds a single
+  entry and every laptop holds the same private key (see [Sharing a sandbox between
+  analysts](#sharing-a-sandbox-between-analysts)). sshd logs therefore cannot tell
+  analysts apart, and a rekey by one analyst rotates everyone. Per-analyst entries were
+  considered and deliberately not built.
 
 - **No `km vscode stop` command.** Ctrl-C ends the foreground tunnel; sshd keeps running.
   Reconnect any time with `km vscode start $SB`. Scheduled stops can be composed with `km at`.

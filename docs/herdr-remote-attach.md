@@ -64,7 +64,11 @@ still useful, so km says so and holds the tunnel rather than failing.
 1. **`spec.runtime.vscode.enabled`** must not be explicitly `false`. It **defaults
    to `true`**, so most sandboxes already have `sshd` running and a per-sandbox
    ed25519 keypair at `~/.km/keys/<id>` — the identical transport `km vscode`
-   depends on. If you never touched this field, you already qualify.
+   depends on. If you never touched this field, you already qualify. The key is
+   shared and lives in SSM: `km herdr` pulls or refreshes it before its pre-flight,
+   so a laptop that never ran `km create` for the sandbox still attaches, and it
+   runs the same box-vs-shared-key mismatch guard as `km vscode start`. See
+   [docs/vscode.md § Sharing a sandbox between analysts](vscode.md#sharing-a-sandbox-between-analysts).
 2. **The Herdr binary on the box.** This is where the redundancy below matters —
    read it before assuming you need to do anything.
 

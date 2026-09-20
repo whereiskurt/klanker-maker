@@ -179,12 +179,35 @@ The KasmVNC toolbar (a small tab on the left edge of the browser window) also pr
 At `km create` time (when `desktop.enabled: true`):
 
 1. A per-sandbox KasmVNC credential (username + random password) is generated.
-2. It is stored locally at `~/.km/desktop/<sandbox-id>`.
+2. It is stored locally at `~/.km/desktop/<sandbox-id>` and published to SSM at
+   `/{prefix}/access/<sandbox-id>/desktop-cred` (SecureString) for every other operator.
 3. It is threaded into the compiler config and seeded into `~/.kasmpasswd` on the sandbox at boot.
 
 The credential is **never baked into an AMI** — it is always seeded fresh at boot — so one desktop AMI can serve many sandboxes with different credentials.
 
-`km destroy` removes the `~/.km/desktop/<sandbox-id>` file. Manual cleanup is only needed when a sandbox is wiped out-of-band.
+`km destroy` (and the TTL handler) delete the SSM parameter; `km destroy` also removes the local `~/.km/desktop/<sandbox-id>` file. `km doctor` warns about orphan parameters.
+
+### Sharing a desktop between analysts
+
+The credential is **shared**: SSM is the truth and `~/.km/desktop/<id>` is a per-laptop
+cache reconciled by every `km desktop start`. Close your browser, walk away; the next
+analyst runs `km desktop start <id>` on a machine that has never seen the sandbox and
+gets `✓ Pulled shared desktop credential from SSM` followed by the URL and password.
+If someone ran `km desktop rekey` in between, you see `✓ Local desktop credential
+refreshed from SSM (rekeyed elsewhere)`. A sandbox created before this shipped is
+backfilled the first time its creator runs `start` (`✓ Published existing desktop
+credential to SSM`).
+
+`km desktop rekey` installs the new password on the box, then locally, then publishes
+(`✓ Published to SSM`) — box → local → SSM, so a failed publish leaves you working and
+names the re-run. Last rekey wins.
+
+**No mismatch guard for the password.** `km vscode start` can tell you when the box's
+key differs from the shared one; the desktop cannot — `~/.kasmpasswd` stores a hash and
+`kasmvncpasswd` has no verify mode. A stale password surfaces as a browser login
+failure; `km desktop rekey <id>` fixes it. The full model (who can read the
+parameter, why it is not under `/{prefix}/sandbox/`, deploy surface) is in
+[docs/vscode.md § Sharing a sandbox between analysts](vscode.md#sharing-a-sandbox-between-analysts).
 
 ---
 
@@ -438,9 +461,15 @@ current build.
 Expected if using a non-AMI launch — the desktop stack (KasmVNC + WM + browser) must install from scratch. Use the AMI-bake workflow for routine use. See [First-boot install, network…](#first-boot-install-network-and-the-ami-bake-workflow).
 
 **Credential file missing (`~/.km/desktop/<id>` not found)**
-The sandbox was created on a different machine, or the file was deleted manually. Options:
-- Use `km shell $SB` to SSM into the sandbox and read `~/.kasmpasswd`.
-- Recreate the sandbox with `km destroy $SB --remote --yes && km create <profile>`.
+`km desktop start` pulls the shared credential from SSM (see [Sharing a desktop between
+analysts](#sharing-a-desktop-between-analysts)), so this only happens when neither SSM nor
+this laptop has one — the error names `km desktop rekey $SB`, which mints a fresh password,
+installs it on the box, and publishes it.
+
+**Browser login rejects the password `km desktop start` printed**
+The box's `~/.kasmpasswd` disagrees with the shared credential — someone rotated it by
+hand, or the box was restored from an AMI. There is no pre-flight guard for this (the box
+stores a hash; km cannot compare it), so it surfaces here. Fix: `km desktop rekey $SB`.
 
 **`km validate` error: "desktop requires an Ubuntu AMI"**
 Set `spec.runtime.ami: ubuntu-24.04` (or `ubuntu-22.04`). Amazon Linux 2023 is not supported in v1.

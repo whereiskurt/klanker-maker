@@ -145,8 +145,10 @@ the box without publishing, or the box was restored from an AMI. Run: km vscode 
 ```
 
 instead of the `Permission denied (publickey)` the operator would otherwise meet inside
-VS Code. The same script and parser serve `km herdr` and `km tunnel` via the shared
-pre-flight, so all three get the guard.
+VS Code. `km herdr` runs the same check through its own pre-flight parser. `km tunnel`
+makes no SSM pre-flight (it SSHes straight through the forward), so it gets the sync but
+not the guard; a stale key there fails inside ssh with `Permission denied (publickey)`
+and the fix is the same `km vscode rekey`.
 
 **Desktop has no equivalent and this is stated in the docs, not papered over.**
 `~/.kasmpasswd` stores a hash and `kasmvncpasswd` has no verify mode, so km cannot
