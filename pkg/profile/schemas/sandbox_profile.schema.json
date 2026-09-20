@@ -265,6 +265,11 @@
               "type": "boolean",
               "description": "Enable EC2 hibernation (on-demand only; incompatible with spot=true)"
             },
+            "onVolumeMismatch": {
+              "type": "string",
+              "enum": ["refuse", "reboot"],
+              "description": "What km-volumes does after a hibernate/resume when an additional volume still fails validation after the PCI re-probe: refuse (default) leaves the mountpoint empty with a marker and reports it; reboot reboots once so the box comes back through the cold-boot mount path. Only meaningful with additionalVolume/additionalSnapshots."
+            },
             "ami": {
               "type": "string",
               "description": "AMI slug resolved per-region (amazon-linux-2023, ubuntu-24.04, ubuntu-22.04), or a raw AMI ID (ami-xxxxxxxx, 8-17 lowercase hex chars) for account-owned images. Raw IDs are region-scoped — must exist in spec.runtime.region. Empty or omitted defaults to amazon-linux-2023.",

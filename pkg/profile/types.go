@@ -502,6 +502,14 @@ type RuntimeSpec struct {
 	AdditionalSnapshots []AdditionalSnapshotSpec `yaml:"additionalSnapshots,omitempty" json:"additionalSnapshots,omitempty"`
 	// Hibernation enables EC2 hibernation (on-demand instances only; incompatible with spot).
 	Hibernation bool `yaml:"hibernation,omitempty" json:"hibernation,omitempty"`
+	// OnVolumeMismatch is what km-volumes does after a hibernate/resume when an
+	// additional volume still fails validation after the PCI re-probe:
+	// "refuse" (default) leaves the mountpoint empty with a marker and reports
+	// it; "reboot" reboots once so the box comes back through the cold-boot
+	// mount path — right for headless boxes whose turns are worthless without
+	// /repos. Only meaningful with additionalVolume/additionalSnapshots.
+	// See docs/superpowers/specs/2026-09-20-hibernate-volume-validation-design.md §5.5.
+	OnVolumeMismatch string `yaml:"onVolumeMismatch,omitempty" json:"onVolumeMismatch,omitempty"`
 	// AMI is an AMI slug to resolve per-region (e.g. "ubuntu-24.04"). Empty defaults to amazon-linux-2023.
 	AMI string `yaml:"ami,omitempty" json:"ami,omitempty"`
 	// MountEFS controls whether this sandbox mounts the regional EFS shared filesystem (EC2 only).

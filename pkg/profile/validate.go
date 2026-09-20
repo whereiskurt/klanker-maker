@@ -543,6 +543,18 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	// Phase 87 SNAP-02: Layer 1 semantic validation for additionalSnapshots.
 	errs = append(errs, validateAdditionalSnapshots(p)...)
 
+	// km-volumes: onVolumeMismatch only governs additional volumes; set without
+	// any, it is a dead field — warn rather than let the operator believe a
+	// recovery policy is in force.
+	if p.Spec.Runtime.OnVolumeMismatch != "" &&
+		p.Spec.Runtime.AdditionalVolume == nil && len(p.Spec.Runtime.AdditionalSnapshots) == 0 {
+		errs = append(errs, ValidationError{
+			Path:      "spec.runtime.onVolumeMismatch",
+			Message:   "set without additionalVolume or additionalSnapshots — km-volumes has nothing to apply it to; remove it or add a volume",
+			IsWarning: true,
+		})
+	}
+
 	// NOTE (mixed-mode now SUPPORTED): inlining a Claude settings.json via
 	// execution.configFiles ALONGSIDE the typed spec.agent.claude block is no
 	// longer a hard error. The Wave-5 synthesizer deep-merges its typed output
