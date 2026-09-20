@@ -406,9 +406,16 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 	}
 	for i, r := range records {
 		ttl := r.TTLRemaining
-		if ttl == "" {
+		switch {
+		case ttl == "":
 			ttl = "-"
-		} else if r.TTLExpiry != nil && time.Until(*r.TTLExpiry) >= 3*365*24*time.Hour {
+		case ttl == "expired":
+			// computeTTLRemaining's "expired" is 7 chars in a %-6s column and
+			// pushed IDLE/UP/💬 right on that one row. Display-only: --json
+			// keeps "expired", and the narrow SHUTDOWN column (11 wide) is
+			// untouched.
+			ttl = "exp."
+		case r.TTLExpiry != nil && time.Until(*r.TTLExpiry) >= 3*365*24*time.Hour:
 			ttl = "∞" // same rung as compactDuration; --json keeps the numeric string
 		}
 		alias := r.Alias
