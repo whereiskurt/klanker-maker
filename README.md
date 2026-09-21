@@ -12,6 +12,9 @@ This project **is not about** solving 'Agents at Scale'🙅 - **it is** about is
 
 Manage/interact with AWS EC2 klankers over Slack/Github/email/herdr securely inside your own AWS account using AWS security primitives like SCP,IAM,KMS,SG,VPC,Lambda+SQS, etc. 
 
+<img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
+
+
 # Details
 I've been interested in this topic a long time and this kinda an extension of 'home virtual labs' but for Claude + friends. 
 
