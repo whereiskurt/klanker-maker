@@ -1,18 +1,21 @@
+> [!IMPORTANT]
+> Hihi! I'm KPH and this project has been really useful for me. It's currently a protoype `pre-v1.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. I'm considering rewrite as a `v1.0.0` before mid-2027. 🤗  
+
 # Klanker Maker (km)
 > Magically+safely run AWS EC2 instances pre-configured with Claude/Codex/vLLM that easily do integrated and provide Slack/Github/herdr/vscode/browser+VNC
 
-> [!IMPORTANT]
-> I'm KPH and I'm sharing this because it's been useful for me. I hope you like it. :-)
-
 # Why?
-🔥Hot take?? AWS EC2 is really only appropriate for 1) making k8s/ECS nodes 2) cloud developer environment. 🧨
+🔥Hot take??🧑‍🚒 AWS EC2 is really only appropriate for 1) making k8s/ECS nodes 2) cloud developer environment. 🧨
 
-This project **is not about** solving 'Agents at Scale'🙅 - **it is** about ⛑️ isolated YAML defined virutal machines (AWS EC2) for my development and hacking purproses 🔐. To "safely-enable " my new "AI centric workflows/tasks" running Claude/Codex/vLLM sessions, in the cloud, on my AWS infrastructure (detached from my localhost.) 
+This project **is not about** solving 'Agents at Scale'🙅 - **it is** about isolated YAML defined virutal machines (AWS EC2) for my development and hacking purproses ⛑️🔐. To "safely-enable " my new "AI centric workflows/tasks" running Claude/Codex/vLLM sessions, in the cloud, on my AWS infrastructure (detached from my localhost.) 
 
 Manage/interact with AWS EC2 klankers over Slack/Github/email/herdr securely inside your own AWS account using AWS security primitives like SCP,IAM,KMS,SG,VPC,Lambda+SQS, etc.
 <img alt="image" src="https://github.com/user-attachments/assets/38dc63fd-e441-464c-9512-935d3dff6b12" />
 
 I've been interested in this topic a long and this really an extension of a 'home lab' but for Claude + friends.
+
+**Built for security/engineer teams.** You're team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, doing code reviews, and reasoning about vulnerabilities - without the investigation itself becoming the next breach. 
+
 
 # Details
 YAML templates extending compute+storage for running untrusted code, dependencies, and AI agents inside a contained blast radius .
@@ -24,9 +27,6 @@ YAML templates extending compute+storage for running untrusted code, dependencie
 - Secure Architecture balancing privelege with contaiment/isolation (SSO+Organizations+Accounts, SCP, KMS, SSM, IAM, SG, VPC+NATGW+IGW, Lambda+SQS+SES+S3, Cloudtrail, Budgets)
 - Run SKILLS/plugins/prompts with Claude/Codex/Bedrock over Slack/Github/webhooks/email (AWS SES)
 - Out-of-the-box support for the Wiz Sensor; extensible EC2 `UserData` interface
-
-**Built for security/engineer teams.** You're team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, doing code reviews, and reasoning about vulnerabilities - without the investigation itself becoming the next breach. 
-
 
 A profile is the contract - declare what's allowed, get the infrastructure as the artifact:
 
