@@ -1,6 +1,12 @@
 # Klanker Maker (km) 
 ## Write `sandbox.yaml` definitions and run isolated AWS EC2 `klankers` in your AWS Organization/account.
 ### Out-of-the-box works wtih Slack / Github / Hackerone / Email / herdr / vscode / browser+ubuntu / eBPF / Wiz Sensor
+
+<img width="450" height="225" alt="km create+desktop start" src="https://github.com/user-attachments/assets/a4d3c0da-4bbe-4021-abbc-9c08c71da172" />
+<img width="450" height="225" alt="Screenshot 2026-09-21 at 17 38 33" src="https://github.com/user-attachments/assets/3b55f19a-9926-449a-ac5f-8dd662250449" />
+
+
+
 > [!NOTE]
 > Hi! 👋 I'm [Kurt (aka KPH)](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about the future of 'software factories.'.
 >
