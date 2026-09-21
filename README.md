@@ -1,35 +1,80 @@
 # Klanker Maker (km)
+> Magically+safely run AWS EC2 instances pre-configured with Claude/Codex/vLLM that easily do integrated and provide Slack/Github/herdr/vscode/browser+VNC
 
-**An agent runtime on your own AWS account - declarative, eBPF-enforced, Slack+Github-native, with hard budgets that actually stop runaway loops.**
- 
+> [!IMPORTANT]
+> I'm KPH and I'm sharing this because it's been useful for me. I hope you like it. :-)
+
+# Why?
+🔥Hot take?? AWS EC2 is really only appropriate for 1) making k8s/ECS nodes 2) cloud developer environment. 🧨
+
+This project **is not about** solving 'Agents at Scale'🙅 - **it is** about ⛑️ isolated YAML defined virutal machines (AWS EC2) for my development and hacking purproses 🔐. To "safely-enable " my new "AI centric workflows/tasks" running Claude/Codex/vLLM sessions, in the cloud, on my AWS infrastructure (detached from my localhost.) 
+
+Manage/interact with AWS EC2 klankers over Slack/Github/email/herdr securely inside your own AWS account using AWS security primitives like SCP,IAM,KMS,SG,VPC,Lambda+SQS, etc.
+<img alt="image" src="https://github.com/user-attachments/assets/38dc63fd-e441-464c-9512-935d3dff6b12" />
+
+I've been interested in this topic a long and this really an extension of a 'home lab' but for Claude + friends.
+
+# Details
+YAML templates extending compute+storage for running untrusted code, dependencies, and AI agents inside a contained blast radius .
+
+<img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
+
+**Cloud native Claude/Codex in your AWS account. Declarative YAML templates, Slack+Github+Hackerone/email native, eBPF-centric with Lambda+EventBridge enforced hard budgets.**
+- A CLI for easily running AWS EC2 instances (`km create`, `km ls`, `km desktop start`, `km vscode start` ...)
+- Secure Architecture balancing privelege with contaiment/isolation (SSO+Organizations+Accounts, SCP, KMS, SSM, IAM, SG, VPC+NATGW+IGW, Lambda+SQS+SES+S3, Cloudtrail, Budgets)
+- Run SKILLS/plugins/prompts with Claude/Codex/Bedrock over Slack/Github/webhooks/email (AWS SES)
+- Out-of-the-box support for the Wiz Sensor; extensible EC2 `UserData` interface
+
 **Built for security/engineer teams.** You're team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, doing code reviews, and reasoning about vulnerabilities - without the investigation itself becoming the next breach. 
-> Klanker Maker gives you an isolated AWS EC2 instance, YAML policy-governed sandbox where untrusted code, dependencies, and AI agents run inside a contained blast radius.
 
-<img width="796" height="694" alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
-
-<img width="3840" height="2280" alt="image" src="https://github.com/user-attachments/assets/38dc63fd-e441-464c-9512-935d3dff6b12" />
 
 A profile is the contract - declare what's allowed, get the infrastructure as the artifact:
 
 ```yaml
-spec:
-  network:
-    enforcement: both          # eBPF connect4 + transparent MITM proxy
-    egress:
-      allowedDNSSuffixes: [.amazonaws.com, .anthropic.com, .github.com]
-  budget:
-    compute: { maxSpendUSD: 0.50 }
-    ai:      { maxSpendUSD: 1.00 }
-  sourceAccess:
-    mode: allowlist
-    github:
-      allowedRepos: [my-org/api, my-org/infra]
-      allowedRefs:  [main, "feature/*"]
-  cli:
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true       # bidirectional chat
-    notifySlackTranscriptEnabled: true    # per-turn streaming + JSONL upload
+# extends resolves left→right; base/os/redhat must come before base/platform
+extends: [base/os/redhat, base/userinit, base/platform, base/security/wiz]
+
+runtime:
+  region: us-east-1
+  instanceType: m7i.2xlarge
+  hibernation: true
+  rootVolumeSize: 120
+  additionalVolume: { size: 60, mountPoint: /data }
+  additionalSnapshots: [{ snapshotId: snap-abcdef01234567890, mountPoint: /repos }]
+  mountEFS: true
+  efsMountPoint: /shared
+
+execution:
+  initCommandsAppend:
+    - yum install -y yum-utils
+    - yum-config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
+    - yum install -y gh
+
+secrets: { sopsFile: ./secrets/kmprivs.enc.yaml }
+
+network:
+  enforcement: both
+  egress:
+    allowedDNSSuffixes: [
+      .amazonaws.com, time.aws.com,                                              # AWS / Bedrock / SSM
+      .anthropic.com, .claude.ai, .claude.com, .sentry.io, .cloudfront.net,     # Claude Code
+      .statsig.com, .featuregates.org,                                           # Claude Code feature flags
+      .openai.com, .chatgpt.com,                                                 # Codex
+      .github.com, .githubusercontent.com,                                       # git / gh / plugins
+      .npmjs.org, .npmjs.com, .nodejs.org, .npmmirror.com,                       # node
+      .pypi.org, .pythonhosted.org,                                              # python
+      .pulsemcp.com, .google.com, .google-analytics.com, .googletagmanager.com,  # MCP registry / GA
+      .visualstudio.com ]                                                        # VS Code
+    allowedHosts: [vscode.download.prss.microsoft.com, nodejs.org]
+
+notification:
+  slack: { enabled: true, perSandbox: true, private: true, 
+            channelName: "sec-{alias}",
+            invites: { emails: [user1@example.com, user2@example.com] },
+            inbound: { enabled: true, maxConcurrentThreads: 4 },
+            archiveOnDestroy: true }
+  github: { inbound: { enabled: true } }
+  h1: { inbound: { enabled: true } }
 ```
 
 Klanker Maker compiles a YAML profile into a real AWS sandbox: a scoped IAM role, a kernel-level network policy, a MITM proxy that meters every Bedrock/Anthropic/OpenAI token, a Slack channel that talks back to the agent, and a dollar ceiling that suspends compute when the money runs out. All of this an isolated AWS Account with AWS SCP policies applied, to further preventing breakouts.
