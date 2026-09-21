@@ -112,24 +112,52 @@ validates, and it never runs `mkfs`.
 
 ### Re-materialise from snapshot (control plane)
 
-The clean answer when fsck fails, and the design intent for `/repos` — a
-snapshot-derived volume is disposable. The volume is a root-level resource in the
-sandbox's terragrunt unit (the unit's `terraform.source` is the ec2spot module):
+The clean answer when `repair` finds no usable backup, and the design intent for `/repos`
+— a snapshot-derived volume is disposable. Proven live on `sb-3cf8e982` (2026-09-21); every
+step below is what actually worked, including three traps.
 
 ```bash
-cd infra/live/<region-label>/sandboxes/<sandbox-id>
-terragrunt state list | grep aws_ebs_volume.snapshot        # e.g. aws_ebs_volume.snapshot["0"]
-km stop <id>                                                # the volume must not be in use
-terragrunt taint 'aws_ebs_volume.snapshot["0"]'
-terragrunt apply                                            # recreates from the snapshot, re-attaches
-km resume <id>
-km shell --root <id>            # then, on the box:
-#   rm -f /var/lib/km/volumes.json && reboot       # forget the OLD volume id; the next cold boot writes a fresh manifest
+ID=<sandbox-id>; D=infra/live/<region-label>/sandboxes/$ID      # e.g. use1
+
+# 1. A REMOTE-created sandbox has no unit on your laptop — hydrate it. The full
+#    rendered unit lives in the artifacts bucket. (A --local create already has it.)
+mkdir -p $D && cp infra/templates/sandbox/terragrunt.hcl $D/
+for f in service.hcl user-data.sh budget-enforcer.hcl; do
+  aws s3 cp s3://<artifacts-bucket>/remote-create/$ID/$f $D/$f
+done
+
+# 2. The instance must be RUNNING. A stopped instance reports
+#    associate_public_ip_address=false to the API and the plan will want to REPLACE
+#    THE INSTANCE. km-volumes has already left the refused volume unmounted, so the
+#    detach is safe on a running box.
+km resume $ID
+
+# 3. Taint and PLAN FIRST. Expect exactly: the snapshot volume + its attachment
+#    replaced, plus an in-place volume_tags change on the instance (provider quirk).
+#    Anything else — stop and look.
+eval "$(km env)"; cd $D
+terragrunt state list | grep aws_ebs_volume.snapshot           # e.g. aws_ebs_volume.snapshot["0"]
+terragrunt run -- taint 'aws_ebs_volume.snapshot["0"]'         # terragrunt ≥0.99: run --, not bare taint
+terragrunt plan
+terragrunt apply                                                # ~1 min: new volume from the snapshot, re-attached
+
+# 4. On the box: the manifest still names the OLD volume id, so mount reports the
+#    entry "absent". Drop that entry and re-record it as a first boot would; a
+#    snapshot of a blank volume needs the mkfs the first boot would have done.
+km shell --root $ID
+  python3 - <<'PY'
+import json; p="/var/lib/km/volumes.json"; m=json.load(open(p))
+m["volumes"]=[v for v in m["volumes"] if v["mountpoint"]!="/repos"]; json.dump(m,open(p,"w"),indent=2)
+PY
+  NEW=$(for n in /dev/nvme*n1; do d=$(basename $n); [ "$(cat /sys/block/$d/device/serial)" = "vol<new-id-without-dash>" ] && echo $n; done)
+  blkid "$NEW" >/dev/null 2>&1 || mkfs.ext4 -F "$NEW"          # only if the snapshot was blank
+  km-volumes manifest --mountpoint /repos --bdm g --device "$NEW" --label "snapshot <snap-id>" --from-snapshot <snap-id>
+  systemctl restart km-volumes.service && km-volumes status
 ```
 
-(`km resume` alone would refuse the new volume: the manifest still names the old
-`volumeId`. Removing the manifest makes the next cold boot a first boot again — every
-entry is re-recorded, including `/data`, which validates and mounts as before.)
+A box created **before** km-volumes still carries `/etc/fstab` lines for its additional
+volumes; they will happily remount the wrong volume by UUID at the next boot (that is
+the bug). Delete them (`sed -i '/\/repos/d' /etc/fstab`) as part of the same repair.
 
 ## `/shared` (EFS) across hibernate — a separate problem
 

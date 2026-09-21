@@ -396,6 +396,25 @@ Consequences for the plan: `post-sleep`'s reappearance wait can stay at 10 s (ob
 0.7 s); `ListDevices` must be re-run after every re-probe (names move); the `repair`
 UAT step has a real cross-written pair to work on.
 
+### 13.6 Live UAT, repair and re-materialisation (`sb-3cf8e982`, 2026-09-21)
+
+- Validation refused both volumes at `fsuuid` (each disk carries the other's superblock).
+- **Every backup superblock on BOTH volumes belonged to the other filesystem** — the 10 GB
+  volume lies entirely inside the 30 GB filesystem's extent, so the write-up's "backups
+  past the overlap survived" does not apply when the smaller volume is the whole overlap.
+  `repair` therefore checks each backup's UUID with `dumpe2fs -o superblock=N -h` (never
+  writes) and only runs `e2fsck -b` against one carrying the manifest's filesystem; with
+  none it runs no fsck and points at the runbook. (Before that check, `e2fsck -b` against
+  a foreign backup aborted with "FILE SYSTEM WAS MODIFIED", and one that happened to fit
+  rewrote the primary with the wrong filesystem.)
+- Re-materialisation proven: `terragrunt run -- taint 'aws_ebs_volume.snapshot["0"]'` +
+  apply on a RUNNING instance replaced the volume in ~1 min; a stopped instance plans an
+  instance REPLACEMENT (`associate_public_ip_address false -> true`). A remote-created
+  sandbox's unit must first be hydrated from `remote-create/<id>/`. After re-recording the
+  entry, `mount` validated the new volume by live serial and mounted it; `/data` (only
+  copy, backups gone) stays refused. The box's legacy fstab line had meanwhile remounted
+  `/repos` from the wrong volume by UUID — the runbook now says to delete those lines.
+
 ### 13.5 Live UAT cycle 1 (`sb-302a43c0`, first build) — the re-probe races the hypervisor
 
 `pre-sleep` unmounted both volumes; after resume `/repos` re-probed and mounted, the 1 MiB
