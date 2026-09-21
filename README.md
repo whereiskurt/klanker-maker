@@ -1,5 +1,5 @@
 # Klanker Maker (km) 
-## Write secure `sandbox.yaml` definitions and run isolated AWS EC2 instances (w/ `klankers`) in your AWS Organization/account.
+## Write `sandbox.yaml` definitions and run isolated AWS EC2 `klankers` in your AWS Organization/account.
 ### Out-of-the-box works wtih Slack / Github / Hackerone / Email / herdr / vscode / browser+ubuntu / eBPF / Wiz Sensor
 > [!NOTE]
 > Hi! 👋 I'm [Kurt (aka KPH)](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about the future of 'software factories.'.
