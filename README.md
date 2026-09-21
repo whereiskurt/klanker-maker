@@ -6,7 +6,7 @@
 > Hihi! I'm KPH and this project has been really useful for me. It's currently a protoype `pre-v1.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. I'm considering rewrite as a `v1.0.0` before mid-2027. 🤗  
 
 # Why?
-🔥Hot take??🧑‍🚒 AWS EC2 is really only appropriate for 1) making k8s/ECS nodes 2) cloud developer environment. 🧨
+🔥Hot take??🧑‍🚒 AWS EC2 is really only appropriate for 1) making k8s/ECS nodes 2) disposable cloud developer environment. 🧨
 
 This project **is not about** solving 'Agents at Scale'🙅 - **it is** about isolated YAML defined virutal machines (AWS EC2) for my development and hacking purposes 🔐. To "safely-enable " my new "AI centric workflows/tasks" running Claude/Codex/vLLM sessions, in the cloud, on my AWS infrastructure (detached from my localhost.) 
 
