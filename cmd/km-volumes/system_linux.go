@@ -355,6 +355,22 @@ func (realSystem) Ext4BlockCount(source string) (uint64, uint64, error) {
 
 // BackupSuperblocks parses the "Superblock backups stored on blocks:" line(s)
 // of `mke2fs -n` (a dry run; -n never writes).
+// SuperblockUUID asks dumpe2fs -h with an alternate superblock; -h never
+// writes, so this is safe against a backup that belongs to another
+// filesystem — the reason repair checks it before ever running e2fsck.
+func (realSystem) SuperblockUUID(node string, superblock uint64) (string, error) {
+	out, err := run(dumpe2fsTimout, "dumpe2fs", "-o", "superblock="+strconv.FormatUint(superblock, 10), "-h", node)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "Filesystem UUID:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "Filesystem UUID:")), nil
+		}
+	}
+	return "", fmt.Errorf("dumpe2fs superblock=%d %s: no Filesystem UUID line", superblock, node)
+}
+
 func (realSystem) BackupSuperblocks(node string) ([]uint64, error) {
 	out, err := run(mke2fsTimeout, "mke2fs", "-n", node)
 	if err != nil {

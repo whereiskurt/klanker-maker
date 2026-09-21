@@ -72,7 +72,18 @@ func runRepair(ctx context.Context, sys System, m *Manifest, mountpoint string, 
 	if err != nil {
 		return fmt.Errorf("repair: %w", err)
 	}
+	foreign := 0
 	for _, sb := range sbs {
+		// Never e2fsck against a backup that belongs to another filesystem:
+		// after a cross-write every backup on a volume may carry the OTHER
+		// volume's superblock (proven live), e2fsck -b then aborts having
+		// "MODIFIED" the primary, or — if the foreign geometry happens to
+		// fit — rewrites the primary with the wrong filesystem entirely.
+		if u, err := sys.SuperblockUUID(target, sb); err != nil || u != vol.FSUUID {
+			fmt.Fprintf(os.Stderr, "km-volumes repair: backup superblock %d on %s carries filesystem %q, not %s — skipped\n", sb, target, u, vol.FSUUID)
+			foreign++
+			continue
+		}
 		fmt.Fprintf(os.Stderr, "km-volumes repair: e2fsck -f -y -b %d %s\n", sb, target)
 		if err := sys.Fsck(target, sb); err != nil {
 			fmt.Fprintf(os.Stderr, "km-volumes repair:   %v\n", err)
@@ -90,6 +101,10 @@ func runRepair(ctx context.Context, sys System, m *Manifest, mountpoint string, 
 		}
 		return nil
 	}
-	return fmt.Errorf("repair: no backup superblock on %s validated (%d tried); re-materialise the volume: "+
-		"terraform taint the aws_ebs_volume for %s on the sandbox's unit, re-apply, then km resume", target, len(sbs), mountpoint)
+	if foreign == len(sbs) {
+		return fmt.Errorf("repair: %d backup superblock(s) on %s examined, none carries filesystem %s (the cross-write reached every backup); "+
+			"re-materialise the volume — see docs/hibernate-volumes.md § Re-materialise from snapshot", len(sbs), target, vol.FSUUID)
+	}
+	return fmt.Errorf("repair: no backup superblock on %s validated (%d tried, %d foreign); re-materialise the volume: "+
+		"see docs/hibernate-volumes.md § Re-materialise from snapshot", target, len(sbs), foreign)
 }

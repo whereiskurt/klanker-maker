@@ -52,6 +52,7 @@ type fakeSystem struct {
 
 	state             State
 	backupSuperblocks map[string][]uint64
+	superblockUUID    map[string]map[uint64]string // node -> backup -> uuid; absent ⇒ manifest's own UUID (legacy tests)
 	fscks             map[string][]uint64
 	fsckSucceedsAt    map[string]uint64
 }
@@ -202,6 +203,20 @@ func (f *fakeSystem) Ext4BlockCount(source string) (uint64, uint64, error) {
 		return e[0], e[1], nil
 	}
 	return 0, 0, fmt.Errorf("fake: no ext4 info for %s", source)
+}
+
+func (f *fakeSystem) SuperblockUUID(node string, sb uint64) (string, error) {
+	if m, ok := f.superblockUUID[node]; ok {
+		if u, ok := m[sb]; ok {
+			return u, nil
+		}
+		return "", fmt.Errorf("fake: no superblock %d on %s", sb, node)
+	}
+	// Legacy tests never set this: report the UUID blkid would, i.e. ours.
+	if b, ok := f.blkid[node]; ok {
+		return b[0], nil
+	}
+	return "", fmt.Errorf("fake: no superblock uuid for %s", node)
 }
 
 func (f *fakeSystem) BackupSuperblocks(node string) ([]uint64, error) {

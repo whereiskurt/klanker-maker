@@ -56,6 +56,9 @@ type System interface {
 	Ext4BlockCount(source string) (count, blockSize uint64, err error)
 	// BackupSuperblocks lists the backup superblocks mke2fs -n would place.
 	BackupSuperblocks(node string) ([]uint64, error)
+	// SuperblockUUID reads the filesystem UUID recorded in the backup
+	// superblock at that block (dumpe2fs -o superblock=N -h) WITHOUT writing.
+	SuperblockUUID(node string, superblock uint64) (string, error)
 	// Fsck runs e2fsck -f -y -b <superblock> on node.
 	Fsck(node string, superblock uint64) error
 	Reboot() error
