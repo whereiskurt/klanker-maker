@@ -1,5 +1,5 @@
 # Klanker Maker (km)
-## Simple+secure YAML definitions for launching AWS EC2 instances with Claude / Codex / vLLM / Slack / Github / herdr / vscode / browser+kasm+VNC in your AWS Organization/account.
+## Simple+secure YAML definitions for launching AWS EC2 instances with Claude / Codex / vLLM / Slack / Github / herdr / vscode / browser+ubuntu in your AWS Organization/account.
 ### Securely work with Claude over Slack/Github/Email/herdr on AWS EC2
 
 > [!IMPORTANT]
