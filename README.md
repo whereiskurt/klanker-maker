@@ -5,8 +5,7 @@
 > [!IMPORTANT]
 > Hihi! I'm KPH and this project has been really useful for me. It's currently a protoype `pre-v1.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. I'm considering rewrite as a `v1.0.0` before mid-2027. 🤗  
 
-### Overview of AWS Services Used
-<img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
+<img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
 # Why?
 🔥Hot take??🧑‍🚒 AWS EC2 is really only appropriate for 1) making k8s/ECS nodes 2) disposable cloud developer environment. 🧨
@@ -15,9 +14,10 @@ This project **is not about** solving 'Agents at Scale'🙅 - **it is** about is
 
 Manage/interact with AWS EC2 klankers over Slack/Github/email/herdr securely inside your own AWS account using AWS security primitives like SCP,IAM,KMS,SG,VPC,Lambda+SQS, etc. 
 
-<img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
 # Details
+### Overview of AWS Services Used
+<img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
 
 I've been interested in this topic a long time and this kinda an extension of 'home virtual labs' but for Claude + friends. 
 
@@ -124,36 +124,6 @@ There are four useful frames for it:
 **3. The integrations layer.** Klanker Maker is built to be the surface a human (or another agent) drives an agent fleet through. A Slack App provides bidirectional chat: `#sb-{id}` channels per sandbox, transcript streaming, `:eyes:` ack reactions, signing-secret-verified Events API webhooks dispatched to per-sandbox SQS FIFO queues. A GitHub App provides per-sandbox short-lived installation tokens scoped to allowlisted repos. SES + Ed25519 lets sandboxes message each other (and the operator) with cryptographically verified sender identity. OTEL captures every prompt, tool call, and API request to S3 for replay.
 
 **4. The work envelope.** Sandboxes scale with the workload. The profile picks the substrate (EC2 spot/on-demand, ECS Fargate, Docker), the instance type (`t3.medium` for a quick fix, `r7i.48xlarge` for an in-memory backtest, a GPU box for fine-tuning), and the storage shape (EBS, additional EBS volume, EFS shared across a crew of agents). The same eBPF + MITM + budget layer wraps all of them. The point isn't "sandbox a coding agent on my laptop" - it's *put Claude (or a dozen Claudes) in front of cloud-scale compute and data, with the policy, identity, and dollar rails wired in by construction*. Heavy data and ML workloads belong on AWS; the agent driving them shouldn't be the part that has to live on your MacBook.
-
----
-
-
-## How It Compares
-
-Klanker Maker sits in the gap between three categories of tool. The table below is the elevator pitch.
-
-| | **Klanker Maker** | **AWS Bedrock AgentCore** | **Coder** | **E2B / agent-sandbox** |
-|---|---|---|---|---|
-| **Who runs the runtime?** | You - your AWS account, your VPC, your bill | AWS-managed | You - typically Kubernetes | E2B-managed (SaaS) / your K8s cluster |
-| **Who is it for?** | AI agents (Claude, Codex, security tools) | AI agents | Human developers | AI agents |
-| **Definition format** | Declarative YAML profile, schema-validated | SDK / API construction | Terraform-templated workspaces | SDK / Dockerfile |
-| **Network policy** | Cgroup eBPF + DNS/HTTP MITM proxy + SCP backstop | VPC + IAM | NetworkPolicy / SG | Container network |
-| **Budget enforcement** | Per-sandbox $ ceiling, dual-layer (proxy 403 + IAM revocation) | Per-account billing alarms (delayed) | None | None |
-| **Identity model** | Per-sandbox Ed25519 + scoped IAM session + GitHub App token | Bedrock-managed identity provider | Per-workspace OIDC | Container env |
-| **Slack integration** | Native: bidirectional chat, transcript stream, ack reactions | None | None | None |
-| **GitHub integration** | Native: GitHub App, per-repo allowlist, short-lived tokens | None | Limited | None |
-| **Multi-agent comms** | Signed email (Ed25519 + optional NaCl box) over SES | None | N/A | Inter-sandbox HTTP |
-| **Org-level guardrails** | Service Control Policy (6-statement deny set) | AWS-internal | None | None |
-| **Substrate** | EC2 spot/on-demand, ECS Fargate spot/on-demand, Docker (local), EKS planned | AWS-managed Firecracker | Kubernetes / cloud VM | Firecracker |
-
-**Closest mental models:**
-
-- *AgentCore, but you own the substrate.* AgentCore is a managed runtime; Klanker Maker is the same problem solved on infrastructure you control, with the policy authored in YAML instead of constructed via SDK, and with the eBPF/MITM/SCP layers AgentCore doesn't expose.
-- *Coder, but for agents instead of humans.* Coder gives developers ephemeral cloud workspaces from a template. Klanker Maker gives agents ephemeral cloud sandboxes from a profile, with the security additions agents need (kernel-level egress filtering, MITM token metering, dollar ceilings, signed inter-agent email).
-- *E2B, but self-hosted with kernel-level controls.* E2B is excellent for stateless code execution. Klanker Maker is for agents that need real cloud credentials, real persistent storage, real GitHub repos, and a real budget - running where your data already lives.
-
----
-
 
 ## Quick Start
 
