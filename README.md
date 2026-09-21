@@ -5,8 +5,9 @@
 **Built for security/engineer teams.** You're team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, doing code reviews, and reasoning about vulnerabilities - without the investigation itself becoming the next breach. 
 > Klanker Maker gives you an isolated AWS EC2 instance, YAML policy-governed sandbox where untrusted code, dependencies, and AI agents run inside a contained blast radius.
 
-<img width="1640" height="1400" alt="km arch" src="https://github.com/user-attachments/assets/70f80f9b-6e33-4296-bd28-6873c5e17e71" />
+<img width="3840" height="2280" alt="image" src="https://github.com/user-attachments/assets/38dc63fd-e441-464c-9512-935d3dff6b12" />
 
+<img width="3279" height="2800" alt="image" src="https://github.com/user-attachments/assets/20c6c6d2-06fa-4cdb-82f1-ee989b3aa60d" />
 
 A profile is the contract - declare what's allowed, get the infrastructure as the artifact:
 
