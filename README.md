@@ -1,10 +1,10 @@
 # Klanker Maker (km) 
-## Secure `sandbox.yaml` definitions running isolated AWS EC2+Claude in your AWS Organization/account.
+## Secure `sandbox.yaml` definitions running isolated AWS EC2 instances w/ `klankers` in your AWS Organization/account.
 ### Slack / Github / Email / herdr / vscode / browser+ubuntu / eBPF
 > [!NOTE]
-> Hihi! I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about the future of 'software factories.'.
+> Hi! 👋 I'm [Kurt (aka KPH)](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about the future of 'software factories.'.
 >
-> It's currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
+> `klanker-maker` currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
 >
 > I've made a bunch of decisions along the way and that's why it's so easy to use. 🙇 For example - there is ZERO inbound network traffic to the klankers by default/design.
 
@@ -26,7 +26,7 @@ Manage/interact with AWS EC2 klankers over Slack/Github/email/herdr securely ins
 ### Overview of AWS Services Used
 <img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
 
-I've been interested in this topic a long time and this kinda an extension of 'home virtual labs' but for Claude + friends. 
+I've been interested in [this topic a long time as an extension of 'home virtual labs'](https://github.com/whereiskurt/kvmlab/blob/v1.0/Virtual%20Lab%20Design%20(KVM).png) but for Claude + friends. 
 
 **Useful for security/engineer practitioners.** if team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, reading code, and reasoning about vulnerabilities - without becoming the next breach.
 
