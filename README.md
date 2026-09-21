@@ -8,10 +8,9 @@
 <img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
 # Why?
-## 🔥Hot take??🧑‍🚒 AWS EC2 is really only appropriate for 1) making k8s/ECS nodes or 2) disposable cloud developer environment. 🧨
-
 This project **is not about** solving 'Agents at Scale'🙅 - **it is** about #2 above - isolated YAML defined virutal machines (AWS EC2) for my development and hacking purposes 🔐. To "safely-enable " my new "AI centric workflows/tasks" running Claude/Codex/vLLM sessions, in the cloud, on my AWS infrastructure (detached from my localhost.) 
 
+## 🔥Hot take??🧑‍🚒 AWS EC2 is really only appropriate for 1) making k8s/ECS nodes or 2) disposable cloud developer environment. 🧨
 Manage/interact with AWS EC2 klankers over Slack/Github/email/herdr securely inside your own AWS account using AWS security primitives like SCP,IAM,KMS,SG,VPC,Lambda+SQS, etc. 
 
 # Details
