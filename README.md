@@ -14,8 +14,10 @@ Manage/interact with AWS EC2 klankers over Slack/Github/email/herdr securely ins
 
 <img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
-
 # Details
+### Overview of AWS Services Used
+<img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
+
 I've been interested in this topic a long time and this kinda an extension of 'home virtual labs' but for Claude + friends. 
 
 **Useful for security/engineer practitioners.** if team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, reading code, and reasoning about vulnerabilities - without becoming the next breach.
@@ -25,12 +27,8 @@ Isolation and monitoring.
 ### Overview of Slack/Github Integration
 <img alt="image" src="https://github.com/user-attachments/assets/38dc63fd-e441-464c-9512-935d3dff6b12" />
 
-
-
 YAML templates extending compute+storage for running untrusted code, dependencies, and AI agents inside a contained blast radius .
 
-### Overview of AWS Services Used
-<img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
 
 **Cloud native Claude/Codex in your AWS account. Declarative YAML templates, Slack+Github+Hackerone/email native, eBPF-centric with Lambda+EventBridge enforced hard budgets.**
 - A CLI for easily running AWS EC2 instances (`km create`, `km ls`, `km desktop start`, `km vscode start` ...)
