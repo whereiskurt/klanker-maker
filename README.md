@@ -5,6 +5,9 @@
 > [!IMPORTANT]
 > Hihi! I'm KPH and this project has been really useful for me. It's currently a protoype `pre-v1.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. I'm considering rewrite as a `v1.0.0` before mid-2027. 🤗  
 
+### Overview of AWS Services Used
+<img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
+
 # Why?
 🔥Hot take??🧑‍🚒 AWS EC2 is really only appropriate for 1) making k8s/ECS nodes 2) disposable cloud developer environment. 🧨
 
@@ -15,8 +18,6 @@ Manage/interact with AWS EC2 klankers over Slack/Github/email/herdr securely ins
 <img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
 # Details
-### Overview of AWS Services Used
-<img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
 
 I've been interested in this topic a long time and this kinda an extension of 'home virtual labs' but for Claude + friends. 
 
