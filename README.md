@@ -1,5 +1,6 @@
 # Klanker Maker (km)
-> Magically 🪄 run AWS EC2 instances pre-configured with Claude/Codex/vLLM that easily integrate and provide Slack/Github/herdr/vscode/browser+VNC in a safe+secure way.
+## Work with Claude ove Slack/Github/Email/herdr!
+### Securely pre-configured AWS EC2 instances with Claude/Codex/vLLM/Slack/Github/herdr/vscode/browser+VNC in your AWS Organization/account.
 
 > [!IMPORTANT]
 > Hihi! I'm KPH and this project has been really useful for me. It's currently a protoype `pre-v1.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. I'm considering rewrite as a `v1.0.0` before mid-2027. 🤗  
@@ -11,14 +12,17 @@ This project **is not about** solving 'Agents at Scale'🙅 - **it is** about is
 
 Manage/interact with AWS EC2 klankers over Slack/Github/email/herdr securely inside your own AWS account using AWS security primitives like SCP,IAM,KMS,SG,VPC,Lambda+SQS, etc. 
 
-
 # Details
-I've been interested in this topic a long time and this kinda an extension of 'home virtual labs' but for Claude + friends.
+I've been interested in this topic a long time and this kinda an extension of 'home virtual labs' but for Claude + friends. 
+
+**Useful for security/engineer practitioners.** if team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, reading code, and reasoning about vulnerabilities - without becoming the next breach.
+
+Isolation and monitoring.
 
 ### Overview of Slack/Github Integration
 <img alt="image" src="https://github.com/user-attachments/assets/38dc63fd-e441-464c-9512-935d3dff6b12" />
 
-**Built for security/engineer teams.** You're team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, doing code reviews, and reasoning about vulnerabilities - without the investigation itself becoming the next breach. 
+
 
 YAML templates extending compute+storage for running untrusted code, dependencies, and AI agents inside a contained blast radius .
 
