@@ -3581,7 +3581,12 @@ mkdir -p /var/lib/km
 cat > /etc/systemd/system/km-volumes.service << 'KMVOLUNIT'
 [Unit]
 Description=Klankrmkr additional EBS volumes — validate by live NVMe identity, then mount
-After=local-fs.target cloud-final.service
+# NOT After=cloud-final.service: the first-boot bootstrap IS cloud-final, and
+# every unit Before= this one (sshd, km-presence, the pollers) would inherit a
+# wait on the whole bootstrap — the bootstrap's own systemctl restart
+# km-presence then deadlocks on itself (proven live). The sidecar is on disk
+# from the first boot on and needs only the block layer.
+After=local-fs.target
 Before=km-presence.service sshd.service km-slack-inbound-poller.service km-github-inbound-poller.service km-h1-inbound-poller.service km-webhook-inbound-poller.service
 [Service]
 Type=oneshot
@@ -3614,10 +3619,14 @@ StandardError=append:/var/log/km-volumes.log
 KMVOLRESUMEUNIT
 systemctl daemon-reload
 systemctl enable km-volumes.service
-# Run it now as well: the volume block above mounted directly for this first
-# boot, so this validates the same mounts (idempotent) and writes
+# Validate now as well — by calling the binary, NOT systemctl start: a start
+# job issued from inside cloud-final waits on cloud-final and deadlocks the
+# bootstrap. The volume block above mounted directly for this first boot, so
+# this validates the same mounts (idempotent) and writes
 # /var/lib/km/volumes.state — km status has something to show from minute one.
-systemctl start km-volumes.service || echo "[km-bootstrap] WARNING: km-volumes.service failed on first boot; see journalctl -u km-volumes"
+KM_SANDBOX_ID=sb-phase92-baseline KM_VOLUMES_ON_MISMATCH=refuse \
+  /opt/km/bin/km-volumes mount --fallback /data:f \
+  || echo "[km-bootstrap] WARNING: km-volumes refused a volume on first boot; see /var/lib/km/volumes.state"
 cat > /usr/lib/systemd/system-sleep/km-volumes << 'KMVOLSLEEP'
 #!/bin/sh
 # Bounded and ALWAYS exit 0: a system-sleep script that blocks or fails stalls

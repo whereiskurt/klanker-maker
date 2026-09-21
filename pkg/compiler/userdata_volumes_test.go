@@ -100,7 +100,7 @@ func TestUserdataVolumes_NoFstabLineAndUnitPresent(t *testing.T) {
 		"Environment=KM_VOLUMES_ON_MISMATCH=refuse",
 		"ExecStart=/opt/km/bin/km-volumes mount --fallback /data:f --fallback /repos:g",
 		"systemctl enable km-volumes.service",
-		"systemctl start km-volumes.service",
+		"/opt/km/bin/km-volumes mount --fallback /data:f --fallback /repos:g",
 		"/etc/systemd/system/km-volumes-resume.service",
 		"TimeoutStartSec=240",
 		"ExecStart=/opt/km/bin/km-volumes post-sleep",
@@ -111,6 +111,18 @@ func TestUserdataVolumes_NoFstabLineAndUnitPresent(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rendered userdata missing %q", want)
+		}
+	}
+	// First-boot validation must call the binary, never `systemctl start`: a
+	// start job from inside cloud-final deadlocks the bootstrap. And the unit
+	// must not order After=cloud-final for the same reason (proven live).
+	if strings.Contains(out, "systemctl start km-volumes.service") {
+		t.Error("first boot must invoke km-volumes mount directly, not systemctl start (deadlocks inside cloud-final)")
+	}
+	unit := extractHeredoc(t, out, "/etc/systemd/system/km-volumes.service", "KMVOLUNIT")
+	for _, line := range strings.Split(unit, "\n") {
+		if strings.HasPrefix(line, "After=") && strings.Contains(line, "cloud-final") {
+			t.Errorf("km-volumes.service must not be After=cloud-final.service: %s", line)
 		}
 	}
 	// The additional volume (not snapshot-derived) must NOT carry --from-snapshot.
