@@ -14,7 +14,7 @@ authoritative, these exist to make the shape of the thing legible in one look.
 | 1 | [Containment boundaries](01-containment-boundaries.html) | What sits between the agent and the account, and which of those rings a compromised box can erase |
 | 2 | [Compensating layers](02-compensating-layers.html) | What each defensive layer stops — and, in the right-hand column, the escape it deliberately leaves open |
 | 3 | [Brokered secret unsealing](03-secret-unsealing.html) | How a SOPS bundle reaches one process without ever landing on disk or in an environment |
-| 4 | [Bridge Lambda trust boundary](04-bridge-trust-boundary.html) | Why a public, unauthenticated Function URL is safe, and why the bridge has no route into the VPC |
+| 4 | [Bridge Lambda trust boundary](04-bridge-trust-boundary.html) | Why a public, unauthenticated Function URL is safe, why the bridge has no route into the VPC, and the two HackerOne edges that cross the other way — the internal ack that `reply: none` removes, and the opt-in raw capture written before the HMAC check |
 | 5 | [The IMDS fence](05-imds-fence-traces.html) | Two processes on one box asking for the same credential, rule by rule |
 | 6 | [Terragrunt invocation path](06-terragrunt-invocation.html) | Who runs Terraform, from where, against which named bucket and lock table |
 | 7 | [IaC file provenance](07-iac-provenance.html) | Which process authors every file an apply touches — and why `backend.tf` is not in the repo |
