@@ -69,6 +69,11 @@ func TestMain(m *testing.M) {
 	// (save/restore).
 	NewSharedCredStoreFunc = func(context.Context, *config.Config) (*sharedCredStore, error) { return nil, nil }
 
+	// km-volumes state: km status asks the box over SSM only in production.
+	statusVolumeStateLookup = func(context.Context, *kmaws.SandboxRecord) *volumesState { return nil }
+	resumeVolumePollInterval = time.Millisecond
+	resumeVolumePollBudget = 10 * time.Millisecond
+
 	// Shrink the select-loop / ticker durations that the `sleep` seam does NOT
 	// cover (these are time.After / time.NewTicker waits, not time.Sleep). The
 	// shell port-forward reconnect/liveness loops and the SSM pollers otherwise

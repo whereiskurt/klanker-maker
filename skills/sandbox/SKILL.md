@@ -146,6 +146,23 @@ done
 aws ssm get-parameter --name "/sandbox/$KM_SANDBOX_ID/signing-key" \
   --with-decryption --query 'Parameter.Value' --output text > /dev/null 2>&1 \
   && echo "signing-key: OK" || echo "signing-key: MISSING (km-send --no-sign required for external recipients)"
+
+# B5. Additional EBS volumes (km-volumes). READ THIS BEFORE diagnosing an empty /repos or /data.
+echo "--- Additional volumes ---"
+if [ -r /var/lib/km/volumes.state ]; then
+  python3 - <<'PY' 2>/dev/null || cat /var/lib/km/volumes.state
+import json
+st = json.load(open("/var/lib/km/volumes.state"))
+for v in st.get("volumes", []):
+    line = v.get("mountpoint", "?") + ": " + v.get("outcome", "?")
+    if v.get("reason"):
+        line += " -- " + v["reason"]
+    print(line)
+PY
+  for m in $(ls -d /*/.km-mount-refused 2>/dev/null); do echo "MARKER: $m ($(cat $m))"; done
+else
+  echo "no km-volumes state (no additional volumes, or a sandbox created before km-volumes)"
+fi
 ```
 
 **Key interpretation:**
@@ -155,6 +172,16 @@ aws ssm get-parameter --name "/sandbox/$KM_SANDBOX_ID/signing-key" \
 - `km-send`/`km-recv` always present on Phase-63+ sandboxes.
 - Signing key is shared by `km-slack` (Slack envelope signing) and `km-send` (sandbox-to-sandbox
   email). If missing and `signing: required`, both will fail. External email: use `km-send --no-sign`.
+
+- **A mountpoint whose state is `refused` (or that contains `.km-mount-refused`) is EMPTY ON
+  PURPOSE.** km-volumes validated the device behind it against the volume recorded at first
+  boot and they did not match — the usual cause is a hibernate/resume that swapped NVMe
+  bindings. Say exactly that. Do NOT conclude the wrong volume was attached, do NOT propose
+  restoring from a snapshot, do NOT `mkfs` anything. The operator remedies are a reboot (which
+  re-enumerates) or `km-volumes repair <mountpoint>` as root; point them at
+  `docs/hibernate-volumes.md`.
+- `unvalidated` means the box predates km-volumes (mounted the old way, unprotected); `mounted`
+  is healthy.
 
 **External email exception:** For non-sandbox recipients (Gmail, corporate email), always pass
 `--no-sign` — it skips the signing key fetch entirely. Inbound replies from non-sandbox senders

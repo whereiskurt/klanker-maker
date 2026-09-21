@@ -1581,6 +1581,15 @@ install is present on the same account).
 `spec.runtime.additionalSnapshots` materialises fresh EBS volumes from existing snapshots at
 sandbox creation time.
 
+> **Hibernation + additional volumes.** A hibernate/resume can cross-wire the additional
+> NVMe namespaces and, with a plain fstab mount, silently write both volumes onto the wrong
+> disk. Every additional volume (this and `additionalVolume`) is therefore owned by the
+> `km-volumes` sidecar: validated by live NVMe identity on every boot and resume, unmounted
+> before hibernate, re-probed after, and refused rather than mounted wrong. Set
+> `spec.runtime.onVolumeMismatch: reboot` on headless profiles that must have `/repos`.
+> Existing sandboxes need a recreate to get it; until then keep `hibernation: false` on
+> volume-bearing profiles. Full runbook: `docs/hibernate-volumes.md`.
+
 ### When to use
 
 Use `additionalSnapshots` when your sandbox workload needs read-write access to a dataset

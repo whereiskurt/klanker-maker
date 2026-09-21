@@ -499,6 +499,12 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 		}
 	}
 
+	// Additional EBS volumes, as km-volumes validated them on this boot or
+	// resume. A refused /repos is otherwise indistinguishable from a healthy
+	// empty directory, and the box's own agent has confidently misdiagnosed
+	// it before. Nothing is printed for a box with no additional volumes.
+	renderVolumeLines(out, statusVolumeStateLookup(ctx, rec), rec.SandboxID)
+
 	fmt.Fprintf(out, "Created At:  %s\n", rec.CreatedAt.Local().Format("2006-01-02 3:04:05 PM MST"))
 	if rec.TTLExpiry != nil {
 		fmt.Fprintf(out, "TTL Expiry:  %s\n", rec.TTLExpiry.Local().Format("2006-01-02 3:04:05 PM MST"))
