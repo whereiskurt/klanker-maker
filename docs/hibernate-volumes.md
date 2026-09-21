@@ -64,7 +64,7 @@ Volumes:
   ? /models    unvalidated (no manifest — created before km-volumes; recreate to protect)
 ```
 
-`km resume` prints the same lines as soon as the box answers (it polls for up to 90 s;
+`km resume` prints the same lines as soon as the box answers (it polls for up to 240 s — a hibernation resume answers SSM at ~150–300 s;
 best-effort). `km doctor` has an `Additional volumes` check that WARNs per running
 sandbox whose latest km-volumes event for a mountpoint is a refusal. The on-box
 `klanker:sandbox` census reads the state and the marker and is told not to diagnose a
