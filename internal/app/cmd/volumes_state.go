@@ -98,10 +98,15 @@ func renderVolumeLines(w io.Writer, st *volumesState, sandboxID string) {
 	}
 }
 
-// Seams for the two blocking waits; the test binary shrinks them.
+// Seams for the two blocking waits; the test binary shrinks them. The budget
+// is sized for a HIBERNATION resume: the SSM agent only answers once the RAM
+// image is restored, measured live at ~150 s on a t3.medium, and the
+// post-resume unit itself may then take up to ~2 min to settle and re-bind.
+// It is the one moment the operator is watching, so waiting is worth it;
+// every path out is best-effort and the resume itself has already succeeded.
 var (
 	resumeVolumePollInterval = 5 * time.Second
-	resumeVolumePollBudget   = 90 * time.Second
+	resumeVolumePollBudget   = 240 * time.Second
 )
 
 // resumeVolumeStateReport polls the freshly started box for its km-volumes
@@ -114,6 +119,7 @@ func resumeVolumeStateReport(ctx context.Context, ssmClient SSMSendAPI, instance
 		return
 	}
 	deadline := time.Now().Add(resumeVolumePollBudget)
+	waited := false
 	for {
 		pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		st, err := fetchVolumeState(pctx, ssmClient, instanceID)
@@ -128,6 +134,10 @@ func resumeVolumeStateReport(ctx context.Context, ssmClient SSMSendAPI, instance
 		if time.Now().After(deadline) || ctx.Err() != nil {
 			fmt.Fprintf(w, "  [info] additional-volume state not readable yet (%v); check later with km status %s\n", err, sandboxID)
 			return
+		}
+		if !waited {
+			fmt.Fprintf(w, "  waiting for the box to report its additional volumes (up to %s)...\n", resumeVolumePollBudget)
+			waited = true
 		}
 		time.Sleep(resumeVolumePollInterval)
 	}
