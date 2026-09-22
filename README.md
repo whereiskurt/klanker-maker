@@ -1,4 +1,14 @@
 # Klanker Maker (km): `sandbox.yaml` and run safe AWS EC2 `klankers` in your AWS Organization/account.
+
+> [!NOTE]
+> Hi! 👋 I'm [Kurt (aka KPH)](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about the future of 'software factories.'. I've made a bunch of decisions and put a tonne of thought/experiene into building `klanker-maker` the way it is.
+>
+> This is approach is called 'opinionated software' and is what makes `klanker-maker` easy to use.🤞 For example - may not like the fact there is ZERO inbound network traffic allowed by default/design ie. AWS security group blocks all inbound. So everything is over SSM. 🤷 Also - maybe you don't use herdr / vscode / github / slack / hackerone / wiz or even want remote dev envs. 🤷 
+>
+> `klanker-maker` currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
+
+<img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
+
 ## Easily run a bunch of AWS EC2s instances you can chat with over Slack / Github / Hackerone / Email use herdr / vscode / browser+ubuntu / eBPF / Wiz Sensor
 
 #### Example 1 - create a klanker and connect to xfce ubuntu desktop:
@@ -22,17 +32,6 @@
   ./km shell desk2 # OR! bash command line
 ```
 <img width="450" alt="Screenshot 2026-09-22 at 10 29 02" src="https://github.com/user-attachments/assets/110d7051-2580-4990-bf3b-a9bc5cc3a19b" />
-
-
-
-> [!NOTE]
-> Hi! 👋 I'm [Kurt (aka KPH)](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about the future of 'software factories.'.
->
-> I've made a bunch of decisions and put a tonne of thought/experiene into building `klanker-maker` the way it is. This is called 'opinionated software' and that's what makes it "easy to use." 🙇 For example - may not like the fact there is ZERO inbound network traffic allowed by default/design ie. AWS security group blocks all inbound. So everything is over SSM. 🤷 Also - maybe you don't use herdr / vscode / github / slack / hackerone / wiz or even want remote dev envs. 🤷 
->
-> `klanker-maker` currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
-
-<img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
 # Why?
 This project **is not about** solving 'Agents at Scale'🙅 - **it is** about #2 above - isolated YAML defined virutal machines (AWS EC2) for my development and hacking purposes 🔐. To "safely-enable " my new "AI centric workflows/tasks" running Claude/Codex/vLLM sessions, in the cloud, on my AWS infrastructure (detached from my localhost.) 
