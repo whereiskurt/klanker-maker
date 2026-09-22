@@ -24,10 +24,10 @@ Take it, and run. Free software. 🙇
 
 ## Create many klankers and interact with them
   ./km create profiles/desk.yaml desk1 #Create sandbox from profile - new EC2
-  ./km desktop start desk1 # Easily connect over SSM to kasm+VNC
-  ./km vscode start desk1 + # Or remote vscode server
-  ./km herdr desk1 # Or right into herdr.
-  ./km shell desk2 # OR! bash command line
+  ./km desktop start desk1 # Connect to a remote linux desktop over SSM
+  ./km vscode start desk1  # Connect to a remote vscode server over SSM
+  ./km herdr desk1         # Connect to a remote herdr over SSM
+  ./km shell desk2         # Open a remote shell over SSM
 ```
 
 <img width="450"  alt="km create+desktop start" src="https://github.com/user-attachments/assets/a4d3c0da-4bbe-4021-abbc-9c08c71da172" />
