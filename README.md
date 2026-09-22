@@ -17,9 +17,10 @@ Take it, and run. Free software. 🙇
 
 #### Example 1 - creating a klanker and connect to xfce ubuntu desktop:
 ```shell
-## Setup your AWS Account once
-  ./km bootstrap --dry-run=false #Only once per AWS Account install
-  ./km init --dry-run=false      #Only once for your klanker workspace
+## One-time setup steps for your AWS Account
+  ./km configure                 #Creates the local `km-config.yaml` file with AWS details
+  ./km bootstrap --dry-run=false #Installs SCP, KMS, S3s, and support infrastructure 
+  ./km init --dry-run=false      #Deploy binary sidecars and artifacts to AWS 
 
 ## Create many klankers and interact with them
   ./km create profiles/desk.yaml desk1 #Create sandbox from profile - new EC2
