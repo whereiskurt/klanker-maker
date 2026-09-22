@@ -1,18 +1,36 @@
-# Klanker Maker (km) 
-## Write `sandbox.yaml` definitions and run isolated AWS EC2 `klankers` in your AWS Organization/account.
-### Out-of-the-box works wtih Slack / Github / Hackerone / Email / herdr / vscode / browser+ubuntu / eBPF / Wiz Sensor
+# Klanker Maker (km): `sandbox.yaml` and run safe AWS EC2 `klankers` in your AWS Organization/account.
+## Easily run a bunch of AWS EC2s instances you can chat with over Slack / Github / Hackerone / Email use herdr / vscode / browser+ubuntu / eBPF / Wiz Sensor
 
-<img width="450" height="225" alt="km create+desktop start" src="https://github.com/user-attachments/assets/a4d3c0da-4bbe-4021-abbc-9c08c71da172" />
-<img width="450" height="225" alt="Screenshot 2026-09-21 at 17 38 33" src="https://github.com/user-attachments/assets/3b55f19a-9926-449a-ac5f-8dd662250449" />
+#### Example 1 - create a klanker and connect to xfce ubuntu desktop:
+```shell
+  ./km create profiles/desk.yaml desk1
+  ./km dekstop start desk1
+```
+
+<img width="450"  alt="km create+desktop start" src="https://github.com/user-attachments/assets/a4d3c0da-4bbe-4021-abbc-9c08c71da172" />
+
+#### Example 2 - use a remote vscode session on the klanker:
+```
+  ./km create profiles/desk.yaml desk1
+  ./km vscode start desk1
+```
+<img width="450"  alt="Screenshot 2026-09-21 at 17 38 33" src="https://github.com/user-attachments/assets/3b55f19a-9926-449a-ac5f-8dd662250449" />
+
+#### Example 3 - herdr and/or full shell access
+```
+  ./km herdr desk1 # Open right into herdr.
+  ./km shell desk2 # OR! bash command line
+```
+<img width="450" alt="Screenshot 2026-09-22 at 10 29 02" src="https://github.com/user-attachments/assets/110d7051-2580-4990-bf3b-a9bc5cc3a19b" />
 
 
 
 > [!NOTE]
 > Hi! 👋 I'm [Kurt (aka KPH)](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about the future of 'software factories.'.
 >
-> `klanker-maker` currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
+> I've made a bunch of decisions and put a tonne of thought/experiene into building `klanker-maker` the way it is. This is called 'opinionated software' and that's what makes it "easy to use." 🙇 For example - may not like the fact there is ZERO inbound network traffic allowed by default/design ie. AWS security group blocks all inbound. So everything is over SSM. 🤷 Also - maybe you don't use herdr / vscode / github / slack / hackerone / wiz or even want remote dev envs. 🤷 
 >
-> I've made a bunch of decisions along the way and that's why it's so easy to use. 🙇 For example - there is ZERO inbound network traffic to the klankers by default/design.
+> `klanker-maker` currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
 
 <img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
