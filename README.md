@@ -27,7 +27,9 @@ Take it, and run. Free software. 🙇
   ./km create profiles/desk.yaml desk1
   ./km vscode start desk1
 ```
-<img width="450"  alt="Screenshot 2026-09-21 at 17 38 33" src="https://github.com/user-attachments/assets/3b55f19a-9926-449a-ac5f-8dd662250449" />
+
+<img width="450" alt="km create + vscode" src="https://github.com/user-attachments/assets/f072982e-6442-4bee-8653-24e63ac05ee5" />
+
 
 #### Example 3 - herdr and/or full shell access
 ```
