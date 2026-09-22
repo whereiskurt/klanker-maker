@@ -1,9 +1,9 @@
 # Klanker Maker (km): `sandbox.yaml` and run safe AWS EC2 `klankers` in your AWS Organization/account.
 Hi! 👋 I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about "The Future of Software". 
 
-FYI - For this project I've made a bunch of decisions/conventions and put a tonne of thought / experience into building `klanker-maker` **the way it is.** This is approach is called 'opinionated software' and is what makes `klanker-maker` easy to use.🤞 
+FYI - I've made a bunch of decisions/conventions and put a tonne of thought / experience into building `klanker-maker` **the way it is.** This is approach is called 'opinionated software' and is what makes `klanker-maker` easy to use.🤞 Doesn't mean my opinions won't change, just that I've baked a bunch in, and they are often Security First.
 
-You may not like - for example - the fact ZERO inbound network traffic is allowed by the AWS Security Group, blocking all inbound. Everything is over AWS SSM - even 'public network `klankers`'. 🤷 Maybe you don't use `herdr` / vscode / Github / Slack / Hackerone / Wiz or even want remote dev envs. 🤷 Maybe you just want to keep everything localhost?! Maybe you hate AWS EC2 even more than I do?!?! 🤡
+For example - you may not like the fact ZERO inbound network traffic is allowed by the AWS Security Group, blocking all inbound. Everything is over AWS SSM - even 'public network `klankers`'. 🤷 Maybe you don't use `herdr` / vscode / Github / Slack / Hackerone / Wiz or even want remote dev envs. 🤷 Maybe you just want to keep everything localhost?! Maybe you hate AWS EC2 even more than I do?!?! 🤡
 
 Take it, and run. Free software. 🙇
 
