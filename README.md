@@ -6,9 +6,9 @@ FYI - I've made a bunch of decisions and put a tonne of thought/experiene into b
 > [!WARNING]
 > `klanker-maker` currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
 
-<img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
-
 ## Easily run a bunch of AWS EC2s instances you can chat with over Slack / Github / Hackerone / Email use herdr / vscode / browser+ubuntu / eBPF / Wiz Sensor
+
+<img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
 #### Example 1 - create a klanker and connect to xfce ubuntu desktop:
 ```shell
