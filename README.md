@@ -19,11 +19,11 @@ Take it, and run. Free software. 🙇
 ```shell
 ## Setup your AWS Account once
   ./km bootstrap --dry-run=false #Only once per AWS Account install
-  ./km init --dry-run=false #Only once per `klanker` workspace
+  ./km init --dry-run=false      #Only once for your klanker workspace
 
 ## Create many klankers and interact with them
   ./km create profiles/desk.yaml desk1 #Create sandbox from profile - new EC2
-  ./km dekstop start desk1 # Easily connect over SSM to kasm+VNC
+  ./km desktop start desk1 # Easily connect over SSM to kasm+VNC
   ./km vscode start desk1 + # Or remote vscode server
   ./km herdr desk1 # Or right into herdr.
   ./km shell desk2 # OR! bash command line
