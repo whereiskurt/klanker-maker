@@ -1,12 +1,12 @@
 # Klanker Maker (km): `sandbox.yaml` and run safe AWS EC2 `klankers` in your AWS Organization/account.
 Hi! 👋 I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about "The Future of Software". 
 
-FYI - I've made a bunch of decisions and put a tonne of thought/experiene into building `klanker-maker` the way it is. This is approach is called 'opinionated software' and is what makes `klanker-maker` easy to use.🤞 For example - may not like the fact there is ZERO inbound network traffic allowed by default/design ie. AWS security group blocks all inbound. So everything is over SSM. 🤷 Also - maybe you don't use herdr / vscode / github / slack / hackerone / wiz or even want remote dev envs. 🤷 
+FYI - I've made a bunch of decisions and put a tonne of thought/experiene into building `klanker-maker` the way it is. This is approach is called 'opinionated software' and is what makes `klanker-maker` easy to use.🤞 For example - you may not like the fact ZERO inbound network traffic is allowed by the AWS Security Group, blocking all inbound. So everything is over AWS SSM - even 'public network `klankers`'. 🤷 Also - maybe you don't use `herdr` / vscode / Github / Slack / Hackerone / Wiz or even want remote dev envs. 🤷 
 
 > [!WARNING]
 > `klanker-maker` currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
 
-## Easily run a bunch of AWS EC2s instances you can chat with over Slack / Github / Hackerone / Email use herdr / vscode / browser+ubuntu / eBPF / Wiz Sensor
+## Easily run a bunch of AWS EC2s instances you can interact with over Slack / Github / Hackerone / email use herdr / vscode / browser+ubuntu / eBPF / Wiz Sensor
 
 <img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
