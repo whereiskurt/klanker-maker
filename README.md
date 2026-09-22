@@ -1,5 +1,5 @@
 # Klanker Maker (`km`) - AWS EC2 `klankers`
-# Define a `sandbox.yaml` and run Claude+friends safely in your AWS Organization/Account.
+# 1) Define a `sandbox.yaml` 2) Experiment safely in your AWS Account (with Claude and friends.)
 Hi! 👋 I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about "The Future of Software". 
 
 FYI - I've made a bunch of decisions/conventions and put a tonne of thought / experience into building `klanker-maker` **the way it is.** This is approach is called 'opinionated software' and is what makes `klanker-maker` easy to use.🤞 Doesn't mean my opinions won't change, just that I've baked a bunch in, and they are often Security First.
