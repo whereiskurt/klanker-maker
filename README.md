@@ -15,28 +15,17 @@ Take it, and run. Free software. 🙇
 
 <img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
-#### Example 1 - create a klanker and connect to xfce ubuntu desktop:
+#### Example 1 - creating a klanker and connect to xfce ubuntu desktop:
 ```shell
-  ./km create profiles/desk.yaml desk1
-  ./km dekstop start desk1
+  ./km create profiles/desk.yaml desk1 #Create sandbox from profile - new EC2
+  ./km dekstop start desk1 # Easily connect over SSM to kasm+VNC
+  ./km vscode start desk1 + # Or remote vscode server
+  ./km herdr desk1 # Or right into herdr.
+  ./km shell desk2 # OR! bash command line
 ```
 
 <img width="450"  alt="km create+desktop start" src="https://github.com/user-attachments/assets/a4d3c0da-4bbe-4021-abbc-9c08c71da172" />
-
-#### Example 2 - use a remote vscode session on the klanker:
-```
-  ./km create profiles/desk.yaml desk1
-  ./km vscode start desk1
-```
-
 <img width="450" alt="km create + vscode" src="https://github.com/user-attachments/assets/f072982e-6442-4bee-8653-24e63ac05ee5" />
-
-
-#### Example 3 - herdr and/or full shell access
-```
-  ./km herdr desk1 # Open right into herdr.
-  ./km shell desk2 # OR! bash command line
-```
 <img width="450" alt="Screenshot 2026-09-22 at 10 29 02" src="https://github.com/user-attachments/assets/110d7051-2580-4990-bf3b-a9bc5cc3a19b" />
 
 # Why?
