@@ -1,19 +1,20 @@
-# Klanker Maker (`km`) - AWS EC2 `klankers`
-## 1) Define a `sandbox.yaml` 2) Experiment safely in your AWS Account
-Hi! 👋 I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about "The Future of Software". 
+#### Easy AWS EC2 `klankers` in your AWS Account with strong security controls defined by a `sandbox.yaml`
 
-FYI - I've made a bunch of decisions/conventions and put a tonne of thought / experience into building `klanker-maker` **the way it is.** This is approach is called 'opinionated software' and is what makes `klanker-maker` easy to use.🤞 Doesn't mean my opinions won't change, just that I've baked a bunch in, and they are often Security First.
+# Klanker Maker (`km`)
+Hi! 👋 I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about "The Future of Software". I've been interested in [this topic a long time as an extension of 'home virtual labs'](https://github.com/whereiskurt/kvmlab/blob/v1.0/Virtual%20Lab%20Design%20(KVM).png) but for Claude + friends. Take it, and run. Free software. 🙇
 
-For example - you may not like the fact ZERO inbound network traffic is allowed by the AWS Security Group, blocking all inbound. Everything is over AWS SSM - even 'public network `klankers`'. 🤷 Maybe you don't use `herdr` / vscode / Github / Slack / Hackerone / Wiz or even want remote dev envs. 🤷 Maybe you just want to keep everything localhost?! Maybe you hate AWS EC2 even more than I do?!?! 🤡
+## What you get?
+<img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
-Take it, and run. Free software. 🙇
+## How it flows safely into?
+<img alt="image" src="https://github.com/user-attachments/assets/38dc63fd-e441-464c-9512-935d3dff6b12" />
 
-> [!WARNING]
-> `klanker-maker` currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
+### What AWS Services are used?
+<img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
 
 ## Easily run a bunch of AWS EC2s instances you can interact with over Slack / Github / Hackerone / email use herdr / vscode / browser+ubuntu / eBPF / Wiz Sensor
 
-<img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
+Create an AWS EC2 that you can shell/vscode/web-linux into.
 
 #### Example 1 - creating a klanker and connect to xfce ubuntu desktop:
 ```shell
@@ -33,6 +34,15 @@ Take it, and run. Free software. 🙇
 <img width="450"  alt="km create+desktop start" src="https://github.com/user-attachments/assets/a4d3c0da-4bbe-4021-abbc-9c08c71da172" />
 <img width="450" alt="km create + vscode" src="https://github.com/user-attachments/assets/f072982e-6442-4bee-8653-24e63ac05ee5" />
 <img width="450" alt="Screenshot 2026-09-22 at 10 29 02" src="https://github.com/user-attachments/assets/110d7051-2580-4990-bf3b-a9bc5cc3a19b" />
+
+
+FYI - I've made a bunch of decisions/conventions and put a tonne of thought / experience into building `klanker-maker` **the way it is.** This is approach is called 'opinionated software' and is what makes `klanker-maker` easy to use.🤞 Doesn't mean my opinions won't change, just that I've baked a bunch in, and they are often Security First.
+
+For example - you may not like the fact ZERO inbound network traffic is allowed by the AWS Security Group, blocking all inbound. Everything is over AWS SSM - even 'public network `klankers`'. 🤷 Maybe you don't use `herdr` / vscode / Github / Slack / Hackerone / Wiz or even want remote dev envs. 🤷 Maybe you just want to keep everything localhost?! Maybe you hate AWS EC2 even more than I do?!?! 🤡
+
+> [!WARNING]
+> `klanker-maker` currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
+
 
 # Why?
 This project **is not about** solving 'Agents at Scale'🙅 - **it is** about #2 above - isolated YAML defined virutal machines (AWS EC2) for my development and hacking purposes 🔐. To "safely-enable " my new "AI centric workflows/tasks" running Claude/Codex/vLLM sessions, in the cloud, on my AWS infrastructure (detached from my localhost.) 
