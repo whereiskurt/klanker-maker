@@ -1,4 +1,4 @@
-#### Easy AWS EC2 `klankers` in your AWS Account with strong security controls defined by a `sandbox.yaml`
+#### Easy AWS EC2 with strong security controls defined by a `sandbox.yaml`
 
 # Klanker Maker (`km`)
 Hi! 👋 I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about "The Future of Software". I've been interested in [this topic a long time as an extension of 'home virtual labs'](https://github.com/whereiskurt/kvmlab/blob/v1.0/Virtual%20Lab%20Design%20(KVM).png) but for Claude + friends. Take it, and run. Free software. 🙇
@@ -6,7 +6,7 @@ Hi! 👋 I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project ha
 ## What you get?
 <img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
 
-## How it flows safely into?
+## Slack/Github/Webook Lambda+SQS, no ingress to sandboxes (only SSM)
 <img alt="image" src="https://github.com/user-attachments/assets/38dc63fd-e441-464c-9512-935d3dff6b12" />
 
 ### What AWS Services are used?
