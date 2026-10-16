@@ -542,6 +542,12 @@ type mockDDBQueryGetPut struct {
 	putCalls int
 }
 
+// UpdateItem lets mockDDBQueryGetPut satisfy DDBUpdateItemAPI (DDBThreadStore.Client);
+// mockDDBUpdateItem shadows it with a recording version.
+func (m *mockDDBQueryGetPut) UpdateItem(_ context.Context, _ *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	return &dynamodb.UpdateItemOutput{}, nil
+}
+
 func (m *mockDDBQueryGetPut) GetItem(ctx context.Context, in *dynamodb.GetItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
 	if m.getItem != nil {
 		return m.getItem(ctx, in, opts...)

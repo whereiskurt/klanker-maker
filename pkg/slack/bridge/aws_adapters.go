@@ -871,7 +871,7 @@ type DDBQueryGetPutAPI interface {
 // Key: (channel_id, thread_ts). Upsert uses attribute_not_exists(channel_id) so
 // the bridge never overwrites a claude_session_id written by the poller.
 type DDBThreadStore struct {
-	Client    DDBQueryGetPutAPI
+	Client    DDBUpdateItemAPI
 	TableName string // e.g. "km-slack-threads" (from KM_SLACK_THREADS_TABLE env var)
 }
 
@@ -1022,6 +1022,54 @@ func (s *DDBThreadStore) Upsert(ctx context.Context, channelID, threadTS, sandbo
 			return nil
 		}
 		return fmt.Errorf("threads upsert: %w", err)
+	}
+	return nil
+}
+
+// DispatchBoundary returns last_dispatch_ts for (channelID, threadTS): the Slack
+// ts of the last message that dispatched a turn. "" (nil error) when the row or
+// the attribute is absent.
+func (s *DDBThreadStore) DispatchBoundary(ctx context.Context, channelID, threadTS string) (string, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: awssdk.String(s.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"channel_id": &dynamodbtypes.AttributeValueMemberS{Value: channelID},
+			"thread_ts":  &dynamodbtypes.AttributeValueMemberS{Value: threadTS},
+		},
+		ProjectionExpression: awssdk.String("last_dispatch_ts"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("threads dispatch-boundary: %w", err)
+	}
+	if v, ok := out.Item["last_dispatch_ts"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		return v.Value, nil
+	}
+	return "", nil
+}
+
+// MarkDispatched records eventTS as last_dispatch_ts if it is newer than the
+// stored value (monotonic). A losing write (ConditionalCheckFailed) is a no-op.
+// Slack ts strings are fixed-width "seconds.micros" (10+1+6 chars until 2286),
+// so DynamoDB's lexicographic `<` on S is a correct numeric compare.
+func (s *DDBThreadStore) MarkDispatched(ctx context.Context, channelID, threadTS, eventTS string) error {
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(s.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"channel_id": &dynamodbtypes.AttributeValueMemberS{Value: channelID},
+			"thread_ts":  &dynamodbtypes.AttributeValueMemberS{Value: threadTS},
+		},
+		UpdateExpression:    awssdk.String("SET last_dispatch_ts = :ts"),
+		ConditionExpression: awssdk.String("attribute_not_exists(last_dispatch_ts) OR last_dispatch_ts < :ts"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":ts": &dynamodbtypes.AttributeValueMemberS{Value: eventTS},
+		},
+	})
+	if err != nil {
+		var ccfe *dynamodbtypes.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return nil
+		}
+		return fmt.Errorf("threads mark-dispatched: %w", err)
 	}
 	return nil
 }

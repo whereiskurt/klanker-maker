@@ -93,6 +93,12 @@ type SlackThreadStore interface {
 	// empty strings (not error) when no owned row exists or on a cross-sandbox
 	// lookup (sandbox-never-reads-DDB boundary). Phase 110 Plan 02.
 	LookupBySession(ctx context.Context, sessionID, sandboxID string) (channelID, threadTS, agentType string, err error)
+	// DispatchBoundary returns last_dispatch_ts (the Slack ts of the last message
+	// that dispatched a turn in this thread), "" when absent. Part B context window.
+	DispatchBoundary(ctx context.Context, channelID, threadTS string) (string, error)
+	// MarkDispatched records eventTS as last_dispatch_ts if it is newer than the
+	// stored value (monotonic). A losing write is silently a no-op.
+	MarkDispatched(ctx context.Context, channelID, threadTS, eventTS string) error
 }
 
 // SandboxByChannelFetcher resolves a Slack channel_id to sandbox routing info
