@@ -141,6 +141,10 @@ type EventsHandler struct {
 	AliasResolver   SlackAliasResolver
 	CreatePublisher SandboxCreatePublisher
 	SenderEmails    SenderEmailFetcher
+
+	// Part B: reads a strict thread's human messages since the bot's last turn
+	// (conversations.replies) for a mentioned reply. nil ⇒ context never collected.
+	ThreadReader SlackThreadReader
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -381,6 +385,10 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 
 	// Steps 5a and 5b gate channel-owned messages only. A routed message already
 	// passed the route's own mention + sender-email gate in resolveDefaultRoute.
+	// effectiveAllow / effectiveMentionOnly are declared here so step 8's strict
+	// context collection can see them; the per-sandbox overrides apply inside.
+	effectiveAllow := h.Allow
+	effectiveMentionOnly := h.MentionOnly
 	if !routed {
 		// 5a. Trigger allowlist (Phase 118). The OUTER gate: runs AFTER channel-ownership
 		// (so per-sandbox info.Allow is known) and BEFORE the mention-only / thread-bypass
@@ -393,7 +401,6 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		//
 		// Placing this before the thread-bypass is deliberate (AC5): a non-listed user
 		// must NOT be able to hijack an already-engaged thread via the Phase 91.3 bypass.
-		effectiveAllow := h.Allow
 		if len(info.Allow) > 0 {
 			effectiveAllow = info.Allow
 		}
@@ -416,13 +423,16 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		// with sandbox_id set), skip the mention requirement. Threads are 1:1
 		// conversations with the bot — once the first mention has dispatched and the
 		// upsert lands, every subsequent reply is logically directed at the bot.
-		effectiveMentionOnly := h.MentionOnly
+		//
+		// Part B: a sandbox row with slack_thread_bypass=false is strict — the bypass
+		// never runs, so every reply needs its own mention, and a non-mention reply
+		// drops here before dedup, upsert, enqueue, reaction, or any replies fetch.
 		if info.MentionOnly != nil {
 			effectiveMentionOnly = *info.MentionOnly
 		}
 		if effectiveMentionOnly {
 			bypassed := false
-			if msg.ThreadTS != "" {
+			if threadBypassAllowed(info) && msg.ThreadTS != "" {
 				sb, lookupErr := h.Threads.LookupSandbox(ctx, msg.Channel, msg.ThreadTS)
 				if lookupErr != nil {
 					h.log().Warn("events: mention-only: thread lookup failed; treating as new thread",
@@ -506,6 +516,23 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	if dedupID == "" {
 		dedupID = msg.TS
 	}
+
+	// Part B: context for a mentioned reply in a strict thread. After dedup (step 6)
+	// so a Slack retry never repeats the fetch. Synchronous and bounded; never
+	// blocks the turn.
+	var threadCtx *ThreadContext
+	strict := !threadBypassAllowed(info) && (effectiveMentionOnly || routed)
+	if strict && msg.ThreadTS != "" && h.ThreadReader != nil {
+		allowed := func(u string) bool { return len(effectiveAllow) == 0 || isInSlackAllowlist(u, effectiveAllow) }
+		if routed {
+			// A routed thread is gated by the route's sender-email list, not Phase 118.
+			allowed = func(u string) bool {
+				e, err := h.SenderEmails.SenderEmail(ctx, u)
+				return err == nil && h.DefaultRoute.Allows(e)
+			}
+		}
+		threadCtx = h.collectThreadContext(ctx, msg, info, allowed)
+	}
 	if h.FileDownloader != nil && len(msg.Files) > 0 {
 		// Phase 75.2: process file downloads SYNCHRONOUSLY within the handler.
 		//
@@ -542,13 +569,15 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 
 		// Build the SQS body with Attachments[] populated.
 		sqsBody := InboundQueueBody{
-			Channel:     msg.Channel,
-			ThreadTS:    threadTS,
-			Text:        msg.Text,
-			User:        msg.User,
-			EventTS:     msg.TS,
-			Attachments: atts,
+			Channel:       msg.Channel,
+			ThreadTS:      threadTS,
+			Text:          msg.Text,
+			User:          msg.User,
+			EventTS:       msg.TS,
+			Attachments:   atts,
+			ThreadContext: threadCtx,
 		}
+		TrimContextToFit(&sqsBody, MaxQueueBodyBytes)
 		if delivered, err := h.deliver(bgCtx, info, coldCreate, sqsBody, threadTS, dedupID); err != nil {
 			h.log().Error("events: deliver (files-sync) failed",
 				"err", err, "queue", info.QueueURL, "sandbox", info.SandboxID, "cold_create", coldCreate)
@@ -563,12 +592,14 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		// When FileDownloader is nil and files are present, we fall through here and
 		// dispatch text-only — back-compat for Lambda images deployed before Phase 75.
 		body := InboundQueueBody{
-			Channel:  msg.Channel,
-			ThreadTS: threadTS,
-			Text:     msg.Text,
-			User:     msg.User,
-			EventTS:  msg.TS,
+			Channel:       msg.Channel,
+			ThreadTS:      threadTS,
+			Text:          msg.Text,
+			User:          msg.User,
+			EventTS:       msg.TS,
+			ThreadContext: threadCtx,
 		}
+		TrimContextToFit(&body, MaxQueueBodyBytes)
 		delivered, err := h.deliver(ctx, info, coldCreate, body, threadTS, dedupID)
 		if err != nil {
 			// Internal error — log and 200 (NOT 500) per RESEARCH.md Pitfall 2.
@@ -840,6 +871,42 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 		return routeDecision{coldCreate: true}, true
 	}
 	return routeDecision{info: current}, true
+}
+
+// collectThreadContext reads the strict thread's messages since the bot's last
+// dispatch (the boundary), keeps the trusted human ones, and downloads their
+// files. It never fails the turn: errors land in ThreadContext.Error / FileErrors.
+func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, allowed func(string) bool) *ThreadContext {
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	oldest, err := h.Threads.DispatchBoundary(cctx, msg.Channel, msg.ThreadTS)
+	if err != nil {
+		h.log().Warn("events: context: boundary read failed; using thread root",
+			"err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+		oldest = ""
+	}
+	replies, err := h.ThreadReader.Replies(cctx, msg.Channel, msg.ThreadTS, oldest)
+	if err != nil {
+		h.log().Warn("events: context: replies fetch failed",
+			"err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+		return &ThreadContext{Error: err.Error()}
+	}
+	uid, _ := h.BotUserID.Fetch(cctx)
+	tc, refs := BuildThreadContext(replies, msg.TS, uid, allowed)
+	if h.FileDownloader != nil {
+		for _, ref := range refs {
+			atts, ferrs, derr := h.FileDownloader.Download(cctx, []SlackFile{ref.File}, info.SandboxID, msg.ThreadTS)
+			if derr != nil {
+				tc.FileErrors = append(tc.FileErrors, FileError{OriginalName: ref.File.Name, Reason: derr.Error()})
+				continue
+			}
+			tc.FileErrors = append(tc.FileErrors, ferrs...)
+			tc.Messages[ref.MsgIndex].Attachments = append(tc.Messages[ref.MsgIndex].Attachments, atts...)
+		}
+	}
+	h.log().Info("events: context collected", "channel", msg.Channel, "thread_ts", msg.ThreadTS,
+		"messages", len(tc.Messages), "omitted", tc.OmittedNonAllow, "truncated", tc.TruncatedOlder, "files", len(refs))
+	return &tc
 }
 
 // deliver enqueues a routed/owned turn, or publishes a cold-create carrying the

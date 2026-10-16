@@ -396,6 +396,10 @@ func wireEventsHandler() {
 	}
 	eventsHandler.AckEmoji = ackEmoji
 
+	// Part B: thread reader for strict-mode context. Unconditional — dormant until a
+	// sandbox row carries slack_thread_bypass=false.
+	eventsHandler.ThreadReader = &bridge.SlackThreadReaderAdapter{HTTPClient: initHTTPClient, Tokens: initToken}
+
 	// Phase 75: wire S3FileDownloader for inbound file_share events.
 	if artifactsBucket != "" {
 		eventsHandler.FileDownloader = &bridge.S3FileDownloader{
