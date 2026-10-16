@@ -582,15 +582,17 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			ThreadContext: threadCtx,
 		}
 		TrimContextToFit(&sqsBody, MaxQueueBodyBytes)
-		if delivered, err := h.deliver(bgCtx, info, coldCreate, sqsBody, threadTS, dedupID); err != nil {
+		delivered, err := h.deliver(bgCtx, info, coldCreate, sqsBody, threadTS, dedupID)
+		if err != nil {
 			h.log().Error("events: deliver (files-sync) failed",
 				"err", err, "queue", info.QueueURL, "sandbox", info.SandboxID, "cold_create", coldCreate)
-		} else {
-			h.log().Info("events: enqueued (files-sync)",
-				"sandbox", delivered, "channel", msg.Channel, "thread_ts", threadTS,
-				"attachments", len(atts), "event_id", env.EventID)
-			h.recordDispatch(ctx, msg, threadTS, delivered, rebind)
+			// Same as the plain branch: an undelivered message gets no 👀.
+			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
+		h.log().Info("events: enqueued (files-sync)",
+			"sandbox", delivered, "channel", msg.Channel, "thread_ts", threadTS,
+			"attachments", len(atts), "event_id", env.EventID)
+		h.recordDispatch(ctx, msg, threadTS, delivered, rebind)
 	} else {
 		// Files-empty path (or FileDownloader nil): synchronous SQS write. UNCHANGED.
 		// When FileDownloader is nil and files are present, we fall through here and
@@ -877,11 +879,35 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 	return routeDecision{info: current}, true
 }
 
+// Strict-mode context budget. ContextCollectMax caps the collection; when the
+// handler context carries a deadline the budget shrinks so ContextTurnReserve is
+// left for the rest of the turn, and collection is skipped when nothing is left.
+// File downloads stop once less than ContextFileFloor remains.
+const (
+	ContextCollectMax  = 20 * time.Second
+	ContextTurnReserve = 35 * time.Second
+	ContextFileFloor   = 5 * time.Second
+)
+
 // collectThreadContext reads the strict thread's messages since the bot's last
 // dispatch (the boundary), keeps the trusted human ones, and downloads their
 // files. It never fails the turn: errors land in ThreadContext.Error / FileErrors.
 func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, allowed func(context.Context, string) bool) *ThreadContext {
-	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	// Budget against the Lambda deadline: the dedup nonce is already consumed, so a
+	// turn that times out after this point is lost silently. Leave room for the
+	// files fork, delivery, resume and reaction.
+	budget := ContextCollectMax
+	if dl, ok := ctx.Deadline(); ok {
+		if b := time.Until(dl) - ContextTurnReserve; b < budget {
+			budget = b
+		}
+		if budget <= 0 {
+			h.log().Warn("events: context: skipped, insufficient time before the Lambda deadline",
+				"remaining", time.Until(dl).String(), "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+			return &ThreadContext{Error: "skipped: insufficient time before the Lambda deadline"}
+		}
+	}
+	cctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	oldest, err := h.Threads.DispatchBoundary(cctx, msg.Channel, msg.ThreadTS)
 	if err != nil {
@@ -900,7 +926,15 @@ func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessa
 	// sub-context so a slow API cannot push the turn past the Lambda timeout.
 	tc, refs := BuildThreadContext(replies, msg.TS, uid, func(u string) bool { return allowed(cctx, u) })
 	if h.FileDownloader != nil {
-		for _, ref := range refs {
+		for i, ref := range refs {
+			if dl, ok := cctx.Deadline(); ok && time.Until(dl) < ContextFileFloor {
+				for _, r := range refs[i:] {
+					tc.FilesOmitted = append(tc.FilesOmitted, r.File.Name)
+				}
+				h.log().Warn("events: context: file downloads stopped near the context deadline",
+					"omitted", len(refs)-i, "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+				break
+			}
 			atts, ferrs, derr := h.FileDownloader.Download(cctx, []SlackFile{ref.File}, info.SandboxID, msg.ThreadTS)
 			if derr != nil {
 				tc.FileErrors = append(tc.FileErrors, FileError{OriginalName: ref.File.Name, Reason: derr.Error()})

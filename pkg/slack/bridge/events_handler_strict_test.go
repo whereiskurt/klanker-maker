@@ -301,3 +301,71 @@ func TestStrictMode_RoutedPredicateUsesBoundedContext(t *testing.T) {
 		t.Fatal("context-author lookup ran without the sub-context deadline")
 	}
 }
+
+// F2: collection is budgeted against the handler deadline. With too little time
+// left it is skipped (no Replies call) and says so on the envelope; with a normal
+// Lambda deadline it runs.
+func TestStrictMode_ContextBudgetedAgainstDeadline(t *testing.T) {
+	run := func(t *testing.T, d time.Duration, id string) (*fakeReader, InboundQueueBody) {
+		now := time.Now()
+		f := false
+		h, sqs, threads, _, sandboxes, _, _ := newHandler(now)
+		h.MentionOnly = true
+		sandboxes.info.ThreadBypass = &f
+		threads.sandboxByThread = map[string]string{"C1|1.0": "sb-abc123"}
+		reader := &fakeReader{replies: []SlackReplyMessage{{User: "U0RON", TS: "1.000002", Text: "earlier"}}}
+		h.ThreadReader = reader
+		ctx, cancel := context.WithTimeout(context.Background(), d)
+		defer cancel()
+		h.Handle(ctx, strictEvent(t, now, "<@UBOT123> go", "1.000005", "1.0", "U0KURT", id))
+		if len(sqs.sends) != 1 {
+			t.Fatalf("context must never block the turn; sends=%d", len(sqs.sends))
+		}
+		var body InboundQueueBody
+		json.Unmarshal([]byte(sqs.sends[0].body), &body)
+		return reader, body
+	}
+	t.Run("10s deadline skips", func(t *testing.T) {
+		reader, body := run(t, 10*time.Second, "CB-1")
+		if reader.calls != 0 {
+			t.Fatalf("no Replies call expected, got %d", reader.calls)
+		}
+		if body.ThreadContext == nil || body.ThreadContext.Error != "skipped: insufficient time before the Lambda deadline" {
+			t.Fatalf("want the skip error on the envelope, got %+v", body.ThreadContext)
+		}
+	})
+	t.Run("60s deadline collects", func(t *testing.T) {
+		reader, body := run(t, 60*time.Second, "CB-2")
+		if reader.calls != 1 || body.ThreadContext == nil || len(body.ThreadContext.Messages) != 1 || body.ThreadContext.Error != "" {
+			t.Fatalf("collection must run; reader=%d ctx=%+v", reader.calls, body.ThreadContext)
+		}
+	})
+}
+
+// F2: a context budget already under the file floor records every context file
+// in FilesOmitted instead of starting a download it cannot finish.
+func TestStrictMode_ContextFilesStopNearDeadline(t *testing.T) {
+	now := time.Now()
+	f := false
+	h, sqs, threads, _, sandboxes, _, _ := newHandler(now)
+	h.MentionOnly = true
+	sandboxes.info.ThreadBypass = &f
+	threads.sandboxByThread = map[string]string{"C1|1.0": "sb-abc123"}
+	dl := &contextDownloader{}
+	h.FileDownloader = dl
+	h.ThreadReader = &fakeReader{replies: []SlackReplyMessage{
+		{User: "U0RON", TS: "1.000002", Text: "log", Files: []SlackFile{{Name: "a.log", Size: 10}}},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), ContextTurnReserve+ContextFileFloor-time.Second)
+	defer cancel()
+	h.Handle(ctx, strictEvent(t, now, "<@UBOT123> go", "1.000005", "1.0", "U0KURT", "CB-3"))
+	if len(sqs.sends) != 1 {
+		t.Fatalf("sends=%d", len(sqs.sends))
+	}
+	var body InboundQueueBody
+	json.Unmarshal([]byte(sqs.sends[0].body), &body)
+	tc := body.ThreadContext
+	if tc == nil || len(tc.Messages) != 1 || len(tc.FilesOmitted) != 1 || tc.FilesOmitted[0] != "a.log" || len(dl.sandboxIDs) != 0 {
+		t.Fatalf("a.log must be omitted without a download; ctx=%+v downloads=%v", tc, dl.sandboxIDs)
+	}
+}

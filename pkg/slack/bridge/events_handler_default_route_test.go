@@ -516,3 +516,35 @@ func TestDefaultRoute_AliasMoved_FrozenOrFailedSend_NoRebind(t *testing.T) {
 		t.Fatalf("failed send must not rewrite the row; rebinds=%+v marks=%+v", threads.rebinds, threads.marks)
 	}
 }
+
+// F2: the files-sync branch returns on a failed delivery like the plain branch,
+// so an undelivered message never gets the 👀 reaction.
+func TestDefaultRoute_ColdCreatePublishFailureWithFiles_NoRowNoMarkNoReaction(t *testing.T) {
+	now := time.Now()
+	h, _, threads, alias, pub, reactor, _ := routedHandler(t, now)
+	alias.found = false
+	alias.info = SandboxRoutingInfo{}
+	pub.err = errors.New("eventbridge down")
+	h.FileDownloader = &recordingDownloader{}
+	ev := map[string]any{
+		"type": "message", "subtype": "file_share", "channel": "CFOREIGN", "channel_type": "channel",
+		"user": "U0KURT", "text": "<@UBOT123> look", "ts": "10.5",
+		"files": []map[string]any{{"id": "F1", "name": "a.txt", "url_private_download": "https://files.example/a.txt", "size": 3}},
+	}
+	evb, _ := json.Marshal(ev)
+	body := fmt.Sprintf(`{"type":"event_callback","event_id":%q,"event":%s}`, "DM4F", evb)
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+	resp := h.Handle(context.Background(), EventsRequest{Headers: map[string]string{"x-slack-request-timestamp": tsHdr, "x-slack-signature": sigHdr}, Body: body})
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if len(pub.calls) != 1 {
+		t.Fatalf("want the files-sync publish attempt; calls=%+v", pub.calls)
+	}
+	if len(threads.upserts) != 0 || len(threads.rebinds) != 0 || len(threads.marks) != 0 {
+		t.Fatalf("failed publish must write nothing; upserts=%+v rebinds=%+v marks=%+v", threads.upserts, threads.rebinds, threads.marks)
+	}
+	if n := len(reactor.snapshot()); n != 0 {
+		t.Fatalf("undelivered files message must not react; reactions=%d", n)
+	}
+}
