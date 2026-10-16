@@ -143,6 +143,8 @@ type fakeThreads struct {
 	// Part B: DispatchBoundary values (ch+"|"+ts) and recorded MarkDispatched calls.
 	boundary map[string]string
 	marks    []struct{ chan_, ts, ev string }
+	// Default route: recorded Rebind calls.
+	rebinds []struct{ chan_, ts, sb string }
 }
 
 func (f *fakeThreads) Get(ctx context.Context, ch, ts string) (string, error) { return "", nil }
@@ -165,6 +167,14 @@ func (f *fakeThreads) DispatchBoundary(_ context.Context, ch, ts string) (string
 }
 func (f *fakeThreads) MarkDispatched(_ context.Context, ch, ts, ev string) error {
 	f.marks = append(f.marks, struct{ chan_, ts, ev string }{ch, ts, ev})
+	return f.err
+}
+func (f *fakeThreads) Rebind(ctx context.Context, ch, ts, sb string) error {
+	if f.sandboxByThread == nil {
+		f.sandboxByThread = map[string]string{}
+	}
+	f.sandboxByThread[ch+"|"+ts] = sb
+	f.rebinds = append(f.rebinds, struct{ chan_, ts, sb string }{ch, ts, sb})
 	return f.err
 }
 

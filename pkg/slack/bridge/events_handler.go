@@ -131,6 +131,16 @@ type EventsHandler struct {
 	// (ErrNoResumableInstance — instance gone, no cold-create in v1). Carries the
 	// "couldn't auto-resume; ask an operator" text. nil => orphan path logs only.
 	OrphanHinter PauseHintPoster
+
+	// 2026-10-16: default route (nil => OFF; Phase 96/118 byte-identical). When
+	// set, a message in a channel no install owns is offered to the route ladder
+	// instead of the Phase 96 orphan reply: thread continuity → relay → mention +
+	// sender-email gate → alias resolve (enqueue, resume, or cold-create).
+	DefaultRoute    *DefaultRoute
+	SandboxByID     SandboxByIDFetcher
+	AliasResolver   SlackAliasResolver
+	CreatePublisher SandboxCreatePublisher
+	SenderEmails    SenderEmailFetcher
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -253,136 +263,184 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		h.log().Error("events: channel lookup", "err", err, "channel", msg.Channel)
 		return EventsResponse{StatusCode: 200, Body: "ok"} // 200 to prevent retry storm
 	}
+	routed := false     // info came from the default route, not channel ownership
+	coldCreate := false // route alias absent: publish a SandboxCreate instead of enqueueing
 	if info.SandboxID == "" || info.QueueURL == "" {
-		// Phase 95: broadcast-on-miss / drop-on-relay decision table.
-		// The relay marker is read from req.Headers (keys already lowercased by
-		// the adapter in main.go lowercaseHeaders). This check runs AFTER
-		// verifySlackSignature so the loop guard is authenticated.
-		//
-		// Decision table:
-		//   | X-KM-Relayed? | Owns channel? | Action                              |
-		//   |---------------|---------------|-------------------------------------|
-		//   | absent        | yes           | (falls through — handled above)     |
-		//   | absent        | no            | broadcast to all peers, return 200  |
-		//   | present       | yes           | (falls through — handled above)     |
-		//   | present       | no            | drop (TERMINAL — no re-relay), 200  |
-		if req.Headers["x-km-relayed"] != "" {
-			// TERMINAL: relayed request + no owner => drop, never re-relay.
-			// Phase 96: return {claimed:false, channels:[...]} so the front door
-			// can tally cross-install running channels for the orphan reply.
-			h.log().Warn("events: relay miss — no owner for relayed message",
-				"channel", msg.Channel, "event", "slack_relay_no_owner")
-			var runningChannels []SandboxChannelInfo
-			if h.RunningChannels != nil {
-				if listed, listErr := h.RunningChannels.ListRunning(ctx); listErr != nil {
-					h.log().Warn("events: relay miss: running channels list failed", "err", listErr)
+		// Default-route ladder step 1: thread continuity. A thread the front door
+		// routed earlier carries its sandbox in km-slack-threads. Decide this BEFORE
+		// the relay so a follow-up never fans out to peers. A relayed request never
+		// takes this path — peers are not front doors, so they never route.
+		continuitySB := ""
+		skipMention := false // Part B: continuity skips the mention only when the box allows the bypass
+		if h.DefaultRoute != nil && msg.ThreadTS != "" && req.Headers["x-km-relayed"] == "" {
+			if sb, lookupErr := h.Threads.LookupSandbox(ctx, msg.Channel, msg.ThreadTS); lookupErr != nil {
+				h.log().Warn("events: route: thread lookup failed; treating as new thread",
+					"err", lookupErr, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+			} else if sb != "" {
+				continuitySB = sb
+				if h.SandboxByID == nil {
+					h.log().Warn("events: route: no SandboxByID fetcher wired; continuity treated as strict", "sandbox", sb)
+				} else if ci, ferr := h.SandboxByID.FetchBySandboxID(ctx, sb); ferr != nil {
+					h.log().Warn("events: route: continuity fetch failed; treating as strict", "err", ferr, "sandbox", sb)
 				} else {
-					runningChannels = listed
+					skipMention = threadBypassAllowed(ci) // nil/&true ⇒ Phase 91.3 bypass; &false ⇒ strict
 				}
 			}
-			if runningChannels == nil {
-				runningChannels = []SandboxChannelInfo{}
+		}
+		if continuitySB == "" {
+			// Ladder step 2: relay — the unchanged Phase 95/96 decision table.
+			// Phase 95: broadcast-on-miss / drop-on-relay decision table.
+			// The relay marker is read from req.Headers (keys already lowercased by
+			// the adapter in main.go lowercaseHeaders). This check runs AFTER
+			// verifySlackSignature so the loop guard is authenticated.
+			//
+			// Decision table:
+			//   | X-KM-Relayed? | Owns channel? | Action                              |
+			//   |---------------|---------------|-------------------------------------|
+			//   | absent        | yes           | (falls through — handled above)     |
+			//   | absent        | no            | broadcast to all peers, return 200  |
+			//   | present       | yes           | (falls through — handled above)     |
+			//   | present       | no            | drop (TERMINAL — no re-relay), 200  |
+			if req.Headers["x-km-relayed"] != "" {
+				// TERMINAL: relayed request + no owner => drop, never re-relay.
+				// Phase 96: return {claimed:false, channels:[...]} so the front door
+				// can tally cross-install running channels for the orphan reply.
+				h.log().Warn("events: relay miss — no owner for relayed message",
+					"channel", msg.Channel, "event", "slack_relay_no_owner")
+				var runningChannels []SandboxChannelInfo
+				if h.RunningChannels != nil {
+					if listed, listErr := h.RunningChannels.ListRunning(ctx); listErr != nil {
+						h.log().Warn("events: relay miss: running channels list failed", "err", listErr)
+					} else {
+						runningChannels = listed
+					}
+				}
+				if runningChannels == nil {
+					runningChannels = []SandboxChannelInfo{}
+				}
+				missResp := peerRelayResponse{Claimed: false, Channels: runningChannels}
+				missBody, marshalErr := json.Marshal(missResp)
+				if marshalErr != nil {
+					h.log().Warn("events: relay miss: json marshal failed; falling back", "err", marshalErr)
+					return EventsResponse{StatusCode: 200, Body: "ok"}
+				}
+				return EventsResponse{
+					StatusCode: 200,
+					Body:       string(missBody),
+					Headers:    map[string]string{"content-type": "application/json"},
+				}
 			}
-			missResp := peerRelayResponse{Claimed: false, Channels: runningChannels}
-			missBody, marshalErr := json.Marshal(missResp)
-			if marshalErr != nil {
-				h.log().Warn("events: relay miss: json marshal failed; falling back", "err", marshalErr)
+			anyClaimed := false
+			var claimResults []PeerClaimResult
+			if h.Relayer != nil {
+				// Broadcast raw event to all peer bridges (synchronous, bounded ~2.5s).
+				// Phase 96: capture []PeerClaimResult and tally claims for orphan detection.
+				// The caller returns 200 regardless — a partial broadcast is better
+				// than dropping the event entirely.
+				var broadcastErr error
+				claimResults, broadcastErr = h.Relayer.Broadcast(ctx, req.Body, req.Headers)
+				if broadcastErr != nil {
+					h.log().Warn("events: relay broadcast partial failure", "err", broadcastErr,
+						"channel", msg.Channel)
+				}
+				// Phase 96: claim-aware orphan reply.
+				// Tally: any claimed:true => owner handled it, no router reply needed.
+				for _, r := range claimResults {
+					if r.Claimed {
+						anyClaimed = true
+						break
+					}
+				}
+			}
+			if anyClaimed {
 				return EventsResponse{StatusCode: 200, Body: "ok"}
 			}
-			return EventsResponse{
-				StatusCode: 200,
-				Body:       string(missBody),
-				Headers:    map[string]string{"content-type": "application/json"},
-			}
-		}
-		if h.Relayer != nil {
-			// Broadcast raw event to all peer bridges (synchronous, bounded ~2.5s).
-			// Phase 96: capture []PeerClaimResult and tally claims for orphan detection.
-			// The caller returns 200 regardless — a partial broadcast is better
-			// than dropping the event entirely.
-			claimResults, broadcastErr := h.Relayer.Broadcast(ctx, req.Body, req.Headers)
-			if broadcastErr != nil {
-				h.log().Warn("events: relay broadcast partial failure", "err", broadcastErr,
-					"channel", msg.Channel)
-			}
-			// Phase 96: claim-aware orphan reply.
-			// Tally: any claimed:true => owner handled it, no router reply needed.
-			anyClaimed := false
-			for _, r := range claimResults {
-				if r.Claimed {
-					anyClaimed = true
-					break
+			// Ladder step 3: route selection. No route configured ⇒ Phase 96 exactly
+			// as before. A configured route retires the orphan reply on this install:
+			// a listed sender gets a dispatch and an unlisted one a silent drop, so
+			// there is nobody left to hint.
+			if h.DefaultRoute == nil {
+				if h.Relayer != nil {
+					h.maybePostOrphanReply(ctx, msg, claimResults)
+				} else {
+					h.log().Warn("events: unknown channel or inbound disabled", "channel", msg.Channel)
 				}
+				return EventsResponse{StatusCode: 200, Body: "ok"}
 			}
-			if !anyClaimed {
-				h.maybePostOrphanReply(ctx, msg, claimResults)
-			}
-		} else {
-			h.log().Warn("events: unknown channel or inbound disabled", "channel", msg.Channel)
 		}
-		return EventsResponse{StatusCode: 200, Body: "ok"}
+		// Ladder steps 4 (mention + sender-email gate) and 5 (alias resolve).
+		var ok bool
+		info, coldCreate, ok = h.resolveDefaultRoute(ctx, msg, continuitySB, skipMention)
+		if !ok {
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
+		routed = true
 	}
 	// present+yes: process locally (fall through — today's path unchanged).
 
-	// 5a. Trigger allowlist (Phase 118). The OUTER gate: runs AFTER channel-ownership
-	// (so per-sandbox info.Allow is known) and BEFORE the mention-only / thread-bypass
-	// filter, dedup, and dispatch. A non-listed user is silently dropped (no reaction,
-	// no reply, no enqueue; 200 OK) — mirroring the GitHub bridge's silent-200 reject.
-	//
-	// Resolution: a non-empty per-sandbox info.Allow REPLACES the install-level
-	// h.Allow entirely for this sandbox; otherwise h.Allow applies; if both are
-	// empty the gate is dormant (everyone may trigger — backward-compatible).
-	//
-	// Placing this before the thread-bypass is deliberate (AC5): a non-listed user
-	// must NOT be able to hijack an already-engaged thread via the Phase 91.3 bypass.
-	effectiveAllow := h.Allow
-	if len(info.Allow) > 0 {
-		effectiveAllow = info.Allow
-	}
-	if len(effectiveAllow) > 0 && !isInSlackAllowlist(msg.User, effectiveAllow) {
-		h.log().Debug("events: allowlist: silent drop (user not in trigger allowlist)",
-			"user", msg.User, "channel", msg.Channel, "ts", msg.TS,
-			"per_sandbox_override", len(info.Allow) > 0)
-		return EventsResponse{StatusCode: 200, Body: "ok"}
-	}
-
-	// 5b. Mention-only filter (Phase 91; per-sandbox override). When mention-only
-	// is in effect, skip messages that do not @-mention the bot. Runs AFTER
-	// FetchByChannel so the per-sandbox info.MentionOnly tri-state can override the
-	// install-level h.MentionOnly, and BEFORE dedup/upsert/enqueue so a filtered
-	// message consumes no nonce, engages no thread, and dispatches nothing.
-	// Fail-open on BotUserID fetch error to match isBotLoop's policy.
-	//
-	// Phase 91.3 thread-bypass: when the message is a reply in a thread the bot is
-	// already engaged with (a (channel, thread_ts) row exists in km-slack-threads
-	// with sandbox_id set), skip the mention requirement. Threads are 1:1
-	// conversations with the bot — once the first mention has dispatched and the
-	// upsert lands, every subsequent reply is logically directed at the bot.
-	effectiveMentionOnly := h.MentionOnly
-	if info.MentionOnly != nil {
-		effectiveMentionOnly = *info.MentionOnly
-	}
-	if effectiveMentionOnly {
-		bypassed := false
-		if msg.ThreadTS != "" {
-			sb, lookupErr := h.Threads.LookupSandbox(ctx, msg.Channel, msg.ThreadTS)
-			if lookupErr != nil {
-				h.log().Warn("events: mention-only: thread lookup failed; treating as new thread",
-					"err", lookupErr, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
-			} else if sb != "" {
-				h.log().Debug("events: mention-only: bypassed for engaged thread",
-					"channel", msg.Channel, "thread_ts", msg.ThreadTS, "sandbox", sb)
-				bypassed = true
-			}
+	// Steps 5a and 5b gate channel-owned messages only. A routed message already
+	// passed the route's own mention + sender-email gate in resolveDefaultRoute.
+	if !routed {
+		// 5a. Trigger allowlist (Phase 118). The OUTER gate: runs AFTER channel-ownership
+		// (so per-sandbox info.Allow is known) and BEFORE the mention-only / thread-bypass
+		// filter, dedup, and dispatch. A non-listed user is silently dropped (no reaction,
+		// no reply, no enqueue; 200 OK) — mirroring the GitHub bridge's silent-200 reject.
+		//
+		// Resolution: a non-empty per-sandbox info.Allow REPLACES the install-level
+		// h.Allow entirely for this sandbox; otherwise h.Allow applies; if both are
+		// empty the gate is dormant (everyone may trigger — backward-compatible).
+		//
+		// Placing this before the thread-bypass is deliberate (AC5): a non-listed user
+		// must NOT be able to hijack an already-engaged thread via the Phase 91.3 bypass.
+		effectiveAllow := h.Allow
+		if len(info.Allow) > 0 {
+			effectiveAllow = info.Allow
 		}
-		if !bypassed {
-			uid, err := h.BotUserID.Fetch(ctx)
-			if err != nil {
-				h.log().Warn("events: mention-only: bot_user_id fetch failed; falling open (allow)", "err", err)
-			} else if uid != "" && !strings.Contains(msg.Text, "<@"+uid+">") {
-				h.log().Debug("events: mention-only: skipping non-mention message",
-					"channel", msg.Channel, "ts", msg.TS, "per_sandbox_override", info.MentionOnly != nil)
-				return EventsResponse{StatusCode: 200, Body: "ok"}
+		if len(effectiveAllow) > 0 && !isInSlackAllowlist(msg.User, effectiveAllow) {
+			h.log().Debug("events: allowlist: silent drop (user not in trigger allowlist)",
+				"user", msg.User, "channel", msg.Channel, "ts", msg.TS,
+				"per_sandbox_override", len(info.Allow) > 0)
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
+
+		// 5b. Mention-only filter (Phase 91; per-sandbox override). When mention-only
+		// is in effect, skip messages that do not @-mention the bot. Runs AFTER
+		// FetchByChannel so the per-sandbox info.MentionOnly tri-state can override the
+		// install-level h.MentionOnly, and BEFORE dedup/upsert/enqueue so a filtered
+		// message consumes no nonce, engages no thread, and dispatches nothing.
+		// Fail-open on BotUserID fetch error to match isBotLoop's policy.
+		//
+		// Phase 91.3 thread-bypass: when the message is a reply in a thread the bot is
+		// already engaged with (a (channel, thread_ts) row exists in km-slack-threads
+		// with sandbox_id set), skip the mention requirement. Threads are 1:1
+		// conversations with the bot — once the first mention has dispatched and the
+		// upsert lands, every subsequent reply is logically directed at the bot.
+		effectiveMentionOnly := h.MentionOnly
+		if info.MentionOnly != nil {
+			effectiveMentionOnly = *info.MentionOnly
+		}
+		if effectiveMentionOnly {
+			bypassed := false
+			if msg.ThreadTS != "" {
+				sb, lookupErr := h.Threads.LookupSandbox(ctx, msg.Channel, msg.ThreadTS)
+				if lookupErr != nil {
+					h.log().Warn("events: mention-only: thread lookup failed; treating as new thread",
+						"err", lookupErr, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+				} else if sb != "" {
+					h.log().Debug("events: mention-only: bypassed for engaged thread",
+						"channel", msg.Channel, "thread_ts", msg.ThreadTS, "sandbox", sb)
+					bypassed = true
+				}
+			}
+			if !bypassed {
+				uid, err := h.BotUserID.Fetch(ctx)
+				if err != nil {
+					h.log().Warn("events: mention-only: bot_user_id fetch failed; falling open (allow)", "err", err)
+				} else if uid != "" && !strings.Contains(msg.Text, "<@"+uid+">") {
+					h.log().Debug("events: mention-only: skipping non-mention message",
+						"channel", msg.Channel, "ts", msg.TS, "per_sandbox_override", info.MentionOnly != nil)
+					return EventsResponse{StatusCode: 200, Body: "ok"}
+				}
 			}
 		}
 	}
@@ -426,13 +484,11 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	}
 
 	// 7. Determine thread anchor: top-level posts use msg.TS as the new thread_ts.
+	// The km-slack-threads write happens after a successful delivery (step 8), so a
+	// cold-create can record the sandbox id it just minted.
 	threadTS := msg.ThreadTS
 	if threadTS == "" {
 		threadTS = msg.TS
-	}
-	if err := h.Threads.Upsert(ctx, msg.Channel, threadTS, info.SandboxID); err != nil {
-		h.log().Warn("events: threads upsert", "err", err, "channel", msg.Channel, "thread_ts", threadTS)
-		// best-effort — poller can recreate the row when it does its DDB lookup
 	}
 
 	// 8. SQS write — critical path.
@@ -492,14 +548,14 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			EventTS:     msg.TS,
 			Attachments: atts,
 		}
-		sqsBodyBytes, _ := json.Marshal(sqsBody)
-		if err := h.SQS.Send(bgCtx, info.QueueURL, string(sqsBodyBytes), threadTS, dedupID); err != nil {
+		if delivered, err := h.deliver(bgCtx, info, coldCreate, sqsBody, threadTS, dedupID); err != nil {
 			h.log().Error("events: sqs send (files-sync) failed",
 				"err", err, "queue", info.QueueURL, "sandbox", info.SandboxID)
 		} else {
 			h.log().Info("events: enqueued (files-sync)",
-				"sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", threadTS,
+				"sandbox", delivered, "channel", msg.Channel, "thread_ts", threadTS,
 				"attachments", len(atts), "event_id", env.EventID)
+			h.recordDispatch(ctx, msg, threadTS, delivered, routed && coldCreate)
 		}
 	} else {
 		// Files-empty path (or FileDownloader nil): synchronous SQS write. UNCHANGED.
@@ -512,15 +568,16 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			User:     msg.User,
 			EventTS:  msg.TS,
 		}
-		bodyBytes, _ := json.Marshal(body)
-		if err := h.SQS.Send(ctx, info.QueueURL, string(bodyBytes), threadTS, dedupID); err != nil {
+		delivered, err := h.deliver(ctx, info, coldCreate, body, threadTS, dedupID)
+		if err != nil {
 			// Internal error — log and 200 (NOT 500) per RESEARCH.md Pitfall 2.
 			// CONTEXT.md flow step 9 mandates 200 on transport failure: 5xx triggers
 			// a Slack retry storm with new event_ids that bypass nonce dedup.
 			h.log().Error("events: sqs send", "err", err, "queue", info.QueueURL, "sandbox", info.SandboxID)
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
-		h.log().Info("events: enqueued", "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", threadTS, "event_id", env.EventID)
+		h.log().Info("events: enqueued", "sandbox", delivered, "channel", msg.Channel, "thread_ts", threadTS, "event_id", env.EventID)
+		h.recordDispatch(ctx, msg, threadTS, delivered, routed && coldCreate)
 	}
 
 	// 9. Resume-or-hint (Phase 114). The message is ALREADY enqueued at step 8 in all
@@ -638,6 +695,125 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	}
 
 	return EventsResponse{StatusCode: 200, Body: "ok"}
+}
+
+// resolveDefaultRoute runs ladder steps 4 (mention + sender-email gate) and 5
+// (alias resolve, continuity rebind). ok=false means "drop silently, 200".
+// coldCreate is true when the alias has no row and the caller must publish a
+// SandboxCreate, not enqueue. continuitySB is the sandbox named by an existing
+// km-slack-threads row ("" for a fresh message). skipMention is true only for
+// continuity on a box whose ThreadBypass allows it (Part B strict mode leaves it
+// false, so a follow-up needs a mention again). DMs (channel_type "im") never
+// need a mention. The email gate applies on every path, continuity included.
+func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessageEvent, continuitySB string, skipMention bool) (info SandboxRoutingInfo, coldCreate bool, ok bool) {
+	if !skipMention && requiresMention(msg.ChannelType) {
+		uid, err := h.BotUserID.Fetch(ctx)
+		if err != nil {
+			// Fail CLOSED here, unlike the owned-path 5b filter: a route dispatches
+			// into a box from a channel nobody mapped, so an unverifiable mention is
+			// not a mention.
+			h.log().Warn("events: route: bot_user_id fetch failed; dropping", "err", err)
+			return info, false, false
+		}
+		if uid == "" || !strings.Contains(msg.Text, "<@"+uid+">") {
+			h.log().Debug("events: route: no mention", "channel", msg.Channel, "channel_type", msg.ChannelType)
+			return info, false, false
+		}
+	}
+	if h.SenderEmails == nil {
+		h.log().Warn("events: route: no SenderEmails fetcher wired; dropping")
+		return info, false, false
+	}
+	email, err := h.SenderEmails.SenderEmail(ctx, msg.User)
+	if err != nil {
+		h.log().Debug("events: route: sender email unavailable (deny)", "user", msg.User, "err", err)
+		return info, false, false
+	}
+	if !h.DefaultRoute.Allows(email) {
+		h.log().Debug("events: route: sender not allowlisted (silent drop)", "user", msg.User, "channel", msg.Channel)
+		return info, false, false
+	}
+
+	if h.AliasResolver == nil {
+		h.log().Warn("events: route: no AliasResolver wired; dropping", "alias", h.DefaultRoute.Alias)
+		return info, false, false
+	}
+	current, found, err := h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
+	if err != nil {
+		h.log().Error("events: route: alias resolve failed", "alias", h.DefaultRoute.Alias, "err", err)
+		return info, false, false
+	}
+	if continuitySB != "" {
+		if found && current.SandboxID != continuitySB {
+			// The alias was recreated: refresh the row rather than enqueue to a dead
+			// queue (mirrors the GitHub bridge's InvalidateStaleSession).
+			h.log().Info("events: route: alias moved; rebinding thread",
+				"from", continuitySB, "to", current.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+			if rerr := h.Threads.Rebind(ctx, msg.Channel, msg.ThreadTS, current.SandboxID); rerr != nil {
+				h.log().Warn("events: route: rebind failed (continuing)", "err", rerr)
+			}
+			return current, false, true
+		}
+		if !found {
+			return info, true, true // old box gone and alias absent: cold-create
+		}
+		if h.SandboxByID == nil {
+			return current, false, true
+		}
+		byID, ferr := h.SandboxByID.FetchBySandboxID(ctx, continuitySB)
+		if ferr != nil || byID.SandboxID == "" {
+			return current, false, true
+		}
+		return byID, false, true
+	}
+	if !found {
+		return info, true, true
+	}
+	return current, false, true
+}
+
+// deliver enqueues a routed/owned turn, or publishes a cold-create carrying the
+// envelope. Returns the sandbox id the thread row must name.
+func (h *EventsHandler) deliver(ctx context.Context, info SandboxRoutingInfo, coldCreate bool, body InboundQueueBody, threadTS, dedupID string) (string, error) {
+	bodyBytes, _ := json.Marshal(body)
+	if coldCreate {
+		if h.CreatePublisher == nil || h.DefaultRoute == nil {
+			return "", errors.New("cold-create publish: no CreatePublisher wired")
+		}
+		id, err := h.CreatePublisher.PutSandboxCreate(ctx, h.DefaultRoute.Alias, h.DefaultRoute.Profile, string(bodyBytes))
+		if err != nil {
+			return "", fmt.Errorf("cold-create publish: %w", err)
+		}
+		h.log().Info("events: route: cold-create published", "alias", h.DefaultRoute.Alias, "sandbox", id, "channel", body.Channel)
+		return id, nil
+	}
+	if err := h.SQS.Send(ctx, info.QueueURL, string(bodyBytes), threadTS, dedupID); err != nil {
+		return "", err
+	}
+	return info.SandboxID, nil
+}
+
+// recordDispatch writes the km-slack-threads row after a SUCCESSFUL delivery
+// (never on failure — callers return or skip on a deliver error) and advances
+// the Part B dispatch boundary. Both writes are best-effort: the poller can
+// recreate the row when it does its DDB lookup.
+func (h *EventsHandler) recordDispatch(ctx context.Context, msg slackMessageEvent, threadTS, sandboxID string, rebind bool) {
+	if rebind && msg.ThreadTS != "" {
+		// Orphaned thread whose old box is gone and whose alias is absent: the
+		// existing row still names the dead sandbox and a conditional Upsert
+		// would leave it there. Rebind it to the box we just minted.
+		if err := h.Threads.Rebind(ctx, msg.Channel, threadTS, sandboxID); err != nil {
+			h.log().Warn("events: threads rebind after cold-create", "err", err, "channel", msg.Channel, "thread_ts", threadTS)
+		}
+	} else if err := h.Threads.Upsert(ctx, msg.Channel, threadTS, sandboxID); err != nil {
+		h.log().Warn("events: threads upsert", "err", err, "channel", msg.Channel, "thread_ts", threadTS)
+	}
+	// Part B: record the boundary for the next context window. After EVERY
+	// successful delivery (enqueue or cold-create publish), in every mode, so a
+	// sandbox later flipped to strict already has a correct boundary.
+	if err := h.Threads.MarkDispatched(ctx, msg.Channel, threadTS, msg.TS); err != nil {
+		h.log().Warn("events: threads mark-dispatched", "err", err, "channel", msg.Channel, "thread_ts", threadTS)
+	}
 }
 
 // isBotLoop returns true if the message should NOT be dispatched to the

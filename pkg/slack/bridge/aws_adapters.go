@@ -1026,6 +1026,30 @@ func (s *DDBThreadStore) Upsert(ctx context.Context, channelID, threadTS, sandbo
 	return nil
 }
 
+// Rebind unconditionally rewrites (channel, thread_ts) → sandbox_id with no
+// session id, so the next turn starts a fresh agent session on the new box.
+func (s *DDBThreadStore) Rebind(ctx context.Context, channelID, threadTS, sandboxID string) error {
+	now := time.Now()
+	nowISO := now.UTC().Format(time.RFC3339)
+	ttlExpiry := strconv.FormatInt(now.Add(30*24*time.Hour).Unix(), 10)
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: awssdk.String(s.TableName),
+		Item: map[string]dynamodbtypes.AttributeValue{
+			"channel_id":   &dynamodbtypes.AttributeValueMemberS{Value: channelID},
+			"thread_ts":    &dynamodbtypes.AttributeValueMemberS{Value: threadTS},
+			"sandbox_id":   &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+			"created_at":   &dynamodbtypes.AttributeValueMemberS{Value: nowISO},
+			"last_turn_ts": &dynamodbtypes.AttributeValueMemberS{Value: nowISO},
+			"turn_count":   &dynamodbtypes.AttributeValueMemberN{Value: "0"},
+			"ttl_expiry":   &dynamodbtypes.AttributeValueMemberN{Value: ttlExpiry},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("threads rebind: %w", err)
+	}
+	return nil
+}
+
 // DispatchBoundary returns last_dispatch_ts for (channelID, threadTS): the Slack
 // ts of the last message that dispatched a turn. "" (nil error) when the row or
 // the attribute is absent.

@@ -99,6 +99,10 @@ type SlackThreadStore interface {
 	// MarkDispatched records eventTS as last_dispatch_ts if it is newer than the
 	// stored value (monotonic). A losing write is silently a no-op.
 	MarkDispatched(ctx context.Context, channelID, threadTS, eventTS string) error
+	// Rebind overwrites the row for (channel, thread_ts) with a new sandbox_id
+	// and clears claude_session_id — used when the alias behind a routed
+	// thread now resolves to a different (recreated) sandbox.
+	Rebind(ctx context.Context, channelID, threadTS, sandboxID string) error
 }
 
 // SandboxByChannelFetcher resolves a Slack channel_id to sandbox routing info
