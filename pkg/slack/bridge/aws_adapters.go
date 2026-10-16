@@ -1333,7 +1333,7 @@ func (f *CachedBotUserIDFetcher) PrimeCache(uid string) {
 // ============================================================
 
 // DDBUpdateItemAPI extends DDBQueryGetPutAPI with UpdateItem, which is required
-// only by DDBPauseHinter (the threads adapter never does UpdateItem).
+// by DDBPauseHinter and DDBThreadStore (MarkDispatched).
 // A single *dynamodb.Client satisfies both DDBQueryGetPutAPI and DDBUpdateItemAPI.
 type DDBUpdateItemAPI interface {
 	DDBQueryGetPutAPI

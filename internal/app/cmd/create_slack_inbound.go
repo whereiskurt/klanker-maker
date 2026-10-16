@@ -346,7 +346,7 @@ func makePostOperatorSigned(ssmClient *ssm.Client, bridgeURL, resourcePrefix str
 // makeUpsertSlackThread returns a UpsertSlackThread callback that writes a
 // km-slack-threads anchor row using the existing bridge DDBThreadStore.
 // Reuses pkg/slack/bridge.DDBThreadStore.Upsert so the schema stays consistent.
-func makeUpsertSlackThread(ddbClient slackbridge.DDBQueryGetPutAPI, tableName string) func(ctx context.Context, channelID, threadTS, sandboxID string) error {
+func makeUpsertSlackThread(ddbClient slackbridge.DDBUpdateItemAPI, tableName string) func(ctx context.Context, channelID, threadTS, sandboxID string) error {
 	store := &slackbridge.DDBThreadStore{Client: ddbClient, TableName: tableName}
 	return store.Upsert
 }
