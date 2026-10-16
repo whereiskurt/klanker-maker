@@ -46,6 +46,10 @@ type InboundQueueBody struct {
 	User        string       `json:"user"`
 	EventTS     string       `json:"event_ts"`
 	Attachments []Attachment `json:"attachments,omitempty"` // Phase 75: per-file records; absent (not null) when empty for back-compat
+
+	// ThreadContext (Part B, strict mode only): human messages since the bot's
+	// last turn, for a mentioned thread reply. Older pollers ignore it.
+	ThreadContext *ThreadContext `json:"thread_context,omitempty"`
 }
 
 // Attachment is the per-file record written to the SQS body for the sandbox poller.
