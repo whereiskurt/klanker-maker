@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	goyaml "github.com/goccy/go-yaml"
 	"io"
 	"io/fs"
 	"math/big"
@@ -1182,14 +1183,31 @@ func ValidateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPat
 
 // PreStageSlackDefaultRouteProfile uploads the route's profile YAML to
 // s3://{bucket}/slack-profiles/{slug}/.km-profile.yaml so a cold-create
-// published by the Slack bridge can be provisioned. Mirrors PreStageGitHubProfiles;
-// reads the file at route.Profile verbatim.
-func PreStageSlackDefaultRouteProfile(ctx context.Context, route *config.SlackDefaultRoute, bucket string, up S3ProfileUploader) error {
+// published by the Slack bridge can be provisioned. Mirrors PreStageGitHubProfiles.
+//
+// A profile that uses extends: is uploaded FLATTENED (resolved, extends cleared):
+// the create-handler Lambda has no profiles/base/** fragments, so the raw child
+// would fail there with `profile "base/..." not found` (see selectRemoteProfileYAML).
+// There is no safe fallback to raw bytes in that case, so a resolve or marshal
+// failure is an error. A monolithic profile is uploaded verbatim.
+func PreStageSlackDefaultRouteProfile(ctx context.Context, route *config.SlackDefaultRoute, bucket string, searchPaths []string, up S3ProfileUploader) error {
 	if route == nil {
 		return nil
 	}
+	body := readFileOrEmpty(route.Profile)
+	if parsed, err := profile.Parse(body); err == nil && parsed.Extends.IsSet() {
+		paths := append([]string{filepath.Dir(route.Profile)}, searchPaths...)
+		resolved, err := profile.Resolve(SlackDefaultRouteProfileSlug(route.Profile), paths)
+		if err != nil {
+			return fmt.Errorf("km init: resolve slack default-route profile %q for pre-stage: %w", route.Profile, err)
+		}
+		body, err = goyaml.Marshal(resolved)
+		if err != nil {
+			return fmt.Errorf("km init: marshal flattened slack default-route profile %q: %w", route.Profile, err)
+		}
+	}
 	key := "slack-profiles/" + SlackDefaultRouteProfileSlug(route.Profile) + "/.km-profile.yaml"
-	if err := up.PutObject(ctx, bucket, key, readFileOrEmpty(route.Profile)); err != nil {
+	if err := up.PutObject(ctx, bucket, key, body); err != nil {
 		return fmt.Errorf("km init: pre-stage slack default-route profile: %w", err)
 	}
 	return nil
@@ -1569,7 +1587,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		}
 		if cfg.ArtifactsBucket != "" {
 			uploader := &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}
-			if err := PreStageSlackDefaultRouteProfile(ctx, cfg.Slack.DefaultRoute, cfg.ArtifactsBucket, uploader); err != nil {
+			if err := PreStageSlackDefaultRouteProfile(ctx, cfg.Slack.DefaultRoute, cfg.ArtifactsBucket, cfg.ProfileSearchPaths, uploader); err != nil {
 				return err
 			}
 		}

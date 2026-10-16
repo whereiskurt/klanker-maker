@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 func writeProfile(t *testing.T, dir, name, body string) string {
@@ -115,7 +116,7 @@ func TestPreStageSlackDefaultRouteProfile(t *testing.T) {
 	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
 	up := &recordingUploader{}
 	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"x@y.z"}}
-	if err := PreStageSlackDefaultRouteProfile(context.Background(), route, "bucket", up); err != nil {
+	if err := PreStageSlackDefaultRouteProfile(context.Background(), route, "bucket", nil, up); err != nil {
 		t.Fatal(err)
 	}
 	body, ok := up.keys["slack-profiles/ir-bot/.km-profile.yaml"]
@@ -127,5 +128,45 @@ func TestPreStageSlackDefaultRouteProfile(t *testing.T) {
 	}
 	if SlackDefaultRouteProfileSlug("profiles/IR-Bot.YAML") != "ir-bot" {
 		t.Errorf("slug normalisation broken")
+	}
+}
+
+func TestPreStageSlackDefaultRouteProfile_FlattensExtends(t *testing.T) {
+	dir := t.TempDir()
+	writeProfile(t, dir, "ir-base.yaml", `apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: ir-base
+  abstract: true
+spec:
+  notification:
+    slack:
+      enabled: true
+      perSandbox: true
+      inbound:
+        enabled: true
+`)
+	child := writeProfile(t, dir, "ir-child.yaml", `apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: ir-child
+extends: [ir-base]
+`)
+	up := &recordingUploader{}
+	route := &config.SlackDefaultRoute{Alias: "ir", Profile: child, AllowEmails: []string{"x@y.z"}}
+	if err := PreStageSlackDefaultRouteProfile(context.Background(), route, "bucket", []string{dir}, up); err != nil {
+		t.Fatal(err)
+	}
+	body := up.keys["slack-profiles/ir-child/.km-profile.yaml"]
+	p, err := profile.Parse(body)
+	if err != nil {
+		t.Fatalf("uploaded YAML does not parse: %v\n%s", err, body)
+	}
+	if p.Extends.IsSet() {
+		t.Errorf("extends must be cleared in the uploaded profile:\n%s", body)
+	}
+	n := p.Spec.Notification
+	if n == nil || n.Slack == nil || n.Slack.Inbound == nil || n.Slack.Inbound.Enabled == nil || !*n.Slack.Inbound.Enabled {
+		t.Errorf("inbound.enabled not inherited from base:\n%s", body)
 	}
 }
