@@ -644,6 +644,8 @@ resource "aws_iam_role_policy" "sqs_slack_inbound" {
           "sqs:ListQueues",
           "sqs:SetQueueAttributes",
           "sqs:TagQueue",
+          # 2026-10-16: the create-handler drains Slack cold-create envelopes here.
+          "sqs:SendMessage",
         ]
         # sqs:ListQueues does not support resource-level scoping; AWS evaluates
         # it account-wide regardless of the Resource ARN. Left in this scoped

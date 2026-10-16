@@ -162,3 +162,23 @@ variable "quota_table_arn" {
   type        = string
   default     = ""
 }
+
+# 2026-10-16: Slack default route. All three are exported together by km init
+# (ExportTerragruntEnvVars) or not at all; the bridge treats a partial set as OFF.
+variable "slack_default_route_alias" {
+  description = "Alias of the sandbox that receives @-mentions from unmapped channels/DMs. Empty = route OFF."
+  type        = string
+  default     = ""
+}
+
+variable "slack_default_route_profile" {
+  description = "Profile path used to cold-create the default-route sandbox when the alias is absent."
+  type        = string
+  default     = ""
+}
+
+variable "slack_default_route_allow" {
+  description = "Comma-joined, lowercased emails allowed to drive the default route. Empty = route OFF (deny-by-default)."
+  type        = string
+  default     = ""
+}
