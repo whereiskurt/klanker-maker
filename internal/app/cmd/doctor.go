@@ -345,8 +345,8 @@ func (a *appConfigAdapter) GetSlackPeerBridges() []string     { return a.cfg.Sla
 func (a *appConfigAdapter) GetSlackDefaultRoute() *appcfg.SlackDefaultRoute {
 	return a.cfg.Slack.DefaultRoute
 }
-func (a *appConfigAdapter) GetSlackThreadsTableName() string  { return a.cfg.GetSlackThreadsTableName() }
-func (a *appConfigAdapter) GetSandboxTableName() string       { return a.cfg.GetSandboxTableName() }
+func (a *appConfigAdapter) GetSlackThreadsTableName() string { return a.cfg.GetSlackThreadsTableName() }
+func (a *appConfigAdapter) GetSandboxTableName() string      { return a.cfg.GetSandboxTableName() }
 func (a *appConfigAdapter) GetClusterRoleNames() []string {
 	out := make([]string, 0, len(a.cfg.Clusters))
 	for _, c := range a.cfg.Clusters {
