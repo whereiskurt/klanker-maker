@@ -292,6 +292,23 @@ absent" as "fall back to install default".
 a targeted `UpdateItem` (like `UpdateSandboxTTLDynamo`) over a full-row rewrite when
 only one attribute changes.
 
+### Never grant the sandbox role access to `km-slack-threads`
+
+The Slack bridge's outbound authorizer lets a sandbox post into a foreign channel when the
+`km-slack-threads` row for that `(channel, thread_ts)` names the sandbox (the default route,
+2026-10-16). DynamoDB IAM cannot scope a grant by a row's `sandbox_id`, so any sandbox-role
+write grant on that table lets every sandbox forge a row and post into every routed thread.
+`TestSandboxRole_HasNoWriteGrantOnSlackThreadsTable` (`pkg/terragrunt`) fails on such a grant.
+
+**Caveat: the rule is already broken on most profiles.** `ec2spot_region_lock` in the
+ec2spot module is an `Allow` of `Action "*"` on `Resource "*"` conditioned only on
+`aws:RequestedRegion`, created whenever a profile sets `iam.allowedRegions`, which
+`profiles/base/platform.yaml` does. On those boxes the sandbox role reaches every in-region
+table, `km-slack-threads` included, and the inbound poller's own session `get-item`/`put-item`
+on that table depends on it. The guard names that policy as its single known exception.
+Narrowing it is a separate decision that needs the sandbox's real grants enumerated first.
+See `docs/slack-default-route.md` § 6.4.
+
 ---
 
 ## Config & CLI

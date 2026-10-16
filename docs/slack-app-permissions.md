@@ -27,6 +27,8 @@ Bot token scopes (15) + bot events (2) declared by the manifest:
 | `groups:write` | create / manage **private** channels |
 | `groups:read` | look up a private channel |
 | `groups:history` | read private-channel messages (inbound trigger) |
+| `im:history` | read one-to-one DM messages to the bot (default route) |
+| `mpim:history` | read group DM messages that include the bot (default route) |
 | `conversations.connect:write` | Slack Connect invites to external people |
 | `reactions:write` | add the 👀 ACK reaction on inbound |
 | `reactions:read` | read reaction state (read-counterpart; future reactions-as-actions) |
@@ -36,6 +38,8 @@ Bot token scopes (15) + bot events (2) declared by the manifest:
 | `users:read.email` | resolve an email → Slack user id for invites |
 | **event** `message.channels` | messages in public channels the bot is in |
 | **event** `message.groups` | messages in private channels the bot is in |
+| **event** `message.im` | one-to-one DMs to the bot (default route) |
+| **event** `message.mpim` | group DMs that include the bot (default route) |
 
 ---
 
@@ -147,6 +151,7 @@ keeping the surface minimal. App-mention-in-non-member-channels (`app_mention` +
 | Outbound notifications | `chat:write` |
 | Per-sandbox channel create/archive | `channels:manage` / `groups:write`, `channels:read` / `groups:read`, `channels:join` |
 | Inbound (listen + reply) | `channels:history`, `groups:history`, `chat:write` + events `message.channels`/`message.groups` |
+| Default route DMs (`slack.default_route`) | `im:history`, `mpim:history` + events `message.im`/`message.mpim`; no `im:write`, the bot only answers a DM. See `docs/slack-default-route.md` |
 | 👀 ACK reaction | `reactions:write` |
 | Transcript streaming / attachments | `files:write`, `files:read` |
 | Invites (native + Connect) | `users:read` + `users:read.email`, `conversations.connect:write` |

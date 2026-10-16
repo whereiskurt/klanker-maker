@@ -3139,6 +3139,9 @@ PID), serial-within-thread, cap enforcement, heartbeat/no-dup, dormancy regressi
 
 ## Default route — @-mention the bot from any channel or DM (2026-10-16)
 
+> Design rationale, the code map, the security posture and the UAT checklist are in
+> `docs/slack-default-route.md`.
+
 ### What it does
 
 Invite the bot to any channel (public or private), or DM it, and @-mention it with a task.
