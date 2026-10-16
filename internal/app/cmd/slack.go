@@ -473,7 +473,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 			// Only print if we don't already have a cached scope list.
 			cacheVal, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/bot-scopes-cache", false)
 			if cacheVal == "" {
-				fmt.Fprintf(os.Stderr, "km slack init: Note — verify Slack App has scopes: channels:history, groups:history for inbound Events API.\n")
+				fmt.Fprintf(os.Stderr, "km slack init: Note — verify Slack App has scopes: channels:history, groups:history, im:history, mpim:history for inbound Events API.\n")
 				fmt.Fprintf(os.Stderr, "  (Run km slack init again after adding scopes to confirm.)\n")
 			}
 		}
@@ -956,7 +956,7 @@ func PersistSigningSecret(ctx context.Context, store SlackSSMStore, secret, ssmP
 }
 
 // VerifyEventsAPIScopes checks whether the provided scope list contains the
-// scopes required for Slack Events API inbound (channels:history, groups:history)
+// scopes required for Slack Events API inbound (channels:history, groups:history, im:history, mpim:history)
 // AND the ACK reaction (reactions:write — Phase 67.1).
 // Returns (allPresent bool, missing []string).
 // Exported for testability.
