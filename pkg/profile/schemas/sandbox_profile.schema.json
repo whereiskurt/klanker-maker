@@ -910,6 +910,10 @@
                       "type": "boolean",
                       "description": "When true (default), the bridge posts a 👀 reaction on every dispatched message. When false, the reaction is posted ONLY on top-level engagement messages — thread replies dispatch silently. Phase 91.4/91.5. Install-level default via km-config.yaml slack.react_always."
                     },
+                    "threadBypass": {
+                      "type": "boolean",
+                      "description": "When false (strict), every dispatch requires an @-mention of the bot, including replies inside a thread the bot is already engaged in; a mentioned thread reply then carries the human messages since the bot's last turn as context. Omitted/true = Phase 91.3 behaviour (engaged-thread replies bypass the mention requirement). Only meaningful when mention-only is in effect."
+                    },
                     "allow": {
                       "type": "array",
                       "items": {

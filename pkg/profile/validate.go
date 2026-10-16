@@ -402,6 +402,25 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 			})
 		}
 
+		// Rule S-threadbypass (warnings, 2026-10-16): threadBypass:false only
+		// changes anything when mention-only is in effect for the sandbox.
+		if slack.Inbound != nil && slack.Inbound.ThreadBypass != nil && !*slack.Inbound.ThreadBypass {
+			switch {
+			case slack.Inbound.MentionOnly != nil && !*slack.Inbound.MentionOnly:
+				errs = append(errs, ValidationError{
+					Path:      "spec.notification.slack.inbound.threadBypass",
+					Message:   "notification.slack.inbound.threadBypass: false has no effect when notification.slack.inbound.mentionOnly is false (nothing requires a mention)",
+					IsWarning: true,
+				})
+			case slack.Inbound.MentionOnly == nil:
+				errs = append(errs, ValidationError{
+					Path:      "spec.notification.slack.inbound.threadBypass",
+					Message:   "notification.slack.inbound.threadBypass: false takes effect only when mention-only is in effect; mentionOnly is unset here, so the install-level slack.mention_only (or the channel-mode default) decides",
+					IsWarning: true,
+				})
+			}
+		}
+
 		// Rule S-maxconcurrency (warning, Phase 119): maxConcurrentThreads > 1 has no
 		// effect without perSandbox:true AND inbound.enabled:true — the cap drives the
 		// per-sandbox inbound poller, which only exists for a per-sandbox inbound queue.
