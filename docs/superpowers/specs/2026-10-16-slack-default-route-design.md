@@ -1,7 +1,7 @@
 # Slack default route: @-mention the bot from any channel or DM
 
 **Date:** 2026-10-16
-**Status:** Design approved in conversation; implementation plan pending
+**Status:** Implemented on `feat/slack-default-route`. Sections 3, 7 and 11 were corrected after implementation; see the notes marked *Corrected*.
 **Scope:** `km-slack-bridge` events handler and outbound authorizer, `km-config.yaml`,
 `km init` / `km doctor`, the Slack inbound poller userdata, `cmd/create-handler`,
 `infra/modules/lambda-slack-bridge`, the Slack App manifest.
@@ -50,10 +50,10 @@ slack:
 
 - `internal/app/config.SlackConfig` gains `DefaultRoute *SlackDefaultRoute` with
   `Alias`, `Profile`, `AllowEmails []string`.
-- Three new entries in the v2→v merge list (`slack.default_route.alias`,
-  `slack.default_route.profile`, `slack.default_route.allow_emails`) with the existing
-  merge-list regression guard extended. This footgun has bitten twice; the guard is
-  not optional.
+- One new entry in the v2→v merge list, `slack.default_route`, loaded with
+  `UnmarshalKey` the way the `github` block is, with the existing merge-list regression
+  guard extended. This footgun has bitten twice; the guard is not optional.
+  *Corrected:* the design said three leaf entries; a single block entry is what shipped.
 - `ExportTerragruntEnvVars` exports `KM_SLACK_DEFAULT_ROUTE_ALIAS`,
   `KM_SLACK_DEFAULT_ROUTE_PROFILE`, and `KM_SLACK_DEFAULT_ROUTE_ALLOW` (comma-joined,
   lowercased, trimmed). All three are exported or none: a block with an empty
@@ -171,8 +171,16 @@ holds. A top-level post into a routed channel, and `permalink` or `update` there
 - **`infra/live/use1/lambda-slack-bridge/terragrunt.hcl`**: three `get_env` inputs.
 - **`cmd/create-handler`**: `SlackEnvelope` on `SandboxCreateDetail`; a third drain
   into `awspkg.SlackInboundQueueName(prefix, id)` next to the GitHub and H1 drains.
-  Verify the create-handler role's SQS send grant covers `slack-inbound-*`; add it if
-  the grant is source-specific.
+  *Corrected:* the create-handler role had no send grant covering `slack-inbound-*`;
+  `sqs:SendMessage` on `{prefix}-slack-inbound-*.fifo` was added.
+- **Profile pre-stage** (*Corrected: missing from the design*). The cold-create path reads
+  the profile from S3, so `km init` uploads it to
+  `s3://{artifacts}/slack-profiles/{slug}/.km-profile.yaml` (slug = base name, extension
+  stripped, lowercased; same normalisation as `github-profiles/`). A profile that uses
+  `extends:` is uploaded flattened, because the create-handler Lambda has no base
+  fragments; a monolithic profile is uploaded verbatim.
+- **Bridge thread-store write** (Part B, listed here for completeness): `dynamodb:UpdateItem`
+  on `km-slack-threads` for `MarkDispatched` and `Rebind`.
 - **Manifest** (`slack_manifest_template.json`): scopes `im:history`, `mpim:history`;
   events `message.im`, `message.mpim`. No `im:write` (the bot never opens a DM). One-time
   reinstall plus `km slack rotate-token` on the front-door install, the Phase 72 shape.
@@ -181,6 +189,10 @@ holds. A top-level post into a routed channel, and `permalink` or `update` there
   absent: profile exists and has Slack inbound; `allow_emails` non-empty and each
   resolves via `users.lookupByEmail` (WARN per miss); bot scopes cache contains
   `im:history` (WARN); alias resolves or is reported "absent, will cold-create".
+  *Corrected:* the group shipped as three results from one evaluation (profile, allowlist,
+  scopes). Scopes are read from the live `auth.test`, not an SSM cache, and both
+  `im:history` and `mpim:history` are required. The profile result notes a strict
+  (`threadBypass: false`) profile. No alias-resolution result shipped.
 - No new tables, queues, or Lambdas.
 
 ## 8. Deploy and rollout
@@ -263,9 +275,14 @@ events.
 
 ## 11. Open items to settle during implementation
 
-- Whether the create-handler's SQS send grant already covers `slack-inbound-*` queues.
-- Whether `km-slack update` is used by any in-turn path that would now target a routed
-  channel; if so it needs `thread_ts` on its envelope to pass §6.2.
+- ~~Whether the create-handler's SQS send grant already covers `slack-inbound-*` queues.~~
+  **Resolved:** it did not; `sqs:SendMessage` on `{prefix}-slack-inbound-*.fifo` was added
+  to the create-handler role (§7).
+- ~~Whether `km-slack update` is used by any in-turn path that would now target a routed
+  channel; if so it needs `thread_ts` on its envelope to pass §6.2.~~
+  **Resolved:** a repo-wide search found no in-turn caller of `km-slack update`. §6.2 admits
+  only `post` and `upload` into a routed thread; `update` and `permalink` there stay
+  `403 channel_mismatch`.
 - Slack Connect channels from another workspace: `users.info` returns the external
   member's email so the gate applies; reaction and reply behaviour there is unverified
   and is a UAT addition if an operator has such a channel.
