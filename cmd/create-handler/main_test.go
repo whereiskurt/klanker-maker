@@ -1261,3 +1261,43 @@ func TestNocapClassifier(t *testing.T) {
 		})
 	}
 }
+
+// TestCreateHandler_SlackEnvelope_EnqueuesToSlackInboundQueue: a non-empty
+// slack_envelope is sent verbatim to the sandbox's slack-inbound FIFO.
+func TestCreateHandler_SlackEnvelope_EnqueuesToSlackInboundQueue(t *testing.T) {
+	mockSQS := &mockSQSSendAPI{}
+	h := newDrainTestHandler(mockSQS)
+	envelope := `{"channel":"CFOREIGN","thread_ts":"1.0","text":"<@UBOT> hi","user":"U0KURT","event_ts":"1.0"}`
+	event := CreateEvent{
+		SandboxID:      "sl-cold1",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "slack-profiles/ir-bot",
+		SlackEnvelope:  envelope,
+	}
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle returned error: %v", err)
+	}
+	if mockSQS.sendMessageCalled != 1 {
+		t.Fatalf("expected 1 SendMessage call, got %d", mockSQS.sendMessageCalled)
+	}
+	got := mockSQS.sends[0]
+	wantQueue := awspkg.SlackInboundQueueName(resourcePrefix(), "sl-cold1")
+	if !strings.HasSuffix(got.queueURL, "/"+wantQueue) {
+		t.Errorf("queue URL %q must end in %q", got.queueURL, wantQueue)
+	}
+	if got.body != envelope {
+		t.Errorf("envelope must be forwarded verbatim; got %q", got.body)
+	}
+}
+
+func TestCreateHandler_SlackEnvelope_Empty_NoEnqueue(t *testing.T) {
+	mockSQS := &mockSQSSendAPI{}
+	h := newDrainTestHandler(mockSQS)
+	event := CreateEvent{SandboxID: "sb-plain", ArtifactBucket: "km-artifacts", ArtifactPrefix: "remote-create/sb-plain"}
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle returned error: %v", err)
+	}
+	if mockSQS.sendMessageCalled != 0 {
+		t.Errorf("expected 0 SendMessage calls, got %d", mockSQS.sendMessageCalled)
+	}
+}
