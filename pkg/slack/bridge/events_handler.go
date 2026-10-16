@@ -764,9 +764,10 @@ type routeDecision struct {
 
 // continuityBypass fills cont.row (and cont.alias for a gone box) and reports
 // whether a continuity reply may skip the mention. The decision follows the box
-// that will actually receive the turn: the row's box while it exists, else the
-// alias's current box. A gone box with no current box, or any lookup failure,
-// is strict — a dead sandbox's absent attribute must never read as a bypass.
+// that will actually receive the turn: the row's box while the alias still names
+// it, else the alias's current box (the rebind case, or a gone row box). An
+// absent alias, or any lookup failure, is strict — a dead sandbox's absent
+// attribute must never read as a bypass.
 func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEvent, cont *routeContinuity) bool {
 	if h.SandboxByID == nil {
 		h.log().Warn("events: route: no SandboxByID fetcher wired; continuity treated as strict",
@@ -781,21 +782,29 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 	}
 	if ci.SandboxID != "" {
 		cont.row = ci
-		return threadBypassAllowed(ci) // nil/&true ⇒ Phase 91.3 bypass; &false ⇒ strict
 	}
-	// The row's box is gone: take the bypass from the alias's current box.
+	// Resolve the alias here (resolveDefaultRoute reuses cont.alias, so this costs
+	// no extra call): when it moved, the turn is delivered to the CURRENT box and
+	// the bypass must come from there, not from the row's box.
 	if h.AliasResolver == nil {
+		if ci.SandboxID != "" {
+			return threadBypassAllowed(ci)
+		}
 		return false
 	}
 	current, found, err := h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
 	if err != nil {
-		h.log().Warn("events: route: alias resolve failed for gone continuity box; treating as strict",
+		h.log().Warn("events: route: alias resolve failed for continuity; treating as strict",
 			"err", err, "alias", h.DefaultRoute.Alias, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
 		return false
 	}
 	cont.alias = &routeAlias{info: current, found: found}
 	if !found {
+		// Alias absent: the turn cold-creates a box with no setting yet ⇒ strict.
 		return false
+	}
+	if ci.SandboxID != "" && current.SandboxID == ci.SandboxID {
+		return threadBypassAllowed(ci) // nil/&true ⇒ Phase 91.3 bypass; &false ⇒ strict
 	}
 	return threadBypassAllowed(current)
 }
@@ -924,7 +933,16 @@ func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessa
 	uid, _ := h.BotUserID.Fetch(cctx)
 	// The trust predicate (possibly a Slack lookup per author) is bound to the
 	// sub-context so a slow API cannot push the turn past the Lambda timeout.
-	tc, refs := BuildThreadContext(replies, msg.TS, uid, func(u string) bool { return allowed(cctx, u) })
+	// Memoised per author: a thread with many messages by one person costs one lookup.
+	trust := map[string]bool{}
+	tc, refs := BuildThreadContext(replies, msg.TS, uid, func(u string) bool {
+		ok, seen := trust[u]
+		if !seen {
+			ok = allowed(cctx, u)
+			trust[u] = ok
+		}
+		return ok
+	})
 	if h.FileDownloader != nil {
 		for i, ref := range refs {
 			if dl, ok := cctx.Deadline(); ok && time.Until(dl) < ContextFileFloor {

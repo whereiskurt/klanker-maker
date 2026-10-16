@@ -369,3 +369,51 @@ func TestStrictMode_ContextFilesStopNearDeadline(t *testing.T) {
 		t.Fatalf("a.log must be omitted without a download; ctx=%+v downloads=%v", tc, dl.sandboxIDs)
 	}
 }
+
+type countingEmails struct {
+	inner  *scriptedEmailsByUser
+	byUser map[string]int
+}
+
+func (c *countingEmails) SenderEmail(ctx context.Context, u string) (string, error) {
+	c.byUser[u]++
+	return c.inner.SenderEmail(ctx, u)
+}
+
+// F5: the context trust predicate is memoised per author inside one call, so
+// many messages by one ineligible author cost one lookup.
+func TestStrictMode_ContextTrustMemoisedPerAuthor(t *testing.T) {
+	now := time.Now()
+	f := false
+	h, sqs, threads, alias, _, _, emails := routedHandler(t, now)
+	ce := &countingEmails{inner: emails, byUser: map[string]int{}}
+	h.SenderEmails = ce
+	alias.info.ThreadBypass = &f
+	h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot": alias.info}}
+	threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-irbot"}
+	h.ThreadReader = &fakeReader{replies: []SlackReplyMessage{
+		{User: "U0OTHER", TS: "1.000002", Text: "one"},
+		{User: "U0OTHER", TS: "1.000003", Text: "two"},
+		{User: "U0OTHER", TS: "1.000004", Text: "three"},
+	}}
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> again", "1.6", "1.0", "MEMO-1"))
+	if len(sqs.sends) != 1 {
+		t.Fatalf("want dispatch, sends=%d", len(sqs.sends))
+	}
+	if ce.byUser["U0OTHER"] != 1 {
+		t.Fatalf("ineligible author looked up %d times, want 1", ce.byUser["U0OTHER"])
+	}
+	var body InboundQueueBody
+	json.Unmarshal([]byte(sqs.sends[0].body), &body)
+	if body.ThreadContext == nil || body.ThreadContext.OmittedNonAllow != 3 {
+		t.Fatalf("all three must still be omitted: %+v", body.ThreadContext)
+	}
+}
+
+// F5: FileError travels on the wire inside thread_context with snake_case keys.
+func TestFileError_WireKeys(t *testing.T) {
+	b, _ := json.Marshal(ThreadContext{FileErrors: []FileError{{OriginalName: "a.log", Reason: "too big"}}})
+	if got := string(b); got != `{"file_errors":[{"original_name":"a.log","reason":"too big"}]}` {
+		t.Fatalf("wire form %s", got)
+	}
+}

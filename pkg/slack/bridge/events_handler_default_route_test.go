@@ -548,3 +548,35 @@ func TestDefaultRoute_ColdCreatePublishFailureWithFiles_NoRowNoMarkNoReaction(t 
 		t.Fatalf("undelivered files message must not react; reactions=%d", n)
 	}
 }
+
+// F5: the row names a LIVE box with bypass on, but the alias was recreated as a
+// strict box. The turn goes to the current box, so its strictness decides: a
+// no-mention follow-up drops; a mentioned one dispatches there and rebinds.
+func TestDefaultRoute_ThreadContinuity_AliasMoved_BypassFromCurrentBox(t *testing.T) {
+	strict, on := false, true
+	setup := func(t *testing.T, now time.Time) (*EventsHandler, *fakeSQS, *fakeThreads, *fakeAlias) {
+		h, sqs, threads, alias, _, _, _ := routedHandler(t, now)
+		old := SandboxRoutingInfo{SandboxID: "sb-irbot", QueueURL: "https://sqs.example/irbot.fifo", ThreadBypass: &on}
+		h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot": old}}
+		alias.info = SandboxRoutingInfo{SandboxID: "sb-irbot2", QueueURL: "https://sqs.example/irbot2.fifo", ThreadBypass: &strict}
+		threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-irbot"}
+		return h, sqs, threads, alias
+	}
+	now := time.Now()
+	h, sqs, threads, alias := setup(t, now)
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "follow-up, no mention", "1.5", "1.0", "DAM1"))
+	if len(sqs.sends) != 0 || len(threads.rebinds) != 0 {
+		t.Fatalf("strict current box: a no-mention follow-up must drop; sends=%+v rebinds=%+v", sqs.sends, threads.rebinds)
+	}
+	h, sqs, threads, alias = setup(t, now)
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> follow-up", "1.6", "1.0", "DAM2"))
+	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/irbot2.fifo" {
+		t.Fatalf("mention must dispatch to the current box; sends=%+v", sqs.sends)
+	}
+	if alias.calls != 1 {
+		t.Fatalf("alias resolved %d times; the continuity result must be reused", alias.calls)
+	}
+	if len(threads.rebinds) != 1 || threads.rebinds[0].sb != "sb-irbot2" {
+		t.Fatalf("row must be rebound to the current box; rebinds=%+v", threads.rebinds)
+	}
+}

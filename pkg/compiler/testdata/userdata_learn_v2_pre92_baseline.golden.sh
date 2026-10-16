@@ -2529,7 +2529,8 @@ while true; do
               [ -z "$CTX_MSG" ] && continue
               CU=$(echo "$CTX_MSG" | jq -r '.user // empty' 2>/dev/null || true)
               CT=$(echo "$CTX_MSG" | jq -r '.ts // empty' 2>/dev/null || true)
-              CX=$(echo "$CTX_MSG" | jq -r '.text // empty' 2>/dev/null || true)
+              # Indent continuation lines so a context message cannot mimic the [Slack] From: preamble.
+              CX=$(echo "$CTX_MSG" | jq -r '.text // empty' 2>/dev/null | sed '2,$s/^/    /' || true)
               printf '  <@%s> (%s): %s\n' "$CU" "$CT" "$CX"
               while IFS= read -r CA; do
                 [ -z "$CA" ] && continue

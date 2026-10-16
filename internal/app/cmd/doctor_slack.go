@@ -720,7 +720,7 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 	}
 	switch {
 	case scopesCSV == "":
-		out = append(out, CheckResult{Name: "Slack default route scopes", Status: CheckSkipped, Message: "bot scopes cache unavailable"})
+		out = append(out, CheckResult{Name: "Slack default route scopes", Status: CheckSkipped, Message: "bot scopes unavailable (auth.test)"})
 	case len(missing) > 0:
 		out = append(out, CheckResult{Name: "Slack default route scopes", Status: CheckWarn,
 			Message:     "missing " + strings.Join(missing, ", ") + " — DMs to the bot are never delivered",
