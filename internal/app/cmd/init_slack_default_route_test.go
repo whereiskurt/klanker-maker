@@ -170,3 +170,38 @@ extends: [ir-base]
 		t.Errorf("inbound.enabled not inherited from base:\n%s", body)
 	}
 }
+
+// F3: a profile reachable only via a search path pre-stages the real bytes,
+// exactly as validation finds it — not an empty placeholder from a cwd miss.
+func TestPreStageSlackDefaultRouteProfile_FindsProfileViaSearchPath(t *testing.T) {
+	dir := t.TempDir()
+	writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: "nowhere/ir-bot.yaml", AllowEmails: []string{"x@y.z"}}
+	if err := ValidateSlackDefaultRouteProfile(route, []string{dir}); err != nil {
+		t.Fatalf("validate must find the profile via the search path: %v", err)
+	}
+	up := &recordingUploader{}
+	if err := PreStageSlackDefaultRouteProfile(context.Background(), route, "bucket", []string{dir}, up); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(up.keys["slack-profiles/ir-bot/.km-profile.yaml"]); got != routeProfileOK {
+		t.Fatalf("uploaded bytes must be the search-path file; got %q", got)
+	}
+}
+
+// F3: a missing profile is a hard error from both validate and pre-stage, and
+// pre-stage uploads nothing.
+func TestSlackDefaultRouteProfile_MissingErrorsAndUploadsNothing(t *testing.T) {
+	dir := t.TempDir()
+	route := &config.SlackDefaultRoute{Alias: "a", Profile: filepath.Join(dir, "missing-route.yaml"), AllowEmails: []string{"x@y.z"}}
+	if err := ValidateSlackDefaultRouteProfile(route, []string{dir}); err == nil {
+		t.Fatal("validate: want error for a missing profile")
+	}
+	up := &recordingUploader{}
+	if err := PreStageSlackDefaultRouteProfile(context.Background(), route, "bucket", []string{dir}, up); err == nil {
+		t.Fatal("pre-stage: want error for a missing profile")
+	}
+	if len(up.keys) != 0 {
+		t.Fatalf("pre-stage must upload nothing on a miss; keys=%v", up.keys)
+	}
+}

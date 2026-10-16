@@ -1167,8 +1167,7 @@ func ValidateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPat
 	if err := route.Validate(); err != nil {
 		return err
 	}
-	paths := append([]string{filepath.Dir(route.Profile)}, searchPaths...)
-	p, err := profile.Resolve(SlackDefaultRouteProfileSlug(route.Profile), paths)
+	p, err := resolveSlackDefaultRouteProfile(route, searchPaths)
 	if err != nil {
 		return fmt.Errorf("slack.default_route.profile %q: %w", route.Profile, err)
 	}
@@ -1179,6 +1178,43 @@ func ValidateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPat
 		return fmt.Errorf("slack.default_route.profile %q must set notification.slack.enabled and notification.slack.inbound.enabled: a default-route sandbox replies through its inbound poller and has no other way to answer", route.Profile)
 	}
 	return nil
+}
+
+// locateSlackDefaultRouteProfile finds the file a route's profile names: the
+// path itself when it is a file, else <slug>.yaml / <slug>.yml in each of
+// [dir(profile)] + searchPaths, the order profile.Resolve searches. Validation
+// and pre-stage both go through it so they can never disagree about which file
+// the route means.
+func locateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPaths []string) (string, error) {
+	if fi, err := os.Stat(route.Profile); err == nil && !fi.IsDir() {
+		return route.Profile, nil
+	}
+	slug := SlackDefaultRouteProfileSlug(route.Profile)
+	dirs := append([]string{filepath.Dir(route.Profile)}, searchPaths...)
+	for _, dir := range dirs {
+		for _, ext := range profile.ProfileExtensions {
+			p := filepath.Join(dir, slug+ext)
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+				return p, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("slack.default_route.profile %q: no file at that path and no %s.yaml or %s.yml in %v", route.Profile, slug, slug, dirs)
+}
+
+// resolveSlackDefaultRouteProfile resolves the located file (extends included),
+// or the built-in of the same slug when no file exists.
+func resolveSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPaths []string) (*profile.SandboxProfile, error) {
+	slug := SlackDefaultRouteProfileSlug(route.Profile)
+	path, err := locateSlackDefaultRouteProfile(route, searchPaths)
+	if err != nil {
+		if profile.IsBuiltin(slug) {
+			return profile.Resolve(slug, searchPaths)
+		}
+		return nil, err
+	}
+	paths := append([]string{filepath.Dir(path), filepath.Dir(route.Profile)}, searchPaths...)
+	return profile.Resolve(profile.LeafName(path), paths)
 }
 
 // PreStageSlackDefaultRouteProfile uploads the route's profile YAML to
@@ -1194,10 +1230,30 @@ func PreStageSlackDefaultRouteProfile(ctx context.Context, route *config.SlackDe
 	if route == nil {
 		return nil
 	}
-	body := readFileOrEmpty(route.Profile)
+	// Same lookup as ValidateSlackDefaultRouteProfile, and never an empty
+	// placeholder: an empty object would make every cold-create fail later.
+	path, lerr := locateSlackDefaultRouteProfile(route, searchPaths)
+	var body []byte
+	switch {
+	case lerr == nil:
+		var err error
+		if body, err = os.ReadFile(path); err != nil {
+			return fmt.Errorf("km init: read slack default-route profile %q for pre-stage: %w", path, err)
+		}
+	case profile.IsBuiltin(SlackDefaultRouteProfileSlug(route.Profile)):
+		// A built-in has no file; upload its resolved form.
+		resolved, err := resolveSlackDefaultRouteProfile(route, searchPaths)
+		if err != nil {
+			return fmt.Errorf("km init: resolve slack default-route profile %q for pre-stage: %w", route.Profile, err)
+		}
+		if body, err = goyaml.Marshal(resolved); err != nil {
+			return fmt.Errorf("km init: marshal slack default-route profile %q: %w", route.Profile, err)
+		}
+	default:
+		return fmt.Errorf("km init: pre-stage: %w", lerr)
+	}
 	if parsed, err := profile.Parse(body); err == nil && parsed.Extends.IsSet() {
-		paths := append([]string{filepath.Dir(route.Profile)}, searchPaths...)
-		resolved, err := profile.Resolve(SlackDefaultRouteProfileSlug(route.Profile), paths)
+		resolved, err := resolveSlackDefaultRouteProfile(route, searchPaths)
 		if err != nil {
 			return fmt.Errorf("km init: resolve slack default-route profile %q for pre-stage: %w", route.Profile, err)
 		}
