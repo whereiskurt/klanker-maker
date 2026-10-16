@@ -321,6 +321,7 @@ func unmarshalSlackFields(item map[string]dynamodbtypes.AttributeValue, meta *Sa
 	// strings ("true"/"false") via UpdateSandboxAttr; marshalSandboxItem writes
 	// BOOL. Tolerate both so the round-trip survives regardless of the writer.
 	meta.SlackMentionOnly = readTriStateBool(item, "slack_mention_only")
+	meta.SlackThreadBypass = readTriStateBool(item, "slack_thread_bypass")
 	meta.SlackReactAlways = readTriStateBool(item, "slack_react_always")
 	// Phase 118: per-sandbox inbound allow-list. Stored as comma-joined S attribute.
 	// Absent or empty → meta.SlackAllow remains nil (fall-back signal: use install-level
@@ -563,6 +564,9 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 	// silently strip the override on the next full-row PutItem.
 	if meta.SlackMentionOnly != nil {
 		item["slack_mention_only"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: *meta.SlackMentionOnly}
+	}
+	if meta.SlackThreadBypass != nil {
+		item["slack_thread_bypass"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: *meta.SlackThreadBypass}
 	}
 	if meta.SlackReactAlways != nil {
 		item["slack_react_always"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: *meta.SlackReactAlways}

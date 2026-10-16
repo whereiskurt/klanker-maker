@@ -1114,6 +1114,22 @@ func routingInfoFromItem(item map[string]dynamodbtypes.AttributeValue) SandboxRo
 			info.MentionOnly = &f
 		}
 	}
+	// Part B: per-sandbox thread_bypass override. Same tri-state contract as
+	// mention_only; BOOL (marshalSandboxItem) and string (UpdateSandboxAttr) both
+	// accepted. Absent leaves info.ThreadBypass nil (bypass allowed).
+	if v, ok := item["slack_thread_bypass"].(*dynamodbtypes.AttributeValueMemberBOOL); ok {
+		b := v.Value
+		info.ThreadBypass = &b
+	} else if v, ok := item["slack_thread_bypass"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		switch v.Value {
+		case "true":
+			t := true
+			info.ThreadBypass = &t
+		case "false":
+			f := false
+			info.ThreadBypass = &f
+		}
+	}
 	// Phase 118: per-sandbox inbound allow-list. Stored as comma-joined S attribute
 	// ("slack_allow"). Absent or empty → info.Allow remains nil, signalling the
 	// enforcement gate to use the install-level default (all Slack users allowed).
@@ -1951,4 +1967,9 @@ func (a *SlackSenderEmailAdapter) SenderEmail(ctx context.Context, userID string
 		return "", ErrSenderIneligible
 	}
 	return u.Email, nil
+}
+
+// threadBypassAllowed: nil or true ⇒ the Phase 91.3 bypass applies.
+func threadBypassAllowed(info SandboxRoutingInfo) bool {
+	return info.ThreadBypass == nil || *info.ThreadBypass
 }

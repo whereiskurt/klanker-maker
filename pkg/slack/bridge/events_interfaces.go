@@ -121,6 +121,9 @@ type SandboxRoutingInfo struct {
 	//   &true  → this sandbox requires an @-mention (with thread-bypass)
 	//   &false → this sandbox dispatches every message (chatty), ignoring mentions
 	MentionOnly *bool
+	// Part B: per-sandbox thread-bypass. nil/&true → Phase 91.3 bypass; &false →
+	// strict (mention required everywhere; context collected on mention).
+	ThreadBypass *bool
 	// Phase 118: per-sandbox trigger allowlist override (Slack user IDs). When
 	// non-empty, REPLACES EventsHandler.Allow entirely for this sandbox — it is
 	// not additive. nil/empty = fall back to install-level EventsHandler.Allow

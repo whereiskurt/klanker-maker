@@ -570,3 +570,34 @@ func TestDrainSlackInbound_NoSharedDLQDelete(t *testing.T) {
 		t.Fatalf("km destroy deleted the shared DLQ %q — it must be install-scoped", fs.deleteURL)
 	}
 }
+
+func TestCreate_SlackInboundThreadBypassOverride(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+	tests := []struct {
+		name      string
+		tb        *bool
+		wantAttr  bool
+		wantValue string
+	}{
+		{"nil → no write", nil, false, ""},
+		{"&false → writes slack_thread_bypass=false", boolPtr(false), true, "false"},
+		{"&true → writes slack_thread_bypass=true", boolPtr(true), true, "true"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &fakeSQS{}
+			deps, state := makeDeps(t, true, fs, nil, nil)
+			deps.Profile.Spec.Notification.Slack.Inbound.ThreadBypass = tc.tb
+			if _, err := provisionSlackInboundQueue(context.Background(), deps); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			got, present := state.ddbAttrs["slack_thread_bypass"]
+			if tc.wantAttr != present {
+				t.Fatalf("present=%v want %v; attrs=%v", present, tc.wantAttr, state.ddbAttrs)
+			}
+			if tc.wantAttr && got != tc.wantValue {
+				t.Errorf("got %q want %q", got, tc.wantValue)
+			}
+		})
+	}
+}
