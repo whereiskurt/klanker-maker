@@ -30,6 +30,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -38,6 +40,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -1053,7 +1056,13 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 	if len(out.Items) == 0 {
 		return SandboxRoutingInfo{}, nil // unknown channel — caller logs warn
 	}
-	item := out.Items[0]
+	return routingInfoFromItem(out.Items[0]), nil
+}
+
+// routingInfoFromItem decodes a km-sandboxes row into SandboxRoutingInfo. Shared by
+// FetchByChannel (GSI), FetchBySandboxID (GetItem) and ResolveAlias (GSI → GetItem)
+// so the three can never disagree about an attribute name.
+func routingInfoFromItem(item map[string]dynamodbtypes.AttributeValue) SandboxRoutingInfo {
 	info := SandboxRoutingInfo{}
 	if v, ok := item["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS); ok {
 		info.SandboxID = v.Value
@@ -1126,7 +1135,7 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 	if v, ok := item["frozen_reason"].(*dynamodbtypes.AttributeValueMemberS); ok {
 		info.FrozenReason = v.Value
 	}
-	return info, nil
+	return info
 }
 
 // ============================================================
@@ -1813,4 +1822,133 @@ func (w *DynamoSandboxStatusWriter) SetStatusRunning(ctx context.Context, sandbo
 		return fmt.Errorf("slack-bridge: SetStatusRunning for %s: %w", sandboxID, err)
 	}
 	return nil
+}
+
+// DDBSandboxByID implements SandboxByIDFetcher (GetItem on km-sandboxes).
+type DDBSandboxByID struct {
+	Client    DDBQueryGetPutAPI
+	TableName string
+}
+
+func (f *DDBSandboxByID) FetchBySandboxID(ctx context.Context, sandboxID string) (SandboxRoutingInfo, error) {
+	out, err := f.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: awssdk.String(f.TableName),
+		Key:       map[string]dynamodbtypes.AttributeValue{"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID}},
+	})
+	if err != nil {
+		return SandboxRoutingInfo{}, fmt.Errorf("sandbox-by-id get %s: %w", sandboxID, err)
+	}
+	if len(out.Item) == 0 {
+		return SandboxRoutingInfo{}, nil
+	}
+	return routingInfoFromItem(out.Item), nil
+}
+
+// DDBAliasResolver implements SlackAliasResolver: alias-index GSI → sandbox_id →
+// GetItem (the GSI projection does not carry every routing attribute).
+type DDBAliasResolver struct {
+	Client    DDBQueryGetPutAPI
+	TableName string
+}
+
+func (r *DDBAliasResolver) ResolveAlias(ctx context.Context, alias string) (SandboxRoutingInfo, bool, error) {
+	out, err := r.Client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              awssdk.String(r.TableName),
+		IndexName:              awssdk.String("alias-index"),
+		KeyConditionExpression: awssdk.String("alias = :alias"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":alias": &dynamodbtypes.AttributeValueMemberS{Value: alias},
+		},
+		Limit: awssdk.Int32(2),
+	})
+	if err != nil {
+		return SandboxRoutingInfo{}, false, fmt.Errorf("slack-bridge: resolve alias %q: %w", alias, err)
+	}
+	if len(out.Items) == 0 {
+		return SandboxRoutingInfo{}, false, nil
+	}
+	if len(out.Items) > 1 {
+		return SandboxRoutingInfo{}, false, fmt.Errorf("slack-bridge: alias %q is ambiguous (matched multiple sandboxes)", alias)
+	}
+	sv, ok := out.Items[0]["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || sv.Value == "" {
+		return SandboxRoutingInfo{}, false, fmt.Errorf("slack-bridge: alias %q: GSI item missing sandbox_id", alias)
+	}
+	info, err := (&DDBSandboxByID{Client: r.Client, TableName: r.TableName}).FetchBySandboxID(ctx, sv.Value)
+	if err != nil {
+		return SandboxRoutingInfo{}, false, err
+	}
+	if info.SandboxID == "" {
+		return SandboxRoutingInfo{}, false, nil // GSI lag: row gone
+	}
+	return info, true, nil
+}
+
+// EventBridgeAdapter implements SandboxCreatePublisher. ArtifactPrefix follows the
+// slack-profiles/{slug} convention that internal/app/cmd.PreStageSlackDefaultRouteProfile
+// uploads to; the slug rule must match SlackDefaultRouteProfileSlug.
+type EventBridgeAdapter struct {
+	Client         kmaws.EventBridgeAPI
+	ArtifactBucket string
+}
+
+func slackProfileSlug(profile string) string {
+	base := filepath.Base(profile)
+	for _, ext := range []string{".yaml", ".yml"} {
+		if strings.HasSuffix(strings.ToLower(base), ext) {
+			base = base[:len(base)-len(ext)]
+			break
+		}
+	}
+	return strings.ToLower(base)
+}
+
+func generateSlackSandboxID() string {
+	b := make([]byte, 4)
+	if _, err := cryptorand.Read(b); err != nil {
+		panic(fmt.Sprintf("slack-bridge: generateSlackSandboxID: %v", err))
+	}
+	return "sl-" + hex.EncodeToString(b)
+}
+
+func (a *EventBridgeAdapter) PutSandboxCreate(ctx context.Context, alias, profile, slackEnvelopeJSON string) (string, error) {
+	id := generateSlackSandboxID()
+	detail := kmaws.SandboxCreateDetail{
+		SandboxID:      id,
+		ArtifactBucket: a.ArtifactBucket,
+		ArtifactPrefix: "slack-profiles/" + slackProfileSlug(profile),
+		Alias:          alias,
+		CreatedBy:      "slack",
+		SlackEnvelope:  slackEnvelopeJSON,
+	}
+	if err := kmaws.PutSandboxCreateEvent(ctx, a.Client, detail); err != nil {
+		return "", fmt.Errorf("slack-bridge: cold-create: %w", err)
+	}
+	return id, nil
+}
+
+// SlackSenderEmailAdapter implements SenderEmailFetcher over users.info.
+type SlackSenderEmailAdapter struct {
+	Tokens     BotTokenFetcher
+	HTTPClient *http.Client
+	BaseURL    string // tests only; empty = Slack default
+}
+
+func (a *SlackSenderEmailAdapter) SenderEmail(ctx context.Context, userID string) (string, error) {
+	tok, err := a.Tokens.Fetch(ctx)
+	if err != nil {
+		return "", fmt.Errorf("slack-bridge: bot token: %w", err)
+	}
+	c := pkgslack.NewClient(tok, a.HTTPClient)
+	if a.BaseURL != "" {
+		c.SetBaseURL(a.BaseURL)
+	}
+	u, err := c.UserInfo(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if u.Deleted || u.IsBot || u.Email == "" {
+		return "", ErrSenderIneligible
+	}
+	return u.Email, nil
 }
