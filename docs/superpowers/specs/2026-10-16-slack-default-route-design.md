@@ -153,9 +153,18 @@ A non-operator envelope is authorized when either:
 - `env.ThreadTS != ""` and `Threads.LookupSandbox(env.Channel, env.ThreadTS) ==
   env.SenderID`.
 
-The thread row is written only by the events handler at dispatch, so a sandbox can
-post only into threads the bridge routed to it. The sandbox-never-reads-DDB boundary
-holds. A top-level post into a routed channel, and `permalink` or `update` there
+The thread row is written only by bridge-side components: the events handler at
+dispatch, and the create-handler (`postReadyAnnouncement`). The sandbox role has no
+explicit grant on `km-slack-threads`; that absence is load-bearing, because DynamoDB
+IAM cannot scope a grant by `sandbox_id`, and it is pinned by
+`TestSandboxRole_HasNoWriteGrantOnSlackThreadsTable` (`pkg/terragrunt`). Never grant
+the sandbox role access to `km-slack-threads`. **Open hole (found in the final review):**
+the ec2spot `ec2spot_region_lock` inline policy is an `Allow` of `Action "*"` on
+`Resource "*"` conditioned on `aws:RequestedRegion`, created whenever a profile sets
+`iam.allowedRegions` (`profiles/base/platform.yaml` does). On those boxes the sandbox
+role CAN write the table, so a sandbox could forge a row and post into any thread. The
+guard names that policy as its one known exception; closing it is a separate decision.
+Where the hole is absent, a sandbox can post only into threads the bridge routed to it. A top-level post into a routed channel, and `permalink` or `update` there
 (neither carries a thread), stay `403 channel_mismatch`.
 
 ## 7. Infrastructure

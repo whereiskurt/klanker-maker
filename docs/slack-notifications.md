@@ -3216,6 +3216,9 @@ slack:
   effective.
 - **The gate applies to every turn**, thread follow-ups included. A non-listed person cannot
   continue a thread a listed person started.
+- **The gate is only as strong as the workspace's control of profile emails.** SSO- or
+  admin-managed workspaces are fine; where members can edit their own email, it relies on
+  Slack's mailbox verification of the new address.
 - **A non-listed sender sees nothing**: no 👀, no reply, no hint. The bridge logs the drop at
   debug level and returns 200. Nothing confirms who is on the list.
 
@@ -3273,8 +3276,12 @@ Two halves that ship together:
 - **Bridge outbound authorization.** A sandbox may post to its own channel (as before), or
   into a foreign channel when the envelope carries a `thread_ts` **and** the
   `km-slack-threads` row for that `(channel, thread_ts)` names the posting sandbox. That row
-  is written only by the events handler at dispatch, so a sandbox can reach only threads the
-  bridge routed to it, and the sandbox still never reads DynamoDB. Only the thread-anchored
+  is written only by bridge-side components: the events handler and the create-handler. The
+  sandbox role has no explicit grant on the table, and that absence is load-bearing: DynamoDB
+  IAM cannot scope a grant by `sandbox_id`, so any grant would let every sandbox forge a
+  routed-thread row. `TestSandboxRole_HasNoWriteGrantOnSlackThreadsTable` (`pkg/terragrunt`)
+  pins it. **Never grant the sandbox role access to `km-slack-threads`.** One known exception
+  is open; see Known limits below. Only the thread-anchored
   verbs, `post` and `upload`, are admitted this way. `permalink` and `update` in a foreign
   channel stay `403 channel_mismatch`, because the bot token is shared across sandboxes and
   neither verb is scoped by a thread. A top-level post into a routed channel is also refused.
@@ -3363,6 +3370,15 @@ Skipped silently when the block is absent. Otherwise three results from one eval
 
 ### Known limits
 
+- **Never grant the sandbox role access to `km-slack-threads`.** The outbound authorizer
+  trusts its rows, and DynamoDB IAM cannot scope a grant by `sandbox_id`.
+- **Open hole: `iam.allowedRegions` profiles can forge a thread row today.** The ec2spot
+  `ec2spot_region_lock` inline policy is an `Allow` of `Action "*"` on `Resource "*"`
+  conditioned on `aws:RequestedRegion`, not a Deny. Every profile extending
+  `profiles/base/platform.yaml` sets `allowedRegions`, so on those boxes the sandbox role can
+  write `km-slack-threads` and could post into any thread in a routed channel. The guard test
+  lists that policy as its single known exception so a second path cannot appear silently.
+  Fixing it means changing the region lock, which is a separate decision.
 - **A cold-created box gets no thread context on its first turn.** Its sandbox row and its
   `threadBypass` setting do not exist when the bridge builds that turn, so strict-mode context
   is not collected. Later turns behave normally.

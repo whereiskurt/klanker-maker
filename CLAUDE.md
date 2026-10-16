@@ -39,7 +39,14 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   `channel` (`REPLY_CHANNEL`) and exports a per-turn `KM_SLACK_CHANNEL_ID`, so the
   notify-hook and `km-slack reply` follow with no binary change. The bridge authorizes a
   foreign-channel post only when it carries a `thread_ts` whose `km-slack-threads` row names
-  the posting sandbox, and **only for `post` and `upload`**. `permalink`/`update` there stay
+  the posting sandbox, and **only for `post` and `upload`**. That row is written only by
+  bridge-side components (events handler, create-handler); the sandbox role has no explicit
+  grant on the table, pinned by `TestSandboxRole_HasNoWriteGrantOnSlackThreadsTable` —
+  **never grant the sandbox role access to `km-slack-threads`** (DynamoDB IAM cannot scope by
+  `sandbox_id`). **Open hole:** `ec2spot_region_lock` is an `Allow *` on `*` conditioned on
+  region, created for every `iam.allowedRegions` profile (all of `base/platform`), so those
+  boxes CAN write the table today; the guard names it as its one known exception, and
+  fixing the region lock is a separate decision. `permalink`/`update` there stay
   `403 channel_mismatch` because the bot token is shared across sandboxes and neither verb is
   thread-anchored. Consequence: the Phase 70 `claude:`/`codex:` handoff (a new top-level
   post) is skipped in a routed thread, with a poller log line saying so.
