@@ -3281,7 +3281,12 @@ Two halves that ship together:
   IAM cannot scope a grant by `sandbox_id`, so any grant would let every sandbox forge a
   routed-thread row. `TestSandboxRole_HasNoWriteGrantOnSlackThreadsTable` (`pkg/terragrunt`)
   pins it. **Never grant the sandbox role access to `km-slack-threads`.** One known exception
-  is open; see Known limits below. Only the thread-anchored
+  is open: on any profile with `iam.allowedRegions` set (`base/platform`, so most profiles),
+  `ec2spot_region_lock` is an `Allow */*` scoped only by region, so the sandbox role does
+  reach `km-slack-threads` and every other in-region table. Until it is narrowed a sandbox
+  could forge a routed-thread row and the authorizer would honour it. On such profiles the
+  gate bounds posting to channels the bot is in, not to threads the bridge routed. See
+  Known limits below. Only the thread-anchored
   verbs, `post` and `upload`, are admitted this way. `permalink` and `update` in a foreign
   channel stay `403 channel_mismatch`, because the bot token is shared across sandboxes and
   neither verb is scoped by a thread. A top-level post into a routed channel is also refused.
@@ -3376,9 +3381,12 @@ Skipped silently when the block is absent. Otherwise three results from one eval
   `ec2spot_region_lock` inline policy is an `Allow` of `Action "*"` on `Resource "*"`
   conditioned on `aws:RequestedRegion`, not a Deny. Every profile extending
   `profiles/base/platform.yaml` sets `allowedRegions`, so on those boxes the sandbox role can
-  write `km-slack-threads` and could post into any thread in a routed channel. The guard test
-  lists that policy as its single known exception so a second path cannot appear silently.
-  Fixing it means changing the region lock, which is a separate decision.
+  write `km-slack-threads` (and every other in-region table). A forged row would be honoured,
+  so on those boxes posting is bounded by the channels the bot is in, not by the threads the
+  bridge routed. The guard test lists that policy as its single known exception so a second
+  path cannot appear silently. The fix is a separate phase: narrow the region lock to a
+  region Deny plus explicit grants, which needs the grants sandboxes rely on enumerated
+  first, then move routed-thread authorization to a store the sandbox role cannot reach.
 - **A cold-created box gets no thread context on its first turn.** Its sandbox row and its
   `threadBypass` setting do not exist when the bridge builds that turn, so strict-mode context
   is not collected. Later turns behave normally.

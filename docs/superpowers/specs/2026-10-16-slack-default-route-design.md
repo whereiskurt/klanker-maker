@@ -163,8 +163,11 @@ the ec2spot `ec2spot_region_lock` inline policy is an `Allow` of `Action "*"` on
 `Resource "*"` conditioned on `aws:RequestedRegion`, created whenever a profile sets
 `iam.allowedRegions` (`profiles/base/platform.yaml` does). On those boxes the sandbox
 role CAN write the table, so a sandbox could forge a row and post into any thread. The
-guard names that policy as its one known exception; closing it is a separate decision.
-Where the hole is absent, a sandbox can post only into threads the bridge routed to it. A top-level post into a routed channel, and `permalink` or `update` there
+guard names that policy as its one known exception; closing it is a separate decision
+(§11). Until that statement is narrowed, the outbound authorizer would honour a forged
+row, so on such profiles the gate bounds posting to channels the bot is in, not to
+threads the bridge routed. Where the hole is absent, a sandbox can post only into
+threads the bridge routed to it. A top-level post into a routed channel, and `permalink` or `update` there
 (neither carries a thread), stay `403 channel_mismatch`.
 
 ## 7. Infrastructure
@@ -295,6 +298,10 @@ events.
 - Slack Connect channels from another workspace: `users.info` returns the external
   member's email so the gate applies; reaction and reply behaviour there is unverified
   and is a UAT addition if an operator has such a channel.
+- **Follow-up (separate phase):** narrow `ec2spot_region_lock` (Allow-\* ⇒ region Deny plus
+  explicit grants). This requires enumerating the grants sandboxes actually rely on.
+- **Follow-up, once that is true:** move routed-thread authorization to a store the sandbox
+  role cannot reach.
 
 ---
 

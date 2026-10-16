@@ -45,8 +45,12 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   **never grant the sandbox role access to `km-slack-threads`** (DynamoDB IAM cannot scope by
   `sandbox_id`). **Open hole:** `ec2spot_region_lock` is an `Allow *` on `*` conditioned on
   region, created for every `iam.allowedRegions` profile (all of `base/platform`), so those
-  boxes CAN write the table today; the guard names it as its one known exception, and
-  fixing the region lock is a separate decision. `permalink`/`update` there stay
+  boxes CAN write the table (and every other in-region table) today. A forged row would be
+  honoured, so there the gate bounds posting to channels the bot is in, not to threads the
+  bridge routed. The guard names it as its one known exception; narrowing it (region Deny
+  plus explicit grants, after enumerating what sandboxes rely on) and then moving
+  routed-thread authz to a store the sandbox cannot reach is a separate phase (spec §11).
+  `permalink`/`update` there stay
   `403 channel_mismatch` because the bot token is shared across sandboxes and neither verb is
   thread-anchored. Consequence: the Phase 70 `claude:`/`codex:` handoff (a new top-level
   post) is skipped in a routed thread, with a poller log line saying so.

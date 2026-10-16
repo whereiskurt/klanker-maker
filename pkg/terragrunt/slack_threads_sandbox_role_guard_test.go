@@ -120,7 +120,10 @@ func TestSandboxRole_HasNoWriteGrantOnSlackThreadsTable(t *testing.T) {
 	why := "the Slack bridge's outbound authorizer (threadRoutedToSender) trusts km-slack-threads rows; " +
 		"DynamoDB IAM cannot scope by sandbox_id, so a sandbox-role grant on that table lets every " +
 		"sandbox forge a routed-thread row and post into every thread. Never grant the sandbox role " +
-		"access to km-slack-threads."
+		"access to km-slack-threads. (aws_iam_role_policy \"ec2spot_region_lock\" is the one listed " +
+		"exception: a pre-existing Allow */* scoped only by aws:RequestedRegion that already reaches the " +
+		"table on iam.allowedRegions profiles. It is pinned, not endorsed; narrowing it is a separate phase, " +
+		"spec §11. Do not add a second exception.)"
 	sawKnown := false
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
