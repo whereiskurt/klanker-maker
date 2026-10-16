@@ -142,3 +142,37 @@ func TestSlackManifest_MissingBridgeURL(t *testing.T) {
 		t.Errorf("error should suggest km slack init; got: %v", err)
 	}
 }
+
+// TestSlackManifest_DMScopesAndEvents: the default route accepts DMs and group
+// DMs, which need im:history/mpim:history and the message.im/message.mpim events.
+func TestSlackManifest_DMScopesAndEvents(t *testing.T) {
+	var buf bytes.Buffer
+	if err := cmd.RenderSlackManifest(&buf, cmd.SlackManifestData{AppName: "x", EventsURL: "https://e/events"}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{`"im:history"`, `"mpim:history"`, `"message.im"`, `"message.mpim"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("manifest missing %s", want)
+		}
+	}
+	if strings.Contains(out, `"im:write"`) {
+		t.Error("the bot never opens a DM; im:write must not be requested")
+	}
+}
+
+func TestVerifyEventsAPIScopes_RequiresIMHistory(t *testing.T) {
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"channels:history", "groups:history", "reactions:write", "files:read"})
+	if ok || !hasString(missing, "im:history") {
+		t.Fatalf("im:history must be required; ok=%v missing=%v", ok, missing)
+	}
+}
+
+func hasString(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}

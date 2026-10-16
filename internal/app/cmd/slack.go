@@ -961,7 +961,7 @@ func PersistSigningSecret(ctx context.Context, store SlackSSMStore, secret, ssmP
 // Returns (allPresent bool, missing []string).
 // Exported for testability.
 func VerifyEventsAPIScopes(scopes []string) (bool, []string) {
-	required := []string{"channels:history", "groups:history", "reactions:write", "files:read"}
+	required := []string{"channels:history", "groups:history", "im:history", "mpim:history", "reactions:write", "files:read"}
 	scopeSet := make(map[string]bool, len(scopes))
 	for _, s := range scopes {
 		scopeSet[s] = true

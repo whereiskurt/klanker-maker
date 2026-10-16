@@ -21,6 +21,8 @@
         "groups:write",
         "groups:read",
         "groups:history",
+        "im:history",
+        "mpim:history",
         "conversations.connect:write",
         "reactions:read",
         "reactions:write",
@@ -37,7 +39,9 @@
       "request_url": "https://example.lambda-url.us-east-1.on.aws/events",
       "bot_events": [
         "message.channels",
-        "message.groups"
+        "message.groups",
+        "message.im",
+        "message.mpim"
       ]
     },
     "org_deploy_enabled": false,
