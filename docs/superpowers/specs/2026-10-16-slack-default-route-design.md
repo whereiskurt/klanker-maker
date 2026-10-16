@@ -101,8 +101,8 @@ changes. The miss branch (`events_handler.go` step 5) becomes a ladder:
    decision, and a listed sender gets a dispatch, so there is nobody left to hint.)
 4. **Gate.** Mention required when `channel_type` is `channel`, `group`, or `mpim`;
    not required for `im`. `slackMessageEvent` gains a `ChannelType` field read from
-   the event's `channel_type`. Then the email check from §4. Either failure: 200, debug
-   log, nothing else.
+   the event's `channel_type`. Then the email check from §4. Either failure: 200, info
+   log (so CloudWatch shows which gate dropped it), nothing else.
 5. **Resolve the alias** with a Slack-side `DynamoAliasResolver` (copy of the GitHub
    one: `alias-index` query, then read `slack_inbound_queue_url`, status,
    `action_frozen`, `frozen_reason`). Three-way split:

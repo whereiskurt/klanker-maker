@@ -485,17 +485,18 @@ for `km-slack-inbound-poller`.
 
 ### 9.3 Telling which gate dropped a mention
 
-The gate drops log at debug level by design, so that a silent drop is invisible to the
-sender. The events handler logs through `slog.Default()`, which is Info level, and the bridge
-has no log-level knob, so those debug lines do not reach CloudWatch today. Diagnose by
-elimination instead. No `events:` line at all for the channel means the event never reached
-the bridge: check bot membership and, for DMs, the scopes. An `events: router:` line means no
-route is configured and Phase 96 ran. If neither appears and no `events: enqueued` or
-`events: route: cold-create published` follows, the drop was at the gate: check the message
-for a mention (DMs aside), then run `km doctor` to confirm the sender's email resolves and is
-on the list. A dispatch that reached the box but whose reply never appeared shows as
-`bridge: channel_mismatch`. Making the gate drops visible needs a log-level option on the
-bridge, which is a small follow-up.
+The route-gate drops log at Info, so they reach CloudWatch at the Lambda's default level.
+Grep the bridge log group for these lines:
+
+- `events: route: no mention`: the channel is not a DM and the message did not mention the bot.
+- `events: route: sender email unavailable (deny)`: the sender's email lookup failed, so the gate denied.
+- `events: route: sender not allowlisted (silent drop)`: the sender's email is not on the route's list.
+
+The sender sees nothing in any of these cases. No `events:` line at all for the channel means
+the event never reached the bridge: check bot membership and, for DMs, the scopes. An
+`events: router:` line means no route is configured and Phase 96 ran. A dispatch that reached
+the box but whose reply never appeared shows as `bridge: channel_mismatch`. The owned-path
+drops (allowlist, mention-only skip, bypass, reaction skipped) still log at Debug.
 
 ## 10. Live UAT
 
@@ -573,7 +574,6 @@ unverified.
 - The email cache never evicts expired entries (bounded per user id) and has no single-flight
   on concurrent misses.
 - `BotUserID.Fetch` in context collection has no nil guard; production always wires it.
-- The bridge has no log-level option, so the debug-level gate drops never reach CloudWatch.
 - `km slack init`'s scope note still lists only `channels:history` and `groups:history`.
 - Slack Connect channels from another workspace are unverified.
 - Per-channel rules, a "booting" message on cold-create, and a cooldown on the route are out

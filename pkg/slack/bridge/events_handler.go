@@ -827,7 +827,7 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 			return routeDecision{}, false
 		}
 		if uid == "" || !strings.Contains(msg.Text, "<@"+uid+">") {
-			h.log().Debug("events: route: no mention", "channel", msg.Channel, "channel_type", msg.ChannelType)
+			h.log().Info("events: route: no mention", "channel", msg.Channel, "channel_type", msg.ChannelType)
 			return routeDecision{}, false
 		}
 	}
@@ -838,12 +838,12 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 	}
 	email, err := h.SenderEmails.SenderEmail(ctx, msg.User)
 	if err != nil {
-		h.log().Debug("events: route: sender email unavailable (deny)",
+		h.log().Info("events: route: sender email unavailable (deny)",
 			"user", msg.User, "err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
 		return routeDecision{}, false
 	}
 	if !h.DefaultRoute.Allows(email) {
-		h.log().Debug("events: route: sender not allowlisted (silent drop)", "user", msg.User, "channel", msg.Channel)
+		h.log().Info("events: route: sender not allowlisted (silent drop)", "user", msg.User, "channel", msg.Channel)
 		return routeDecision{}, false
 	}
 
