@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,9 @@ import (
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	sqssvc "github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
@@ -648,4 +651,97 @@ func checkSlackPeerBridges(peerBridges []string, ownBridgeURL string) CheckResul
 		Status:  CheckOK,
 		Message: fmt.Sprintf("slack.peer_bridges configured: %d peer(s); no malformed URLs or self-loops detected", len(peerBridges)),
 	}
+}
+
+// SlackEmailLookup is the one users.lookupByEmail call the default-route doctor
+// group makes; *slackpkg.Client satisfies it.
+type SlackEmailLookup interface {
+	LookupUserByEmail(ctx context.Context, email string) (string, bool, error)
+}
+
+// checkSlackDefaultRoute validates the slack.default_route block. Read-only.
+// One SKIPPED result when the block is absent; otherwise three results
+// (profile, allowlist, scopes).
+func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute, searchPaths []string, lookup SlackEmailLookup, scopesCSV string) []CheckResult {
+	if route == nil {
+		return []CheckResult{{Name: "Slack default route", Status: CheckSkipped, Message: "slack.default_route not set — route off"}}
+	}
+	var out []CheckResult
+
+	// 1. Profile: exists, resolves, has Slack inbound.
+	if err := ValidateSlackDefaultRouteProfile(route, searchPaths); err != nil {
+		out = append(out, CheckResult{Name: "Slack default route profile", Status: CheckWarn, Message: err.Error(),
+			Remediation: "Fix km-config.yaml slack.default_route and the profile, then `km init --dry-run=false`."})
+	} else {
+		msg := fmt.Sprintf("%s → alias %q, Slack inbound enabled", route.Profile, route.Alias)
+		if strict, err := slackDefaultRouteProfileIsStrict(route, searchPaths); err == nil && strict {
+			msg += "; threadBypass: false — thread follow-ups in invited channels require an @-mention"
+		}
+		out = append(out, CheckResult{Name: "Slack default route profile", Status: CheckOK, Message: msg})
+	}
+
+	// 2. Allowlist: non-empty and every email resolves in the workspace.
+	emails := route.NormalizedEmails()
+	switch {
+	case len(emails) == 0:
+		out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckWarn,
+			Message:     "allow_emails is empty — the route is OFF (deny-by-default)",
+			Remediation: "List at least one workspace email under slack.default_route.allow_emails."})
+	case lookup == nil:
+		out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckSkipped,
+			Message: fmt.Sprintf("%d email(s) configured; bot token unavailable so resolution was not checked", len(emails))})
+	default:
+		var unresolved []string
+		for _, e := range emails {
+			if _, ok, err := lookup.LookupUserByEmail(ctx, e); err != nil || !ok {
+				unresolved = append(unresolved, e)
+			}
+		}
+		if len(unresolved) > 0 {
+			out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckWarn,
+				Message:     "not found in the workspace: " + strings.Join(unresolved, ", "),
+				Remediation: "Use the email on the person's Slack profile. Removals take effect after `km init --dry-run=false` plus up to 15 minutes of bridge cache."})
+		} else {
+			out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckOK,
+				Message: fmt.Sprintf("%d email(s) resolve in the workspace", len(emails))})
+		}
+	}
+
+	// 3. Scopes: DMs need im:history / mpim:history.
+	have := map[string]bool{}
+	for _, s := range strings.Split(scopesCSV, ",") {
+		have[strings.TrimSpace(s)] = true
+	}
+	var missing []string
+	for _, s := range []string{"im:history", "mpim:history"} {
+		if !have[s] {
+			missing = append(missing, s)
+		}
+	}
+	switch {
+	case scopesCSV == "":
+		out = append(out, CheckResult{Name: "Slack default route scopes", Status: CheckSkipped, Message: "bot scopes cache unavailable"})
+	case len(missing) > 0:
+		out = append(out, CheckResult{Name: "Slack default route scopes", Status: CheckWarn,
+			Message:     "missing " + strings.Join(missing, ", ") + " — DMs to the bot are never delivered",
+			Remediation: "`km slack manifest` → paste into the Slack App → reinstall → `km slack rotate-token --bot-token <new>`."})
+	default:
+		out = append(out, CheckResult{Name: "Slack default route scopes", Status: CheckOK, Message: "im:history and mpim:history present"})
+	}
+	return out
+}
+
+// slackDefaultRouteProfileIsStrict resolves the route's profile and reports
+// notification.slack.inbound.threadBypass == false.
+func slackDefaultRouteProfileIsStrict(route *config.SlackDefaultRoute, searchPaths []string) (bool, error) {
+	paths := append([]string{filepath.Dir(route.Profile)}, searchPaths...)
+	p, err := profile.Resolve(SlackDefaultRouteProfileSlug(route.Profile), paths)
+	if err != nil {
+		return false, err
+	}
+	n := p.Spec.Notification
+	if n == nil || n.Slack == nil || n.Slack.Inbound == nil || n.Slack.Inbound.ThreadBypass == nil {
+		return false, nil
+	}
+	return !*n.Slack.Inbound.ThreadBypass, nil
 }
