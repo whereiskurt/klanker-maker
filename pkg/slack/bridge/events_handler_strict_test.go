@@ -206,19 +206,57 @@ func TestStrictMode_ContextFiles(t *testing.T) {
 	}
 }
 
+// A strict mentioned reply that itself carries a file takes the files-sync
+// branch; that envelope must carry the thread context too.
+func TestStrictMode_FilesSyncBranchCarriesContext(t *testing.T) {
+	now := time.Now()
+	f := false
+	h, sqs, threads, _, sandboxes, _, _ := newHandler(now)
+	h.MentionOnly = true
+	sandboxes.info.ThreadBypass = &f
+	threads.sandboxByThread = map[string]string{"C1|1.0": "sb-abc123"}
+	h.FileDownloader = &contextDownloader{}
+	h.ThreadReader = &fakeReader{replies: []SlackReplyMessage{
+		{User: "U0RON", TS: "1.000002", Text: "earlier"},
+	}}
+	ev := map[string]any{
+		"type": "message", "subtype": "file_share", "channel": "C1", "user": "U0KURT",
+		"text": "<@UBOT123> see file", "ts": "1.000005", "thread_ts": "1.0",
+		"files": []map[string]any{{"id": "F1", "name": "trigger.png", "size": 10}},
+	}
+	evb, _ := json.Marshal(ev)
+	raw := fmt.Sprintf(`{"type":"event_callback","event_id":"FS-1","event":%s}`, evb)
+	tsHdr, sigHdr := signSlackPayload(t, raw, now)
+	h.Handle(context.Background(), EventsRequest{Headers: map[string]string{"x-slack-request-timestamp": tsHdr, "x-slack-signature": sigHdr}, Body: raw})
+	if len(sqs.sends) != 1 {
+		t.Fatalf("want dispatch, sends=%d", len(sqs.sends))
+	}
+	var body InboundQueueBody
+	json.Unmarshal([]byte(sqs.sends[0].body), &body)
+	if len(body.Attachments) != 1 || body.Attachments[0].OriginalName != "trigger.png" {
+		t.Fatalf("want the files-sync branch (trigger attachment), got %+v", body.Attachments)
+	}
+	if body.ThreadContext == nil || len(body.ThreadContext.Messages) != 1 || body.ThreadContext.Messages[0].Text != "earlier" {
+		t.Fatalf("files-sync envelope must carry context: %+v", body.ThreadContext)
+	}
+}
+
 // Part A routed thread on a strict default sandbox.
 func TestStrictMode_RoutedThread(t *testing.T) {
 	now := time.Now()
 	f := false
-	h, sqs, threads, alias, _, _, _ := routedHandler(t, now)
+	h, sqs, threads, alias, _, reactor, _ := routedHandler(t, now)
+	nonces := h.Nonces.(*fakeNonces)
 	alias.info.ThreadBypass = &f
 	h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot": alias.info}}
 	threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-irbot"}
 	reader := &fakeReader{replies: []SlackReplyMessage{{User: "U0KURT", TS: "1.000002", Text: "earlier"}, {User: "U0OTHER", TS: "1.000003", Text: "unlisted"}}}
 	h.ThreadReader = reader
 	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "no mention", "1.5", "1.0", "RS-1"))
-	if len(sqs.sends) != 0 || reader.calls != 0 {
-		t.Fatal("strict routed follow-up without mention must drop")
+	if len(sqs.sends) != 0 || reader.calls != 0 || len(nonces.seen) != 0 || len(threads.upserts) != 0 ||
+		len(reactor.snapshot()) != 0 || len(threads.marks) != 0 {
+		t.Fatalf("strict routed follow-up without mention must touch nothing: sends=%d reader=%d nonces=%d upserts=%d reactions=%d marks=%d",
+			len(sqs.sends), reader.calls, len(nonces.seen), len(threads.upserts), len(reactor.snapshot()), len(threads.marks))
 	}
 	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> again", "1.6", "1.0", "RS-2"))
 	if len(sqs.sends) != 1 {
@@ -228,5 +266,38 @@ func TestStrictMode_RoutedThread(t *testing.T) {
 	json.Unmarshal([]byte(sqs.sends[0].body), &body)
 	if body.ThreadContext == nil || len(body.ThreadContext.Messages) != 1 || body.ThreadContext.OmittedNonAllow != 1 {
 		t.Fatalf("routed context must use the email gate: %+v", body.ThreadContext)
+	}
+}
+
+// deadlineEmails records whether each SenderEmail call carried a deadline.
+type deadlineEmails struct {
+	inner       *scriptedEmailsByUser
+	hadDeadline map[string]bool
+}
+
+func (d *deadlineEmails) SenderEmail(ctx context.Context, u string) (string, error) {
+	_, ok := ctx.Deadline()
+	d.hadDeadline[u] = ok
+	return d.inner.SenderEmail(ctx, u)
+}
+
+// The routed trust predicate must run under collectThreadContext's bounded
+// sub-context, not Handle's, so a slow Slack API cannot outlive the turn.
+func TestStrictMode_RoutedPredicateUsesBoundedContext(t *testing.T) {
+	now := time.Now()
+	f := false
+	h, sqs, threads, alias, _, _, emails := routedHandler(t, now)
+	de := &deadlineEmails{inner: emails, hadDeadline: map[string]bool{}}
+	h.SenderEmails = de
+	alias.info.ThreadBypass = &f
+	h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot": alias.info}}
+	threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-irbot"}
+	h.ThreadReader = &fakeReader{replies: []SlackReplyMessage{{User: "U0OTHER", TS: "1.000003", Text: "unlisted"}}}
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> again", "1.6", "1.0", "RD-1"))
+	if len(sqs.sends) != 1 {
+		t.Fatalf("want dispatch, sends=%d", len(sqs.sends))
+	}
+	if !de.hadDeadline["U0OTHER"] {
+		t.Fatal("context-author lookup ran without the sub-context deadline")
 	}
 }

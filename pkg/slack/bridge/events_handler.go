@@ -523,11 +523,15 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	var threadCtx *ThreadContext
 	strict := !threadBypassAllowed(info) && (effectiveMentionOnly || routed)
 	if strict && msg.ThreadTS != "" && h.ThreadReader != nil {
-		allowed := func(u string) bool { return len(effectiveAllow) == 0 || isInSlackAllowlist(u, effectiveAllow) }
+		allowed := func(_ context.Context, u string) bool {
+			return len(effectiveAllow) == 0 || isInSlackAllowlist(u, effectiveAllow)
+		}
 		if routed {
 			// A routed thread is gated by the route's sender-email list, not Phase 118.
-			allowed = func(u string) bool {
-				e, err := h.SenderEmails.SenderEmail(ctx, u)
+			// The lookup runs under collectThreadContext's deadline; once it passes, a
+			// lookup errors and the author counts as not allowed (fails closed).
+			allowed = func(cctx context.Context, u string) bool {
+				e, err := h.SenderEmails.SenderEmail(cctx, u)
 				return err == nil && h.DefaultRoute.Allows(e)
 			}
 		}
@@ -876,23 +880,25 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 // collectThreadContext reads the strict thread's messages since the bot's last
 // dispatch (the boundary), keeps the trusted human ones, and downloads their
 // files. It never fails the turn: errors land in ThreadContext.Error / FileErrors.
-func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, allowed func(string) bool) *ThreadContext {
+func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, allowed func(context.Context, string) bool) *ThreadContext {
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	oldest, err := h.Threads.DispatchBoundary(cctx, msg.Channel, msg.ThreadTS)
 	if err != nil {
 		h.log().Warn("events: context: boundary read failed; using thread root",
-			"err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+			"err", err, "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
 		oldest = ""
 	}
 	replies, err := h.ThreadReader.Replies(cctx, msg.Channel, msg.ThreadTS, oldest)
 	if err != nil {
 		h.log().Warn("events: context: replies fetch failed",
-			"err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+			"err", err, "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
 		return &ThreadContext{Error: err.Error()}
 	}
 	uid, _ := h.BotUserID.Fetch(cctx)
-	tc, refs := BuildThreadContext(replies, msg.TS, uid, allowed)
+	// The trust predicate (possibly a Slack lookup per author) is bound to the
+	// sub-context so a slow API cannot push the turn past the Lambda timeout.
+	tc, refs := BuildThreadContext(replies, msg.TS, uid, func(u string) bool { return allowed(cctx, u) })
 	if h.FileDownloader != nil {
 		for _, ref := range refs {
 			atts, ferrs, derr := h.FileDownloader.Download(cctx, []SlackFile{ref.File}, info.SandboxID, msg.ThreadTS)
@@ -904,7 +910,7 @@ func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessa
 			tc.Messages[ref.MsgIndex].Attachments = append(tc.Messages[ref.MsgIndex].Attachments, atts...)
 		}
 	}
-	h.log().Info("events: context collected", "channel", msg.Channel, "thread_ts", msg.ThreadTS,
+	h.log().Info("events: context collected", "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS,
 		"messages", len(tc.Messages), "omitted", tc.OmittedNonAllow, "truncated", tc.TruncatedOlder, "files", len(refs))
 	return &tc
 }
