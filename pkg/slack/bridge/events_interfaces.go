@@ -204,3 +204,30 @@ type SandboxResumer interface {
 type SandboxStatusWriter interface {
 	SetStatusRunning(ctx context.Context, sandboxID string) error
 }
+
+// ---- 2026-10-16: default route ---------------------------------------------
+
+// SandboxByIDFetcher reads routing info for a known sandbox id (GetItem on
+// km-sandboxes). Used for thread continuity in channels no sandbox owns.
+type SandboxByIDFetcher interface {
+	FetchBySandboxID(ctx context.Context, sandboxID string) (SandboxRoutingInfo, error)
+}
+
+// SlackAliasResolver resolves the default route's alias to routing info.
+// found=false with err=nil means "no row": cold-create.
+type SlackAliasResolver interface {
+	ResolveAlias(ctx context.Context, alias string) (info SandboxRoutingInfo, found bool, err error)
+}
+
+// SandboxCreatePublisher publishes a SandboxCreate event carrying the Slack
+// envelope and returns the sandbox id it minted, so the thread row can be
+// written before the box exists.
+type SandboxCreatePublisher interface {
+	PutSandboxCreate(ctx context.Context, alias, profile, slackEnvelopeJSON string) (sandboxID string, err error)
+}
+
+// SenderEmailFetcher resolves a Slack user id to a lowercased email. It returns
+// ErrSenderIneligible for deleted users, bots, and profiles with no email.
+type SenderEmailFetcher interface {
+	SenderEmail(ctx context.Context, userID string) (email string, err error)
+}

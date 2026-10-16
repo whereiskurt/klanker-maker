@@ -22,6 +22,9 @@ type slackMessageEvent struct {
 	TS       string      `json:"ts"`
 	ThreadTS string      `json:"thread_ts,omitempty"`
 	Files    []SlackFile `json:"files,omitempty"` // Phase 75: populated on file_share events
+	// ChannelType is Slack's conversation kind: "channel", "group", "im", "mpim".
+	// The default route requires an @-mention everywhere except "im".
+	ChannelType string `json:"channel_type,omitempty"`
 }
 
 // SlackFile is a Slack file object as delivered in a file_share message event's files[].
