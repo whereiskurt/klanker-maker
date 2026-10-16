@@ -233,10 +233,11 @@ type SlackAliasResolver interface {
 }
 
 // SandboxCreatePublisher publishes a SandboxCreate event carrying the Slack
-// envelope and returns the sandbox id it minted, so the thread row can be
-// written before the box exists.
+// envelope for a sandbox id the caller minted. The events handler mints the id
+// BEFORE the files fork so attachment keys (slack-inbound/<id>/<thread_ts>/…)
+// and the thread row both name the box that is about to exist.
 type SandboxCreatePublisher interface {
-	PutSandboxCreate(ctx context.Context, alias, profile, slackEnvelopeJSON string) (sandboxID string, err error)
+	PutSandboxCreate(ctx context.Context, sandboxID, alias, profile, slackEnvelopeJSON string) error
 }
 
 // SenderEmailFetcher resolves a Slack user id to a lowercased email. It returns

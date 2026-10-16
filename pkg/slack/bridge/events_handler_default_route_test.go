@@ -34,14 +34,23 @@ func (f *fakeAlias) ResolveAlias(_ context.Context, _ string) (SandboxRoutingInf
 }
 
 type fakePublisher struct {
-	calls     []struct{ alias, profile, envelope string }
-	sandboxID string
-	err       error
+	calls []struct{ sandboxID, alias, profile, envelope string }
+	err   error
 }
 
-func (f *fakePublisher) PutSandboxCreate(_ context.Context, alias, profile, env string) (string, error) {
-	f.calls = append(f.calls, struct{ alias, profile, envelope string }{alias, profile, env})
-	return f.sandboxID, f.err
+func (f *fakePublisher) PutSandboxCreate(_ context.Context, sandboxID, alias, profile, env string) error {
+	f.calls = append(f.calls, struct{ sandboxID, alias, profile, envelope string }{sandboxID, alias, profile, env})
+	return f.err
+}
+
+// recordingDownloader records the sandbox id each Download was keyed on.
+type recordingDownloader struct {
+	sandboxIDs []string
+}
+
+func (d *recordingDownloader) Download(_ context.Context, _ []SlackFile, sandboxID, _ string) ([]Attachment, []FileError, error) {
+	d.sandboxIDs = append(d.sandboxIDs, sandboxID)
+	return nil, nil, nil
 }
 
 type fakeRelayer struct {
@@ -62,7 +71,7 @@ func routedHandler(t *testing.T, now time.Time) (*EventsHandler, *fakeSQS, *fake
 	h, sqs, threads, _, sandboxes, _, reactor := newHandler(now)
 	sandboxes.info = SandboxRoutingInfo{} // every channel is a miss
 	alias := &fakeAlias{info: SandboxRoutingInfo{SandboxID: "sb-irbot", QueueURL: "https://sqs.example/irbot.fifo"}, found: true}
-	pub := &fakePublisher{sandboxID: "sl-cold1"}
+	pub := &fakePublisher{}
 	emails := &scriptedEmailsByUser{byUser: map[string]string{"U0KURT": "kurt@example.com", "U0OTHER": "other@example.com"}}
 	h.DefaultRoute = NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"})
 	h.AliasResolver = alias
@@ -250,7 +259,10 @@ func TestDefaultRoute_AliasAbsent_ColdCreateCarriesEnvelope(t *testing.T) {
 	if err := json.Unmarshal([]byte(pub.calls[0].envelope), &body); err != nil || body.Channel != "CFOREIGN" || body.Text == "" {
 		t.Fatalf("envelope must be an InboundQueueBody: %s err=%v", pub.calls[0].envelope, err)
 	}
-	if len(threads.upserts) != 1 || threads.upserts[0].sb != "sl-cold1" {
+	if !strings.HasPrefix(pub.calls[0].sandboxID, "sl-") {
+		t.Fatalf("handler must mint an sl- id for the publisher; got %q", pub.calls[0].sandboxID)
+	}
+	if len(threads.upserts) != 1 || threads.upserts[0].sb != pub.calls[0].sandboxID {
 		t.Fatalf("thread row must name the minted sandbox id; %+v", threads.upserts)
 	}
 	if len(reactor.snapshot()) != 1 {
@@ -324,7 +336,37 @@ func TestDefaultRoute_OrphanThread_AliasAbsent_ColdCreateRebinds(t *testing.T) {
 	if len(pub.calls) != 1 {
 		t.Fatalf("want cold-create, got %d publishes", len(pub.calls))
 	}
-	if len(threads.rebinds) != 1 || threads.rebinds[0].sb != "sl-cold1" {
+	if !strings.HasPrefix(pub.calls[0].sandboxID, "sl-") {
+		t.Fatalf("minted id %q", pub.calls[0].sandboxID)
+	}
+	if len(threads.rebinds) != 1 || threads.rebinds[0].sb != pub.calls[0].sandboxID {
 		t.Fatalf("orphaned thread row must be rebound to the minted box; rebinds=%+v upserts=%+v", threads.rebinds, threads.upserts)
+	}
+}
+
+func TestDefaultRoute_AliasAbsent_ColdCreateWithFiles_KeysOnMintedID(t *testing.T) {
+	now := time.Now()
+	h, _, threads, alias, pub, _, _ := routedHandler(t, now)
+	alias.found = false
+	alias.info = SandboxRoutingInfo{}
+	dl := &recordingDownloader{}
+	h.FileDownloader = dl
+	ev := map[string]any{
+		"type": "message", "subtype": "file_share", "channel": "CFOREIGN", "channel_type": "channel",
+		"user": "U0KURT", "text": "<@UBOT123> look at this", "ts": "1.0",
+		"files": []map[string]any{{"id": "F1", "name": "a.txt", "url_private_download": "https://files.example/a.txt", "size": 3}},
+	}
+	evb, _ := json.Marshal(ev)
+	body := fmt.Sprintf(`{"type":"event_callback","event_id":%q,"event":%s}`, "DR15", evb)
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+	h.Handle(context.Background(), EventsRequest{Headers: map[string]string{"x-slack-request-timestamp": tsHdr, "x-slack-signature": sigHdr}, Body: body})
+	if len(dl.sandboxIDs) != 1 || !strings.HasPrefix(dl.sandboxIDs[0], "sl-") {
+		t.Fatalf("downloader must key on the minted sl- id; got %v", dl.sandboxIDs)
+	}
+	if len(pub.calls) != 1 || pub.calls[0].sandboxID != dl.sandboxIDs[0] {
+		t.Fatalf("publisher id must match the download key; calls=%+v", pub.calls)
+	}
+	if len(threads.upserts) != 1 || threads.upserts[0].sb != dl.sandboxIDs[0] {
+		t.Fatalf("thread row must name the minted id; %+v", threads.upserts)
 	}
 }

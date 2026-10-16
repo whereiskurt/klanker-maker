@@ -375,6 +375,12 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
 		routed = true
+		if coldCreate {
+			// Mint the id now, BEFORE the files fork, so attachment keys
+			// (slack-inbound/<id>/<thread_ts>/…), the SandboxCreate event and the
+			// thread row all name the box that is about to exist.
+			info.SandboxID = generateSlackSandboxID()
+		}
 	}
 	// present+yes: process locally (fall through — today's path unchanged).
 
@@ -773,19 +779,19 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 }
 
 // deliver enqueues a routed/owned turn, or publishes a cold-create carrying the
-// envelope. Returns the sandbox id the thread row must name.
+// envelope for the id Handle pre-minted into info.SandboxID. Returns the sandbox
+// id the thread row must name.
 func (h *EventsHandler) deliver(ctx context.Context, info SandboxRoutingInfo, coldCreate bool, body InboundQueueBody, threadTS, dedupID string) (string, error) {
 	bodyBytes, _ := json.Marshal(body)
 	if coldCreate {
 		if h.CreatePublisher == nil || h.DefaultRoute == nil {
 			return "", errors.New("cold-create publish: no CreatePublisher wired")
 		}
-		id, err := h.CreatePublisher.PutSandboxCreate(ctx, h.DefaultRoute.Alias, h.DefaultRoute.Profile, string(bodyBytes))
-		if err != nil {
+		if err := h.CreatePublisher.PutSandboxCreate(ctx, info.SandboxID, h.DefaultRoute.Alias, h.DefaultRoute.Profile, string(bodyBytes)); err != nil {
 			return "", fmt.Errorf("cold-create publish: %w", err)
 		}
-		h.log().Info("events: route: cold-create published", "alias", h.DefaultRoute.Alias, "sandbox", id, "channel", body.Channel)
-		return id, nil
+		h.log().Info("events: route: cold-create published", "alias", h.DefaultRoute.Alias, "sandbox", info.SandboxID, "channel", body.Channel)
+		return info.SandboxID, nil
 	}
 	if err := h.SQS.Send(ctx, info.QueueURL, string(bodyBytes), threadTS, dedupID); err != nil {
 		return "", err

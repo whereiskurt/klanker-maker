@@ -1991,6 +1991,8 @@ func slackProfileSlug(profile string) string {
 	return strings.ToLower(base)
 }
 
+// generateSlackSandboxID mints an sl-<8 hex> sandbox id. Called by the events
+// handler (not the publisher) as soon as a cold-create is decided.
 func generateSlackSandboxID() string {
 	b := make([]byte, 4)
 	if _, err := cryptorand.Read(b); err != nil {
@@ -1999,10 +2001,9 @@ func generateSlackSandboxID() string {
 	return "sl-" + hex.EncodeToString(b)
 }
 
-func (a *EventBridgeAdapter) PutSandboxCreate(ctx context.Context, alias, profile, slackEnvelopeJSON string) (string, error) {
-	id := generateSlackSandboxID()
+func (a *EventBridgeAdapter) PutSandboxCreate(ctx context.Context, sandboxID, alias, profile, slackEnvelopeJSON string) error {
 	detail := kmaws.SandboxCreateDetail{
-		SandboxID:      id,
+		SandboxID:      sandboxID,
 		ArtifactBucket: a.ArtifactBucket,
 		ArtifactPrefix: "slack-profiles/" + slackProfileSlug(profile),
 		Alias:          alias,
@@ -2010,9 +2011,9 @@ func (a *EventBridgeAdapter) PutSandboxCreate(ctx context.Context, alias, profil
 		SlackEnvelope:  slackEnvelopeJSON,
 	}
 	if err := kmaws.PutSandboxCreateEvent(ctx, a.Client, detail); err != nil {
-		return "", fmt.Errorf("slack-bridge: cold-create: %w", err)
+		return fmt.Errorf("slack-bridge: cold-create: %w", err)
 	}
-	return id, nil
+	return nil
 }
 
 // SlackSenderEmailAdapter implements SenderEmailFetcher over users.info.

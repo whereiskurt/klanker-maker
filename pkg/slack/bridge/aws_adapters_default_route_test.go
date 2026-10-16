@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -84,16 +83,12 @@ func (m *mockEventBridge) PutEvents(_ context.Context, in *eventbridge.PutEvents
 func TestEventBridgeAdapter_PutSandboxCreate(t *testing.T) {
 	eb := &mockEventBridge{}
 	a := &bridge.EventBridgeAdapter{Client: eb, ArtifactBucket: "km-artifacts"}
-	id, err := a.PutSandboxCreate(context.Background(), "ir-bot", "profiles/IR-Bot.yaml", `{"channel":"C1"}`)
-	if err != nil {
+	if err := a.PutSandboxCreate(context.Background(), "sl-test1234", "ir-bot", "profiles/IR-Bot.yaml", `{"channel":"C1"}`); err != nil {
 		t.Fatal(err)
-	}
-	if !strings.HasPrefix(id, "sl-") {
-		t.Fatalf("id %q", id)
 	}
 	var d kmaws.SandboxCreateDetail
 	json.Unmarshal([]byte(eb.entries[0]), &d)
-	if d.SandboxID != id || d.Alias != "ir-bot" || d.ArtifactPrefix != "slack-profiles/ir-bot" || d.SlackEnvelope != `{"channel":"C1"}` || d.CreatedBy != "slack" {
+	if d.SandboxID != "sl-test1234" || d.Alias != "ir-bot" || d.ArtifactPrefix != "slack-profiles/ir-bot" || d.SlackEnvelope != `{"channel":"C1"}` || d.CreatedBy != "slack" {
 		t.Fatalf("detail %+v", d)
 	}
 }
