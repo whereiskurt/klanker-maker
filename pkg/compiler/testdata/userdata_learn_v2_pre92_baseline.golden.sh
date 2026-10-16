@@ -2285,10 +2285,18 @@ while true; do
 
     # Quick malformed-body check BEFORE backgrounding — delete+continue avoids the
     # retry storm without holding a semaphore slot.
+    # --- km-slack-reply-channel ---
     CHANNEL=$(echo "$BODY" | jq -r '.channel // empty')
     THREAD_TS=$(echo "$BODY" | jq -r '.thread_ts // empty')
     TEXT=$(echo "$BODY" | jq -r '.text // empty')
     ATTACH_COUNT=$(echo "$BODY" | jq -r '.attachments // [] | length')
+    # Reply where the question was asked. A default-routed turn (2026-10-16)
+    # arrives from a channel this box does not own; the bridge authorizes posts
+    # into threads it routed, so every post in this turn targets the envelope's
+    # channel, not the boot-time KM_SLACK_CHANNEL_ID. For a mapped channel the
+    # two are equal and nothing changes.
+    REPLY_CHANNEL="$CHANNEL"
+    # --- end km-slack-reply-channel ---
     if [ -z "$CHANNEL" ] || [ -z "$THREAD_TS" ] || { [ -z "$TEXT" ] && [ "$ATTACH_COUNT" -eq 0 ]; }; then
       echo "[km-slack-inbound-poller] WARN: malformed message body, acking to avoid retry: $BODY"
       aws sqs delete-message \
@@ -2342,6 +2350,9 @@ while true; do
 
       # Phase 75: compute ATTACH_COUNT before the guard so file-only uploads are admitted.
       ATTACH_COUNT=$(echo "$BODY" | jq -r '.attachments // [] | length')
+      # Re-derived from the envelope with the rest of the parse (see the
+      # km-slack-reply-channel block above): every post in this turn goes here.
+      REPLY_CHANNEL="$CHANNEL"
 
       # Phase 119 (P119-F): read the inbound event_ts that uniquely identifies THIS
       # Slack message. InboundQueueBody.EventTS = msg.TS (the Slack message ts, set at
@@ -2486,9 +2497,12 @@ while true; do
       # --mention "$KM_SLACK_SENDER_ID" to km-slack post/reply. Self-contained
       # (derives SENDER_ID from BODY here) so the compiler test can run it as-is.
       SENDER_ID=$(echo "$BODY" | jq -r '.user // empty' 2>/dev/null || true)
+      # The channel the turn arrived in (already set by the envelope parse; the
+      # := fallback keeps this block self-contained for the same test).
+      : "${REPLY_CHANNEL:=$(echo "$BODY" | jq -r '.channel // empty' 2>/dev/null || true)}"
       if [ -n "$SENDER_ID" ]; then
         HDR_FILE="$(mktemp)"
-        printf '[Slack] From: <@%s> (also in $KM_SLACK_SENDER_ID). To notify this person in your reply write <@%s> inline, or pass --mention %s to km-slack post/reply. A bare @name is plain text to Slack — never invent an id; use this one or a <@U…> token from the message.\n\n' "$SENDER_ID" "$SENDER_ID" "$SENDER_ID" > "$HDR_FILE"
+        printf '[Slack] From: <@%s> in <#%s> (also in $KM_SLACK_SENDER_ID). To notify this person in your reply write <@%s> inline, or pass --mention %s to km-slack post/reply. A bare @name is plain text to Slack — never invent an id; use this one or a <@U…> token from the message.\n\n' "$SENDER_ID" "$REPLY_CHANNEL" "$SENDER_ID" "$SENDER_ID" > "$HDR_FILE"
         cat "$PROMPT_FILE" >> "$HDR_FILE"
         mv "$HDR_FILE" "$PROMPT_FILE"
         chmod 644 "$PROMPT_FILE"
@@ -2503,6 +2517,10 @@ while true; do
       # handoff in old thread → seeded prompt → fall through to Plan 70-05 dispatch.
       # No chat.update in the critical path: avoids Slack 10-min edit window AND avoids
       # ever posting a <permalink-placeholder> string to Slack (v1 pattern).
+      if [ "$DO_SWITCH" -eq 1 ] && [ "$REPLY_CHANNEL" != "$KM_SLACK_CHANNEL_ID" ]; then
+        echo "[km-slack-inbound-poller] agent switch requested in a routed channel ($REPLY_CHANNEL); the bridge only authorizes posts into the existing thread, so continuing with $CURRENT_AGENT" >&2
+        DO_SWITCH=0
+      fi
       if [ "$DO_SWITCH" -eq 1 ]; then
         NEW_AGENT="$REQUESTED_AGENT"
         OLD_AGENT="$CURRENT_AGENT"
@@ -2511,7 +2529,7 @@ while true; do
         # Step 1: fetch OLD-thread permalink FIRST. THREAD_TS is already known from
         # the inbound SQS event — this call has no dependency on the new top-level.
         OLD_PERMALINK=$(/opt/km/bin/km-slack permalink \
-          --channel "$KM_SLACK_CHANNEL_ID" --ts "$THREAD_TS" 2>>"$RUN_DIR/stderr.log" || echo "(unavailable)")
+          --channel "$REPLY_CHANNEL" --ts "$THREAD_TS" 2>>"$RUN_DIR/stderr.log" || echo "(unavailable)")
         [ -z "$OLD_PERMALINK" ] && OLD_PERMALINK="(unavailable)"
 
         # Step 2: build the new top-level body WITH OLD_PERMALINK already embedded.
@@ -2531,7 +2549,7 @@ while true; do
 
         # Step 3: post NEW top-level message; capture its ts from km-slack stdout.
         NEW_TOP_TS=$(/opt/km/bin/km-slack post \
-          --channel "$KM_SLACK_CHANNEL_ID" \
+          --channel "$REPLY_CHANNEL" \
           --new-message \
           --body "$NEW_MSG_BODY" 2>>"$RUN_DIR/stderr.log" \
           | grep '^ts=' | head -n1 | sed 's/^ts=//')
@@ -2543,7 +2561,7 @@ while true; do
           ERR_BODY=$(mktemp /tmp/km-switch-err.XXXXXX)
           printf 'Failed to spawn new %s thread (see journald). Try again.\n' "$NEW_AGENT" > "$ERR_BODY"
           /opt/km/bin/km-slack post \
-            --channel "$KM_SLACK_CHANNEL_ID" \
+            --channel "$REPLY_CHANNEL" \
             --thread "$THREAD_TS" \
             --body "$ERR_BODY" 2>>"$RUN_DIR/stderr.log" || true
           rm -f "$ERR_BODY"
@@ -2556,14 +2574,14 @@ while true; do
 
         # Step 5: fetch NEW-thread permalink (for the handoff post in OLD thread).
         NEW_PERMALINK=$(/opt/km/bin/km-slack permalink \
-          --channel "$KM_SLACK_CHANNEL_ID" --ts "$NEW_TOP_TS" 2>>"$RUN_DIR/stderr.log" || echo "(unavailable)")
+          --channel "$REPLY_CHANNEL" --ts "$NEW_TOP_TS" 2>>"$RUN_DIR/stderr.log" || echo "(unavailable)")
         [ -z "$NEW_PERMALINK" ] && NEW_PERMALINK="(unavailable)"
 
         # Step 6: post handoff in OLD thread with NEW_PERMALINK embedded.
         HANDOFF_BODY=$(mktemp /tmp/km-handoff.XXXXXX)
         printf 'Switching to %s → continuing in this thread.\n%s\n' "$NEW_AGENT" "$NEW_PERMALINK" > "$HANDOFF_BODY"
         /opt/km/bin/km-slack post \
-          --channel "$KM_SLACK_CHANNEL_ID" \
+          --channel "$REPLY_CHANNEL" \
           --thread "$THREAD_TS" \
           --body "$HANDOFF_BODY" 2>>"$RUN_DIR/stderr.log" || true
         rm -f "$HANDOFF_BODY"
@@ -2638,6 +2656,7 @@ while true; do
             export PATH=\"/home/sandbox/.local/bin:\$PATH\"
             export KM_CODEX_RUN_ID='$RUN_ID'
             export KM_SLACK_THREAD_TS='$THREAD_TS'
+            export KM_SLACK_CHANNEL_ID='$REPLY_CHANNEL'
             export KM_SLACK_SENDER_ID='$SENDER_ID'
             cd /workspace 2>/dev/null || true
             codex exec resume '$CLAUDE_SESSION' \"\$(cat '$PROMPT_FILE')\" \
@@ -2653,6 +2672,7 @@ while true; do
             export PATH=\"/home/sandbox/.local/bin:\$PATH\"
             export KM_CODEX_RUN_ID='$RUN_ID'
             export KM_SLACK_THREAD_TS='$THREAD_TS'
+            export KM_SLACK_CHANNEL_ID='$REPLY_CHANNEL'
             export KM_SLACK_SENDER_ID='$SENDER_ID'
             cd /workspace 2>/dev/null || true
             codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
@@ -2677,6 +2697,7 @@ while true; do
           # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
           export PATH=\"/home/sandbox/.local/bin:\$PATH\"
           export KM_SLACK_THREAD_TS='$THREAD_TS'
+          export KM_SLACK_CHANNEL_ID='$REPLY_CHANNEL'
           export KM_SLACK_SENDER_ID='$SENDER_ID'
           cd /workspace 2>/dev/null || true
           claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
@@ -2767,7 +2788,7 @@ while true; do
         # 'km agent list'. Documented trade-off: silence-on-failure is safer
         # than a misleading "(no recent assistant text)" fallback that operators
         # cannot distinguish from genuine empty replies.
-        if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
+        if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$REPLY_CHANNEL" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
           POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
           printf '%s' "$RESULT_TEXT" > "$POST_FILE"
           # Phase 112 (HOOK-01 inbound coverage): --render=blocks-rich (Tier 3: native
@@ -2777,7 +2798,7 @@ while true; do
           # /etc/profile.d/km-notify-env.sh. km-slack demotes Tier 3 → Tier 2 → Tier 1
           # automatically when a rich render overflows.
           if /opt/km/bin/km-slack post \
-               --channel "$KM_SLACK_CHANNEL_ID" \
+               --channel "$REPLY_CHANNEL" \
                --subject "" \
                --thread "$THREAD_TS" \
                --render "${KM_SLACK_RENDER:-blocks-rich}" \
