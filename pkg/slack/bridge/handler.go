@@ -270,14 +270,24 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 				return errResp(500, "channel_lookup_failed")
 			}
 			if owned == "" || owned != env.Channel {
-				logger.WarnContext(ctx, "bridge: channel_mismatch",
-					"step", "authz",
-					"sender_id", env.SenderID,
-					"channel", env.Channel,
-					"owned_channel", owned,
-					"status", 403,
-				)
-				return errResp(403, "channel_mismatch")
+				// 2026-10-16: default route. A sandbox may post into a thread the
+				// events handler routed to it (km-slack-threads row names it). The
+				// bridge does the lookup; the sandbox never reads DDB. Only a
+				// thread-anchored envelope qualifies: permalink/update/top-level
+				// posts in a foreign channel stay refused.
+				if !h.threadRoutedToSender(ctx, env) {
+					logger.WarnContext(ctx, "bridge: channel_mismatch",
+						"step", "authz",
+						"sender_id", env.SenderID,
+						"channel", env.Channel,
+						"owned_channel", owned,
+						"thread_ts", env.ThreadTS,
+						"status", 403,
+					)
+					return errResp(403, "channel_mismatch")
+				}
+				logger.InfoContext(ctx, "bridge: authz_routed_thread",
+					"sender_id", env.SenderID, "channel", env.Channel, "thread_ts", env.ThreadTS)
 			}
 		}
 	}
@@ -577,6 +587,20 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 //
 // The notice posted here is control-plane (from the bridge's bot token), never
 // counted by quota.Record. Fail-open: any error → (Decision{}, false).
+// threadRoutedToSender reports whether km-slack-threads binds (channel, thread_ts)
+// to the sender. Fails closed on a nil store, empty thread, or lookup error.
+func (h *Handler) threadRoutedToSender(ctx context.Context, env slack.SlackEnvelope) bool {
+	if h.Threads == nil || env.ThreadTS == "" {
+		return false
+	}
+	sb, err := h.Threads.LookupSandbox(ctx, env.Channel, env.ThreadTS)
+	if err != nil {
+		logger.WarnContext(ctx, "bridge: routed_thread_lookup_failed", "err", err.Error(), "channel", env.Channel)
+		return false
+	}
+	return sb != "" && sb == env.SenderID
+}
+
 func (h *Handler) checkQuota(ctx context.Context, sandboxID string, action quota.Action, channel, threadTS string) (quota.Decision, bool) {
 	if h.Quota == nil || h.Limits == nil || h.QuotaTable == "" {
 		return quota.Decision{}, false // dormant
