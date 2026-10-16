@@ -588,8 +588,15 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 // The notice posted here is control-plane (from the bridge's bot token), never
 // counted by quota.Record. Fail-open: any error → (Decision{}, false).
 // threadRoutedToSender reports whether km-slack-threads binds (channel, thread_ts)
-// to the sender. Fails closed on a nil store, empty thread, or lookup error.
+// to the sender. Fails closed on a nil store, empty thread, lookup error, or any
+// action other than post/upload. The bot token is shared across every sandbox, so
+// a routed thread must never authorize update/permalink (an update could edit
+// another sandbox's message in a shared channel); post and upload can only ADD
+// into the thread the bridge routed.
 func (h *Handler) threadRoutedToSender(ctx context.Context, env slack.SlackEnvelope) bool {
+	if env.Action != slack.ActionPost && env.Action != slack.ActionUpload {
+		return false
+	}
 	if h.Threads == nil || env.ThreadTS == "" {
 		return false
 	}

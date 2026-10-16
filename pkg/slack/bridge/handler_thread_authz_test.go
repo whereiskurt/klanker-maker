@@ -78,3 +78,22 @@ func TestHandler_ForeignChannel_NilThreads_403(t *testing.T) {
 		t.Fatalf("nil thread store must fail closed, got %d", resp.StatusCode)
 	}
 }
+
+func TestHandler_ForeignChannel_RoutedThread_OnlyPostAndUpload(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	h := defaultHandler(pub)
+	h.Threads = &routedThreads{rows: map[string]string{"CFOREIGN|1.0": "sb-abc123"}}
+	for i, action := range []string{slack.ActionPermalink, slack.ActionUpdate, slack.ActionUpload} {
+		env := makeEnv(action, "sb-abc123", "CFOREIGN")
+		env.Nonce = fmt.Sprintf("%032x", i+100)
+		env.ThreadTS = "1.0"
+		resp := h.Handle(context.Background(), signRequest(t, env, priv))
+		mismatch := resp.StatusCode == 403 && responseBody(t, resp)["error"] == "channel_mismatch"
+		if action == slack.ActionUpload && mismatch {
+			t.Fatalf("upload in a routed thread must pass authz, got %d %s", resp.StatusCode, resp.Body)
+		}
+		if action != slack.ActionUpload && !mismatch {
+			t.Fatalf("%s must stay 403 channel_mismatch even with a routed thread, got %d %s", action, resp.StatusCode, resp.Body)
+		}
+	}
+}
