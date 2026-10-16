@@ -265,29 +265,24 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	}
 	routed := false     // info came from the default route, not channel ownership
 	coldCreate := false // route alias absent: publish a SandboxCreate instead of enqueueing
+	rebind := false     // routed thread row must be rewritten (alias moved / orphaned thread), after delivery
 	if info.SandboxID == "" || info.QueueURL == "" {
 		// Default-route ladder step 1: thread continuity. A thread the front door
 		// routed earlier carries its sandbox in km-slack-threads. Decide this BEFORE
 		// the relay so a follow-up never fans out to peers. A relayed request never
 		// takes this path — peers are not front doors, so they never route.
-		continuitySB := ""
+		var cont routeContinuity
 		skipMention := false // Part B: continuity skips the mention only when the box allows the bypass
 		if h.DefaultRoute != nil && msg.ThreadTS != "" && req.Headers["x-km-relayed"] == "" {
 			if sb, lookupErr := h.Threads.LookupSandbox(ctx, msg.Channel, msg.ThreadTS); lookupErr != nil {
 				h.log().Warn("events: route: thread lookup failed; treating as new thread",
 					"err", lookupErr, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
 			} else if sb != "" {
-				continuitySB = sb
-				if h.SandboxByID == nil {
-					h.log().Warn("events: route: no SandboxByID fetcher wired; continuity treated as strict", "sandbox", sb)
-				} else if ci, ferr := h.SandboxByID.FetchBySandboxID(ctx, sb); ferr != nil {
-					h.log().Warn("events: route: continuity fetch failed; treating as strict", "err", ferr, "sandbox", sb)
-				} else {
-					skipMention = threadBypassAllowed(ci) // nil/&true ⇒ Phase 91.3 bypass; &false ⇒ strict
-				}
+				cont.sandboxID = sb
+				skipMention = h.continuityBypass(ctx, msg, &cont)
 			}
 		}
-		if continuitySB == "" {
+		if cont.sandboxID == "" {
 			// Ladder step 2: relay — the unchanged Phase 95/96 decision table.
 			// Phase 95: broadcast-on-miss / drop-on-relay decision table.
 			// The relay marker is read from req.Headers (keys already lowercased by
@@ -369,11 +364,11 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			}
 		}
 		// Ladder steps 4 (mention + sender-email gate) and 5 (alias resolve).
-		var ok bool
-		info, coldCreate, ok = h.resolveDefaultRoute(ctx, msg, continuitySB, skipMention)
+		decision, ok := h.resolveDefaultRoute(ctx, msg, cont, skipMention)
 		if !ok {
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
+		info, coldCreate, rebind = decision.info, decision.coldCreate, decision.rebind
 		routed = true
 		if coldCreate {
 			// Mint the id now, BEFORE the files fork, so attachment keys
@@ -555,13 +550,13 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			Attachments: atts,
 		}
 		if delivered, err := h.deliver(bgCtx, info, coldCreate, sqsBody, threadTS, dedupID); err != nil {
-			h.log().Error("events: sqs send (files-sync) failed",
-				"err", err, "queue", info.QueueURL, "sandbox", info.SandboxID)
+			h.log().Error("events: deliver (files-sync) failed",
+				"err", err, "queue", info.QueueURL, "sandbox", info.SandboxID, "cold_create", coldCreate)
 		} else {
 			h.log().Info("events: enqueued (files-sync)",
 				"sandbox", delivered, "channel", msg.Channel, "thread_ts", threadTS,
 				"attachments", len(atts), "event_id", env.EventID)
-			h.recordDispatch(ctx, msg, threadTS, delivered, routed && coldCreate)
+			h.recordDispatch(ctx, msg, threadTS, delivered, rebind)
 		}
 	} else {
 		// Files-empty path (or FileDownloader nil): synchronous SQS write. UNCHANGED.
@@ -583,7 +578,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
 		h.log().Info("events: enqueued", "sandbox", delivered, "channel", msg.Channel, "thread_ts", threadTS, "event_id", env.EventID)
-		h.recordDispatch(ctx, msg, threadTS, delivered, routed && coldCreate)
+		h.recordDispatch(ctx, msg, threadTS, delivered, rebind)
 	}
 
 	// 9. Resume-or-hint (Phase 114). The message is ALREADY enqueued at step 8 in all
@@ -703,15 +698,79 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	return EventsResponse{StatusCode: 200, Body: "ok"}
 }
 
+// routeContinuity is ladder step 1's finding for a reply in a thread the front
+// door routed earlier. sandboxID is the sandbox the km-slack-threads row names
+// ("" for a fresh message); row is that sandbox's routing info (empty when the
+// box is gone or the fetch failed); alias is set when step 1 already had to
+// resolve the route alias (gone box), so step 5 does not resolve it twice.
+type routeContinuity struct {
+	sandboxID string
+	row       SandboxRoutingInfo
+	alias     *routeAlias
+}
+
+type routeAlias struct {
+	info  SandboxRoutingInfo
+	found bool
+}
+
+// routeDecision is what the default route resolved to. rebind asks
+// recordDispatch to rewrite the thread row (alias moved, or an orphaned thread
+// being cold-created) instead of the conditional Upsert — only after a
+// successful delivery, so a frozen box, a dedup hit or a failed send never
+// rewrites the row.
+type routeDecision struct {
+	info       SandboxRoutingInfo
+	coldCreate bool
+	rebind     bool
+}
+
+// continuityBypass fills cont.row (and cont.alias for a gone box) and reports
+// whether a continuity reply may skip the mention. The decision follows the box
+// that will actually receive the turn: the row's box while it exists, else the
+// alias's current box. A gone box with no current box, or any lookup failure,
+// is strict — a dead sandbox's absent attribute must never read as a bypass.
+func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEvent, cont *routeContinuity) bool {
+	if h.SandboxByID == nil {
+		h.log().Warn("events: route: no SandboxByID fetcher wired; continuity treated as strict",
+			"sandbox", cont.sandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+		return false
+	}
+	ci, err := h.SandboxByID.FetchBySandboxID(ctx, cont.sandboxID)
+	if err != nil {
+		h.log().Warn("events: route: continuity fetch failed; treating as strict",
+			"err", err, "sandbox", cont.sandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+		return false
+	}
+	if ci.SandboxID != "" {
+		cont.row = ci
+		return threadBypassAllowed(ci) // nil/&true ⇒ Phase 91.3 bypass; &false ⇒ strict
+	}
+	// The row's box is gone: take the bypass from the alias's current box.
+	if h.AliasResolver == nil {
+		return false
+	}
+	current, found, err := h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
+	if err != nil {
+		h.log().Warn("events: route: alias resolve failed for gone continuity box; treating as strict",
+			"err", err, "alias", h.DefaultRoute.Alias, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+		return false
+	}
+	cont.alias = &routeAlias{info: current, found: found}
+	if !found {
+		return false
+	}
+	return threadBypassAllowed(current)
+}
+
 // resolveDefaultRoute runs ladder steps 4 (mention + sender-email gate) and 5
-// (alias resolve, continuity rebind). ok=false means "drop silently, 200".
-// coldCreate is true when the alias has no row and the caller must publish a
-// SandboxCreate, not enqueue. continuitySB is the sandbox named by an existing
-// km-slack-threads row ("" for a fresh message). skipMention is true only for
-// continuity on a box whose ThreadBypass allows it (Part B strict mode leaves it
-// false, so a follow-up needs a mention again). DMs (channel_type "im") never
-// need a mention. The email gate applies on every path, continuity included.
-func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessageEvent, continuitySB string, skipMention bool) (info SandboxRoutingInfo, coldCreate bool, ok bool) {
+// (alias resolve). ok=false means "drop silently, 200". A decision with
+// coldCreate set means the alias has no row and the caller must publish a
+// SandboxCreate, not enqueue. skipMention is true only for continuity on a box
+// whose ThreadBypass allows it (Part B strict mode leaves it false, so a
+// follow-up needs a mention again). DMs (channel_type "im") never need a
+// mention. The email gate applies on every path, continuity included.
+func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessageEvent, cont routeContinuity, skipMention bool) (routeDecision, bool) {
 	if !skipMention && requiresMention(msg.ChannelType) {
 		uid, err := h.BotUserID.Fetch(ctx)
 		if err != nil {
@@ -719,63 +778,68 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 			// into a box from a channel nobody mapped, so an unverifiable mention is
 			// not a mention.
 			h.log().Warn("events: route: bot_user_id fetch failed; dropping", "err", err)
-			return info, false, false
+			return routeDecision{}, false
 		}
 		if uid == "" || !strings.Contains(msg.Text, "<@"+uid+">") {
 			h.log().Debug("events: route: no mention", "channel", msg.Channel, "channel_type", msg.ChannelType)
-			return info, false, false
+			return routeDecision{}, false
 		}
 	}
 	if h.SenderEmails == nil {
-		h.log().Warn("events: route: no SenderEmails fetcher wired; dropping")
-		return info, false, false
+		h.log().Warn("events: route: no SenderEmails fetcher wired; dropping",
+			"channel", msg.Channel, "thread_ts", msg.ThreadTS)
+		return routeDecision{}, false
 	}
 	email, err := h.SenderEmails.SenderEmail(ctx, msg.User)
 	if err != nil {
-		h.log().Debug("events: route: sender email unavailable (deny)", "user", msg.User, "err", err)
-		return info, false, false
+		h.log().Debug("events: route: sender email unavailable (deny)",
+			"user", msg.User, "err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+		return routeDecision{}, false
 	}
 	if !h.DefaultRoute.Allows(email) {
 		h.log().Debug("events: route: sender not allowlisted (silent drop)", "user", msg.User, "channel", msg.Channel)
-		return info, false, false
+		return routeDecision{}, false
 	}
 
-	if h.AliasResolver == nil {
-		h.log().Warn("events: route: no AliasResolver wired; dropping", "alias", h.DefaultRoute.Alias)
-		return info, false, false
-	}
-	current, found, err := h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
-	if err != nil {
-		h.log().Error("events: route: alias resolve failed", "alias", h.DefaultRoute.Alias, "err", err)
-		return info, false, false
-	}
-	if continuitySB != "" {
-		if found && current.SandboxID != continuitySB {
-			// The alias was recreated: refresh the row rather than enqueue to a dead
-			// queue (mirrors the GitHub bridge's InvalidateStaleSession).
-			h.log().Info("events: route: alias moved; rebinding thread",
-				"from", continuitySB, "to", current.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
-			if rerr := h.Threads.Rebind(ctx, msg.Channel, msg.ThreadTS, current.SandboxID); rerr != nil {
-				h.log().Warn("events: route: rebind failed (continuing)", "err", rerr)
-			}
-			return current, false, true
+	var current SandboxRoutingInfo
+	var found bool
+	if cont.alias != nil {
+		current, found = cont.alias.info, cont.alias.found
+	} else {
+		if h.AliasResolver == nil {
+			h.log().Warn("events: route: no AliasResolver wired; dropping", "alias", h.DefaultRoute.Alias)
+			return routeDecision{}, false
 		}
+		current, found, err = h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
+		if err != nil {
+			h.log().Error("events: route: alias resolve failed",
+				"alias", h.DefaultRoute.Alias, "err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+			return routeDecision{}, false
+		}
+	}
+	if cont.sandboxID != "" {
 		if !found {
-			return info, true, true // old box gone and alias absent: cold-create
+			// Old box gone and alias absent: cold-create, and rebind the orphaned
+			// row to the minted box once the publish succeeds.
+			return routeDecision{coldCreate: true, rebind: true}, true
 		}
-		if h.SandboxByID == nil {
-			return current, false, true
+		if current.SandboxID != cont.sandboxID {
+			// The alias was recreated: the row is rewritten after delivery rather
+			// than enqueueing to a dead queue (mirrors the GitHub bridge's
+			// InvalidateStaleSession).
+			h.log().Info("events: route: alias moved; rebinding thread after delivery",
+				"from", cont.sandboxID, "to", current.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+			return routeDecision{info: current, rebind: true}, true
 		}
-		byID, ferr := h.SandboxByID.FetchBySandboxID(ctx, continuitySB)
-		if ferr != nil || byID.SandboxID == "" {
-			return current, false, true
+		if cont.row.SandboxID != "" {
+			return routeDecision{info: cont.row}, true
 		}
-		return byID, false, true
+		return routeDecision{info: current}, true
 	}
 	if !found {
-		return info, true, true
+		return routeDecision{coldCreate: true}, true
 	}
-	return current, false, true
+	return routeDecision{info: current}, true
 }
 
 // deliver enqueues a routed/owned turn, or publishes a cold-create carrying the
@@ -805,11 +869,12 @@ func (h *EventsHandler) deliver(ctx context.Context, info SandboxRoutingInfo, co
 // recreate the row when it does its DDB lookup.
 func (h *EventsHandler) recordDispatch(ctx context.Context, msg slackMessageEvent, threadTS, sandboxID string, rebind bool) {
 	if rebind && msg.ThreadTS != "" {
-		// Orphaned thread whose old box is gone and whose alias is absent: the
-		// existing row still names the dead sandbox and a conditional Upsert
-		// would leave it there. Rebind it to the box we just minted.
+		// A routed thread whose row names a box that is no longer the alias's
+		// (recreated, or gone and just cold-created): a conditional Upsert would
+		// leave the stale id in place, so rewrite the row and drop its session.
 		if err := h.Threads.Rebind(ctx, msg.Channel, threadTS, sandboxID); err != nil {
-			h.log().Warn("events: threads rebind after cold-create", "err", err, "channel", msg.Channel, "thread_ts", threadTS)
+			h.log().Warn("events: route: rebind failed", "err", err, "sandbox", sandboxID,
+				"channel", msg.Channel, "thread_ts", threadTS)
 		}
 	} else if err := h.Threads.Upsert(ctx, msg.Channel, threadTS, sandboxID); err != nil {
 		h.log().Warn("events: threads upsert", "err", err, "channel", msg.Channel, "thread_ts", threadTS)

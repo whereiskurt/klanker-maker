@@ -332,7 +332,9 @@ func TestDefaultRoute_OrphanThread_AliasAbsent_ColdCreateRebinds(t *testing.T) {
 	alias.found = false
 	alias.info = SandboxRoutingInfo{}
 	threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-dead"}
-	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "still there?", "1.5", "1.0", "DR14"))
+	// Gone box + absent alias is strict (no box to inherit a bypass from), so
+	// the follow-up carries a mention.
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> still there?", "1.5", "1.0", "DR14"))
 	if len(pub.calls) != 1 {
 		t.Fatalf("want cold-create, got %d publishes", len(pub.calls))
 	}
@@ -368,5 +370,149 @@ func TestDefaultRoute_AliasAbsent_ColdCreateWithFiles_KeysOnMintedID(t *testing.
 	}
 	if len(threads.upserts) != 1 || threads.upserts[0].sb != dl.sandboxIDs[0] {
 		t.Fatalf("thread row must name the minted id; %+v", threads.upserts)
+	}
+}
+
+// ---- fix round 2: dispatch bookkeeping only after a successful delivery ----
+
+func TestDefaultRoute_Enqueue_MarksDispatchedOnce(t *testing.T) {
+	now := time.Now()
+	h, _, threads, _, _, _, _ := routedHandler(t, now)
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> go", "7.0", "", "DM1"))
+	if len(threads.upserts) != 1 {
+		t.Fatalf("want 1 upsert, got %+v", threads.upserts)
+	}
+	if len(threads.marks) != 1 || threads.marks[0].ev != "7.0" || threads.marks[0].ts != "7.0" || threads.marks[0].chan_ != "CFOREIGN" {
+		t.Fatalf("want one mark with ev=msg.TS, got %+v", threads.marks)
+	}
+}
+
+func TestDefaultRoute_ColdCreate_MarksDispatchedOnce(t *testing.T) {
+	now := time.Now()
+	h, _, threads, alias, pub, _, _ := routedHandler(t, now)
+	alias.found = false
+	alias.info = SandboxRoutingInfo{}
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> go", "8.0", "", "DM2"))
+	if len(pub.calls) != 1 {
+		t.Fatalf("want cold-create, got %d", len(pub.calls))
+	}
+	if len(threads.marks) != 1 || threads.marks[0].ev != "8.0" {
+		t.Fatalf("want one mark with ev=msg.TS, got %+v", threads.marks)
+	}
+}
+
+func TestDefaultRoute_EnqueueFailure_NoRowNoMarkNoReaction(t *testing.T) {
+	now := time.Now()
+	h, sqs, threads, _, _, reactor, _ := routedHandler(t, now)
+	sqs.err = errors.New("sqs down")
+	resp := h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> go", "9.0", "", "DM3"))
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if len(threads.upserts) != 0 || len(threads.rebinds) != 0 || len(threads.marks) != 0 {
+		t.Fatalf("failed send must write nothing; upserts=%+v rebinds=%+v marks=%+v", threads.upserts, threads.rebinds, threads.marks)
+	}
+	if len(reactor.snapshot()) != 0 {
+		t.Fatal("failed send must not react")
+	}
+}
+
+func TestDefaultRoute_ColdCreatePublishFailure_NoRowNoMark(t *testing.T) {
+	now := time.Now()
+	h, _, threads, alias, pub, _, _ := routedHandler(t, now)
+	alias.found = false
+	alias.info = SandboxRoutingInfo{}
+	pub.err = errors.New("eventbridge down")
+	resp := h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> go", "10.0", "", "DM4"))
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if len(threads.upserts) != 0 || len(threads.rebinds) != 0 || len(threads.marks) != 0 {
+		t.Fatalf("failed publish must write nothing; upserts=%+v rebinds=%+v marks=%+v", threads.upserts, threads.rebinds, threads.marks)
+	}
+}
+
+func TestEventsHandler_OwnedEnqueueFailure_NoRowNoMark(t *testing.T) {
+	now := time.Now()
+	h, sqs, threads, _, _, _, _ := newHandler(now) // owned channel: sb-abc123
+	sqs.err = errors.New("sqs down")
+	resp := h.Handle(context.Background(), routedRequest(t, now, "COWNED", "channel", "U0KURT", "hello", "11.0", "", "DM5"))
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if len(sqs.sends) != 1 {
+		t.Fatalf("owned path must attempt the send; sends=%d", len(sqs.sends))
+	}
+	if len(threads.upserts) != 0 || len(threads.marks) != 0 {
+		t.Fatalf("owned failed send must write no row; upserts=%+v marks=%+v", threads.upserts, threads.marks)
+	}
+}
+
+// ---- fix round 2: a gone continuity box never lends a bypass ----
+
+func TestDefaultRoute_ThreadContinuity_GoneBox_BypassFromCurrentBox(t *testing.T) {
+	strict := false
+	setup := func(t *testing.T, now time.Time) (*EventsHandler, *fakeSQS, *fakeThreads, *fakeAlias) {
+		h, sqs, threads, alias, _, _, _ := routedHandler(t, now)
+		alias.info = SandboxRoutingInfo{SandboxID: "sb-irbot2", QueueURL: "https://sqs.example/irbot2.fifo", ThreadBypass: &strict}
+		threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-dead"} // sb-dead absent from fakeByID
+		return h, sqs, threads, alias
+	}
+
+	now := time.Now()
+	h, sqs, _, alias := setup(t, now)
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "follow-up, no mention", "1.5", "1.0", "DG1"))
+	if len(sqs.sends) != 0 {
+		t.Fatalf("strict current box: a no-mention follow-up must drop; sends=%+v", sqs.sends)
+	}
+	if alias.calls != 1 {
+		t.Fatalf("alias must be resolved once (continuity check), got %d", alias.calls)
+	}
+
+	h, sqs, threads, alias := setup(t, now)
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> follow-up", "1.6", "1.0", "DG2"))
+	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/irbot2.fifo" {
+		t.Fatalf("mention must dispatch to the current box; sends=%+v", sqs.sends)
+	}
+	if alias.calls != 1 {
+		t.Fatalf("alias resolved %d times; the continuity result must be reused", alias.calls)
+	}
+	if len(threads.rebinds) != 1 || threads.rebinds[0].sb != "sb-irbot2" || len(threads.upserts) != 0 {
+		t.Fatalf("row must be rebound to the current box; rebinds=%+v upserts=%+v", threads.rebinds, threads.upserts)
+	}
+}
+
+func TestDefaultRoute_ThreadContinuity_GoneBoxAliasAbsent_Strict(t *testing.T) {
+	now := time.Now()
+	h, sqs, threads, alias, pub, _, _ := routedHandler(t, now)
+	alias.found = false
+	alias.info = SandboxRoutingInfo{}
+	threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-dead"}
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "no mention", "1.5", "1.0", "DG3"))
+	if len(sqs.sends) != 0 || len(pub.calls) != 0 {
+		t.Fatal("gone box + absent alias is strict: a no-mention follow-up must drop")
+	}
+}
+
+// ---- fix round 2: the row is rewritten only after a successful delivery ----
+
+func TestDefaultRoute_AliasMoved_FrozenOrFailedSend_NoRebind(t *testing.T) {
+	now := time.Now()
+	h, _, threads, alias, _, _, _ := routedHandler(t, now)
+	alias.info = SandboxRoutingInfo{SandboxID: "sb-irbot2", QueueURL: "https://sqs.example/irbot2.fifo", ActionFrozen: true}
+	threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-irbot"}
+	h.Slack = &fakeSlackPoster{}
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "hello", "1.5", "1.0", "DF1"))
+	if len(threads.rebinds) != 0 {
+		t.Fatalf("frozen box must not rewrite the row; rebinds=%+v", threads.rebinds)
+	}
+
+	h, sqs, threads, alias, _, _, _ := routedHandler(t, now)
+	alias.info = SandboxRoutingInfo{SandboxID: "sb-irbot2", QueueURL: "https://sqs.example/irbot2.fifo"}
+	threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-irbot"}
+	sqs.err = errors.New("sqs down")
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "hello", "1.6", "1.0", "DF2"))
+	if len(threads.rebinds) != 0 || len(threads.marks) != 0 {
+		t.Fatalf("failed send must not rewrite the row; rebinds=%+v marks=%+v", threads.rebinds, threads.marks)
 	}
 }
