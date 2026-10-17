@@ -303,7 +303,7 @@ only one attribute changes.
 **What v1.8.0 does.**
 
 - A region **Deny** replaces the lock. Its `NotAction` is the SCP exemption list plus `bedrock-mantle:*` and `aws-marketplace:*`.
-- One inline policy per concern. Every data-bearing grant (S3, DynamoDB, SSM parameters, SQS, logs, SES) names `{id}` or `{p}` (the install prefix); only the SSM agent channel, `events:PutEvents`, and Bedrock remain on `*` (plus `kms:Decrypt` on `key/*`, condition-scoped to SSM and the same parameter ARNs).
+- One inline policy per concern. Every data-bearing grant (S3, DynamoDB, SSM parameters, SQS, logs, SES) names `{id}` or `{p}` (the install prefix); only the SSM agent channel, `events:PutEvents`, Bedrock, and the Bedrock-conditioned `aws-marketplace` grant remain on `*`. Two `kms:Decrypt` grants sit on `key/*`: the SSM one is condition-scoped to the same parameter ARNs, the sandbox-secrets one to its alias.
 - SSM reads are per path, and the SSM `kms:Decrypt` is pinned with `kms:EncryptionContext:PARAMETER_ARN`.
 - Threads tables are writable only for a named attribute set that excludes `sandbox_id`. A row the box creates has no `sandbox_id` and reads as unrouted.
 - `action-quota` is scoped by `dynamodb:LeadingKeys`.
@@ -313,6 +313,9 @@ only one attribute changes.
 - An operator `aws` call in `initCommands` now fails under `set -e`. `km validate` WARNs about it. Add SSM paths to `iam.allowedSecretPaths`.
 - The role is created per sandbox. Existing boxes keep the old shape until recreate, and `km doctor` "Sandbox role shape" lists them.
 - `KM_RESOURCE_PREFIX` unset now aborts a poller instead of silently targeting `km-*`.
+- A Phase 70 handoff thread's row is written by the poller without `sandbox_id`. The bridge fills it on the first turn it dispatches there, so in a mention-only channel the first reply in a handoff thread still needs an @-mention.
+
+**Residual.** Any box can still `UpdateItem` another thread's session attributes if it knows that thread's `(channel_id, thread_ts)`. A poisoned `last_assistant_msg` is pasted into the victim's handoff seed prompt, which is cross-sandbox prompt injection. A large `last_processed_event_ts` makes the victim's poller skip later messages. This was possible under the Allow-star and is strictly narrower now. Moving the session writes behind the bridge removes it; see `docs/slack-default-route.md` § 11.
 
 **Guards.** `TestEC2SpotRole_*`, `TestSandboxRole_ThreadsWriteGrantExcludesSandboxID`, `TestSandboxRole_EveryUserdataCLICallHasAGrant`, `TestSandboxRole_EverySDKActionHasAGrant` (all `pkg/terragrunt`), and `TestThreadsTableUpdates_FitTheIAMCondition` / `TestThreadsTableReads_ProjectOnlyOwnedAttributes` (`pkg/compiler`). **Never add `sandbox_id` to the threads write set.**
 
