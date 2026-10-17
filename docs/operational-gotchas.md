@@ -956,6 +956,24 @@ not apply terragrunt modules.
 
 **No SandboxProfile schema change, no bridge Lambda change, no sandbox recreate required.**
 
+## Cold-create first turn and the init gate (2026-10-17)
+
+**Symptom.** The first reply from a freshly cold-created sandbox arrives about 30 minutes after the box is up. Later turns answer in seconds. The poller journal shows two lines for the first turn: `WARN: agent run failed (exit 127), message returns to queue`, then, half an hour later, a normal turn on the retry. Reproduced twice in the Slack default-route live UAT.
+
+**Root cause.** In `pkg/compiler/userdata.go` the pollers start in section 5. Section 7.5 runs the profile's `initCommands`, several sections later, and that is where every shipped profile installs `claude` or `codex`. The platform installs no agent. So on first boot the poller was already up, drained the cold-create envelope, dispatched, and the turn exited 127 because the agent did not exist yet. The poller's own startup comment claimed init had already run. That is true only after a stop/resume, where userdata does not re-run. On exit 127 the message stayed in flight until the queue's 1800 s visibility timeout expired.
+
+**Fix (two halves, ship together).**
+- **Marker.** Section 7.5 writes `/var/lib/km/init-done` after profile init on every boot path: init succeeded, init failed, or no init script at all. A failed init still leaves `/var/lib/km/init-failed` for `km status` and `km doctor`; the marker only says "init has finished".
+- **Gate.** Each inbound poller (Slack, GitHub, HackerOne, webhook) waits for the marker before its first receive, polling every 5 s and bounded at 1200 s. Journal lines: `waiting for profile init (/var/lib/km/init-done)`, then `profile init done after Ns`, or `WARN: profile init marker not seen after Ns; proceeding` on timeout. The bound keeps a wedged init from silencing the box.
+- **Agent check after the gate.** The `agent '<name>' not on PATH` WARNING now runs after the wait. It therefore means the profile has no agent install (add one to `initCommands`), not that the race was lost.
+- **Exit 127 rule.** A turn that exits 127 sets its message visible again in 60 s via `change-message-visibility`. The Slack poller first kills its Phase 119 visibility heartbeat, otherwise a later tick would re-extend the message. Journal line: `agent missing (exit 127): message visible again in 60s`. Other non-zero exits keep today's behaviour. 60, not 0: a zero would hot-loop on a profile that never installs an agent, and the shared DLQ's `maxReceiveCount` still bounds the retries.
+
+**Stop/resume.** No wait. The marker lives in `/var/lib/km`, which persists across stop, start and hibernate, so a resumed box passes the gate immediately. `/run` was rejected because a cold boot after `km stop` would clear it.
+
+**Deploy.** `make build-lambdas` then `km init --dry-run=false`. The change rides in the create-handler zip's userdata, so `--sidecars` is not enough. Existing sandboxes keep the race until `km destroy && km create`. No schema, IAM or sidecar change.
+
+Spec: `docs/superpowers/specs/2026-10-17-cold-create-boot-race-design.md`.
+
 ## Shared sandbox access credentials — two halves, one of them a Lambda
 
 `km vscode|desktop|herdr|tunnel start` reconcile `~/.km/keys/<id>` and

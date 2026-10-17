@@ -462,7 +462,7 @@ create-handler-rendered poller both change, and a box gains it only on recreate.
 | The reply lands in `#sb-…` | The default box runs a pre-route poller | Recreate the default sandbox |
 | The bridge logs `channel_mismatch` for a routed channel | A top-level post, or `permalink` or `update`, into a foreign channel | Expected; only `post` and `upload` with the routed `thread_ts` pass |
 | A cold-created box never answers | Old create-handler, missing create-handler send grant, or a profile without inbound | `make build-lambdas` + `km init --dry-run=false`, then re-mention |
-| The first reply takes minutes | The alias was absent and the mention cold-created it | Expected; later turns are warm |
+| The first reply takes minutes | The alias was absent and the mention cold-created it | Expected: the box boots and runs profile init first, and the poller waits for it. Later turns are warm. A reply ~30 min late means a box from before the init gate; see `docs/operational-gotchas.md` § Cold-create first turn and the init gate |
 | A `claude:` or `codex:` prefix in a routed thread changes nothing | The handoff is skipped in routed threads | Expected; switch agents in a mapped channel |
 | The agent says thread context was unavailable | `conversations.replies` failed or was rate-limited, or the turn ran out of time before collection | Check the bridge log; confirm the App is internal (Tier 3) |
 | Every mention fails with the alias resolve error | Two sandbox rows share the alias | Destroy the stale one |
@@ -568,14 +568,11 @@ unverified.
   newest messages rather than its oldest page.
 - **Render `file_errors` and `files_omitted` in the poller header.** Both are on the wire;
   the agent sees neither.
-- **Close the cold-create boot race (pre-existing, reproduced twice in the live UAT).**
-  `km-slack-inbound-poller.service` starts before `km-init.sh` has installed the agent, so
-  the first dispatched turn on a cold-created box fails with exit 127 and the envelope sits
-  invisible for the FIFO's 1800 s visibility timeout. Every bridge that cold-creates pays
-  this: the first reply arrives ~30 minutes after the box is up. Fix either by ordering the
-  poller unit after the init-complete marker, or by resetting the message's visibility to 0
-  when a dispatch exits 127. Also worth a `km doctor` WARN ("poller started before the agent
-  was on PATH") read from the unit's journal.
+- ~~**Close the cold-create boot race.**~~ **Fixed 2026-10-17.** The inbound pollers now wait
+  (bounded at 1200 s) for `/var/lib/km/init-done`, which the bootstrap writes after profile
+  init on every path, and an exit-127 turn makes its message visible again in 60 s instead of
+  1800 s. Existing boxes get it on recreate. See `docs/operational-gotchas.md` § Cold-create
+  first turn and the init gate. The `km doctor` WARN idea was not built.
 - **Post the wake hint on a routed resume.** `DDBPauseHinter` resolves the sandbox row by
   channel, so a mention that auto-resumes the box from a channel it does not own gets no
   "Sandbox is waking up" line; the reply still arrives.

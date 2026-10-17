@@ -3391,7 +3391,7 @@ Skipped silently when the block is absent. Otherwise three results from one eval
 | Cold-created box never answers | The profile lacks Slack inbound | Fix the profile; `km init` now refuses this. |
 | Cold-created box never answers | Old create-handler ignores `slack_envelope` | `make build-lambdas` + `km init --dry-run=false`; re-mention. |
 | Cold-created box never answers | Create-handler role lacks `sqs:SendMessage` on `slack-inbound-*` | `km init --dry-run=false` applies the grant; re-mention. |
-| First reply takes minutes | The alias was absent and the mention cold-created it | Expected. Later turns are warm. |
+| First reply takes minutes | The alias was absent and the mention cold-created it | Expected: boot plus profile init, which the poller now waits for (bounded 1200 s). A reply ~30 min late means a box created before the init gate (exit 127, 1800 s visibility); recreate it. See `docs/operational-gotchas.md` § Cold-create first turn and the init gate. Later turns are warm. |
 | `claude:` prefix in a routed thread does nothing | Agent switching is skipped in routed threads | Expected; the poller log names it. Start the conversation in a mapped channel to switch agents. |
 
 ### Known limits
