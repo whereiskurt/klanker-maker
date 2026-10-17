@@ -21,6 +21,12 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   the alias's box (falls back to the install list; neither ⇒ error); a change needs `km init`
   AND a recreate. See `docs/slack-notifications.md` § Quiet period, § Allowlists.
 
+**Cold-create first turn no longer ~30 minutes late (2026-10-17):**
+- **The poller started before the agent existed.** Userdata section 5 starts the inbound pollers; section 7.5 runs `initCommands`, which is where `claude`/`codex` are installed. The first dispatched turn exited 127 and the message sat invisible for the queue's 1800 s timeout.
+- **Fix, two halves.** The bootstrap writes `/var/lib/km/init-done` after profile init on every path (success, failure, no init); every inbound poller waits for it (bounded 1200 s) before its first receive, then checks the agent. An exit-127 turn makes its message visible in 60 s (the Slack poller kills its Phase 119 heartbeat first). A resume does not wait: the marker persists in `/var/lib/km`.
+- **The `agent not on PATH` WARNING now means the profile has no agent install**, not a lost race.
+- **Deploy = `make build-lambdas` + `km init --dry-run=false`**, not `--sidecars`; existing sandboxes on recreate. See `docs/operational-gotchas.md` § Cold-create first turn and the init gate.
+
 **Slack default route + strict mention-only threads (2026-10-16):**
 - **Invite the bot to any channel, or DM it, @-mention it, and the reply lands in a thread
   there.** New front-door-only `slack.default_route: {alias, profile, allow_emails}` sends
