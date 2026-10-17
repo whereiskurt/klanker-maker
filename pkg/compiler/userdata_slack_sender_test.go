@@ -150,3 +150,14 @@ func TestUserdata_SenderPreambleIsSlackOnly(t *testing.T) {
 		t.Fatal("sender preamble/env leaked into a profile with no Slack inbound")
 	}
 }
+
+func TestUserdata_SlackInbound_SenderPreambleInDMChannel(t *testing.T) {
+	block := slackPollerBlock(t)
+	got := runSenderPreamble(t, block, `{"channel":"D0KURT1","thread_ts":"1.2","text":"hi","user":"U0KURT"}`, "hi")
+	if !strings.Contains(got, "already in a direct message") {
+		t.Errorf("DM-channel preamble missing the already-in-a-DM note:\n%s", got)
+	}
+	if strings.Contains(got, "km-slack dm --to") {
+		t.Errorf("DM-channel preamble still advertises km-slack dm:\n%s", got)
+	}
+}

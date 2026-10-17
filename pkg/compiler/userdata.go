@@ -2357,7 +2357,13 @@ while true; do
         if [ -n "$BOT_ID" ]; then
           BOT_NOTE=" You are the Slack bot <@$BOT_ID>: a <@$BOT_ID> token in the message is this person addressing you, not someone else to contact."
         fi
-        printf '[Slack] From: <@%s> in <#%s> (also in $KM_SLACK_SENDER_ID).%s Your final reply is posted to this thread automatically when the turn ends; to notify this person write <@%s> inline in that reply. To send this person a direct message run: km-slack dm --to %s --text "..." (it does not replace your reply here). Do not call km-slack post/reply to deliver your answer: any km-slack post/reply into this thread cancels the automatic final post, so such a call must carry your complete answer. A bare @name is plain text to Slack — never invent an id; use this one or a <@U…> token from the message.\n\n' "$SENDER_ID" "$REPLY_CHANNEL" "$BOT_NOTE" "$SENDER_ID" "$SENDER_ID" > "$HDR_FILE"
+        # Inside a DM channel the dm verb is a trap: an agent that reads it sends a
+        # second top-level DM before replying. Advertise it only elsewhere.
+        case "$REPLY_CHANNEL" in
+          D*) DM_NOTE=" You are already in a direct message with this person; reply here, do not run km-slack dm." ;;
+          *)  DM_NOTE=" To send this person a direct message run: km-slack dm --to $SENDER_ID --text \"...\" (it does not replace your reply here)." ;;
+        esac
+        printf '[Slack] From: <@%s> in <#%s> (also in $KM_SLACK_SENDER_ID).%s Your final reply is posted to this thread automatically when the turn ends; to notify this person write <@%s> inline in that reply.%s Do not call km-slack post/reply to deliver your answer: any km-slack post/reply into this thread cancels the automatic final post, so such a call must carry your complete answer. A bare @name is plain text to Slack — never invent an id; use this one or a <@U…> token from the message.\n\n' "$SENDER_ID" "$REPLY_CHANNEL" "$BOT_NOTE" "$SENDER_ID" "$DM_NOTE" > "$HDR_FILE"
         cat "$PROMPT_FILE" >> "$HDR_FILE"
         mv "$HDR_FILE" "$PROMPT_FILE"
         chmod 644 "$PROMPT_FILE"
