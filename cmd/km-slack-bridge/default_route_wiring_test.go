@@ -39,3 +39,25 @@ func TestWireDefaultRoute_AllThreeOrNothing(t *testing.T) {
 		t.Fatal("the outbound handler must share the route and the email cache (km-slack dm)")
 	}
 }
+
+// The sender-email cache and the by-id fetcher are wired whether or not the
+// route is configured: a sandbox's allowEmails gates its own #sb- channel and
+// its km-slack dm targets on a route-less install too.
+func TestWireDefaultRoute_EmailGateDepsWiredWithoutRoute(t *testing.T) {
+	get := func(string) string { return "" }
+	h := &bridge.EventsHandler{}
+	out := &bridge.Handler{}
+	wireDefaultRoute(h, out, get, defaultRouteDeps{})
+	if h.DefaultRoute != nil || out.DefaultRoute != nil {
+		t.Fatal("route must stay OFF")
+	}
+	if h.SenderEmails == nil || out.SenderEmails == nil {
+		t.Fatal("SenderEmails must be wired on both handlers without a route")
+	}
+	if out.SenderEmails != h.SenderEmails {
+		t.Fatal("both handlers must share one email cache")
+	}
+	if h.SandboxByID == nil || out.SandboxByID == nil || out.SandboxByID != h.SandboxByID {
+		t.Fatal("both handlers must share one SandboxByID fetcher")
+	}
+}

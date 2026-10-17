@@ -23,9 +23,27 @@ func (h *Handler) handleDM(ctx context.Context, env slack.SlackEnvelope) *Respon
 		logger.WarnContext(ctx, "bridge: dm_bad_target", "step", "dm", "sender_id", env.SenderID, "status", 400)
 		return errResp(400, "bad_target")
 	}
+	// The posting sandbox's allowEmails, when its row carries one, replaces the
+	// route list (the same override the inbound path applies). A fetch error
+	// falls back to the route list.
+	allows, listName := h.DefaultRoute.Allows, "allow_emails"
+	if h.SandboxByID != nil {
+		info, ferr := h.SandboxByID.FetchBySandboxID(ctx, env.SenderID)
+		if ferr != nil {
+			logger.WarnContext(ctx, "bridge: dm_sandbox_lookup_failed; using the route list",
+				"step", "dm", "sender_id", env.SenderID, "error", ferr.Error())
+		} else if len(info.AllowEmails) > 0 {
+			al, cerr := CompileEmailAllowlist(info.AllowEmails)
+			if cerr != nil {
+				logger.ErrorContext(ctx, "bridge: dm_sandbox_allow_emails_invalid; denying",
+					"step", "dm", "sender_id", env.SenderID, "error", cerr.Error())
+			}
+			allows, listName = al.Allows, "sandbox allowEmails" // nil al denies everyone
+		}
+	}
 	email, err := h.SenderEmails.SenderEmail(ctx, env.TargetUser)
-	if err != nil || !h.DefaultRoute.Allows(email) {
-		reason := "not on allow_emails"
+	if err != nil || !allows(email) {
+		reason := "not on " + listName
 		if err != nil {
 			reason = err.Error()
 		}

@@ -772,6 +772,19 @@ func wireDefaultRoute(h *bridge.EventsHandler, out *bridge.Handler, getenv func(
 			emails = append(emails, e)
 		}
 	}
+	// The sender-email cache and the by-id fetcher are wired whether or not the
+	// route is on: a sandbox row's allowEmails gates its own #sb- channel and its
+	// km-slack dm targets on a route-less install too. Both handlers share one
+	// instance of each (one cache; a deny is never cached).
+	h.SandboxByID = &bridge.DDBSandboxByID{Client: d.ddb, TableName: d.sandboxesTable}
+	h.SenderEmails = &bridge.CachedSenderEmailFetcher{
+		Inner: &bridge.SlackSenderEmailAdapter{Tokens: d.tokens, HTTPClient: d.httpClient},
+		TTL:   15 * time.Minute,
+	}
+	if out != nil {
+		out.SandboxByID = h.SandboxByID
+		out.SenderEmails = h.SenderEmails
+	}
 	route := bridge.NewDefaultRoute(alias, profile, emails)
 	if route == nil {
 		if alias != "" || profile != "" || len(emails) > 0 {
@@ -781,18 +794,12 @@ func wireDefaultRoute(h *bridge.EventsHandler, out *bridge.Handler, getenv func(
 		return
 	}
 	h.DefaultRoute = route
-	h.SandboxByID = &bridge.DDBSandboxByID{Client: d.ddb, TableName: d.sandboxesTable}
 	h.AliasResolver = &bridge.DDBAliasResolver{Client: d.ddb, TableName: d.sandboxesTable}
 	h.CreatePublisher = &bridge.EventBridgeAdapter{Client: d.eventBridge, ArtifactBucket: d.artifactBucket}
-	h.SenderEmails = &bridge.CachedSenderEmailFetcher{
-		Inner: &bridge.SlackSenderEmailAdapter{Tokens: d.tokens, HTTPClient: d.httpClient},
-		TTL:   15 * time.Minute,
-	}
-	// ActionDM (km-slack dm) gates its target on the same allowlist and the same
-	// email cache; out == nil leaves the outbound handler's dm verb disabled.
+	// ActionDM (km-slack dm) gates its target on the same allowlist (or the
+	// posting sandbox's own allowEmails); out == nil leaves the dm verb disabled.
 	if out != nil {
 		out.DefaultRoute = route
-		out.SenderEmails = h.SenderEmails // same cache; a deny is never cached
 	}
 	slog.Info("km-slack-bridge: default route enabled", "alias", alias, "profile", profile, "allow_count", len(emails))
 }

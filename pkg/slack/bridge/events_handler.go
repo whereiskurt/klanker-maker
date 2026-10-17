@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -155,6 +156,11 @@ type EventsHandler struct {
 	// Part B: reads a strict thread's human messages since the bot's last turn
 	// (conversations.replies) for a mentioned reply. nil ⇒ context never collected.
 	ThreadReader SlackThreadReader
+
+	// emailLists memoises a sandbox row's compiled allowEmails, keyed by the
+	// joined list, for the life of the warm Lambda.
+	emailListsMu sync.Mutex
+	emailLists   map[string]*EmailAllowlist
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -420,6 +426,13 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 				"per_sandbox_override", len(info.Allow) > 0)
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
+		// 5a'. Per-sandbox email gate (2026-10-17). A row carrying allowEmails is
+		// the whole rule for who may talk to that sandbox; without one the owned
+		// path has no email gate (today's behaviour). ANDed with the id gate above,
+		// and before the thread bypass for the same reason.
+		if !h.senderAllowedForSandbox(ctx, info, msg.User, msg.Channel, false) {
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
 
 		// 5b. Mention-only filter (Phase 91; per-sandbox override). When mention-only
 		// is in effect, skip messages that do not @-mention the bot. Runs AFTER
@@ -533,16 +546,22 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	var threadCtx *ThreadContext
 	strict := !threadBypassAllowed(info) && (effectiveMentionOnly || routed)
 	if strict && msg.ThreadTS != "" && h.ThreadReader != nil {
-		allowed := func(_ context.Context, u string) bool {
-			return len(effectiveAllow) == 0 || isInSlackAllowlist(u, effectiveAllow)
+		// A context author is trusted only if they would pass the same gates as
+		// the sender: Phase 118 ids AND the sandbox's allowEmails on a mapped
+		// channel; the sandbox's allowEmails, else the route list, on a routed
+		// thread. Email lookups run under collectThreadContext's deadline; once it
+		// passes a lookup errors and the author counts as not allowed (fails closed).
+		allowed := func(cctx context.Context, u string) bool {
+			if len(effectiveAllow) > 0 && !isInSlackAllowlist(u, effectiveAllow) {
+				return false
+			}
+			ok, _ := h.senderEmailAllowed(cctx, info, u, false)
+			return ok
 		}
 		if routed {
-			// A routed thread is gated by the route's sender-email list, not Phase 118.
-			// The lookup runs under collectThreadContext's deadline; once it passes, a
-			// lookup errors and the author counts as not allowed (fails closed).
 			allowed = func(cctx context.Context, u string) bool {
-				e, err := h.SenderEmails.SenderEmail(cctx, u)
-				return err == nil && h.DefaultRoute.Allows(e)
+				ok, _ := h.senderEmailAllowed(cctx, info, u, true)
+				return ok
 			}
 		}
 		threadCtx = h.collectThreadContext(ctx, msg, info, allowed)
@@ -851,22 +870,23 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 			return routeDecision{}, false
 		}
 	}
-	if h.SenderEmails == nil {
-		h.log().Warn("events: route: no SenderEmails fetcher wired; dropping",
-			"channel", msg.Channel, "thread_ts", msg.ThreadTS)
+	decision, ok := h.routeTarget(ctx, msg, cont)
+	if !ok {
 		return routeDecision{}, false
 	}
-	email, err := h.SenderEmails.SenderEmail(ctx, msg.User)
-	if err != nil {
-		h.log().Info("events: route: sender email unavailable (deny)",
-			"user", msg.User, "err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+	// The email gate follows the box that will receive the turn: its row's
+	// allowEmails when it has one, else the route list. A cold-create has no row
+	// yet, so the route list (which km init resolves from the route profile)
+	// decides.
+	if !h.senderAllowedForSandbox(ctx, decision.info, msg.User, msg.Channel, true) {
 		return routeDecision{}, false
 	}
-	if !h.DefaultRoute.Allows(email) {
-		h.log().Info("events: route: sender not allowlisted (silent drop)", "user", msg.User, "channel", msg.Channel)
-		return routeDecision{}, false
-	}
+	return decision, true
+}
 
+// routeTarget is ladder step 5: which box the routed turn goes to.
+func (h *EventsHandler) routeTarget(ctx context.Context, msg slackMessageEvent, cont routeContinuity) (routeDecision, bool) {
+	var err error
 	if cont.sandboxID != "" && cont.lookupFailed {
 		h.log().Warn("events: route: continuity lookup failed; dropping",
 			"sandbox", cont.sandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
@@ -914,6 +934,83 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 		return routeDecision{coldCreate: true}, true
 	}
 	return routeDecision{info: current}, true
+}
+
+// senderAllowedForSandbox is the sender-email gate for one sandbox, logged. A
+// row carrying allowEmails decides alone (override, not merge); without one,
+// the route list decides on the route paths and nothing gates the owned #sb-
+// path. Any lookup failure with a list in force is a deny (never cached).
+func (h *EventsHandler) senderAllowedForSandbox(ctx context.Context, info SandboxRoutingInfo, userID, channel string, onRoutePath bool) bool {
+	ok, source := h.senderEmailAllowed(ctx, info, userID, onRoutePath)
+	if ok {
+		return true
+	}
+	switch source {
+	case "sandbox":
+		h.log().Info("events: sender not in sandbox allowEmails (silent drop)",
+			"sandbox", info.SandboxID, "user", userID, "channel", channel)
+	default:
+		h.log().Info("events: route: sender not allowlisted (silent drop)",
+			"user", userID, "channel", channel)
+	}
+	return false
+}
+
+// senderEmailAllowed decides without logging (the strict-context trust
+// predicate calls it once per author). source names the list that decided:
+// "sandbox", "route", or "" when no list applies.
+func (h *EventsHandler) senderEmailAllowed(ctx context.Context, info SandboxRoutingInfo, userID string, onRoutePath bool) (bool, string) {
+	var allows func(string) bool
+	var source string
+	switch {
+	case len(info.AllowEmails) > 0:
+		allows, source = h.sandboxEmailList(info).Allows, "sandbox"
+	case onRoutePath && h.DefaultRoute != nil:
+		allows, source = h.DefaultRoute.Allows, "route"
+	case onRoutePath:
+		return false, "route" // a route path with no route: nothing admits anyone
+	default:
+		return true, ""
+	}
+	prefix := "events: " // documented route log lines keep their "route:" prefix
+	if source == "route" {
+		prefix = "events: route: "
+	}
+	if h.SenderEmails == nil {
+		h.log().Warn(prefix+"no SenderEmails fetcher wired; dropping",
+			"source", source, "sandbox", info.SandboxID, "user", userID)
+		return false, source
+	}
+	email, err := h.SenderEmails.SenderEmail(ctx, userID)
+	if err != nil {
+		h.log().Info(prefix+"sender email unavailable (deny)",
+			"source", source, "sandbox", info.SandboxID, "user", userID, "err", err)
+		return false, source
+	}
+	return allows(email), source
+}
+
+// sandboxEmailList compiles (once per distinct list) a row's allowEmails. A
+// compile error should be impossible (entries are validated at km create); it
+// is logged and the list treated as present-but-empty, which denies everyone.
+func (h *EventsHandler) sandboxEmailList(info SandboxRoutingInfo) *EmailAllowlist {
+	key := strings.Join(info.AllowEmails, ",")
+	h.emailListsMu.Lock()
+	defer h.emailListsMu.Unlock()
+	if al, ok := h.emailLists[key]; ok {
+		return al
+	}
+	al, err := CompileEmailAllowlist(info.AllowEmails)
+	if err != nil {
+		h.log().Error("events: sandbox allowEmails failed to compile; denying everyone",
+			"sandbox", info.SandboxID, "err", err)
+		al = &EmailAllowlist{}
+	}
+	if h.emailLists == nil {
+		h.emailLists = map[string]*EmailAllowlist{}
+	}
+	h.emailLists[key] = al
+	return al
 }
 
 // Strict-mode context budget. ContextCollectMax caps the collection; when the
