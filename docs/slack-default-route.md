@@ -607,6 +607,12 @@ unverified.
   of scope; one route was the ask, 👀 is the acknowledgement, and the Phase 121 action quota
   is the backstop.
 
+### Noted during the km-slack docs audit (2026-10-17), code untouched
+
+- The header comment in `cmd/km-slack/main.go` predates `reply`, `update`, `permalink` and `dm`.
+- Missing `KM_SANDBOX_ID`/`KM_SLACK_BRIDGE_URL` exits 1 on `post`, `reply` and `dm` but 2 on the other verbs.
+- `km-slack dm` does not validate `--render`; an unknown value renders plain (same fallback as `post`, without the warning line).
+
 ## 12. Where things live
 
 | What | Where |

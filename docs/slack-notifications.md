@@ -3529,6 +3529,7 @@ check: a top-level `dm` gets `400 missing_fields` (the old bridge requires a cha
 | 6 | Human replies under that DM | **PASS**: continuity to the alias box, answer in the DM thread. |
 | 7 | Human sends a fresh top-level DM | **PASS**: default route as before; the alias box answered in a thread under it. |
 | 8 | `km doctor` | **PASS**: `Slack default route scopes: im:history, mpim:history and im:write present`. |
+| 9 | Final recreate with the DM-channel preamble gate: reply under the DM, then a channel mention | **PASS**: `FINAL-DM-OK` in the DM thread and **no** new top-level DM; the channel mention answered "Yep, I'm here" once. |
 
 Found and fixed during the run: an agent whose turn arrived **inside** a DM channel read the
 preamble's "to DM this person run `km-slack dm`" and sent a second top-level DM before
