@@ -3,6 +3,9 @@ package bridge
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -18,21 +21,29 @@ var ErrSenderIneligible = errors.New("slack-bridge: sender is not an eligible hu
 type DefaultRoute struct {
 	Alias   string
 	Profile string
-	allow   map[string]struct{}
+	list    *EmailAllowlist
 }
 
+// NewDefaultRoute compiles emails into the route's allowlist. An invalid entry
+// is logged and dropped (km init already refuses them; this is belt-and-braces)
+// so one typo can never widen the list or take the whole route down.
 func NewDefaultRoute(alias, profile string, emails []string) *DefaultRoute {
-	allow := make(map[string]struct{}, len(emails))
+	valid := make([]string, 0, len(emails))
 	for _, e := range emails {
-		e = strings.ToLower(strings.TrimSpace(e))
-		if e != "" {
-			allow[e] = struct{}{}
+		if strings.TrimSpace(e) == "" {
+			continue
 		}
+		if _, _, err := ValidateEmailEntry(e); err != nil {
+			log.Printf("slack-bridge: default_route: dropping %v", err)
+			continue
+		}
+		valid = append(valid, e)
 	}
-	if len(allow) == 0 || alias == "" || profile == "" {
+	list, err := CompileEmailAllowlist(valid)
+	if err != nil || list.Len() == 0 || alias == "" || profile == "" {
 		return nil
 	}
-	return &DefaultRoute{Alias: alias, Profile: profile, allow: allow}
+	return &DefaultRoute{Alias: alias, Profile: profile, list: list}
 }
 
 // Allows reports whether email is on the list. Empty email is always denied.
@@ -40,11 +51,82 @@ func (r *DefaultRoute) Allows(email string) bool {
 	if r == nil {
 		return false
 	}
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
+	return r.list.Allows(email)
+}
+
+// reDomainEntry / reExactEntry are duplicated in internal/app/config
+// (validateRouteEmailEntry), which cannot import this package. The two copies
+// share a test table (emailEntryCases here, TestValidateRouteEmailEntry_MirrorsBridge
+// there): change both together.
+var reDomainEntry = regexp.MustCompile(`^\*@[a-z0-9.-]+\.[a-z]{2,}$`)
+var reExactEntry = regexp.MustCompile(`^[^@\s*]+@[a-z0-9.-]+\.[a-z]{2,}$`)
+
+// ValidateEmailEntry normalises one allowlist entry: lowercased, trimmed; either
+// an exact address or exactly `*@<domain>`. Any other use of `*` is an error so
+// a typo cannot widen an allowlist.
+func ValidateEmailEntry(s string) (string, bool, error) {
+	n := strings.ToLower(strings.TrimSpace(s))
+	switch {
+	case reDomainEntry.MatchString(n):
+		return n, true, nil
+	case reExactEntry.MatchString(n):
+		return n, false, nil
+	default:
+		return "", false, fmt.Errorf("allowlist entry %q: must be an email address or *@<domain>", s)
+	}
+}
+
+// EmailAllowlist is the one matcher for every email gate: the default route's
+// list, a sandbox's own allowEmails, and km-slack dm targets.
+type EmailAllowlist struct {
+	exact   map[string]struct{}
+	domains map[string]struct{}
+}
+
+func CompileEmailAllowlist(entries []string) (*EmailAllowlist, error) {
+	al := &EmailAllowlist{exact: map[string]struct{}{}, domains: map[string]struct{}{}}
+	for _, e := range entries {
+		if strings.TrimSpace(e) == "" {
+			continue
+		}
+		n, isDomain, err := ValidateEmailEntry(e)
+		if err != nil {
+			return nil, err
+		}
+		if isDomain {
+			al.domains[strings.TrimPrefix(n, "*@")] = struct{}{}
+		} else {
+			al.exact[n] = struct{}{}
+		}
+	}
+	return al, nil
+}
+
+func (al *EmailAllowlist) Len() int {
+	if al == nil {
+		return 0
+	}
+	return len(al.exact) + len(al.domains)
+}
+
+// Allows: exact first, then the domain after the LAST '@'. Subdomains do not
+// match (`a@sub.example.com` is not `*@example.com`). Empty ⇒ false.
+func (al *EmailAllowlist) Allows(email string) bool {
+	if al == nil {
 		return false
 	}
-	_, ok := r.allow[email]
+	e := strings.ToLower(strings.TrimSpace(email))
+	if e == "" || strings.HasPrefix(e, "*@") {
+		return false
+	}
+	if _, ok := al.exact[e]; ok {
+		return true
+	}
+	at := strings.LastIndex(e, "@")
+	if at < 1 {
+		return false
+	}
+	_, ok := al.domains[e[at+1:]]
 	return ok
 }
 

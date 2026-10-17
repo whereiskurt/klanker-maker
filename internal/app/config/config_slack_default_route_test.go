@@ -64,9 +64,9 @@ func TestSlackDefaultRoute_Validate(t *testing.T) {
 		route   config.SlackDefaultRoute
 		wantErr string
 	}{
-		{"ok", config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml", AllowEmails: []string{"x@y.z"}}, ""},
-		{"no alias", config.SlackDefaultRoute{Profile: "p.yaml", AllowEmails: []string{"x@y.z"}}, "alias"},
-		{"no profile", config.SlackDefaultRoute{Alias: "a", AllowEmails: []string{"x@y.z"}}, "profile"},
+		{"ok", config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml", AllowEmails: []string{"x@y.io"}}, ""},
+		{"no alias", config.SlackDefaultRoute{Profile: "p.yaml", AllowEmails: []string{"x@y.io"}}, "alias"},
+		{"no profile", config.SlackDefaultRoute{Alias: "a", AllowEmails: []string{"x@y.io"}}, "profile"},
 		{"empty allow", config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml"}, "allow_emails"},
 		{"not an email", config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml", AllowEmails: []string{"nope"}}, "nope"},
 	}
@@ -80,5 +80,52 @@ func TestSlackDefaultRoute_Validate(t *testing.T) {
 				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestSlackDefaultRoute_Validate_DomainWildcard(t *testing.T) {
+	ok := config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml", AllowEmails: []string{"*@example.com", "kurt@example.com"}}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("domain wildcard + exact must validate: %v", err)
+	}
+	bad := config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml", AllowEmails: []string{"k*@example.com"}}
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "k*@example.com") {
+		t.Fatalf("a glob other than *@<domain> must fail naming the entry, got %v", err)
+	}
+	r := config.SlackDefaultRoute{AllowEmails: []string{" *@Example.COM "}}
+	if got := r.NormalizedEmails(); len(got) != 1 || got[0] != "*@example.com" {
+		t.Fatalf("NormalizedEmails = %v", got)
+	}
+}
+
+// Mirrors emailEntryCases in pkg/slack/bridge/default_route_test.go
+// (TestValidateEmailEntry_SharedTable). config cannot import pkg/slack/bridge,
+// so the two validators share a table instead of code: change both together.
+func TestValidateRouteEmailEntry_MirrorsBridge(t *testing.T) {
+	cases := []struct {
+		in string
+		ok bool
+	}{
+		{"kurt@example.com", true},
+		{"Kurt@Example.COM", true},
+		{" *@example.com ", true},
+		{"*@corp.example", true},
+		{"*", false},
+		{"*@", false},
+		{"*@*", false},
+		{"k*@example.com", false},
+		{"*@example", false},
+		{"kurt@", false},
+		{"@example.com", false},
+		{"*@exa mple.com", false},
+		{"nope", false},
+		{"x@y.z", false},
+	}
+	for _, tc := range cases {
+		r := config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml", AllowEmails: []string{tc.in}}
+		err := r.Validate()
+		if (err == nil) != tc.ok {
+			t.Errorf("%q: ok=%v, err=%v", tc.in, tc.ok, err)
+		}
 	}
 }

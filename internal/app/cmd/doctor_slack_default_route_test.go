@@ -90,3 +90,32 @@ func TestCheckSlackDefaultRoute_Warnings(t *testing.T) {
 		t.Errorf("missing im:history must WARN; got %s %q", st, msg)
 	}
 }
+
+func TestCheckSlackDefaultRoute_DomainWildcardNotResolved(t *testing.T) {
+	dir := t.TempDir()
+	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"*@example.com", "kurt@example.com"}}
+	scopes := "channels:history,im:history,mpim:history,im:write"
+
+	rs := checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{known: map[string]string{"kurt@example.com": "U1"}}, scopes)
+	st, msg := statusOf(rs, "Slack default route allowlist")
+	if st != CheckOK || !strings.Contains(msg, "1 domain wildcard") || !strings.Contains(msg, "1 email(s) resolve") {
+		t.Errorf("wildcard must not be looked up; got %s %q", st, msg)
+	}
+
+	rs = checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{}, scopes)
+	st, msg = statusOf(rs, "Slack default route allowlist")
+	if st != CheckWarn || !strings.Contains(msg, "kurt@example.com") || strings.Contains(msg, "*@example.com") {
+		t.Errorf("WARN must name only the unresolved exact entry; got %s %q", st, msg)
+	}
+}
+
+func TestCheckSlackDefaultRoute_NoWildcardClauseWhenNone(t *testing.T) {
+	dir := t.TempDir()
+	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"kurt@example.com"}}
+	rs := checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{known: map[string]string{"kurt@example.com": "U1"}}, "im:history,mpim:history,im:write")
+	if _, msg := statusOf(rs, "Slack default route allowlist"); strings.Contains(msg, "wildcard") {
+		t.Errorf("zero wildcards must omit the clause: %q", msg)
+	}
+}

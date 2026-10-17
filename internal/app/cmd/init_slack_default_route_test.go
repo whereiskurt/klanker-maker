@@ -48,14 +48,14 @@ func TestValidateSlackDefaultRouteProfile(t *testing.T) {
 	ok := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
 	bad := writeProfile(t, dir, "quiet.yaml", routeProfileNoInbound)
 
-	if err := ValidateSlackDefaultRouteProfile(&config.SlackDefaultRoute{Alias: "a", Profile: ok, AllowEmails: []string{"x@y.z"}}, nil); err != nil {
+	if err := ValidateSlackDefaultRouteProfile(&config.SlackDefaultRoute{Alias: "a", Profile: ok, AllowEmails: []string{"x@y.io"}}, nil); err != nil {
 		t.Fatalf("expected ok, got %v", err)
 	}
-	err := ValidateSlackDefaultRouteProfile(&config.SlackDefaultRoute{Alias: "a", Profile: bad, AllowEmails: []string{"x@y.z"}}, nil)
+	err := ValidateSlackDefaultRouteProfile(&config.SlackDefaultRoute{Alias: "a", Profile: bad, AllowEmails: []string{"x@y.io"}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "notification.slack.inbound.enabled") {
 		t.Fatalf("want inbound error, got %v", err)
 	}
-	err = ValidateSlackDefaultRouteProfile(&config.SlackDefaultRoute{Alias: "a", Profile: filepath.Join(dir, "missing.yaml"), AllowEmails: []string{"x@y.z"}}, nil)
+	err = ValidateSlackDefaultRouteProfile(&config.SlackDefaultRoute{Alias: "a", Profile: filepath.Join(dir, "missing.yaml"), AllowEmails: []string{"x@y.io"}}, nil)
 	if err == nil {
 		t.Fatal("want error for missing profile")
 	}
@@ -115,7 +115,7 @@ func TestPreStageSlackDefaultRouteProfile(t *testing.T) {
 	dir := t.TempDir()
 	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
 	up := &recordingUploader{}
-	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"x@y.z"}}
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"x@y.io"}}
 	if err := PreStageSlackDefaultRouteProfile(context.Background(), route, "bucket", nil, up); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ metadata:
 extends: [ir-base]
 `)
 	up := &recordingUploader{}
-	route := &config.SlackDefaultRoute{Alias: "ir", Profile: child, AllowEmails: []string{"x@y.z"}}
+	route := &config.SlackDefaultRoute{Alias: "ir", Profile: child, AllowEmails: []string{"x@y.io"}}
 	if err := PreStageSlackDefaultRouteProfile(context.Background(), route, "bucket", []string{dir}, up); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ extends: [ir-base]
 func TestPreStageSlackDefaultRouteProfile_FindsProfileViaSearchPath(t *testing.T) {
 	dir := t.TempDir()
 	writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
-	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: "nowhere/ir-bot.yaml", AllowEmails: []string{"x@y.z"}}
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: "nowhere/ir-bot.yaml", AllowEmails: []string{"x@y.io"}}
 	if err := ValidateSlackDefaultRouteProfile(route, []string{dir}); err != nil {
 		t.Fatalf("validate must find the profile via the search path: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestPreStageSlackDefaultRouteProfile_FindsProfileViaSearchPath(t *testing.T
 // pre-stage uploads nothing.
 func TestSlackDefaultRouteProfile_MissingErrorsAndUploadsNothing(t *testing.T) {
 	dir := t.TempDir()
-	route := &config.SlackDefaultRoute{Alias: "a", Profile: filepath.Join(dir, "missing-route.yaml"), AllowEmails: []string{"x@y.z"}}
+	route := &config.SlackDefaultRoute{Alias: "a", Profile: filepath.Join(dir, "missing-route.yaml"), AllowEmails: []string{"x@y.io"}}
 	if err := ValidateSlackDefaultRouteProfile(route, []string{dir}); err == nil {
 		t.Fatal("validate: want error for a missing profile")
 	}

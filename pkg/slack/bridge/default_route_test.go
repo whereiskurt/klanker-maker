@@ -68,3 +68,78 @@ func TestCachedSenderEmailFetcher_CachesSuccessOnly(t *testing.T) {
 		t.Fatalf("a failure must never be cached; got %d calls", bad.calls)
 	}
 }
+
+func TestEmailAllowlist_ExactAndDomain(t *testing.T) {
+	al, err := CompileEmailAllowlist([]string{"Kurt@Example.com", "*@Corp.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ok := range []string{"kurt@example.com", "KURT@example.com", "bob@corp.example", "Alice@CORP.EXAMPLE"} {
+		if !al.Allows(ok) {
+			t.Errorf("%q must be allowed", ok)
+		}
+	}
+	for _, no := range []string{"bob@example.com", "a@sub.corp.example", "corp.example", "", "*@corp.example"} {
+		if al.Allows(no) {
+			t.Errorf("%q must be denied", no)
+		}
+	}
+	if al.Len() != 2 {
+		t.Fatalf("Len = %d", al.Len())
+	}
+}
+
+func TestValidateEmailEntry_RejectsOtherGlobs(t *testing.T) {
+	for _, bad := range []string{"*", "*@", "*@*", "k*@example.com", "*@example", "kurt@", "@example.com", "*@exa mple.com"} {
+		if _, _, err := ValidateEmailEntry(bad); err == nil {
+			t.Errorf("%q must be rejected", bad)
+		}
+	}
+	n, isDomain, err := ValidateEmailEntry(" *@Example.COM ")
+	if err != nil || !isDomain || n != "*@example.com" {
+		t.Fatalf("got %q %v %v", n, isDomain, err)
+	}
+	n, isDomain, err = ValidateEmailEntry("Kurt@Example.com")
+	if err != nil || isDomain || n != "kurt@example.com" {
+		t.Fatalf("got %q %v %v", n, isDomain, err)
+	}
+}
+
+// emailEntryCases is mirrored verbatim in internal/app/config
+// (TestValidateRouteEmailEntry_MirrorsBridge): config cannot import this
+// package, so the two validators are kept in lockstep by sharing this table.
+var emailEntryCases = []struct {
+	in string
+	ok bool
+}{
+	{"kurt@example.com", true},
+	{"Kurt@Example.COM", true},
+	{" *@example.com ", true},
+	{"*@corp.example", true},
+	{"*", false},
+	{"*@", false},
+	{"*@*", false},
+	{"k*@example.com", false},
+	{"*@example", false},
+	{"kurt@", false},
+	{"@example.com", false},
+	{"*@exa mple.com", false},
+	{"nope", false},
+	{"x@y.z", false},
+}
+
+func TestValidateEmailEntry_SharedTable(t *testing.T) {
+	for _, tc := range emailEntryCases {
+		_, _, err := ValidateEmailEntry(tc.in)
+		if (err == nil) != tc.ok {
+			t.Errorf("%q: ok=%v, err=%v", tc.in, tc.ok, err)
+		}
+	}
+}
+
+func TestDefaultRoute_AllowsDomainEntry(t *testing.T) {
+	r := NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"*@example.com"})
+	if r == nil || !r.Allows("anyone@example.com") || r.Allows("x@other.example") {
+		t.Fatal("route must honour a domain entry")
+	}
+}

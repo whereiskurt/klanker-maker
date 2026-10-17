@@ -680,7 +680,7 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 		out = append(out, CheckResult{Name: "Slack default route profile", Status: CheckOK, Message: msg})
 	}
 
-	// 2. Allowlist: non-empty and every email resolves in the workspace.
+	// 2. Allowlist: non-empty and every exact email resolves in the workspace.
 	emails := route.NormalizedEmails()
 	switch {
 	case len(emails) == 0:
@@ -691,8 +691,17 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 		out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckSkipped,
 			Message: fmt.Sprintf("%d email(s) configured; bot token unavailable so resolution was not checked", len(emails))})
 	default:
-		var unresolved []string
+		// `*@<domain>` entries are not people; only exact addresses are resolved.
+		var exact, unresolved []string
+		wildcards := 0
 		for _, e := range emails {
+			if strings.HasPrefix(e, "*@") {
+				wildcards++
+				continue
+			}
+			exact = append(exact, e)
+		}
+		for _, e := range exact {
 			if _, ok, err := lookup.LookupUserByEmail(ctx, e); err != nil || !ok {
 				unresolved = append(unresolved, e)
 			}
@@ -702,8 +711,11 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 				Message:     "not found in the workspace: " + strings.Join(unresolved, ", "),
 				Remediation: "Use the email on the person's Slack profile. Removals take effect after `km init --dry-run=false` plus up to 15 minutes of bridge cache."})
 		} else {
-			out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckOK,
-				Message: fmt.Sprintf("%d email(s) resolve in the workspace", len(emails))})
+			msg := fmt.Sprintf("%d email(s) resolve in the workspace", len(exact))
+			if wildcards > 0 {
+				msg += fmt.Sprintf(", %d domain wildcard(s)", wildcards)
+			}
+			out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckOK, Message: msg})
 		}
 	}
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -189,7 +190,7 @@ func (r *SlackDefaultRoute) NormalizedEmails() []string {
 }
 
 // Validate enforces the deny-by-default contract: alias and profile set, at
-// least one syntactically plausible email. It does NOT touch disk or Slack.
+// least one entry, every entry an email address or `*@<domain>`. It does NOT touch disk or Slack.
 func (r *SlackDefaultRoute) Validate() error {
 	if r == nil {
 		return nil
@@ -204,12 +205,33 @@ func (r *SlackDefaultRoute) Validate() error {
 	if len(emails) == 0 {
 		return fmt.Errorf("slack.default_route.allow_emails is empty: the default route is deny-by-default and stays OFF until at least one email is listed")
 	}
-	for _, e := range emails {
-		if !strings.Contains(e, "@") {
-			return fmt.Errorf("slack.default_route.allow_emails entry %q is not an email address", e)
+	for _, e := range r.AllowEmails {
+		if strings.TrimSpace(e) == "" {
+			continue
+		}
+		if err := validateRouteEmailEntry(e); err != nil {
+			return fmt.Errorf("slack.default_route.allow_emails: %w", err)
 		}
 	}
 	return nil
+}
+
+// routeDomainEntry / routeExactEntry duplicate reDomainEntry / reExactEntry in
+// pkg/slack/bridge/default_route.go (bridge.ValidateEmailEntry). config must not
+// import pkg/slack/bridge, so the copies are held in lockstep by a shared test
+// table (TestValidateRouteEmailEntry_MirrorsBridge ↔ emailEntryCases): change both.
+var routeDomainEntry = regexp.MustCompile(`^\*@[a-z0-9.-]+\.[a-z]{2,}$`)
+var routeExactEntry = regexp.MustCompile(`^[^@\s*]+@[a-z0-9.-]+\.[a-z]{2,}$`)
+
+// validateRouteEmailEntry accepts an exact address or exactly `*@<domain>`
+// (case-insensitive, trimmed). Any other use of `*` is an error so a typo
+// cannot widen the allowlist.
+func validateRouteEmailEntry(s string) error {
+	n := strings.ToLower(strings.TrimSpace(s))
+	if routeDomainEntry.MatchString(n) || routeExactEntry.MatchString(n) {
+		return nil
+	}
+	return fmt.Errorf("allowlist entry %q: must be an email address or *@<domain>", s)
 }
 
 type ClusterConfig struct {
