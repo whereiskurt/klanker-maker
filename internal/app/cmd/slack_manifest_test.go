@@ -142,3 +142,47 @@ func TestSlackManifest_MissingBridgeURL(t *testing.T) {
 		t.Errorf("error should suggest km slack init; got: %v", err)
 	}
 }
+
+// TestSlackManifest_DMScopesAndEvents: the default route accepts DMs and group
+// DMs, which need im:history/mpim:history and the message.im/message.mpim events.
+func TestSlackManifest_DMScopesAndEvents(t *testing.T) {
+	var buf bytes.Buffer
+	if err := cmd.RenderSlackManifest(&buf, cmd.SlackManifestData{AppName: "x", EventsURL: "https://e/events"}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{`"im:history"`, `"mpim:history"`, `"im:write"`, `"message.im"`, `"message.mpim"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("manifest missing %s", want)
+		}
+	}
+	// Scopes and events are not enough for a DM: Slack refuses the send client-side
+	// ("Sending messages to this app has been turned off") unless the App Home
+	// Messages tab accepts messages. Found live on 2026-10-17.
+	if !strings.Contains(out, `"messages_tab_enabled": true`) || !strings.Contains(out, `"messages_tab_read_only_enabled": false`) {
+		t.Error("manifest must enable the App Home messages tab (writable) or DMs are refused before any event is sent")
+	}
+}
+
+func TestVerifyEventsAPIScopes_RequiresIMHistory(t *testing.T) {
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"channels:history", "groups:history", "reactions:write", "files:read"})
+	if ok || !hasString(missing, "im:history") {
+		t.Fatalf("im:history must be required; ok=%v missing=%v", ok, missing)
+	}
+}
+
+func TestVerifyEventsAPIScopes_RequiresIMWrite(t *testing.T) {
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"channels:history", "groups:history", "im:history", "mpim:history", "reactions:write", "files:read"})
+	if ok || !hasString(missing, "im:write") {
+		t.Fatalf("im:write must be required; ok=%v missing=%v", ok, missing)
+	}
+}
+
+func hasString(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}

@@ -93,6 +93,16 @@ type SlackThreadStore interface {
 	// empty strings (not error) when no owned row exists or on a cross-sandbox
 	// lookup (sandbox-never-reads-DDB boundary). Phase 110 Plan 02.
 	LookupBySession(ctx context.Context, sessionID, sandboxID string) (channelID, threadTS, agentType string, err error)
+	// DispatchBoundary returns last_dispatch_ts (the Slack ts of the last message
+	// that dispatched a turn in this thread), "" when absent. Part B context window.
+	DispatchBoundary(ctx context.Context, channelID, threadTS string) (string, error)
+	// MarkDispatched records eventTS as last_dispatch_ts if it is newer than the
+	// stored value (monotonic). A losing write is silently a no-op.
+	MarkDispatched(ctx context.Context, channelID, threadTS, eventTS string) error
+	// Rebind overwrites the row for (channel, thread_ts) with a new sandbox_id
+	// and clears claude_session_id — used when the alias behind a routed
+	// thread now resolves to a different (recreated) sandbox.
+	Rebind(ctx context.Context, channelID, threadTS, sandboxID string) error
 }
 
 // SandboxByChannelFetcher resolves a Slack channel_id to sandbox routing info
@@ -121,6 +131,9 @@ type SandboxRoutingInfo struct {
 	//   &true  → this sandbox requires an @-mention (with thread-bypass)
 	//   &false → this sandbox dispatches every message (chatty), ignoring mentions
 	MentionOnly *bool
+	// Part B: per-sandbox thread-bypass. nil/&true → Phase 91.3 bypass; &false →
+	// strict (mention required everywhere; context collected on mention).
+	ThreadBypass *bool
 	// Phase 118: per-sandbox trigger allowlist override (Slack user IDs). When
 	// non-empty, REPLACES EventsHandler.Allow entirely for this sandbox — it is
 	// not additive. nil/empty = fall back to install-level EventsHandler.Allow
@@ -203,4 +216,32 @@ type SandboxResumer interface {
 // MUST use UpdateItem, never PutItem (SandboxMetadata lossy round-trip footgun).
 type SandboxStatusWriter interface {
 	SetStatusRunning(ctx context.Context, sandboxID string) error
+}
+
+// ---- 2026-10-16: default route ---------------------------------------------
+
+// SandboxByIDFetcher reads routing info for a known sandbox id (GetItem on
+// km-sandboxes). Used for thread continuity in channels no sandbox owns.
+type SandboxByIDFetcher interface {
+	FetchBySandboxID(ctx context.Context, sandboxID string) (SandboxRoutingInfo, error)
+}
+
+// SlackAliasResolver resolves the default route's alias to routing info.
+// found=false with err=nil means "no row": cold-create.
+type SlackAliasResolver interface {
+	ResolveAlias(ctx context.Context, alias string) (info SandboxRoutingInfo, found bool, err error)
+}
+
+// SandboxCreatePublisher publishes a SandboxCreate event carrying the Slack
+// envelope for a sandbox id the caller minted. The events handler mints the id
+// BEFORE the files fork so attachment keys (slack-inbound/<id>/<thread_ts>/…)
+// and the thread row both name the box that is about to exist.
+type SandboxCreatePublisher interface {
+	PutSandboxCreate(ctx context.Context, sandboxID, alias, profile, slackEnvelopeJSON string) error
+}
+
+// SenderEmailFetcher resolves a Slack user id to a lowercased email. It returns
+// ErrSenderIneligible for deleted users, bots, and profiles with no email.
+type SenderEmailFetcher interface {
+	SenderEmail(ctx context.Context, userID string) (email string, err error)
 }

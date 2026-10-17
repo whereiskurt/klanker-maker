@@ -77,6 +77,13 @@ type BlockPoster interface {
 	PostMessageBlocks(ctx context.Context, channel, subject, body, blocksJSON, threadTS string) (string, error)
 }
 
+// DMOpener is the optional Slack-API surface for ActionDM (2026-10-17). The
+// handler type-asserts h.Slack.(DMOpener) and answers 500 dm_unsupported when
+// the poster lacks it, so existing fakes keep satisfying SlackPoster.
+type DMOpener interface {
+	OpenDM(ctx context.Context, userID string) (channelID string, err error)
+}
+
 // S3ObjectGetter abstracts S3 GetObject for streaming transcripts to Slack
 // without buffering the full body in Lambda memory. Phase 68.
 //

@@ -8,6 +8,95 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Slack default route + strict mention-only threads (2026-10-16):**
+- **Invite the bot to any channel, or DM it, @-mention it, and the reply lands in a thread
+  there.** New front-door-only `slack.default_route: {alias, profile, allow_emails}` sends
+  every conversation this install does not own to one alias: warm enqueue, Phase 114 resume,
+  or cold-create, the `github.events` vocabulary. **Deny-by-default:** an empty
+  `allow_emails` fails `km init`, and `slack.allow` is deliberately NOT reused (user ids,
+  allow-by-default on empty: two meanings under one key is a trap). One merge-list entry
+  (`slack.default_route`, `UnmarshalKey`), three env vars `KM_SLACK_DEFAULT_ROUTE_*`, all
+  or none. `km init` refuses a profile without Slack inbound, because a routed box answers
+  only through its poller. Dormant when the block is absent.
+- **The ladder runs on the `FetchByChannel` miss only; the owned path is untouched.**
+  (1) thread continuity from `km-slack-threads`, (2) the unchanged Phase 95/96 relay,
+  (3) route selection, (4) mention gate (not for `im`; yes for `mpim`) + email gate,
+  (5) alias resolve → cold-create / resume / enqueue / frozen notice, (6) the shared tail.
+  **Continuity runs before the relay** so a thread follow-up never fans out to peers; a
+  peer that claims the channel still wins over the route for anything that is not already a
+  routed thread. **A configured route retires the Phase 96 orphan reply on that install**:
+  a listed sender gets a dispatch and an unlisted one a silent drop, so nobody is left to
+  hint. If a thread row's box is gone the bypass comes from the alias's CURRENT box (strict
+  when the alias is absent too); an alias-moved rebind happens only after a successful
+  delivery, and **the thread row is written only after a successful delivery on every path**,
+  so a failed enqueue leaves no row and the sender re-mentions.
+- **Identity is resolved at event time and a deny is never cached.** `users.info` → email,
+  lowercased; deny on API error, no email, `deleted`, `is_bot`. Successful lookups are cached
+  15 minutes per warm Lambda; failures are not, so a Slack blip costs one event and cannot pin
+  a person out. The gate applies to every turn, thread follow-ups included; non-listed senders
+  get no 👀, no reply, no hint.
+- **The reply fix is two-sided and ships together.** The poller posts to the envelope's
+  `channel` (`REPLY_CHANNEL`) and exports a per-turn `KM_SLACK_CHANNEL_ID`, so the
+  notify-hook and `km-slack reply` follow with no binary change. The bridge authorizes a
+  foreign-channel post only when it carries a `thread_ts` whose `km-slack-threads` row names
+  the posting sandbox, and **only for `post` and `upload`**. That row is written only by
+  bridge-side components (events handler, create-handler); the sandbox role has no explicit
+  grant on the table, pinned by `TestSandboxRole_HasNoWriteGrantOnSlackThreadsTable` —
+  **never grant the sandbox role access to `km-slack-threads`** (DynamoDB IAM cannot scope by
+  `sandbox_id`). **Open hole:** `ec2spot_region_lock` is an `Allow *` on `*` conditioned on
+  region, created for every `iam.allowedRegions` profile (all of `base/platform`), so those
+  boxes CAN write the table (and every other in-region table) today. A forged row would be
+  honoured, so there the gate bounds posting to channels the bot is in, not to threads the
+  bridge routed. The guard names it as its one known exception; narrowing it (region Deny
+  plus explicit grants, after enumerating what sandboxes rely on) and then moving
+  routed-thread authz to a store the sandbox cannot reach is a separate phase (spec §11).
+  `permalink`/`update` there stay
+  `403 channel_mismatch` because the bot token is shared across sandboxes and neither verb is
+  thread-anchored. Consequence: the Phase 70 `claude:`/`codex:` handoff (a new top-level
+  post) is skipped in a routed thread, with a poller log line saying so.
+- **Strict mode: `notification.slack.inbound.threadBypass: false`.** Every turn needs an
+  @-mention, thread replies included, in mapped channels AND routed threads; a mentioned
+  thread reply carries the human messages since the bot's last turn (100 msgs / 32 KiB /
+  10 files / 50 MiB, newest-first, 240 KiB body guard). Trust = the thread's own gate
+  (Phase 118 list, or the email gate under the 20 s context deadline, **fail-closed**).
+  `last_dispatch_ts` is advanced after EVERY successful delivery in every mode, so a box
+  later flipped to strict has a correct boundary. Context never blocks a turn. Known limits:
+  `conversations.replies` is single-page (`limit=200`); the header omits per-file errors;
+  a cold-created routed box gets no context on its first turn (no row, no `threadBypass` yet).
+- **Three things found during planning, all fixed:** the create-handler role had no
+  `sqs:SendMessage` on `{prefix}-slack-inbound-*.fifo` (a cold-create could never drain its
+  first prompt); the cold-create path needs the profile in S3, so `km init` pre-stages it to
+  `slack-profiles/{slug}/.km-profile.yaml`, **flattened** when it uses `extends:` (the
+  create-handler has no base fragments); and the orphan reply had to be retired where a route
+  exists. The bridge also mints the `sl-…` id before downloading the trigger's files, so
+  attachments are keyed on the real box. Bridge IAM gains `dynamodb:Query` on `alias-index`,
+  `events:PutEvents`, and `dynamodb:UpdateItem` on the threads table.
+- **Manifest gains `im:history`, `mpim:history`, `message.im`, `message.mpim`** (`im:write` added 2026-10-17 for `km-slack dm`);
+  `km slack init`'s scope check requires both history scopes. `km doctor` group
+  `Slack default route` (three results, one evaluation): profile resolves with inbound (notes
+  a strict profile), every email resolves, live `auth.test` scopes include both history scopes.
+- **Deploy = `make build` → `make build-lambdas` → `km init --dry-run=false` (NOT
+  `--sidecars`, NOT `--slack` alone) → `km slack manifest` → reinstall the App →
+  `km slack rotate-token --bot-token <new>` → `km destroy && km create` of the default
+  sandbox (or let the first mention cold-create it) → `km doctor`.** Half-deploys are quiet,
+  none dangerous: new bridge + old poller ⇒ replies land in `#sb-…`; old bridge + new poller
+  ⇒ the route never fires; new bridge + old create-handler ⇒ the box is created and the first
+  prompt is lost. Until the reinstall, channels work and DMs are never delivered. Frozen
+  pre-92 learn.v2 golden hand-patched for the poller hunks, never re-captured. No plugin bump.
+  See `docs/slack-notifications.md` § Default route and § Phase 91 Strict mode.
+- **`km-slack dm --to U… ` (2026-10-17): the bot opens a DM with a person on the route
+  allowlist and posts top-level; a reply under it routes back to the sandbox (thread row written
+  after the post). New scope `im:write`. `target_user` is `omitempty` because the bridge
+  re-canonicalises before verifying. Half-deploy: a new `km-slack` against an old bridge gets
+  `400 missing_fields` (top-level) or `400 unknown_action` (`--from-thread`), fail-closed, no
+  nonce burned. See `docs/slack-notifications.md` § Bot-initiated DMs.
+- **One reply per turn (2026-10-17): every Slack turn posted TWICE** — the agent answered with
+  `km-slack reply` (the 09-19 preamble told it to), then the poller posted its closing sentence.
+  `km-slack` now touches `/tmp/km-slack-posted.<thread_ts>` after a successful threaded post;
+  the poller clears it before dispatch and skips its final post when it exists. The hook's
+  stream drain opts out (`KM_SLACK_POSTED_MARKER=0`) or a progress post would eat the answer.
+  Deploy = `make build` + `km init --dry-run=false` (sidecar AND create-handler) + recreate.
+
 **Hibernate-safe additional volumes — `km-volumes` (2026-09-20):**
 - **A hibernate/resume can cross-wire the additional NVMe namespaces; `/etc/fstab`'s mount-by-UUID then writes both volumes onto the wrong disk.** Reproduced on cycle 1 of `km pause`/`km resume` on a two-volume t3.medium (`sb-3cf8e982`): the kernel re-reads namespace SIZE but keeps cached controller IDENTITY and page cache, so `/sys/block/*/device/serial` and `blkid` both lie after resume — **only a live `nvme id-ctrl` Identify tells the truth** (it showed the two volumes had actually swapped controllers). The operator write-up's "serials were right" was sysfs. A 1 MiB known file failed its checksum 33 s after resume.
 - **Fix = new sidecar `cmd/km-volumes` + userdata.** The fstab lines are gone. First cold boot writes `/var/lib/km/volumes.json` (live serial → vol-id, size, fs UUID, mountpoint, snapshot provenance). `km-volumes.service` (oneshot, before sshd/pollers) runs `mount` on EVERY boot: resolve by live serial (never BDM letter, never UUID), check size + UUID + superblock-fits, mount only on a full match, else refuse with `<mp>/.km-mount-refused` + `/var/lib/km/volumes.state` + a `volume_mount_refused` audit event. `system-sleep/km-volumes`: `pre-sleep` unmounts (TERM→KILL→lazy-with-marker, every step under `timeout`, ALWAYS exit 0 — a blocking hook trips ec2-hibinit's retry/debounce and the box stops hibernating), `post-sleep` PCI-removes + rescans every non-root controller UNCONDITIONALLY (0.7 s live; node names AND BDFs move, serial is the only key) then mounts; one retry; then `spec.runtime.onVolumeMismatch: refuse|reboot` (default refuse; reboot is once per resume, no loop). `km-volumes repair <mp>` = backup-superblock e2fsck, snapshot-derived only unless `--i-accept-data-loss`. Sidecar is fetched in userdata section 2.6.0, BEFORE the mount block — the shared sidecar download runs later in the script.
@@ -1929,6 +2018,9 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | kubectl in a sandbox against a cluster only your laptop can reach — `km tunnel` operator runbook: prerequisites, flags, troubleshooting, the `socks` mode, deploy surface | `docs/k8s-reverse-tunnel.md` (Phase 130) |
 | **How the k8s tunnel actually works** — the three nested tunnels and why SSM forced SSH-inside-SSM, the ExecCredential proxy and why the broker is deliberately dumb, the `tls-server-name`-vs-CA split, the exec apiVersion exact-match trap, the precise trust boundary, and why the deploy surface is `make build` alone | `docs/k8s-reverse-tunnel-internals.md` (Phase 130) |
 | Persistent agent panes that survive detach — `km herdr start`, the base/tools/herdr fragment, km-presence signal 8, the pause-vs-stop lifecycle trap, the ssh-config conflict, deploy surface | `docs/herdr-remote-attach.md` |
+| Ask the bot to DM someone — `km-slack dm`, who it may DM, the continuity row, the `im:write` scope | `docs/slack-notifications.md` § Bot-initiated DMs |
+| @-mention the bot from any channel or DM — `slack.default_route`, the email allowlist, the routing ladder, replies in the originating thread, the `channel_mismatch` rule, the DM scopes, deploy and half-deploy outcomes; strict `threadBypass: false` and thread context | `docs/slack-notifications.md` § Default route + § Phase 91 Strict mode |
+| Why the Slack default route and strict mode were built the way they were — every design decision with its rationale, the end-to-end ladder, the code map and tests, the `ec2spot_region_lock` security finding, deploy surface, log lines, UAT checklist, follow-ups | `docs/slack-default-route.md` |
 | Hibernate/resume cross-wiring additional EBS volumes — why fstab-by-UUID corrupted them, the live-Identify rule, the pre/post sleep hooks, `onVolumeMismatch`, `km-volumes repair`, re-materialising from snapshot, the `/shared` caveat | `docs/hibernate-volumes.md` |
 | Sharing a sandbox's VS Code / desktop / herdr / tunnel access between analysts — the SSM-held key + password under `/{prefix}/access/`, the sync table, rekey publish order, the mismatch guard, why the desktop has none | `docs/vscode.md` § Sharing a sandbox between analysts + `docs/desktop.md` § Sharing a desktop between analysts |
 | How interactive sessions came to be enforced (Phase 135) — the cgroup v2 common-ancestor rule, the uid-or-scope predicate and why both clauses, fail-open constants, and the quiet half-deploy | `docs/operational-gotchas.md` § Interactive sessions and the eBPF enforcement cgroup |
@@ -1947,6 +2039,7 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | Serverless `km check` runner (deploy/run/ls/sync/rm, KM_CHECK_TRIGGER, CheckDispatch) | `docs/check-runner.md` (Phase 116) |
 | Inject secrets into a `km check` Lambda — `--secret <ssm-path>` + `--sops <file>` (deploy-time unpack to per-check SSM SecureString params; no Lambda KMS) | `docs/check-runner.md` § Secrets |
 | Post to Slack from inside a sandbox (incl. transcript streaming, inbound, attachments) | `klanker:slack` skill |
+| Every `km-slack` verb — flags, stdout/stderr, exit codes, render precedence (flag, `KM_SLACK_RENDER`, `plain`), the `invalid_blocks` retry, the posted marker, and which verbs the bridge admits in a routed thread | `docs/slack-notifications.md` § km-slack verb reference |
 | @-mentioning people from a sandbox reply — where the ids come from (`[Slack] From:` preamble, `KM_SLACK_SENDER_ID`, tokens the sender typed), `km-slack --mention`, why the renderer used to escape `<@U…>`, why names are unsupported | `docs/slack-notifications.md` § Mentioning people |
 | Polite-bot mode, `KM_SLACK_MENTION_ONLY`, per-channel @-mention-only inbound | `docs/slack-notifications.md` § Phase 91 |
 | Federated bridge relay — one Slack App across multiple km installs | `docs/slack-notifications.md` § Phase 95 |
@@ -2001,7 +2094,7 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | Channel | Helper(s) in `/opt/km/bin` | Verbs / use |
 |---|---|---|
 | **GitHub** | `km-github` | `comment` / `review` / `check` / `pr create` / **`commit`** (verified signed commit via GraphQL `createCommitOnBranch`) — all keyless (token from SSM). Prefer this over raw `gh`/`git push`. |
-| **Slack** | `km-slack` | post status/progress/threaded replies + Block-Kit rich rendering (see `klanker:slack` skill). |
+| **Slack** | `km-slack` | `post` / `reply` (session-aware thread) / `dm` (allowlist-gated) / `upload` / `permalink` / `update`, plus hook-internal `record-mapping`. Render tiers, `--mention`, and the posted marker that cancels the automatic final reply: `klanker:slack` skill + `docs/slack-notifications.md` § km-slack verb reference. |
 | **Email** | `km-send`, `km-recv` (+ `km-mail-poller`) | signed inter-sandbox / operator email (see `klanker:email` skill). |
 | **HackerOne** | `km-h1` | comment on reports (internal-by-default). |
 | **Git auth** | `km-git-askpass`, `km-git-credential-helper` | inject the installation token into plain `git` operations (baked-in sandbox id, works in any subprocess). |

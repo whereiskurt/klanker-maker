@@ -72,12 +72,41 @@ func TestUserdata_SlackInbound_SenderPreambleIsPrepended(t *testing.T) {
 	if !strings.HasSuffix(got, "hi <@U0RON>") {
 		t.Fatalf("original prompt text not preserved after the preamble:\n%s", got)
 	}
-	// The preamble must tell the agent HOW to mention — the literal token form
-	// and the --mention flag — because "@Kurt" is the mistake it will otherwise make.
-	for _, want := range []string{"<@U0KURT>", "--mention U0KURT"} {
+	// The preamble must tell the agent HOW to mention — the literal token form —
+	// because "@Kurt" is the mistake it will otherwise make. It must also say the
+	// final reply is posted automatically, and must NOT steer the agent to
+	// deliver its answer with km-slack: that was the double post per turn.
+	for _, want := range []string{"<@U0KURT>", "posted to this thread automatically", "Do not call km-slack post/reply to deliver your answer", "never invent an id", "km-slack dm --to U0KURT", "does not replace your reply here"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("preamble missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "--mention U0KURT") {
+		t.Errorf("preamble still steers the agent to km-slack --mention for its answer:\n%s", got)
+	}
+	// No bot_user_id in the body (older bridge): no self-identity sentence.
+	if strings.Contains(got, "You are the Slack bot") {
+		t.Errorf("self-identity sentence rendered without a bot_user_id:\n%s", got)
+	}
+}
+
+// With the bridge-supplied bot_user_id the preamble names the bot's own id, so
+// "<@UBOT> you around?" is read as the sender addressing the agent. Live
+// 2026-10-17: without it the agent replied "I'm not the person you're looking
+// for. I can't ping other users for you."
+func TestUserdata_SlackInbound_SenderPreambleNamesTheBotItself(t *testing.T) {
+	block := slackPollerBlock(t)
+	got := runSenderPreamble(t, block, `{"channel":"C1","thread_ts":"1.2","text":"Yo!! <@UBOT999> you around?","user":"U0KURT","bot_user_id":"UBOT999"}`, "Yo!! <@UBOT999> you around?")
+	if !strings.HasPrefix(got, "[Slack] From: <@U0KURT>") {
+		t.Fatalf("prompt does not start with the sender preamble:\n%s", got)
+	}
+	for _, want := range []string{"You are the Slack bot <@UBOT999>", "a <@UBOT999> token in the message is this person addressing you"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("preamble missing %q:\n%s", want, got)
+		}
+	}
+	if !strings.HasSuffix(got, "Yo!! <@UBOT999> you around?") {
+		t.Fatalf("original prompt text not preserved:\n%s", got)
 	}
 }
 
@@ -119,5 +148,16 @@ func TestUserdata_SenderPreambleIsSlackOnly(t *testing.T) {
 	}
 	if strings.Contains(out, "KM_SLACK_SENDER_ID") || strings.Contains(out, slackSenderPreambleStart) {
 		t.Fatal("sender preamble/env leaked into a profile with no Slack inbound")
+	}
+}
+
+func TestUserdata_SlackInbound_SenderPreambleInDMChannel(t *testing.T) {
+	block := slackPollerBlock(t)
+	got := runSenderPreamble(t, block, `{"channel":"D0KURT1","thread_ts":"1.2","text":"hi","user":"U0KURT"}`, "hi")
+	if !strings.Contains(got, "already in a direct message") {
+		t.Errorf("DM-channel preamble missing the already-in-a-DM note:\n%s", got)
+	}
+	if strings.Contains(got, "km-slack dm --to") {
+		t.Errorf("DM-channel preamble still advertises km-slack dm:\n%s", got)
 	}
 }

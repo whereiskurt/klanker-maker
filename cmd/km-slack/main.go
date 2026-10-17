@@ -72,6 +72,8 @@ func dispatch(args []string, stderr io.Writer) int {
 		return runUpdate(args[1:], stderr)
 	case "reply":
 		return runReply(args[1:], stderr)
+	case "dm":
+		return runDM(args[1:], stderr)
 	case "-h", "--help", "help":
 		usage(stderr)
 		return 0
@@ -90,6 +92,7 @@ Subcommands:
   record-mapping Write a (channel_id, slack_ts) → transcript-offset row to DDB.
   permalink      Resolve a Slack permalink URL for --channel + --ts.
   update         Edit a previously-posted bot message via --channel, --ts, and --text/--body.
+  dm --to U… (--text <s> | --body <file>) [--render …] [--from-thread]   DM a person on the route allowlist (top-level; no marker)
   reply          Post a reply into the thread bound to the current session (4-step resolution chain).
                  Resolution: --thread > $KM_SLACK_THREAD_TS > session-id lookup > channel root.
   post/reply     --mention U…[,U…|here|channel] notifies people: the ids are prepended as <@U…>
@@ -350,6 +353,32 @@ func run(channel, subject, bodyPath, thread, renderMode string, mentions []strin
 	return runWith(ctx, priv, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode, mentions...)
 }
 
+// renderBody applies the km-slack render tier to body and returns the text
+// fallback plus the Block Kit JSON ("" when the tier produced none). Shared by
+// post/reply and dm. Degrades blocks-rich -> blocks -> mrkdwn.
+func renderBody(renderMode string, body []byte) (rendered, blocksJSON string) {
+	switch renderMode {
+	case "blocks-rich":
+		aiFooter := os.Getenv("KM_SLACK_AI_FOOTER") == "true"
+		if bj, fallback, ok := slack.RenderRich(string(body), aiFooter); ok {
+			return fallback, bj
+		}
+		if bj2, fallback2, ok := slack.RenderBlocks(string(body)); ok {
+			return fallback2, bj2
+		}
+		return slack.Mrkdwnify(string(body)), ""
+	case "blocks":
+		if bj, fallback, ok := slack.RenderBlocks(string(body)); ok {
+			return fallback, bj
+		}
+		return slack.Mrkdwnify(string(body)), ""
+	case "mrkdwn":
+		return slack.Mrkdwnify(string(body)), ""
+	default:
+		return string(body), ""
+	}
+}
+
 // runWith is the testable inner entry point. Tests inject an ephemeral key and
 // stub bridge server URL directly, bypassing SSM entirely.
 //
@@ -391,46 +420,7 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 	}
 
 	// Phase 74: apply renderer then check overflow before building envelope.
-	var rendered string
-	var blocksJSON string
-	switch renderMode {
-	case "blocks-rich":
-		// Tier 3: attempt RenderRich (markdown + table blocks, GFM-verbatim prose).
-		// KM_SLACK_AI_FOOTER=true appends a trailing AI-disclaimer context block.
-		// On ok==false (12K cap, 50-block cap, or panic), degrade to Tier 2 (RenderBlocks).
-		// If Tier 2 also returns ok==false, degrade to Tier 1 (Mrkdwnify).
-		aiFooter := os.Getenv("KM_SLACK_AI_FOOTER") == "true"
-		bj, fallback, okRR := slack.RenderRich(string(body), aiFooter)
-		if okRR {
-			rendered = fallback
-			blocksJSON = bj
-		} else {
-			// Tier 2 fallback.
-			bj2, fallback2, okBK := slack.RenderBlocks(string(body))
-			if okBK {
-				rendered = fallback2
-				blocksJSON = bj2
-			} else {
-				// Tier 1 final fallback.
-				rendered = slack.Mrkdwnify(string(body))
-			}
-		}
-	case "blocks":
-		// Tier 2: attempt Block Kit rendering. On ok==false (50-block cap or
-		// panic), degrade to Mrkdwnify (Tier 1). The fallback path is indistinguishable
-		// from an explicit --render=mrkdwn call for the bridge.
-		bj, fallback, okBK := slack.RenderBlocks(string(body))
-		if okBK {
-			rendered = fallback
-			blocksJSON = bj
-		} else {
-			rendered = slack.Mrkdwnify(string(body))
-		}
-	case "mrkdwn":
-		rendered = slack.Mrkdwnify(string(body))
-	default: // "plain" and any unknown value (already normalised in runPost)
-		rendered = string(body)
-	}
+	rendered, blocksJSON := renderBody(renderMode, body)
 	if line := slack.MentionLine(mentions); line != "" {
 		rendered = line + "\n" + rendered
 		if blocksJSON != "" {
@@ -495,6 +485,7 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 				return "", fmt.Errorf("bridge returned not-ok on mrkdwn fallback: %s", fbResp.Error)
 			}
 			fmt.Fprintf(os.Stderr, "km-slack: posted ts=%s (mrkdwn fallback)\n", fbResp.TS)
+			markThreadPosted(thread)
 			return fbResp.TS, nil
 		}
 		return "", err
@@ -503,7 +494,49 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 		return "", fmt.Errorf("bridge returned not-ok: %s", resp.Error)
 	}
 	fmt.Fprintf(os.Stderr, "km-slack: posted ts=%s\n", resp.TS)
+	markThreadPosted(thread)
 	return resp.TS, nil
+}
+
+// postedMarkerPrefix is the basename prefix of the "agent already posted in
+// this thread" marker. The Slack inbound poller (pkg/compiler/userdata.go,
+// the km-slack-final-post block) checks the SAME literal path
+// ${KM_SLACK_POSTED_DIR:-/tmp}/km-slack-posted.<thread_ts> and skips its own
+// end-of-turn post when it exists — otherwise an agent that answers with
+// `km-slack reply` gets its closing sentence posted as a second reply.
+const postedMarkerPrefix = "km-slack-posted."
+
+// postedMarkerPath returns the marker path for thread, or "" when thread is
+// empty (a top-level post), not a plain filename component, or the caller
+// opted out with KM_SLACK_POSTED_MARKER=0. The opt-out exists for posts that
+// are NOT the agent delivering its answer: km-notify-hook's transcript-stream
+// drain posts tool progress into the same thread mid-turn, and a marker from
+// it would suppress the poller's real final reply.
+func postedMarkerPath(thread string) string {
+	if os.Getenv("KM_SLACK_POSTED_MARKER") == "0" {
+		return ""
+	}
+	if thread == "" || strings.ContainsAny(thread, `/\`) || thread == "." || thread == ".." {
+		return ""
+	}
+	dir := os.Getenv("KM_SLACK_POSTED_DIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, postedMarkerPrefix+thread)
+}
+
+// markThreadPosted touches the posted marker after a SUCCESSFUL threaded post.
+// Best-effort: a failure is logged and ignored — the worst case is the old
+// double post, never a lost reply.
+func markThreadPosted(thread string) {
+	p := postedMarkerPath(thread)
+	if p == "" {
+		return
+	}
+	if err := os.WriteFile(p, nil, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "km-slack: could not write posted marker %s: %v\n", p, err)
+	}
 }
 
 // runPermalink wraps chat.getPermalink via the bridge.

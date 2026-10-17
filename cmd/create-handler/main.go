@@ -94,6 +94,11 @@ type CreateEvent struct {
 	// like GithubEnvelope. Empty for non-h1 creates (dormant). Until 2026-09-18
 	// nothing read this field, so an h1 cold-create silently lost its prompt.
 	H1Envelope string `json:"h1_envelope,omitempty"`
+
+	// SlackEnvelope carries the Slack bridge's InboundQueueBody for a default-route
+	// cold-create (2026-10-16). Drained into the slack-inbound FIFO after
+	// provisioning. Empty for non-slack creates (dormant).
+	SlackEnvelope string `json:"slack_envelope,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download files.
@@ -479,6 +484,15 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 		if enqErr := h.drainInboundEnvelope(ctx, event.SandboxID, queue, event.H1Envelope, "hackerone"); enqErr != nil {
 			log.Warn().Err(enqErr).Str("sandbox_id", event.SandboxID).
 				Msg("failed to enqueue h1 envelope into h1-inbound queue (non-fatal — the next report event re-dispatches)")
+		}
+	}
+
+	// Step 6c (2026-10-16): Slack default-route cold-create drain.
+	if event.SlackEnvelope != "" && h.SQSClient != nil {
+		queue := awspkg.SlackInboundQueueName(resourcePrefix(), event.SandboxID)
+		if enqErr := h.drainInboundEnvelope(ctx, event.SandboxID, queue, event.SlackEnvelope, "slack"); enqErr != nil {
+			log.Warn().Err(enqErr).Str("sandbox_id", event.SandboxID).
+				Msg("failed to enqueue slack envelope into slack-inbound queue (non-fatal — the sender can re-mention)")
 		}
 	}
 

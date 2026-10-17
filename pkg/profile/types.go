@@ -312,6 +312,13 @@ type NotificationSlackInboundSpec struct {
 	// messages (false). Phase 91.4/91.5 (re-homed from cli.notifySlackInboundReactAlways
 	// in Phase 92, Wave 3). nil = default true (chatty-reactor back-compat).
 	ReactAlways *bool `json:"reactAlways,omitempty" yaml:"reactAlways,omitempty"`
+	// ThreadBypass (2026-10-16): nil/true = Phase 91.3 behaviour (replies in an
+	// engaged thread bypass the mention requirement); false = STRICT: every
+	// dispatch needs an @-mention, including thread replies and Part A routed
+	// threads, and a mentioned thread reply carries the human messages since the
+	// bot's last turn as context. Persisted as slack_thread_bypass on the
+	// km-sandboxes row (must round-trip through SandboxMetadata).
+	ThreadBypass *bool `json:"threadBypass,omitempty" yaml:"threadBypass,omitempty"`
 	// Phase 118: Allow is the per-sandbox trigger allowlist (Slack user IDs,
 	// e.g. ["U012ABCDE"]). When non-empty, only messages from listed users are
 	// dispatched; all others are silently dropped (200 OK, no reaction, no SQS).

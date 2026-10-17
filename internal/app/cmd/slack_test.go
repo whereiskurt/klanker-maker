@@ -1008,7 +1008,7 @@ func TestSlackInit_PersistsSigningSecret(t *testing.T) {
 
 // TestSlackInit_ScopeCheck_AllPresent verifies no missing scopes when all required present (including Phase 75 files:read).
 func TestSlackInit_ScopeCheck_AllPresent(t *testing.T) {
-	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "groups:history", "reactions:write", "files:read"})
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "groups:history", "im:history", "mpim:history", "im:write", "reactions:write", "files:read"})
 	if !ok || len(missing) != 0 {
 		t.Fatalf("expected all scopes present, got missing=%v", missing)
 	}
@@ -1018,17 +1018,17 @@ func TestSlackInit_ScopeCheck_AllPresent(t *testing.T) {
 // Input includes all other required scopes (channels:history, reactions:write, files:read)
 // so that exactly one scope is absent.
 func TestSlackInit_ScopeCheck_MissingOne(t *testing.T) {
-	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "reactions:write", "files:read"})
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "im:history", "mpim:history", "im:write", "reactions:write", "files:read"})
 	if ok || len(missing) != 1 || missing[0] != "groups:history" {
 		t.Fatalf("expected groups:history missing, got ok=%v missing=%v", ok, missing)
 	}
 }
 
-// TestSlackInit_ScopeCheck_MissingBoth verifies all four scopes detected missing when only chat:write provided.
+// TestSlackInit_ScopeCheck_MissingBoth verifies all six scopes detected missing when only chat:write provided.
 func TestSlackInit_ScopeCheck_MissingBoth(t *testing.T) {
 	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write"})
-	if ok || len(missing) != 4 {
-		t.Fatalf("expected four scopes missing, got ok=%v missing=%v", ok, missing)
+	if ok || len(missing) != 7 {
+		t.Fatalf("expected six scopes missing, got ok=%v missing=%v", ok, missing)
 	}
 	foundReactionsWrite := false
 	for _, m := range missing {
@@ -1069,7 +1069,7 @@ func TestSlackInit_ScopeCheck_MissingReactionsWrite(t *testing.T) {
 // Conversely, with all four scopes present it MUST return ok=true.
 func TestSlackInit_FilesReadScope_Required(t *testing.T) {
 	// Missing files:read — the three pre-Phase-75 scopes are present.
-	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "groups:history", "reactions:write"})
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "groups:history", "im:history", "mpim:history", "im:write", "reactions:write"})
 	if ok {
 		t.Fatal("expected files:read missing, got ok=true")
 	}
@@ -1085,7 +1085,7 @@ func TestSlackInit_FilesReadScope_Required(t *testing.T) {
 	}
 
 	// All four present — must return ok=true with no missing scopes.
-	ok2, missing2 := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "groups:history", "reactions:write", "files:read"})
+	ok2, missing2 := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "groups:history", "im:history", "mpim:history", "im:write", "reactions:write", "files:read"})
 	if !ok2 || len(missing2) != 0 {
 		t.Fatalf("expected all four scopes present, got ok=%v missing=%v", ok2, missing2)
 	}

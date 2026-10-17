@@ -140,6 +140,11 @@ type fakeThreads struct {
 	// Phase 91.3: simulate existing thread rows for LookupSandbox.
 	// Key: ch+"|"+ts → sandbox_id. Empty value = row not found.
 	sandboxByThread map[string]string
+	// Part B: DispatchBoundary values (ch+"|"+ts) and recorded MarkDispatched calls.
+	boundary map[string]string
+	marks    []struct{ chan_, ts, ev string }
+	// Default route: recorded Rebind calls.
+	rebinds []struct{ chan_, ts, sb string }
 }
 
 func (f *fakeThreads) Get(ctx context.Context, ch, ts string) (string, error) { return "", nil }
@@ -155,6 +160,22 @@ func (f *fakeThreads) LookupSandbox(ctx context.Context, ch, ts string) (string,
 }
 func (f *fakeThreads) LookupBySession(_ context.Context, _, _ string) (string, string, string, error) {
 	return "", "", "", nil
+}
+
+func (f *fakeThreads) DispatchBoundary(_ context.Context, ch, ts string) (string, error) {
+	return f.boundary[ch+"|"+ts], f.err
+}
+func (f *fakeThreads) MarkDispatched(_ context.Context, ch, ts, ev string) error {
+	f.marks = append(f.marks, struct{ chan_, ts, ev string }{ch, ts, ev})
+	return f.err
+}
+func (f *fakeThreads) Rebind(ctx context.Context, ch, ts, sb string) error {
+	if f.sandboxByThread == nil {
+		f.sandboxByThread = map[string]string{}
+	}
+	f.sandboxByThread[ch+"|"+ts] = sb
+	f.rebinds = append(f.rebinds, struct{ chan_, ts, sb string }{ch, ts, sb})
+	return f.err
 }
 
 type fakeSQS struct {

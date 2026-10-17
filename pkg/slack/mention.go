@@ -119,3 +119,27 @@ func PrependMentionBlock(blocksJSON, line string) (string, bool) {
 	}
 	return string(out), true
 }
+
+// AppendContextBlock appends a context block carrying mrkdwn to a Block Kit
+// array (used by the bridge to add the originating-thread permalink to a DM).
+// ok=false when the array does not parse or already holds 50 blocks; the
+// caller then drops the blocks and relies on the text fallback.
+func AppendContextBlock(blocksJSON, mrkdwn string) (string, bool) {
+	var blocks []json.RawMessage
+	if err := json.Unmarshal([]byte(blocksJSON), &blocks); err != nil {
+		return blocksJSON, false
+	}
+	if len(blocks) >= 50 {
+		return blocksJSON, false
+	}
+	ctxBlock, _ := json.Marshal(map[string]any{
+		"type":     "context",
+		"elements": []map[string]any{{"type": "mrkdwn", "text": mrkdwn}},
+	})
+	blocks = append(blocks, ctxBlock)
+	out, err := json.Marshal(blocks)
+	if err != nil {
+		return blocksJSON, false
+	}
+	return string(out), true
+}

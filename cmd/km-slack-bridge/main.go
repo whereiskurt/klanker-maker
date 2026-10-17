@@ -39,6 +39,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -61,15 +62,16 @@ var eventsHandler *bridge.EventsHandler
 // out of init() so test builds can exercise resolveThreadsTable without the
 // Lambda cold-start env requirements.
 var (
-	initDDB        *dynamodb.Client
-	initSSMC       *ssm.Client
-	initS3Client   *s3.Client
-	initSQSClient  *sqs.Client
-	initEC2Client  *ec2.Client
-	initPoster     *bridge.SlackPosterAdapter
-	initToken      *bridge.SSMBotTokenFetcher
-	initHTTPClient *http.Client
-	initNonces     *bridge.DynamoNonceStore
+	initDDB         *dynamodb.Client
+	initEventBridge *eventbridge.Client
+	initSSMC        *ssm.Client
+	initS3Client    *s3.Client
+	initSQSClient   *sqs.Client
+	initEC2Client   *ec2.Client
+	initPoster      *bridge.SlackPosterAdapter
+	initToken       *bridge.SSMBotTokenFetcher
+	initHTTPClient  *http.Client
+	initNonces      *bridge.DynamoNonceStore
 	// initTokenRefresher re-mints a GitHub installation token when an @-mention
 	// auto-resumes a stopped sandbox. Built in init() because the AWS config is
 	// local there; consumed by wireEventsHandler.
@@ -85,6 +87,7 @@ func init() {
 	}
 
 	initDDB = dynamodb.NewFromConfig(cfg)
+	initEventBridge = eventbridge.NewFromConfig(cfg)
 	initSSMC = ssm.NewFromConfig(cfg)
 	initEC2Client = ec2.NewFromConfig(cfg)
 	initTokenRefresher = awspkg.NewGitHubTokenRefresher(cfg, resourcePrefix())
@@ -340,6 +343,16 @@ func wireEventsHandler() {
 		slog.Info("km-slack-bridge: default-router enabled")
 	}
 
+	// Default route: channel-miss ladder that routes an allowlisted sender's
+	// @-mention in an unowned channel to a named sandbox alias. All three of
+	// KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW} or nothing; absent => OFF
+	// => byte-identical to before. Env-block change: km init --dry-run=false.
+	wireDefaultRoute(eventsHandler, handler, os.Getenv, defaultRouteDeps{
+		ddb: initDDB, sandboxesTable: sandboxesTable,
+		eventBridge: initEventBridge, artifactBucket: artifactsBucket,
+		tokens: initToken, httpClient: initHTTPClient,
+	})
+
 	// Wire DDBPauseHinter to eventsHandler.PauseHinter.
 	postHintFn := bridge.PostHintFunc(func(ctx context.Context, channelID, threadTS, text string) error {
 		_, err := initPoster.PostMessage(ctx, channelID, "", text, threadTS)
@@ -395,6 +408,10 @@ func wireEventsHandler() {
 		Tokens:     initToken,
 	}
 	eventsHandler.AckEmoji = ackEmoji
+
+	// Part B: thread reader for strict-mode context. Unconditional — dormant until a
+	// sandbox row carries slack_thread_bypass=false.
+	eventsHandler.ThreadReader = &bridge.SlackThreadReaderAdapter{HTTPClient: initHTTPClient, Tokens: initToken}
 
 	// Phase 75: wire S3FileDownloader for inbound file_share events.
 	if artifactsBucket != "" {
@@ -705,4 +722,52 @@ type routerCooldownAdapter struct {
 
 func (r *routerCooldownAdapter) Reserve(ctx context.Context, channelID string, cooldownSeconds int) error {
 	return r.inner.Reserve(ctx, "router-cooldown:"+channelID, cooldownSeconds)
+}
+
+// defaultRouteDeps carries the clients wireDefaultRoute needs; a struct so the
+// wiring is testable without AWS.
+type defaultRouteDeps struct {
+	ddb            bridge.DDBQueryGetPutAPI
+	sandboxesTable string
+	eventBridge    awspkg.EventBridgeAPI
+	artifactBucket string
+	tokens         bridge.BotTokenFetcher
+	httpClient     *http.Client
+}
+
+// wireDefaultRoute reads KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW}. All three
+// or nothing: bridge.NewDefaultRoute returns nil for an empty allowlist, so a
+// half-set env leaves the route OFF rather than open.
+func wireDefaultRoute(h *bridge.EventsHandler, out *bridge.Handler, getenv func(string) string, d defaultRouteDeps) {
+	alias := strings.TrimSpace(getenv("KM_SLACK_DEFAULT_ROUTE_ALIAS"))
+	profile := strings.TrimSpace(getenv("KM_SLACK_DEFAULT_ROUTE_PROFILE"))
+	var emails []string
+	for _, e := range strings.Split(getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"), ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			emails = append(emails, e)
+		}
+	}
+	route := bridge.NewDefaultRoute(alias, profile, emails)
+	if route == nil {
+		if alias != "" || profile != "" || len(emails) > 0 {
+			slog.Warn("km-slack-bridge: default route partially configured; staying OFF",
+				"alias_set", alias != "", "profile_set", profile != "", "emails", len(emails))
+		}
+		return
+	}
+	h.DefaultRoute = route
+	h.SandboxByID = &bridge.DDBSandboxByID{Client: d.ddb, TableName: d.sandboxesTable}
+	h.AliasResolver = &bridge.DDBAliasResolver{Client: d.ddb, TableName: d.sandboxesTable}
+	h.CreatePublisher = &bridge.EventBridgeAdapter{Client: d.eventBridge, ArtifactBucket: d.artifactBucket}
+	h.SenderEmails = &bridge.CachedSenderEmailFetcher{
+		Inner: &bridge.SlackSenderEmailAdapter{Tokens: d.tokens, HTTPClient: d.httpClient},
+		TTL:   15 * time.Minute,
+	}
+	// ActionDM (km-slack dm) gates its target on the same allowlist and the same
+	// email cache; out == nil leaves the outbound handler's dm verb disabled.
+	if out != nil {
+		out.DefaultRoute = route
+		out.SenderEmails = h.SenderEmails // same cache; a deny is never cached
+	}
+	slog.Info("km-slack-bridge: default route enabled", "alias", alias, "profile", profile, "allow_count", len(emails))
 }

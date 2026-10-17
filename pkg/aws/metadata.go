@@ -81,6 +81,12 @@ type SandboxMetadata struct {
 	// `mentionOnly: true` (and gaining 👀-on-everything) after a pause/resume.
 	SlackMentionOnly *bool `json:"slack_mention_only,omitempty"`
 	SlackReactAlways *bool `json:"slack_react_always,omitempty"`
+	// Part B (2026-10-16): per-sandbox thread-bypass override. nil = default
+	// (Phase 91.3 bypass on); &false = strict mention-only inside threads.
+	// MUST round-trip through marshal/unmarshal for the same reason as
+	// SlackMentionOnly above: a struct that drops it reverts the sandbox to the
+	// default on the next full-row PutItem (resume/extend/ttl-handler).
+	SlackThreadBypass *bool `json:"slack_thread_bypass,omitempty"`
 	// Phase 118: per-sandbox trigger allowlist. When non-nil/non-empty, only
 	// messages from listed Slack user IDs are dispatched; overrides the install-level
 	// EventsHandler.Allow. Stored in DDB as a comma-joined S attribute "slack_allow"

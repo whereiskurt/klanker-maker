@@ -15,7 +15,7 @@ km slack manifest > app.json   # render a deployment-specific manifest
 # Slack → Your Apps → Create New App → "From an app manifest" → paste app.json
 ```
 
-Bot token scopes (15) + bot events (2) declared by the manifest:
+Bot token scopes (18) + bot events (4) declared by the manifest:
 
 | Scope | One-liner |
 |-------|-----------|
@@ -27,6 +27,9 @@ Bot token scopes (15) + bot events (2) declared by the manifest:
 | `groups:write` | create / manage **private** channels |
 | `groups:read` | look up a private channel |
 | `groups:history` | read private-channel messages (inbound trigger) |
+| `im:history` | read one-to-one DM messages to the bot (default route) |
+| `mpim:history` | read group DM messages that include the bot (default route) |
+| `im:write` | open a DM with a person when a sandbox agent runs `km-slack dm` (`conversations.open`); never used to read. The bridge admits only targets on `slack.default_route.allow_emails` |
 | `conversations.connect:write` | Slack Connect invites to external people |
 | `reactions:write` | add the 👀 ACK reaction on inbound |
 | `reactions:read` | read reaction state (read-counterpart; future reactions-as-actions) |
@@ -36,6 +39,9 @@ Bot token scopes (15) + bot events (2) declared by the manifest:
 | `users:read.email` | resolve an email → Slack user id for invites |
 | **event** `message.channels` | messages in public channels the bot is in |
 | **event** `message.groups` | messages in private channels the bot is in |
+| **event** `message.im` | one-to-one DMs to the bot (default route) |
+| **App Home** `messages_tab_enabled` / `messages_tab_read_only_enabled: false` | not a scope: lets a person type in the App's Messages tab; without it Slack blocks DMs before any event (default route) |
+| **event** `message.mpim` | group DMs that include the bot (default route) |
 
 ---
 
@@ -147,6 +153,7 @@ keeping the surface minimal. App-mention-in-non-member-channels (`app_mention` +
 | Outbound notifications | `chat:write` |
 | Per-sandbox channel create/archive | `channels:manage` / `groups:write`, `channels:read` / `groups:read`, `channels:join` |
 | Inbound (listen + reply) | `channels:history`, `groups:history`, `chat:write` + events `message.channels`/`message.groups` |
+| Default route DMs (`slack.default_route`) | `im:history`, `mpim:history` + events `message.im`/`message.mpim`; `im:write` only for `km-slack dm`, which opens a DM to an allowlisted person. See `docs/slack-default-route.md` |
 | 👀 ACK reaction | `reactions:write` |
 | Transcript streaming / attachments | `files:write`, `files:read` |
 | Invites (native + Connect) | `users:read` + `users:read.email`, `conversations.connect:write` |

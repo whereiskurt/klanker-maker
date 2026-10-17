@@ -339,8 +339,14 @@ func (a *appConfigAdapter) GetDoctorIgnorePrefixes() []string { return a.cfg.Get
 func (a *appConfigAdapter) GetEmailDomain() string            { return a.cfg.GetEmailDomain() }
 func (a *appConfigAdapter) GetSsmPrefix() string              { return a.cfg.GetSsmPrefix() }
 func (a *appConfigAdapter) GetSlackPeerBridges() []string     { return a.cfg.Slack.PeerBridges }
-func (a *appConfigAdapter) GetSlackThreadsTableName() string  { return a.cfg.GetSlackThreadsTableName() }
-func (a *appConfigAdapter) GetSandboxTableName() string       { return a.cfg.GetSandboxTableName() }
+
+// GetSlackDefaultRoute is read through an optional interface in the doctor
+// group (not DoctorConfig) so existing test configs need no new method.
+func (a *appConfigAdapter) GetSlackDefaultRoute() *appcfg.SlackDefaultRoute {
+	return a.cfg.Slack.DefaultRoute
+}
+func (a *appConfigAdapter) GetSlackThreadsTableName() string { return a.cfg.GetSlackThreadsTableName() }
+func (a *appConfigAdapter) GetSandboxTableName() string      { return a.cfg.GetSandboxTableName() }
 func (a *appConfigAdapter) GetClusterRoleNames() []string {
 	out := make([]string, 0, len(a.cfg.Clusters))
 	for _, c := range a.cfg.Clusters {
@@ -645,6 +651,11 @@ type DoctorDeps struct {
 	// channel still exists. Nil causes both dead-channel checks to return SKIPPED
 	// (bot token absent or Slack not configured).
 	SlackDeadChannelChecker SlackChannelChecker
+
+	// SlackEmailLookup resolves allow_emails via users.lookupByEmail for the
+	// "Slack default route" group. Nil when the bot token is unavailable, which
+	// SKIPs the allowlist resolution check.
+	SlackEmailLookup SlackEmailLookup
 
 	// Phase 116 — km check serverless runner doctor check dependencies.
 	// ChecksDDBClient is the DynamoDB client for the {prefix}-checks table.
@@ -4658,6 +4669,48 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// 2026-10-16 — Slack default route. Absent block: one SKIPPED result and no
+	// AWS/Slack calls. Configured: three results (profile, allowlist, scopes).
+	// The checks slice is one-result-per-closure, and the Slack group reports one
+	// closure per result, so register one closure per result over a shared,
+	// once-computed evaluation (no repeated users.lookupByEmail calls).
+	var defaultRoute *appcfg.SlackDefaultRoute
+	if rc, ok := cfg.(interface {
+		GetSlackDefaultRoute() *appcfg.SlackDefaultRoute
+	}); ok {
+		defaultRoute = rc.GetSlackDefaultRoute()
+	}
+	if defaultRoute == nil {
+		checks = append(checks, func(ctx context.Context) CheckResult {
+			return checkSlackDefaultRoute(ctx, nil, nil, nil, "")[0]
+		})
+	} else {
+		defaultRouteSearchPaths := cfg.GetProfileSearchPaths()
+		emailLookup := deps.SlackEmailLookup
+		var routeOnce sync.Once
+		var routeResults []CheckResult
+		evalRoute := func(ctx context.Context) []CheckResult {
+			routeOnce.Do(func() {
+				var scopes string
+				// Same auth.test scopes source the other Slack scope checks use
+				// (there is no SSM scopes cache). Empty/error → scopes SKIPPED.
+				if slackScopes != nil {
+					if list, err := slackScopes(ctx); err == nil {
+						scopes = strings.Join(list, ",")
+					}
+				}
+				routeResults = checkSlackDefaultRoute(ctx, defaultRoute, defaultRouteSearchPaths, emailLookup, scopes)
+			})
+			return routeResults
+		}
+		for i := 0; i < 3; i++ {
+			idx := i
+			checks = append(checks, func(ctx context.Context) CheckResult {
+				return evalRoute(ctx)[idx]
+			})
+		}
+	}
+
 	// Phase 110 Plan 06 — dead-channel doctor checks.
 	// Both checks SKIP when SlackDeadChannelChecker is nil (bot token absent).
 	// Both use DDBScanDeleteClient (already has Scan) to avoid adding a new field.
@@ -5311,6 +5364,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	if btErr == nil && botToken.Parameter != nil && awssdk.ToString(botToken.Parameter.Value) != "" {
 		slackClientForDoctor := slackpkg.NewClient(awssdk.ToString(botToken.Parameter.Value), nil)
 		deps.SlackDeadChannelChecker = &slackClientChannelChecker{client: slackClientForDoctor}
+		deps.SlackEmailLookup = slackClientForDoctor
 	}
 
 	// Phase 126 Plan 09 — cross-account link doctor checks. base is this

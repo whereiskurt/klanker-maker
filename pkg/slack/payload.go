@@ -40,6 +40,7 @@ const (
 	ActionPermalink    = "permalink"     // Phase 70 — wraps chat.getPermalink
 	ActionUpdate       = "update"        // Phase 70 — wraps chat.update
 	ActionLookupThread = "lookup-thread" // Phase 110 — session_id → (channel_id, thread_ts)
+	ActionDM           = "dm"            // 2026-10-17 — bot-initiated DM: conversations.open + top-level chat.postMessage
 )
 
 // SenderOperator is the canonical sender_id for operator-signed envelopes.
@@ -88,6 +89,11 @@ type SlackEnvelope struct {
 	SenderID    string `json:"sender_id"`
 	SizeBytes   int64  `json:"size_bytes"`
 	Subject     string `json:"subject"`
+	// TargetUser is the Slack user id a `dm` envelope opens a conversation with.
+	// omitempty is LOAD-BEARING: the bridge re-canonicalises the struct before
+	// verifying, so a field that always serialises would change the signed bytes
+	// of every envelope from a km-slack built before this field existed.
+	TargetUser  string `json:"target_user,omitempty"`
 	Text        string `json:"text"` // Phase 70 — used by update action (new message text)
 	ThreadTS    string `json:"thread_ts"`
 	Timestamp   int64  `json:"timestamp"`

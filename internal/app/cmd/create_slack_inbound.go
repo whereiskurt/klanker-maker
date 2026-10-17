@@ -173,6 +173,22 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 		}
 	}
 
+	// Part B (2026-10-16): per-sandbox thread-bypass override. Same contract as
+	// mention_only: written only when the profile sets it. Non-fatal on failure.
+	if inbound.ThreadBypass != nil {
+		v := "true"
+		if !*inbound.ThreadBypass {
+			v = "false"
+		}
+		if updateErr := deps.UpdateSandboxAttr(ctx, deps.SandboxID, "slack_thread_bypass", v); updateErr != nil {
+			log.Warn().Err(updateErr).Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("persist slack_thread_bypass per-sandbox override failed; sandbox will use the default (bypass on)")
+		} else {
+			log.Info().Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("Slack: persisted per-sandbox thread_bypass override")
+		}
+	}
+
 	// Phase 118: per-sandbox inbound allow-list. Only written when the profile
 	// explicitly sets notification.slack.inbound.allow to a non-empty list.
 	// Stored as comma-joined S attribute "slack_allow" (UpdateSandboxAttr is
@@ -330,7 +346,7 @@ func makePostOperatorSigned(ssmClient *ssm.Client, bridgeURL, resourcePrefix str
 // makeUpsertSlackThread returns a UpsertSlackThread callback that writes a
 // km-slack-threads anchor row using the existing bridge DDBThreadStore.
 // Reuses pkg/slack/bridge.DDBThreadStore.Upsert so the schema stays consistent.
-func makeUpsertSlackThread(ddbClient slackbridge.DDBQueryGetPutAPI, tableName string) func(ctx context.Context, channelID, threadTS, sandboxID string) error {
+func makeUpsertSlackThread(ddbClient slackbridge.DDBUpdateItemAPI, tableName string) func(ctx context.Context, channelID, threadTS, sandboxID string) error {
 	store := &slackbridge.DDBThreadStore{Client: ddbClient, TableName: tableName}
 	return store.Upsert
 }

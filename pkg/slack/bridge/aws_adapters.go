@@ -30,6 +30,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -38,6 +40,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -485,6 +488,53 @@ func (s *SlackPosterAdapter) GetPermalink(ctx context.Context, channel, messageT
 	return apiResp.Permalink, nil
 }
 
+// OpenDM opens (or returns) the bot's DM channel with userID via
+// conversations.open and returns its id. 2026-10-17 — km-slack dm. Its own
+// decoder: chat.postMessage answers "channel" as a string, conversations.open
+// as an object, so slackAPIResponse cannot carry both.
+func (s *SlackPosterAdapter) OpenDM(ctx context.Context, userID string) (string, error) {
+	token, err := s.Tokens.Fetch(ctx)
+	if err != nil {
+		return "", fmt.Errorf("bridge: get bot token for conversations.open: %w", err)
+	}
+	b, _ := json.Marshal(map[string]any{"users": userID})
+	req, err := http.NewRequestWithContext(ctx, "POST", s.getBaseURL()+"/conversations.open", bytes.NewReader(b))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	hc := s.HTTPClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if rlErr := checkRateLimit(resp.StatusCode, resp.Header.Get("Retry-After"), "conversations.open"); rlErr != nil {
+		return "", rlErr
+	}
+	var out struct {
+		OK      bool   `json:"ok"`
+		Error   string `json:"error"`
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("bridge: decode conversations.open: %w", err)
+	}
+	if !out.OK {
+		return "", fmt.Errorf("bridge: conversations.open: %s", out.Error)
+	}
+	if out.Channel.ID == "" {
+		return "", errors.New("bridge: conversations.open: no channel id in response")
+	}
+	return out.Channel.ID, nil
+}
+
 // UpdateMessage edits a previously-posted bot message via chat.update.
 // Phase 70 — used by Plan 70-06's optional handoff-edit path.
 func (s *SlackPosterAdapter) UpdateMessage(ctx context.Context, channel, ts, text string) (string, error) {
@@ -868,7 +918,7 @@ type DDBQueryGetPutAPI interface {
 // Key: (channel_id, thread_ts). Upsert uses attribute_not_exists(channel_id) so
 // the bridge never overwrites a claude_session_id written by the poller.
 type DDBThreadStore struct {
-	Client    DDBQueryGetPutAPI
+	Client    DDBUpdateItemAPI
 	TableName string // e.g. "km-slack-threads" (from KM_SLACK_THREADS_TABLE env var)
 }
 
@@ -1023,6 +1073,78 @@ func (s *DDBThreadStore) Upsert(ctx context.Context, channelID, threadTS, sandbo
 	return nil
 }
 
+// Rebind unconditionally rewrites (channel, thread_ts) → sandbox_id with no
+// session id, so the next turn starts a fresh agent session on the new box.
+func (s *DDBThreadStore) Rebind(ctx context.Context, channelID, threadTS, sandboxID string) error {
+	now := time.Now()
+	nowISO := now.UTC().Format(time.RFC3339)
+	ttlExpiry := strconv.FormatInt(now.Add(30*24*time.Hour).Unix(), 10)
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: awssdk.String(s.TableName),
+		Item: map[string]dynamodbtypes.AttributeValue{
+			"channel_id":   &dynamodbtypes.AttributeValueMemberS{Value: channelID},
+			"thread_ts":    &dynamodbtypes.AttributeValueMemberS{Value: threadTS},
+			"sandbox_id":   &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+			"created_at":   &dynamodbtypes.AttributeValueMemberS{Value: nowISO},
+			"last_turn_ts": &dynamodbtypes.AttributeValueMemberS{Value: nowISO},
+			"turn_count":   &dynamodbtypes.AttributeValueMemberN{Value: "0"},
+			"ttl_expiry":   &dynamodbtypes.AttributeValueMemberN{Value: ttlExpiry},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("threads rebind: %w", err)
+	}
+	return nil
+}
+
+// DispatchBoundary returns last_dispatch_ts for (channelID, threadTS): the Slack
+// ts of the last message that dispatched a turn. "" (nil error) when the row or
+// the attribute is absent.
+func (s *DDBThreadStore) DispatchBoundary(ctx context.Context, channelID, threadTS string) (string, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: awssdk.String(s.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"channel_id": &dynamodbtypes.AttributeValueMemberS{Value: channelID},
+			"thread_ts":  &dynamodbtypes.AttributeValueMemberS{Value: threadTS},
+		},
+		ProjectionExpression: awssdk.String("last_dispatch_ts"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("threads dispatch-boundary: %w", err)
+	}
+	if v, ok := out.Item["last_dispatch_ts"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		return v.Value, nil
+	}
+	return "", nil
+}
+
+// MarkDispatched records eventTS as last_dispatch_ts if it is newer than the
+// stored value (monotonic). A losing write (ConditionalCheckFailed) is a no-op.
+// Slack ts strings are fixed-width "seconds.micros" (10+1+6 chars until 2286),
+// so DynamoDB's lexicographic `<` on S is a correct numeric compare.
+func (s *DDBThreadStore) MarkDispatched(ctx context.Context, channelID, threadTS, eventTS string) error {
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(s.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"channel_id": &dynamodbtypes.AttributeValueMemberS{Value: channelID},
+			"thread_ts":  &dynamodbtypes.AttributeValueMemberS{Value: threadTS},
+		},
+		UpdateExpression:    awssdk.String("SET last_dispatch_ts = :ts"),
+		ConditionExpression: awssdk.String("attribute_not_exists(last_dispatch_ts) OR last_dispatch_ts < :ts"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":ts": &dynamodbtypes.AttributeValueMemberS{Value: eventTS},
+		},
+	})
+	if err != nil {
+		var ccfe *dynamodbtypes.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return nil
+		}
+		return fmt.Errorf("threads mark-dispatched: %w", err)
+	}
+	return nil
+}
+
 // ============================================================
 // Plan 67-05: DDBSandboxByChannel — SandboxByChannelFetcher implementation
 // ============================================================
@@ -1053,7 +1175,13 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 	if len(out.Items) == 0 {
 		return SandboxRoutingInfo{}, nil // unknown channel — caller logs warn
 	}
-	item := out.Items[0]
+	return routingInfoFromItem(out.Items[0]), nil
+}
+
+// routingInfoFromItem decodes a km-sandboxes row into SandboxRoutingInfo. Shared by
+// FetchByChannel (GSI), FetchBySandboxID (GetItem) and ResolveAlias (GSI → GetItem)
+// so the three can never disagree about an attribute name.
+func routingInfoFromItem(item map[string]dynamodbtypes.AttributeValue) SandboxRoutingInfo {
 	info := SandboxRoutingInfo{}
 	if v, ok := item["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS); ok {
 		info.SandboxID = v.Value
@@ -1105,6 +1233,22 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 			info.MentionOnly = &f
 		}
 	}
+	// Part B: per-sandbox thread_bypass override. Same tri-state contract as
+	// mention_only; BOOL (marshalSandboxItem) and string (UpdateSandboxAttr) both
+	// accepted. Absent leaves info.ThreadBypass nil (bypass allowed).
+	if v, ok := item["slack_thread_bypass"].(*dynamodbtypes.AttributeValueMemberBOOL); ok {
+		b := v.Value
+		info.ThreadBypass = &b
+	} else if v, ok := item["slack_thread_bypass"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		switch v.Value {
+		case "true":
+			t := true
+			info.ThreadBypass = &t
+		case "false":
+			f := false
+			info.ThreadBypass = &f
+		}
+	}
 	// Phase 118: per-sandbox inbound allow-list. Stored as comma-joined S attribute
 	// ("slack_allow"). Absent or empty → info.Allow remains nil, signalling the
 	// enforcement gate to use the install-level default (all Slack users allowed).
@@ -1126,7 +1270,7 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 	if v, ok := item["frozen_reason"].(*dynamodbtypes.AttributeValueMemberS); ok {
 		info.FrozenReason = v.Value
 	}
-	return info, nil
+	return info
 }
 
 // ============================================================
@@ -1260,7 +1404,7 @@ func (f *CachedBotUserIDFetcher) PrimeCache(uid string) {
 // ============================================================
 
 // DDBUpdateItemAPI extends DDBQueryGetPutAPI with UpdateItem, which is required
-// only by DDBPauseHinter (the threads adapter never does UpdateItem).
+// by DDBPauseHinter and DDBThreadStore (MarkDispatched).
 // A single *dynamodb.Client satisfies both DDBQueryGetPutAPI and DDBUpdateItemAPI.
 type DDBUpdateItemAPI interface {
 	DDBQueryGetPutAPI
@@ -1813,4 +1957,139 @@ func (w *DynamoSandboxStatusWriter) SetStatusRunning(ctx context.Context, sandbo
 		return fmt.Errorf("slack-bridge: SetStatusRunning for %s: %w", sandboxID, err)
 	}
 	return nil
+}
+
+// DDBSandboxByID implements SandboxByIDFetcher (GetItem on km-sandboxes).
+type DDBSandboxByID struct {
+	Client    DDBQueryGetPutAPI
+	TableName string
+}
+
+func (f *DDBSandboxByID) FetchBySandboxID(ctx context.Context, sandboxID string) (SandboxRoutingInfo, error) {
+	out, err := f.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: awssdk.String(f.TableName),
+		Key:       map[string]dynamodbtypes.AttributeValue{"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID}},
+	})
+	if err != nil {
+		return SandboxRoutingInfo{}, fmt.Errorf("sandbox-by-id get %s: %w", sandboxID, err)
+	}
+	if len(out.Item) == 0 {
+		return SandboxRoutingInfo{}, nil
+	}
+	return routingInfoFromItem(out.Item), nil
+}
+
+// DDBAliasResolver implements SlackAliasResolver: alias-index GSI → sandbox_id →
+// GetItem (the GSI projection does not carry every routing attribute).
+type DDBAliasResolver struct {
+	Client    DDBQueryGetPutAPI
+	TableName string
+}
+
+func (r *DDBAliasResolver) ResolveAlias(ctx context.Context, alias string) (SandboxRoutingInfo, bool, error) {
+	out, err := r.Client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              awssdk.String(r.TableName),
+		IndexName:              awssdk.String("alias-index"),
+		KeyConditionExpression: awssdk.String("alias = :alias"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":alias": &dynamodbtypes.AttributeValueMemberS{Value: alias},
+		},
+		Limit: awssdk.Int32(2),
+	})
+	if err != nil {
+		return SandboxRoutingInfo{}, false, fmt.Errorf("slack-bridge: resolve alias %q: %w", alias, err)
+	}
+	if len(out.Items) == 0 {
+		return SandboxRoutingInfo{}, false, nil
+	}
+	if len(out.Items) > 1 {
+		return SandboxRoutingInfo{}, false, fmt.Errorf("slack-bridge: alias %q is ambiguous (matched multiple sandboxes)", alias)
+	}
+	sv, ok := out.Items[0]["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || sv.Value == "" {
+		return SandboxRoutingInfo{}, false, fmt.Errorf("slack-bridge: alias %q: GSI item missing sandbox_id", alias)
+	}
+	info, err := (&DDBSandboxByID{Client: r.Client, TableName: r.TableName}).FetchBySandboxID(ctx, sv.Value)
+	if err != nil {
+		return SandboxRoutingInfo{}, false, err
+	}
+	if info.SandboxID == "" {
+		return SandboxRoutingInfo{}, false, nil // GSI lag: row gone
+	}
+	return info, true, nil
+}
+
+// EventBridgeAdapter implements SandboxCreatePublisher. ArtifactPrefix follows the
+// slack-profiles/{slug} convention that internal/app/cmd.PreStageSlackDefaultRouteProfile
+// uploads to; the slug rule must match SlackDefaultRouteProfileSlug.
+type EventBridgeAdapter struct {
+	Client         kmaws.EventBridgeAPI
+	ArtifactBucket string
+}
+
+func slackProfileSlug(profile string) string {
+	base := filepath.Base(profile)
+	for _, ext := range []string{".yaml", ".yml"} {
+		if strings.HasSuffix(strings.ToLower(base), ext) {
+			base = base[:len(base)-len(ext)]
+			break
+		}
+	}
+	return strings.ToLower(base)
+}
+
+// generateSlackSandboxID mints an sl-<8 hex> sandbox id. Called by the events
+// handler (not the publisher) as soon as a cold-create is decided.
+func generateSlackSandboxID() string {
+	b := make([]byte, 4)
+	if _, err := cryptorand.Read(b); err != nil {
+		panic(fmt.Sprintf("slack-bridge: generateSlackSandboxID: %v", err))
+	}
+	return "sl-" + hex.EncodeToString(b)
+}
+
+func (a *EventBridgeAdapter) PutSandboxCreate(ctx context.Context, sandboxID, alias, profile, slackEnvelopeJSON string) error {
+	detail := kmaws.SandboxCreateDetail{
+		SandboxID:      sandboxID,
+		ArtifactBucket: a.ArtifactBucket,
+		ArtifactPrefix: "slack-profiles/" + slackProfileSlug(profile),
+		Alias:          alias,
+		CreatedBy:      "slack",
+		SlackEnvelope:  slackEnvelopeJSON,
+	}
+	if err := kmaws.PutSandboxCreateEvent(ctx, a.Client, detail); err != nil {
+		return fmt.Errorf("slack-bridge: cold-create: %w", err)
+	}
+	return nil
+}
+
+// SlackSenderEmailAdapter implements SenderEmailFetcher over users.info.
+type SlackSenderEmailAdapter struct {
+	Tokens     BotTokenFetcher
+	HTTPClient *http.Client
+	BaseURL    string // tests only; empty = Slack default
+}
+
+func (a *SlackSenderEmailAdapter) SenderEmail(ctx context.Context, userID string) (string, error) {
+	tok, err := a.Tokens.Fetch(ctx)
+	if err != nil {
+		return "", fmt.Errorf("slack-bridge: bot token: %w", err)
+	}
+	c := pkgslack.NewClient(tok, a.HTTPClient)
+	if a.BaseURL != "" {
+		c.SetBaseURL(a.BaseURL)
+	}
+	u, err := c.UserInfo(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if u.Deleted || u.IsBot || u.Email == "" {
+		return "", ErrSenderIneligible
+	}
+	return u.Email, nil
+}
+
+// threadBypassAllowed: nil or true ⇒ the Phase 91.3 bypass applies.
+func threadBypassAllowed(info SandboxRoutingInfo) bool {
+	return info.ThreadBypass == nil || *info.ThreadBypass
 }

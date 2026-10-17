@@ -104,3 +104,20 @@ func TestPrependMentionBlock_RefusesToBreachBlockCap(t *testing.T) {
 		t.Error("PrependMentionBlock ok=true on malformed input")
 	}
 }
+
+func TestAppendContextBlock(t *testing.T) {
+	out, ok := AppendContextBlock(`[{"type":"section","text":{"type":"mrkdwn","text":"hi"}}]`, "From: <https://example.slack.com/archives/C1/p1|thread>")
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if !strings.Contains(out, `"type":"context"`) || !strings.HasSuffix(strings.TrimSpace(out), "]") {
+		t.Fatalf("context block not appended: %s", out)
+	}
+	if _, ok := AppendContextBlock(`not json`, "x"); ok {
+		t.Fatal("unparseable blocks must return ok=false")
+	}
+	fifty := "[" + strings.Repeat(`{"type":"divider"},`, 49) + `{"type":"divider"}]`
+	if _, ok := AppendContextBlock(fifty, "x"); ok {
+		t.Fatal("at the 50-block cap must return ok=false")
+	}
+}

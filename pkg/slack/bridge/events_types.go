@@ -22,6 +22,9 @@ type slackMessageEvent struct {
 	TS       string      `json:"ts"`
 	ThreadTS string      `json:"thread_ts,omitempty"`
 	Files    []SlackFile `json:"files,omitempty"` // Phase 75: populated on file_share events
+	// ChannelType is Slack's conversation kind: "channel", "group", "im", "mpim".
+	// The default route requires an @-mention everywhere except "im".
+	ChannelType string `json:"channel_type,omitempty"`
 }
 
 // SlackFile is a Slack file object as delivered in a file_share message event's files[].
@@ -43,6 +46,17 @@ type InboundQueueBody struct {
 	User        string       `json:"user"`
 	EventTS     string       `json:"event_ts"`
 	Attachments []Attachment `json:"attachments,omitempty"` // Phase 75: per-file records; absent (not null) when empty for back-compat
+
+	// ThreadContext (Part B, strict mode only): human messages since the bot's
+	// last turn, for a mentioned thread reply. Older pollers ignore it.
+	ThreadContext *ThreadContext `json:"thread_context,omitempty"`
+
+	// BotUserID is the bot's own Slack user id, so the poller can tell the agent
+	// that a `<@U…>` token for it in the message is the sender addressing the
+	// bot, not a third person to contact (an agent that does not know its own id
+	// answered "I'm not the person you're looking for"). Empty when the id could
+	// not be fetched; older pollers ignore it.
+	BotUserID string `json:"bot_user_id,omitempty"`
 }
 
 // Attachment is the per-file record written to the SQS body for the sandbox poller.

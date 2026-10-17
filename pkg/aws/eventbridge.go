@@ -40,6 +40,12 @@ type SandboxCreateDetail struct {
 	// into the new sandbox's github-inbound FIFO queue after provisioning so the
 	// poller can dispatch it on first boot. Empty for all non-github creates (dormant).
 	GithubEnvelope string `json:"github_envelope,omitempty"`
+
+	// H1Envelope / SlackEnvelope: the HackerOne and Slack bridges' cold-create
+	// envelopes, drained by the create-handler into the new box's h1-inbound /
+	// slack-inbound FIFO after provisioning. Empty for every other create.
+	H1Envelope    string `json:"h1_envelope,omitempty"`
+	SlackEnvelope string `json:"slack_envelope,omitempty"`
 }
 
 // PutSandboxCreateEvent publishes a SandboxCreate event to EventBridge.

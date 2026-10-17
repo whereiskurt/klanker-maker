@@ -475,7 +475,9 @@ _km_stream_drain() {
   # a rich render overflows (e.g. the 12K markdown cap or Slack's 50-block cap), so
   # this is safe even for very long Claude turns.
   local post_resp posted_ts
-  post_resp=$(/opt/km/bin/km-slack post \
+  # KM_SLACK_POSTED_MARKER=0: a stream-drain post is progress, not the agent
+  # answering — it must not trip the inbound poller final-post skip.
+  post_resp=$(KM_SLACK_POSTED_MARKER=0 /opt/km/bin/km-slack post \
     --channel "$KM_SLACK_CHANNEL_ID" \
     --thread "$ts" \
     --body "$body_file" \

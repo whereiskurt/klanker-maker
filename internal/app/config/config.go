@@ -152,6 +152,64 @@ type SlackConfig struct {
 	// silently stays nil regardless of km-config.yaml content
 	// (project_config_key_merge_list footgun).
 	Allow []string `mapstructure:"allow" yaml:"allow,omitempty"`
+
+	// DefaultRoute (2026-10-16): when set on the FRONT-DOOR install, an @-mention
+	// of the bot in any channel the bot is a member of (or a DM) that no sandbox
+	// owns is dispatched to the sandbox at Alias — warm enqueue, resume-if-stopped,
+	// or cold-create from Profile. Gated on AllowEmails (sender's Slack profile
+	// email, resolved at event time). Empty AllowEmails ⇒ route OFF. Absent ⇒
+	// byte-identical to Phase 96/118 behaviour.
+	//
+	// Maps to km-config.yaml key slack.default_route. Exported as
+	// KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW} by ExportTerragruntEnvVars.
+	// CRITICAL: "slack.default_route" must be in the v2→v merge-list.
+	DefaultRoute *SlackDefaultRoute `mapstructure:"default_route" yaml:"default_route,omitempty"`
+}
+
+// SlackDefaultRoute is the slack.default_route block. See SlackConfig.DefaultRoute.
+type SlackDefaultRoute struct {
+	Alias       string   `mapstructure:"alias"        yaml:"alias"`
+	Profile     string   `mapstructure:"profile"      yaml:"profile"`
+	AllowEmails []string `mapstructure:"allow_emails" yaml:"allow_emails,omitempty"`
+}
+
+// NormalizedEmails returns AllowEmails lowercased, trimmed, empties dropped.
+func (r *SlackDefaultRoute) NormalizedEmails() []string {
+	if r == nil {
+		return nil
+	}
+	out := make([]string, 0, len(r.AllowEmails))
+	for _, e := range r.AllowEmails {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// Validate enforces the deny-by-default contract: alias and profile set, at
+// least one syntactically plausible email. It does NOT touch disk or Slack.
+func (r *SlackDefaultRoute) Validate() error {
+	if r == nil {
+		return nil
+	}
+	if strings.TrimSpace(r.Alias) == "" {
+		return fmt.Errorf("slack.default_route.alias is required")
+	}
+	if strings.TrimSpace(r.Profile) == "" {
+		return fmt.Errorf("slack.default_route.profile is required")
+	}
+	emails := r.NormalizedEmails()
+	if len(emails) == 0 {
+		return fmt.Errorf("slack.default_route.allow_emails is empty: the default route is deny-by-default and stays OFF until at least one email is listed")
+	}
+	for _, e := range emails {
+		if !strings.Contains(e, "@") {
+			return fmt.Errorf("slack.default_route.allow_emails entry %q is not an email address", e)
+		}
+	}
+	return nil
 }
 
 type ClusterConfig struct {
@@ -1142,6 +1200,10 @@ func Load() (*Config, error) {
 			// entry, slack.allow is silently dropped regardless of km-config.yaml content
 			// (project_config_key_merge_list footgun). Loaded via GetStringSlice below.
 			"slack.allow",
+			// 2026-10-16: default route block. One entry covers the nested keys
+			// because the load below uses UnmarshalKey on the parent (same shape
+			// as "github"). CRITICAL: without it the block is silently dropped.
+			"slack.default_route",
 			// Phase 97: github block (repos list-of-objects + default_profile). CRITICAL:
 			// without this entry, the entire github: block is silently dropped regardless
 			// of km-config.yaml content (project_config_key_merge_list footgun).
@@ -1328,6 +1390,16 @@ func Load() (*Config, error) {
 	// this IsSet check always returns false (project_config_key_merge_list footgun).
 	if v.IsSet("slack.allow") {
 		cfg.Slack.Allow = v.GetStringSlice("slack.allow")
+	}
+
+	// 2026-10-16: slack.default_route is a structured block → UnmarshalKey. Only
+	// populated when present; absent ⇒ nil ⇒ route OFF everywhere downstream.
+	if v.IsSet("slack.default_route") {
+		var dr SlackDefaultRoute
+		if err := v.UnmarshalKey("slack.default_route", &dr); err != nil {
+			return nil, fmt.Errorf("unmarshal slack.default_route: %w", err)
+		}
+		cfg.Slack.DefaultRoute = &dr
 	}
 
 	// Clusters is a structured slice — viper's UnmarshalKey handles the

@@ -65,10 +65,14 @@ type SlackAPIResponse struct {
 //   - auth.test returns "user": "bot-username" (a string — the bot's display name)
 //   - users.lookupByEmail returns "user": {"id": "U...", ...} (an object)
 //
-// Only the ID is needed downstream; the bot-username string shape decodes to
-// SlackUserField{ID: ""} so the parent SlackAPIResponse decode succeeds for both.
+// Only the ID is needed by most callers; the bot-username string shape decodes to
+// SlackUserField{} so the parent SlackAPIResponse decode succeeds for both. The
+// object shape also carries deleted/is_bot/profile.email for users.info.
 type SlackUserField struct {
-	ID string
+	ID      string
+	Deleted bool
+	IsBot   bool
+	Email   string // profile.email; empty when the token lacks users:read.email
 }
 
 func (u *SlackUserField) UnmarshalJSON(b []byte) error {
@@ -80,12 +84,17 @@ func (u *SlackUserField) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var obj struct {
-		ID string `json:"id"`
+		ID      string `json:"id"`
+		Deleted bool   `json:"deleted"`
+		IsBot   bool   `json:"is_bot"`
+		Profile struct {
+			Email string `json:"email"`
+		} `json:"profile"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return err
 	}
-	u.ID = obj.ID
+	u.ID, u.Deleted, u.IsBot, u.Email = obj.ID, obj.Deleted, obj.IsBot, obj.Profile.Email
 	return nil
 }
 
@@ -732,6 +741,30 @@ func (c *Client) LookupUserByEmail(ctx context.Context, email string) (string, b
 		return "", false, err
 	}
 	return resp.User.ID, true, nil
+}
+
+// SlackUserInfo is the subset of users.info the bridge's default-route gate needs.
+type SlackUserInfo struct {
+	ID      string
+	Email   string // lowercased; empty when absent
+	Deleted bool
+	IsBot   bool
+}
+
+// UserInfo wraps users.info (form-encoded, same legacy-method class as
+// users.lookupByEmail). Requires users:read; profile.email additionally requires
+// users:read.email. Any Slack error is returned as *SlackAPIError.
+func (c *Client) UserInfo(ctx context.Context, userID string) (*SlackUserInfo, error) {
+	resp, err := c.callForm(ctx, "users.info", url.Values{"user": {userID}})
+	if err != nil {
+		return nil, err
+	}
+	return &SlackUserInfo{
+		ID:      resp.User.ID,
+		Email:   strings.ToLower(strings.TrimSpace(resp.User.Email)),
+		Deleted: resp.User.Deleted,
+		IsBot:   resp.User.IsBot,
+	}, nil
 }
 
 // InviteUserToChannel wraps conversations.invite for a single user.

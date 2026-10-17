@@ -36,6 +36,12 @@ func (f *fakeThreadStore) LookupBySession(ctx context.Context, sessionID, sandbo
 	return "", "", "", nil
 }
 
+func (f *fakeThreadStore) DispatchBoundary(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+func (f *fakeThreadStore) MarkDispatched(_ context.Context, _, _, _ string) error { return nil }
+func (f *fakeThreadStore) Rebind(_ context.Context, _, _, _ string) error         { return nil }
+
 // handlerWithThreads returns a Handler wired with the given thread store and
 // a pre-registered sandbox key for "sb-abc123". lookup-thread envelopes do NOT
 // carry a channel, so the channel ownership check is bypassed — we set a

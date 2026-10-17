@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	goyaml "github.com/goccy/go-yaml"
 	"io"
 	"io/fs"
 	"math/big"
@@ -42,6 +43,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt/planreport"
 	"github.com/whereiskurt/klanker-maker/pkg/version"
@@ -423,6 +425,9 @@ func runInitScoped(cfg *config.Config, awsProfile, region string, verbose bool, 
 	// 1. Export KM_* env vars so terragrunt get_env() calls see fresh values.
 	ExportTerragruntEnvVars(cfg)
 	exportPlatformKMSKeyARN(ctx, awsCfg, cfg)
+	if err := ValidateSlackDefaultRouteProfile(cfg.Slack.DefaultRoute, cfg.ProfileSearchPaths); err != nil {
+		return fmt.Errorf("km init: %w", err)
+	}
 
 	// 2. Ensure Slack bot-user-id is cached in env (needed when applying lambda-slack-bridge
 	//    so KM_SLACK_BOT_USER_ID lands in the Lambda env block). Non-fatal.
@@ -1146,6 +1151,150 @@ func githubProfileSlug(profile string) string {
 	return strings.ToLower(base)
 }
 
+// SlackDefaultRouteProfileSlug is the S3 prefix key for the default-route
+// profile: s3://{artifacts}/slack-profiles/{slug}/.km-profile.yaml. Same
+// normalisation as the GitHub bridge (base name, extension stripped, lowercase)
+// so pkg/slack/bridge.EventBridgeAdapter and this uploader agree by construction.
+func SlackDefaultRouteProfileSlug(profile string) string { return githubProfileSlug(profile) }
+
+// ValidateSlackDefaultRouteProfile runs route.Validate() and then resolves the
+// profile (extends included) to prove it has Slack inbound enabled — a
+// cold-created box without an inbound queue can never answer.
+func ValidateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPaths []string) error {
+	if route == nil {
+		return nil
+	}
+	if err := route.Validate(); err != nil {
+		return err
+	}
+	p, err := resolveSlackDefaultRouteProfile(route, searchPaths)
+	if err != nil {
+		return fmt.Errorf("slack.default_route.profile %q: %w", route.Profile, err)
+	}
+	n := p.Spec.Notification
+	slackOn := n != nil && n.Slack != nil && n.Slack.Enabled != nil && *n.Slack.Enabled
+	inboundOn := slackOn && n.Slack.Inbound != nil && n.Slack.Inbound.Enabled != nil && *n.Slack.Inbound.Enabled
+	if !slackOn || !inboundOn {
+		return fmt.Errorf("slack.default_route.profile %q must set notification.slack.enabled and notification.slack.inbound.enabled: a default-route sandbox replies through its inbound poller and has no other way to answer", route.Profile)
+	}
+	return nil
+}
+
+// locateSlackDefaultRouteProfile finds the file a route's profile names: the
+// path itself when it is a file, else <slug>.yaml / <slug>.yml in each of
+// [dir(profile)] + searchPaths, the order profile.Resolve searches. Validation
+// and pre-stage both go through it so they can never disagree about which file
+// the route means.
+func locateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPaths []string) (string, error) {
+	if fi, err := os.Stat(route.Profile); err == nil && !fi.IsDir() {
+		return route.Profile, nil
+	}
+	slug := SlackDefaultRouteProfileSlug(route.Profile)
+	dirs := append([]string{filepath.Dir(route.Profile)}, searchPaths...)
+	for _, dir := range dirs {
+		for _, ext := range profile.ProfileExtensions {
+			p := filepath.Join(dir, slug+ext)
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+				return p, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("slack.default_route.profile %q: no file at that path and no %s.yaml or %s.yml in %v", route.Profile, slug, slug, dirs)
+}
+
+// resolveSlackDefaultRouteProfile resolves the located file (extends included),
+// or the built-in of the same slug when no file exists.
+func resolveSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPaths []string) (*profile.SandboxProfile, error) {
+	slug := SlackDefaultRouteProfileSlug(route.Profile)
+	path, err := locateSlackDefaultRouteProfile(route, searchPaths)
+	if err != nil {
+		if profile.IsBuiltin(slug) {
+			return profile.Resolve(slug, searchPaths)
+		}
+		return nil, err
+	}
+	paths := append([]string{filepath.Dir(path), filepath.Dir(route.Profile)}, searchPaths...)
+	return profile.Resolve(profile.LeafName(path), paths)
+}
+
+// PreStageSlackDefaultRouteProfile uploads the route's profile YAML to
+// s3://{bucket}/slack-profiles/{slug}/.km-profile.yaml so a cold-create
+// published by the Slack bridge can be provisioned. Mirrors PreStageGitHubProfiles.
+//
+// A profile that uses extends: is uploaded FLATTENED (resolved, extends cleared):
+// the create-handler Lambda has no profiles/base/** fragments, so the raw child
+// would fail there with `profile "base/..." not found` (see selectRemoteProfileYAML).
+// There is no safe fallback to raw bytes in that case, so a resolve or marshal
+// failure is an error. A monolithic profile is uploaded verbatim.
+func PreStageSlackDefaultRouteProfile(ctx context.Context, route *config.SlackDefaultRoute, bucket string, searchPaths []string, up S3ProfileUploader) error {
+	if route == nil {
+		return nil
+	}
+	// Same lookup as ValidateSlackDefaultRouteProfile, and never an empty
+	// placeholder: an empty object would make every cold-create fail later.
+	path, lerr := locateSlackDefaultRouteProfile(route, searchPaths)
+	var body []byte
+	switch {
+	case lerr == nil:
+		var err error
+		if body, err = os.ReadFile(path); err != nil {
+			return fmt.Errorf("km init: read slack default-route profile %q for pre-stage: %w", path, err)
+		}
+	case profile.IsBuiltin(SlackDefaultRouteProfileSlug(route.Profile)):
+		// A built-in has no file; upload its resolved form.
+		resolved, err := resolveSlackDefaultRouteProfile(route, searchPaths)
+		if err != nil {
+			return fmt.Errorf("km init: resolve slack default-route profile %q for pre-stage: %w", route.Profile, err)
+		}
+		if body, err = goyaml.Marshal(resolved); err != nil {
+			return fmt.Errorf("km init: marshal slack default-route profile %q: %w", route.Profile, err)
+		}
+	default:
+		return fmt.Errorf("km init: pre-stage: %w", lerr)
+	}
+	if parsed, err := profile.Parse(body); err == nil && parsed.Extends.IsSet() {
+		resolved, err := resolveSlackDefaultRouteProfile(route, searchPaths)
+		if err != nil {
+			return fmt.Errorf("km init: resolve slack default-route profile %q for pre-stage: %w", route.Profile, err)
+		}
+		body, err = goyaml.Marshal(resolved)
+		if err != nil {
+			return fmt.Errorf("km init: marshal flattened slack default-route profile %q: %w", route.Profile, err)
+		}
+	}
+	key := "slack-profiles/" + SlackDefaultRouteProfileSlug(route.Profile) + "/.km-profile.yaml"
+	if err := up.PutObject(ctx, bucket, key, body); err != nil {
+		return fmt.Errorf("km init: pre-stage slack default-route profile: %w", err)
+	}
+	return nil
+}
+
+// exportSlackDefaultRouteEnv exports the three KM_SLACK_DEFAULT_ROUTE_* vars
+// consumed by infra/live/use1/lambda-slack-bridge/terragrunt.hcl. All three or
+// none: a partial export would turn the route on with no allowlist. env-wins
+// drift WARN mirrors KM_SLACK_ALLOW.
+func exportSlackDefaultRouteEnv(cfg *config.Config) {
+	r := cfg.Slack.DefaultRoute
+	if r == nil {
+		return
+	}
+	emails := r.NormalizedEmails()
+	if r.Alias == "" || r.Profile == "" || len(emails) == 0 {
+		return // Validate() reports this; never export a half-configured route.
+	}
+	for k, want := range map[string]string{
+		"KM_SLACK_DEFAULT_ROUTE_ALIAS":   r.Alias,
+		"KM_SLACK_DEFAULT_ROUTE_PROFILE": r.Profile,
+		"KM_SLACK_DEFAULT_ROUTE_ALLOW":   strings.Join(emails, ","),
+	} {
+		if envVal := os.Getenv(k); envVal != "" && envVal != want {
+			fmt.Fprintf(os.Stderr, "WARN: %s=%s (env) overrides km-config.yaml slack.default_route value %s\n", k, envVal, want)
+		} else if envVal == "" {
+			os.Setenv(k, want) //nolint:errcheck
+		}
+	}
+}
+
 // readFileOrEmpty reads a file and returns its bytes. When the file is missing
 // or unreadable, returns nil (zero bytes) — the upload proceeds with empty content
 // so the S3 key exists and operators can replace it manually.
@@ -1483,6 +1632,20 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		uploader := &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}
 		if err := PreStageWebhookProfiles(ctx, cfg.Webhooks.Sources, cfg.ArtifactsBucket, uploader); err != nil {
 			return fmt.Errorf("km init: webhook profiles: %w", err)
+		}
+	}
+
+	// 2026-10-16: Slack default route. Validate (deny-by-default + the profile
+	// must carry Slack inbound) and pre-stage the profile for cold-create.
+	if cfg.Slack.DefaultRoute != nil {
+		if err := ValidateSlackDefaultRouteProfile(cfg.Slack.DefaultRoute, cfg.ProfileSearchPaths); err != nil {
+			return fmt.Errorf("km init: %w", err)
+		}
+		if cfg.ArtifactsBucket != "" {
+			uploader := &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}
+			if err := PreStageSlackDefaultRouteProfile(ctx, cfg.Slack.DefaultRoute, cfg.ArtifactsBucket, cfg.ProfileSearchPaths, uploader); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -2004,6 +2167,9 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			os.Setenv("KM_SLACK_ALLOW", yamlSlackAllow) //nolint:errcheck
 		}
 	}
+
+	// 2026-10-16: Slack default route (@-mention from any channel or DM).
+	exportSlackDefaultRouteEnv(cfg)
 
 	// Phase 97: KM_GITHUB_REPOS — JSON-encoded repository-to-sandbox mapping.
 	// Consumed by the GitHub bridge Lambda to resolve which sandbox to dispatch

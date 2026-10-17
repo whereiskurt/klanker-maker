@@ -138,6 +138,13 @@ inputs = {
   # allowed (dormant). Requires km init --dry-run=false (NOT --sidecars) — env-block change.
   slack_allow = get_env("KM_SLACK_ALLOW", "")
 
+  # 2026-10-16 - Slack default route. km init exports all three from
+  # km-config.yaml slack.default_route or none. Requires km init --dry-run=false
+  # (env-block change; --sidecars does not update it).
+  slack_default_route_alias   = get_env("KM_SLACK_DEFAULT_ROUTE_ALIAS", "")
+  slack_default_route_profile = get_env("KM_SLACK_DEFAULT_ROUTE_PROFILE", "")
+  slack_default_route_allow   = get_env("KM_SLACK_DEFAULT_ROUTE_ALLOW", "")
+
   tags = {
     "km:component" = "slack-bridge"
     "km:managed"   = "true"

@@ -69,8 +69,8 @@ type FileDownloader interface {
 // FileError records a per-file failure with a human-readable reason for the
 // thread-reply warning posted before the agent sees the message.
 type FileError struct {
-	OriginalName string // Slack-supplied filename, used in the warning text.
-	Reason       string // Human-readable description, e.g. "Skipped big.zip (101 MB > 100 MB cap)".
+	OriginalName string `json:"original_name"` // Slack-supplied filename, used in the warning text.
+	Reason       string `json:"reason"`        // Human-readable description, e.g. "Skipped big.zip (101 MB > 100 MB cap)".
 }
 
 // FilesInfoFetcher resolves a Slack file ID to a fully-populated SlackFile.

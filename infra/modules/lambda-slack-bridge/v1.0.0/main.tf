@@ -166,6 +166,8 @@ resource "aws_iam_role_policy" "dynamodb_slack_threads" {
           "dynamodb:GetItem",
           "dynamodb:PutItem",
           "dynamodb:Query",
+          # 2026-10-16 Part B: MarkDispatched writes last_dispatch_ts.
+          "dynamodb:UpdateItem",
         ]
         Resource = [
           "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.slack_threads_table_name}",
@@ -181,6 +183,38 @@ resource "aws_iam_role_policy" "dynamodb_slack_threads" {
         ]
       }
     ]
+  })
+}
+
+# 2026-10-16: default route - alias-index GSI query (alias -> sandbox) and
+# EventBridge PutEvents (cold-create). Both unconditional: the statements grant
+# nothing dangerous and keying them to a variable would make a half-configured
+# route fail with AccessDenied instead of staying OFF.
+resource "aws_iam_role_policy" "dynamodb_sandboxes_alias_gsi" {
+  name = "${local.function_name}-dynamodb-alias-gsi"
+  role = aws_iam_role.slack_bridge.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "DDBSandboxesAliasGSI"
+      Effect   = "Allow"
+      Action   = ["dynamodb:Query"]
+      Resource = ["${var.sandboxes_table_arn}/index/alias-index"]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "eventbridge_sandbox_create" {
+  name = "${local.function_name}-eventbridge"
+  role = aws_iam_role.slack_bridge.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "EventBridgePutSandboxCreate"
+      Effect   = "Allow"
+      Action   = ["events:PutEvents"]
+      Resource = "arn:aws:events:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:event-bus/default"
+    }]
   })
 }
 
@@ -425,6 +459,11 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SLACK_DEFAULT_ROUTER = var.slack_default_router
       # Phase 118 — install-level trigger allowlist (comma-joined Uxxxx)
       KM_SLACK_ALLOW = var.slack_allow
+
+      # 2026-10-16 - default route (unmapped channel/DM -> one alias; email-gated)
+      KM_SLACK_DEFAULT_ROUTE_ALIAS   = var.slack_default_route_alias
+      KM_SLACK_DEFAULT_ROUTE_PROFILE = var.slack_default_route_profile
+      KM_SLACK_DEFAULT_ROUTE_ALLOW   = var.slack_default_route_allow
       # Phase 121 — action-quota table name for bridge-side quota enforcement
       KM_QUOTA_TABLE = var.quota_table_arn != "" ? "${var.resource_prefix}-action-quota" : ""
     }
