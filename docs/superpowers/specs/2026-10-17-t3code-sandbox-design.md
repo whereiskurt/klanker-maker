@@ -224,9 +224,7 @@ Group=sandbox
 WorkingDirectory=/workspace
 Environment=T3CODE_TELEMETRY_ENABLED=false
 UnsetEnvironment=XDG_RUNTIME_DIR
-ExecStart=/bin/bash -lc 'exec t3 serve --host 127.0.0.1 --port 3773 --no-browser /workspace'
-StandardOutput=append:/home/sandbox/.t3/km-t3code.log
-StandardError=append:/home/sandbox/.t3/km-t3code.log
+ExecStart=/bin/bash -lc 'umask 077; L=/home/sandbox/.t3/km-t3code.log; mkdir -p /home/sandbox/.t3; if [ -e "$$L" ] && [ ! -O "$$L" ]; then rm -f "$$L"; fi; touch "$$L" && chmod 600 "$$L"; exec t3 serve --host 127.0.0.1 --port 3773 --no-browser /workspace >>/home/sandbox/.t3/km-t3code.log 2>&1'
 KillMode=mixed
 Restart=on-failure
 RestartSec=5
@@ -249,8 +247,12 @@ Each line is load-bearing:
 - **Log to `~/.t3/km-t3code.log`, not the journal** — t3 prints a pairing token at
   startup (F4). `~/.t3` is t3's own store, already holding every credential it has;
   the journal is readable by more than the sandbox user and is shipped nowhere, but
-  keeping the token out of it is free. (`append:` creates the file as root before
-  dropping to `User=`; `start` pre-creates it `0600 sandbox:sandbox` so it never is.)
+  keeping the token out of it is free. **Amended after review/UAT:** the redirect is
+  opened by the sandbox user's shell, NOT systemd's `StandardOutput=append:` — that
+  opens as root, and `~/.t3` is sandbox-controlled, so a planted symlink aims a root
+  open at any file (the first build also had root touch/chown the log there: a
+  sandbox→root escalation). `$$L` is systemd's escape for a literal `$`. The
+  start script does no root file operation inside `~/.t3` or on a fixed `/tmp` name.
 - **`WorkingDirectory=/workspace`** + positional `/workspace` — provider sessions
   start where every km agent works. **Not** `--auto-bootstrap-project-from-cwd`
   (builder's call: the onboarding wizard picks projects; avoids creating a project the
