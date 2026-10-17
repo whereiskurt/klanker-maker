@@ -125,3 +125,24 @@ No manifest change, no new scope, no new table.
    log; the two listed people work everywhere; `km-slack dm --to <third>` from `ir-bot` is
    `dm_not_allowed`.
 4. `km doctor` shows the wildcard entry as a domain wildcard and the exact entries resolved.
+
+## 5. Live UAT (2026-10-17, install prefix `km`, one operator account)
+
+Install list `*@<operator domain>`; route profile `allowEmails` = the operator (phase A) then a
+different address (phase B). Bridge env confirmed: `KM_SLACK_DEFAULT_ROUTE_ALLOW=*@<domain>`,
+`KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW=<list>`, `KM_SLACK_REACT_QUIET_SECONDS=180`.
+
+| # | Step | Result |
+|---|---|---|
+| A1 | `km init` / `km doctor` with both lists | **PASS**: `[info]` names both sources; doctor `install list 1 entries (DM targets and non-route sandboxes); route profile list 1 entries (cold-create and the route box)`, `1 email(s) resolve, 1 domain wildcard(s)`. |
+| A2 | Operator (on the profile list) @-mentions in a channel with `ir-bot` destroyed | **PASS**: cold-create published; first reply 3.6 min later (boot gate). |
+| B1 | Profile list changed to another address, `km init --slack`, `ir-bot` destroyed, operator mentions | **PASS**: `events: route: sender not allowlisted (silent drop)`; no 👀, no cold-create, no sandbox, even though the install list admits the domain. |
+| Q1 | Thread reply 273 s after the last dispatch | **PASS**: `reaction posted`. |
+| Q2 | Thread reply 36 s after the last dispatch | **PASS**: `reaction skipped (quiet period) since_last_dispatch_s=36 quiet_s=180`, still enqueued; no 👀 on the message. |
+| Q3 | Top-level mention | **PASS**: `reaction posted`. |
+| Q4 | Thread row after a completed turn | **PASS**: `last_dispatch_ts` present (= the last dispatched message ts). Before this branch's poller fix the whole-row `put-item` wiped it every turn, so Q2 reacted (found live, fixed, redeployed, re-verified). |
+| D1 | `km-slack dm --to <operator>` from `ir-bot` (profile list names the operator) | **PASS**: sent. |
+| D2 | `km-slack dm --to <bot's own id>` | **PASS**: `403 dm_not_allowed`. |
+
+Not run (no second workspace account): a listed non-operator sending; a DM target on the
+domain but off the posting sandbox's list (both pinned by handler tests).
