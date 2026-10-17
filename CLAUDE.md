@@ -71,7 +71,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   exists. The bridge also mints the `sl-…` id before downloading the trigger's files, so
   attachments are keyed on the real box. Bridge IAM gains `dynamodb:Query` on `alias-index`,
   `events:PutEvents`, and `dynamodb:UpdateItem` on the threads table.
-- **Manifest gains `im:history`, `mpim:history`, `message.im`, `message.mpim`** (no `im:write`);
+- **Manifest gains `im:history`, `mpim:history`, `message.im`, `message.mpim`** (`im:write` added 2026-10-17 for `km-slack dm`);
   `km slack init`'s scope check requires both history scopes. `km doctor` group
   `Slack default route` (three results, one evaluation): profile resolves with inbound (notes
   a strict profile), every email resolves, live `auth.test` scopes include both history scopes.
@@ -84,6 +84,10 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   prompt is lost. Until the reinstall, channels work and DMs are never delivered. Frozen
   pre-92 learn.v2 golden hand-patched for the poller hunks, never re-captured. No plugin bump.
   See `docs/slack-notifications.md` § Default route and § Phase 91 Strict mode.
+- **`km-slack dm --to U… ` (2026-10-17): the bot opens a DM with a person on the route
+  allowlist and posts top-level; a reply under it routes back to the sandbox (thread row written
+  after the post). New scope `im:write`. `target_user` is `omitempty` because the bridge
+  re-canonicalises before verifying. See `docs/slack-notifications.md` § Bot-initiated DMs.
 - **One reply per turn (2026-10-17): every Slack turn posted TWICE** — the agent answered with
   `km-slack reply` (the 09-19 preamble told it to), then the poller posted its closing sentence.
   `km-slack` now touches `/tmp/km-slack-posted.<thread_ts>` after a successful threaded post;
@@ -2011,6 +2015,7 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | kubectl in a sandbox against a cluster only your laptop can reach — `km tunnel` operator runbook: prerequisites, flags, troubleshooting, the `socks` mode, deploy surface | `docs/k8s-reverse-tunnel.md` (Phase 130) |
 | **How the k8s tunnel actually works** — the three nested tunnels and why SSM forced SSH-inside-SSM, the ExecCredential proxy and why the broker is deliberately dumb, the `tls-server-name`-vs-CA split, the exec apiVersion exact-match trap, the precise trust boundary, and why the deploy surface is `make build` alone | `docs/k8s-reverse-tunnel-internals.md` (Phase 130) |
 | Persistent agent panes that survive detach — `km herdr start`, the base/tools/herdr fragment, km-presence signal 8, the pause-vs-stop lifecycle trap, the ssh-config conflict, deploy surface | `docs/herdr-remote-attach.md` |
+| Ask the bot to DM someone — `km-slack dm`, who it may DM, the continuity row, the `im:write` scope | `docs/slack-notifications.md` § Bot-initiated DMs |
 | @-mention the bot from any channel or DM — `slack.default_route`, the email allowlist, the routing ladder, replies in the originating thread, the `channel_mismatch` rule, the DM scopes, deploy and half-deploy outcomes; strict `threadBypass: false` and thread context | `docs/slack-notifications.md` § Default route + § Phase 91 Strict mode |
 | Why the Slack default route and strict mode were built the way they were — every design decision with its rationale, the end-to-end ladder, the code map and tests, the `ec2spot_region_lock` security finding, deploy surface, log lines, UAT checklist, follow-ups | `docs/slack-default-route.md` |
 | Hibernate/resume cross-wiring additional EBS volumes — why fstab-by-UUID corrupted them, the live-Identify rule, the pre/post sleep hooks, `onVolumeMismatch`, `km-volumes repair`, re-materialising from snapshot, the `/shared` caveat | `docs/hibernate-volumes.md` |

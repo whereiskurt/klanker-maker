@@ -15,7 +15,7 @@ km slack manifest > app.json   # render a deployment-specific manifest
 # Slack → Your Apps → Create New App → "From an app manifest" → paste app.json
 ```
 
-Bot token scopes (15) + bot events (2) declared by the manifest:
+Bot token scopes (18) + bot events (4) declared by the manifest:
 
 | Scope | One-liner |
 |-------|-----------|

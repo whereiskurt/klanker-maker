@@ -75,7 +75,7 @@ ledger records the rulings.
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Reach | Public channels, private channels, DMs, group DMs | The operator's call. DMs cost two scopes and two events and no `im:write`, because the bot only answers a DM, it never opens one. |
+| Reach | Public channels, private channels, DMs, group DMs | The operator's call. DMs cost two scopes and two events. `im:write` was added on 2026-10-17 for `km-slack dm` (bot-initiated DM, allowlist-gated; see `docs/slack-notifications.md` § Bot-initiated DMs). |
 | Empty allowlist | The route is OFF | A bot reachable from every channel in an org must be deny-by-default. Phase 118's allow-by-default empty list stays for mapped channels, which is why `slack.allow` was not reused: one key with two opposite empty-list meanings is a trap. |
 | Identity | Sender email resolved at event time via `users.info` | Deactivation and list edits take effect without a `km init` of Slack ids, and a lookup failure is a deny rather than a hole. Resolving ids at `km init` was rejected because it goes stale until re-init and a failed lookup at init must be either a hard error or a silent hole. |
 | Rejected: a wildcard sandbox row | Not built | A fake row owning every channel would lie to `km list`, `km doctor`, the running-channels lister and the Phase 118 per-sandbox allowlist, and has no place for an email gate. |
@@ -399,7 +399,7 @@ time. See `docs/profile-reference.md`.
 | `Slack default route` | n/a | n/a | `slack.default_route not set — route off` |
 | `Slack default route profile` | Profile resolves with Slack inbound; notes strict mode when `threadBypass: false` | Missing, unresolvable, or lacking inbound | n/a |
 | `Slack default route allowlist` | Every email resolves via `users.lookupByEmail` | List empty (route OFF), or names emails not found in the workspace | Bot token unavailable |
-| `Slack default route scopes` | `im:history` and `mpim:history` present in the live `auth.test` scopes | Either missing: DMs are never delivered | `auth.test` scopes unavailable |
+| `Slack default route scopes` | `im:history`, `mpim:history` and `im:write` present in the live `auth.test` scopes | Any missing: DMs are never delivered, or `km-slack dm` fails | `auth.test` scopes unavailable |
 
 No alias-resolution result shipped, although spec §7 originally listed one.
 
@@ -579,6 +579,8 @@ unverified.
   "Sandbox is waking up" line; the reply still arrives.
 
 ### Can wait
+
+Shipped 2026-10-17: bot-initiated DMs (`km-slack dm`).
 
 - The guard's exception is keyed by policy name, its write regex misses glob actions such as
   `dynamodb:Put*`, and its table regex also matches the GitHub and HackerOne threads tables.

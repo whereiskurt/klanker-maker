@@ -251,9 +251,28 @@ EOF
   --body /tmp/reply.txt --mention U0KURT,U0RON
 ```
 
-The Stop-hook auto-post of your final answer uses the inline path — a `<@U…>` in your reply
-text is enough for the normal bridge turn. Reach for `--mention` when you post explicitly and
-want the ping regardless of how the body renders.
+Your final reply is posted to the thread automatically when the turn ends, and a `<@U…>` in it
+notifies the person. Any `km-slack post`/`reply` into the thread **cancels** that automatic post
+(the poller sees the marker km-slack leaves), so such a call must carry your complete answer.
+Reach for `--mention` only on a post you make deliberately and completely.
+
+### Sending someone a DM ("can you DM me the summary?")
+
+```bash
+# The id comes from the [Slack] From: line / $KM_SLACK_SENDER_ID — never a name.
+/opt/km/bin/km-slack dm --to "$KM_SLACK_SENDER_ID" --text "Summary: …"
+/opt/km/bin/km-slack dm --to "$KM_SLACK_SENDER_ID" --body /tmp/summary.md --render blocks-rich --from-thread
+```
+
+- `--to` is a bare user id (`U…`/`W…`). Give exactly one of `--text` or `--body`.
+  `--render` is `plain|mrkdwn|blocks|blocks-rich`. On success it prints `channel=<D…> ts=<ts>`.
+- The DM is a **top-level** message from the bot; your reply in the current thread still posts
+  automatically. `--from-thread` (reads `KM_SLACK_CHANNEL_ID`/`KM_SLACK_THREAD_TS`) appends a
+  permalink back to this thread.
+- The bridge sends it only to a person on the install's `slack.default_route.allow_emails`.
+  `bridge returned not-ok: dm_not_allowed` means the person is not listed; `dm_disabled` means
+  this install has no default route. Say so in your reply rather than retrying.
+- A reply the person types **under** your DM message comes back to this sandbox.
 
 ## Limits
 

@@ -3312,7 +3312,7 @@ The manifest gains two scopes and two events, for DMs and group DMs:
 | `message.mpim` | event | Deliver group DM messages to the bridge |
 | `app_home.messages_tab_enabled: true` + `messages_tab_read_only_enabled: false` | App Home setting | Let people type in the App's Messages tab at all. Without it Slack refuses the DM client-side ("Sending messages to this app has been turned off") and no event is ever sent — found live 2026-10-17 after the scopes were already in place. |
 
-No `im:write`: the bot never opens a DM, it only answers one. The App Home setting is not a
+`im:write` was added on 2026-10-17 for `km-slack dm` (see § Bot-initiated DMs); the default route itself still only answers DMs. The App Home setting is not a
 scope: re-pasting the manifest (or toggling **App Home → Show Tabs → Messages Tab → Allow
 users to send messages**) applies it with no reinstall and no token rotation. `km slack init`'s scope check
 now requires both history scopes. Apply on the front-door install with the Phase 72 shape:
@@ -3360,7 +3360,7 @@ Skipped silently when the block is absent. Otherwise three results from one eval
 |---|---|
 | `Slack default route profile` | The profile is missing, does not resolve, or lacks Slack inbound. When OK and the profile sets `threadBypass: false`, the message notes that thread follow-ups in invited channels require a mention. |
 | `Slack default route allowlist` | `allow_emails` is empty (route OFF), or an email does not resolve via `users.lookupByEmail` |
-| `Slack default route scopes` | The live `auth.test` scopes lack `im:history` or `mpim:history` (DMs never delivered) |
+| `Slack default route scopes` | The live `auth.test` scopes lack `im:history` or `mpim:history` (DMs never delivered), or `im:write` (`km-slack dm` fails) |
 
 ### Troubleshooting
 
@@ -3470,6 +3470,28 @@ prompt injection, which is the preamble doing its job.
 Deploy = `make build` + `km init --dry-run=false`: the `km-slack` sidecar and the
 create-handler-rendered poller and hook both change. A sandbox gains it on
 `km destroy && km create`.
+
+### Bot-initiated DMs (2026-10-17)
+
+`km-slack dm --to U… (--text | --body file) [--render plain|mrkdwn|blocks|blocks-rich]
+[--from-thread]` asks the bridge to open a DM with a person and post there, top-level. `--to`
+is a bare user id. A Slack `invalid_blocks` rejection is retried once without blocks. The
+bridge admits only a target whose email (via `users.info`, the same cached fetcher as the
+inbound gate) is on `slack.default_route.allow_emails`; without a default route every `dm` is
+`403 dm_disabled`. `--from-thread` appends a permalink to the originating thread.
+On success the bridge writes a `km-slack-threads` row for the DM message (after the post), so a
+reply typed under it routes back to the same sandbox; a fresh top-level DM still goes through
+the default route. The DM writes no one-reply marker.
+Refusals, all fail-closed: `dm_disabled`, `bad_target`, `dm_not_allowed`, `channel_mismatch`
+(`--from-thread` on a thread that is not the sender's), `quota_exceeded`, `dm_unsupported`.
+Operators cannot send `dm`. New scope `im:write`; `km doctor`'s `Slack default route scopes`
+requires it. The envelope field `target_user` is `omitempty` on purpose: the bridge
+re-canonicalises before verifying, so a non-omitempty field would break every older
+`km-slack`'s signatures.
+
+Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false` + `km slack manifest`
+→ paste, reinstall → `km slack rotate-token --bot-token <new>` → `km doctor` → recreate the
+default sandbox so its `km-slack` carries the verb.
 
 ### Verified live (2026-09-19)
 
