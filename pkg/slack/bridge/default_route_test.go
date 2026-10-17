@@ -127,6 +127,9 @@ var emailEntryCases = []struct {
 	{"*@exa mple.com", false},
 	{"nope", false},
 	{"x@y.z", false},
+	{"*@.example.com", false},
+	{"*@-.com", false},
+	{"*@a..com", false},
 }
 
 func TestValidateEmailEntry_SharedTable(t *testing.T) {
@@ -142,5 +145,22 @@ func TestDefaultRoute_AllowsDomainEntry(t *testing.T) {
 	r := NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"*@example.com"})
 	if r == nil || !r.Allows("anyone@example.com") || r.Allows("x@other.example") {
 		t.Fatal("route must honour a domain entry")
+	}
+}
+
+// An input with more than one '@' is never a single address: `a@b@example.com`
+// must not match `*@example.com` by its last-'@' domain.
+func TestEmailAllowlist_DeniesTwoAts(t *testing.T) {
+	al, err := CompileEmailAllowlist([]string{"*@example.com", "b@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []string{"a@b@example.com", "b@example.com@example.com", "@@example.com"} {
+		if al.Allows(in) {
+			t.Errorf("Allows(%q) = true, want false", in)
+		}
+	}
+	if !al.Allows("a@example.com") {
+		t.Error("Allows(a@example.com) = false, want true")
 	}
 }

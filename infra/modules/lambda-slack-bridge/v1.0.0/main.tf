@@ -453,6 +453,8 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SLACK_BOT_USER_ID  = var.slack_bot_user_id
       # Phase 91.4 — first-only-react toggle
       KM_SLACK_REACT_ALWAYS = var.slack_react_always
+      # 2026-10-17 — reaction quiet period for thread replies (seconds; "0" = off)
+      KM_SLACK_REACT_QUIET_SECONDS = var.slack_react_quiet_seconds
       # Phase 95 — federated relay peer list
       KM_SLACK_PEER_BRIDGES = var.slack_peer_bridges
       # Phase 96 — front-door orphan-channel router toggle

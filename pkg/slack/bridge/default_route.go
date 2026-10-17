@@ -58,8 +58,8 @@ func (r *DefaultRoute) Allows(email string) bool {
 // (validateRouteEmailEntry), which cannot import this package. The two copies
 // share a test table (emailEntryCases here, TestValidateRouteEmailEntry_MirrorsBridge
 // there): change both together.
-var reDomainEntry = regexp.MustCompile(`^\*@[a-z0-9.-]+\.[a-z]{2,}$`)
-var reExactEntry = regexp.MustCompile(`^[^@\s*]+@[a-z0-9.-]+\.[a-z]{2,}$`)
+var reDomainEntry = regexp.MustCompile(`^\*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+var reExactEntry = regexp.MustCompile(`^[^@\s*]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
 
 // ValidateEmailEntry normalises one allowlist entry: lowercased, trimmed; either
 // an exact address or exactly `*@<domain>`. Any other use of `*` is an error so
@@ -109,14 +109,16 @@ func (al *EmailAllowlist) Len() int {
 	return len(al.exact) + len(al.domains)
 }
 
-// Allows: exact first, then the domain after the LAST '@'. Subdomains do not
-// match (`a@sub.example.com` is not `*@example.com`). Empty ⇒ false.
+// Allows: exact first, then the domain after the '@'. Subdomains do not
+// match (`a@sub.example.com` is not `*@example.com`). Empty ⇒ false; an input
+// that is not exactly one '@' (`a@b@example.com`) ⇒ false, so a malformed
+// address can never reach a domain entry through its trailing label.
 func (al *EmailAllowlist) Allows(email string) bool {
 	if al == nil {
 		return false
 	}
 	e := strings.ToLower(strings.TrimSpace(email))
-	if e == "" || strings.HasPrefix(e, "*@") {
+	if e == "" || strings.HasPrefix(e, "*@") || strings.Count(e, "@") != 1 {
 		return false
 	}
 	if _, ok := al.exact[e]; ok {

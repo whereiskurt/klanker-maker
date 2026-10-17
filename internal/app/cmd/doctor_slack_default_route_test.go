@@ -119,3 +119,16 @@ func TestCheckSlackDefaultRoute_NoWildcardClauseWhenNone(t *testing.T) {
 		t.Errorf("zero wildcards must omit the clause: %q", msg)
 	}
 }
+
+// The route profile's allowEmails is the effective list: doctor resolves it,
+// not the (different) km-config.yaml list.
+func TestCheckSlackDefaultRoute_UsesProfileAllowEmails(t *testing.T) {
+	dir := t.TempDir()
+	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileWithAllow)
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"stale@example.com"}}
+	rs := checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{known: map[string]string{"kurt@example.com": "U1"}}, "im:history,mpim:history,im:write")
+	st, msg := statusOf(rs, "Slack default route allowlist")
+	if st != CheckOK || !strings.Contains(msg, "1 email(s) resolve") || !strings.Contains(msg, "1 domain wildcard") {
+		t.Fatalf("allowlist: %s (%s), want OK from the profile list", st, msg)
+	}
+}

@@ -67,7 +67,9 @@ func TestSlackDefaultRoute_Validate(t *testing.T) {
 		{"ok", config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml", AllowEmails: []string{"x@y.io"}}, ""},
 		{"no alias", config.SlackDefaultRoute{Profile: "p.yaml", AllowEmails: []string{"x@y.io"}}, "alias"},
 		{"no profile", config.SlackDefaultRoute{Alias: "a", AllowEmails: []string{"x@y.io"}}, "profile"},
-		{"empty allow", config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml"}, "allow_emails"},
+		// Empty is valid at this layer: the route profile's allowEmails may
+		// supply the list. km init rejects "neither" (ValidateSlackDefaultRouteProfile).
+		{"empty allow", config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml"}, ""},
 		{"not an email", config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml", AllowEmails: []string{"nope"}}, "nope"},
 	}
 	for _, tc := range cases {
@@ -120,6 +122,9 @@ func TestValidateRouteEmailEntry_MirrorsBridge(t *testing.T) {
 		{"*@exa mple.com", false},
 		{"nope", false},
 		{"x@y.z", false},
+		{"*@.example.com", false},
+		{"*@-.com", false},
+		{"*@a..com", false},
 	}
 	for _, tc := range cases {
 		r := config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml", AllowEmails: []string{tc.in}}

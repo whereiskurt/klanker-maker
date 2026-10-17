@@ -44,6 +44,7 @@ import (
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
+	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt/planreport"
 	"github.com/whereiskurt/klanker-maker/pkg/version"
@@ -425,7 +426,7 @@ func runInitScoped(cfg *config.Config, awsProfile, region string, verbose bool, 
 	// 1. Export KM_* env vars so terragrunt get_env() calls see fresh values.
 	ExportTerragruntEnvVars(cfg)
 	exportPlatformKMSKeyARN(ctx, awsCfg, cfg)
-	if err := ValidateSlackDefaultRouteProfile(cfg.Slack.DefaultRoute, cfg.ProfileSearchPaths); err != nil {
+	if err := prepareSlackDefaultRoute(cfg); err != nil {
 		return fmt.Errorf("km init: %w", err)
 	}
 
@@ -1160,24 +1161,65 @@ func SlackDefaultRouteProfileSlug(profile string) string { return githubProfileS
 // ValidateSlackDefaultRouteProfile runs route.Validate() and then resolves the
 // profile (extends included) to prove it has Slack inbound enabled — a
 // cold-created box without an inbound queue can never answer.
-func ValidateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPaths []string) error {
+//
+// It returns the profile's own notification.slack.inbound.allowEmails,
+// normalised (nil when the profile has none). When present it REPLACES
+// slack.default_route.allow_emails as the route's allowlist, so the mention
+// that cold-creates the box is gated by the same list the box enforces once
+// it exists. Neither list ⇒ error: the route is deny-by-default.
+func ValidateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPaths []string) ([]string, error) {
 	if route == nil {
-		return nil
+		return nil, nil
 	}
 	if err := route.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 	p, err := resolveSlackDefaultRouteProfile(route, searchPaths)
 	if err != nil {
-		return fmt.Errorf("slack.default_route.profile %q: %w", route.Profile, err)
+		return nil, fmt.Errorf("slack.default_route.profile %q: %w", route.Profile, err)
 	}
 	n := p.Spec.Notification
 	slackOn := n != nil && n.Slack != nil && n.Slack.Enabled != nil && *n.Slack.Enabled
 	inboundOn := slackOn && n.Slack.Inbound != nil && n.Slack.Inbound.Enabled != nil && *n.Slack.Inbound.Enabled
 	if !slackOn || !inboundOn {
-		return fmt.Errorf("slack.default_route.profile %q must set notification.slack.enabled and notification.slack.inbound.enabled: a default-route sandbox replies through its inbound poller and has no other way to answer", route.Profile)
+		return nil, fmt.Errorf("slack.default_route.profile %q must set notification.slack.enabled and notification.slack.inbound.enabled: a default-route sandbox replies through its inbound poller and has no other way to answer", route.Profile)
 	}
-	return nil
+	var profileAllow []string
+	for _, e := range n.Slack.Inbound.AllowEmails {
+		if strings.TrimSpace(e) == "" {
+			continue
+		}
+		norm, _, verr := slackbridge.ValidateEmailEntry(e)
+		if verr != nil {
+			return nil, fmt.Errorf("slack.default_route.profile %q: notification.slack.inbound.allowEmails: %w", route.Profile, verr)
+		}
+		profileAllow = append(profileAllow, norm)
+	}
+	if len(profileAllow) == 0 && len(route.NormalizedEmails()) == 0 {
+		return nil, errSlackDefaultRouteNoAllowlist(route.Profile)
+	}
+	return profileAllow, nil
+}
+
+func errSlackDefaultRouteNoAllowlist(profilePath string) error {
+	return fmt.Errorf("slack.default_route has no allowlist: set notification.slack.inbound.allowEmails in the route profile %q, or slack.default_route.allow_emails in km-config.yaml — the route is deny-by-default and stays OFF until one of them lists at least one email", profilePath)
+}
+
+// prepareSlackDefaultRoute validates the route (and its profile) and exports
+// KM_SLACK_DEFAULT_ROUTE_* with the effective allowlist. Every km init path
+// that can apply or plan lambda-slack-bridge calls it after
+// ExportTerragruntEnvVars: the allowlist depends on the route profile, which
+// ExportTerragruntEnvVars (shared by create/destroy/bootstrap) does not read.
+// No route ⇒ no-op.
+func prepareSlackDefaultRoute(cfg *config.Config) error {
+	if cfg.Slack.DefaultRoute == nil {
+		return nil
+	}
+	profileAllow, err := ValidateSlackDefaultRouteProfile(cfg.Slack.DefaultRoute, cfg.ProfileSearchPaths)
+	if err != nil {
+		return err
+	}
+	return exportSlackDefaultRouteEnv(cfg, profileAllow)
 }
 
 // locateSlackDefaultRouteProfile finds the file a route's profile names: the
@@ -1273,15 +1315,28 @@ func PreStageSlackDefaultRouteProfile(ctx context.Context, route *config.SlackDe
 // consumed by infra/live/use1/lambda-slack-bridge/terragrunt.hcl. All three or
 // none: a partial export would turn the route on with no allowlist. env-wins
 // drift WARN mirrors KM_SLACK_ALLOW.
-func exportSlackDefaultRouteEnv(cfg *config.Config) {
+//
+// The allowlist is profileAllow (the route profile's allowEmails) when
+// non-empty, else slack.default_route.allow_emails. Neither ⇒ error, exported
+// nothing. Absent route ⇒ nil, exported nothing.
+func exportSlackDefaultRouteEnv(cfg *config.Config, profileAllow []string) error {
 	r := cfg.Slack.DefaultRoute
 	if r == nil {
-		return
+		return nil
 	}
-	emails := r.NormalizedEmails()
-	if r.Alias == "" || r.Profile == "" || len(emails) == 0 {
-		return // Validate() reports this; never export a half-configured route.
+	if r.Alias == "" || r.Profile == "" {
+		return nil // Validate() reports this; never export a half-configured route.
 	}
+	emails := profileAllow
+	source := fmt.Sprintf("from profile %s", r.Profile)
+	if len(emails) == 0 {
+		emails = r.NormalizedEmails()
+		source = "from km-config.yaml"
+	}
+	if len(emails) == 0 {
+		return errSlackDefaultRouteNoAllowlist(r.Profile)
+	}
+	fmt.Fprintf(os.Stderr, "[info] slack.default_route allowlist: %s (%d entries)\n", source, len(emails))
 	for k, want := range map[string]string{
 		"KM_SLACK_DEFAULT_ROUTE_ALIAS":   r.Alias,
 		"KM_SLACK_DEFAULT_ROUTE_PROFILE": r.Profile,
@@ -1293,6 +1348,7 @@ func exportSlackDefaultRouteEnv(cfg *config.Config) {
 			os.Setenv(k, want) //nolint:errcheck
 		}
 	}
+	return nil
 }
 
 // readFileOrEmpty reads a file and returns its bytes. When the file is missing
@@ -1638,7 +1694,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	// 2026-10-16: Slack default route. Validate (deny-by-default + the profile
 	// must carry Slack inbound) and pre-stage the profile for cold-create.
 	if cfg.Slack.DefaultRoute != nil {
-		if err := ValidateSlackDefaultRouteProfile(cfg.Slack.DefaultRoute, cfg.ProfileSearchPaths); err != nil {
+		if err := prepareSlackDefaultRoute(cfg); err != nil {
 			return fmt.Errorf("km init: %w", err)
 		}
 		if cfg.ArtifactsBucket != "" {
@@ -2118,6 +2174,21 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 		}
 	}
 
+	// 2026-10-17: KM_SLACK_REACT_QUIET_SECONDS — install-level reaction quiet
+	// period consumed by infra/live/use1/lambda-slack-bridge/terragrunt.hcl
+	// get_env("KM_SLACK_REACT_QUIET_SECONDS", "180"). Only export when the
+	// operator set slack.react_quiet_seconds (0 included: it means "off");
+	// absent leaves the env untouched and the terragrunt default applies.
+	// env-wins semantics preserved.
+	if cfg.Slack.ReactQuietSeconds != nil {
+		yamlSlackReactQuiet := strconv.Itoa(*cfg.Slack.ReactQuietSeconds)
+		if envVal := os.Getenv("KM_SLACK_REACT_QUIET_SECONDS"); envVal != "" && envVal != yamlSlackReactQuiet {
+			fmt.Fprintf(os.Stderr, "WARN: KM_SLACK_REACT_QUIET_SECONDS=%s (env) overrides km-config.yaml slack.react_quiet_seconds=%s\n", envVal, yamlSlackReactQuiet)
+		} else if envVal == "" {
+			os.Setenv("KM_SLACK_REACT_QUIET_SECONDS", yamlSlackReactQuiet) //nolint:errcheck
+		}
+	}
+
 	// Phase 95: KM_SLACK_PEER_BRIDGES — comma-joined list of sibling bridge /events URLs.
 	// Consumed by infra/live/use1/lambda-slack-bridge/terragrunt.hcl
 	// get_env("KM_SLACK_PEER_BRIDGES", ""). Only export when the operator has explicitly
@@ -2168,8 +2239,9 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 		}
 	}
 
-	// 2026-10-16: Slack default route (@-mention from any channel or DM).
-	exportSlackDefaultRouteEnv(cfg)
+	// 2026-10-16: the Slack default route's KM_SLACK_DEFAULT_ROUTE_* are NOT
+	// exported here: the allowlist may come from the route profile, so km init
+	// exports them via prepareSlackDefaultRoute after this function runs.
 
 	// Phase 97: KM_GITHUB_REPOS — JSON-encoded repository-to-sandbox mapping.
 	// Consumed by the GitHub bridge Lambda to resolve which sandbox to dispatch
@@ -3279,6 +3351,9 @@ func runInitPlan(cfg *config.Config, awsProfile, region string, verbose, acceptD
 	//    MUST happen exactly once before any terragrunt invocation.
 	ExportTerragruntEnvVars(cfg)
 	exportPlatformKMSKeyARN(ctx, awsCfg, cfg)
+	if err := prepareSlackDefaultRoute(cfg); err != nil {
+		return fmt.Errorf("km init --plan: %w", err)
+	}
 
 	// 3. Construct runner (Verbose=false — RunInitPlanWithRunner captures stdout
 	//    per-module and echoes based on verbose flag post-hoc).

@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -283,6 +284,7 @@ func wireEventsHandler() {
 
 	// Phase 91: polite-bot mode. Read at cold-start; constant for Lambda lifetime.
 	WireMentionOnly(eventsHandler, botUserIDFetcher)
+	WireReactQuiet(eventsHandler, os.Getenv)
 
 	// Phase 95: federated relay. Parse KM_SLACK_PEER_BRIDGES; build HTTPPeerRelayer.
 	// nil Relayer => federation off => byte-identical to today's handle path.
@@ -456,6 +458,29 @@ func WireMentionOnly(h *bridge.EventsHandler, fetcher *bridge.CachedBotUserIDFet
 	slog.Info("km-slack-bridge: events handler mention-only mode",
 		"enabled", h.MentionOnly,
 		"react_always", h.ReactAlways)
+}
+
+// defaultReactQuietSeconds is the bridge's own fallback when
+// KM_SLACK_REACT_QUIET_SECONDS is unset or unparseable; the terragrunt default
+// ("180") normally supplies the same value.
+const defaultReactQuietSeconds = 180
+
+// WireReactQuiet sets EventsHandler.ReactQuietSeconds from
+// KM_SLACK_REACT_QUIET_SECONDS: "" ⇒ 180; a non-negative integer ⇒ that value
+// ("0" turns the quiet period off); anything else ⇒ 180 with a warning, so a
+// typo never silently disables the quiet period.
+func WireReactQuiet(h *bridge.EventsHandler, getenv func(string) string) {
+	raw := strings.TrimSpace(getenv("KM_SLACK_REACT_QUIET_SECONDS"))
+	h.ReactQuietSeconds = defaultReactQuietSeconds
+	if raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			h.ReactQuietSeconds = n
+		} else {
+			slog.Warn("km-slack-bridge: KM_SLACK_REACT_QUIET_SECONDS is not a non-negative integer; using the default",
+				"value", raw, "default", defaultReactQuietSeconds)
+		}
+	}
+	slog.Info("km-slack-bridge: reaction quiet period", "react_quiet_seconds", h.ReactQuietSeconds)
 }
 
 // WireActionQuota wires the Phase 121 action-quota + auto-freeze fields onto the

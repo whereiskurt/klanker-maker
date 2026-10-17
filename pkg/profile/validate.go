@@ -1272,8 +1272,8 @@ func IsAbstractFragment(raw []byte) bool {
 // must not import pkg/slack/bridge, so the three copies are held in lockstep by
 // a shared test table (TestValidateInboundEmailEntry_MirrorsBridge ↔
 // emailEntryCases ↔ TestValidateRouteEmailEntry_MirrorsBridge): change all three.
-var inboundDomainEntry = regexp.MustCompile(`^\*@[a-z0-9.-]+\.[a-z]{2,}$`)
-var inboundExactEntry = regexp.MustCompile(`^[^@\s*]+@[a-z0-9.-]+\.[a-z]{2,}$`)
+var inboundDomainEntry = regexp.MustCompile(`^\*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+var inboundExactEntry = regexp.MustCompile(`^[^@\s*]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
 
 // validateInboundEmailEntry accepts an exact address or exactly `*@<domain>`
 // (case-insensitive, trimmed). Any other use of `*` is an error so a typo

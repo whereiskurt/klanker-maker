@@ -121,6 +121,11 @@ inputs = {
   # Set km-config slack.react_always: false to flip to first-only reactions.
   slack_react_always = get_env("KM_SLACK_REACT_ALWAYS", "true")
 
+  # 2026-10-17 — reaction quiet period. ExportTerragruntEnvVars populates
+  # KM_SLACK_REACT_QUIET_SECONDS from km-config.yaml slack.react_quiet_seconds
+  # (tri-state *int) only when set; unset → "180". "0" turns it off.
+  slack_react_quiet_seconds = get_env("KM_SLACK_REACT_QUIET_SECONDS", "180")
+
   # Phase 95 — federated relay peer list. Comma-joined /events URLs of sibling
   # km installs. Populated by ExportTerragruntEnvVars from km-config.yaml
   # slack.peer_bridges []string. Empty/absent => no relay (federation off).

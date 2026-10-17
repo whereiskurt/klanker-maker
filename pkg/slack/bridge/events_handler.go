@@ -71,6 +71,16 @@ type EventsHandler struct {
 	// var at cold-start (defaults to true when env is unset or "true").
 	ReactAlways bool
 
+	// ReactQuietSeconds (2026-10-17) is the install-level reaction quiet period:
+	// a THREAD reply gets the 👀 reaction only when at least this many seconds
+	// have passed since the bot last dispatched a turn in that thread
+	// (km-slack-threads last_dispatch_ts). Top-level messages always react, and
+	// ReactAlways=false still suppresses thread reactions outright. 0 = off.
+	// A sandbox row's slack_react_quiet_seconds (SandboxRoutingInfo.ReactQuietSeconds)
+	// overrides it. Wired from KM_SLACK_REACT_QUIET_SECONDS at cold-start
+	// (WireReactQuiet: unset ⇒ 180).
+	ReactQuietSeconds int
+
 	// Phase 118: install-level trigger allowlist (Slack user IDs, e.g. "Uxxxx"),
 	// populated from KM_SLACK_ALLOW (comma-joined). Empty = everyone allowed
 	// (backward-compatible with all pre-Phase-118 behavior). When non-empty, only

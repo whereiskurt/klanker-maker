@@ -115,6 +115,20 @@ type SlackConfig struct {
 	// KM_SLACK_REACT_ALWAYS for the bridge Lambda environment block.
 	ReactAlways *bool `mapstructure:"react_always" yaml:"react_always,omitempty"`
 
+	// ReactQuietSeconds is the install-level reaction quiet period (2026-10-17):
+	// a thread reply gets the 👀 reaction only when at least this many seconds
+	// have passed since the bot last dispatched a turn in that thread. Top-level
+	// messages always react. Tri-state via *int:
+	//   nil   → key absent; bridge default 180 (terragrunt get_env fallback)
+	//   &0    → quiet period OFF (every dispatched reply reacts, as before)
+	//   &N>0  → N seconds
+	// Negative is rejected by Load. A sandbox profile's
+	// notification.slack.inbound.reactQuietSeconds overrides it per sandbox.
+	// Maps to km-config.yaml key slack.react_quiet_seconds. Exported as
+	// KM_SLACK_REACT_QUIET_SECONDS for the bridge Lambda environment block.
+	// CRITICAL: "slack.react_quiet_seconds" must be in the v2→v merge-list.
+	ReactQuietSeconds *int `mapstructure:"react_quiet_seconds" yaml:"react_quiet_seconds,omitempty"`
+
 	// PeerBridges is the Phase 95 federated relay peer list — a []string of sibling
 	// km install bridge /events URLs. Exported as KM_SLACK_PEER_BRIDGES (comma-joined)
 	// by ExportTerragruntEnvVars for infra/live/use1/lambda-slack-bridge/terragrunt.hcl
@@ -189,8 +203,12 @@ func (r *SlackDefaultRoute) NormalizedEmails() []string {
 	return out
 }
 
-// Validate enforces the deny-by-default contract: alias and profile set, at
-// least one entry, every entry an email address or `*@<domain>`. It does NOT touch disk or Slack.
+// Validate checks the block's own shape: alias and profile set, every entry an
+// email address or `*@<domain>`. It does NOT touch disk or Slack. An EMPTY
+// allow_emails is valid here because the route profile's
+// notification.slack.inbound.allowEmails may supply the list instead; the
+// deny-by-default "neither list" check lives in km init
+// (ValidateSlackDefaultRouteProfile), the only place that sees both.
 func (r *SlackDefaultRoute) Validate() error {
 	if r == nil {
 		return nil
@@ -200,10 +218,6 @@ func (r *SlackDefaultRoute) Validate() error {
 	}
 	if strings.TrimSpace(r.Profile) == "" {
 		return fmt.Errorf("slack.default_route.profile is required")
-	}
-	emails := r.NormalizedEmails()
-	if len(emails) == 0 {
-		return fmt.Errorf("slack.default_route.allow_emails is empty: the default route is deny-by-default and stays OFF until at least one email is listed")
 	}
 	for _, e := range r.AllowEmails {
 		if strings.TrimSpace(e) == "" {
@@ -221,8 +235,8 @@ func (r *SlackDefaultRoute) Validate() error {
 // import pkg/slack/bridge, so the copies are held in lockstep by a shared test
 // table (TestValidateRouteEmailEntry_MirrorsBridge ↔ emailEntryCases ↔
 // pkg/profile TestValidateInboundEmailEntry_MirrorsBridge): change all three.
-var routeDomainEntry = regexp.MustCompile(`^\*@[a-z0-9.-]+\.[a-z]{2,}$`)
-var routeExactEntry = regexp.MustCompile(`^[^@\s*]+@[a-z0-9.-]+\.[a-z]{2,}$`)
+var routeDomainEntry = regexp.MustCompile(`^\*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+var routeExactEntry = regexp.MustCompile(`^[^@\s*]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
 
 // validateRouteEmailEntry accepts an exact address or exactly `*@<domain>`
 // (case-insensitive, trimmed). Any other use of `*` is an error so a typo
@@ -1211,6 +1225,10 @@ func Load() (*Config, error) {
 			"slack.mention_only",
 			// Phase 91.4: nested key for the first-only reactor install-level default.
 			"slack.react_always",
+			// 2026-10-17: reaction quiet period. CRITICAL: without this entry,
+			// slack.react_quiet_seconds: 0 is silently dropped and the bridge
+			// default (180) applies instead of the operator's "off".
+			"slack.react_quiet_seconds",
 			// Phase 95: federated relay peer list. CRITICAL: without this entry,
 			// v2.Get("slack.peer_bridges") is never merged into v and the field
 			// stays nil regardless of what is in km-config.yaml (the known
@@ -1384,6 +1402,16 @@ func Load() (*Config, error) {
 	if v.IsSet("slack.react_always") {
 		val := v.GetBool("slack.react_always")
 		cfg.Slack.ReactAlways = &val
+	}
+
+	// 2026-10-17: slack.react_quiet_seconds is tri-state via *int so an explicit
+	// 0 (quiet period off) stays distinguishable from absent (bridge default 180).
+	if v.IsSet("slack.react_quiet_seconds") {
+		val := v.GetInt("slack.react_quiet_seconds")
+		if val < 0 {
+			return nil, fmt.Errorf("slack.react_quiet_seconds must be >= 0 (0 turns the reaction quiet period off), got %d", val)
+		}
+		cfg.Slack.ReactQuietSeconds = &val
 	}
 
 	// Phase 95: slack.peer_bridges is a []string federated relay peer list.

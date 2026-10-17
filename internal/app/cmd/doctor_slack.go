@@ -669,7 +669,8 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 	var out []CheckResult
 
 	// 1. Profile: exists, resolves, has Slack inbound.
-	if err := ValidateSlackDefaultRouteProfile(route, searchPaths); err != nil {
+	profileAllow, err := ValidateSlackDefaultRouteProfile(route, searchPaths)
+	if err != nil {
 		out = append(out, CheckResult{Name: "Slack default route profile", Status: CheckWarn, Message: err.Error(),
 			Remediation: "Fix km-config.yaml slack.default_route and the profile, then `km init --dry-run=false`."})
 	} else {
@@ -681,12 +682,17 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 	}
 
 	// 2. Allowlist: non-empty and every exact email resolves in the workspace.
-	emails := route.NormalizedEmails()
+	// The effective list is the route profile's allowEmails when it has one
+	// (km init exports that one), else slack.default_route.allow_emails.
+	emails := profileAllow
+	if len(emails) == 0 {
+		emails = route.NormalizedEmails()
+	}
 	switch {
 	case len(emails) == 0:
 		out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckWarn,
-			Message:     "allow_emails is empty — the route is OFF (deny-by-default)",
-			Remediation: "List at least one workspace email under slack.default_route.allow_emails."})
+			Message:     "allow_emails is empty and the route profile sets no allowEmails — the route is OFF (deny-by-default)",
+			Remediation: "List at least one workspace email under slack.default_route.allow_emails, or under notification.slack.inbound.allowEmails in the route profile."})
 	case lookup == nil:
 		out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckSkipped,
 			Message: fmt.Sprintf("%d email(s) configured; bot token unavailable so resolution was not checked", len(emails))})
