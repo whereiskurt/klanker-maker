@@ -303,7 +303,7 @@ only one attribute changes.
 **What v1.8.0 does.**
 
 - A region **Deny** replaces the lock. Its `NotAction` is the SCP exemption list plus `bedrock-mantle:*` and `aws-marketplace:*`.
-- One inline policy per concern, and every grant names `{id}` or `{p}` (the install prefix).
+- One inline policy per concern. Every data-bearing grant (S3, DynamoDB, SSM parameters, SQS, logs, SES) names `{id}` or `{p}` (the install prefix); only the SSM agent channel, `events:PutEvents`, and Bedrock remain on `*`.
 - SSM reads are per path, and the SSM `kms:Decrypt` is pinned with `kms:EncryptionContext:PARAMETER_ARN`.
 - Threads tables are writable only for a named attribute set that excludes `sandbox_id`. A row the box creates has no `sandbox_id` and reads as unrouted.
 - `action-quota` is scoped by `dynamodb:LeadingKeys`.
