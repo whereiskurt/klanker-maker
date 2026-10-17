@@ -1178,9 +1178,6 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 	return routingInfoFromItem(out.Items[0]), nil
 }
 
-// routingInfoFromItem decodes a km-sandboxes row into SandboxRoutingInfo. Shared by
-// FetchByChannel (GSI), FetchBySandboxID (GetItem) and ResolveAlias (GSI → GetItem)
-// so the three can never disagree about an attribute name.
 // readNonNegIntAttr reads an integer attribute stored as N or S. Absent,
 // non-numeric or negative values read as nil (never a panic). Mirrors
 // pkg/aws readOptionalNonNegInt.
@@ -1201,6 +1198,9 @@ func readNonNegIntAttr(item map[string]dynamodbtypes.AttributeValue, key string)
 	return &n
 }
 
+// routingInfoFromItem decodes a km-sandboxes row into SandboxRoutingInfo. Shared by
+// FetchByChannel (GSI), FetchBySandboxID (GetItem) and ResolveAlias (GSI → GetItem)
+// so the three can never disagree about an attribute name.
 func routingInfoFromItem(item map[string]dynamodbtypes.AttributeValue) SandboxRoutingInfo {
 	info := SandboxRoutingInfo{}
 	if v, ok := item["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS); ok {

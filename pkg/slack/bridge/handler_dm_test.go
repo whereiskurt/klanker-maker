@@ -132,6 +132,24 @@ func TestHandler_DM_LookupError_403(t *testing.T) {
 	}
 }
 
+type dmErrByID struct{ err error }
+
+func (e dmErrByID) FetchBySandboxID(_ context.Context, _ string) (bridge.SandboxRoutingInfo, error) {
+	return bridge.SandboxRoutingInfo{}, e.err
+}
+
+func TestHandler_DM_SenderRowFetchError_FailsClosed(t *testing.T) {
+	h, p, th, priv := dmHandler(t)
+	h.SandboxByID = dmErrByID{err: errors.New("ddb blip")}
+	resp := h.Handle(context.Background(), signRequest(t, dmEnv("U0KURT"), priv))
+	if resp.StatusCode != 403 || responseBody(t, resp)["error"] != "dm_not_allowed" {
+		t.Fatalf("sender-row read error must deny: %d %s", resp.StatusCode, resp.Body)
+	}
+	if len(p.opened) != 0 || len(p.posted) != 0 || len(th.upserts) != 0 {
+		t.Fatal("no Slack call and no row on a sender-row read error")
+	}
+}
+
 func TestHandler_DM_NoRoute_403_Disabled(t *testing.T) {
 	h, _, _, priv := dmHandler(t)
 	h.DefaultRoute = nil
@@ -339,9 +357,9 @@ func TestHandler_DM_NoSandboxList_RouteRuleApplies(t *testing.T) {
 	}
 }
 
-func TestHandler_DM_SandboxFetchError_FallsBackToRoute(t *testing.T) {
+func TestHandler_DM_SandboxFetchError_Denies(t *testing.T) {
 	h, priv := dmOverrideHandler(t, []string{"kurt@example.com"}, errors.New("ddb blip"))
-	if resp := h.Handle(context.Background(), signRequest(t, dmEnv("U0BOB"), priv)); resp.StatusCode != 200 {
-		t.Fatalf("fetch error falls back to the route decision; got %d %s", resp.StatusCode, resp.Body)
+	if resp := h.Handle(context.Background(), signRequest(t, dmEnv("U0BOB"), priv)); resp.StatusCode != 403 {
+		t.Fatalf("fetch error must fail closed even for a route-listed target; got %d %s", resp.StatusCode, resp.Body)
 	}
 }

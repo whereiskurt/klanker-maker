@@ -65,8 +65,8 @@ func TestAllowEmails_EmptyListIsAnErrorThatSaysOmit(t *testing.T) {
 	raw := []byte(aeHead + "        enabled: true\n        allowEmails: []\n")
 	errs := profile.Validate(raw)
 	got := aeErrsAt(errs, aePath, false)
-	if len(got) == 0 {
-		t.Fatalf("want error at %s, got %+v", aePath, errs)
+	if len(got) != 1 {
+		t.Fatalf("want exactly one error at %s, got %+v", aePath, errs)
 	}
 	found := false
 	for _, e := range got {

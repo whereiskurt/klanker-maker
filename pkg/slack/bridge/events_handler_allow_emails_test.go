@@ -233,3 +233,56 @@ func TestAllowEmails_StrictMappedContext_TrustsOnlyRowList(t *testing.T) {
 		t.Fatalf("mapped context must trust only the row list: %+v", body.ThreadContext)
 	}
 }
+
+// Continuity follows a LIVE row box that is not the alias box, and the gate is
+// that row box's list, not the alias box's.
+func TestAllowEmails_Continuity_LiveRowBox_UsesRowBoxList(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		user string
+		want int
+	}{{"U0KURT", 1}, {"U0BOB", 0}} {
+		h, sqs, threads, alias, _ := overrideRoutedHandler(t, now, []string{"bob@example.com"})
+		rowBox := SandboxRoutingInfo{SandboxID: "sb-mapped", QueueURL: "https://sqs.example/mapped.fifo", AllowEmails: []string{"kurt@example.com"}}
+		h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot": alias.info, "sb-mapped": rowBox}}
+		threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-mapped"}
+		h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", tc.user, "follow-up", "1.5", "1.0", "AR-L"+tc.user))
+		if len(sqs.sends) != tc.want {
+			t.Fatalf("%s: sends=%d want %d", tc.user, len(sqs.sends), tc.want)
+		}
+		if tc.want == 1 && sqs.sends[0].url != "https://sqs.example/mapped.fifo" {
+			t.Fatalf("%s: must go to the row box queue, got %s", tc.user, sqs.sends[0].url)
+		}
+		if len(threads.rebinds) != 0 {
+			t.Fatalf("%s: a live row box is never rebound: %+v", tc.user, threads.rebinds)
+		}
+	}
+}
+
+// Alias-moved: the row box is gone, so the alias box's list gates and a
+// delivered turn rebinds the thread.
+func TestAllowEmails_Continuity_AliasMoved_UsesAliasBoxList(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		user string
+		want int
+	}{{"U0BOB", 1}, {"U0KURT", 0}} {
+		h, sqs, threads, _, _ := overrideRoutedHandler(t, now, []string{"bob@example.com"})
+		// sb-mapped is absent from fakeByID: the row box is gone.
+		threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-mapped"}
+		h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", tc.user, "<@UBOT123> follow-up", "1.5", "1.0", "AR-M"+tc.user))
+		if len(sqs.sends) != tc.want {
+			t.Fatalf("%s: sends=%d want %d", tc.user, len(sqs.sends), tc.want)
+		}
+		if tc.want == 1 {
+			if sqs.sends[0].url != "https://sqs.example/irbot.fifo" {
+				t.Fatalf("%s: must go to the alias queue, got %s", tc.user, sqs.sends[0].url)
+			}
+			if len(threads.rebinds) != 1 || threads.rebinds[0].sb != "sb-irbot" {
+				t.Fatalf("%s: want a rebind to sb-irbot, got %+v", tc.user, threads.rebinds)
+			}
+		} else if len(threads.rebinds) != 0 {
+			t.Fatalf("%s: dropped sender must not rebind: %+v", tc.user, threads.rebinds)
+		}
+	}
+}

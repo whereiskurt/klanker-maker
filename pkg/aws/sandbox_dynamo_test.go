@@ -1683,6 +1683,14 @@ func TestSandboxMetadata_SlackAllowEmailsAndReactQuiet_RoundTrip(t *testing.T) {
 		t.Errorf("non-numeric must be nil, got %v", *got.SlackReactQuietSeconds)
 	}
 
+	// A negative value (N or S) reads as nil.
+	item["slack_react_quiet_seconds"] = &dynamodbtypes.AttributeValueMemberN{Value: "-5"}
+	got, _ = kmaws.ReadSandboxMetadataDynamo(context.Background(),
+		&mockSandboxMetadataAPI{getItemOutput: &dynamodb.GetItemOutput{Item: item}}, "km-sandboxes", "sb-ae")
+	if got.SlackReactQuietSeconds != nil {
+		t.Errorf("negative must be nil, got %v", *got.SlackReactQuietSeconds)
+	}
+
 	// Absent attrs leave both nil.
 	bare := mustMarshalSandboxItemFull(t, &kmaws.SandboxMetadata{
 		SandboxID: "sb-bare", ProfileName: "dev", Substrate: "ec2", Region: "us-east-1", CreatedAt: now,

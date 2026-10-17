@@ -366,10 +366,6 @@ func unmarshalLaunchAccountField(item map[string]dynamodbtypes.AttributeValue, m
 	}
 }
 
-// readTriStateBool reads a tri-state *bool DynamoDB attribute that may have been
-// written either as a native BOOL (marshalSandboxItem) or as a string
-// "true"/"false" (UpdateSandboxAttr in create_slack_inbound.go). Returns nil when
-// the attribute is absent or unrecognised — nil signals "fall back to default".
 // readOptionalNonNegInt reads an integer attribute written either as N
 // (marshalSandboxItem) or S (UpdateSandboxAttr). Absent, non-numeric or
 // negative values read as nil — never a panic, never a guessed default.
@@ -390,6 +386,10 @@ func readOptionalNonNegInt(item map[string]dynamodbtypes.AttributeValue, key str
 	return &n
 }
 
+// readTriStateBool reads a tri-state *bool DynamoDB attribute that may have been
+// written either as a native BOOL (marshalSandboxItem) or as a string
+// "true"/"false" (UpdateSandboxAttr in create_slack_inbound.go). Returns nil when
+// the attribute is absent or unrecognised — nil signals "fall back to default".
 func readTriStateBool(item map[string]dynamodbtypes.AttributeValue, key string) *bool {
 	switch v := item[key].(type) {
 	case *dynamodbtypes.AttributeValueMemberBOOL:

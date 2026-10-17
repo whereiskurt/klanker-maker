@@ -25,14 +25,17 @@ func (h *Handler) handleDM(ctx context.Context, env slack.SlackEnvelope) *Respon
 	}
 	// The posting sandbox's allowEmails, when its row carries one, replaces the
 	// route list (the same override the inbound path applies). A fetch error
-	// falls back to the route list.
+	// denies (fail closed): the row may carry a narrower list we cannot see. An
+	// absent row (no error, empty info) uses the route list.
 	allows, listName := h.DefaultRoute.Allows, "allow_emails"
 	if h.SandboxByID != nil {
 		info, ferr := h.SandboxByID.FetchBySandboxID(ctx, env.SenderID)
 		if ferr != nil {
-			logger.WarnContext(ctx, "bridge: dm_sandbox_lookup_failed; using the route list",
-				"step", "dm", "sender_id", env.SenderID, "error", ferr.Error())
-		} else if len(info.AllowEmails) > 0 {
+			logger.WarnContext(ctx, "bridge: dm_sender_row_unavailable",
+				"step", "dm", "sender_id", env.SenderID, "error", ferr.Error(), "status", 403)
+			return errResp(403, "dm_not_allowed")
+		}
+		if len(info.AllowEmails) > 0 {
 			al, cerr := CompileEmailAllowlist(info.AllowEmails)
 			if cerr != nil {
 				logger.ErrorContext(ctx, "bridge: dm_sandbox_allow_emails_invalid; denying",
