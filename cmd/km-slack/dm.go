@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strings"
 	"syscall"
 
 	"github.com/whereiskurt/klanker-maker/pkg/slack"
@@ -46,7 +47,11 @@ func runDM(args []string, stderr io.Writer) int {
 	}
 	_, perr := slack.ParseMentions([]string{o.to})
 	if o.to == "" || perr != nil || !reDMUserID.MatchString(o.to) {
-		fmt.Fprintf(stderr, "km-slack dm: --to must be a Slack user id (U…), not a name: %v\n", perr)
+		msg := "km-slack dm: --to must be a Slack user id (U…), not a name"
+		if perr != nil {
+			msg += ": " + perr.Error()
+		}
+		fmt.Fprintln(stderr, msg)
 		return 2
 	}
 	if (o.text == "") == (o.bodyPath == "") {
@@ -121,6 +126,24 @@ func runDMWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeUR
 		return "", "", err
 	}
 	resp, err := slack.PostToBridge(ctx, bridgeURL, env, sig)
+	if err != nil && blocksJSON != "" && strings.Contains(err.Error(), "invalid_blocks") {
+		// Fresh envelope (new nonce: the bridge reserved the first), no blocks, once.
+		fmt.Fprintln(os.Stderr, "km-slack: WARN dm blocks rejected (invalid_blocks); re-sent without blocks")
+		fb, fbErr := slack.BuildEnvelope(slack.ActionDM, sandboxID, o.fromChannel, "", rendered, o.fromThread)
+		if fbErr != nil {
+			return "", "", err
+		}
+		fb.TargetUser = o.to
+		_, fbSig, fbErr := slack.SignEnvelope(fb, priv)
+		if fbErr != nil {
+			return "", "", err
+		}
+		resp, fbErr = slack.PostToBridge(ctx, bridgeURL, fb, fbSig)
+		if fbErr != nil {
+			return "", "", err
+		}
+		err = nil
+	}
 	if err != nil {
 		return "", "", err
 	}

@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,10 @@ import (
 
 func TestRunDM_RejectsNamesAndMissingText(t *testing.T) {
 	var errb bytes.Buffer
+	errb.Reset()
+	if rc := runDM([]string{"--to", "u0kurt", "--text", "hi"}, &errb); rc != 2 || !strings.Contains(errb.String(), "user id") || strings.Contains(errb.String(), "<nil>") {
+		t.Fatalf("lowercase id: rc=%d %q", rc, errb.String())
+	}
 	for _, bad := range []string{"kurt", "here", "channel", "<@U0KURT>", "@U0KURT"} {
 		errb.Reset()
 		if rc := runDM([]string{"--to", bad, "--text", "hi"}, &errb); rc != 2 || !strings.Contains(errb.String(), "user id") {
@@ -83,5 +88,33 @@ func TestRunDMWith_BodyFileAndBlocks(t *testing.T) {
 	}
 	if got.Blocks == "" {
 		t.Fatalf("blocks-rich must populate Blocks: %+v", got)
+	}
+}
+
+func TestRunDMWith_InvalidBlocksRetriesOnceWithoutBlocks(t *testing.T) {
+	var envs []slack.SlackEnvelope
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var e slack.SlackEnvelope
+		json.NewDecoder(r.Body).Decode(&e)
+		envs = append(envs, e)
+		w.Header().Set("Content-Type", "application/json")
+		if len(envs) == 1 {
+			w.WriteHeader(502)
+			fmt.Fprintln(w, `{"error":"invalid_blocks","ok":false}`)
+			return
+		}
+		fmt.Fprintln(w, `{"ok":true,"ts":"2.0","channel_id":"D0KURT"}`)
+	}))
+	defer srv.Close()
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	ch, ts, err := runDMWith(context.Background(), priv, "sb-1", srv.URL, dmOptions{to: "U0KURT", text: "# Hi\n\n- a\n", render: "blocks-rich", fromChannel: "C1", fromThread: "1.0"})
+	if err != nil || ch != "D0KURT" || ts != "2.0" {
+		t.Fatalf("got %q %q %v", ch, ts, err)
+	}
+	if len(envs) != 2 || envs[0].Blocks == "" || envs[1].Blocks != "" || envs[0].Nonce == envs[1].Nonce {
+		t.Fatalf("want 2 requests, 2nd without blocks and new nonce: %+v", envs)
+	}
+	if envs[1].TargetUser != "U0KURT" || envs[1].Channel != "C1" || envs[1].ThreadTS != "1.0" || envs[1].Action != slack.ActionDM {
+		t.Fatalf("fallback envelope %+v", envs[1])
 	}
 }
