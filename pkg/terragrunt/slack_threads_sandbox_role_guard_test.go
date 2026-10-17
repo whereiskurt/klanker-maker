@@ -126,6 +126,7 @@ func TestSandboxRole_ThreadsWriteGrantExcludesSandboxID(t *testing.T) {
 	}
 	sort.Strings(files)
 	attrsRe := regexp.MustCompile(`"dynamodb:Attributes"\s*=\s*\[([^\]]*)\]`)
+	qualifierRe := regexp.MustCompile(`"ForAllValues:StringEquals"\s*=\s*$`)
 	sawThreads := 0
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
@@ -159,6 +160,16 @@ func TestSandboxRole_ThreadsWriteGrantExcludesSandboxID(t *testing.T) {
 			if am == nil {
 				t.Errorf("%s (policy %q): an Allow on a threads table has no dynamodb:Attributes condition; a box could write sandbox_id and forge a routed-thread row", rel, policy)
 				continue
+			}
+			// The qualifier is the whole guarantee. ForAllValues:StringEquals means
+			// EVERY attribute the request touches is in the set. ForAnyValue: is
+			// satisfied by ONE listed attribute, so a write of {thread_ts, sandbox_id}
+			// passes and the forged-row hole is back; a bare StringEquals on a
+			// multivalued key does not do set containment at all.
+			loc := attrsRe.FindStringIndex(stmt)
+			qa, _ := enclosingBlock(stmt, loc[0])
+			if qa == -1 || !qualifierRe.MatchString(stmt[:qa]) {
+				t.Errorf("%s (policy %q): dynamodb:Attributes must sit directly under \"ForAllValues:StringEquals\"; ForAnyValue: or a bare StringEquals lets a write that also names sandbox_id through", rel, policy)
 			}
 			if strings.Contains(am[1], `"sandbox_id"`) {
 				t.Errorf("%s (policy %q): sandbox_id is in the attribute set; the bridge trusts that attribute to authorize posts", rel, policy)
