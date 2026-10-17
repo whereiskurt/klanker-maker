@@ -3310,8 +3310,11 @@ The manifest gains two scopes and two events, for DMs and group DMs:
 | `mpim:history` | scope | Receive group DM messages |
 | `message.im` | event | Deliver DM messages to the bridge |
 | `message.mpim` | event | Deliver group DM messages to the bridge |
+| `app_home.messages_tab_enabled: true` + `messages_tab_read_only_enabled: false` | App Home setting | Let people type in the App's Messages tab at all. Without it Slack refuses the DM client-side ("Sending messages to this app has been turned off") and no event is ever sent — found live 2026-10-17 after the scopes were already in place. |
 
-No `im:write`: the bot never opens a DM, it only answers one. `km slack init`'s scope check
+No `im:write`: the bot never opens a DM, it only answers one. The App Home setting is not a
+scope: re-pasting the manifest (or toggling **App Home → Show Tabs → Messages Tab → Allow
+users to send messages**) applies it with no reinstall and no token rotation. `km slack init`'s scope check
 now requires both history scopes. Apply on the front-door install with the Phase 72 shape:
 
 ```bash

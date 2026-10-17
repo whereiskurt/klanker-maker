@@ -39,6 +39,7 @@ Bot token scopes (15) + bot events (2) declared by the manifest:
 | **event** `message.channels` | messages in public channels the bot is in |
 | **event** `message.groups` | messages in private channels the bot is in |
 | **event** `message.im` | one-to-one DMs to the bot (default route) |
+| **App Home** `messages_tab_enabled` / `messages_tab_read_only_enabled: false` | not a scope: lets a person type in the App's Messages tab; without it Slack blocks DMs before any event (default route) |
 | **event** `message.mpim` | group DMs that include the bot (default route) |
 
 ---

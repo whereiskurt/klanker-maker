@@ -235,7 +235,7 @@ changes.
 | Terraform & IAM | `infra/modules/lambda-slack-bridge/v1.0.0` | Three variables and env vars; `dynamodb:Query` on `alias-index`; `events:PutEvents` on the default bus; `dynamodb:UpdateItem` on `km-slack-threads`. Edited in place, additive. |
 | Terraform & IAM | `infra/live/use1/lambda-slack-bridge/terragrunt.hcl` | Three `get_env` inputs. |
 | Terraform & IAM | `infra/modules/km-operator-policy/v1.0.0/main.tf` | Create-handler `sqs:SendMessage` on `{prefix}-slack-inbound-*.fifo`, which it lacked. |
-| Manifest | `slack_manifest_template.json`, `slack.go` | `im:history`, `mpim:history`, `message.im`, `message.mpim`; `km slack init`'s scope check requires both history scopes. |
+| Manifest | `slack_manifest_template.json`, `slack.go` | `im:history`, `mpim:history`, `message.im`, `message.mpim`, and `features.app_home` with the Messages tab enabled and writable (without it Slack refuses DMs client-side); `km slack init`'s scope check requires both history scopes. |
 | `km doctor` | `internal/app/cmd/doctor_slack.go` `checkSlackDefaultRoute` | The `Slack default route` group: profile, allowlist and scopes results from one evaluation. |
 | Profile | `profiles/ir-bot.yaml` | A shipped default-route target: Bedrock on both knobs so a cold-created box needs no login, per-sandbox Slack with inbound, mention-only, three concurrent threads. |
 
@@ -418,7 +418,7 @@ The steps run on the front-door install, in this order.
    alone, which refreshes the bridge but not the create-handler. This applies the bridge env,
    the three bridge IAM additions and the create-handler send grant, and pre-stages the
    profile.
-5. `km slack manifest`, paste it into the Slack App, save, and reinstall. **Human only.**
+5. `km slack manifest`, paste it into the Slack App, save, and reinstall. **Human only.** Confirm the App's **App Home → Messages Tab** shows "Allow users to send … messages" enabled; the manifest sets it, but an App created from an older manifest keeps the old value until re-pasted.
 6. `km slack rotate-token --bot-token <new>`. **Human only.** Until steps 5 and 6 are done,
    invited channels work and DMs are never delivered. `docs/slack-app-permissions.md` notes
    that adding scopes does not change the bot token; the rotate step is the Phase 72 shape
@@ -511,7 +511,7 @@ controller after the deploy.
 | 2 | Reply in that thread without a mention | Same sandbox, same agent session | **PASS**: `CONTINUED` from the same box; bridge took the continuity branch before the relay. |
 | 3 | A non-listed user mentions the bot in the same channel | Nothing | **PASS**: no enqueue, no 👀; after the Info-level change the bridge logs `route: sender email unavailable (deny) user=… err="users.info: user_not_found"`. |
 | 4 | A non-listed user replies inside the established thread | Nothing | **PASS** with and without a mention: denied at the email gate, nothing enqueued. |
-| 5 | DM the bot without a mention | Dispatched, reply in the DM | **BLOCKED** (human step): the App manifest with `im:history`/`message.im` must be pasted and the App reinstalled; `km doctor` warns `missing im:history, mpim:history`. |
+| 5 | DM the bot without a mention | Dispatched, reply in the DM | **PARTIAL** (2026-10-17): after the manifest paste, reinstall and `km slack rotate-token`, `km doctor` reports `im:history and mpim:history present`, but the first DM was refused by Slack itself ("Sending messages to this app has been turned off") — the App Home Messages tab was disabled, a setting the generated manifest did not carry. Fixed in the template (`features.app_home`); the DM retest is pending the toggle. A genuine human `@`-mention from the shared channel the same morning was answered in the thread in 27 s. |
 | 6 | Private channel: invite, mention | Dispatched | **PASS**: `PRIVATE-OK` reply in the private channel's thread (the agent guessed a channel *name*; the preamble carries only the id). |
 | 7 | Stop the default sandbox, mention again | Auto-resume, reply arrives | **PASS**: `km stop` → mention → EC2 stopped→running → `RESUMED-OK` in 25 s. No "waking up" hint on a routed resume (the hinter resolves the row by channel). |
 | 8 | Destroy the default sandbox, mention again | Cold-create, first prompt answered on boot | **PASS** (cold-create half): `km destroy` archived the box's own channel and left the routed rows; the next mention cold-created `sl-…` under the same alias. |

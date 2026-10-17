@@ -159,6 +159,12 @@ func TestSlackManifest_DMScopesAndEvents(t *testing.T) {
 	if strings.Contains(out, `"im:write"`) {
 		t.Error("the bot never opens a DM; im:write must not be requested")
 	}
+	// Scopes and events are not enough for a DM: Slack refuses the send client-side
+	// ("Sending messages to this app has been turned off") unless the App Home
+	// Messages tab accepts messages. Found live on 2026-10-17.
+	if !strings.Contains(out, `"messages_tab_enabled": true`) || !strings.Contains(out, `"messages_tab_read_only_enabled": false`) {
+		t.Error("manifest must enable the App Home messages tab (writable) or DMs are refused before any event is sent")
+	}
 }
 
 func TestVerifyEventsAPIScopes_RequiresIMHistory(t *testing.T) {
