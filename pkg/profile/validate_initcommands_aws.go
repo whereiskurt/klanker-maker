@@ -12,6 +12,8 @@ import (
 // best-effort textual check: it cannot see indirect AWS use inside installers.
 var initAWSCallRe = regexp.MustCompile(`(?:^|[\s;&|(])aws\s+(s3|s3api|ssm|dynamodb|sqs|logs|ses|sesv2|kms|sts|ec2|iam|secretsmanager|lambda|events)\s+([a-z-]+)([^\n;&|]*)`)
 
+var initAWSContinuationRe = regexp.MustCompile(`\\[ \t]*\r?\n[ \t]*`)
+
 var initAWSS3GrantedPrefixRe = regexp.MustCompile(`s3://[^/\s"']+/(models|sidecars|binaries|rsync)/`)
 
 func validateInitCommandAWSCalls(p *SandboxProfile) []ValidationError {
@@ -27,6 +29,8 @@ func validateInitCommandAWSCalls(p *SandboxProfile) []ValidationError {
 	}
 	check := func(path string, cmds []string) {
 		for i, cmd := range cmds {
+			// Join backslash-newline continuations so a continued command is one command.
+			cmd = initAWSContinuationRe.ReplaceAllString(cmd, " ")
 			for _, m := range initAWSCallRe.FindAllStringSubmatch(cmd, -1) {
 				svc, op, rest := m[1], m[2], m[3]
 				switch {

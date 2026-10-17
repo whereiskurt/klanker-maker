@@ -79,6 +79,8 @@ func TestValidateInitCommandAWSCalls_PerCommandBoundary(t *testing.T) {
 		{"name= unlisted", "aws ssm get-parameter --name=/km/other", 1},
 		{"quoted name listed", `aws ssm get-parameter --name "{{prefix}}/wiz/client-id"`, 0},
 		{"quoted name unlisted", `aws ssm get-parameter --name "/km/other"`, 1},
+		{"continued ungranted bucket", "aws s3 cp \\\n  s3://other-bucket/k /tmp/k", 1},
+		{"continued granted prefix", "aws s3 cp \\\n  s3://${KM_ARTIFACTS_BUCKET}/models/x /data", 0},
 		{"command substitution", `X=$(aws dynamodb get-item --table-name t --key {})`, 1},
 	}
 	for _, c := range cases {
