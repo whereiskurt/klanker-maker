@@ -359,7 +359,7 @@ func shellSingleQuote(s string) string {
 // =============================================================================
 
 // tick runs one iteration of the presence loop. Returns (signalsActive, emitted).
-// signalsActive is true when any of the eight signals is positive; emitted is true
+// signalsActive is true when any of the nine signals is positive; emitted is true
 // when a heartbeat event was written to the audit pipe.
 // The presence stamp at presenceStampPath is ALWAYS touched at end of tick,
 // even if no signal is active or emit fails.
@@ -372,8 +372,9 @@ func tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath
 	s6 := checkVNCClients(r)
 	s7 := checkSSHSessions(r)
 	s8 := checkHerdrPaneBusy(r, herdrConfigDir)
+	s9 := checkT3InUse(r, t3GetFn, t3TokenPath)
 
-	active := s1 || s2 || s3 || s4 || s5 || s6 || s7 || s8
+	active := s1 || s2 || s3 || s4 || s5 || s6 || s7 || s8 || s9
 
 	emitted := false
 	if active {
