@@ -200,6 +200,15 @@ const ec2ServiceHCLTemplate = `locals {
     # transcripts/{sandbox_id}/* and PutItem on the stream-messages table).
     artifacts_bucket                  = "{{ .ArtifactsBucket }}"
     slack_stream_messages_table_name  = "{{ .SlackStreamMessagesTableName }}"
+
+    # v1.8.0 — the SES send grant is scoped to this domain identity and to this
+    # sandbox's own From addresses.
+    email_domain                      = "{{ .EmailDomain }}"
+{{- if .OTPSecretPaths }}
+
+    # spec.otp.secrets: read-once parameters; v1.8.0 grants GetParameter + DeleteParameter.
+    otp_secret_paths = [{{ joinStrings .OTPSecretPaths }}]
+{{- end }}
   }
 {{- if .HasBudget }}
 
@@ -594,6 +603,14 @@ type ec2HCLParams struct {
 	// matching sts:AssumeRole grant. Emitted only when true, so a profile that
 	// does not ask for the fence renders byte-identical Terraform.
 	FenceIMDS bool
+
+	// EmailDomain scopes the v1.8.0 ses:SendEmail grant (identity + From
+	// addresses). Always emitted: an empty value creates no SES grant and
+	// km-send fails loudly on the box.
+	EmailDomain string
+	// OTPSecretPaths (spec.otp.secrets) get ssm:GetParameter + DeleteParameter
+	// in v1.8.0; emitted only when non-empty.
+	OTPSecretPaths []string
 }
 
 // ============================================================
@@ -995,6 +1012,8 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		AdditionalVolumeDeviceName: pickAdditionalVolumeDevice(amiBDMDeviceNames, nil),
 		SecretPaths:                secretPaths,
 		FenceIMDS:                  profile.IsFenceIMDSEnabled(p.Spec.Secrets),
+		EmailDomain:                effectiveEmailDomain(network),
+		OTPSecretPaths:             otpSecretPaths(p),
 	}
 
 	// Phase 87 — allocate devices for additionalSnapshots entries.
@@ -1257,4 +1276,22 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		return "", fmt.Errorf("execute ecs service.hcl template: %w", err)
 	}
 	return buf.String(), nil
+}
+
+const defaultEmailDomain = "sandboxes.klankermaker.ai"
+
+// effectiveEmailDomain is the one place the nil-network fallback lives, so
+// userdata (KM_EMAIL_ADDRESS) and the SES grant can never name different domains.
+func effectiveEmailDomain(network *NetworkConfig) string {
+	if network != nil && network.EmailDomain != "" {
+		return network.EmailDomain
+	}
+	return defaultEmailDomain
+}
+
+func otpSecretPaths(p *profile.SandboxProfile) []string {
+	if p.Spec.OTP == nil {
+		return nil
+	}
+	return p.Spec.OTP.Secrets
 }
