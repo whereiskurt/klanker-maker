@@ -19,7 +19,7 @@ func (s *scriptedEmails) SenderEmail(_ context.Context, _ string) (string, error
 }
 
 func TestDefaultRoute_AllowsIsCaseInsensitiveAndTrimmed(t *testing.T) {
-	r := NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{" Kurt@Example.com "})
+	r := NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{" Kurt@Example.com "}, nil)
 	if !r.Allows("kurt@example.com") || !r.Allows("KURT@EXAMPLE.COM") {
 		t.Fatal("expected allow")
 	}
@@ -29,7 +29,7 @@ func TestDefaultRoute_AllowsIsCaseInsensitiveAndTrimmed(t *testing.T) {
 }
 
 func TestNewDefaultRoute_EmptyEmailsIsNil(t *testing.T) {
-	if NewDefaultRoute("a", "p", nil) != nil || NewDefaultRoute("a", "p", []string{" "}) != nil {
+	if NewDefaultRoute("a", "p", nil, nil) != nil || NewDefaultRoute("a", "p", []string{" "}, nil) != nil {
 		t.Fatal("empty allowlist must yield a nil route (route OFF)")
 	}
 }
@@ -130,6 +130,7 @@ var emailEntryCases = []struct {
 	{"*@.example.com", false},
 	{"*@-.com", false},
 	{"*@a..com", false},
+	{"bob,eve@example.com", false},
 }
 
 func TestValidateEmailEntry_SharedTable(t *testing.T) {
@@ -142,7 +143,7 @@ func TestValidateEmailEntry_SharedTable(t *testing.T) {
 }
 
 func TestDefaultRoute_AllowsDomainEntry(t *testing.T) {
-	r := NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"*@example.com"})
+	r := NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"*@example.com"}, nil)
 	if r == nil || !r.Allows("anyone@example.com") || r.Allows("x@other.example") {
 		t.Fatal("route must honour a domain entry")
 	}
@@ -162,5 +163,58 @@ func TestEmailAllowlist_DeniesTwoAts(t *testing.T) {
 	}
 	if !al.Allows("a@example.com") {
 		t.Error("Allows(a@example.com) = false, want true")
+	}
+}
+
+// Two lists: the install list (Allows) serves everyone the route reaches that
+// is not the route's own box; the route profile's list (AllowsCreate) gates a
+// cold-create and the alias's current box, falling back to the install list
+// when the profile declares none.
+func TestNewDefaultRoute_TwoLists(t *testing.T) {
+	r := NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"*@example.com"}, []string{"kurt@example.com"})
+	if r == nil {
+		t.Fatal("route with both lists must be ON")
+	}
+	if !r.Allows("bob@example.com") || !r.Allows("kurt@example.com") {
+		t.Fatal("Allows is the install list")
+	}
+	if !r.AllowsCreate("kurt@example.com") || r.AllowsCreate("bob@example.com") {
+		t.Fatal("AllowsCreate is the profile list when present")
+	}
+	if !r.HasProfileList() {
+		t.Fatal("HasProfileList must report the profile list")
+	}
+}
+
+func TestNewDefaultRoute_ProfileListOnly(t *testing.T) {
+	r := NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", nil, []string{"kurt@example.com"})
+	if r == nil {
+		t.Fatal("a profile list alone turns the route ON")
+	}
+	if r.Allows("kurt@example.com") {
+		t.Fatal("an empty install list admits nobody to the non-route paths")
+	}
+	if !r.AllowsCreate("kurt@example.com") || r.AllowsCreate("bob@example.com") {
+		t.Fatal("AllowsCreate is the profile list")
+	}
+}
+
+func TestNewDefaultRoute_InstallListOnly_CreateFallsBack(t *testing.T) {
+	r := NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"}, nil)
+	if !r.AllowsCreate("kurt@example.com") || r.AllowsCreate("bob@example.com") || r.HasProfileList() {
+		t.Fatal("AllowsCreate falls back to the install list")
+	}
+}
+
+func TestNewDefaultRoute_BothEmptyOrMissingNameIsNil(t *testing.T) {
+	if NewDefaultRoute("a", "p", nil, []string{" "}) != nil {
+		t.Fatal("both lists empty ⇒ route OFF")
+	}
+	if NewDefaultRoute("", "p", nil, []string{"k@example.com"}) != nil || NewDefaultRoute("a", "", []string{"k@example.com"}, nil) != nil {
+		t.Fatal("missing alias or profile ⇒ route OFF")
+	}
+	var r *DefaultRoute
+	if r.AllowsCreate("k@example.com") || r.HasProfileList() {
+		t.Fatal("nil route denies")
 	}
 }

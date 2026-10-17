@@ -176,10 +176,13 @@ type SlackConfig struct {
 	// byte-identical to Phase 96/118 behaviour.
 	//
 	// Maps to km-config.yaml key slack.default_route. Exported as
-	// KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW} by ExportTerragruntEnvVars
-	// (best-effort) and km init / km slack init (fail-closed), both through
-	// effectiveSlackDefaultRoute: the route profile's allowEmails, when set,
-	// replaces AllowEmails.
+	// KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW,PROFILE_ALLOW} by
+	// ExportTerragruntEnvVars (best-effort) and km init / km slack init
+	// (fail-closed), both through effectiveSlackDefaultRoute. Two lists:
+	// AllowEmails (ALLOW) is the install list — DM targets and routed turns to
+	// non-route sandboxes; the route profile's allowEmails (PROFILE_ALLOW) gates
+	// the cold-create and the alias's box, falling back to AllowEmails. Either
+	// may be empty, not both.
 	// CRITICAL: "slack.default_route" must be in the v2→v merge-list.
 	DefaultRoute *SlackDefaultRoute `mapstructure:"default_route" yaml:"default_route,omitempty"`
 }
@@ -239,7 +242,7 @@ func (r *SlackDefaultRoute) Validate() error {
 // table (TestValidateRouteEmailEntry_MirrorsBridge ↔ emailEntryCases ↔
 // pkg/profile TestValidateInboundEmailEntry_MirrorsBridge): change all three.
 var routeDomainEntry = regexp.MustCompile(`^\*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
-var routeExactEntry = regexp.MustCompile(`^[^@\s*]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+var routeExactEntry = regexp.MustCompile(`^[^@\s*,]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
 
 // validateRouteEmailEntry accepts an exact address or exactly `*@<domain>`
 // (case-insensitive, trimmed). Any other use of `*` is an error so a typo

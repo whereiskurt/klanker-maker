@@ -125,6 +125,7 @@ func TestValidateRouteEmailEntry_MirrorsBridge(t *testing.T) {
 		{"*@.example.com", false},
 		{"*@-.com", false},
 		{"*@a..com", false},
+		{"bob,eve@example.com", false},
 	}
 	for _, tc := range cases {
 		r := config.SlackDefaultRoute{Alias: "a", Profile: "p.yaml", AllowEmails: []string{tc.in}}

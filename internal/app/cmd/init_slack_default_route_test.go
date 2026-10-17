@@ -188,9 +188,11 @@ spec:
           - "*@Corp.Example"
 `
 
+var routeEnvKeys = []string{"KM_SLACK_DEFAULT_ROUTE_ALIAS", "KM_SLACK_DEFAULT_ROUTE_PROFILE", "KM_SLACK_DEFAULT_ROUTE_ALLOW", "KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW"}
+
 func unsetRouteEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"KM_SLACK_DEFAULT_ROUTE_ALIAS", "KM_SLACK_DEFAULT_ROUTE_PROFILE", "KM_SLACK_DEFAULT_ROUTE_ALLOW"} {
+	for _, k := range routeEnvKeys {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
@@ -242,7 +244,9 @@ func TestExportTerragruntEnvVars_ReactQuietSeconds(t *testing.T) {
 }
 
 // prepareSlackDefaultRoute is the one step every km init path runs: no route ⇒
-// no-op; a route ⇒ validated and exported with the effective list.
+// no-op; a route ⇒ validated and exported with BOTH lists: ALLOW is the install
+// list (km-config.yaml), PROFILE_ALLOW the route profile's allowEmails. (Before
+// the two-list model this asserted that the profile list replaced ALLOW.)
 func TestPrepareSlackDefaultRoute(t *testing.T) {
 	unsetRouteEnv(t)
 	if err := prepareSlackDefaultRoute(&config.Config{}); err != nil {
@@ -258,8 +262,11 @@ func TestPrepareSlackDefaultRoute(t *testing.T) {
 	if err := prepareSlackDefaultRoute(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := os.Getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"); got != "kurt@example.com,*@corp.example" {
-		t.Fatalf("ALLOW=%q, want the profile list", got)
+	if got := os.Getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"); got != "x@other.example" {
+		t.Fatalf("ALLOW=%q, want the install list", got)
+	}
+	if got := os.Getenv("KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW"); got != "kurt@example.com,*@corp.example" {
+		t.Fatalf("PROFILE_ALLOW=%q, want the profile list", got)
 	}
 	unsetRouteEnv(t)
 	cfg.Slack.DefaultRoute = &config.SlackDefaultRoute{Alias: "ir-bot", Profile: writeProfile(t, dir, "plain.yaml", routeProfileOK)}
@@ -277,67 +284,75 @@ func routeCfg(alias, profilePath string, emails ...string) *config.Config {
 // The config list, normalised, when the profile has no allowEmails.
 func TestEffectiveSlackDefaultRoute_ConfigList(t *testing.T) {
 	p := writeProfile(t, t.TempDir(), "ir-bot.yaml", routeProfileOK)
-	alias, prof, emails, source, err := effectiveSlackDefaultRoute(routeCfg("ir-bot", p, "Kurt@Example.com", " analyst@example.com "))
+	er, err := effectiveSlackDefaultRoute(routeCfg("ir-bot", p, "Kurt@Example.com", " analyst@example.com "))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if alias != "ir-bot" || prof != p || strings.Join(emails, ",") != "kurt@example.com,analyst@example.com" || source != "km-config.yaml" {
-		t.Fatalf("got %q %q %v %q", alias, prof, emails, source)
+	if er.Alias != "ir-bot" || er.Profile != p || strings.Join(er.Install, ",") != "kurt@example.com,analyst@example.com" ||
+		len(er.ProfileList) != 0 || er.Source() != "km-config.yaml" {
+		t.Fatalf("got %+v source=%q", er, er.Source())
 	}
 }
 
-// Profile wins over a different config list; source names the resolved path.
-func TestEffectiveSlackDefaultRoute_ProfileWins(t *testing.T) {
+// Both lists are kept (the profile list no longer replaces the config list);
+// the profile source names the resolved path.
+func TestEffectiveSlackDefaultRoute_BothLists(t *testing.T) {
 	dir := t.TempDir()
 	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileWithAllow)
 	// The route names the profile by a path that only resolves via the search
 	// path, so the source must show the RESOLVED path, not the configured one.
 	cfg := routeCfg("ir-bot", "nowhere/ir-bot.yaml", "someone@else.example")
 	cfg.ProfileSearchPaths = []string{dir}
-	_, _, emails, source, err := effectiveSlackDefaultRoute(cfg)
+	er, err := effectiveSlackDefaultRoute(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(emails, ",") != "kurt@example.com,*@corp.example" {
-		t.Fatalf("emails = %v, want the profile list", emails)
+	if strings.Join(er.ProfileList, ",") != "kurt@example.com,*@corp.example" {
+		t.Fatalf("profile list = %v", er.ProfileList)
 	}
-	if source != "profile "+p {
-		t.Fatalf("source = %q, want %q", source, "profile "+p)
+	if strings.Join(er.Install, ",") != "someone@else.example" {
+		t.Fatalf("install list = %v, want the km-config.yaml list kept", er.Install)
+	}
+	if er.ProfilePath != p {
+		t.Fatalf("profile path = %q, want %q", er.ProfilePath, p)
 	}
 }
 
 // A profile-only list is valid: km-config.yaml may leave allow_emails empty.
 func TestEffectiveSlackDefaultRoute_ProfileOnly(t *testing.T) {
 	p := writeProfile(t, t.TempDir(), "ir-bot.yaml", routeProfileWithAllow)
-	_, _, emails, _, err := effectiveSlackDefaultRoute(routeCfg("ir-bot", p))
-	if err != nil || len(emails) != 2 {
-		t.Fatalf("emails=%v err=%v", emails, err)
+	er, err := effectiveSlackDefaultRoute(routeCfg("ir-bot", p))
+	if err != nil || len(er.ProfileList) != 2 || len(er.Install) != 0 || er.Source() != "profile "+p {
+		t.Fatalf("er=%+v err=%v", er, err)
 	}
 }
 
 func TestEffectiveSlackDefaultRoute_NeitherErrors(t *testing.T) {
 	p := writeProfile(t, t.TempDir(), "ir-bot.yaml", routeProfileOK)
-	_, _, _, _, err := effectiveSlackDefaultRoute(routeCfg("ir-bot", p))
+	_, err := effectiveSlackDefaultRoute(routeCfg("ir-bot", p))
 	if err == nil || !strings.Contains(err.Error(), "allow_emails") || !strings.Contains(err.Error(), "allowEmails") {
 		t.Fatalf("want an error naming allow_emails and allowEmails, got %v", err)
 	}
 }
 
 func TestEffectiveSlackDefaultRoute_Absent(t *testing.T) {
-	alias, _, emails, _, err := effectiveSlackDefaultRoute(&config.Config{})
-	if err != nil || alias != "" || emails != nil {
-		t.Fatalf("absent route must be zero/nil, got %q %v %v", alias, emails, err)
+	er, err := effectiveSlackDefaultRoute(&config.Config{})
+	if err != nil || er.Alias != "" || er.Install != nil || er.ProfileList != nil {
+		t.Fatalf("absent route must be zero/nil, got %+v %v", er, err)
 	}
 }
 
-// ExportTerragruntEnvVars (best-effort) exports the profile list, so every
+// ExportTerragruntEnvVars (best-effort) exports both lists, so every
 // terragrunt-driving command agrees with km init.
 func TestExportTerragruntEnvVars_ExportsProfileRouteList(t *testing.T) {
 	unsetRouteEnv(t)
 	p := writeProfile(t, t.TempDir(), "ir-bot.yaml", routeProfileWithAllow)
-	ExportTerragruntEnvVars(routeCfg("ir-bot", p, "stale@example.com"))
-	if got := os.Getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"); got != "kurt@example.com,*@corp.example" {
-		t.Fatalf("ALLOW=%q, want the profile list", got)
+	ExportTerragruntEnvVars(routeCfg("ir-bot", p, "install@example.com"))
+	if got := os.Getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"); got != "install@example.com" {
+		t.Fatalf("ALLOW=%q, want the install list", got)
+	}
+	if got := os.Getenv("KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW"); got != "kurt@example.com,*@corp.example" {
+		t.Fatalf("PROFILE_ALLOW=%q, want the profile list", got)
 	}
 	if got := os.Getenv("KM_SLACK_DEFAULT_ROUTE_ALIAS"); got != "ir-bot" {
 		t.Errorf("ALIAS=%q", got)
@@ -347,7 +362,7 @@ func TestExportTerragruntEnvVars_ExportsProfileRouteList(t *testing.T) {
 	}
 }
 
-// Neither list ⇒ one WARN, none of the three exported.
+// Neither list ⇒ one WARN, none of the four exported.
 func TestExportTerragruntEnvVars_RouteWithoutListWarnsAndExportsNothing(t *testing.T) {
 	unsetRouteEnv(t)
 	p := writeProfile(t, t.TempDir(), "ir-bot.yaml", routeProfileOK)
@@ -355,7 +370,7 @@ func TestExportTerragruntEnvVars_RouteWithoutListWarnsAndExportsNothing(t *testi
 	if strings.Count(out, "WARN: slack.default_route not exported") != 1 {
 		t.Fatalf("want exactly one route WARN, got %q", out)
 	}
-	for _, k := range []string{"KM_SLACK_DEFAULT_ROUTE_ALIAS", "KM_SLACK_DEFAULT_ROUTE_PROFILE", "KM_SLACK_DEFAULT_ROUTE_ALLOW"} {
+	for _, k := range routeEnvKeys {
 		if _, set := os.LookupEnv(k); set {
 			t.Errorf("%s must not be exported when the route has no allowlist", k)
 		}
@@ -369,7 +384,7 @@ func TestExportTerragruntEnvVars_AbsentRouteExportsNothing(t *testing.T) {
 	if strings.Contains(out, "slack.default_route") {
 		t.Fatalf("absent route must be silent, got %q", out)
 	}
-	for _, k := range []string{"KM_SLACK_DEFAULT_ROUTE_ALIAS", "KM_SLACK_DEFAULT_ROUTE_PROFILE", "KM_SLACK_DEFAULT_ROUTE_ALLOW"} {
+	for _, k := range routeEnvKeys {
 		if _, set := os.LookupEnv(k); set {
 			t.Errorf("%s must not be exported when the route is absent", k)
 		}
@@ -406,7 +421,56 @@ func TestBuildSlackCmdDeps_CarriesCfg(t *testing.T) {
 	if d.Cfg != cfg {
 		t.Fatal("buildSlackCmdDeps must set Cfg")
 	}
-	if got := os.Getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"); got != "kurt@example.com,*@corp.example" {
-		t.Fatalf("ALLOW=%q after buildSlackCmdDeps, want the profile list", got)
+	if got := os.Getenv("KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW"); got != "kurt@example.com,*@corp.example" {
+		t.Fatalf("PROFILE_ALLOW=%q after buildSlackCmdDeps, want the profile list", got)
+	}
+	if got := os.Getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"); got != "" {
+		t.Fatalf("ALLOW=%q, want empty: km-config.yaml lists no one", got)
+	}
+}
+
+// Both lists ⇒ the [info] names each list's source and what each one gates, in
+// the same words km doctor uses. Two lists are by design, not a surprise.
+func TestPrepareSlackDefaultRoute_InfoBothLists(t *testing.T) {
+	unsetRouteEnv(t)
+	p := writeProfile(t, t.TempDir(), "ir-bot.yaml", routeProfileWithAllow)
+	var err error
+	out := captureStderr(t, func() { err = prepareSlackDefaultRoute(routeCfg("ir-bot", p, "*@example.com")) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"[info] slack.default_route allowlist: from profile " + p + " (2 entries) and from km-config.yaml (1 entries)",
+		"[info] slack.default_route: install list 1 entries (DM targets and non-route sandboxes); route profile list 2 entries (cold-create and the route box)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in %q", want, out)
+		}
+	}
+	if strings.Contains(out, "WARN") {
+		t.Fatalf("two lists are by design: no WARN, got %q", out)
+	}
+}
+
+// Scoped `km init --slack` (lambda-slack-bridge) re-stages the route profile
+// exactly as full km init does; any other scoped module leaves S3 alone.
+func TestPrestageSlackDefaultRouteForModule(t *testing.T) {
+	p := writeProfile(t, t.TempDir(), "ir-bot.yaml", routeProfileWithAllow)
+	cfg := routeCfg("ir-bot", p)
+	cfg.ArtifactsBucket = "artifacts"
+
+	up := &recordingUploader{}
+	if err := prestageSlackDefaultRouteForModule(context.Background(), cfg, "lambda-github-bridge", up); err != nil {
+		t.Fatal(err)
+	}
+	if len(up.keys) != 0 {
+		t.Fatalf("a non-slack scoped module must not re-stage; keys=%v", up.keys)
+	}
+	if err := prestageSlackDefaultRouteForModule(context.Background(), cfg, "lambda-slack-bridge", up); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := up.keys["slack-profiles/ir-bot/.km-profile.yaml"]
+	if !ok || !strings.Contains(string(got), "Kurt@Example.com") {
+		t.Fatalf("scoped --slack must upload the route profile; keys=%v", up.keys)
 	}
 }

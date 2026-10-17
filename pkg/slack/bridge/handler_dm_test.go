@@ -76,7 +76,7 @@ func dmHandler(t *testing.T) (*bridge.Handler, *dmPoster, *recordingThreads, ed2
 	h.Slack = p
 	th := &recordingThreads{rows: map[string]string{"CFOREIGN|1.0": "sb-abc123"}}
 	h.Threads = th
-	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"})
+	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"}, nil)
 	h.SenderEmails = &dmEmails{byUser: map[string]string{"U0KURT": "kurt@example.com", "U0OTHER": "other@example.com"}}
 	return h, p, th, priv
 }
@@ -253,7 +253,7 @@ func TestHandler_DM_Operator_403(t *testing.T) {
 		Token:    &fakeToken{tok: "xoxb"},
 		Slack:    p,
 	}
-	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"})
+	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"}, nil)
 	h.SenderEmails = &dmEmails{byUser: map[string]string{"U0KURT": "kurt@example.com"}}
 	env := makeEnv(slack.ActionDM, slack.SenderOperator, "")
 	env.TargetUser = "U0KURT"
@@ -319,7 +319,7 @@ func (f *dmByID) FetchBySandboxID(_ context.Context, id string) (bridge.SandboxR
 func dmOverrideHandler(t *testing.T, rowList []string, fetchErr error) (*bridge.Handler, ed25519.PrivateKey) {
 	t.Helper()
 	h, _, _, priv := dmHandler(t)
-	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"*@example.com"})
+	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"*@example.com"}, nil)
 	h.SenderEmails = &dmEmails{byUser: map[string]string{
 		"U0KURT": "kurt@example.com", "U0BOB": "bob@example.com", "U0Z": "z@other.example",
 	}}

@@ -286,6 +286,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	routed := false     // info came from the default route, not channel ownership
 	coldCreate := false // route alias absent: publish a SandboxCreate instead of enqueueing
 	rebind := false     // routed thread row must be rewritten (alias moved / orphaned thread), after delivery
+	gate := gateOwned   // which email list decides when the box's row carries none
 	if info.SandboxID == "" || info.QueueURL == "" {
 		// Default-route ladder step 1: thread continuity. A thread the front door
 		// routed earlier carries its sandbox in km-slack-threads. Decide this BEFORE
@@ -388,7 +389,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		if !ok {
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
-		info, coldCreate, rebind = decision.info, decision.coldCreate, decision.rebind
+		info, coldCreate, rebind, gate = decision.info, decision.coldCreate, decision.rebind, decision.gate
 		routed = true
 		if coldCreate {
 			// Mint the id now, BEFORE the files fork, so attachment keys
@@ -430,7 +431,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		// the whole rule for who may talk to that sandbox; without one the owned
 		// path has no email gate (today's behaviour). ANDed with the id gate above,
 		// and before the thread bypass for the same reason.
-		if !h.senderAllowedForSandbox(ctx, info, msg.User, msg.Channel, false) {
+		if !h.senderAllowedForSandbox(ctx, info, msg.User, msg.Channel, gateOwned) {
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
 
@@ -562,19 +563,20 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	if strict && msg.ThreadTS != "" && h.ThreadReader != nil {
 		// A context author is trusted only if they would pass the same gates as
 		// the sender: Phase 118 ids AND the sandbox's allowEmails on a mapped
-		// channel; the sandbox's allowEmails, else the route list, on a routed
-		// thread. Email lookups run under collectThreadContext's deadline; once it
+		// channel; on a routed thread, the same gate the dispatch decision used
+		// (the sandbox's allowEmails, else the route list that decision picked).
+		// Email lookups run under collectThreadContext's deadline; once it
 		// passes a lookup errors and the author counts as not allowed (fails closed).
 		allowed := func(cctx context.Context, u string) bool {
 			if len(effectiveAllow) > 0 && !isInSlackAllowlist(u, effectiveAllow) {
 				return false
 			}
-			ok, _ := h.senderEmailAllowed(cctx, info, u, false)
+			ok, _ := h.senderEmailAllowed(cctx, info, u, gateOwned)
 			return ok
 		}
 		if routed {
 			allowed = func(cctx context.Context, u string) bool {
-				ok, _ := h.senderEmailAllowed(cctx, info, u, true)
+				ok, _ := h.senderEmailAllowed(cctx, info, u, gate)
 				return ok
 			}
 		}
@@ -811,7 +813,18 @@ type routeDecision struct {
 	info       SandboxRoutingInfo
 	coldCreate bool
 	rebind     bool
+	gate       emailGate // gateRouteCreate for the route's own box, else gateRouteInstall
 }
+
+// emailGate names the list that decides a sender when the receiving box's row
+// carries no allowEmails of its own (a row list always decides alone).
+type emailGate int
+
+const (
+	gateOwned        emailGate = iota // a channel-owned box: no list ⇒ no email gate
+	gateRouteInstall                  // a routed turn to a non-route box: the install list
+	gateRouteCreate                   // a cold-create or the alias's box: the route profile's list, else the install list
+)
 
 // continuityBypass fills cont.row (and cont.alias for a gone box) and reports
 // whether a continuity reply may skip the mention. The decision follows the box
@@ -892,10 +905,10 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 		return routeDecision{}, false
 	}
 	// The email gate follows the box that will receive the turn: its row's
-	// allowEmails when it has one, else the route list. A cold-create has no row
-	// yet, so the route list (which km init resolves from the route profile)
-	// decides.
-	if !h.senderAllowedForSandbox(ctx, decision.info, msg.User, msg.Channel, true) {
+	// allowEmails when it has one, else the list decision.gate names — the route
+	// profile's list for the route's own box (a cold-create has no row yet), the
+	// install list for any other box.
+	if !h.senderAllowedForSandbox(ctx, decision.info, msg.User, msg.Channel, decision.gate) {
 		return routeDecision{}, false
 	}
 	return decision, true
@@ -912,7 +925,26 @@ func (h *EventsHandler) routeTarget(ctx context.Context, msg slackMessageEvent, 
 	if cont.sandboxID != "" && cont.row.SandboxID != "" && cont.row.QueueURL != "" {
 		// The thread's own box is live: the reply returns to it, whatever the alias
 		// names now, and the row is left alone.
-		return routeDecision{info: cont.row}, true
+		gate := gateRouteInstall
+		if len(cont.row.AllowEmails) == 0 && h.DefaultRoute.HasProfileList() {
+			// Only here can the two lists disagree: ask whether the row box is the
+			// alias's box (the route's own box ⇒ the profile list). A failed resolve
+			// drops: the narrower list may be the one that applies.
+			if h.AliasResolver == nil {
+				h.log().Warn("events: route: no AliasResolver wired; dropping", "alias", h.DefaultRoute.Alias)
+				return routeDecision{}, false
+			}
+			current, found, rerr := h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
+			if rerr != nil {
+				h.log().Error("events: route: alias resolve failed",
+					"alias", h.DefaultRoute.Alias, "err", rerr, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+				return routeDecision{}, false
+			}
+			if found && current.SandboxID == cont.row.SandboxID {
+				gate = gateRouteCreate
+			}
+		}
+		return routeDecision{info: cont.row, gate: gate}, true
 	}
 
 	var current SandboxRoutingInfo
@@ -935,7 +967,7 @@ func (h *EventsHandler) routeTarget(ctx context.Context, msg slackMessageEvent, 
 		if !found {
 			// Old box gone and alias absent: cold-create, and rebind the orphaned
 			// row to the minted box once the publish succeeds.
-			return routeDecision{coldCreate: true, rebind: true}, true
+			return routeDecision{coldCreate: true, rebind: true, gate: gateRouteCreate}, true
 		}
 		if current.SandboxID != cont.sandboxID {
 			// The row's box is gone and the alias names another: the row is
@@ -943,22 +975,22 @@ func (h *EventsHandler) routeTarget(ctx context.Context, msg slackMessageEvent, 
 			// (mirrors the GitHub bridge's InvalidateStaleSession).
 			h.log().Info("events: route: alias moved; rebinding thread after delivery",
 				"from", cont.sandboxID, "to", current.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
-			return routeDecision{info: current, rebind: true}, true
+			return routeDecision{info: current, rebind: true, gate: gateRouteCreate}, true
 		}
-		return routeDecision{info: current}, true
+		return routeDecision{info: current, gate: gateRouteCreate}, true
 	}
 	if !found {
-		return routeDecision{coldCreate: true}, true
+		return routeDecision{coldCreate: true, gate: gateRouteCreate}, true
 	}
-	return routeDecision{info: current}, true
+	return routeDecision{info: current, gate: gateRouteCreate}, true
 }
 
 // senderAllowedForSandbox is the sender-email gate for one sandbox, logged. A
 // row carrying allowEmails decides alone (override, not merge); without one,
-// the route list decides on the route paths and nothing gates the owned #sb-
-// path. Any lookup failure with a list in force is a deny (never cached).
-func (h *EventsHandler) senderAllowedForSandbox(ctx context.Context, info SandboxRoutingInfo, userID, channel string, onRoutePath bool) bool {
-	ok, source := h.senderEmailAllowed(ctx, info, userID, onRoutePath)
+// gate picks the route list on the route paths and nothing gates the owned
+// #sb- path. Any lookup failure with a list in force is a deny (never cached).
+func (h *EventsHandler) senderAllowedForSandbox(ctx context.Context, info SandboxRoutingInfo, userID, channel string, gate emailGate) bool {
+	ok, source := h.senderEmailAllowed(ctx, info, userID, gate)
 	if ok {
 		return true
 	}
@@ -976,18 +1008,19 @@ func (h *EventsHandler) senderAllowedForSandbox(ctx context.Context, info Sandbo
 // senderEmailAllowed decides without logging (the strict-context trust
 // predicate calls it once per author). source names the list that decided:
 // "sandbox", "route", or "" when no list applies.
-func (h *EventsHandler) senderEmailAllowed(ctx context.Context, info SandboxRoutingInfo, userID string, onRoutePath bool) (bool, string) {
+func (h *EventsHandler) senderEmailAllowed(ctx context.Context, info SandboxRoutingInfo, userID string, gate emailGate) (bool, string) {
 	var allows func(string) bool
 	var source string
 	switch {
 	case len(info.AllowEmails) > 0:
 		allows, source = h.sandboxEmailList(info).Allows, "sandbox"
-	case onRoutePath && h.DefaultRoute != nil:
-		allows, source = h.DefaultRoute.Allows, "route"
-	case onRoutePath:
-		return false, "route" // a route path with no route: nothing admits anyone
-	default:
+	case gate == gateOwned:
 		return true, ""
+	default:
+		if allows = h.routeAllows(gate); allows == nil {
+			return false, "route" // a route path with no route: nothing admits anyone
+		}
+		source = "route"
 	}
 	prefix := "events: " // documented route log lines keep their "route:" prefix
 	if source == "route" {
@@ -1005,6 +1038,22 @@ func (h *EventsHandler) senderEmailAllowed(ctx context.Context, info SandboxRout
 		return false, source
 	}
 	return allows(email), source
+}
+
+// routeAllows returns the route list a route-path gate names: AllowsCreate for
+// the route's own box, Allows (the install list) otherwise. nil when no route
+// is configured or gate is gateOwned.
+func (h *EventsHandler) routeAllows(gate emailGate) func(string) bool {
+	if h.DefaultRoute == nil {
+		return nil
+	}
+	switch gate {
+	case gateRouteCreate:
+		return h.DefaultRoute.AllowsCreate
+	case gateRouteInstall:
+		return h.DefaultRoute.Allows
+	}
+	return nil
 }
 
 // sandboxEmailList compiles (once per distinct list) a row's allowEmails. A

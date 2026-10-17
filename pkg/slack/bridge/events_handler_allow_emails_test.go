@@ -108,7 +108,7 @@ func overrideRoutedHandler(t *testing.T, now time.Time, rowList []string) (*Even
 	t.Helper()
 	h, sqs, threads, alias, pub, _, emails := routedHandler(t, now)
 	emails.byUser = allowEmailsUsers
-	h.DefaultRoute = NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"*@example.com"})
+	h.DefaultRoute = NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"*@example.com"}, nil)
 	alias.info.AllowEmails = rowList
 	h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot": alias.info}}
 	return h, sqs, threads, alias, pub

@@ -16,9 +16,10 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - **Entries are exact or exactly `*@<domain>`** (no subdomains). **`inbound.allowEmails` REPLACES
   the install list for that sandbox on every path** (`#sb-`, routed, DM, strict trust, its
   `km-slack dm` targets); AND with Phase 118 ids; empty ⇒ error; silent Info drop.
-- **The route profile's `allowEmails` is the route's list** (`km init` exports it; config
-  `allow_emails` is the fallback; neither ⇒ error), so the cold-create mention is gated too; a
-  change needs `km init` AND a recreate. See `docs/slack-notifications.md` § Quiet period, § Allowlists.
+- **Two lists:** config `allow_emails` (`KM_SLACK_DEFAULT_ROUTE_ALLOW`) gates DM targets and
+  non-route boxes; the route profile's `allowEmails` (`…_PROFILE_ALLOW`) gates cold-create and
+  the alias's box (falls back to the install list; neither ⇒ error); a change needs `km init`
+  AND a recreate. See `docs/slack-notifications.md` § Quiet period, § Allowlists.
 
 **Slack default route + strict mention-only threads (2026-10-16):**
 - **Invite the bot to any channel, or DM it, @-mention it, and the reply lands in a thread

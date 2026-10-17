@@ -189,7 +189,13 @@ variable "slack_default_route_profile" {
 }
 
 variable "slack_default_route_allow" {
-  description = "Comma-joined, lowercased emails allowed to drive the default route. Empty = route OFF (deny-by-default)."
+  description = "INSTALL list: comma-joined, lowercased emails (or *@domain) for DM targets and routed turns to non-route sandboxes. Route OFF only when this AND slack_default_route_profile_allow are both empty (deny-by-default)."
+  type        = string
+  default     = ""
+}
+
+variable "slack_default_route_profile_allow" {
+  description = "Route profile's allowEmails, comma-joined: gates cold-create and the alias's own box. Empty = those fall back to slack_default_route_allow."
   type        = string
   default     = ""
 }

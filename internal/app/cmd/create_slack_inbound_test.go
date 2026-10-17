@@ -636,3 +636,46 @@ func TestCreate_SlackInboundAllowEmailsAndReactQuiet(t *testing.T) {
 		}
 	})
 }
+
+// A failed slack_allow_emails write is fatal: the box's own #sb- channel would
+// otherwise come up with NO email gate. The queue is rolled back, as for a
+// failed queue-url write. slack_react_quiet_seconds stays non-fatal (cosmetic).
+func TestCreate_SlackInboundAllowEmailsWriteFailureIsFatal(t *testing.T) {
+	fs := &fakeSQS{}
+	deps, _ := makeDeps(t, true, fs, nil, nil)
+	deps.Profile.Spec.Notification.Slack.Inbound.AllowEmails = []string{"kurt@example.com"}
+	inner := deps.UpdateSandboxAttr
+	deps.UpdateSandboxAttr = func(ctx context.Context, id, attr, val string) error {
+		if attr == "slack_allow_emails" {
+			return errors.New("ddb throttled")
+		}
+		return inner(ctx, id, attr, val)
+	}
+	url, err := provisionSlackInboundQueue(context.Background(), deps)
+	if err == nil || !strings.Contains(err.Error(), "slack_allow_emails") {
+		t.Fatalf("want a fatal error naming slack_allow_emails, got %v", err)
+	}
+	if url != "" {
+		t.Fatalf("expected empty URL on failure, got %q", url)
+	}
+	if fs.deleteCalled != 1 {
+		t.Fatalf("expected 1 DeleteQueue rollback call, got %d", fs.deleteCalled)
+	}
+}
+
+func TestCreate_SlackInboundReactQuietWriteFailureIsNonFatal(t *testing.T) {
+	fs := &fakeSQS{}
+	deps, _ := makeDeps(t, true, fs, nil, nil)
+	q := 60
+	deps.Profile.Spec.Notification.Slack.Inbound.ReactQuietSeconds = &q
+	inner := deps.UpdateSandboxAttr
+	deps.UpdateSandboxAttr = func(ctx context.Context, id, attr, val string) error {
+		if attr == "slack_react_quiet_seconds" {
+			return errors.New("ddb throttled")
+		}
+		return inner(ctx, id, attr, val)
+	}
+	if _, err := provisionSlackInboundQueue(context.Background(), deps); err != nil {
+		t.Fatalf("react quiet is cosmetic; want success, got %v", err)
+	}
+}

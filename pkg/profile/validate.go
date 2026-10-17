@@ -1273,7 +1273,7 @@ func IsAbstractFragment(raw []byte) bool {
 // a shared test table (TestValidateInboundEmailEntry_MirrorsBridge ↔
 // emailEntryCases ↔ TestValidateRouteEmailEntry_MirrorsBridge): change all three.
 var inboundDomainEntry = regexp.MustCompile(`^\*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
-var inboundExactEntry = regexp.MustCompile(`^[^@\s*]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+var inboundExactEntry = regexp.MustCompile(`^[^@\s*,]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
 
 // validateInboundEmailEntry accepts an exact address or exactly `*@<domain>`
 // (case-insensitive, trimmed). Any other use of `*` is an error so a typo

@@ -24,9 +24,11 @@ func (h *Handler) handleDM(ctx context.Context, env slack.SlackEnvelope) *Respon
 		return errResp(400, "bad_target")
 	}
 	// The posting sandbox's allowEmails, when its row carries one, replaces the
-	// route list (the same override the inbound path applies). A fetch error
+	// install list (the same override the inbound path applies). A fetch error
 	// denies (fail closed): the row may carry a narrower list we cannot see. An
-	// absent row (no error, empty info) uses the route list.
+	// absent row (no error, empty info) uses the install list. The route
+	// profile's own list never gates a DM target: it governs who may create or
+	// reach the route's box, not whom any sandbox may message.
 	allows, listName := h.DefaultRoute.Allows, "allow_emails"
 	if h.SandboxByID != nil {
 		info, ferr := h.SandboxByID.FetchBySandboxID(ctx, env.SenderID)

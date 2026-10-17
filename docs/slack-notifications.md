@@ -3254,19 +3254,20 @@ slack:
       - "*@example.com"               # every member of the domain (quote the *)
 ```
 
-`km init` exports three bridge env vars, **all three or none**:
+`km init` exports four bridge env vars, **all four or none**:
 
 | Env var | Value |
 |---|---|
 | `KM_SLACK_DEFAULT_ROUTE_ALIAS` | `alias` |
 | `KM_SLACK_DEFAULT_ROUTE_PROFILE` | `profile` |
-| `KM_SLACK_DEFAULT_ROUTE_ALLOW` | The route profile's `notification.slack.inbound.allowEmails` when it has one, else `allow_emails`; trimmed, lowercased, comma-joined |
+| `KM_SLACK_DEFAULT_ROUTE_ALLOW` | The **install list**: `allow_emails`, trimmed, lowercased, comma-joined. May be empty when the route profile has a list. |
+| `KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW` | The **route profile's list**: its `notification.slack.inbound.allowEmails`, same form. May be empty. |
 
 - **Deny-by-default.** When neither the route profile's `allowEmails` nor `allow_emails`
   lists anyone, `km init` and `km slack init` stop with an error naming both places. A bot
   reachable from every channel in an org must never be open to everyone by omission. See
   [Allowlists](#allowlists-domains-and-per-sandbox-lists-2026-10-17) for the entry forms and
-  which list wins.
+  what each list gates.
 - **Why not `slack.allow`.** Phase 118's `slack.allow` is a list of Slack user ids and is
   **allow-by-default** on empty. Reusing that key for an email list with the opposite empty
   semantics would put two meanings under one name. The two lists are independent:
@@ -3362,19 +3363,35 @@ spec:
 - `km create` writes the list to the sandbox row as `slack_allow_emails`, so a change needs
   `km destroy && km create`.
 
-**The route profile's list is the route's list.** When `slack.default_route.profile` sets
-`allowEmails`, `km init` exports that list as `KM_SLACK_DEFAULT_ROUTE_ALLOW`, and
-`allow_emails` in `km-config.yaml` is ignored. `allow_emails` applies only when the profile has
-no list. `km init` prints which source won:
+**Two lists: the install list for everyone, the route profile's list for the route's own box.**
+`allow_emails` in `km-config.yaml` is the **install list** (`KM_SLACK_DEFAULT_ROUTE_ALLOW`). It
+gates the targets of `km-slack dm` and routed turns to any sandbox that is not the route's box
+and carries no `allowEmails` of its own. The route profile's `allowEmails` is the **route
+profile's list** (`KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW`). It gates the mention that
+**cold-creates** the box and every turn to the alias's current box; when the profile has no
+list, the install list gates those too. A sandbox row that carries its own `allowEmails` always
+decides alone. So narrowing the route profile to two people narrows who can start and reach
+that box, and nothing else on the install. Either list may be empty, not both. `km init` names
+the source of each list, and prints a second line when both exist:
 
 ```
-[info] slack.default_route allowlist: from profile profiles/ir-bot.yaml (2 entries)
+[info] slack.default_route allowlist: from profile profiles/ir-bot.yaml (2 entries) and from km-config.yaml (1 entries)
+[info] slack.default_route: install list 1 entries (DM targets and non-route sandboxes); route profile list 2 entries (cold-create and the route box)
 ```
 
 This closes the first-turn gap. The mention that **cold-creates** the box is gated by the same
-list the box enforces once it exists, so only the people the profile names can start it.
-Changing that profile's list therefore needs **both** `km init --dry-run=false` (the bridge
-env, and the pre-staged profile) **and** `km destroy && km create` of the box (its row).
+list the box enforces once it exists, so only the people the profile names can start it. Every
+path that applies the bridge re-stages the route profile with the list it exports: full
+`km init`, scoped `km init --slack`, and `km slack init --force`. Changing that profile's list
+therefore needs **both** `km init --dry-run=false` (the bridge env, and the pre-staged profile)
+**and** `km destroy && km create` of the box (its row). A failed `slack_allow_emails` row write
+fails `km create`, so a box never comes up without its list.
+
+**Upgrade note.** Entry validation is stricter than before. An address with a single-label
+domain such as `kurt@localhost`, a punycode TLD (`xn--…`), or a comma in the local part now
+fails `km init`. Fix such entries and run `km init --dry-run=false` **before** deploying the new
+bridge zip. A bridge that gets the zip first drops such entries with a WARN, and the route
+goes OFF if they were the only entries.
 
 ### How a message is routed
 
@@ -3510,14 +3527,14 @@ Skipped silently when the block is absent. Otherwise three results from one eval
 | Check | WARN when |
 |---|---|
 | `Slack default route profile` | The profile is missing, does not resolve, or lacks Slack inbound. When OK and the profile sets `threadBypass: false`, the message notes that thread follow-ups in invited channels require a mention. |
-| `Slack default route allowlist` | Neither the route profile's `allowEmails` nor `allow_emails` lists anyone (route OFF), or an exact address does not resolve via `users.lookupByEmail`. Domain wildcards are counted separately (`2 email(s) resolve in the workspace, 1 domain wildcard(s)`) and never looked up. |
+| `Slack default route allowlist` | Neither the route profile's `allowEmails` nor `allow_emails` lists anyone (route OFF), or an exact address in either list does not resolve via `users.lookupByEmail`. The message starts with its source (`from profile <path>:`, `from km-config.yaml:`, or both). Domain wildcards are counted separately (`2 email(s) resolve in the workspace, 1 domain wildcard(s)`) and never looked up. When both lists exist, a second OK line says what each one gates. |
 | `Slack default route scopes` | The live `auth.test` scopes lack `im:history` or `mpim:history` (DMs never delivered), or `im:write` (`km-slack dm` fails) |
 
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Mention in an invited channel is ignored | Sender's Slack email is not on the effective list | Add it to the route profile's `allowEmails` if it has one, else to `allow_emails`; `km init --dry-run=false`. `km doctor` shows which emails do not resolve. |
+| Mention in an invited channel is ignored | Sender's Slack email is not on the list for that box | A cold-create or the alias's box: the route profile's `allowEmails` if it has one, else `allow_emails`. Any other box: its own `allowEmails`, else `allow_emails`. Then `km init --dry-run=false`. `km doctor` shows which emails do not resolve. |
 | Mention is ignored and the log says `sender not in sandbox allowEmails` | The target sandbox's own list does not name the sender | Add them to the profile's `allowEmails`, then `km destroy && km create` (and `km init` too when it is the route profile). |
 | `*@example.com` member from `sub.example.com` is ignored | Subdomains do not match a domain wildcard | Add `*@sub.example.com`. |
 | Mention in an invited channel is ignored | The bot is not a member of the channel | `/invite @<bot>` in the channel. |

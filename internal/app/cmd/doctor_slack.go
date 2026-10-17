@@ -661,7 +661,8 @@ type SlackEmailLookup interface {
 
 // checkSlackDefaultRoute validates the slack.default_route block. Read-only.
 // One SKIPPED result when the block is absent; otherwise three results
-// (profile, allowlist, scopes).
+// (profile, allowlist, scopes), plus a second allowlist line when both the
+// install list and the route profile's list are set.
 func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute, searchPaths []string, lookup SlackEmailLookup, scopesCSV string) []CheckResult {
 	if route == nil {
 		return []CheckResult{{Name: "Slack default route", Status: CheckSkipped, Message: "slack.default_route not set — route off"}}
@@ -681,13 +682,27 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 		out = append(out, CheckResult{Name: "Slack default route profile", Status: CheckOK, Message: msg})
 	}
 
-	// 2. Allowlist: non-empty and every exact email resolves in the workspace.
-	// The effective list is the route profile's allowEmails when it has one
-	// (km init exports that one), else slack.default_route.allow_emails.
-	emails := profileAllow
-	if len(emails) == 0 {
-		emails = route.NormalizedEmails()
+	// 2. Allowlists: at least one non-empty, and every exact email in either
+	// resolves in the workspace. Both are live: slack.default_route.allow_emails
+	// is the install list (DM targets, non-route sandboxes), the route profile's
+	// allowEmails gates the cold-create and the route box (see
+	// effectiveSlackDefaultRoute). The message names where the list(s) came from.
+	lists := slackDefaultRouteLists{Install: route.NormalizedEmails(), ProfileList: profileAllow}
+	if len(profileAllow) > 0 {
+		lists.ProfilePath = route.Profile + " (built-in)"
+		if resolved, lerr := locateSlackDefaultRouteProfile(route, searchPaths); lerr == nil {
+			lists.ProfilePath = resolved
+		}
 	}
+	seen := map[string]bool{}
+	var emails []string
+	for _, e := range append(append([]string{}, lists.ProfileList...), lists.Install...) {
+		if !seen[e] {
+			seen[e] = true
+			emails = append(emails, e)
+		}
+	}
+	prefix := "from " + lists.Source() + ": "
 	switch {
 	case len(emails) == 0:
 		out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckWarn,
@@ -695,7 +710,7 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 			Remediation: "List at least one workspace email under slack.default_route.allow_emails, or under notification.slack.inbound.allowEmails in the route profile."})
 	case lookup == nil:
 		out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckSkipped,
-			Message: fmt.Sprintf("%d email(s) configured; bot token unavailable so resolution was not checked", len(emails))})
+			Message: prefix + fmt.Sprintf("%d email(s) configured; bot token unavailable so resolution was not checked", len(emails))})
 	default:
 		// `*@<domain>` entries are not people; only exact addresses are resolved.
 		var exact, unresolved []string
@@ -714,15 +729,19 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 		}
 		if len(unresolved) > 0 {
 			out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckWarn,
-				Message:     "not found in the workspace: " + strings.Join(unresolved, ", "),
+				Message:     prefix + "not found in the workspace: " + strings.Join(unresolved, ", "),
 				Remediation: "Use the email on the person's Slack profile. Removals take effect after `km init --dry-run=false` plus up to 15 minutes of bridge cache."})
 		} else {
 			msg := fmt.Sprintf("%d email(s) resolve in the workspace", len(exact))
 			if wildcards > 0 {
 				msg += fmt.Sprintf(", %d domain wildcard(s)", wildcards)
 			}
-			out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckOK, Message: msg})
+			out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckOK, Message: prefix + msg})
 		}
+	}
+	if len(lists.Install) > 0 && len(lists.ProfileList) > 0 {
+		out = append(out, CheckResult{Name: "Slack default route allowlist", Status: CheckOK,
+			Message: slackDefaultRouteTwoListsLine(len(lists.Install), len(lists.ProfileList))})
 	}
 
 	// 3. Scopes: DMs to the bot need im:history / mpim:history; km-slack dm needs im:write.

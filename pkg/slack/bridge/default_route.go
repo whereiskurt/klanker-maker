@@ -16,37 +16,55 @@ import (
 var ErrSenderIneligible = errors.New("slack-bridge: sender is not an eligible human user")
 
 // DefaultRoute is the resolved slack.default_route block. A nil *DefaultRoute
-// means the route is OFF; NewDefaultRoute returns nil for an empty allowlist so
-// the deny-by-default contract is structural, not a runtime check.
+// means the route is OFF; NewDefaultRoute returns nil when both allowlists are
+// empty so the deny-by-default contract is structural, not a runtime check.
+//
+// Two lists, two jobs. list is the INSTALL list (slack.default_route.allow_emails):
+// it gates everything the route reaches that is not the route's own box — DM
+// targets and replies to a non-alias sandbox without its own allowEmails.
+// profileList is the route profile's allowEmails: it gates a cold-create and the
+// alias's current box, so narrowing the route profile never narrows the rest of
+// the install. Either may be empty, not both.
 type DefaultRoute struct {
-	Alias   string
-	Profile string
-	list    *EmailAllowlist
+	Alias       string
+	Profile     string
+	list        *EmailAllowlist
+	profileList *EmailAllowlist
 }
 
-// NewDefaultRoute compiles emails into the route's allowlist. An invalid entry
-// is logged and dropped (km init already refuses them; this is belt-and-braces)
-// so one typo can never widen the list or take the whole route down.
-func NewDefaultRoute(alias, profile string, emails []string) *DefaultRoute {
+// NewDefaultRoute compiles both allowlists. An invalid entry is logged and
+// dropped (km init already refuses them; this is belt-and-braces) so one typo
+// can never widen a list or take the whole route down.
+func NewDefaultRoute(alias, profile string, installEmails, profileEmails []string) *DefaultRoute {
+	install := compileRouteList("allow_emails", installEmails)
+	prof := compileRouteList("route profile allowEmails", profileEmails)
+	if alias == "" || profile == "" || (install.Len() == 0 && prof.Len() == 0) {
+		return nil
+	}
+	return &DefaultRoute{Alias: alias, Profile: profile, list: install, profileList: prof}
+}
+
+func compileRouteList(name string, emails []string) *EmailAllowlist {
 	valid := make([]string, 0, len(emails))
 	for _, e := range emails {
 		if strings.TrimSpace(e) == "" {
 			continue
 		}
 		if _, _, err := ValidateEmailEntry(e); err != nil {
-			log.Printf("slack-bridge: default_route: dropping %v", err)
+			log.Printf("slack-bridge: default_route: %s: dropping %v", name, err)
 			continue
 		}
 		valid = append(valid, e)
 	}
 	list, err := CompileEmailAllowlist(valid)
-	if err != nil || list.Len() == 0 || alias == "" || profile == "" {
+	if err != nil {
 		return nil
 	}
-	return &DefaultRoute{Alias: alias, Profile: profile, list: list}
+	return list
 }
 
-// Allows reports whether email is on the list. Empty email is always denied.
+// Allows reports whether email is on the INSTALL list. Empty email is always
+// denied; an empty install list denies everyone.
 func (r *DefaultRoute) Allows(email string) bool {
 	if r == nil {
 		return false
@@ -54,12 +72,31 @@ func (r *DefaultRoute) Allows(email string) bool {
 	return r.list.Allows(email)
 }
 
+// AllowsCreate is the gate for the route's own box (a cold-create, or the
+// alias's current box without its own allowEmails): the route profile's list
+// when it has one, else the install list.
+func (r *DefaultRoute) AllowsCreate(email string) bool {
+	if r == nil {
+		return false
+	}
+	if r.profileList.Len() > 0 {
+		return r.profileList.Allows(email)
+	}
+	return r.list.Allows(email)
+}
+
+// HasProfileList reports whether the route profile declared its own list, i.e.
+// whether AllowsCreate can differ from Allows.
+func (r *DefaultRoute) HasProfileList() bool {
+	return r != nil && r.profileList.Len() > 0
+}
+
 // reDomainEntry / reExactEntry are duplicated in internal/app/config
 // (validateRouteEmailEntry), which cannot import this package. The two copies
 // share a test table (emailEntryCases here, TestValidateRouteEmailEntry_MirrorsBridge
 // there): change both together.
 var reDomainEntry = regexp.MustCompile(`^\*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
-var reExactEntry = regexp.MustCompile(`^[^@\s*]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+var reExactEntry = regexp.MustCompile(`^[^@\s*,]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
 
 // ValidateEmailEntry normalises one allowlist entry: lowercased, trimmed; either
 // an exact address or exactly `*@<domain>`. Any other use of `*` is an error so

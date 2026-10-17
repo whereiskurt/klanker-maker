@@ -148,6 +148,7 @@ func TestValidateInboundEmailEntry_MirrorsBridge(t *testing.T) {
 		{"*@.example.com", false},
 		{"*@-.com", false},
 		{"*@a..com", false},
+		{"bob,eve@example.com", false},
 	}
 	for _, tc := range cases {
 		p, err := profile.Parse([]byte(aeHead + "        enabled: true\n"))

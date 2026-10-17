@@ -463,9 +463,10 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SLACK_ALLOW = var.slack_allow
 
       # 2026-10-16 - default route (unmapped channel/DM -> one alias; email-gated)
-      KM_SLACK_DEFAULT_ROUTE_ALIAS   = var.slack_default_route_alias
-      KM_SLACK_DEFAULT_ROUTE_PROFILE = var.slack_default_route_profile
-      KM_SLACK_DEFAULT_ROUTE_ALLOW   = var.slack_default_route_allow
+      KM_SLACK_DEFAULT_ROUTE_ALIAS         = var.slack_default_route_alias
+      KM_SLACK_DEFAULT_ROUTE_PROFILE       = var.slack_default_route_profile
+      KM_SLACK_DEFAULT_ROUTE_ALLOW         = var.slack_default_route_allow
+      KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW = var.slack_default_route_profile_allow
       # Phase 121 — action-quota table name for bridge-side quota enforcement
       KM_QUOTA_TABLE = var.quota_table_arn != "" ? "${var.resource_prefix}-action-quota" : ""
     }

@@ -210,7 +210,11 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 	// 2026-10-17: per-sandbox email allowlist. Written only when the profile sets
 	// notification.slack.inbound.allowEmails (validation rejects an empty list).
 	// Entries are normalised (trimmed, lowercased) and comma-joined into the S
-	// attribute "slack_allow_emails". Absent = install-level list. Non-fatal.
+	// attribute "slack_allow_emails". Absent = install-level list.
+	//
+	// FATAL on failure, unlike the knobs above: without the attribute the box's
+	// own #sb- channel has no email gate at all, which is wider than the profile
+	// asked for. Same rollback as a failed queue-url write.
 	if len(inbound.AllowEmails) > 0 {
 		norm := make([]string, 0, len(inbound.AllowEmails))
 		for _, e := range inbound.AllowEmails {
@@ -220,12 +224,14 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 		}
 		v := strings.Join(norm, ",")
 		if updateErr := deps.UpdateSandboxAttr(ctx, deps.SandboxID, "slack_allow_emails", v); updateErr != nil {
-			log.Warn().Err(updateErr).Str("sandbox_id", deps.SandboxID).Str("value", v).
-				Msg("persist slack_allow_emails per-sandbox override failed; sandbox will use install-level default")
-		} else {
-			log.Info().Str("sandbox_id", deps.SandboxID).Str("value", v).
-				Msg("Slack: persisted per-sandbox email allow-list override")
+			if delErr := awspkg.DeleteSlackInboundQueue(ctx, deps.SQS, queueURL); delErr != nil {
+				log.Warn().Err(delErr).Str("queue_url", queueURL).
+					Msg("rollback: failed to delete SQS queue after slack_allow_emails persist failure")
+			}
+			return "", fmt.Errorf("persist slack_allow_emails to DDB (the sandbox would run without its email gate): %w", updateErr)
 		}
+		log.Info().Str("sandbox_id", deps.SandboxID).Str("value", v).
+			Msg("Slack: persisted per-sandbox email allow-list override")
 	}
 
 	// 2026-10-17: per-sandbox 👀 reaction quiet period. Written only when the

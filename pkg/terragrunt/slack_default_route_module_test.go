@@ -18,12 +18,13 @@ func repoFile(t *testing.T, rel string) string {
 }
 
 // Every KM_SLACK_DEFAULT_ROUTE_* var the bridge reads must be set by the module
-// from a variable the live unit feeds from get_env — all three, by name.
+// from a variable the live unit feeds from get_env — all four, by name.
+// ALLOW is the install list; PROFILE_ALLOW the route profile's allowEmails.
 func TestSlackBridgeModule_DefaultRouteEnvIsPlumbedEndToEnd(t *testing.T) {
 	main := repoFile(t, "infra/modules/lambda-slack-bridge/v1.0.0/main.tf")
 	vars := repoFile(t, "infra/modules/lambda-slack-bridge/v1.0.0/variables.tf")
 	live := repoFile(t, "infra/live/use1/lambda-slack-bridge/terragrunt.hcl")
-	for _, suffix := range []string{"ALIAS", "PROFILE", "ALLOW"} {
+	for _, suffix := range []string{"ALIAS", "PROFILE", "ALLOW", "PROFILE_ALLOW"} {
 		env := "KM_SLACK_DEFAULT_ROUTE_" + suffix
 		v := "slack_default_route_" + strings.ToLower(suffix)
 		if !regexp.MustCompile(env + `\s*=\s*var\.` + v).MatchString(main) {

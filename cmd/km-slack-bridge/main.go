@@ -760,18 +760,16 @@ type defaultRouteDeps struct {
 	httpClient     *http.Client
 }
 
-// wireDefaultRoute reads KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW}. All three
-// or nothing: bridge.NewDefaultRoute returns nil for an empty allowlist, so a
-// half-set env leaves the route OFF rather than open.
+// wireDefaultRoute reads KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW,PROFILE_ALLOW}.
+// ALLOW is the install list (DM targets, non-route boxes); PROFILE_ALLOW is the
+// route profile's allowEmails (cold-create and the alias's box). Alias, profile
+// and at least one list, or nothing: bridge.NewDefaultRoute returns nil
+// otherwise, so a half-set env leaves the route OFF rather than open.
 func wireDefaultRoute(h *bridge.EventsHandler, out *bridge.Handler, getenv func(string) string, d defaultRouteDeps) {
 	alias := strings.TrimSpace(getenv("KM_SLACK_DEFAULT_ROUTE_ALIAS"))
 	profile := strings.TrimSpace(getenv("KM_SLACK_DEFAULT_ROUTE_PROFILE"))
-	var emails []string
-	for _, e := range strings.Split(getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"), ",") {
-		if e = strings.TrimSpace(e); e != "" {
-			emails = append(emails, e)
-		}
-	}
+	emails := splitEmailEnv(getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"))
+	profileEmails := splitEmailEnv(getenv("KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW"))
 	// The sender-email cache and the by-id fetcher are wired whether or not the
 	// route is on: a sandbox row's allowEmails gates its own #sb- channel and its
 	// km-slack dm targets on a route-less install too. Both handlers share one
@@ -785,21 +783,35 @@ func wireDefaultRoute(h *bridge.EventsHandler, out *bridge.Handler, getenv func(
 		out.SandboxByID = h.SandboxByID
 		out.SenderEmails = h.SenderEmails
 	}
-	route := bridge.NewDefaultRoute(alias, profile, emails)
+	route := bridge.NewDefaultRoute(alias, profile, emails, profileEmails)
 	if route == nil {
-		if alias != "" || profile != "" || len(emails) > 0 {
+		if alias != "" || profile != "" || len(emails) > 0 || len(profileEmails) > 0 {
 			slog.Warn("km-slack-bridge: default route partially configured; staying OFF",
-				"alias_set", alias != "", "profile_set", profile != "", "emails", len(emails))
+				"alias_set", alias != "", "profile_set", profile != "",
+				"emails", len(emails), "profile_emails", len(profileEmails))
 		}
 		return
 	}
 	h.DefaultRoute = route
 	h.AliasResolver = &bridge.DDBAliasResolver{Client: d.ddb, TableName: d.sandboxesTable}
 	h.CreatePublisher = &bridge.EventBridgeAdapter{Client: d.eventBridge, ArtifactBucket: d.artifactBucket}
-	// ActionDM (km-slack dm) gates its target on the same allowlist (or the
-	// posting sandbox's own allowEmails); out == nil leaves the dm verb disabled.
+	// ActionDM (km-slack dm) gates its target on the install list (or the
+	// posting sandbox's own allowEmails). With no route at all (the early return
+	// above) out.DefaultRoute stays nil and km-slack dm answers 403 dm_disabled.
 	if out != nil {
 		out.DefaultRoute = route
 	}
-	slog.Info("km-slack-bridge: default route enabled", "alias", alias, "profile", profile, "allow_count", len(emails))
+	slog.Info("km-slack-bridge: default route enabled", "alias", alias, "profile", profile,
+		"allow_count", len(emails), "profile_allow_count", len(profileEmails))
+}
+
+// splitEmailEnv splits a comma-joined email env var, dropping blanks.
+func splitEmailEnv(v string) []string {
+	var out []string
+	for _, e := range strings.Split(v, ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
 }
