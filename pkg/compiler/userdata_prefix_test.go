@@ -164,6 +164,17 @@ func extractCrossAgentBlock(ud string) string {
 	depth := 0
 	i := 0
 	for i < len(rest) {
+		// Skip shell comments: an "if " or "fi" in prose would otherwise unbalance
+		// the count and the extractor would return the rest of the poller, making
+		// every "block must not contain X" assertion vacuous for anything below it.
+		if rest[i] == '#' && i > 0 && isWordBoundary(rest[i-1]) {
+			nl := strings.IndexByte(rest[i:], '\n')
+			if nl < 0 {
+				break
+			}
+			i += nl
+			continue
+		}
 		// Detect 'if ' at a word boundary (preceded by newline, space, semicolon, or start).
 		if strings.HasPrefix(rest[i:], "if ") && (i == 0 || isWordBoundary(rest[i-1])) {
 			depth++

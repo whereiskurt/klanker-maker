@@ -1949,6 +1949,15 @@ thread-context window, so an event reads the boundary at most once. That shared 
 capped at 3 seconds; a slower read falls back to the thread root, which gives the agent more
 context, never less.
 
+**The poller must not clobber the boundary.** The sandbox's Slack inbound poller writes its
+own attributes on the same thread row after every turn (`claude_session_id`, `agent_type`,
+`last_assistant_msg`, `last_turn_ts`, `last_processed_event_ts`, `ttl_expiry`). It does so
+with an `UpdateItem` that sets only those, so the bridge's `last_dispatch_ts`, `created_at`
+and `turn_count` survive a turn. Before 2026-10-17 it used a whole-item `PutItem`. A sandbox
+created before that fix still wipes the boundary on every turn until `km destroy && km create`.
+There the quiet period reacts every time and strict-mode context falls back to the thread
+root. The fix ships in userdata, so it needs `make build-lambdas` and `km init --dry-run=false`.
+
 **Log line.** A skip is logged at Info:
 
 ```
@@ -2146,6 +2155,9 @@ cannot be resolved in time is omitted, not included.
 **The `last_dispatch_ts` boundary** is advanced with a conditional `UpdateItem` after every
 successful delivery, enqueue or cold-create publish, in every mode. A sandbox later switched
 to strict therefore already has a correct boundary. A failed delivery leaves it unchanged.
+The poller's own per-turn write updates only its attributes, so the boundary survives a turn;
+a sandbox created before 2026-10-17 overwrites the whole row and loses it until recreated
+(see § Quiet period).
 
 **What the agent sees.** The poller renders the context above the sender preamble:
 

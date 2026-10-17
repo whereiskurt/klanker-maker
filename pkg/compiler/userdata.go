@@ -2533,7 +2533,7 @@ while true; do
         # Step 8: rewrite poller state so Plan 70-05's dispatch fork handles the new
         # agent as a FIRST turn (no session resume) into the NEW thread.
         # OLD DDB row is INTACT — we never issued update-item or delete-item on it.
-        # Plan 70-05's put-item below will write a NEW row keyed on (CHANNEL, NEW_TOP_TS)
+        # Plan 70-05's update-item below will write a NEW row keyed on (CHANNEL, NEW_TOP_TS)
         # with agent_type=NEW_AGENT because we've rewritten both THREAD_TS and EFFECTIVE_AGENT.
         # RESUME_ARG is reset alongside CLAUDE_SESSION: the codex dispatch re-reads
         # CLAUDE_SESSION at fork time (so empty -> first-turn branch), but the claude
@@ -2682,7 +2682,7 @@ while true; do
           RESULT_TEXT=$(jq -r '.result // .response // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
         fi
 
-        # Phase 70 (Plan 70-05): JSON-encode RESULT_TEXT for the DDB put-item.
+        # Phase 70 (Plan 70-05): JSON-encode RESULT_TEXT for the DDB update-item.
         # CRITICAL (70-RESEARCH.md Pitfall 2): RESULT_TEXT may contain embedded
         # double-quotes, backslashes, and newlines from agent replies. Direct shell
         # interpolation into the DDB JSON literal would produce malformed JSON.
@@ -2696,19 +2696,25 @@ while true; do
         # Phase 119 (P119-F): write last_processed_event_ts so crash-redelivery of
         # this same SQS message (same event_ts) is caught by the idempotency guard
         # above and skipped without a second dispatch or Slack post.
-        aws dynamodb put-item \
+        #
+        # update-item, NOT put-item: SET only the attributes the poller owns. The
+        # bridge writes last_dispatch_ts (MarkDispatched), created_at and
+        # turn_count on this same row; a put-item replaced the whole item every
+        # turn and wiped them, so the reaction quiet period never saw a boundary
+        # and strict-mode context fell back to the thread root.
+        aws dynamodb update-item \
           --table-name "$THREADS_TABLE" \
           --region "$REGION" \
-          --item "{
-            \"channel_id\":{\"S\":\"$CHANNEL\"},
-            \"thread_ts\":{\"S\":\"$THREAD_TS\"},
-            \"claude_session_id\":{\"S\":\"$NEW_SESSION\"},
-            \"agent_type\":{\"S\":\"$EFFECTIVE_AGENT\"},
-            \"last_assistant_msg\":{\"S\":$LAST_MSG_JSON},
-            \"sandbox_id\":{\"S\":\"$SANDBOX_ID\"},
-            \"last_turn_ts\":{\"S\":\"$NOW\"},
-            \"last_processed_event_ts\":{\"S\":\"$EVENT_TS\"},
-            \"ttl_expiry\":{\"N\":\"$TTL_EXPIRY\"}
+          --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
+          --update-expression "SET claude_session_id = :sid, agent_type = :agent, last_assistant_msg = :msg, sandbox_id = :sb, last_turn_ts = :lt, last_processed_event_ts = :ev, ttl_expiry = :ttl" \
+          --expression-attribute-values "{
+            \":sid\":{\"S\":\"$NEW_SESSION\"},
+            \":agent\":{\"S\":\"$EFFECTIVE_AGENT\"},
+            \":msg\":{\"S\":$LAST_MSG_JSON},
+            \":sb\":{\"S\":\"$SANDBOX_ID\"},
+            \":lt\":{\"S\":\"$NOW\"},
+            \":ev\":{\"S\":\"$EVENT_TS\"},
+            \":ttl\":{\"N\":\"$TTL_EXPIRY\"}
           }" 2>/dev/null || true
 
         # Phase 67-11 Gap A fix: post the canonical .result text to Slack from
