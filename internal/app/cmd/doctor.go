@@ -4813,6 +4813,13 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkInitFailed(ctx, cwFilter, presenceLister, presenceLogGroupPrefix)
 	})
 
+	// v1.8.0 least-privilege role: name the running sandboxes still on the old shape.
+	iamForRoleShape := deps.IAMCleanupClient
+	listerForRoleShape := deps.Lister
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkSandboxRoleShape(ctx, iamForRoleShape, listerForRoleShape, iamResourcePrefix)
+	})
+
 	// Additional EBS volumes km-volumes refused to mount (latest event per
 	// mountpoint, so a resume that re-probed and mounted clears it). Same deps.
 	checks = append(checks, func(ctx context.Context) CheckResult {
