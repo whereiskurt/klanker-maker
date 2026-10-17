@@ -557,6 +557,17 @@ unverified.
   newest messages rather than its oldest page.
 - **Render `file_errors` and `files_omitted` in the poller header.** Both are on the wire;
   the agent sees neither.
+- **Close the cold-create boot race (pre-existing, reproduced twice in the live UAT).**
+  `km-slack-inbound-poller.service` starts before `km-init.sh` has installed the agent, so
+  the first dispatched turn on a cold-created box fails with exit 127 and the envelope sits
+  invisible for the FIFO's 1800 s visibility timeout. Every bridge that cold-creates pays
+  this: the first reply arrives ~30 minutes after the box is up. Fix either by ordering the
+  poller unit after the init-complete marker, or by resetting the message's visibility to 0
+  when a dispatch exits 127. Also worth a `km doctor` WARN ("poller started before the agent
+  was on PATH") read from the unit's journal.
+- **Post the wake hint on a routed resume.** `DDBPauseHinter` resolves the sandbox row by
+  channel, so a mention that auto-resumes the box from a channel it does not own gets no
+  "Sandbox is waking up" line; the reply still arrives.
 
 ### Can wait
 
