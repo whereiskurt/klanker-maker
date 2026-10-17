@@ -65,3 +65,30 @@ func TestValidateInitCommandAWSCalls_VariableIndirectedS3TargetIsNotFlagged(t *t
 		t.Fatalf("got %+v", errs)
 	}
 }
+
+func TestValidateInitCommandAWSCalls_PerCommandBoundary(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  string
+		want int
+	}{
+		{"granted then ungranted on next line", "aws s3 cp s3://b/models/x /y\naws dynamodb scan --table-name t", 1},
+		{"identity then iam", "aws sts get-caller-identity\naws iam list-roles", 1},
+		{"ungranted && granted", "aws s3 cp s3://other/k /t && aws s3 cp s3://b/models/y /t", 1},
+		{"name= listed", "aws ssm get-parameter --name={{prefix}}/wiz/client-id", 0},
+		{"name= unlisted", "aws ssm get-parameter --name=/km/other", 1},
+		{"quoted name listed", `aws ssm get-parameter --name "{{prefix}}/wiz/client-id"`, 0},
+		{"quoted name unlisted", `aws ssm get-parameter --name "/km/other"`, 1},
+		{"command substitution", `X=$(aws dynamodb get-item --table-name t --key {})`, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &SandboxProfile{}
+			p.Spec.Execution.InitCommands = []string{c.cmd}
+			p.Spec.IAM.AllowedSecretPaths = []string{"{{prefix}}/wiz/client-id"}
+			if got := len(validateInitCommandAWSCalls(p)); got != c.want {
+				t.Fatalf("%q: got %d warnings, want %d", c.cmd, got, c.want)
+			}
+		})
+	}
+}

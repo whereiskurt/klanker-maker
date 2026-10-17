@@ -10,7 +10,7 @@ import (
 // `aws …` line in initCommands used to work through the Allow-star; now it
 // fails under set -e in km-init.sh and aborts the remaining steps. This is a
 // best-effort textual check: it cannot see indirect AWS use inside installers.
-var initAWSCallRe = regexp.MustCompile(`(?:^|[\s;&|(])aws\s+(s3|s3api|ssm|dynamodb|sqs|logs|ses|sesv2|kms|sts|ec2|iam|secretsmanager|lambda|events)\s+([a-z-]+)((?:\s+\S+)*)`)
+var initAWSCallRe = regexp.MustCompile(`(?:^|[\s;&|(])aws\s+(s3|s3api|ssm|dynamodb|sqs|logs|ses|sesv2|kms|sts|ec2|iam|secretsmanager|lambda|events)\s+([a-z-]+)([^\n;&|]*)`)
 
 var initAWSS3GrantedPrefixRe = regexp.MustCompile(`s3://[^/\s"']+/(models|sidecars|binaries|rsync)/`)
 
@@ -45,7 +45,7 @@ func validateInitCommandAWSCalls(p *SandboxProfile) []ValidationError {
 				errs = append(errs, ValidationError{
 					Path: fmt.Sprintf("%s[%d]", path, i),
 					Message: fmt.Sprintf("calls `aws %s %s`: the sandbox role grants only what km itself needs, so this step will fail (and abort the remaining initCommands) unless the target is covered. "+
-						"For an SSM parameter add it to spec.iam.allowedSecretPaths; for S3 use the artifacts bucket's models/, binaries/, rsync/ prefixes; anything else needs a profile grant field — ask for one.", svc, op),
+						"For an SSM parameter add it to spec.iam.allowedSecretPaths; for S3 use the artifacts bucket's models/, sidecars/, binaries/, rsync/ prefixes; anything else needs a profile grant field — ask for one.", svc, op),
 					IsWarning: true,
 				})
 			}
