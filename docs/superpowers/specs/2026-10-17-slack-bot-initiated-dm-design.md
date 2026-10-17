@@ -62,9 +62,12 @@ So the agent either says it cannot, or guesses a channel and gets the 403.
 ### 4.2 Envelope and client
 - `pkg/slack/payload.go`: `ActionDM = "dm"`; `TargetUser` field (omitempty); `BuildEnvelope`
   unchanged (callers set `TargetUser` after).
-- `pkg/slack/client.go`: `OpenDM(ctx, userID string) (channelID string, err error)` wrapping
-  `conversations.open` (`users=<id>`, returns `channel.id`). Errors carry the Slack error
-  string.
+- `pkg/slack/bridge/aws_adapters.go` `SlackPosterAdapter.OpenDM(ctx, userID string) (channelID string, err error)`
+  wrapping `conversations.open` (`users=<id>`, returns `channel.id`). On the adapter, not
+  `pkg/slack.Client`: the bridge posts through the adapter (it owns 429 handling) and the
+  operator CLI never opens a DM. Errors carry the Slack error string.
+- `pkg/slack/mention.go` `AppendContextBlock(blocksJSON, mrkdwn string) (string, bool)`: the
+  `--from-thread` permalink has to reach the Block Kit payload too, not only the text fallback.
 - `pkg/slack/bridge/interfaces.go`: `type DMOpener interface { OpenDM(ctx, userID) (string, error) }`.
   The handler type-asserts `h.Slack.(DMOpener)` like `BlockPoster`, so existing fakes keep
   compiling; a poster without it → `500 dm_unsupported`.
@@ -91,7 +94,7 @@ Dispatch, in order, each fail-closed:
 6. `OpenDM(target)` → `D…`; error → `502 slack_error` with the Slack string.
 7. Post (blocks path when `env.Blocks != ""`, else text) into `D…`, no `thread_ts`.
 8. On success: `Threads.Upsert(ctx, D…, ts, env.SenderID)` (error logged, response still 200);
-   respond `{ok:true, ts, channel: D…}`.
+   respond `{ok:true, ts, channel_id: D…}` (`channel_id` so `PostResponse.ChannelID` carries it).
 Logs: `bridge: dm` with sender, target, channel, ts; every refusal names its step.
 
 ### 4.4 `km-slack dm` (`cmd/km-slack/`)
