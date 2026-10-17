@@ -8,13 +8,9 @@ import (
 	"testing"
 )
 
-// ec2spotGrantsModuleDir is switched to the live pin in Task 2 of the
-// least-privilege plan; until then it names the module under construction.
-const ec2spotGrantsModuleDir = "infra/modules/ec2spot/v1.8.0"
-
 func readEC2SpotMainTF(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(findRepoRoot(t), filepath.FromSlash(ec2spotGrantsModuleDir), "main.tf"))
+	raw, err := os.ReadFile(filepath.Join(findRepoRoot(t), filepath.FromSlash(pinnedEC2SpotModuleDir(t)), "main.tf"))
 	if err != nil {
 		t.Fatalf("read module: %v", err)
 	}
@@ -150,7 +146,7 @@ func TestEC2SpotRole_SSMParameterReadsAreScoped(t *testing.T) {
 }
 
 func TestEC2SpotRole_NewInputsDeclared(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(findRepoRoot(t), filepath.FromSlash(ec2spotGrantsModuleDir), "variables.tf"))
+	raw, err := os.ReadFile(filepath.Join(findRepoRoot(t), filepath.FromSlash(pinnedEC2SpotModuleDir(t)), "variables.tf"))
 	if err != nil {
 		t.Fatal(err)
 	}

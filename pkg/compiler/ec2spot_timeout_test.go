@@ -17,8 +17,8 @@ import (
 // when the live pin moved v1.3.0 -> v1.4.0 (secret_paths IAM grant), same day, again
 // when it moved v1.4.0 -> v1.5.0 (captures/ + learn/ S3 grants), and again when it moved
 // v1.5.0 -> v1.6.0 (execs/ S3 grant, Phase 132), and again when it moved
-// v1.6.0 -> v1.7.0 (IMDS-fence self-assume trust, Phase 133 Wave 2).
-const ec2spotModuleDir = "../../infra/modules/ec2spot/v1.7.0"
+// v1.6.0 -> v1.7.0 (IMDS-fence self-assume trust, Phase 133 Wave 2), and again when it moved v1.7.0 -> v1.8.0 (least-privilege role: region Deny + explicit grants).
+const ec2spotModuleDir = "../../infra/modules/ec2spot/v1.8.0"
 
 // sandboxTemplatePath is the terragrunt template carrying the authoritative pin.
 const sandboxTemplatePath = "../../infra/templates/sandbox/terragrunt.hcl"

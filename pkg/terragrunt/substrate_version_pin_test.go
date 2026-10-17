@@ -143,8 +143,8 @@ func TestSubstrateVersionPinResolvesPerSubstrate(t *testing.T) {
 	body := parseSandboxTemplate(t, repoRoot)
 	versions := extractSubstrateVersionMap(t, body)
 
-	if got := versions["ec2spot"]; got != "v1.7.0" {
-		t.Errorf("substrate_module_versions[ec2spot] = %q, want v1.6.0", got)
+	if got := versions["ec2spot"]; got != "v1.8.0" {
+		t.Errorf("substrate_module_versions[ec2spot] = %q, want v1.8.0", got)
 	}
 	if got := versions["ecs"]; got != "v1.0.0" {
 		t.Errorf("substrate_module_versions[ecs] = %q, want v1.0.0", got)
