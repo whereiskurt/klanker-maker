@@ -2939,6 +2939,10 @@ while true; do
         # --- km-exit-127 ---
         echo "[km-slack-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
         if [ "$RUN_EXIT" -eq 127 ]; then
+          # Stop the visibility heartbeat first: a tick after the 60 s set below
+          # would re-extend the message. The kill after this block is idempotent.
+          kill "$HB_PID" 2>/dev/null || true
+          wait "$HB_PID" 2>/dev/null || true
           # 127 = the agent binary is missing (the boot race the init gate now
           # prevents, or a profile with no agent install). Retry in 60 s instead
           # of the queue's 1800 s; the shared DLQ's maxReceiveCount still bounds it.
