@@ -440,6 +440,13 @@ All three are quiet and none is dangerous.
 
 ## 9. Operating it
 
+A second "Reply sent to …" line under every answer was the pre-existing double post, not the
+route: the agent answered with `km-slack reply` and the poller then posted its closing
+sentence. A marker file now makes the poller skip its final post when the agent already
+posted in the thread (see `docs/slack-notifications.md` § One reply per turn). It ships with
+`make build` + `km init --dry-run=false`, because the `km-slack` sidecar and the
+create-handler-rendered poller both change, and a box gains it only on recreate.
+
 ### 9.1 Troubleshooting
 
 | Symptom | Cause | Fix |

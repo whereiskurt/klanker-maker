@@ -3429,10 +3429,35 @@ Three things stood between the agent and that token:
 
 | Piece | Change |
 |---|---|
-| `km-slack-inbound-poller` (userdata) | Reads the body's `.user`; prepends `[Slack] From: <@U…> …` to the prompt with the two ways to use it; exports `KM_SLACK_SENDER_ID` inline in every dispatched turn. No preamble when `.user` is absent. Slack-inbound profiles only. |
+| `km-slack-inbound-poller` (userdata) | Reads the body's `.user`; prepends `[Slack] From: <@U…> …` to the prompt telling the agent to write the token inline in its final reply (since 2026-10-17 it no longer suggests `--mention`; see One reply per turn); exports `KM_SLACK_SENDER_ID` inline in every dispatched turn. No preamble when `.user` is absent. Slack-inbound profiles only. |
 | `pkg/slack` renderer | `htmlEscape` preserves exactly `<@U…>`, `<@W…>`, `<#C…>`, `<!here>`, `<!channel>`. Nothing wider — `<script>`, `<!subteam^…>` (no `usergroups:*` scope) and other angle-bracketed text still escape. |
 | `km-slack post` / `reply` | New `--mention U…[,U…\|here\|channel]` (repeatable). Normalises `U1`, `@U1`, `<@U1>`, `here`, `@here`; prepends a `<@U…>` line to the plain `text` in **every** mode (Slack builds the push notification from `text` even when blocks are sent) and, in block modes, a leading `section`/`mrkdwn` block. At the 50-block cap the block is dropped rather than the post. **Names are rejected at parse time.** |
 | `klanker:slack` skill | "Mentioning people" section: where the ids come from, the two forms, `<!here>` only on explicit ask. Plugin `0.4.16`. |
+
+The preamble the agent sees today (2026-10-17 wording):
+
+```text
+[Slack] From: <@U0ABC123> in <#C0TEAM> (also in $KM_SLACK_SENDER_ID). Your final reply is posted to this thread automatically when the turn ends; to notify this person write <@U0ABC123> inline in that reply. Do not call km-slack post/reply to deliver your answer: any km-slack post/reply into this thread cancels the automatic final post, so such a call must carry your complete answer. A bare @name is plain text to Slack — never invent an id; use this one or a <@U…> token from the message.
+```
+
+### One reply per turn (2026-10-17)
+
+Every Slack turn used to land twice. The original preamble suggested `km-slack post/reply
+--mention`, so the agent posted its answer itself. The poller then posted the turn's final
+text, which by then was the agent's closing sentence ("Reply sent to @… in the thread.").
+Two layers fix it. `km-slack` touches `/tmp/km-slack-posted.<thread_ts>` after every
+successful threaded `post` or `reply`. The poller deletes that marker just before it
+dispatches the agent. At the end of the turn it skips its own post when the marker exists,
+logging `agent already posted in thread=…; skipping the final post`. The hook's
+transcript-stream drain posts progress into the same thread, so it sets
+`KM_SLACK_POSTED_MARKER=0` and leaves no marker; otherwise a mid-turn progress post would
+suppress the real answer. The marker is best-effort: if it cannot be written, the worst case
+is the old double post, never a lost reply. The preamble now tells the agent its final reply
+is posted automatically, so the common case never reaches the skip.
+
+Deploy = `make build` + `km init --dry-run=false`: the `km-slack` sidecar and the
+create-handler-rendered poller and hook both change. A sandbox gains it on
+`km destroy && km create`.
 
 ### Verified live (2026-09-19)
 

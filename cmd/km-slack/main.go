@@ -495,6 +495,7 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 				return "", fmt.Errorf("bridge returned not-ok on mrkdwn fallback: %s", fbResp.Error)
 			}
 			fmt.Fprintf(os.Stderr, "km-slack: posted ts=%s (mrkdwn fallback)\n", fbResp.TS)
+			markThreadPosted(thread)
 			return fbResp.TS, nil
 		}
 		return "", err
@@ -503,7 +504,49 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 		return "", fmt.Errorf("bridge returned not-ok: %s", resp.Error)
 	}
 	fmt.Fprintf(os.Stderr, "km-slack: posted ts=%s\n", resp.TS)
+	markThreadPosted(thread)
 	return resp.TS, nil
+}
+
+// postedMarkerPrefix is the basename prefix of the "agent already posted in
+// this thread" marker. The Slack inbound poller (pkg/compiler/userdata.go,
+// the km-slack-final-post block) checks the SAME literal path
+// ${KM_SLACK_POSTED_DIR:-/tmp}/km-slack-posted.<thread_ts> and skips its own
+// end-of-turn post when it exists — otherwise an agent that answers with
+// `km-slack reply` gets its closing sentence posted as a second reply.
+const postedMarkerPrefix = "km-slack-posted."
+
+// postedMarkerPath returns the marker path for thread, or "" when thread is
+// empty (a top-level post), not a plain filename component, or the caller
+// opted out with KM_SLACK_POSTED_MARKER=0. The opt-out exists for posts that
+// are NOT the agent delivering its answer: km-notify-hook's transcript-stream
+// drain posts tool progress into the same thread mid-turn, and a marker from
+// it would suppress the poller's real final reply.
+func postedMarkerPath(thread string) string {
+	if os.Getenv("KM_SLACK_POSTED_MARKER") == "0" {
+		return ""
+	}
+	if thread == "" || strings.ContainsAny(thread, `/\`) || thread == "." || thread == ".." {
+		return ""
+	}
+	dir := os.Getenv("KM_SLACK_POSTED_DIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, postedMarkerPrefix+thread)
+}
+
+// markThreadPosted touches the posted marker after a SUCCESSFUL threaded post.
+// Best-effort: a failure is logged and ignored — the worst case is the old
+// double post, never a lost reply.
+func markThreadPosted(thread string) {
+	p := postedMarkerPath(thread)
+	if p == "" {
+		return
+	}
+	if err := os.WriteFile(p, nil, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "km-slack: could not write posted marker %s: %v\n", p, err)
+	}
 }
 
 // runPermalink wraps chat.getPermalink via the bridge.

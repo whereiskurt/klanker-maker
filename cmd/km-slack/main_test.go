@@ -21,7 +21,16 @@ import (
 // TestMain shrinks BridgeBackoff to milliseconds so retry tests don't slow the suite.
 func TestMain(m *testing.M) {
 	slack.BridgeBackoff = []time.Duration{1 * time.Millisecond, 1 * time.Millisecond, 1 * time.Millisecond}
-	os.Exit(m.Run())
+	// Keep threaded-post markers out of the real /tmp for the whole suite.
+	markerDir, err := os.MkdirTemp("", "km-slack-posted-test-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Setenv("KM_SLACK_POSTED_DIR", markerDir)
+	code := m.Run()
+	os.RemoveAll(markerDir)
+	os.Exit(code)
 }
 
 // genKey returns a fresh ephemeral Ed25519 key pair for test use.

@@ -84,6 +84,12 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   prompt is lost. Until the reinstall, channels work and DMs are never delivered. Frozen
   pre-92 learn.v2 golden hand-patched for the poller hunks, never re-captured. No plugin bump.
   See `docs/slack-notifications.md` § Default route and § Phase 91 Strict mode.
+- **One reply per turn (2026-10-17): every Slack turn posted TWICE** — the agent answered with
+  `km-slack reply` (the 09-19 preamble told it to), then the poller posted its closing sentence.
+  `km-slack` now touches `/tmp/km-slack-posted.<thread_ts>` after a successful threaded post;
+  the poller clears it before dispatch and skips its final post when it exists. The hook's
+  stream drain opts out (`KM_SLACK_POSTED_MARKER=0`) or a progress post would eat the answer.
+  Deploy = `make build` + `km init --dry-run=false` (sidecar AND create-handler) + recreate.
 
 **Hibernate-safe additional volumes — `km-volumes` (2026-09-20):**
 - **A hibernate/resume can cross-wire the additional NVMe namespaces; `/etc/fstab`'s mount-by-UUID then writes both volumes onto the wrong disk.** Reproduced on cycle 1 of `km pause`/`km resume` on a two-volume t3.medium (`sb-3cf8e982`): the kernel re-reads namespace SIZE but keeps cached controller IDENTITY and page cache, so `/sys/block/*/device/serial` and `blkid` both lie after resume — **only a live `nvme id-ctrl` Identify tells the truth** (it showed the two volumes had actually swapped controllers). The operator write-up's "serials were right" was sysfs. A 1 MiB known file failed its checksum 33 s after resume.

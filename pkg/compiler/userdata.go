@@ -862,7 +862,9 @@ _km_stream_drain() {
   # a rich render overflows (e.g. the 12K markdown cap or Slack's 50-block cap), so
   # this is safe even for very long Claude turns.
   local post_resp posted_ts
-  post_resp=$(/opt/km/bin/km-slack post \
+  # KM_SLACK_POSTED_MARKER=0: a stream-drain post is progress, not the agent
+  # answering — it must not trip the inbound poller final-post skip.
+  post_resp=$(KM_SLACK_POSTED_MARKER=0 /opt/km/bin/km-slack post \
     --channel "$KM_SLACK_CHANNEL_ID" \
     --thread "$ts" \
     --body "$body_file" \
@@ -2335,8 +2337,11 @@ while true; do
       # body's .user, and without it "can you @ me back" is unanswerable (an
       # agent that guesses writes "@Kurt", which Slack renders as plain text).
       # Prepend it as a one-line preamble and export it into every dispatched
-      # turn (below) so the agent can write <@$SENDER_ID> inline or pass
-      # --mention "$KM_SLACK_SENDER_ID" to km-slack post/reply. Self-contained
+      # turn (below) so the agent can write <@$SENDER_ID> inline in its final
+      # reply, which the poller posts to the thread when the turn ends (the
+      # renderer preserves the token). The preamble steers the agent AWAY from
+      # delivering its answer with km-slack post/reply — that was the double
+      # post (km-slack-final-post below now also guards it). Self-contained
       # (derives SENDER_ID from BODY here) so the compiler test can run it as-is.
       SENDER_ID=$(echo "$BODY" | jq -r '.user // empty' 2>/dev/null || true)
       # The channel the turn arrived in (already set by the envelope parse; the
@@ -2344,7 +2349,7 @@ while true; do
       : "${REPLY_CHANNEL:=$(echo "$BODY" | jq -r '.channel // empty' 2>/dev/null || true)}"
       if [ -n "$SENDER_ID" ]; then
         HDR_FILE="$(mktemp)"
-        printf '[Slack] From: <@%s> in <#%s> (also in $KM_SLACK_SENDER_ID). To notify this person in your reply write <@%s> inline, or pass --mention %s to km-slack post/reply. A bare @name is plain text to Slack — never invent an id; use this one or a <@U…> token from the message.\n\n' "$SENDER_ID" "$REPLY_CHANNEL" "$SENDER_ID" "$SENDER_ID" > "$HDR_FILE"
+        printf '[Slack] From: <@%s> in <#%s> (also in $KM_SLACK_SENDER_ID). Your final reply is posted to this thread automatically when the turn ends; to notify this person write <@%s> inline in that reply. Do not call km-slack post/reply to deliver your answer: any km-slack post/reply into this thread cancels the automatic final post, so such a call must carry your complete answer. A bare @name is plain text to Slack — never invent an id; use this one or a <@U…> token from the message.\n\n' "$SENDER_ID" "$REPLY_CHANNEL" "$SENDER_ID" > "$HDR_FILE"
         cat "$PROMPT_FILE" >> "$HDR_FILE"
         mv "$HDR_FILE" "$PROMPT_FILE"
         chmod 644 "$PROMPT_FILE"
@@ -2530,6 +2535,12 @@ while true; do
       # Export KM_SLACK_THREAD_TS so km-notify-hook passes --thread to km-slack post (Phase 67).
       export KM_SLACK_THREAD_TS="$THREAD_TS"
 
+      # One reply per turn: km-slack touches /tmp/km-slack-posted.<thread_ts>
+      # after a successful threaded post/reply, and the final-post block below
+      # skips the poller's own post when the agent already answered. Clear any
+      # stale marker first so an earlier turn cannot suppress this one.
+      rm -f "/tmp/km-slack-posted.$THREAD_TS"
+
       # Phase 70 (Plan 70-05): dispatch fork — codex path (new) or claude path (existing, unchanged).
       # EFFECTIVE_AGENT was set above from DDB agent_type (defaulting to AGENT if absent).
       # Plan 70-06 prefix parser may have overridden EFFECTIVE_AGENT before this block.
@@ -2682,25 +2693,38 @@ while true; do
         # than a misleading "(no recent assistant text)" fallback that operators
         # cannot distinguish from genuine empty replies.
         if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$REPLY_CHANNEL" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
-          POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
-          printf '%s' "$RESULT_TEXT" > "$POST_FILE"
-          # Phase 112 (HOOK-01 inbound coverage): --render=blocks-rich (Tier 3: native
-          # markdown + table blocks) by default for the poller reply path so
-          # Slack-initiated chat sees structured messages, not literal markdown. Operator
-          # override: KM_SLACK_RENDER=blocks|mrkdwn|plain via /etc/km/notify.env or
-          # /etc/profile.d/km-notify-env.sh. km-slack demotes Tier 3 → Tier 2 → Tier 1
-          # automatically when a rich render overflows.
-          if /opt/km/bin/km-slack post \
-               --channel "$REPLY_CHANNEL" \
-               --subject "" \
-               --thread "$THREAD_TS" \
-               --render "${KM_SLACK_RENDER:-blocks-rich}" \
-               --body "$POST_FILE" 2>>"$RUN_DIR/stderr.log"; then
-            echo "[km-slack-inbound-poller] Posted reply to Slack (thread=$THREAD_TS, len=${#RESULT_TEXT})"
+          # --- km-slack-final-post ---
+          # One reply per turn. An agent that already answered with
+          # km-slack post/reply --thread left /tmp/km-slack-posted.<thread_ts>
+          # (written by km-slack itself on success); posting RESULT_TEXT on top
+          # of that would add its closing sentence ("Reply sent to …") as a
+          # second reply. Skip, and consume the marker.
+          if [ -e "/tmp/km-slack-posted.$THREAD_TS" ]; then
+            echo "[km-slack-inbound-poller] agent already posted in thread=$THREAD_TS; skipping the final post" >&2
+            rm -f "/tmp/km-slack-posted.$THREAD_TS"
           else
-            echo "[km-slack-inbound-poller] WARN: km-slack post failed for thread=$THREAD_TS" >&2
+            POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
+            printf '%s' "$RESULT_TEXT" > "$POST_FILE"
+            # Phase 112 (HOOK-01 inbound coverage): --render=blocks-rich (Tier 3: native
+            # markdown + table blocks) by default for the poller reply path so
+            # Slack-initiated chat sees structured messages, not literal markdown. Operator
+            # override: KM_SLACK_RENDER=blocks|mrkdwn|plain via /etc/km/notify.env or
+            # /etc/profile.d/km-notify-env.sh. km-slack demotes Tier 3 → Tier 2 → Tier 1
+            # automatically when a rich render overflows. The marker this post
+            # leaves is cleared before the next turn in this thread is dispatched.
+            if /opt/km/bin/km-slack post \
+                 --channel "$REPLY_CHANNEL" \
+                 --subject "" \
+                 --thread "$THREAD_TS" \
+                 --render "${KM_SLACK_RENDER:-blocks-rich}" \
+                 --body "$POST_FILE" 2>>"$RUN_DIR/stderr.log"; then
+              echo "[km-slack-inbound-poller] Posted reply to Slack (thread=$THREAD_TS, len=${#RESULT_TEXT})"
+            else
+              echo "[km-slack-inbound-poller] WARN: km-slack post failed for thread=$THREAD_TS" >&2
+            fi
+            rm -f "$POST_FILE"
           fi
-          rm -f "$POST_FILE"
+          # --- end km-slack-final-post ---
         elif [ -z "$KM_SLACK_CHANNEL_ID" ] || [ -z "$KM_SLACK_BRIDGE_URL" ]; then
           echo "[km-slack-inbound-poller] WARN: KM_SLACK_CHANNEL_ID/KM_SLACK_BRIDGE_URL unset, skipping Slack post for thread=$THREAD_TS"
         else

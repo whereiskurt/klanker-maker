@@ -72,12 +72,17 @@ func TestUserdata_SlackInbound_SenderPreambleIsPrepended(t *testing.T) {
 	if !strings.HasSuffix(got, "hi <@U0RON>") {
 		t.Fatalf("original prompt text not preserved after the preamble:\n%s", got)
 	}
-	// The preamble must tell the agent HOW to mention — the literal token form
-	// and the --mention flag — because "@Kurt" is the mistake it will otherwise make.
-	for _, want := range []string{"<@U0KURT>", "--mention U0KURT"} {
+	// The preamble must tell the agent HOW to mention — the literal token form —
+	// because "@Kurt" is the mistake it will otherwise make. It must also say the
+	// final reply is posted automatically, and must NOT steer the agent to
+	// deliver its answer with km-slack: that was the double post per turn.
+	for _, want := range []string{"<@U0KURT>", "posted to this thread automatically", "Do not call km-slack post/reply to deliver your answer", "never invent an id"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("preamble missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "--mention U0KURT") {
+		t.Errorf("preamble still steers the agent to km-slack --mention for its answer:\n%s", got)
 	}
 }
 
