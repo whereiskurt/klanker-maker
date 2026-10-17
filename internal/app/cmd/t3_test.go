@@ -119,18 +119,28 @@ func TestParseT3Status_PairURLOnlyFromItsMarker(t *testing.T) {
 func TestT3UnitFile_LoadBearingLines(t *testing.T) {
 	for _, want := range []string{
 		"User=sandbox",
-		"ExecStart=/bin/bash -lc 'exec t3 serve --host 127.0.0.1 --port 3773 --no-browser /workspace'",
+		"ExecStart=/bin/bash -lc '",
+		"exec t3 serve --host 127.0.0.1 --port 3773 --no-browser /workspace >>/home/sandbox/.t3/km-t3code.log 2>&1'",
+		"umask 077",
+		`chmod 600 "$$L"`,
+		`[ ! -O "$$L" ]`,
 		"UnsetEnvironment=XDG_RUNTIME_DIR",
 		"Environment=T3CODE_TELEMETRY_ENABLED=false",
 		"Restart=on-failure",
-		"StandardOutput=append:/home/sandbox/.t3/km-t3code.log",
 		"WantedBy=multi-user.target",
 	} {
 		if !strings.Contains(t3UnitFile, want) {
 			t.Errorf("unit file missing %q", want)
 		}
 	}
-	for _, bad := range []string{"0.0.0.0", "journal", "auto-bootstrap", "Restart=always"} {
+	// StandardOutput=append: is opened by systemd as ROOT; ~/.t3 is
+	// sandbox-controlled, so a planted symlink would aim that root open() at any
+	// file on the box. The redirect must happen in the sandbox user's shell.
+	// A bare $L would be expanded (to nothing) by systemd before bash runs.
+	if regexp.MustCompile(`[^$]\$L`).MatchString(t3UnitFile) {
+		t.Error("unit file uses $L; systemd expands it — write $$L")
+	}
+	for _, bad := range []string{"0.0.0.0", "journal", "auto-bootstrap", "Restart=always", "StandardOutput=", "StandardError="} {
 		if strings.Contains(t3UnitFile, bad) {
 			t.Errorf("unit file must not contain %q", bad)
 		}
@@ -149,9 +159,10 @@ func TestT3StartScript_NeverEchoesPresenceToken(t *testing.T) {
 		"T3CODE_VERSION=$KM_T3_VERSION sh",
 		"KM_T3_VERSION='0.1.0'",
 		"systemctl enable km-t3code.service",
-		// Unconditional, not create-if-absent: found live, a log first created
-		// by systemd was root 0644 — world-readable, with t3's startup token in it.
-		"chown sandbox:sandbox /home/sandbox/.t3/km-t3code.log\nchmod 0600 /home/sandbox/.t3/km-t3code.log",
+		"set -o pipefail; curl -fsSL",
+		"grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1)\nif [ \"$CUR\" != \"$KM_T3_VERSION\" ]",
+		"mktemp /etc/systemd/system/.km-t3code.XXXXXX",
+		"runuser -u sandbox -- tail -20 /home/sandbox/.t3/km-t3code.log",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("start script missing %q", want)
@@ -164,6 +175,23 @@ func TestT3StartScript_NeverEchoesPresenceToken(t *testing.T) {
 	}
 	if !strings.Contains(s, t3UnitFile) {
 		t.Error("start script does not embed t3UnitFile verbatim")
+	}
+	// The root-run part (everything but the embedded unit text) must never do a
+	// root file operation on a sandbox-controlled path: ~/.t3 is owned by the
+	// sandbox user and /tmp names are guessable, so either is a symlink away
+	// from root writing anywhere on the box.
+	rootPart := strings.Replace(s, t3UnitFile, "", 1)
+	for _, bad := range []string{
+		"/tmp/km-t3",
+		"chown sandbox:sandbox /home/sandbox/.t3",
+		"chmod 0600 /home/sandbox/.t3",
+		"touch /home/sandbox/.t3",
+		"install -d -m 0700 -o sandbox -g sandbox /home/sandbox/.t3",
+		"tail -20 /home/sandbox/.t3/km-t3code.log 2>/dev/null | sed", // must be via runuser
+	} {
+		if strings.Contains(strings.Replace(rootPart, "runuser -u sandbox -- tail -20", "", 1), bad) {
+			t.Errorf("root part of the start script touches a sandbox-controlled path: %q", bad)
+		}
 	}
 	if !strings.HasSuffix(s, t3StatusScript) {
 		t.Error("start script must end with the status probe so start reports like status")

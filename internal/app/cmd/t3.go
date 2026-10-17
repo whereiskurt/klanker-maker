@@ -49,7 +49,15 @@ const (
 //   - UnsetEnvironment=XDG_RUNTIME_DIR keeps t3 from wrapping agents in
 //     `systemd-run --user` scopes, so they stay in this unit's cgroup (signal 5
 //     excludes them by that cgroup);
-//   - stdout to ~/.t3, not the journal: t3 prints a pairing token at startup;
+//   - stdout to ~/.t3/km-t3code.log (0600), not the journal: t3 prints a pairing
+//     token at startup. The redirect is opened by the sandbox user's own shell,
+//     NOT by systemd's StandardOutput=append: — systemd opens that as root, and
+//     ~/.t3 is sandbox-controlled, so a symlink planted there would point a root
+//     open() at any file on the box;
+//     A log the sandbox user does not own (left by an older root-side create)
+//     is replaced, not appended to — sandbox owns ~/.t3, so it may unlink it.
+//     `$$L` is systemd's escape for a literal `$`: systemd expands $VAR in
+//     ExecStart itself, before bash ever sees the line;
 //   - Restart=on-failure, not always, so `km t3 stop` sticks.
 const t3UnitFile = `[Unit]
 Description=T3 Code server (km t3)
@@ -61,9 +69,7 @@ Group=sandbox
 WorkingDirectory=/workspace
 Environment=T3CODE_TELEMETRY_ENABLED=false
 UnsetEnvironment=XDG_RUNTIME_DIR
-ExecStart=/bin/bash -lc 'exec t3 serve --host 127.0.0.1 --port 3773 --no-browser /workspace'
-StandardOutput=append:/home/sandbox/.t3/km-t3code.log
-StandardError=append:/home/sandbox/.t3/km-t3code.log
+ExecStart=/bin/bash -lc 'umask 077; L=/home/sandbox/.t3/km-t3code.log; mkdir -p /home/sandbox/.t3; if [ -e "$$L" ] && [ ! -O "$$L" ]; then rm -f "$$L"; fi; touch "$$L" && chmod 600 "$$L"; exec t3 serve --host 127.0.0.1 --port 3773 --no-browser /workspace >>/home/sandbox/.t3/km-t3code.log 2>&1'
 KillMode=mixed
 Restart=on-failure
 RestartSec=5
@@ -90,7 +96,7 @@ runuser -u sandbox -- bash -lc 'command -v claude; command -v codex' 2>/dev/null
 echo "=== presence token ==="
 if [ -s /etc/km/t3/presence.token ]; then echo yes; else echo no; fi
 echo "=== presence signal9 ==="
-if strings /opt/km/bin/km-presence 2>/dev/null | grep -q checkT3InUse; then echo yes; else echo no; fi`
+if grep -aq checkT3InUse /opt/km/bin/km-presence 2>/dev/null; then echo yes; else echo no; fi`
 
 // t3StopScript disables as well as stops, so a later km resume does not bring
 // the server back. ~/.t3 (threads, settings, sessions) is left alone.
@@ -105,6 +111,12 @@ var t3VersionRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 // The presence token never reaches stdout: python3 writes it straight into a
 // root-only file and prints only the session id. SSM keeps command output, so
 // anything echoed here would be readable for weeks.
+//
+// This runs as ROOT. It never touches a path the sandbox user controls (~/.t3,
+// a fixed name in /tmp) with a root file operation: a symlink planted there
+// would turn a root touch/chown/redirect into a write to any file on the box.
+// Work on ~/.t3 happens via runuser as sandbox; root scratch files come from
+// mktemp; the unit is staged inside /etc/systemd/system.
 func t3StartScript(version string) string {
 	return fmt.Sprintf(`KM_T3_VERSION='%s'
 has_libatomic() {
@@ -115,9 +127,11 @@ has_libatomic() {
 # installer's own smoke test fails first. The package repos are outside
 # base/network/locked's allowlist, so on such a box this fails — report it.
 if ! has_libatomic; then
-  if command -v dnf >/dev/null 2>&1; then dnf install -y libatomic >/tmp/km-t3-libatomic.log 2>&1 || true
-  elif command -v apt-get >/dev/null 2>&1; then apt-get install -y libatomic1 >/tmp/km-t3-libatomic.log 2>&1 || true
+  PKGLOG=$(mktemp)
+  if command -v dnf >/dev/null 2>&1; then dnf install -y libatomic >"$PKGLOG" 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then apt-get install -y libatomic1 >"$PKGLOG" 2>&1 || true
   fi
+  rm -f "$PKGLOG"
   if ! has_libatomic; then
     echo "=== libatomic ==="
     echo missing
@@ -126,39 +140,36 @@ if ! has_libatomic; then
 fi
 # 2. t3 itself (sandbox user), pinned, from the tagged installer on GitHub —
 # not t3.codes, which base/network/locked does not allow. The installer
-# verifies the release's SHA256SUMS.
+# verifies the release's SHA256SUMS. Compared as an exact version so a re-run
+# on an up-to-date box never reinstalls and restarts mid-turn.
 NEED_RESTART=0
-CUR=$(runuser -u sandbox -- /home/sandbox/.local/bin/t3 --version 2>/dev/null || true)
-case "$CUR" in
-  *"v$KM_T3_VERSION") ;;
-  *)
-    echo "installing t3 v$KM_T3_VERSION"
-    if ! runuser -u sandbox -- bash -lc "curl -fsSL https://raw.githubusercontent.com/pingdotgg/t3code/v$KM_T3_VERSION/scripts/install.sh | T3CODE_VERSION=$KM_T3_VERSION sh" >/tmp/km-t3-install.log 2>&1; then
-      echo "=== install failed ==="
-      tail -5 /tmp/km-t3-install.log
-      exit 0
-    fi
-    NEED_RESTART=1
-    ;;
-esac
-# 3. The unit. Its log lives in ~/.t3 beside t3's other credentials (t3 prints
-# a pairing token at startup). systemd's append: creates a missing file as
-# root 0644, so create it here and re-assert owner/mode on every start — a log
-# left world-readable by an earlier run is fixed rather than kept.
-install -d -m 0700 -o sandbox -g sandbox /home/sandbox/.t3
-touch /home/sandbox/.t3/km-t3code.log
-chown sandbox:sandbox /home/sandbox/.t3/km-t3code.log
-chmod 0600 /home/sandbox/.t3/km-t3code.log
+CUR=$(runuser -u sandbox -- /home/sandbox/.local/bin/t3 --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+if [ "$CUR" != "$KM_T3_VERSION" ]; then
+  echo "installing t3 v$KM_T3_VERSION"
+  INSTLOG=$(mktemp)
+  # pipefail: without it a failed download pipes nothing into sh, which exits 0.
+  if ! runuser -u sandbox -- bash -lc "set -o pipefail; curl -fsSL https://raw.githubusercontent.com/pingdotgg/t3code/v$KM_T3_VERSION/scripts/install.sh | T3CODE_VERSION=$KM_T3_VERSION sh" >"$INSTLOG" 2>&1; then
+    echo "=== install failed ==="
+    tail -5 "$INSTLOG"
+    rm -f "$INSTLOG"
+    exit 0
+  fi
+  rm -f "$INSTLOG"
+  NEED_RESTART=1
+fi
+# 3. The unit. ~/.t3 and the server log are created by the unit itself, as the
+# sandbox user (see t3UnitFile).
 [ -d /workspace ] || install -d -o sandbox -g sandbox /workspace
-cat > /tmp/km-t3code.service.new <<'KM_T3_UNIT_EOF'
+NEWUNIT=$(mktemp /etc/systemd/system/.km-t3code.XXXXXX)
+cat > "$NEWUNIT" <<'KM_T3_UNIT_EOF'
 %sKM_T3_UNIT_EOF
-if ! cmp -s /tmp/km-t3code.service.new /etc/systemd/system/km-t3code.service; then
-  mv -f /tmp/km-t3code.service.new /etc/systemd/system/km-t3code.service
-  chmod 0644 /etc/systemd/system/km-t3code.service
+if ! cmp -s "$NEWUNIT" /etc/systemd/system/km-t3code.service; then
+  chmod 0644 "$NEWUNIT"
+  mv -f "$NEWUNIT" /etc/systemd/system/km-t3code.service
   systemctl daemon-reload
   NEED_RESTART=1
 else
-  rm -f /tmp/km-t3code.service.new
+  rm -f "$NEWUNIT"
 fi
 systemctl enable km-t3code.service >/dev/null 2>&1
 if [ "$NEED_RESTART" = 1 ]; then systemctl restart km-t3code.service; else systemctl start km-t3code.service; fi
@@ -168,7 +179,7 @@ until curl -fsS -o /dev/null --max-time 2 http://127.0.0.1:3773/.well-known/t3/e
   i=$((i+1))
   if [ "$i" -ge 30 ]; then
     echo "=== not ready ==="
-    tail -20 /home/sandbox/.t3/km-t3code.log 2>/dev/null | sed -E 's/(token=|Token: )[^ ]+/\1REDACTED/g'
+    runuser -u sandbox -- tail -20 /home/sandbox/.t3/km-t3code.log 2>/dev/null | sed -E 's/(token=|Token: )[^ ]+/\1REDACTED/g'
     break
   fi
   sleep 1
@@ -193,7 +204,7 @@ for s in json.load(sys.stdin):
     if (s.get("client") or {}).get("label") == "km-presence" and s.get("sessionId") != os.environ["NEWID"]:
         print(s["sessionId"])
 ' 2>/dev/null | while read -r old; do
-    runuser -u sandbox -- bash -lc "t3 auth session revoke $old" >/dev/null 2>&1 || true
+    runuser -u sandbox -- bash -lc "t3 auth session revoke '$old'" >/dev/null 2>&1 || true
   done
 else
   rm -f /etc/km/t3/presence.token.tmp
