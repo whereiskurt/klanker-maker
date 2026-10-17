@@ -27,6 +27,7 @@
         "groups:history",
         "im:history",
         "mpim:history",
+        "im:write",
         "conversations.connect:write",
         "reactions:read",
         "reactions:write",

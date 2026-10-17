@@ -707,13 +707,13 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 		}
 	}
 
-	// 3. Scopes: DMs need im:history / mpim:history.
+	// 3. Scopes: DMs to the bot need im:history / mpim:history; km-slack dm needs im:write.
 	have := map[string]bool{}
 	for _, s := range strings.Split(scopesCSV, ",") {
 		have[strings.TrimSpace(s)] = true
 	}
 	var missing []string
-	for _, s := range []string{"im:history", "mpim:history"} {
+	for _, s := range []string{"im:history", "mpim:history", "im:write"} {
 		if !have[s] {
 			missing = append(missing, s)
 		}
@@ -723,10 +723,10 @@ func checkSlackDefaultRoute(ctx context.Context, route *config.SlackDefaultRoute
 		out = append(out, CheckResult{Name: "Slack default route scopes", Status: CheckSkipped, Message: "bot scopes unavailable (auth.test)"})
 	case len(missing) > 0:
 		out = append(out, CheckResult{Name: "Slack default route scopes", Status: CheckWarn,
-			Message:     "missing " + strings.Join(missing, ", ") + " — DMs to the bot are never delivered",
+			Message:     "missing " + strings.Join(missing, ", ") + " — DMs to the bot are never delivered (history) / the bot cannot open a DM (im:write)",
 			Remediation: "`km slack manifest` → paste into the Slack App → reinstall → `km slack rotate-token --bot-token <new>`."})
 	default:
-		out = append(out, CheckResult{Name: "Slack default route scopes", Status: CheckOK, Message: "im:history and mpim:history present"})
+		out = append(out, CheckResult{Name: "Slack default route scopes", Status: CheckOK, Message: "im:history, mpim:history and im:write present"})
 	}
 	return out
 }

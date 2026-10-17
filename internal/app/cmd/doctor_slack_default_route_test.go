@@ -37,7 +37,7 @@ func TestCheckSlackDefaultRoute_AllGreen(t *testing.T) {
 	dir := t.TempDir()
 	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
 	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"kurt@example.com"}}
-	rs := checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{known: map[string]string{"kurt@example.com": "U1"}}, "channels:history,im:history,mpim:history")
+	rs := checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{known: map[string]string{"kurt@example.com": "U1"}}, "channels:history,im:history,mpim:history,im:write")
 	for _, name := range []string{"Slack default route profile", "Slack default route allowlist", "Slack default route scopes"} {
 		if st, msg := statusOf(rs, name); st != CheckOK {
 			t.Errorf("%s: %s (%s)", name, st, msg)
@@ -62,6 +62,16 @@ func TestCheckSlackDefaultRoute_StrictProfileNote(t *testing.T) {
 	}
 	if st, _ := statusOf(rs, "Slack default route scopes"); st != CheckSkipped {
 		t.Errorf("empty scopes cache must SKIP, got %s", st)
+	}
+}
+
+func TestCheckSlackDefaultRoute_MissingIMWrite(t *testing.T) {
+	dir := t.TempDir()
+	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"kurt@example.com"}}
+	rs := checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{known: map[string]string{"kurt@example.com": "U1"}}, "channels:history,im:history,mpim:history")
+	if st, msg := statusOf(rs, "Slack default route scopes"); st != CheckWarn || !strings.Contains(msg, "im:write") {
+		t.Errorf("missing im:write must WARN and name it; got %s %q", st, msg)
 	}
 }
 

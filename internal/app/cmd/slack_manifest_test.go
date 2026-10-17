@@ -151,13 +151,10 @@ func TestSlackManifest_DMScopesAndEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	for _, want := range []string{`"im:history"`, `"mpim:history"`, `"message.im"`, `"message.mpim"`} {
+	for _, want := range []string{`"im:history"`, `"mpim:history"`, `"im:write"`, `"message.im"`, `"message.mpim"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("manifest missing %s", want)
 		}
-	}
-	if strings.Contains(out, `"im:write"`) {
-		t.Error("the bot never opens a DM; im:write must not be requested")
 	}
 	// Scopes and events are not enough for a DM: Slack refuses the send client-side
 	// ("Sending messages to this app has been turned off") unless the App Home
@@ -171,6 +168,13 @@ func TestVerifyEventsAPIScopes_RequiresIMHistory(t *testing.T) {
 	ok, missing := cmd.VerifyEventsAPIScopes([]string{"channels:history", "groups:history", "reactions:write", "files:read"})
 	if ok || !hasString(missing, "im:history") {
 		t.Fatalf("im:history must be required; ok=%v missing=%v", ok, missing)
+	}
+}
+
+func TestVerifyEventsAPIScopes_RequiresIMWrite(t *testing.T) {
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"channels:history", "groups:history", "im:history", "mpim:history", "reactions:write", "files:read"})
+	if ok || !hasString(missing, "im:write") {
+		t.Fatalf("im:write must be required; ok=%v missing=%v", ok, missing)
 	}
 }
 

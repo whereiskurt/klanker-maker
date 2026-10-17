@@ -29,6 +29,7 @@ Bot token scopes (15) + bot events (2) declared by the manifest:
 | `groups:history` | read private-channel messages (inbound trigger) |
 | `im:history` | read one-to-one DM messages to the bot (default route) |
 | `mpim:history` | read group DM messages that include the bot (default route) |
+| `im:write` | open a DM with a person when a sandbox agent runs `km-slack dm` (`conversations.open`); never used to read. The bridge admits only targets on `slack.default_route.allow_emails` |
 | `conversations.connect:write` | Slack Connect invites to external people |
 | `reactions:write` | add the 👀 ACK reaction on inbound |
 | `reactions:read` | read reaction state (read-counterpart; future reactions-as-actions) |
@@ -152,7 +153,7 @@ keeping the surface minimal. App-mention-in-non-member-channels (`app_mention` +
 | Outbound notifications | `chat:write` |
 | Per-sandbox channel create/archive | `channels:manage` / `groups:write`, `channels:read` / `groups:read`, `channels:join` |
 | Inbound (listen + reply) | `channels:history`, `groups:history`, `chat:write` + events `message.channels`/`message.groups` |
-| Default route DMs (`slack.default_route`) | `im:history`, `mpim:history` + events `message.im`/`message.mpim`; no `im:write`, the bot only answers a DM. See `docs/slack-default-route.md` |
+| Default route DMs (`slack.default_route`) | `im:history`, `mpim:history` + events `message.im`/`message.mpim`; `im:write` only for `km-slack dm`, which opens a DM to an allowlisted person. See `docs/slack-default-route.md` |
 | 👀 ACK reaction | `reactions:write` |
 | Transcript streaming / attachments | `files:write`, `files:read` |
 | Invites (native + Connect) | `users:read` + `users:read.email`, `conversations.connect:write` |
