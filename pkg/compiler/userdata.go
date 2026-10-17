@@ -5896,6 +5896,12 @@ else
   echo "[km-bootstrap] No init script found in S3 (skipped)"
 fi
 {{- end }}
+# Cold-create boot race (2026-10-17): the inbound pollers start in section 5 and
+# must not drain their first message before profile init (which installs the
+# agent) has run. Written after 7.5 on EVERY boot path — success, failure, no
+# init at all — so a poller never waits out its bound on a healthy box. Lives in
+# /var/lib/km so a stop/resume (userdata does not re-run) does not wait again.
+mkdir -p /var/lib/km && touch /var/lib/km/init-done
 {{- if .ConfigFiles }}
 # ============================================================
 # 7.6. Config files (from profile spec.execution.configFiles)
