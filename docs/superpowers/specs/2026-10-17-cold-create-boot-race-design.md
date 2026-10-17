@@ -86,3 +86,9 @@ Two independent faults compound:
 the race until recreate. UAT: `km destroy` the default sandbox, @-mention from a channel, and the
 first reply must arrive within boot time plus seconds, never 30 minutes; the poller journal shows
 "waiting for profile init" then "profile init done after Ns" and no exit 127.
+
+## 7. Live UAT (2026-10-17, install prefix `km`)
+
+| Step | Result |
+|---|---|
+| `km destroy` the default sandbox, @-mention from a channel at 13:19:37Z | **PASS**: cold-create published 13:19:38Z; box running 13:20:59Z; poller journal `waiting for profile init (/var/lib/km/init-done)` at 13:22:15Z, `profile init done after 90s` at 13:23:45Z (marker mtime 13:23:40); `Posted reply` at 13:23:55Z. First reply **4 min 18 s** after the mention, no `exit 127`, no `not on PATH` warning. Before the fix the same step took ~32 minutes four times running. |
