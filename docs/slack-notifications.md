@@ -3499,6 +3499,27 @@ check: a top-level `dm` gets `400 missing_fields` (the old bridge requires a cha
 `--from-thread` `dm` gets `400 unknown_action`; neither burns a nonce. A new bridge with an old
 `km-slack` changes nothing, because `target_user` is `omitempty`.
 
+
+**Live UAT (2026-10-17, install prefix `km`, one operator on the allowlist):**
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Mapped (non-alias) sandbox runs `km-slack dm --to <operator>` | **PASS**: `channel=D… ts=…`; bridge `bridge: dm sender_id=<mapped> target=<operator> status=200`. |
+| 2 | Same box, `--to <the bot's own id>` | **PASS** (refused): `403 dm_not_allowed`, bridge reason "sender is not an eligible human user"; no Slack call. |
+| 3 | Human replies **under** that DM | **PASS**: `events: enqueued sandbox=<mapped> channel=D… thread_ts=<dm ts>` (continuity to the SENDING box, not the alias box); the box's answer landed in the DM thread. |
+| 4 | Same box, `--from-thread` from its own channel | **PASS**: the DM ends with `From: <permalink>` to that thread. |
+| 5 | In a channel thread, ask the alias box "please send me a DM with the word X, then reply here" | **PASS**: DM "X" arrived in 6 s, one thread reply confirming; `bridge: dm sender_id=<alias box>`. |
+| 6 | Human replies under that DM | **PASS**: continuity to the alias box, answer in the DM thread. |
+| 7 | Human sends a fresh top-level DM | **PASS**: default route as before; the alias box answered in a thread under it. |
+| 8 | `km doctor` | **PASS**: `Slack default route scopes: im:history, mpim:history and im:write present`. |
+
+Found and fixed during the run: an agent whose turn arrived **inside** a DM channel read the
+preamble's "to DM this person run `km-slack dm`" and sent a second top-level DM before
+replying in the thread. The preamble now says "You are already in a direct message with this
+person; reply here" when the turn's channel is a `D…` id. Synthetic-event note: the UAT
+driver's fake `ts` makes the 👀 reaction fail with `message_not_found`; a real human message
+reacts normally.
+
 ### Verified live (2026-09-19)
 
 Posted against the real workspace with the bot token: a `markdown` block containing `<@U…>`,
