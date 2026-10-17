@@ -1290,8 +1290,15 @@ func effectiveEmailDomain(network *NetworkConfig) string {
 }
 
 func otpSecretPaths(p *profile.SandboxProfile) []string {
-	if p.Spec.OTP == nil {
+	if p.Spec.OTP == nil || len(p.Spec.OTP.Secrets) == 0 {
 		return nil
 	}
-	return p.Spec.OTP.Secrets
+	// The module renders "parameter${p}": an entry without a leading slash
+	// would become a dead ARN (parameterfoo), while SSM accepts both foo and
+	// /foo and its ARN is always parameter/foo. Normalise to one leading slash.
+	out := make([]string, 0, len(p.Spec.OTP.Secrets))
+	for _, s := range p.Spec.OTP.Secrets {
+		out = append(out, "/"+strings.TrimLeft(s, "/"))
+	}
+	return out
 }
