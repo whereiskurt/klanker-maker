@@ -41,6 +41,7 @@ signed payloads and the Lambda forwards to the Slack Web API.
 19. [Phase 104: O(1) channel resolution](#phase-104--o1-channel-resolution-on-alias-reuse)
 20. [Default route: @-mention the bot from any channel or DM](#default-route---mention-the-bot-from-any-channel-or-dm-2026-10-16)
 21. [Mentioning people from a sandbox reply](#mentioning-people-from-a-sandbox-reply-2026-09-19)
+22. [km-slack verb reference](#km-slack-verb-reference)
 
 ---
 
@@ -403,10 +404,12 @@ These are injected into the sandbox at `km create` time by the compiler.
 |----------|--------|---------|
 | `KM_NOTIFY_EMAIL_ENABLED` | profile `spec.notification.email.enabled` | `1` or `0`; controls email dispatch in `km-notify-hook` |
 | `KM_NOTIFY_SLACK_ENABLED` | profile `spec.notification.slack.enabled` | `1` or `0`; controls whether `km-slack` is invoked |
-| `KM_SLACK_CHANNEL_ID` | runtime, resolved at `km create` | Slack channel ID to send notifications to (shared, per-sandbox, or override) |
+| `KM_SLACK_CHANNEL_ID` | runtime, resolved at `km create` | Slack channel ID to send notifications to (shared, per-sandbox, or override). On a Slack-inbound turn the poller re-exports it per turn as the channel the message came from. |
 | `KM_SLACK_BRIDGE_URL` | runtime, from `/km/slack/bridge-url` | Lambda Function URL for the `km-slack` binary to POST to |
+| `KM_SLACK_THREAD_TS`, `KM_SLACK_SENDER_ID` | inbound poller, per turn only | The thread being answered and the sender's user id. Unset outside a Slack-inbound turn. |
+| `KM_SLACK_RENDER`, `KM_SLACK_AI_FOOTER` | operator, never compiler-emitted | Render default when `--render` is absent; AI footer for `blocks-rich`. See [km-slack verb reference](#km-slack-verb-reference). |
 
-Variables are exported in the sandbox's `/etc/profile.d/km.sh` by the user-data script.
+`KM_SLACK_CHANNEL_ID`, `KM_SLACK_BRIDGE_URL` and `AWS_REGION` are written to `/etc/profile.d/km-slack-runtime.sh`; the `KM_NOTIFY_*` flags to `/etc/profile.d/km-notify-env.sh` and its systemd twin `/etc/km/notify.env`.
 
 Sandboxes provisioned before Slack was configured do **not** get these variables retroactively. Destroy and recreate to pick up the km-slack binary and env vars.
 
@@ -581,7 +584,7 @@ envelope before sending it to the bridge.
 4. Fetch sender public key from DynamoDB `km-identities` using `sender_id`.
 5. Verify the Ed25519 signature over the canonical JSON bytes.
 6. Assert channel ownership: sandbox `sender_id` must match the `channel`'s owning sandbox in DynamoDB `km-sandboxes` (prevents sandbox A posting to sandbox B's channel).
-7. Assert action authorization: sandbox identity may only perform `post` / `upload` / `permalink` / `update`; `archive` and `test` require operator identity.
+7. Assert action authorization: sandbox identity may only perform `post` / `upload` / `permalink` / `update` / `lookup-thread` / `dm`; `archive` and `test` require operator identity, and an operator may not send `dm`. `lookup-thread` and `dm` skip the channel-ownership check (`lookup-thread` is filtered by `sandbox_id` instead; `dm` is gated by the route allowlist). `post` and `upload` into a foreign channel pass step 6 only when they carry a `thread_ts` whose `km-slack-threads` row names the sender (see [Default route](#default-route---mention-the-bot-from-any-channel-or-dm-2026-10-16)).
 
 **Bot token isolation:** `/km/slack/bot-token` is a KMS-encrypted SSM
 SecureString. Only the bridge Lambda's IAM role and the operator's IAM
@@ -760,9 +763,10 @@ files, or git history.
      d. GetItem from km-identities for sender_id → public key
      e. ed25519.Verify(pub, canonical, sig) — reject on failure
      f. Channel-ownership assertion (sandbox can post only to its own channel,
-        cross-checked against km-sandboxes)
-     g. Action-authorization assertion (sandboxes: post/upload/permalink/update;
-        operator-only: archive/test)
+        cross-checked against km-sandboxes, or post/upload into a thread whose
+        km-slack-threads row names it; lookup-thread and dm skip this)
+     g. Action-authorization assertion (sandboxes: post/upload/permalink/update/
+        lookup-thread/dm; operator-only: archive/test; dm is sandbox-only)
      h. GetParameter for /km/slack/bot-token (15-min in-process cache)
      i. Dispatch to Slack Web API
 6. Slack response code returned to sandbox over HTTPS
@@ -850,7 +854,7 @@ structured `key=value` pairs:
 
 | Field | What an auditor learns |
 |---|---|
-| `action` | `post` / `archive` / `test` / `upload` / `permalink` / `update` |
+| `action` | `post` / `archive` / `test` / `upload` / `permalink` / `update` / `lookup-thread` / `dm` |
 | `sender_id` | Sandbox ID or `operator` |
 | `channel` | Slack channel ID (target of the call) |
 | `nonce_prefix` | First 8 chars of the request nonce (cross-reference handle) |
@@ -1069,7 +1073,9 @@ sandbox systemd poller (km-slack-inbound-poller.service) →
 poller exports KM_SLACK_THREAD_TS into Claude's env →
 claude -p (Bedrock or OAuth) →
 output.json .result captured by poller →
-poller calls /opt/km/bin/km-slack post --thread $KM_SLACK_THREAD_TS →
+poller calls KM_SLACK_POSTED_MARKER=0 km-slack post --channel $REPLY_CHANNEL
+  --thread $THREAD_TS --render ${KM_SLACK_RENDER:-blocks-rich}
+  (skipped when the agent already posted in that thread; see One reply per turn) →
 SQS DeleteMessage (only after successful post) →
 Bridge re-issues chat.postMessage → reply lands in same Slack thread
 ```
@@ -1273,23 +1279,25 @@ and a 50-block cap automatically falls back from Tier 2 → Tier 1.
 
 ### Render modes
 
-`km-slack post --render <mode>` selects the output:
+`km-slack post|reply|dm --render <mode>` selects the output. Precedence: the flag, then
+`$KM_SLACK_RENDER`, then `plain`. An unknown value on `post`/`reply` warns and uses `plain`.
 
 | Mode | Output | Default user |
 |---|---|---|
-| `plain` | Literal markdown — no transformation | notify-hook (no `--render` flag passed) |
+| `plain` | Literal markdown — no transformation | notify-hook, and any agent-made post that passes no `--render` |
 | `mrkdwn` | Tier 1: tokenized markdown → Slack mrkdwn `text` field | Operators who want rendering without Block Kit |
-| `blocks` | Tier 2: Block Kit `blocks` field + Tier 1 mrkdwn fallback in `text` for mobile push previews; auto-falls-back to `mrkdwn` if the response exceeds 50 blocks | Inbound poller reply + streaming hook |
+| `blocks` | Tier 2: Block Kit `blocks` field + Tier 1 mrkdwn fallback in `text` for mobile push previews; auto-falls-back to `mrkdwn` if the response exceeds 50 blocks | Pre-Phase-112 default |
+| `blocks-rich` | Tier 3: `markdown` + `table` blocks; falls back to `blocks`, then `mrkdwn` | Inbound poller reply + streaming hook since Phase 112 (see [Phase 111](#phase-111--rich-slack-rendering-markdown-and-table-blocks-opt-in-blocks-rich)) |
 
 ### Where Block Kit rendering is wired
 
-Two paths in `pkg/compiler/userdata.go` use `blocks` rendering:
+Two paths in `pkg/compiler/userdata.go` use Block Kit rendering:
 
 - `_km_stream_drain` — per-turn streaming posts (interactive `km shell` / transcript streaming path)
 - `km-slack-inbound-poller` reply — final reply for Slack-inbound chat
 
-Both lines pass `--render "${KM_SLACK_RENDER:-blocks}"`, so the env
-override (below) takes precedence.
+Both lines pass `--render "${KM_SLACK_RENDER:-blocks-rich}"` (Phase 112; it was `blocks`
+before), so the env override (below) takes precedence.
 
 Idle-pings and permission-prompt notifications stay on
 `plain` (the notify hook constructs envelopes without `--render`),
@@ -1305,9 +1313,9 @@ echo 'KM_SLACK_RENDER=plain' | sudo tee -a /etc/km/notify.env
 # Next outbound post → falls back to literal markdown
 ```
 
-Valid values: `plain` | `mrkdwn` | `blocks`. Unset → defaults to the
-userdata template's hard-coded fallback (`blocks` for both
-Block-Kit-emitting paths).
+Valid values: `plain` | `mrkdwn` | `blocks` | `blocks-rich`. Unset → defaults to the
+userdata template's hard-coded fallback (`blocks-rich` for both
+Block-Kit-emitting paths since Phase 112).
 
 ### One-time operator setup
 
@@ -1543,9 +1551,13 @@ Three new surfaces added to the existing `km-slack` binary:
 - `km-slack post --new-message` — omits `thread_ts`; returns `ts=...` to
   stdout (used to capture `NEW_TOP_TS` in step 3 of the switch sequence).
 - `km-slack permalink --channel C --ts T` — wraps `chat.getPermalink`.
-- `km-slack update --channel C --ts T --text "..."` — wraps `chat.update`
-  (subject to Slack's 10-minute bot edit window; not in the cross-agent
-  critical path).
+- `km-slack update --channel C --ts T (--text "..." | --body file)` — wraps
+  `chat.update` (subject to Slack's 10-minute bot edit window; not in the
+  cross-agent critical path). The text is sent as-is: no render, no mention.
+
+`permalink` and `update` are authorized only in the sandbox's own channel; in a
+routed foreign channel both are `403 channel_mismatch`. Full flags and exit
+codes: [km-slack verb reference](#km-slack-verb-reference).
 
 All three go through the bridge Lambda via signed Ed25519 envelopes; sandboxes
 never touch the raw Slack bot token.
@@ -2690,7 +2702,10 @@ fenced grids:
 - Body cells → `raw_text` (all of them). Numeric columns still right-align via
   `column_settings`; the `raw_number` cell type is deferred (its value-field schema is
   undocumented and was rejected in live UAT).
-- Ragged rows are padded to the column count with empty `raw_text` cells.
+- Ragged rows are padded to the column count, and blank cells are filled, with a single-space
+  `raw_text` (Phase 112.1: an empty `text` string is rejected by Slack with `invalid_blocks`).
+  If a block payload is still rejected with `invalid_blocks`, `km-slack` re-posts once without
+  blocks, using the mrkdwn/plain text it already rendered, with a fresh nonce.
 - Guards: >20 columns or >100 rows trigger the monospace `fencePipeTables` fallback instead.
 
 **Tool lines (🔧) → `context` block.** Unchanged from Tier-2.
@@ -3446,7 +3461,9 @@ Every Slack turn used to land twice. The original preamble suggested `km-slack p
 --mention`, so the agent posted its answer itself. The poller then posted the turn's final
 text, which by then was the agent's closing sentence ("Reply sent to @… in the thread.").
 Two layers fix it. `km-slack` touches `/tmp/km-slack-posted.<thread_ts>` after every
-successful threaded `post` or `reply`. The poller deletes that marker just before it
+successful threaded `post` or `reply`, including the `invalid_blocks` re-post. A top-level post,
+`upload`, `update` and `dm` write none, and a thread ts containing `/` or `\` is skipped.
+`KM_SLACK_POSTED_DIR` moves the marker for tests only: the poller checks the literal `/tmp` path. The poller deletes that marker just before it
 dispatches the agent. At the end of the turn it skips its own post when the marker exists,
 logging `agent already posted in thread=…; skipping the final post`. The hook's
 transcript-stream drain posts progress into the same thread, so it sets
@@ -3556,3 +3573,59 @@ renders, idempotent, `bash -n`-checked, original kept as `.bak`. The poller chan
 effect only on `systemctl restart km-slack-inbound-poller`, which kills an in-flight turn
 (the message returns to the queue; that turn's reply is lost), so the restart is opt-in
 via `--restart` — run it when the box is quiet.
+
+---
+
+## km-slack verb reference
+
+`/opt/km/bin/km-slack` is the sandbox-side client for everything above. Every verb except
+`record-mapping` signs an Ed25519 envelope with the key at
+`/{KM_RESOURCE_PREFIX:-km}/sandbox/{KM_SANDBOX_ID}/signing-key` and POSTs it to
+`$KM_SLACK_BRIDGE_URL`; the bridge makes the Slack call with the bot token. Source:
+`cmd/km-slack/main.go` and `cmd/km-slack/dm.go`. The agent-facing guide is the
+`klanker:slack` skill.
+
+### Common behaviour
+
+- **Env.** The bridge verbs need `KM_SANDBOX_ID`, `KM_SLACK_BRIDGE_URL` and `AWS_REGION`
+  (or `AWS_DEFAULT_REGION`). `record-mapping` needs `KM_SANDBOX_ID` and `KM_SLACK_STREAM_TABLE`.
+- **Exit codes.** `0` success. `2` a usage error: unknown subcommand, missing required flag,
+  bad `--mention`/`--to`; `upload`, `permalink`, `update` and `record-mapping` also use `2`
+  for missing env. `1` a runtime failure: missing env on `post`/`reply`/`dm`, the key, the
+  bridge, or a not-ok response.
+- **Errors.** A bridge refusal reads
+  `km-slack <verb>: slack: bridge returned <status>: {"ok":false,"error":"<code>"}`.
+  Network errors are retried at 1 s, 2 s and 4 s; an HTTP 4xx/5xx is not, because the bridge
+  has already reserved the nonce. Every invocation times out after 30 s.
+- **Body.** `--body` is a file path; `-` (stdin) is rejected.
+- **Render.** `post`, `reply` and `dm` take `--render plain|mrkdwn|blocks|blocks-rich`.
+  Precedence is the flag, then `$KM_SLACK_RENDER`, then `plain`. `blocks-rich` degrades to
+  `blocks`, then `mrkdwn`; `blocks` degrades to `mrkdwn`. A rendered body over 35 KB is cut
+  with a truncation footer; 40 KB is the hard cap. When Slack rejects blocks with
+  `invalid_blocks`, the verb re-posts once without them with a fresh envelope.
+  `KM_SLACK_AI_FOOTER=true` adds the AI footer in `blocks-rich` only.
+- **Authorization at the bridge.** A sandbox may act in its own channel. `post` and `upload`
+  may also go into a foreign channel when they carry a `thread_ts` whose `km-slack-threads` row
+  names the sender. Everything else in a foreign channel, including a top-level post,
+  `permalink` and `update`, is `403 channel_mismatch`. `post`, `upload` and `dm` count against
+  the `slack_post` action quota (`429 quota_exceeded`).
+
+### Verbs
+
+| Verb | Flags | Output | Notes |
+|---|---|---|---|
+| `post` | `--channel C…` and `--body file` required; `--subject`, `--thread ts`, `--render`, `--mention`, `--new-message` | stderr `km-slack: posted ts=…`; with `--new-message`, stdout `ts=…` | `--new-message` drops `--thread` and posts top-level. Unknown `--render` warns and uses `plain`. Writes the posted marker after a successful threaded post. |
+| `reply` | `--body file` required; `--thread`, `--channel`, `--session`, `--subject`, `--render`, `--mention` | as `post` | Target, first hit wins: `--thread` (channel from `--channel` or `$KM_SLACK_CHANNEL_ID`), `$KM_SLACK_THREAD_TS`, the session id's thread via the bridge's `lookup-thread`, the channel root. The session id is `--session` or the newest `~/.claude/projects/**/*.jsonl` (`~/.codex/store/` when `KM_AGENT=codex`). Marker as `post`; the channel-root fallback writes none. |
+| `dm` | `--to U…` and exactly one of `--text`/`--body` required; `--render`, `--from-thread` | stdout `channel=D… ts=…` | `--to` must be a bare uppercase `U…`/`W…`. No `--mention`, no marker. `--from-thread` reads `KM_SLACK_CHANNEL_ID` and `KM_SLACK_THREAD_TS` (exit 2 if either is empty) and the bridge appends a permalink to that thread. See [Bot-initiated DMs](#bot-initiated-dms-2026-10-17) for the refusal codes. |
+| `upload` | `--channel`, `--s3-key`, `--filename`, `--content-type`, `--size-bytes` required; `--thread` | stderr `km-slack upload: ok ts=…` | The bridge streams the S3 object into Slack's 3-step upload. It requires the key under `transcripts/<sender>/`, a filename with no `/` and at most 255 bytes, a content type of `application/gzip`, `application/json` or `text/plain`, and a size in (0, 100 MB]. Fails on Slack-Connect-shared channels; see Known limitations above. |
+| `permalink` | `--channel`, `--ts` required | stdout the URL | Wraps `chat.getPermalink`. Own channel only. Used by the Phase 70 agent handoff. |
+| `update` | `--channel`, `--ts` required; one of `--text`/`--body` | nothing on success | Wraps `chat.update`. Own channel only. The text is sent unrendered, with no subject and no mention. No caller in km today. |
+| `record-mapping` | `--channel`, `--slack-ts`, `--offset`, `--session` required | nothing on success | **Internal to the transcript-streaming hook.** Writes a `(channel_id, slack_ts)` row with a 30-day TTL straight to `KM_SLACK_STREAM_TABLE` with the sandbox role; it does not use the bridge. Agents do not call it. |
+
+`--mention` (on `post` and `reply`) accepts `U…`, `W…`, `@U…`, `<@U…>` and lowercase ids,
+plus `here` and `channel` in the same forms; it is comma-separated or repeatable and
+de-duplicated. Anything else, a name included, is exit 2. See
+[Mentioning people](#mentioning-people-from-a-sandbox-reply-2026-09-19).
+
+The posted marker is `${KM_SLACK_POSTED_DIR:-/tmp}/km-slack-posted.<thread_ts>`, and
+`KM_SLACK_POSTED_MARKER=0` suppresses it. See [One reply per turn](#one-reply-per-turn-2026-10-17).

@@ -2039,6 +2039,7 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | Serverless `km check` runner (deploy/run/ls/sync/rm, KM_CHECK_TRIGGER, CheckDispatch) | `docs/check-runner.md` (Phase 116) |
 | Inject secrets into a `km check` Lambda — `--secret <ssm-path>` + `--sops <file>` (deploy-time unpack to per-check SSM SecureString params; no Lambda KMS) | `docs/check-runner.md` § Secrets |
 | Post to Slack from inside a sandbox (incl. transcript streaming, inbound, attachments) | `klanker:slack` skill |
+| Every `km-slack` verb — flags, stdout/stderr, exit codes, render precedence (flag, `KM_SLACK_RENDER`, `plain`), the `invalid_blocks` retry, the posted marker, and which verbs the bridge admits in a routed thread | `docs/slack-notifications.md` § km-slack verb reference |
 | @-mentioning people from a sandbox reply — where the ids come from (`[Slack] From:` preamble, `KM_SLACK_SENDER_ID`, tokens the sender typed), `km-slack --mention`, why the renderer used to escape `<@U…>`, why names are unsupported | `docs/slack-notifications.md` § Mentioning people |
 | Polite-bot mode, `KM_SLACK_MENTION_ONLY`, per-channel @-mention-only inbound | `docs/slack-notifications.md` § Phase 91 |
 | Federated bridge relay — one Slack App across multiple km installs | `docs/slack-notifications.md` § Phase 95 |
@@ -2093,7 +2094,7 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | Channel | Helper(s) in `/opt/km/bin` | Verbs / use |
 |---|---|---|
 | **GitHub** | `km-github` | `comment` / `review` / `check` / `pr create` / **`commit`** (verified signed commit via GraphQL `createCommitOnBranch`) — all keyless (token from SSM). Prefer this over raw `gh`/`git push`. |
-| **Slack** | `km-slack` | post status/progress/threaded replies + Block-Kit rich rendering (see `klanker:slack` skill). |
+| **Slack** | `km-slack` | `post` / `reply` (session-aware thread) / `dm` (allowlist-gated) / `upload` / `permalink` / `update`, plus hook-internal `record-mapping`. Render tiers, `--mention`, and the posted marker that cancels the automatic final reply: `klanker:slack` skill + `docs/slack-notifications.md` § km-slack verb reference. |
 | **Email** | `km-send`, `km-recv` (+ `km-mail-poller`) | signed inter-sandbox / operator email (see `klanker:email` skill). |
 | **HackerOne** | `km-h1` | comment on reports (internal-by-default). |
 | **Git auth** | `km-git-askpass`, `km-git-credential-helper` | inject the installation token into plain `git` operations (baked-in sandbox id, works in any subprocess). |

@@ -205,7 +205,9 @@ On the bridge, a sandbox envelope whose channel is not its owned channel now get
 chance through `threadRoutedToSender`: the action must be `post` or `upload`, the envelope
 must carry `thread_ts`, and the `km-slack-threads` row for that pair must name the sending
 sandbox. A pass logs `bridge: authz_routed_thread`. Everything else stays
-`403 channel_mismatch`, including a top-level post into a routed channel.
+`403 channel_mismatch`, including a top-level post into a routed channel. `km-slack dm
+--from-thread` (2026-10-17) reuses the same check for its originating thread, probing it as a
+`post`. The per-verb rules are in `docs/slack-notifications.md` § km-slack verb reference.
 
 ## 5. What changed in the code
 
@@ -613,6 +615,7 @@ unverified.
 | Implementation plan | `docs/superpowers/plans/2026-10-16-slack-default-route.md` |
 | Operator runbook for the route | `docs/slack-notifications.md` § Default route |
 | Operator runbook for strict mode and context | `docs/slack-notifications.md` § Phase 91, Strict mode |
+| Every `km-slack` verb, its flags and the bridge rule it meets | `docs/slack-notifications.md` § km-slack verb reference |
 | Phase summary | `CLAUDE.md`, "Slack default route + strict mention-only threads (2026-10-16)" |
 | Profile field reference | `docs/profile-reference.md`, `threadBypass` |
 | Slack App scopes and events | `docs/slack-app-permissions.md` |
