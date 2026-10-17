@@ -3,6 +3,9 @@ package bridge
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -13,38 +16,156 @@ import (
 var ErrSenderIneligible = errors.New("slack-bridge: sender is not an eligible human user")
 
 // DefaultRoute is the resolved slack.default_route block. A nil *DefaultRoute
-// means the route is OFF; NewDefaultRoute returns nil for an empty allowlist so
-// the deny-by-default contract is structural, not a runtime check.
+// means the route is OFF; NewDefaultRoute returns nil when both allowlists are
+// empty so the deny-by-default contract is structural, not a runtime check.
+//
+// Two lists, two jobs. list is the INSTALL list (slack.default_route.allow_emails):
+// it gates everything the route reaches that is not the route's own box — DM
+// targets and replies to a non-alias sandbox without its own allowEmails.
+// profileList is the route profile's allowEmails: it gates a cold-create and the
+// alias's current box, so narrowing the route profile never narrows the rest of
+// the install. Either may be empty, not both.
 type DefaultRoute struct {
-	Alias   string
-	Profile string
-	allow   map[string]struct{}
+	Alias       string
+	Profile     string
+	list        *EmailAllowlist
+	profileList *EmailAllowlist
 }
 
-func NewDefaultRoute(alias, profile string, emails []string) *DefaultRoute {
-	allow := make(map[string]struct{}, len(emails))
-	for _, e := range emails {
-		e = strings.ToLower(strings.TrimSpace(e))
-		if e != "" {
-			allow[e] = struct{}{}
-		}
-	}
-	if len(allow) == 0 || alias == "" || profile == "" {
+// NewDefaultRoute compiles both allowlists. An invalid entry is logged and
+// dropped (km init already refuses them; this is belt-and-braces) so one typo
+// can never widen a list or take the whole route down.
+func NewDefaultRoute(alias, profile string, installEmails, profileEmails []string) *DefaultRoute {
+	install := compileRouteList("allow_emails", installEmails)
+	prof := compileRouteList("route profile allowEmails", profileEmails)
+	if alias == "" || profile == "" || (install.Len() == 0 && prof.Len() == 0) {
 		return nil
 	}
-	return &DefaultRoute{Alias: alias, Profile: profile, allow: allow}
+	return &DefaultRoute{Alias: alias, Profile: profile, list: install, profileList: prof}
 }
 
-// Allows reports whether email is on the list. Empty email is always denied.
+func compileRouteList(name string, emails []string) *EmailAllowlist {
+	valid := make([]string, 0, len(emails))
+	for _, e := range emails {
+		if strings.TrimSpace(e) == "" {
+			continue
+		}
+		if _, _, err := ValidateEmailEntry(e); err != nil {
+			log.Printf("slack-bridge: default_route: %s: dropping %v", name, err)
+			continue
+		}
+		valid = append(valid, e)
+	}
+	list, err := CompileEmailAllowlist(valid)
+	if err != nil {
+		return nil
+	}
+	return list
+}
+
+// Allows reports whether email is on the INSTALL list. Empty email is always
+// denied; an empty install list denies everyone.
 func (r *DefaultRoute) Allows(email string) bool {
 	if r == nil {
 		return false
 	}
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
+	return r.list.Allows(email)
+}
+
+// AllowsCreate is the gate for the route's own box (a cold-create, or the
+// alias's current box without its own allowEmails): the route profile's list
+// when it has one, else the install list.
+func (r *DefaultRoute) AllowsCreate(email string) bool {
+	if r == nil {
 		return false
 	}
-	_, ok := r.allow[email]
+	if r.profileList.Len() > 0 {
+		return r.profileList.Allows(email)
+	}
+	return r.list.Allows(email)
+}
+
+// HasProfileList reports whether the route profile declared its own list, i.e.
+// whether AllowsCreate can differ from Allows.
+func (r *DefaultRoute) HasProfileList() bool {
+	return r != nil && r.profileList.Len() > 0
+}
+
+// reDomainEntry / reExactEntry are duplicated in internal/app/config
+// (validateRouteEmailEntry), which cannot import this package. The two copies
+// share a test table (emailEntryCases here, TestValidateRouteEmailEntry_MirrorsBridge
+// there): change both together.
+var reDomainEntry = regexp.MustCompile(`^\*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+var reExactEntry = regexp.MustCompile(`^[^@\s*,]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+
+// ValidateEmailEntry normalises one allowlist entry: lowercased, trimmed; either
+// an exact address or exactly `*@<domain>`. Any other use of `*` is an error so
+// a typo cannot widen an allowlist.
+func ValidateEmailEntry(s string) (string, bool, error) {
+	n := strings.ToLower(strings.TrimSpace(s))
+	switch {
+	case reDomainEntry.MatchString(n):
+		return n, true, nil
+	case reExactEntry.MatchString(n):
+		return n, false, nil
+	default:
+		return "", false, fmt.Errorf("allowlist entry %q: must be an email address or *@<domain>", s)
+	}
+}
+
+// EmailAllowlist is the one matcher for every email gate: the default route's
+// list, a sandbox's own allowEmails, and km-slack dm targets.
+type EmailAllowlist struct {
+	exact   map[string]struct{}
+	domains map[string]struct{}
+}
+
+func CompileEmailAllowlist(entries []string) (*EmailAllowlist, error) {
+	al := &EmailAllowlist{exact: map[string]struct{}{}, domains: map[string]struct{}{}}
+	for _, e := range entries {
+		if strings.TrimSpace(e) == "" {
+			continue
+		}
+		n, isDomain, err := ValidateEmailEntry(e)
+		if err != nil {
+			return nil, err
+		}
+		if isDomain {
+			al.domains[strings.TrimPrefix(n, "*@")] = struct{}{}
+		} else {
+			al.exact[n] = struct{}{}
+		}
+	}
+	return al, nil
+}
+
+func (al *EmailAllowlist) Len() int {
+	if al == nil {
+		return 0
+	}
+	return len(al.exact) + len(al.domains)
+}
+
+// Allows: exact first, then the domain after the '@'. Subdomains do not
+// match (`a@sub.example.com` is not `*@example.com`). Empty ⇒ false; an input
+// that is not exactly one '@' (`a@b@example.com`) ⇒ false, so a malformed
+// address can never reach a domain entry through its trailing label.
+func (al *EmailAllowlist) Allows(email string) bool {
+	if al == nil {
+		return false
+	}
+	e := strings.ToLower(strings.TrimSpace(email))
+	if e == "" || strings.HasPrefix(e, "*@") || strings.Count(e, "@") != 1 {
+		return false
+	}
+	if _, ok := al.exact[e]; ok {
+		return true
+	}
+	at := strings.LastIndex(e, "@")
+	if at < 1 {
+		return false
+	}
+	_, ok := al.domains[e[at+1:]]
 	return ok
 }
 

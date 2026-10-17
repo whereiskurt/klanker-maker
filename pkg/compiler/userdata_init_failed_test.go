@@ -20,11 +20,11 @@ func initBlock(t *testing.T, out string) string {
 	if start < 0 {
 		t.Fatal("7.5 block not rendered")
 	}
-	tail := strings.Index(out[start:], "No init script found in S3 (skipped)\"\nfi\n")
+	tail := strings.Index(out[start:], "mkdir -p /var/lib/km && touch /var/lib/km/init-done\n")
 	if tail < 0 {
 		t.Fatal("7.5 block terminator not found")
 	}
-	return out[start : start+tail+len("No init script found in S3 (skipped)\"\nfi\n")]
+	return out[start : start+tail+len("mkdir -p /var/lib/km && touch /var/lib/km/init-done\n")]
 }
 
 // runInitBlock executes the block with three path substitutions and two fake
@@ -32,7 +32,7 @@ func initBlock(t *testing.T, out string) string {
 // /run/km/audit-pipe: the marker dir, the audit pipe (a plain file here), and
 // `aws s3 cp` (writes initScript to the destination) plus `timeout` (macOS
 // has none; ours drops its first argument and execs the rest).
-func runInitBlock(t *testing.T, block, initScript string) (stdout, stderr, audit, marker string) {
+func runInitBlock(t *testing.T, block, initScript string) (stdout, stderr, audit, marker string, done bool) {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin")
@@ -63,7 +63,8 @@ func runInitBlock(t *testing.T, block, initScript string) (stdout, stderr, audit
 	}
 	a, _ := os.ReadFile(pipe)
 	m, _ := os.ReadFile(filepath.Join(dir, "init-failed"))
-	return so.String(), se.String(), string(a), string(m)
+	_, derr := os.Stat(filepath.Join(dir, "init-done"))
+	return so.String(), se.String(), string(a), string(m), derr == nil
 }
 
 func initProfile() *profile.SandboxProfile {
@@ -90,7 +91,7 @@ func TestUserdataInitBlock_FailureIsReportedNotSwallowed(t *testing.T) {
 	failing := "#!/bin/bash\n" +
 		"printf 'exit=1\\nstep=3\\ntotal=13\\ncommand=npm install -g \"@anthropic-ai/claude-code@2.1.171\"\\n' > \"$(dirname \"$0\")/init-failed\"\n" +
 		"exit 1\n"
-	stdout, stderr, audit, marker := runInitBlock(t, initBlock(t, out), failing)
+	stdout, stderr, audit, marker, _ := runInitBlock(t, initBlock(t, out), failing)
 	if strings.Contains(stdout, "Init complete") {
 		t.Errorf("\"Init complete\" must not be printed after a failed init; stdout:\n%s", stdout)
 	}
@@ -138,13 +139,81 @@ func TestUserdataInitBlock_SuccessAndAbsentUnchanged(t *testing.T) {
 	}
 	block := initBlock(t, out)
 
-	stdout, _, audit, _ := runInitBlock(t, block, "#!/bin/bash\necho '[km-init] Profile init complete'\n")
+	stdout, _, audit, _, _ := runInitBlock(t, block, "#!/bin/bash\necho '[km-init] Profile init complete'\n")
 	if !strings.Contains(stdout, "[km-bootstrap] Init complete") || audit != "" {
 		t.Errorf("success path: want Init complete and no audit event; stdout:\n%s\naudit: %q", stdout, audit)
 	}
 
-	stdout, _, audit, _ = runInitBlock(t, block, "")
+	stdout, _, audit, _, _ = runInitBlock(t, block, "")
 	if !strings.Contains(stdout, "[km-bootstrap] No init script found in S3 (skipped)") || audit != "" {
 		t.Errorf("absent path: want the skipped line and no audit event; stdout:\n%s\naudit: %q", stdout, audit)
+	}
+}
+
+func TestUserdataInitBlock_MarkerWrittenOnSuccessAndFailure(t *testing.T) {
+	out, err := generateUserData(initProfile(), "sb-init", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := initBlock(t, out)
+	_, _, _, _, done := runInitBlock(t, block, "#!/bin/bash\nexit 0\n")
+	if !done {
+		t.Fatal("init-done must be written after a successful init")
+	}
+	failing := "#!/bin/bash\n" +
+		"printf 'exit=1\\nstep=1\\ntotal=1\\ncommand=false\\n' > \"$(dirname \"$0\")/init-failed\"\n" +
+		"exit 1\n"
+	_, _, _, _, done = runInitBlock(t, block, failing)
+	if !done {
+		t.Fatal("init-done must be written after a FAILED init too, or the pollers wait out their bound")
+	}
+	_, _, _, _, done = runInitBlock(t, block, "")
+	if !done {
+		t.Fatal("init-done must be written when there is no init script")
+	}
+}
+
+// A profile with no initCommands/initScripts renders no 7.5 block at all; the
+// marker line must still render or such a box's pollers wait out their bound.
+func TestUserdata_InitDoneMarkerRendersWithoutInit(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Execution.InitCommands = nil
+	out, err := generateUserData(p, "sb-noinit", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out, "touch /var/lib/km/init-done"); n != 1 {
+		t.Fatalf("init-done touch must render exactly once for a no-init profile, got %d", n)
+	}
+}
+
+// A baked AMI carries the marker from the box it was baked on. Userdata runs
+// only on an instance's first boot, so it must clear the marker before section 5
+// starts the pollers, and write it again only after profile init.
+func TestUserdata_StaleInitDoneMarkerClearedBeforePollersStart(t *testing.T) {
+	out := compileInboundUserData(t, minimalSlackInboundProfile(t, true))
+	const rm = "rm -f /var/lib/km/init-done"
+	if n := strings.Count(out, rm); n != 1 {
+		t.Fatalf("the stale-marker clear must render exactly once, got %d", n)
+	}
+	enable := -1
+	pos := 0
+	for _, l := range strings.SplitAfter(out, "\n") {
+		if strings.HasPrefix(l, "systemctl enable") && strings.Contains(l, "inbound-poller") {
+			enable = pos
+			break
+		}
+		pos += len(l)
+	}
+	if enable < 0 {
+		t.Fatal("no systemctl enable line names an inbound poller")
+	}
+	rmAt := strings.Index(out, rm)
+	touchAt := strings.Index(out, "touch /var/lib/km/init-done")
+	if rmAt > enable {
+		t.Fatal("the stale-marker clear must come before the pollers are enabled")
+	}
+	if touchAt < enable {
+		t.Fatal("the init-done touch must come after the pollers are enabled")
 	}
 }

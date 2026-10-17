@@ -73,7 +73,7 @@ func routedHandler(t *testing.T, now time.Time) (*EventsHandler, *fakeSQS, *fake
 	alias := &fakeAlias{info: SandboxRoutingInfo{SandboxID: "sb-irbot", QueueURL: "https://sqs.example/irbot.fifo"}, found: true}
 	pub := &fakePublisher{}
 	emails := &scriptedEmailsByUser{byUser: map[string]string{"U0KURT": "kurt@example.com", "U0OTHER": "other@example.com"}}
-	h.DefaultRoute = NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"})
+	h.DefaultRoute = NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"}, nil)
 	h.AliasResolver = alias
 	h.CreatePublisher = pub
 	h.SenderEmails = emails

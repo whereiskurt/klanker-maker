@@ -121,6 +121,11 @@ inputs = {
   # Set km-config slack.react_always: false to flip to first-only reactions.
   slack_react_always = get_env("KM_SLACK_REACT_ALWAYS", "true")
 
+  # 2026-10-17 — reaction quiet period. ExportTerragruntEnvVars populates
+  # KM_SLACK_REACT_QUIET_SECONDS from km-config.yaml slack.react_quiet_seconds
+  # (tri-state *int) only when set; unset → "180". "0" turns it off.
+  slack_react_quiet_seconds = get_env("KM_SLACK_REACT_QUIET_SECONDS", "180")
+
   # Phase 95 — federated relay peer list. Comma-joined /events URLs of sibling
   # km installs. Populated by ExportTerragruntEnvVars from km-config.yaml
   # slack.peer_bridges []string. Empty/absent => no relay (federation off).
@@ -138,12 +143,14 @@ inputs = {
   # allowed (dormant). Requires km init --dry-run=false (NOT --sidecars) — env-block change.
   slack_allow = get_env("KM_SLACK_ALLOW", "")
 
-  # 2026-10-16 - Slack default route. km init exports all three from
-  # km-config.yaml slack.default_route or none. Requires km init --dry-run=false
+  # 2026-10-16 - Slack default route. km init exports alias, profile and the two
+  # lists (ALLOW = install list, PROFILE_ALLOW = the route profile's allowEmails)
+  # from km-config.yaml slack.default_route, or none. Requires km init --dry-run=false
   # (env-block change; --sidecars does not update it).
-  slack_default_route_alias   = get_env("KM_SLACK_DEFAULT_ROUTE_ALIAS", "")
-  slack_default_route_profile = get_env("KM_SLACK_DEFAULT_ROUTE_PROFILE", "")
-  slack_default_route_allow   = get_env("KM_SLACK_DEFAULT_ROUTE_ALLOW", "")
+  slack_default_route_alias         = get_env("KM_SLACK_DEFAULT_ROUTE_ALIAS", "")
+  slack_default_route_profile       = get_env("KM_SLACK_DEFAULT_ROUTE_PROFILE", "")
+  slack_default_route_allow         = get_env("KM_SLACK_DEFAULT_ROUTE_ALLOW", "")
+  slack_default_route_profile_allow = get_env("KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW", "")
 
   tags = {
     "km:component" = "slack-bridge"

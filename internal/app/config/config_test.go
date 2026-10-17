@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
@@ -1531,4 +1532,61 @@ func TestGetSlackChannelsTableName(t *testing.T) {
 			t.Errorf("km-config.yaml merge: got %q, want %q (merge-list entry missing?)", got, want)
 		}
 	})
+}
+
+// loadSlackYAML writes km-config.yaml with the given slack block and loads it.
+func loadSlackYAML(t *testing.T, slackBlock string) (*config.Config, error) {
+	t.Helper()
+	dir := t.TempDir()
+	writeKMConfig(t, dir, "\ndomain: example.com\nregion: us-east-1\n"+slackBlock)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	return config.Load()
+}
+
+// TestLoadSlackReactQuietSeconds_ZeroRoundTrips is the merge-list regression
+// guard for slack.react_quiet_seconds: without the merge-list entry the key is
+// silently dropped and 0 (quiet period OFF) would come back as nil (bridge
+// default 180) — the opposite of what the operator wrote.
+func TestLoadSlackReactQuietSeconds_ZeroRoundTrips(t *testing.T) {
+	cfg, err := loadSlackYAML(t, "slack:\n    react_quiet_seconds: 0\n")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.ReactQuietSeconds == nil {
+		t.Fatal("Slack.ReactQuietSeconds is nil; want *int(0)")
+	}
+	if *cfg.Slack.ReactQuietSeconds != 0 {
+		t.Errorf("Slack.ReactQuietSeconds = %d, want 0", *cfg.Slack.ReactQuietSeconds)
+	}
+}
+
+func TestLoadSlackReactQuietSeconds_Set(t *testing.T) {
+	cfg, err := loadSlackYAML(t, "slack:\n    react_quiet_seconds: 600\n")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.ReactQuietSeconds == nil || *cfg.Slack.ReactQuietSeconds != 600 {
+		t.Fatalf("Slack.ReactQuietSeconds = %v, want 600", cfg.Slack.ReactQuietSeconds)
+	}
+}
+
+func TestLoadSlackReactQuietSeconds_Absent(t *testing.T) {
+	cfg, err := loadSlackYAML(t, "")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.ReactQuietSeconds != nil {
+		t.Errorf("Slack.ReactQuietSeconds = %d, want nil", *cfg.Slack.ReactQuietSeconds)
+	}
+}
+
+func TestLoadSlackReactQuietSeconds_NegativeRejected(t *testing.T) {
+	_, err := loadSlackYAML(t, "slack:\n    react_quiet_seconds: -5\n")
+	if err == nil || !strings.Contains(err.Error(), "slack.react_quiet_seconds") {
+		t.Fatalf("want an error naming slack.react_quiet_seconds, got %v", err)
+	}
 }

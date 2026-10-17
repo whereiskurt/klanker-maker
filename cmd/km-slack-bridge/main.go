@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -283,6 +284,7 @@ func wireEventsHandler() {
 
 	// Phase 91: polite-bot mode. Read at cold-start; constant for Lambda lifetime.
 	WireMentionOnly(eventsHandler, botUserIDFetcher)
+	WireReactQuiet(eventsHandler, os.Getenv)
 
 	// Phase 95: federated relay. Parse KM_SLACK_PEER_BRIDGES; build HTTPPeerRelayer.
 	// nil Relayer => federation off => byte-identical to today's handle path.
@@ -456,6 +458,29 @@ func WireMentionOnly(h *bridge.EventsHandler, fetcher *bridge.CachedBotUserIDFet
 	slog.Info("km-slack-bridge: events handler mention-only mode",
 		"enabled", h.MentionOnly,
 		"react_always", h.ReactAlways)
+}
+
+// defaultReactQuietSeconds is the bridge's own fallback when
+// KM_SLACK_REACT_QUIET_SECONDS is unset or unparseable; the terragrunt default
+// ("180") normally supplies the same value.
+const defaultReactQuietSeconds = 180
+
+// WireReactQuiet sets EventsHandler.ReactQuietSeconds from
+// KM_SLACK_REACT_QUIET_SECONDS: "" ⇒ 180; a non-negative integer ⇒ that value
+// ("0" turns the quiet period off); anything else ⇒ 180 with a warning, so a
+// typo never silently disables the quiet period.
+func WireReactQuiet(h *bridge.EventsHandler, getenv func(string) string) {
+	raw := strings.TrimSpace(getenv("KM_SLACK_REACT_QUIET_SECONDS"))
+	h.ReactQuietSeconds = defaultReactQuietSeconds
+	if raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			h.ReactQuietSeconds = n
+		} else {
+			slog.Warn("km-slack-bridge: KM_SLACK_REACT_QUIET_SECONDS is not a non-negative integer; using the default",
+				"value", raw, "default", defaultReactQuietSeconds)
+		}
+	}
+	slog.Info("km-slack-bridge: reaction quiet period", "react_quiet_seconds", h.ReactQuietSeconds)
 }
 
 // WireActionQuota wires the Phase 121 action-quota + auto-freeze fields onto the
@@ -735,39 +760,58 @@ type defaultRouteDeps struct {
 	httpClient     *http.Client
 }
 
-// wireDefaultRoute reads KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW}. All three
-// or nothing: bridge.NewDefaultRoute returns nil for an empty allowlist, so a
-// half-set env leaves the route OFF rather than open.
+// wireDefaultRoute reads KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW,PROFILE_ALLOW}.
+// ALLOW is the install list (DM targets, non-route boxes); PROFILE_ALLOW is the
+// route profile's allowEmails (cold-create and the alias's box). Alias, profile
+// and at least one list, or nothing: bridge.NewDefaultRoute returns nil
+// otherwise, so a half-set env leaves the route OFF rather than open.
 func wireDefaultRoute(h *bridge.EventsHandler, out *bridge.Handler, getenv func(string) string, d defaultRouteDeps) {
 	alias := strings.TrimSpace(getenv("KM_SLACK_DEFAULT_ROUTE_ALIAS"))
 	profile := strings.TrimSpace(getenv("KM_SLACK_DEFAULT_ROUTE_PROFILE"))
-	var emails []string
-	for _, e := range strings.Split(getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"), ",") {
-		if e = strings.TrimSpace(e); e != "" {
-			emails = append(emails, e)
-		}
-	}
-	route := bridge.NewDefaultRoute(alias, profile, emails)
-	if route == nil {
-		if alias != "" || profile != "" || len(emails) > 0 {
-			slog.Warn("km-slack-bridge: default route partially configured; staying OFF",
-				"alias_set", alias != "", "profile_set", profile != "", "emails", len(emails))
-		}
-		return
-	}
-	h.DefaultRoute = route
+	emails := splitEmailEnv(getenv("KM_SLACK_DEFAULT_ROUTE_ALLOW"))
+	profileEmails := splitEmailEnv(getenv("KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW"))
+	// The sender-email cache and the by-id fetcher are wired whether or not the
+	// route is on: a sandbox row's allowEmails gates its own #sb- channel and its
+	// km-slack dm targets on a route-less install too. Both handlers share one
+	// instance of each (one cache; a deny is never cached).
 	h.SandboxByID = &bridge.DDBSandboxByID{Client: d.ddb, TableName: d.sandboxesTable}
-	h.AliasResolver = &bridge.DDBAliasResolver{Client: d.ddb, TableName: d.sandboxesTable}
-	h.CreatePublisher = &bridge.EventBridgeAdapter{Client: d.eventBridge, ArtifactBucket: d.artifactBucket}
 	h.SenderEmails = &bridge.CachedSenderEmailFetcher{
 		Inner: &bridge.SlackSenderEmailAdapter{Tokens: d.tokens, HTTPClient: d.httpClient},
 		TTL:   15 * time.Minute,
 	}
-	// ActionDM (km-slack dm) gates its target on the same allowlist and the same
-	// email cache; out == nil leaves the outbound handler's dm verb disabled.
+	if out != nil {
+		out.SandboxByID = h.SandboxByID
+		out.SenderEmails = h.SenderEmails
+	}
+	route := bridge.NewDefaultRoute(alias, profile, emails, profileEmails)
+	if route == nil {
+		if alias != "" || profile != "" || len(emails) > 0 || len(profileEmails) > 0 {
+			slog.Warn("km-slack-bridge: default route partially configured; staying OFF",
+				"alias_set", alias != "", "profile_set", profile != "",
+				"emails", len(emails), "profile_emails", len(profileEmails))
+		}
+		return
+	}
+	h.DefaultRoute = route
+	h.AliasResolver = &bridge.DDBAliasResolver{Client: d.ddb, TableName: d.sandboxesTable}
+	h.CreatePublisher = &bridge.EventBridgeAdapter{Client: d.eventBridge, ArtifactBucket: d.artifactBucket}
+	// ActionDM (km-slack dm) gates its target on the install list (or the
+	// posting sandbox's own allowEmails). With no route at all (the early return
+	// above) out.DefaultRoute stays nil and km-slack dm answers 403 dm_disabled.
 	if out != nil {
 		out.DefaultRoute = route
-		out.SenderEmails = h.SenderEmails // same cache; a deny is never cached
 	}
-	slog.Info("km-slack-bridge: default route enabled", "alias", alias, "profile", profile, "allow_count", len(emails))
+	slog.Info("km-slack-bridge: default route enabled", "alias", alias, "profile", profile,
+		"allow_count", len(emails), "profile_allow_count", len(profileEmails))
+}
+
+// splitEmailEnv splits a comma-joined email env var, dropping blanks.
+func splitEmailEnv(v string) []string {
+	var out []string
+	for _, e := range strings.Split(v, ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
 }

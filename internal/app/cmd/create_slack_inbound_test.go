@@ -601,3 +601,81 @@ func TestCreate_SlackInboundThreadBypassOverride(t *testing.T) {
 		})
 	}
 }
+
+// TestCreate_SlackInboundAllowEmailsAndReactQuiet — 2026-10-17. The per-sandbox
+// email allowlist is written as a comma-joined, normalised "slack_allow_emails"
+// S attribute and the reaction quiet period as "slack_react_quiet_seconds";
+// neither is written when the profile leaves it unset.
+func TestCreate_SlackInboundAllowEmailsAndReactQuiet(t *testing.T) {
+	t.Run("set → both written", func(t *testing.T) {
+		fs := &fakeSQS{}
+		deps, state := makeDeps(t, true, fs, nil, nil)
+		q := 180
+		deps.Profile.Spec.Notification.Slack.Inbound.AllowEmails = []string{" Kurt@Example.com ", "*@example.com"}
+		deps.Profile.Spec.Notification.Slack.Inbound.ReactQuietSeconds = &q
+		if _, err := provisionSlackInboundQueue(context.Background(), deps); err != nil {
+			t.Fatal(err)
+		}
+		if got := state.ddbAttrs["slack_allow_emails"]; got != "kurt@example.com,*@example.com" {
+			t.Errorf("slack_allow_emails = %q", got)
+		}
+		if got := state.ddbAttrs["slack_react_quiet_seconds"]; got != "180" {
+			t.Errorf("slack_react_quiet_seconds = %q", got)
+		}
+	})
+	t.Run("unset → neither written", func(t *testing.T) {
+		fs := &fakeSQS{}
+		deps, state := makeDeps(t, true, fs, nil, nil)
+		if _, err := provisionSlackInboundQueue(context.Background(), deps); err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{"slack_allow_emails", "slack_react_quiet_seconds"} {
+			if v, ok := state.ddbAttrs[k]; ok {
+				t.Errorf("%s written unexpectedly: %q", k, v)
+			}
+		}
+	})
+}
+
+// A failed slack_allow_emails write is fatal: the box's own #sb- channel would
+// otherwise come up with NO email gate. The queue is rolled back, as for a
+// failed queue-url write. slack_react_quiet_seconds stays non-fatal (cosmetic).
+func TestCreate_SlackInboundAllowEmailsWriteFailureIsFatal(t *testing.T) {
+	fs := &fakeSQS{}
+	deps, _ := makeDeps(t, true, fs, nil, nil)
+	deps.Profile.Spec.Notification.Slack.Inbound.AllowEmails = []string{"kurt@example.com"}
+	inner := deps.UpdateSandboxAttr
+	deps.UpdateSandboxAttr = func(ctx context.Context, id, attr, val string) error {
+		if attr == "slack_allow_emails" {
+			return errors.New("ddb throttled")
+		}
+		return inner(ctx, id, attr, val)
+	}
+	url, err := provisionSlackInboundQueue(context.Background(), deps)
+	if err == nil || !strings.Contains(err.Error(), "slack_allow_emails") {
+		t.Fatalf("want a fatal error naming slack_allow_emails, got %v", err)
+	}
+	if url != "" {
+		t.Fatalf("expected empty URL on failure, got %q", url)
+	}
+	if fs.deleteCalled != 1 {
+		t.Fatalf("expected 1 DeleteQueue rollback call, got %d", fs.deleteCalled)
+	}
+}
+
+func TestCreate_SlackInboundReactQuietWriteFailureIsNonFatal(t *testing.T) {
+	fs := &fakeSQS{}
+	deps, _ := makeDeps(t, true, fs, nil, nil)
+	q := 60
+	deps.Profile.Spec.Notification.Slack.Inbound.ReactQuietSeconds = &q
+	inner := deps.UpdateSandboxAttr
+	deps.UpdateSandboxAttr = func(ctx context.Context, id, attr, val string) error {
+		if attr == "slack_react_quiet_seconds" {
+			return errors.New("ddb throttled")
+		}
+		return inner(ctx, id, attr, val)
+	}
+	if _, err := provisionSlackInboundQueue(context.Background(), deps); err != nil {
+		t.Fatalf("react quiet is cosmetic; want success, got %v", err)
+	}
+}

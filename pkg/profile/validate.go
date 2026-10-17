@@ -421,6 +421,45 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 			}
 		}
 
+		// Rule S-allowemails (2026-10-17): an empty list is an error (it would read
+		// as "nobody" to one reader and "fall back" to another — make the author
+		// omit it), and every entry must be an exact address or exactly *@<domain>.
+		if slack.Inbound != nil && slack.Inbound.AllowEmails != nil {
+			if len(slack.Inbound.AllowEmails) == 0 {
+				errs = append(errs, ValidationError{
+					Path:    "spec.notification.slack.inbound.allowEmails",
+					Message: "notification.slack.inbound.allowEmails is empty; omit the field to use the install-level email list",
+				})
+			}
+			for _, e := range slack.Inbound.AllowEmails {
+				if err := validateInboundEmailEntry(e); err != nil {
+					errs = append(errs, ValidationError{
+						Path:    "spec.notification.slack.inbound.allowEmails",
+						Message: err.Error(),
+					})
+				}
+			}
+		}
+
+		// Rule S-inbound-only (warnings, 2026-10-17): allowEmails and
+		// reactQuietSeconds only affect inbound dispatch, mirroring S-threadbypass.
+		if slack.Inbound != nil && (slack.Inbound.Enabled == nil || !*slack.Inbound.Enabled) {
+			if len(slack.Inbound.AllowEmails) > 0 {
+				errs = append(errs, ValidationError{
+					Path:      "spec.notification.slack.inbound.allowEmails",
+					Message:   "notification.slack.inbound.allowEmails has no effect without notification.slack.inbound.enabled: true",
+					IsWarning: true,
+				})
+			}
+			if slack.Inbound.ReactQuietSeconds != nil {
+				errs = append(errs, ValidationError{
+					Path:      "spec.notification.slack.inbound.reactQuietSeconds",
+					Message:   "notification.slack.inbound.reactQuietSeconds has no effect without notification.slack.inbound.enabled: true",
+					IsWarning: true,
+				})
+			}
+		}
+
 		// Rule S-maxconcurrency (warning, Phase 119): maxConcurrentThreads > 1 has no
 		// effect without perSandbox:true AND inbound.enabled:true — the cap drives the
 		// per-sandbox inbound poller, which only exists for a per-sandbox inbound queue.
@@ -1225,4 +1264,24 @@ func IsAbstractFragment(raw []byte) bool {
 	}
 	v, ok := abstract.(bool)
 	return ok && v
+}
+
+// inboundDomainEntry / inboundExactEntry duplicate reDomainEntry / reExactEntry
+// in pkg/slack/bridge/default_route.go (bridge.ValidateEmailEntry) and the
+// routeDomainEntry / routeExactEntry copies in internal/app/config. pkg/profile
+// must not import pkg/slack/bridge, so the three copies are held in lockstep by
+// a shared test table (TestValidateInboundEmailEntry_MirrorsBridge ↔
+// emailEntryCases ↔ TestValidateRouteEmailEntry_MirrorsBridge): change all three.
+var inboundDomainEntry = regexp.MustCompile(`^\*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+var inboundExactEntry = regexp.MustCompile(`^[^@\s*,]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$`)
+
+// validateInboundEmailEntry accepts an exact address or exactly `*@<domain>`
+// (case-insensitive, trimmed). Any other use of `*` is an error so a typo
+// cannot widen the allowlist.
+func validateInboundEmailEntry(s string) error {
+	n := strings.ToLower(strings.TrimSpace(s))
+	if inboundDomainEntry.MatchString(n) || inboundExactEntry.MatchString(n) {
+		return nil
+	}
+	return fmt.Errorf("allowlist entry %q: must be an email address or *@<domain>", s)
 }

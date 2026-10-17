@@ -377,6 +377,7 @@ Set by the `infra/modules/lambda-slack-bridge/v1.0.0/` module on every `km init`
 | `KM_SLACK_MENTION_ONLY` | `km-config.yaml` → `slack.mention_only` (Phase 91.1) | Install-level polite-bot default |
 | `KM_SLACK_BOT_USER_ID` | SSM `{prefix}/slack/bot-user-id` (auto-read by `km init`) | Polite-bot mention scan target |
 | `KM_SLACK_REACT_ALWAYS` | `km-config.yaml` → `slack.react_always` (Phase 91.4) | Install-level 👀-on-replies default |
+| `KM_SLACK_REACT_QUIET_SECONDS` | `km-config.yaml` → `slack.react_quiet_seconds` (2026-10-17; `"180"` when absent) | Install-level 👀 quiet period for thread replies; `0` disables |
 | `TOKEN_ROTATION_TS` | bumped by `km slack rotate-token` | Forces cold-start to invalidate 15-min cache |
 
 ---
@@ -1871,6 +1872,7 @@ env vars are populated automatically by `km init` (Phase 91.1):
 |---------|--------|---------|--------|
 | `KM_SLACK_MENTION_ONLY` | `"true"` / `"false"` | `"false"` | `km-config.yaml` key `slack.mention_only` (Phase 91.1 — formerly required an `export`) |
 | `KM_SLACK_BOT_USER_ID` | Slack user ID (e.g. `U03ABCDEF`) | `""` | SSM `{prefix}slack/bot-user-id` (populated by `km slack init`); auto-read by `km init` |
+| `KM_SLACK_REACT_QUIET_SECONDS` | integer seconds, `>= 0` | `"180"` | `km-config.yaml` key `slack.react_quiet_seconds` (2026-10-17). See [Quiet period](#quiet-period-2026-10-17) |
 
 **Polite vs chatty install-level default:**
 
@@ -1898,6 +1900,74 @@ is slower.
 
 **Per-profile override** (`notification.slack.inbound.mentionOnly`) still wins over the install default
 at sandbox-create time — profiles can flip polite/chatty per sandbox.
+
+### Quiet period (2026-10-17)
+
+In a live back-and-forth the 👀 on every reply is noise: the person already knows the bot is
+there. The quiet period keeps the reaction only where it tells someone something.
+
+- **The rule.** A **thread reply** gets 👀 only when the thread has been quiet for **more
+  than N seconds**. Quiet is measured from the thread row's `last_dispatch_ts`, which is the
+  Slack `ts` of the last message the bridge dispatched in that thread. A reply N seconds or
+  less after it dispatches silently.
+- **Top-level messages always react.** That is the engagement signal and it is unchanged.
+- **`react_always: false` wins.** A sandbox or install with `react_always: false` never
+  reacts to thread replies, whatever the quiet period says.
+- **On by default: 180 seconds.** An install with no `slack.react_quiet_seconds` gets `180`
+  on its next `km init`. This is a behaviour change: thread replies inside a live
+  conversation stop getting 👀. Set `0` to restore the old behaviour.
+- **Per-sandbox override.** `notification.slack.inbound.reactQuietSeconds` (integer, `>= 0`)
+  wins over the install value, the same precedence as `reactAlways`. `km create` writes it
+  to the sandbox row as `slack_react_quiet_seconds`, so a change needs `km destroy && km create`.
+- **It fails toward the reaction.** No thread row, a read error, a read slower than 3
+  seconds, or an unparseable boundary all mean 👀.
+- **It applies everywhere a thread reply is dispatched**: the sandbox's own `#sb-…`
+  channel, routed threads, and DM threads.
+
+```yaml
+# km-config.yaml
+slack:
+  react_always: true          # the quiet period only matters while this is true
+  react_quiet_seconds: 180    # absent = 180; 0 = react on every thread reply
+```
+
+```yaml
+# profile: this sandbox reacts on every thread reply
+spec:
+  notification:
+    slack:
+      inbound:
+        enabled: true
+        reactQuietSeconds: 0
+```
+
+**Cost.** Each thread reply that could react costs one extra DynamoDB `GetItem` on
+`km-slack-threads`. That holds on routed threads too, because the continuity lookup returns
+only the sandbox id. The read happens **before** delivery, because delivery advances
+`last_dispatch_ts` to the message being handled. In strict mode the same read serves the
+thread-context window, so an event reads the boundary at most once. That shared read is
+capped at 3 seconds; a slower read falls back to the thread root, which gives the agent more
+context, never less.
+
+**The poller must not clobber the boundary.** The sandbox's Slack inbound poller writes its
+own attributes on the same thread row after every turn (`claude_session_id`, `agent_type`,
+`last_assistant_msg`, `last_turn_ts`, `last_processed_event_ts`, `ttl_expiry`). It does so
+with an `UpdateItem` that sets only those, so the bridge's `last_dispatch_ts`, `created_at`
+and `turn_count` survive a turn. Before 2026-10-17 it used a whole-item `PutItem`. A sandbox
+created before that fix still wipes the boundary on every turn until `km destroy && km create`.
+There the quiet period reacts every time and strict-mode context falls back to the thread
+root. The fix ships in userdata, so it needs `make build-lambdas` and `km init --dry-run=false`.
+
+**Log line.** A skip is logged at Info:
+
+```
+events: reaction skipped (quiet period) channel=C0… thread_ts=… sandbox=… since_last_dispatch_s=42 quiet_s=180
+```
+
+A read error or unparseable boundary logs a WARN naming the quiet period, then reacts.
+
+**Deploy.** `make build` + `make build-lambdas` + `km init --dry-run=false`. The install
+value takes effect on the next event after the apply. The per-sandbox field needs a recreate.
 
 ### `km doctor` check: `slack_bot_user_id_cached`
 
@@ -2008,6 +2078,7 @@ requires `km init --dry-run=false`, not `km init --sidecars`.
 | Bot ignores a thread reply (no @-mention) when the bot is already engaged in that thread | **Phase 91.3** added bypass for this case. If you upgraded to Phase 91 but not Phase 91.3 (km v0.3.772+), the @-mention is still required on every reply. Upgrade `km` and re-run `km init --dry-run=false`. |
 | Bot 👀-reacts to unrelated thread chatter in a shared channel | **Phase 91.3** thread-bypass keys on (channel, thread\_ts) — once the bot dispatches a turn in a thread, EVERY subsequent reply in that thread routes to the sandbox. If the thread root was a non-bot conversation that the bot was mistakenly mentioned in once, the entire thread is now bot-owned. Set `notification.slack.inbound.threadBypass: false` on the profile and recreate the sandbox; the bot then needs an @-mention for every turn and receives the thread's human messages as context when mentioned. |
 | Want the bot to skip 👀 on thread replies (acknowledge top-level engagement only) | **Phase 91.4 (km v0.3.773+).** Set `slack.react_always: false` in `km-config.yaml`, run `km init --dry-run=false`. Top-level messages still get 👀 to signal "I saw you"; thread replies dispatch silently. |
+| Thread replies stopped getting 👀 after upgrading | Expected since 2026-10-17: the [quiet period](#quiet-period-2026-10-17) defaults to 180 s, so a reply within 3 minutes of the last dispatched message in the thread is not reacted to. Set `slack.react_quiet_seconds: 0` and run `km init --dry-run=false` to react on every reply, or set `notification.slack.inbound.reactQuietSeconds` on one profile and recreate. |
 | Want some sandboxes chatty and others first-only | **Phase 91.5 (km v0.3.776+).** Set `notification.slack.inbound.reactAlways: true \| false` per profile. `km create` writes `slack_react_always` to the sandbox's `km-sandboxes` row and the bridge prefers the per-sandbox value over `slack.react_always` in `km-config.yaml`. Profile field omitted → install default applies. Existing sandboxes need `km destroy --remote --yes && km create` to pick up profile changes. |
 | Mention-scan never fires; cold-start is slow | `KM_SLACK_BOT_USER_ID` is empty in Lambda env. Confirm `km slack init` has been run (writes SSM) — `km init` auto-reads SSM on next apply. |
 | Mode 2 (`#sb-{id}`) channel is polite when it should be chatty | Profile has `notification.slack.inbound.mentionOnly: true` set explicitly. Remove the field to restore the Mode 2 every-message default. |
@@ -2084,6 +2155,9 @@ cannot be resolved in time is omitted, not included.
 **The `last_dispatch_ts` boundary** is advanced with a conditional `UpdateItem` after every
 successful delivery, enqueue or cold-create publish, in every mode. A sandbox later switched
 to strict therefore already has a correct boundary. A failed delivery leaves it unchanged.
+The poller's own per-turn write updates only its attributes, so the boundary survives a turn;
+a sandbox created before 2026-10-17 overwrites the whole row and loses it until recreated
+(see § Quiet period).
 
 **What the agent sees.** The poller renders the context above the sender preamble:
 
@@ -3029,6 +3103,10 @@ spec:
   - mention-only mode (Phase 91) — the allowlist is the strict outer gate; mention-only is the inner content filter. Both must pass when both are active.
   - the Phase 91.3 thread-bypass — a non-listed user **cannot** hijack an already-engaged thread.
 - Handler order: channel-ownership (`FetchByChannel`) → **allowlist (new)** → mention/thread → dedup → dispatch.
+- **AND with email lists (2026-10-17).** A sandbox with `notification.slack.inbound.allowEmails`
+  checks the sender's email after this user-id check; both must pass. The two lists hold
+  different identities and neither replaces the other. See
+  [Allowlists](#allowlists-domains-and-per-sandbox-lists-2026-10-17).
 
 ### Plumbing
 
@@ -3183,21 +3261,25 @@ slack:
   default_route:
     alias: ir-bot                     # required
     profile: profiles/ir-bot.yaml     # required; the cold-create source
-    allow_emails:                     # required, non-empty, or the route is OFF
+    allow_emails:                     # required unless the profile sets allowEmails
       - operator@example.com
-      - analyst@example.com
+      - "*@example.com"               # every member of the domain (quote the *)
 ```
 
-`km init` exports three bridge env vars, **all three or none**:
+`km init` exports four bridge env vars: alias and profile plus **at least one** of the two lists (install or route-profile), or none at all:
 
 | Env var | Value |
 |---|---|
 | `KM_SLACK_DEFAULT_ROUTE_ALIAS` | `alias` |
 | `KM_SLACK_DEFAULT_ROUTE_PROFILE` | `profile` |
-| `KM_SLACK_DEFAULT_ROUTE_ALLOW` | `allow_emails`, trimmed, lowercased, comma-joined |
+| `KM_SLACK_DEFAULT_ROUTE_ALLOW` | The **install list**: `allow_emails`, trimmed, lowercased, comma-joined. May be empty when the route profile has a list. |
+| `KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW` | The **route profile's list**: its `notification.slack.inbound.allowEmails`, same form. May be empty. |
 
-- **Deny-by-default.** An empty `allow_emails` fails `km init` with a message naming the key.
-  A bot reachable from every channel in an org must never be open to everyone by omission.
+- **Deny-by-default.** When neither the route profile's `allowEmails` nor `allow_emails`
+  lists anyone, `km init` and `km slack init` stop with an error naming both places. A bot
+  reachable from every channel in an org must never be open to everyone by omission. See
+  [Allowlists](#allowlists-domains-and-per-sandbox-lists-2026-10-17) for the entry forms and
+  what each list gates.
 - **Why not `slack.allow`.** Phase 118's `slack.allow` is a list of Slack user ids and is
   **allow-by-default** on empty. Reusing that key for an email list with the opposite empty
   semantics would put two meanings under one name. The two lists are independent:
@@ -3218,6 +3300,8 @@ slack:
   next cold-create sees it.
 - **env-wins drift WARN.** An exported `KM_SLACK_DEFAULT_ROUTE_*` that disagrees with the
   yaml produces a one-line WARN and the env value wins, as with `KM_SLACK_ALLOW`.
+- **`km env` does not print the Slack vars.** It never has, so this is not a regression. Read
+  the live values from the Lambda configuration instead.
 
 ### Who can use it
 
@@ -3229,7 +3313,7 @@ slack:
 - **A deny is never cached.** Successful lookups are cached in the warm Lambda for 15
   minutes; failures are not, so a transient Slack error costs one event and cannot pin a
   person out.
-- **Removals:** edit `allow_emails` and run `km init --dry-run=false`. Allow up to one cache
+- **Removals:** edit the effective list and run `km init --dry-run=false`. Allow up to one cache
   TTL (15 minutes) on a warm Lambda before treating a removal or a Slack deactivation as
   effective.
 - **The gate applies to every turn**, thread follow-ups included. A non-listed person cannot
@@ -3238,7 +3322,88 @@ slack:
   admin-managed workspaces are fine; where members can edit their own email, it relies on
   Slack's mailbox verification of the new address.
 - **A non-listed sender sees nothing**: no 👀, no reply, no hint. The bridge logs the drop at
-  debug level and returns 200. Nothing confirms who is on the list.
+  Info (`route: sender not allowlisted (silent drop)`, or `sender not in sandbox allowEmails
+  (silent drop)` when a sandbox's own list decided) and returns 200. Nothing confirms who is
+  on the list.
+
+### Allowlists: domains and per-sandbox lists (2026-10-17)
+
+**Entry forms.** Every email list (`allow_emails`, a profile's `allowEmails`) takes two forms,
+case-insensitive:
+
+| Form | Example | Matches |
+|---|---|---|
+| Exact address | `kurt@example.com` | That address only |
+| Domain wildcard | `*@example.com` | Any address whose domain is exactly `example.com` |
+
+- The wildcard is exactly `*@<domain>`: one `*` as the whole local part. The domain is
+  dot-separated labels with a top-level label of at least two letters, so punycode TLDs
+  (`xn--…`) are rejected.
+- **Subdomains do not match.** `*@example.com` does not admit `a@sub.example.com`; list
+  `*@sub.example.com` too if you mean it.
+- Any other `*` (`k*@example.com`, `*@*`, a bare `*`) fails `km init` and `km validate`, so a
+  typo cannot widen a list.
+
+**Per-sandbox list.** `notification.slack.inbound.allowEmails` on a profile names who may talk
+to that one sandbox:
+
+```yaml
+spec:
+  notification:
+    slack:
+      perSandbox: true
+      inbound:
+        enabled: true
+        allowEmails:
+          - kurt@example.com
+          - "*@example.com"
+```
+
+- **It replaces the install list for that sandbox.** It is an override, not an intersection,
+  so it may be stricter than the install list or admit someone the install list does not.
+- **It applies on every path to that sandbox:** its own `#sb-…` channel, routed threads, DM
+  threads, the strict-mode context trust check, and the targets of `km-slack dm` sent **by**
+  that sandbox.
+- **Absent** means the install list on the route paths (routed threads, DM threads) and no
+  email gate at all on the sandbox's own `#sb-…` channel, as before.
+- **An explicitly empty list is a `km validate` error.** Omit the field to use the install
+  list. Setting it without `inbound.enabled: true` is a WARN.
+- **Phase 118 user ids still apply.** A sender must pass the `allow` user-id list AND the email
+  list. See [Phase 118](#phase-118--slack-trigger-allowlist--private-per-sandbox-channels).
+- **A lookup error denies.** When a list is in force and `users.info` fails, the sender is
+  dropped. The deny is not cached.
+- `km create` writes the list to the sandbox row as `slack_allow_emails`, so a change needs
+  `km destroy && km create`.
+
+**Two lists: the install list for everyone, the route profile's list for the route's own box.**
+`allow_emails` in `km-config.yaml` is the **install list** (`KM_SLACK_DEFAULT_ROUTE_ALLOW`). It
+gates the targets of `km-slack dm` and routed turns to any sandbox that is not the route's box
+and carries no `allowEmails` of its own. The route profile's `allowEmails` is the **route
+profile's list** (`KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW`). It gates the mention that
+**cold-creates** the box and every turn to the alias's current box; when the profile has no
+list, the install list gates those too. A sandbox row that carries its own `allowEmails` always
+decides alone. So narrowing the route profile to two people narrows who can start and reach
+that box, and nothing else on the install. Either list may be empty, not both. `km init` names
+the source of each list, and prints a second line when both exist:
+
+```
+[info] slack.default_route allowlist: from profile profiles/ir-bot.yaml (2 entries) and from km-config.yaml (1 entries)
+[info] slack.default_route: install list 1 entries (DM targets and non-route sandboxes); route profile list 2 entries (cold-create and the route box)
+```
+
+This closes the first-turn gap. The mention that **cold-creates** the box is gated by the same
+list the box enforces once it exists, so only the people the profile names can start it. Every
+path that applies the bridge re-stages the route profile with the list it exports: full
+`km init`, scoped `km init --slack`, and `km slack init --force`. Changing that profile's list
+therefore needs **both** `km init --dry-run=false` (the bridge env, and the pre-staged profile)
+**and** `km destroy && km create` of the box (its row). A failed `slack_allow_emails` row write
+fails `km create`, so a box never comes up without its list.
+
+**Upgrade note.** Entry validation is stricter than before. An address with a single-label
+domain such as `kurt@localhost`, a punycode TLD (`xn--…`), or a comma in the local part now
+fails `km init`. Fix such entries and run `km init --dry-run=false` **before** deploying the new
+bridge zip. A bridge that gets the zip first drops such entries with a WARN, and the route
+goes OFF if they were the only entries.
 
 ### How a message is routed
 
@@ -3366,6 +3531,7 @@ cold-create drain; it had no such grant before.
 | New bridge | Old poller on the default box | Replies land in the sandbox's own `#sb-…` channel instead of the originating thread |
 | New poller | Old bridge | The route never fires |
 | New bridge | Old create-handler | The box is created, `slack_envelope` is ignored, the first prompt is lost; the sender re-mentions |
+| New env from `km init` (profile list) | Old bridge zip | `KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW` is ignored and everything gates on the install list; a profile-only route is OFF until the new zip lands. With both lists set the old bridge behaves exactly as before |
 
 ### `km doctor` group: Slack default route
 
@@ -3374,14 +3540,16 @@ Skipped silently when the block is absent. Otherwise three results from one eval
 | Check | WARN when |
 |---|---|
 | `Slack default route profile` | The profile is missing, does not resolve, or lacks Slack inbound. When OK and the profile sets `threadBypass: false`, the message notes that thread follow-ups in invited channels require a mention. |
-| `Slack default route allowlist` | `allow_emails` is empty (route OFF), or an email does not resolve via `users.lookupByEmail` |
+| `Slack default route allowlist` | Neither the route profile's `allowEmails` nor `allow_emails` lists anyone (route OFF), or an exact address in either list does not resolve via `users.lookupByEmail`. The message starts with its source (`from profile <path>:`, `from km-config.yaml:`, or both). Domain wildcards are counted separately (`2 email(s) resolve in the workspace, 1 domain wildcard(s)`) and never looked up. When both lists exist, a second OK line says what each one gates. |
 | `Slack default route scopes` | The live `auth.test` scopes lack `im:history` or `mpim:history` (DMs never delivered), or `im:write` (`km-slack dm` fails) |
 
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Mention in an invited channel is ignored | Sender's Slack email is not in `allow_emails` | Add it, `km init --dry-run=false`. `km doctor` shows which emails do not resolve. |
+| Mention in an invited channel is ignored | Sender's Slack email is not on the list for that box | A cold-create or the alias's box: the route profile's `allowEmails` if it has one, else `allow_emails`. Any other box: its own `allowEmails`, else `allow_emails`. Then `km init --dry-run=false`. `km doctor` shows which emails do not resolve. |
+| Mention is ignored and the log says `sender not in sandbox allowEmails` | The target sandbox's own list does not name the sender | Add them to the profile's `allowEmails`, then `km destroy && km create` (and `km init` too when it is the route profile). |
+| `*@example.com` member from `sub.example.com` is ignored | Subdomains do not match a domain wildcard | Add `*@sub.example.com`. |
 | Mention in an invited channel is ignored | The bot is not a member of the channel | `/invite @<bot>` in the channel. |
 | Message in a channel is ignored | It carries no @-mention; only DMs dispatch without one | Mention the bot. |
 | Nothing routes at all | The route env is not on the bridge (stale `km` binary, or init not run) | `make build`, `km init --dry-run=false`; check `KM_SLACK_DEFAULT_ROUTE_ALLOW` in the Lambda env. `km doctor` reports the group. |
@@ -3391,7 +3559,7 @@ Skipped silently when the block is absent. Otherwise three results from one eval
 | Cold-created box never answers | The profile lacks Slack inbound | Fix the profile; `km init` now refuses this. |
 | Cold-created box never answers | Old create-handler ignores `slack_envelope` | `make build-lambdas` + `km init --dry-run=false`; re-mention. |
 | Cold-created box never answers | Create-handler role lacks `sqs:SendMessage` on `slack-inbound-*` | `km init --dry-run=false` applies the grant; re-mention. |
-| First reply takes minutes | The alias was absent and the mention cold-created it | Expected. Later turns are warm. |
+| First reply takes minutes | The alias was absent and the mention cold-created it | Expected: boot plus profile init, which the poller now waits for (bounded 1200 s). A reply ~30 min late means a box created before the init gate (exit 127, 1800 s visibility); recreate it. See `docs/operational-gotchas.md` § Cold-create first turn and the init gate. Later turns are warm. |
 | `claude:` prefix in a routed thread does nothing | Agent switching is skipped in routed threads | Expected; the poller log names it. Start the conversation in a mapped channel to switch agents. |
 
 ### Known limits
@@ -3494,8 +3662,10 @@ create-handler-rendered poller and hook both change. A sandbox gains it on
 [--from-thread]` asks the bridge to open a DM with a person and post there, top-level. `--to`
 is a bare user id. A Slack `invalid_blocks` rejection is retried once without blocks. The
 bridge admits only a target whose email (via `users.info`, the same cached fetcher as the
-inbound gate) is on `slack.default_route.allow_emails`; without a default route every `dm` is
-`403 dm_disabled`. `--from-thread` appends a permalink to the originating thread.
+inbound gate) is on the route's effective list; without a default route every `dm` is
+`403 dm_disabled`. When the **sending** sandbox's row carries `allowEmails`, that list replaces
+the route list for the target check. The bridge reads the sender's row first; a read error
+refuses with `dm_not_allowed` (fail closed), because the row may carry a narrower list. `--from-thread` appends a permalink to the originating thread.
 On success the bridge writes a `km-slack-threads` row for the DM message (after the post), so a
 reply typed under it routes back to the same sandbox; a fresh top-level DM still goes through
 the default route. The DM writes no one-reply marker.

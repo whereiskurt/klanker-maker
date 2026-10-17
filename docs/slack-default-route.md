@@ -76,7 +76,11 @@ ledger records the rulings.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Reach | Public channels, private channels, DMs, group DMs | The operator's call. DMs cost two scopes and two events. `im:write` was added on 2026-10-17 for `km-slack dm` (bot-initiated DM, allowlist-gated; see `docs/slack-notifications.md` § Bot-initiated DMs). |
-| Empty allowlist | The route is OFF | A bot reachable from every channel in an org must be deny-by-default. Phase 118's allow-by-default empty list stays for mapped channels, which is why `slack.allow` was not reused: one key with two opposite empty-list meanings is a trap. |
+| Empty allowlist | The route is OFF | A bot reachable from every channel in an org must be deny-by-default. Phase 118's allow-by-default empty list stays for mapped channels, which is why `slack.allow` was not reused: one key with two opposite empty-list meanings is a trap. Since 2026-10-17 "empty" means neither the route profile's `allowEmails` nor `allow_emails` lists anyone. |
+| Allowlist entry forms (2026-10-17) | An exact address or exactly `*@<domain>`; any other `*` fails `km init` and `km validate`; subdomains do not match | Admits a whole domain without listing people, with one unambiguous form and no glob engine. A typo cannot widen a list. |
+| Per-sandbox email list (2026-10-17) | `notification.slack.inbound.allowEmails` REPLACES the install list for that sandbox on every path: its own `#sb-…` channel, routed threads, DM threads, strict-context trust, and `km-slack dm` targets it sends. Absent means the install list on route paths and no email gate on the owned path. Explicitly empty is a `km validate` error | An override is simpler to reason about than an intersection, and lets one klanker be stricter or differently scoped than the install. "Empty means everyone" is the Phase 118 rule and was deliberately not reused. The Phase 118 user-id list still applies in addition (AND). |
+| The route's two lists (2026-10-17) | `km init` exports `allow_emails` as `KM_SLACK_DEFAULT_ROUTE_ALLOW` (the install list: DM targets, non-route boxes) and the route profile's `allowEmails` as `KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW` (cold-create and the alias's box, falling back to the install list); neither stops `km init` and `km slack init` | The mention that cold-creates the box is gated by the same list the box enforces afterwards, so nobody the profile does not name can start it, and narrowing the route profile narrows nothing else. The cost: changing the profile list needs `km init` (env) and a recreate (row). |
+| Reaction quiet period (2026-10-17) | A thread reply reacts 👀 only after more than N seconds since the thread's `last_dispatch_ts`; top-level always reacts; `react_always: false` wins; default 180 s, `0` disables | The 👀 on every reply of a live exchange is noise. The boundary is already stored and advanced on every delivery, and a missing row or read error reacts, because a missing reaction is preferable to a silent bot. |
 | Identity | Sender email resolved at event time via `users.info` | Deactivation and list edits take effect without a `km init` of Slack ids, and a lookup failure is a deny rather than a hole. Resolving ids at `km init` was rejected because it goes stale until re-init and a failed lookup at init must be either a hard error or a silent hole. |
 | Rejected: a wildcard sandbox row | Not built | A fake row owning every channel would lie to `km list`, `km doctor`, the running-channels lister and the Phase 118 per-sandbox allowlist, and has no place for an email gate. |
 | Target semantics | `alias` + `profile`: warm, resume, cold-create | The same vocabulary as `github.events` and `webhooks:`. |
@@ -124,8 +128,11 @@ the ladder continues.
 
 The fourth step is the gate. A mention is required when the event's `channel_type` is
 `channel`, `group` or `mpim`, and not for `im`. Then the sender's email is resolved through
-the cached `users.info` lookup and checked against `allow_emails`. Either failure returns 200
-with a debug log line and nothing else.
+the cached `users.info` lookup and checked against the route's effective list (the route
+profile's `allowEmails` when it has one, else `allow_emails`). Either failure returns 200 with
+an Info log line and nothing else. On the enqueue and resume branches the target box's own
+`allowEmails`, when its row carries one, decides instead; the cold-create branch is gated by
+the route list, which is that same profile's list when it sets one.
 
 The fifth step resolves the alias through the `alias-index` GSI. An absent alias produces a
 cold-create: the bridge mints the `sl-…` id, downloads any attached files under it, and
@@ -138,7 +145,9 @@ error and a drop.
 The sixth step is the tail shared with owned channels: `event_id` dedup, strict-mode context
 collection when it applies, the files fork, delivery with the originating channel on the
 queue body, 👀 on the message, then the thread write and `MarkDispatched` on success. A
-failed delivery writes no row, advances no boundary and adds no reaction.
+failed delivery writes no row, advances no boundary and adds no reaction. Since 2026-10-17 the
+👀 on a thread reply is subject to the quiet period, decided before delivery because delivery
+advances the boundary it is measured from.
 
 ```
  Slack            bridge Lambda               DynamoDB / SQS / EventBridge       create-handler      sandbox poller
@@ -361,16 +370,17 @@ slack:
   default_route:
     alias: ir-bot                    # required
     profile: profiles/ir-bot.yaml    # required; the cold-create source
-    allow_emails:                    # required and non-empty, or the route is OFF
+    allow_emails:                    # required unless the profile sets allowEmails
       - operator@example.com
-      - analyst@example.com
+      - "*@example.com"              # a whole domain; subdomains do not match
 ```
 
 | Rule | Where enforced | Failure |
 |---|---|---|
 | `alias` and `profile` set | `SlackDefaultRoute.Validate`, at `km init` | `km init` fails naming the key |
-| `allow_emails` non-empty after trim | `Validate` | `km init` fails naming the deny-by-default rule |
-| Each email contains `@` | `Validate` | `km init` fails naming the entry |
+| The route profile's `allowEmails` or `allow_emails` lists at least one entry | `ValidateSlackDefaultRouteProfile` | `km init` and `km slack init` fail naming both places |
+| Each entry is an exact address or exactly `*@<domain>` | `Validate`, and `ValidateEmailEntry` for the profile list | `km init` fails naming the entry |
+| The profile's `allowEmails` wins over `allow_emails` | `effectiveSlackDefaultRoute` | `[info] slack.default_route allowlist: from <source> (N entries)` |
 | Profile resolves, including `extends:` | `ValidateSlackDefaultRouteProfile` | `km init` fails |
 | Profile sets `notification.slack.enabled` and `notification.slack.inbound.enabled` | `ValidateSlackDefaultRouteProfile` | `km init` fails; a box without an inbound poller can never answer |
 | Env and yaml agree | `exportSlackDefaultRouteEnv` | WARN, env wins |
@@ -400,7 +410,7 @@ time. See `docs/profile-reference.md`.
 |---|---|---|---|
 | `Slack default route` | n/a | n/a | `slack.default_route not set — route off` |
 | `Slack default route profile` | Profile resolves with Slack inbound; notes strict mode when `threadBypass: false` | Missing, unresolvable, or lacking inbound | n/a |
-| `Slack default route allowlist` | Every email resolves via `users.lookupByEmail` | List empty (route OFF), or names emails not found in the workspace | Bot token unavailable |
+| `Slack default route allowlist` | Every exact email in the effective list resolves via `users.lookupByEmail`; domain wildcards are counted separately and never looked up | Neither list names anyone (route OFF), or exact emails are not found in the workspace | Bot token unavailable |
 | `Slack default route scopes` | `im:history`, `mpim:history` and `im:write` present in the live `auth.test` scopes | Any missing: DMs are never delivered, or `km-slack dm` fails | `auth.test` scopes unavailable |
 
 No alias-resolution result shipped, although spec §7 originally listed one.
@@ -462,7 +472,7 @@ create-handler-rendered poller both change, and a box gains it only on recreate.
 | The reply lands in `#sb-…` | The default box runs a pre-route poller | Recreate the default sandbox |
 | The bridge logs `channel_mismatch` for a routed channel | A top-level post, or `permalink` or `update`, into a foreign channel | Expected; only `post` and `upload` with the routed `thread_ts` pass |
 | A cold-created box never answers | Old create-handler, missing create-handler send grant, or a profile without inbound | `make build-lambdas` + `km init --dry-run=false`, then re-mention |
-| The first reply takes minutes | The alias was absent and the mention cold-created it | Expected; later turns are warm |
+| The first reply takes minutes | The alias was absent and the mention cold-created it | Expected: the box boots and runs profile init first, and the poller waits for it. Later turns are warm. A reply ~30 min late means a box from before the init gate; see `docs/operational-gotchas.md` § Cold-create first turn and the init gate |
 | A `claude:` or `codex:` prefix in a routed thread changes nothing | The handoff is skipped in routed threads | Expected; switch agents in a mapped channel |
 | The agent says thread context was unavailable | `conversations.replies` failed or was rate-limited, or the turn ran out of time before collection | Check the bridge log; confirm the App is internal (Tier 3) |
 | Every mention fails with the alias resolve error | Two sandbox rows share the alias | Destroy the stale one |
@@ -477,9 +487,11 @@ for `km-slack-inbound-poller`.
 |---|---|
 | `km-slack-bridge: default route enabled` | Cold start found all three env vars; carries alias, profile and the email count |
 | `km-slack-bridge: default route partially configured; staying OFF` | One or two env vars set |
-| `events: route: no mention` | Gate step 4 dropped a mention-less message (debug; not emitted at the default level) |
-| `events: route: sender email unavailable (deny)` | `users.info` failed or returned no usable email (debug; not emitted) |
-| `events: route: sender not allowlisted (silent drop)` | The email is not on the list (debug; not emitted) |
+| `events: route: no mention` | Gate step 4 dropped a mention-less message (Info) |
+| `events: route: sender email unavailable (deny)` | `users.info` failed or returned no usable email (Info) |
+| `events: route: sender not allowlisted (silent drop)` | The email is not on the route list (Info) |
+| `events: sender not in sandbox allowEmails (silent drop)` | The target sandbox's own `allowEmails` refused the sender, on any path (Info) |
+| `events: reaction skipped (quiet period)` | A thread reply inside the quiet period got no 👀 (Info) |
 | `events: route: alias resolve failed` | DynamoDB error or an ambiguous alias |
 | `events: route: cold-create published` | `SandboxCreate` sent with the envelope |
 | `events: route: alias moved; rebinding thread after delivery` | Continuity found an old box; the row is rebound on success |
@@ -505,7 +517,9 @@ The sender sees nothing in any of these cases. No `events:` line at all for the 
 the event never reached the bridge: check bot membership and, for DMs, the scopes. An
 `events: router:` line means no route is configured and Phase 96 ran. A dispatch that reached
 the box but whose reply never appeared shows as `bridge: channel_mismatch`. The owned-path
-drops (allowlist, mention-only skip, bypass, reaction skipped) still log at Debug.
+drops (Phase 118 allowlist, mention-only skip, bypass, the `react_always: false` reaction
+skip) still log at Debug. A sandbox `allowEmails` drop and a quiet-period reaction skip log at
+Info on every path.
 
 ## 10. Live UAT
 
@@ -568,14 +582,11 @@ unverified.
   newest messages rather than its oldest page.
 - **Render `file_errors` and `files_omitted` in the poller header.** Both are on the wire;
   the agent sees neither.
-- **Close the cold-create boot race (pre-existing, reproduced twice in the live UAT).**
-  `km-slack-inbound-poller.service` starts before `km-init.sh` has installed the agent, so
-  the first dispatched turn on a cold-created box fails with exit 127 and the envelope sits
-  invisible for the FIFO's 1800 s visibility timeout. Every bridge that cold-creates pays
-  this: the first reply arrives ~30 minutes after the box is up. Fix either by ordering the
-  poller unit after the init-complete marker, or by resetting the message's visibility to 0
-  when a dispatch exits 127. Also worth a `km doctor` WARN ("poller started before the agent
-  was on PATH") read from the unit's journal.
+- ~~**Close the cold-create boot race.**~~ **Fixed 2026-10-17.** The inbound pollers now wait
+  (bounded at 1200 s) for `/var/lib/km/init-done`, which the bootstrap writes after profile
+  init on every path, and an exit-127 turn makes its message visible again in 60 s instead of
+  1800 s. Existing boxes get it on recreate. See `docs/operational-gotchas.md` § Cold-create
+  first turn and the init gate. The `km doctor` WARN idea was not built.
 - **Post the wake hint on a routed resume.** `DDBPauseHinter` resolves the sandbox row by
   channel, so a mention that auto-resumes the box from a channel it does not own gets no
   "Sandbox is waking up" line; the reply still arrives.
@@ -583,6 +594,11 @@ unverified.
 ### Can wait
 
 - Shipped 2026-10-17: bot-initiated DMs (`km-slack dm`).
+- Shipped 2026-10-17: the reaction quiet period (`slack.react_quiet_seconds`,
+  `reactQuietSeconds`). See `docs/slack-notifications.md` § Quiet period.
+- Shipped 2026-10-17: `*@<domain>` allowlist entries and the per-sandbox `allowEmails` list,
+  with the route profile's list gating the cold-create mention. See
+  `docs/slack-notifications.md` § Allowlists.
 - The guard's exception is keyed by policy name, its write regex misses glob actions such as
   `dynamodb:Put*`, and its table regex also matches the GitHub and HackerOne threads tables.
 - No alias-resolution result in `km doctor`, and the profile result reads scopes from
@@ -597,7 +613,7 @@ unverified.
   rebound to the alias box (still email-gated).
 - The routed authorizer maps a thread-lookup error to 403 while an owned-channel lookup error
   maps to 500, and the lookup-error branch is untested.
-- `Validate` checks emails only for an `@`, and `NormalizedEmails` does not deduplicate.
+- `NormalizedEmails` does not deduplicate. (`Validate` now checks each entry's full shape.)
 - The email cache never evicts expired entries (bounded per user id) and has no single-flight
   on concurrent misses.
 - `BotUserID.Fetch` in context collection has no nil guard; production always wires it.

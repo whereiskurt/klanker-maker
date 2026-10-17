@@ -129,6 +129,17 @@ variable "slack_react_always" {
   default     = "true"
 }
 
+# 2026-10-17: reaction quiet period. A thread reply gets the 👀 reaction only
+# when at least this many seconds have passed since the bot last dispatched a
+# turn in that thread. Top-level messages always react. "0" = off (react on
+# every dispatched reply, the pre-2026-10-17 behaviour). A sandbox profile's
+# notification.slack.inbound.reactQuietSeconds overrides it per sandbox.
+variable "slack_react_quiet_seconds" {
+  description = "Seconds of thread silence before a thread reply gets the 👀 reaction again. '0' disables the quiet period. Default '180'."
+  type        = string
+  default     = "180"
+}
+
 # Phase 95: federated relay peer URLs (comma-joined). Empty => federation off.
 variable "slack_peer_bridges" {
   description = "Comma-joined /events URLs of sibling km installs for federated relay (Phase 95). Empty string = federation off."
@@ -178,7 +189,13 @@ variable "slack_default_route_profile" {
 }
 
 variable "slack_default_route_allow" {
-  description = "Comma-joined, lowercased emails allowed to drive the default route. Empty = route OFF (deny-by-default)."
+  description = "INSTALL list: comma-joined, lowercased emails (or *@domain) for DM targets and routed turns to non-route sandboxes. Route OFF only when this AND slack_default_route_profile_allow are both empty (deny-by-default)."
+  type        = string
+  default     = ""
+}
+
+variable "slack_default_route_profile_allow" {
+  description = "Route profile's allowEmails, comma-joined: gates cold-create and the alias's own box. Empty = those fall back to slack_default_route_allow."
   type        = string
   default     = ""
 }

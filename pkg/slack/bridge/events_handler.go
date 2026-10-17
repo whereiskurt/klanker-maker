@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -70,6 +71,16 @@ type EventsHandler struct {
 	// existing thread) dispatch silently. Wired from KM_SLACK_REACT_ALWAYS env
 	// var at cold-start (defaults to true when env is unset or "true").
 	ReactAlways bool
+
+	// ReactQuietSeconds (2026-10-17) is the install-level reaction quiet period:
+	// a THREAD reply gets the 👀 reaction only when at least this many seconds
+	// have passed since the bot last dispatched a turn in that thread
+	// (km-slack-threads last_dispatch_ts). Top-level messages always react, and
+	// ReactAlways=false still suppresses thread reactions outright. 0 = off.
+	// A sandbox row's slack_react_quiet_seconds (SandboxRoutingInfo.ReactQuietSeconds)
+	// overrides it. Wired from KM_SLACK_REACT_QUIET_SECONDS at cold-start
+	// (WireReactQuiet: unset ⇒ 180).
+	ReactQuietSeconds int
 
 	// Phase 118: install-level trigger allowlist (Slack user IDs, e.g. "Uxxxx"),
 	// populated from KM_SLACK_ALLOW (comma-joined). Empty = everyone allowed
@@ -145,6 +156,11 @@ type EventsHandler struct {
 	// Part B: reads a strict thread's human messages since the bot's last turn
 	// (conversations.replies) for a mentioned reply. nil ⇒ context never collected.
 	ThreadReader SlackThreadReader
+
+	// emailLists memoises a sandbox row's compiled allowEmails, keyed by the
+	// joined list, for the life of the warm Lambda.
+	emailListsMu sync.Mutex
+	emailLists   map[string]*EmailAllowlist
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -270,6 +286,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	routed := false     // info came from the default route, not channel ownership
 	coldCreate := false // route alias absent: publish a SandboxCreate instead of enqueueing
 	rebind := false     // routed thread row must be rewritten (alias moved / orphaned thread), after delivery
+	gate := gateOwned   // which email list decides when the box's row carries none
 	if info.SandboxID == "" || info.QueueURL == "" {
 		// Default-route ladder step 1: thread continuity. A thread the front door
 		// routed earlier carries its sandbox in km-slack-threads. Decide this BEFORE
@@ -372,7 +389,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		if !ok {
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
-		info, coldCreate, rebind = decision.info, decision.coldCreate, decision.rebind
+		info, coldCreate, rebind, gate = decision.info, decision.coldCreate, decision.rebind, decision.gate
 		routed = true
 		if coldCreate {
 			// Mint the id now, BEFORE the files fork, so attachment keys
@@ -408,6 +425,13 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			h.log().Debug("events: allowlist: silent drop (user not in trigger allowlist)",
 				"user", msg.User, "channel", msg.Channel, "ts", msg.TS,
 				"per_sandbox_override", len(info.Allow) > 0)
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
+		// 5a'. Per-sandbox email gate (2026-10-17). A row carrying allowEmails is
+		// the whole rule for who may talk to that sandbox; without one the owned
+		// path has no email gate (today's behaviour). ANDed with the id gate above,
+		// and before the thread bypass for the same reason.
+		if !h.senderAllowedForSandbox(ctx, info, msg.User, msg.Channel, gateOwned) {
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
 
@@ -517,25 +541,46 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		dedupID = msg.TS
 	}
 
+	// Reaction quiet period (2026-10-17): decided HERE, before delivery, because
+	// recordDispatch advances last_dispatch_ts to this very message; a read at the
+	// reaction step would always see "0 s since the last dispatch". The same read
+	// serves the strict-mode context window below, so an event reads it at most once.
+	var boundary *dispatchBoundaryRead
+	skipReactQuiet := false
+	if h.Reactor != nil && msg.ThreadTS != "" && h.Threads != nil && h.effectiveReactAlways(info) {
+		if quiet := h.effectiveReactQuiet(info); quiet > 0 {
+			b := h.readDispatchBoundary(ctx, msg)
+			boundary = &b
+			skipReactQuiet = h.withinReactQuiet(msg, info, b, quiet)
+		}
+	}
+
 	// Part B: context for a mentioned reply in a strict thread. After dedup (step 6)
 	// so a Slack retry never repeats the fetch. Synchronous and bounded; never
 	// blocks the turn.
 	var threadCtx *ThreadContext
 	strict := !threadBypassAllowed(info) && (effectiveMentionOnly || routed)
 	if strict && msg.ThreadTS != "" && h.ThreadReader != nil {
-		allowed := func(_ context.Context, u string) bool {
-			return len(effectiveAllow) == 0 || isInSlackAllowlist(u, effectiveAllow)
+		// A context author is trusted only if they would pass the same gates as
+		// the sender: Phase 118 ids AND the sandbox's allowEmails on a mapped
+		// channel; on a routed thread, the same gate the dispatch decision used
+		// (the sandbox's allowEmails, else the route list that decision picked).
+		// Email lookups run under collectThreadContext's deadline; once it
+		// passes a lookup errors and the author counts as not allowed (fails closed).
+		allowed := func(cctx context.Context, u string) bool {
+			if len(effectiveAllow) > 0 && !isInSlackAllowlist(u, effectiveAllow) {
+				return false
+			}
+			ok, _ := h.senderEmailAllowed(cctx, info, u, gateOwned)
+			return ok
 		}
 		if routed {
-			// A routed thread is gated by the route's sender-email list, not Phase 118.
-			// The lookup runs under collectThreadContext's deadline; once it passes, a
-			// lookup errors and the author counts as not allowed (fails closed).
 			allowed = func(cctx context.Context, u string) bool {
-				e, err := h.SenderEmails.SenderEmail(cctx, u)
-				return err == nil && h.DefaultRoute.Allows(e)
+				ok, _ := h.senderEmailAllowed(cctx, info, u, gate)
+				return ok
 			}
 		}
-		threadCtx = h.collectThreadContext(ctx, msg, info, allowed)
+		threadCtx = h.collectThreadContext(ctx, msg, info, allowed, boundary)
 	}
 	if h.FileDownloader != nil && len(msg.Files) > 0 {
 		// Phase 75.2: process file downloads SYNCHRONOUSLY within the handler.
@@ -695,14 +740,17 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		// at sandbox-create time from the profile's
 		// cli.notifySlackInboundReactAlways field. Absent attribute leaves
 		// info.ReactAlways nil → install default applies.
-		effectiveReactAlways := h.ReactAlways
-		if info.ReactAlways != nil {
-			effectiveReactAlways = *info.ReactAlways
-		}
-		if !effectiveReactAlways && msg.ThreadTS != "" {
+		//
+		// 2026-10-17: reaction quiet period. A thread reply that react_always
+		// would otherwise react to reacts only when the thread has been quiet for
+		// more than N seconds since the last dispatch (skipReactQuiet, decided
+		// before delivery; the skip is logged there).
+		if !h.effectiveReactAlways(info) && msg.ThreadTS != "" {
 			h.log().Debug("events: reaction skipped (react-always=false, thread reply)",
 				"channel", msg.Channel, "ts", msg.TS, "thread_ts", msg.ThreadTS,
 				"sandbox", info.SandboxID, "per_sandbox_override", info.ReactAlways != nil)
+		} else if skipReactQuiet {
+			// Logged at decision time.
 		} else {
 			emoji := h.AckEmoji
 			if emoji == "" {
@@ -765,7 +813,18 @@ type routeDecision struct {
 	info       SandboxRoutingInfo
 	coldCreate bool
 	rebind     bool
+	gate       emailGate // gateRouteCreate for the route's own box, else gateRouteInstall
 }
+
+// emailGate names the list that decides a sender when the receiving box's row
+// carries no allowEmails of its own (a row list always decides alone).
+type emailGate int
+
+const (
+	gateOwned        emailGate = iota // a channel-owned box: no list ⇒ no email gate
+	gateRouteInstall                  // a routed turn to a non-route box: the install list
+	gateRouteCreate                   // a cold-create or the alias's box: the route profile's list, else the install list
+)
 
 // continuityBypass fills cont.row (and cont.alias for a gone box) and reports
 // whether a continuity reply may skip the mention. The decision follows the box
@@ -841,22 +900,23 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 			return routeDecision{}, false
 		}
 	}
-	if h.SenderEmails == nil {
-		h.log().Warn("events: route: no SenderEmails fetcher wired; dropping",
-			"channel", msg.Channel, "thread_ts", msg.ThreadTS)
+	decision, ok := h.routeTarget(ctx, msg, cont)
+	if !ok {
 		return routeDecision{}, false
 	}
-	email, err := h.SenderEmails.SenderEmail(ctx, msg.User)
-	if err != nil {
-		h.log().Info("events: route: sender email unavailable (deny)",
-			"user", msg.User, "err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+	// The email gate follows the box that will receive the turn: its row's
+	// allowEmails when it has one, else the list decision.gate names — the route
+	// profile's list for the route's own box (a cold-create has no row yet), the
+	// install list for any other box.
+	if !h.senderAllowedForSandbox(ctx, decision.info, msg.User, msg.Channel, decision.gate) {
 		return routeDecision{}, false
 	}
-	if !h.DefaultRoute.Allows(email) {
-		h.log().Info("events: route: sender not allowlisted (silent drop)", "user", msg.User, "channel", msg.Channel)
-		return routeDecision{}, false
-	}
+	return decision, true
+}
 
+// routeTarget is ladder step 5: which box the routed turn goes to.
+func (h *EventsHandler) routeTarget(ctx context.Context, msg slackMessageEvent, cont routeContinuity) (routeDecision, bool) {
+	var err error
 	if cont.sandboxID != "" && cont.lookupFailed {
 		h.log().Warn("events: route: continuity lookup failed; dropping",
 			"sandbox", cont.sandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
@@ -865,7 +925,26 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 	if cont.sandboxID != "" && cont.row.SandboxID != "" && cont.row.QueueURL != "" {
 		// The thread's own box is live: the reply returns to it, whatever the alias
 		// names now, and the row is left alone.
-		return routeDecision{info: cont.row}, true
+		gate := gateRouteInstall
+		if len(cont.row.AllowEmails) == 0 && h.DefaultRoute.HasProfileList() {
+			// Only here can the two lists disagree: ask whether the row box is the
+			// alias's box (the route's own box ⇒ the profile list). A failed resolve
+			// drops: the narrower list may be the one that applies.
+			if h.AliasResolver == nil {
+				h.log().Warn("events: route: no AliasResolver wired; dropping", "alias", h.DefaultRoute.Alias)
+				return routeDecision{}, false
+			}
+			current, found, rerr := h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
+			if rerr != nil {
+				h.log().Error("events: route: alias resolve failed",
+					"alias", h.DefaultRoute.Alias, "err", rerr, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+				return routeDecision{}, false
+			}
+			if found && current.SandboxID == cont.row.SandboxID {
+				gate = gateRouteCreate
+			}
+		}
+		return routeDecision{info: cont.row, gate: gate}, true
 	}
 
 	var current SandboxRoutingInfo
@@ -888,7 +967,7 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 		if !found {
 			// Old box gone and alias absent: cold-create, and rebind the orphaned
 			// row to the minted box once the publish succeeds.
-			return routeDecision{coldCreate: true, rebind: true}, true
+			return routeDecision{coldCreate: true, rebind: true, gate: gateRouteCreate}, true
 		}
 		if current.SandboxID != cont.sandboxID {
 			// The row's box is gone and the alias names another: the row is
@@ -896,14 +975,108 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 			// (mirrors the GitHub bridge's InvalidateStaleSession).
 			h.log().Info("events: route: alias moved; rebinding thread after delivery",
 				"from", cont.sandboxID, "to", current.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
-			return routeDecision{info: current, rebind: true}, true
+			return routeDecision{info: current, rebind: true, gate: gateRouteCreate}, true
 		}
-		return routeDecision{info: current}, true
+		return routeDecision{info: current, gate: gateRouteCreate}, true
 	}
 	if !found {
-		return routeDecision{coldCreate: true}, true
+		return routeDecision{coldCreate: true, gate: gateRouteCreate}, true
 	}
-	return routeDecision{info: current}, true
+	return routeDecision{info: current, gate: gateRouteCreate}, true
+}
+
+// senderAllowedForSandbox is the sender-email gate for one sandbox, logged. A
+// row carrying allowEmails decides alone (override, not merge); without one,
+// gate picks the route list on the route paths and nothing gates the owned
+// #sb- path. Any lookup failure with a list in force is a deny (never cached).
+func (h *EventsHandler) senderAllowedForSandbox(ctx context.Context, info SandboxRoutingInfo, userID, channel string, gate emailGate) bool {
+	ok, source := h.senderEmailAllowed(ctx, info, userID, gate)
+	if ok {
+		return true
+	}
+	switch source {
+	case "sandbox":
+		h.log().Info("events: sender not in sandbox allowEmails (silent drop)",
+			"sandbox", info.SandboxID, "user", userID, "channel", channel)
+	default:
+		h.log().Info("events: route: sender not allowlisted (silent drop)",
+			"user", userID, "channel", channel)
+	}
+	return false
+}
+
+// senderEmailAllowed decides without logging (the strict-context trust
+// predicate calls it once per author). source names the list that decided:
+// "sandbox", "route", or "" when no list applies.
+func (h *EventsHandler) senderEmailAllowed(ctx context.Context, info SandboxRoutingInfo, userID string, gate emailGate) (bool, string) {
+	var allows func(string) bool
+	var source string
+	switch {
+	case len(info.AllowEmails) > 0:
+		allows, source = h.sandboxEmailList(info).Allows, "sandbox"
+	case gate == gateOwned:
+		return true, ""
+	default:
+		if allows = h.routeAllows(gate); allows == nil {
+			return false, "route" // a route path with no route: nothing admits anyone
+		}
+		source = "route"
+	}
+	prefix := "events: " // documented route log lines keep their "route:" prefix
+	if source == "route" {
+		prefix = "events: route: "
+	}
+	if h.SenderEmails == nil {
+		h.log().Warn(prefix+"no SenderEmails fetcher wired; dropping",
+			"source", source, "sandbox", info.SandboxID, "user", userID)
+		return false, source
+	}
+	email, err := h.SenderEmails.SenderEmail(ctx, userID)
+	if err != nil {
+		h.log().Info(prefix+"sender email unavailable (deny)",
+			"source", source, "sandbox", info.SandboxID, "user", userID, "err", err)
+		return false, source
+	}
+	return allows(email), source
+}
+
+// routeAllows returns the route list a route-path gate names: AllowsCreate for
+// the route's own box, Allows (the install list) otherwise. nil when no route
+// is configured or gate is gateOwned.
+func (h *EventsHandler) routeAllows(gate emailGate) func(string) bool {
+	if h.DefaultRoute == nil {
+		return nil
+	}
+	switch gate {
+	case gateRouteCreate:
+		return h.DefaultRoute.AllowsCreate
+	case gateRouteInstall:
+		return h.DefaultRoute.Allows
+	}
+	return nil
+}
+
+// sandboxEmailList compiles (once per distinct list) a row's allowEmails. A
+// compile error should be impossible (entries are validated at km create); it
+// is logged and the list treated as present-but-empty, which denies everyone.
+func (h *EventsHandler) sandboxEmailList(info SandboxRoutingInfo) *EmailAllowlist {
+	key := strings.Join(info.AllowEmails, ",")
+	h.emailListsMu.Lock()
+	defer h.emailListsMu.Unlock()
+	if al, ok := h.emailLists[key]; ok {
+		return al
+	}
+	al, err := CompileEmailAllowlist(info.AllowEmails)
+	if err != nil {
+		h.log().Error("events: sandbox allowEmails failed to compile; denying everyone",
+			"sandbox", info.SandboxID, "err", err)
+		al = &EmailAllowlist{}
+	}
+	if h.emailLists == nil {
+		h.emailLists = map[string]*EmailAllowlist{}
+	}
+	h.emailLists[key] = al
+	return al
 }
 
 // Strict-mode context budget. ContextCollectMax caps the collection; when the
@@ -919,7 +1092,10 @@ const (
 // collectThreadContext reads the strict thread's messages since the bot's last
 // dispatch (the boundary), keeps the trusted human ones, and downloads their
 // files. It never fails the turn: errors land in ThreadContext.Error / FileErrors.
-func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, allowed func(context.Context, string) bool) *ThreadContext {
+//
+// prefetched, when non-nil, is the boundary already read for this event (the
+// reaction quiet-period check); it is used instead of a second read.
+func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, allowed func(context.Context, string) bool, prefetched *dispatchBoundaryRead) *ThreadContext {
 	// Budget against the Lambda deadline: the dedup nonce is already consumed, so a
 	// turn that times out after this point is lost silently. Leave room for the
 	// files fork, delivery, resume and reaction.
@@ -936,7 +1112,13 @@ func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessa
 	}
 	cctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	oldest, err := h.Threads.DispatchBoundary(cctx, msg.Channel, msg.ThreadTS)
+	var oldest string
+	var err error
+	if prefetched != nil {
+		oldest, err = prefetched.ts, prefetched.err
+	} else {
+		oldest, err = h.Threads.DispatchBoundary(cctx, msg.Channel, msg.ThreadTS)
+	}
 	if err != nil {
 		h.log().Warn("events: context: boundary read failed; using thread root",
 			"err", err, "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
@@ -1018,6 +1200,94 @@ func (h *EventsHandler) deliver(ctx context.Context, info SandboxRoutingInfo, co
 		return "", err
 	}
 	return info.SandboxID, nil
+}
+
+// dispatchBoundaryRead is one DispatchBoundary result, shared within an event.
+type dispatchBoundaryRead struct {
+	ts  string
+	err error
+}
+
+// reactQuietReadMax bounds the pre-delivery boundary read. A slow read must not
+// hold up the enqueue; a timeout is an error, and an error means REACT.
+const reactQuietReadMax = 3 * time.Second
+
+func (h *EventsHandler) readDispatchBoundary(ctx context.Context, msg slackMessageEvent) dispatchBoundaryRead {
+	rctx, cancel := context.WithTimeout(ctx, reactQuietReadMax)
+	defer cancel()
+	ts, err := h.Threads.DispatchBoundary(rctx, msg.Channel, msg.ThreadTS)
+	return dispatchBoundaryRead{ts: ts, err: err}
+}
+
+// effectiveReactAlways: the sandbox row's slack_react_always wins over the
+// install-level ReactAlways (Phase 91.5).
+func (h *EventsHandler) effectiveReactAlways(info SandboxRoutingInfo) bool {
+	if info.ReactAlways != nil {
+		return *info.ReactAlways
+	}
+	return h.ReactAlways
+}
+
+// effectiveReactQuiet: the sandbox row's slack_react_quiet_seconds wins over the
+// install-level ReactQuietSeconds. 0 disables the quiet period.
+func (h *EventsHandler) effectiveReactQuiet(info SandboxRoutingInfo) int {
+	if info.ReactQuietSeconds != nil {
+		return *info.ReactQuietSeconds
+	}
+	return h.ReactQuietSeconds
+}
+
+// withinReactQuiet reports whether a thread reply falls inside the quiet period:
+// the thread's previous dispatch was quiet seconds ago or less. No row, a read
+// error, or an unparseable boundary all mean REACT (false).
+func (h *EventsHandler) withinReactQuiet(msg slackMessageEvent, info SandboxRoutingInfo, b dispatchBoundaryRead, quiet int) bool {
+	if b.err != nil {
+		h.log().Warn("events: reaction quiet period: boundary read failed; reacting",
+			"err", b.err, "channel", msg.Channel, "thread_ts", msg.ThreadTS, "sandbox", info.SandboxID)
+		return false
+	}
+	if b.ts == "" {
+		return false
+	}
+	last, ok := parseSlackTS(b.ts)
+	if !ok {
+		h.log().Warn("events: reaction quiet period: unparseable boundary; reacting",
+			"last_dispatch_ts", b.ts, "channel", msg.Channel, "thread_ts", msg.ThreadTS, "sandbox", info.SandboxID)
+		return false
+	}
+	since := h.now().Sub(last)
+	if since > time.Duration(quiet)*time.Second {
+		return false
+	}
+	h.log().Info("events: reaction skipped (quiet period)",
+		"channel", msg.Channel, "thread_ts", msg.ThreadTS, "sandbox", info.SandboxID,
+		"since_last_dispatch_s", int(since.Seconds()), "quiet_s", quiet)
+	return true
+}
+
+// parseSlackTS turns a Slack ts ("seconds.micros", the value MarkDispatched
+// stores as last_dispatch_ts) into a time.
+func parseSlackTS(ts string) (time.Time, bool) {
+	secPart, fracPart, _ := strings.Cut(ts, ".")
+	sec, err := strconv.ParseInt(secPart, 10, 64)
+	if err != nil || sec <= 0 {
+		return time.Time{}, false
+	}
+	var nsec int64
+	if fracPart != "" {
+		if len(fracPart) > 9 {
+			fracPart = fracPart[:9]
+		}
+		f, err := strconv.ParseInt(fracPart, 10, 64)
+		if err != nil || f < 0 {
+			return time.Time{}, false
+		}
+		for i := len(fracPart); i < 9; i++ {
+			f *= 10
+		}
+		nsec = f
+	}
+	return time.Unix(sec, nsec), true
 }
 
 // recordDispatch writes the km-slack-threads row after a SUCCESSFUL delivery

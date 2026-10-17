@@ -1262,6 +1262,9 @@ echo "[km-bootstrap] ~/.codex/config.toml installed"
 # ============================================================
 echo "[km-bootstrap] Installing km sidecars..."
 mkdir -p /opt/km/bin /etc/km/tracing
+# Userdata runs only on an instance's first boot, and a baked AMI carries the
+# init marker from its source box: clear it before the pollers start.
+rm -f /var/lib/km/init-done
 
 # Download sidecar binaries from S3 (km-sandbox-artifacts bucket)
 KM_ARTIFACTS_BUCKET="my-bucket"
@@ -3085,6 +3088,12 @@ echo "[km-bootstrap] Proxy env vars configured for shell sessions"
 # ============================================================
 # 7. Budget enforcement setup (if enabled)
 # ============================================================
+# Cold-create boot race (2026-10-17): the inbound pollers start in section 5 and
+# must not drain their first message before profile init (which installs the
+# agent) has run. Written after 7.5 on EVERY boot path — success, failure, no
+# init at all — so a poller never waits out its bound on a healthy box. Lives in
+# /var/lib/km so a stop/resume (userdata does not re-run) does not wait again.
+mkdir -p /var/lib/km && touch /var/lib/km/init-done
 # ============================================================
 # 7.6. Config files (from profile spec.execution.configFiles)
 # Runs AFTER initCommands to ensure correct ownership.

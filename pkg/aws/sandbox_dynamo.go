@@ -330,6 +330,11 @@ func unmarshalSlackFields(item map[string]dynamodbtypes.AttributeValue, meta *Sa
 	if v, ok := item["slack_allow"].(*dynamodbtypes.AttributeValueMemberS); ok && v.Value != "" {
 		meta.SlackAllow = strings.Split(v.Value, ",")
 	}
+	// 2026-10-17: per-sandbox email allowlist + reaction quiet period.
+	if v, ok := item["slack_allow_emails"].(*dynamodbtypes.AttributeValueMemberS); ok && v.Value != "" {
+		meta.SlackAllowEmails = strings.Split(v.Value, ",")
+	}
+	meta.SlackReactQuietSeconds = readOptionalNonNegInt(item, "slack_react_quiet_seconds")
 }
 
 // unmarshalNetworkFields reads the Phase 125 network_placement attribute from a
@@ -359,6 +364,26 @@ func unmarshalLaunchAccountField(item map[string]dynamodbtypes.AttributeValue, m
 	if v, ok := item["launch_account"].(*dynamodbtypes.AttributeValueMemberS); ok {
 		meta.LaunchAccount = v.Value
 	}
+}
+
+// readOptionalNonNegInt reads an integer attribute written either as N
+// (marshalSandboxItem) or S (UpdateSandboxAttr). Absent, non-numeric or
+// negative values read as nil — never a panic, never a guessed default.
+func readOptionalNonNegInt(item map[string]dynamodbtypes.AttributeValue, key string) *int {
+	var raw string
+	switch v := item[key].(type) {
+	case *dynamodbtypes.AttributeValueMemberN:
+		raw = v.Value
+	case *dynamodbtypes.AttributeValueMemberS:
+		raw = v.Value
+	default:
+		return nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < 0 {
+		return nil
+	}
+	return &n
 }
 
 // readTriStateBool reads a tri-state *bool DynamoDB attribute that may have been
@@ -578,6 +603,14 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 	// (resume/extend/ttl-handler) do NOT strip it on the next full-row PutItem.
 	if len(meta.SlackAllow) > 0 {
 		item["slack_allow"] = &dynamodbtypes.AttributeValueMemberS{Value: strings.Join(meta.SlackAllow, ",")}
+	}
+	// 2026-10-17: per-sandbox email allowlist (S, comma-joined) and reaction
+	// quiet period (N). Emitted here so full-row PutItems keep them.
+	if len(meta.SlackAllowEmails) > 0 {
+		item["slack_allow_emails"] = &dynamodbtypes.AttributeValueMemberS{Value: strings.Join(meta.SlackAllowEmails, ",")}
+	}
+	if meta.SlackReactQuietSeconds != nil {
+		item["slack_react_quiet_seconds"] = &dynamodbtypes.AttributeValueMemberN{Value: strconv.Itoa(*meta.SlackReactQuietSeconds)}
 	}
 
 	// Phase 97 — GitHub inbound metadata. Symmetric with unmarshalGitHubFields.

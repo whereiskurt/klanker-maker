@@ -76,7 +76,7 @@ func dmHandler(t *testing.T) (*bridge.Handler, *dmPoster, *recordingThreads, ed2
 	h.Slack = p
 	th := &recordingThreads{rows: map[string]string{"CFOREIGN|1.0": "sb-abc123"}}
 	h.Threads = th
-	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"})
+	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"}, nil)
 	h.SenderEmails = &dmEmails{byUser: map[string]string{"U0KURT": "kurt@example.com", "U0OTHER": "other@example.com"}}
 	return h, p, th, priv
 }
@@ -129,6 +129,24 @@ func TestHandler_DM_LookupError_403(t *testing.T) {
 	}
 	if len(p.opened) != 0 {
 		t.Fatal("no Slack call on a lookup error")
+	}
+}
+
+type dmErrByID struct{ err error }
+
+func (e dmErrByID) FetchBySandboxID(_ context.Context, _ string) (bridge.SandboxRoutingInfo, error) {
+	return bridge.SandboxRoutingInfo{}, e.err
+}
+
+func TestHandler_DM_SenderRowFetchError_FailsClosed(t *testing.T) {
+	h, p, th, priv := dmHandler(t)
+	h.SandboxByID = dmErrByID{err: errors.New("ddb blip")}
+	resp := h.Handle(context.Background(), signRequest(t, dmEnv("U0KURT"), priv))
+	if resp.StatusCode != 403 || responseBody(t, resp)["error"] != "dm_not_allowed" {
+		t.Fatalf("sender-row read error must deny: %d %s", resp.StatusCode, resp.Body)
+	}
+	if len(p.opened) != 0 || len(p.posted) != 0 || len(th.upserts) != 0 {
+		t.Fatal("no Slack call and no row on a sender-row read error")
 	}
 }
 
@@ -235,7 +253,7 @@ func TestHandler_DM_Operator_403(t *testing.T) {
 		Token:    &fakeToken{tok: "xoxb"},
 		Slack:    p,
 	}
-	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"})
+	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"kurt@example.com"}, nil)
 	h.SenderEmails = &dmEmails{byUser: map[string]string{"U0KURT": "kurt@example.com"}}
 	env := makeEnv(slack.ActionDM, slack.SenderOperator, "")
 	env.TargetUser = "U0KURT"
@@ -285,5 +303,63 @@ func TestHandler_DM_HalfSetFromThread_SendsPlainDM(t *testing.T) {
 	}
 	if len(p.posted) != 1 || strings.Contains(p.posted[0], "From:") {
 		t.Fatalf("plain DM expected, no permalink: %v", p.posted)
+	}
+}
+
+// dmByID serves the posting sandbox's routing info for the allowEmails override.
+type dmByID struct {
+	infos map[string]bridge.SandboxRoutingInfo
+	err   error
+}
+
+func (f *dmByID) FetchBySandboxID(_ context.Context, id string) (bridge.SandboxRoutingInfo, error) {
+	return f.infos[id], f.err
+}
+
+func dmOverrideHandler(t *testing.T, rowList []string, fetchErr error) (*bridge.Handler, ed25519.PrivateKey) {
+	t.Helper()
+	h, _, _, priv := dmHandler(t)
+	h.DefaultRoute = bridge.NewDefaultRoute("ir-bot", "profiles/ir-bot.yaml", []string{"*@example.com"}, nil)
+	h.SenderEmails = &dmEmails{byUser: map[string]string{
+		"U0KURT": "kurt@example.com", "U0BOB": "bob@example.com", "U0Z": "z@other.example",
+	}}
+	h.SandboxByID = &dmByID{
+		infos: map[string]bridge.SandboxRoutingInfo{"sb-abc123": {SandboxID: "sb-abc123", AllowEmails: rowList}},
+		err:   fetchErr,
+	}
+	return h, priv
+}
+
+func TestHandler_DM_SandboxAllowEmails_ReplacesRouteList(t *testing.T) {
+	h, priv := dmOverrideHandler(t, []string{"kurt@example.com"}, nil)
+	resp := h.Handle(context.Background(), signRequest(t, dmEnv("U0BOB"), priv))
+	if resp.StatusCode != 403 || responseBody(t, resp)["error"] != "dm_not_allowed" {
+		t.Fatalf("bob is on the route list but not the sandbox's: want 403 dm_not_allowed, got %d %s", resp.StatusCode, resp.Body)
+	}
+	h, priv = dmOverrideHandler(t, []string{"kurt@example.com"}, nil)
+	if resp := h.Handle(context.Background(), signRequest(t, dmEnv("U0KURT"), priv)); resp.StatusCode != 200 {
+		t.Fatalf("kurt is on the sandbox list: want 200, got %d %s", resp.StatusCode, resp.Body)
+	}
+	h, priv = dmOverrideHandler(t, []string{"z@other.example"}, nil)
+	if resp := h.Handle(context.Background(), signRequest(t, dmEnv("U0Z"), priv)); resp.StatusCode != 200 {
+		t.Fatalf("the sandbox list replaces the route list: want 200, got %d %s", resp.StatusCode, resp.Body)
+	}
+}
+
+func TestHandler_DM_NoSandboxList_RouteRuleApplies(t *testing.T) {
+	h, priv := dmOverrideHandler(t, nil, nil)
+	if resp := h.Handle(context.Background(), signRequest(t, dmEnv("U0BOB"), priv)); resp.StatusCode != 200 {
+		t.Fatalf("no sandbox list: the route's *@example.com admits bob; got %d %s", resp.StatusCode, resp.Body)
+	}
+	h, priv = dmOverrideHandler(t, nil, nil)
+	if resp := h.Handle(context.Background(), signRequest(t, dmEnv("U0Z"), priv)); resp.StatusCode != 403 {
+		t.Fatalf("no sandbox list: z@other.example is off the route list; got %d %s", resp.StatusCode, resp.Body)
+	}
+}
+
+func TestHandler_DM_SandboxFetchError_Denies(t *testing.T) {
+	h, priv := dmOverrideHandler(t, []string{"kurt@example.com"}, errors.New("ddb blip"))
+	if resp := h.Handle(context.Background(), signRequest(t, dmEnv("U0BOB"), priv)); resp.StatusCode != 403 {
+		t.Fatalf("fetch error must fail closed even for a route-listed target; got %d %s", resp.StatusCode, resp.Body)
 	}
 }

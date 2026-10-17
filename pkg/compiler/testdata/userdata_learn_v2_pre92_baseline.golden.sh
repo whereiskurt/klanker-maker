@@ -1534,6 +1534,9 @@ echo "[km-bootstrap] Notify env defaults (systemd format) written to /etc/km/not
 # ============================================================
 echo "[km-bootstrap] Installing km sidecars..."
 mkdir -p /opt/km/bin /etc/km/tracing
+# Userdata runs only on an instance's first boot, and a baked AMI carries the
+# init marker from its source box: clear it before the pollers start.
+rm -f /var/lib/km/init-done
 
 # Download sidecar binaries from S3 (km-sandbox-artifacts bucket)
 KM_ARTIFACTS_BUCKET="my-bucket"
@@ -2141,9 +2144,25 @@ AGENT="${KM_AGENT:-claude}"
 # the agent as "$AGENT -p ... || true" — the "|| true" silently swallows a
 # missing-agent failure, and the agent CLI is installed by the profile's
 # initCommands, NOT a platform default. Log a clear one-time warning at poller
-# startup (initCommands have already run by now) so a profile that forgot the agent
+# startup, after the init gate below has waited for initCommands, so a profile that forgot the agent
 # install is diagnosable in the poller journal instead of "the bot posted nothing".
+# --- km-init-gate ---
+# Cold-create boot race: section 5 starts this poller before section 7.5 runs the
+# profile's initCommands (which install the agent). Wait for the init marker,
+# bounded, before the first receive — then check the agent, so the warning below
+# means "this profile has no agent install", not "the race was lost".
+if [ ! -e /var/lib/km/init-done ]; then
+  echo "[km-inbound-poller] waiting for profile init (/var/lib/km/init-done)"
+  _km_init_wait=0
+  while [ ! -e /var/lib/km/init-done ] && [ "$_km_init_wait" -lt 1200 ]; do sleep 5; _km_init_wait=$((_km_init_wait+5)); done
+  if [ -e /var/lib/km/init-done ]; then
+    echo "[km-inbound-poller] profile init done after ${_km_init_wait}s"
+  else
+    echo "[km-inbound-poller] WARN: profile init marker not seen after ${_km_init_wait}s; proceeding"
+  fi
+fi
 command -v "$AGENT" >/dev/null 2>&1 || echo "[km-inbound-poller] WARNING: agent '$AGENT' not on PATH — dispatched turns will NOT run; add the agent install to the profile initCommands (e.g. npm install -g @anthropic-ai/claude-code)" >&2
+# --- end km-init-gate ---
 
 # Export AWS_REGION so subprocesses (km-slack post, km-send, etc.) inherit it.
 # The systemd unit's EnvironmentFile=/etc/profile.d/km-notify-env.sh uses
@@ -2672,7 +2691,7 @@ while true; do
         # Step 8: rewrite poller state so Plan 70-05's dispatch fork handles the new
         # agent as a FIRST turn (no session resume) into the NEW thread.
         # OLD DDB row is INTACT — we never issued update-item or delete-item on it.
-        # Plan 70-05's put-item below will write a NEW row keyed on (CHANNEL, NEW_TOP_TS)
+        # Plan 70-05's update-item below will write a NEW row keyed on (CHANNEL, NEW_TOP_TS)
         # with agent_type=NEW_AGENT because we've rewritten both THREAD_TS and EFFECTIVE_AGENT.
         # RESUME_ARG is reset alongside CLAUDE_SESSION: the codex dispatch re-reads
         # CLAUDE_SESSION at fork time (so empty -> first-turn branch), but the claude
@@ -2821,7 +2840,7 @@ while true; do
           RESULT_TEXT=$(jq -r '.result // .response // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
         fi
 
-        # Phase 70 (Plan 70-05): JSON-encode RESULT_TEXT for the DDB put-item.
+        # Phase 70 (Plan 70-05): JSON-encode RESULT_TEXT for the DDB update-item.
         # CRITICAL (70-RESEARCH.md Pitfall 2): RESULT_TEXT may contain embedded
         # double-quotes, backslashes, and newlines from agent replies. Direct shell
         # interpolation into the DDB JSON literal would produce malformed JSON.
@@ -2835,19 +2854,25 @@ while true; do
         # Phase 119 (P119-F): write last_processed_event_ts so crash-redelivery of
         # this same SQS message (same event_ts) is caught by the idempotency guard
         # above and skipped without a second dispatch or Slack post.
-        aws dynamodb put-item \
+        #
+        # update-item, NOT put-item: SET only the attributes the poller owns. The
+        # bridge writes last_dispatch_ts (MarkDispatched), created_at and
+        # turn_count on this same row; a put-item replaced the whole item every
+        # turn and wiped them, so the reaction quiet period never saw a boundary
+        # and strict-mode context fell back to the thread root.
+        aws dynamodb update-item \
           --table-name "$THREADS_TABLE" \
           --region "$REGION" \
-          --item "{
-            \"channel_id\":{\"S\":\"$CHANNEL\"},
-            \"thread_ts\":{\"S\":\"$THREAD_TS\"},
-            \"claude_session_id\":{\"S\":\"$NEW_SESSION\"},
-            \"agent_type\":{\"S\":\"$EFFECTIVE_AGENT\"},
-            \"last_assistant_msg\":{\"S\":$LAST_MSG_JSON},
-            \"sandbox_id\":{\"S\":\"$SANDBOX_ID\"},
-            \"last_turn_ts\":{\"S\":\"$NOW\"},
-            \"last_processed_event_ts\":{\"S\":\"$EVENT_TS\"},
-            \"ttl_expiry\":{\"N\":\"$TTL_EXPIRY\"}
+          --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
+          --update-expression "SET claude_session_id = :sid, agent_type = :agent, last_assistant_msg = :msg, sandbox_id = :sb, last_turn_ts = :lt, last_processed_event_ts = :ev, ttl_expiry = :ttl" \
+          --expression-attribute-values "{
+            \":sid\":{\"S\":\"$NEW_SESSION\"},
+            \":agent\":{\"S\":\"$EFFECTIVE_AGENT\"},
+            \":msg\":{\"S\":$LAST_MSG_JSON},
+            \":sb\":{\"S\":\"$SANDBOX_ID\"},
+            \":lt\":{\"S\":\"$NOW\"},
+            \":ev\":{\"S\":\"$EVENT_TS\"},
+            \":ttl\":{\"N\":\"$TTL_EXPIRY\"}
           }" 2>/dev/null || true
 
         # Phase 67-11 Gap A fix: post the canonical .result text to Slack from
@@ -2920,13 +2945,29 @@ while true; do
         echo "[km-slack-inbound-poller] Turn complete — session=$NEW_SESSION thread=$THREAD_TS"
         touch /run/km/last-slack-inbound
       else
+        # --- km-exit-127 ---
         echo "[km-slack-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
+        if [ "$RUN_EXIT" -eq 127 ]; then
+          # Stop the visibility heartbeat first: a tick after the 60 s set below
+          # would re-extend the message. The kill after this block is idempotent.
+          kill "$HB_PID" 2>/dev/null || true
+          wait "$HB_PID" 2>/dev/null || true
+          # Blank it so the post-turn kill below cannot signal a recycled pid.
+          HB_PID=""
+          # 127 = the agent binary is missing (the boot race the init gate now
+          # prevents, or a profile with no agent install). Retry in 60 s instead
+          # of the queue's 1800 s; the shared DLQ's maxReceiveCount still bounds it.
+          echo "[km-slack-inbound-poller] agent missing (exit 127): message visible again in 60s"
+          aws sqs change-message-visibility --queue-url "$QUEUE_URL" --receipt-handle "$RECEIPT" --visibility-timeout 60 --region "$REGION" 2>/dev/null || true
+        fi
+        # --- end km-exit-127 ---
       fi
 
       # Phase 119 (P119-E): kill the heartbeat ticker now that the turn is done.
       # || true swallows ReceiptHandleIsInvalid if the delete already landed.
-      kill "$HB_PID" 2>/dev/null || true
-      wait "$HB_PID" 2>/dev/null || true
+      # HB_PID is empty when the exit-127 arm already stopped it.
+      [ -n "$HB_PID" ] && kill "$HB_PID" 2>/dev/null || true
+      [ -n "$HB_PID" ] && wait "$HB_PID" 2>/dev/null || true
 
       # ---- end of per-message subshell ----
     ) &
@@ -2959,9 +3000,25 @@ AGENT="${KM_AGENT:-claude}"
 # the agent as "$AGENT -p ... || true" — the "|| true" silently swallows a
 # missing-agent failure, and the agent CLI is installed by the profile's
 # initCommands, NOT a platform default. Log a clear one-time warning at poller
-# startup (initCommands have already run by now) so a profile that forgot the agent
+# startup, after the init gate below has waited for initCommands, so a profile that forgot the agent
 # install is diagnosable in the poller journal instead of "the bot posted nothing".
+# --- km-init-gate ---
+# Cold-create boot race: section 5 starts this poller before section 7.5 runs the
+# profile's initCommands (which install the agent). Wait for the init marker,
+# bounded, before the first receive — then check the agent, so the warning below
+# means "this profile has no agent install", not "the race was lost".
+if [ ! -e /var/lib/km/init-done ]; then
+  echo "[km-inbound-poller] waiting for profile init (/var/lib/km/init-done)"
+  _km_init_wait=0
+  while [ ! -e /var/lib/km/init-done ] && [ "$_km_init_wait" -lt 1200 ]; do sleep 5; _km_init_wait=$((_km_init_wait+5)); done
+  if [ -e /var/lib/km/init-done ]; then
+    echo "[km-inbound-poller] profile init done after ${_km_init_wait}s"
+  else
+    echo "[km-inbound-poller] WARN: profile init marker not seen after ${_km_init_wait}s; proceeding"
+  fi
+fi
 command -v "$AGENT" >/dev/null 2>&1 || echo "[km-inbound-poller] WARNING: agent '$AGENT' not on PATH — dispatched turns will NOT run; add the agent install to the profile initCommands (e.g. npm install -g @anthropic-ai/claude-code)" >&2
+# --- end km-init-gate ---
 
 # km-github-threads table for session/thread continuity (GH-X-CONTINUITY).
 # Falls back to {prefix}-github-threads matching the default in main.go.
@@ -3342,7 +3399,16 @@ $COMMENT_BODY"
       --region "$REGION" 2>/dev/null || true
     echo "[km-github-inbound-poller] Turn complete — repo=$REPO PR=#$NUMBER sender=$SENDER"
   else
+    # --- km-exit-127 ---
     echo "[km-github-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
+    if [ "$RUN_EXIT" -eq 127 ]; then
+      # 127 = the agent binary is missing (the boot race the init gate now
+      # prevents, or a profile with no agent install). Retry in 60 s instead
+      # of the queue's 1800 s; the shared DLQ's maxReceiveCount still bounds it.
+      echo "[km-github-inbound-poller] agent missing (exit 127): message visible again in 60s"
+      aws sqs change-message-visibility --queue-url "$QUEUE_URL" --receipt-handle "$RECEIPT" --visibility-timeout 60 --region "$REGION" 2>/dev/null || true
+    fi
+    # --- end km-exit-127 ---
   fi
 done
 GITHUBINBOUND
@@ -4910,6 +4976,12 @@ if aws s3 cp "s3://${KM_INIT_BUCKET}/artifacts/sb-phase92-baseline/km-init.sh" /
 else
   echo "[km-bootstrap] No init script found in S3 (skipped)"
 fi
+# Cold-create boot race (2026-10-17): the inbound pollers start in section 5 and
+# must not drain their first message before profile init (which installs the
+# agent) has run. Written after 7.5 on EVERY boot path — success, failure, no
+# init at all — so a poller never waits out its bound on a healthy box. Lives in
+# /var/lib/km so a stop/resume (userdata does not re-run) does not wait again.
+mkdir -p /var/lib/km && touch /var/lib/km/init-done
 # ============================================================
 # 7.6. Config files (from profile spec.execution.configFiles)
 # Runs AFTER initCommands to ensure correct ownership.

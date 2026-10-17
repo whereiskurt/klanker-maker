@@ -72,6 +72,9 @@ type Handler struct {
 	// target must pass the SAME email allowlist the inbound route applies.
 	DefaultRoute *DefaultRoute
 	SenderEmails SenderEmailFetcher
+	// SandboxByID reads the posting sandbox's row: its allowEmails, when set,
+	// replaces the route list for the dm target check. nil ⇒ route list only.
+	SandboxByID SandboxByIDFetcher
 
 	// Phase 121 (BRG-01) — quota enforcement on outbound chat actions.
 	// When both Quota and Limits are non-nil, quota.Record is called before each

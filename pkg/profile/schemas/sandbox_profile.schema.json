@@ -922,6 +922,18 @@
                       },
                       "description": "Per-sandbox trigger allowlist (Slack user IDs, Uxxxx). Phase 118. When non-empty, only these users can trigger an agent turn in this sandbox's channel — it REPLACES the install-level slack.allow for this sandbox. Empty/absent = fall back to install-level slack.allow (and if that is also empty, everyone may trigger). Enforced regardless of mentionOnly mode and the thread-bypass."
                     },
+                    "allowEmails": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Per-sandbox email allowlist (2026-10-17): exact addresses or exactly *@<domain>, case-insensitive. When set it REPLACES the install-level email list for this sandbox. Omit the field to use the install-level list; an empty list is an error."
+                    },
+                    "reactQuietSeconds": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Per-sandbox 👀 reaction quiet period in seconds (2026-10-17). Omitted = install default."
+                    },
                     "maxConcurrentThreads": {
                       "type": "integer",
                       "minimum": 1,

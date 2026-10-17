@@ -141,6 +141,14 @@ type SandboxRoutingInfo struct {
 	// from the profile's notification.slack.inbound.allow field; must round-trip
 	// through SandboxMetadata marshal/unmarshal (SandboxMetadata lossy round-trip footgun).
 	Allow []string
+	// 2026-10-17: per-sandbox email allowlist (normalised exact addresses or
+	// *@<domain>) from the comma-joined S attr "slack_allow_emails". When
+	// non-empty it REPLACES the install-level email list. nil = install default.
+	AllowEmails []string
+	// 2026-10-17: per-sandbox 👀 reaction quiet period in seconds from
+	// "slack_react_quiet_seconds" (N or S). nil = install default; absent,
+	// non-numeric or negative values read as nil.
+	ReactQuietSeconds *int
 	// Phase 121: resolved action-limits JSON map (from action_limits S attr on
 	// km-sandboxes). Written by km create from the resolved limits map; read by
 	// the bridge Handler to call quota.Record per action. Empty = no limits configured

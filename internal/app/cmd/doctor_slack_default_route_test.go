@@ -90,3 +90,93 @@ func TestCheckSlackDefaultRoute_Warnings(t *testing.T) {
 		t.Errorf("missing im:history must WARN; got %s %q", st, msg)
 	}
 }
+
+func TestCheckSlackDefaultRoute_DomainWildcardNotResolved(t *testing.T) {
+	dir := t.TempDir()
+	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"*@example.com", "kurt@example.com"}}
+	scopes := "channels:history,im:history,mpim:history,im:write"
+
+	rs := checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{known: map[string]string{"kurt@example.com": "U1"}}, scopes)
+	st, msg := statusOf(rs, "Slack default route allowlist")
+	if st != CheckOK || !strings.Contains(msg, "1 domain wildcard") || !strings.Contains(msg, "1 email(s) resolve") {
+		t.Errorf("wildcard must not be looked up; got %s %q", st, msg)
+	}
+
+	rs = checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{}, scopes)
+	st, msg = statusOf(rs, "Slack default route allowlist")
+	if st != CheckWarn || !strings.Contains(msg, "kurt@example.com") || strings.Contains(msg, "*@example.com") {
+		t.Errorf("WARN must name only the unresolved exact entry; got %s %q", st, msg)
+	}
+}
+
+func TestCheckSlackDefaultRoute_NoWildcardClauseWhenNone(t *testing.T) {
+	dir := t.TempDir()
+	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"kurt@example.com"}}
+	rs := checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{known: map[string]string{"kurt@example.com": "U1"}}, "im:history,mpim:history,im:write")
+	if _, msg := statusOf(rs, "Slack default route allowlist"); strings.Contains(msg, "wildcard") {
+		t.Errorf("zero wildcards must omit the clause: %q", msg)
+	}
+}
+
+// Both lists are live (two-list model): doctor resolves the union, names both
+// sources, and adds a second OK line saying what each list gates. (Before the
+// two-list model this asserted the km-config.yaml list was ignored.)
+func TestCheckSlackDefaultRoute_BothLists(t *testing.T) {
+	dir := t.TempDir()
+	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileWithAllow)
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: p, AllowEmails: []string{"install@example.com"}}
+	known := map[string]string{"kurt@example.com": "U1", "install@example.com": "U2"}
+	rs := checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{known: known}, "im:history,mpim:history,im:write")
+	msgs := messagesOf(rs, "Slack default route allowlist")
+	if len(msgs) != 2 {
+		t.Fatalf("want two allowlist lines, got %q", msgs)
+	}
+	if st, msg := statusOf(rs, "Slack default route allowlist"); st != CheckOK ||
+		!strings.HasPrefix(msg, "from profile "+p+" and from km-config.yaml: ") ||
+		!strings.Contains(msg, "2 email(s) resolve") || !strings.Contains(msg, "1 domain wildcard") {
+		t.Fatalf("allowlist: %s (%s)", st, msg)
+	}
+	if msgs[1] != "install list 1 entries (DM targets and non-route sandboxes); route profile list 2 entries (cold-create and the route box)" {
+		t.Fatalf("second line = %q", msgs[1])
+	}
+
+	// An unresolved install entry is a WARN even though the profile list resolves.
+	delete(known, "install@example.com")
+	rs = checkSlackDefaultRoute(context.Background(), route, nil, &fakeEmailLookup{known: known}, "im:history,mpim:history,im:write")
+	if st, msg := statusOf(rs, "Slack default route allowlist"); st != CheckWarn || !strings.Contains(msg, "install@example.com") {
+		t.Fatalf("unresolved install entry must WARN: %s (%s)", st, msg)
+	}
+}
+
+func TestCheckSlackDefaultRoute_SourcePrefix(t *testing.T) {
+	dir := t.TempDir()
+	plain := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
+	route := &config.SlackDefaultRoute{Alias: "ir-bot", Profile: plain, AllowEmails: []string{"kurt@example.com"}}
+	lookup := &fakeEmailLookup{known: map[string]string{"kurt@example.com": "U1"}}
+	rs := checkSlackDefaultRoute(context.Background(), route, nil, lookup, "im:history,mpim:history,im:write")
+	if _, msg := statusOf(rs, "Slack default route allowlist"); !strings.HasPrefix(msg, "from km-config.yaml: ") {
+		t.Fatalf("install-only must name km-config.yaml: %q", msg)
+	}
+	if n := len(messagesOf(rs, "Slack default route allowlist")); n != 1 {
+		t.Fatalf("one list ⇒ one line, got %d", n)
+	}
+
+	withAllow := writeProfile(t, t.TempDir(), "ir-bot.yaml", routeProfileWithAllow)
+	route = &config.SlackDefaultRoute{Alias: "ir-bot", Profile: withAllow}
+	rs = checkSlackDefaultRoute(context.Background(), route, nil, lookup, "im:history,mpim:history,im:write")
+	if _, msg := statusOf(rs, "Slack default route allowlist"); !strings.HasPrefix(msg, "from profile "+withAllow+": ") {
+		t.Fatalf("profile-only must name the profile: %q", msg)
+	}
+}
+
+func messagesOf(rs []CheckResult, name string) []string {
+	var out []string
+	for _, r := range rs {
+		if r.Name == name {
+			out = append(out, r.Message)
+		}
+	}
+	return out
+}
