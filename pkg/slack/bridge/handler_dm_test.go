@@ -247,3 +247,43 @@ func TestHandler_DM_Operator_403(t *testing.T) {
 		t.Fatal("no Slack call on an operator dm")
 	}
 }
+
+// A tripped slack_post quota refuses the dm before conversations.open. With
+// --from-thread the trip notice lands on the originating thread.
+func TestHandler_DM_QuotaTrip_429_NoOpen(t *testing.T) {
+	for _, fromThread := range []bool{false, true} {
+		h, p, th, priv := dmHandler(t)
+		h.Quota = bridge.NewFakeQuotaClient(2) // count 2 > limit 1
+		h.QuotaTable = "km-action-quota"
+		h.Limits = &fakeActionLimits{limitsJSON: `{"slack_post":{"perHour":1,"onBreach":"block"}}`}
+		env := dmEnv("U0KURT")
+		if fromThread {
+			env.Channel, env.ThreadTS = "CFOREIGN", "1.0"
+		}
+		resp := h.Handle(context.Background(), signRequest(t, env, priv))
+		if resp.StatusCode != 429 || responseBody(t, resp)["error"] != "quota_exceeded" {
+			t.Fatalf("fromThread=%v: want 429 quota_exceeded, got %d %s", fromThread, resp.StatusCode, resp.Body)
+		}
+		if len(p.opened) != 0 || len(th.upserts) != 0 {
+			t.Fatalf("fromThread=%v: no OpenDM and no row on a quota trip (opened %v)", fromThread, p.opened)
+		}
+		if fromThread {
+			if len(p.posted) != 1 || !strings.HasPrefix(p.posted[0], "CFOREIGN|") || !strings.Contains(p.posted[0], "Quota exceeded") {
+				t.Fatalf("trip notice must land on the originating thread: %v", p.posted)
+			}
+		}
+	}
+}
+
+// A half-set from-thread (channel without thread_ts) still sends the plain DM.
+func TestHandler_DM_HalfSetFromThread_SendsPlainDM(t *testing.T) {
+	h, p, _, priv := dmHandler(t)
+	env := dmEnv("U0KURT")
+	env.Channel = "CFOREIGN"
+	if resp := h.Handle(context.Background(), signRequest(t, env, priv)); resp.StatusCode != 200 {
+		t.Fatalf("want 200, got %d %s", resp.StatusCode, resp.Body)
+	}
+	if len(p.posted) != 1 || strings.Contains(p.posted[0], "From:") {
+		t.Fatalf("plain DM expected, no permalink: %v", p.posted)
+	}
+}

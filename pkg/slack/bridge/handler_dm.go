@@ -35,7 +35,16 @@ func (h *Handler) handleDM(ctx context.Context, env slack.SlackEnvelope) *Respon
 	}
 
 	body, blocks := env.Body, env.Blocks
-	if env.Channel != "" && env.ThreadTS != "" {
+	fromThread := env.Channel != "" && env.ThreadTS != ""
+	if !fromThread && (env.Channel != "" || env.ThreadTS != "") {
+		empty := "thread_ts"
+		if env.Channel == "" {
+			empty = "channel"
+		}
+		logger.WarnContext(ctx, "bridge: dm_from_thread_ignored", "step", "dm", "sender_id", env.SenderID,
+			"empty_field", empty, "channel", env.Channel, "thread_ts", env.ThreadTS)
+	}
+	if fromThread {
 		owned, oerr := h.Channels.OwnedChannel(ctx, env.SenderID)
 		if oerr != nil {
 			logger.ErrorContext(ctx, "bridge: channel_lookup_failed", "step", "dm", "sender_id", env.SenderID, "error", oerr.Error(), "status", 500)
@@ -65,7 +74,15 @@ func (h *Handler) handleDM(ctx context.Context, env slack.SlackEnvelope) *Respon
 		}
 	}
 
-	if _, block := h.checkQuota(ctx, env.SenderID, quota.ActionSlackPost, "", ""); block {
+	// The trip notice lands on the originating thread when there is one; a
+	// top-level dm has no channel yet (the DM is opened after the quota check).
+	noticeChannel, noticeThread := "", ""
+	if fromThread {
+		noticeChannel, noticeThread = env.Channel, env.ThreadTS
+	}
+	if _, block := h.checkQuota(ctx, env.SenderID, quota.ActionSlackPost, noticeChannel, noticeThread); block {
+		logger.WarnContext(ctx, "bridge: quota_exceeded", "step", "dm", "sender_id", env.SenderID,
+			"target", env.TargetUser, "status", 429)
 		return errResp(429, "quota_exceeded")
 	}
 
@@ -92,9 +109,10 @@ func (h *Handler) handleDM(ctx context.Context, env slack.SlackEnvelope) *Respon
 		ts, err = h.Slack.PostMessage(ctx, dmChannel, env.Subject, body, "")
 	}
 	if err != nil {
+		resp := slackResponse("", err)
 		logger.ErrorContext(ctx, "bridge: slack_call_failed", "step", "dm", "action", "chat.postMessage",
-			"channel", dmChannel, "slack_error", err.Error())
-		return slackResponse("", err)
+			"channel", dmChannel, "slack_error", err.Error(), "status", resp.StatusCode)
+		return resp
 	}
 	// Continuity: a reply under this DM message routes back to this sandbox.
 	// Written only after the post succeeded; a failure is logged, the DM stands.
@@ -102,6 +120,9 @@ func (h *Handler) handleDM(ctx context.Context, env slack.SlackEnvelope) *Respon
 		if uerr := h.Threads.Upsert(ctx, dmChannel, ts, env.SenderID); uerr != nil {
 			logger.WarnContext(ctx, "bridge: dm_thread_row_failed", "step", "dm", "channel", dmChannel, "ts", ts, "error", uerr.Error())
 		}
+	} else {
+		logger.WarnContext(ctx, "bridge: dm_no_thread_store", "step", "dm", "sender_id", env.SenderID,
+			"channel", dmChannel, "ts", ts)
 	}
 	logger.InfoContext(ctx, "bridge: dm", "sender_id", env.SenderID, "target", env.TargetUser, "channel", dmChannel, "ts", ts, "status", 200)
 	return jsonResp(200, map[string]any{"ok": true, "ts": ts, "channel_id": dmChannel})
