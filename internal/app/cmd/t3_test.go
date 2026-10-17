@@ -149,6 +149,9 @@ func TestT3StartScript_NeverEchoesPresenceToken(t *testing.T) {
 		"T3CODE_VERSION=$KM_T3_VERSION sh",
 		"KM_T3_VERSION='0.1.0'",
 		"systemctl enable km-t3code.service",
+		// Unconditional, not create-if-absent: found live, a log first created
+		// by systemd was root 0644 — world-readable, with t3's startup token in it.
+		"chown sandbox:sandbox /home/sandbox/.t3/km-t3code.log\nchmod 0600 /home/sandbox/.t3/km-t3code.log",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("start script missing %q", want)

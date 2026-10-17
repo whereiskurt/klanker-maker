@@ -141,10 +141,14 @@ case "$CUR" in
     NEED_RESTART=1
     ;;
 esac
-# 3. The unit. Its log lives in ~/.t3 beside t3's other credentials; created
-# here so systemd's append: does not create it root-owned.
+# 3. The unit. Its log lives in ~/.t3 beside t3's other credentials (t3 prints
+# a pairing token at startup). systemd's append: creates a missing file as
+# root 0644, so create it here and re-assert owner/mode on every start — a log
+# left world-readable by an earlier run is fixed rather than kept.
 install -d -m 0700 -o sandbox -g sandbox /home/sandbox/.t3
-[ -e /home/sandbox/.t3/km-t3code.log ] || install -m 0600 -o sandbox -g sandbox /dev/null /home/sandbox/.t3/km-t3code.log
+touch /home/sandbox/.t3/km-t3code.log
+chown sandbox:sandbox /home/sandbox/.t3/km-t3code.log
+chmod 0600 /home/sandbox/.t3/km-t3code.log
 [ -d /workspace ] || install -d -o sandbox -g sandbox /workspace
 cat > /tmp/km-t3code.service.new <<'KM_T3_UNIT_EOF'
 %sKM_T3_UNIT_EOF
