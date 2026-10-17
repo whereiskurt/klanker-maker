@@ -77,9 +77,11 @@ type SQSSender interface {
 type SlackThreadStore interface {
 	// Get returns the claude_session_id for (channel, thread_ts), empty string if no row.
 	Get(ctx context.Context, channelID, threadTS string) (claudeSessionID string, err error)
-	// Upsert creates a row keyed by (channel, thread_ts) only if absent
-	// (attribute_not_exists condition). Idempotent on replay; never overwrites
-	// claude_session_id once set by the poller.
+	// Upsert ensures the row keyed by (channel, thread_ts) names sandboxID:
+	// creates it if absent, fills sandbox_id on a row that lacks it (the
+	// poller-written Phase 70 handoff row), and leaves an existing sandbox_id
+	// alone. Idempotent on replay; never touches claude_session_id or any
+	// other poller-written attribute.
 	Upsert(ctx context.Context, channelID, threadTS, sandboxID string) error
 	// LookupSandbox returns the sandbox_id for (channel, thread_ts), empty
 	// string if no row exists. Phase 91.3: used by the events handler to

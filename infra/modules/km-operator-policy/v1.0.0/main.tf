@@ -99,7 +99,7 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
 # Phase 91.6 — Policy: DynamoDB km-slack-threads write for postReadyAnnouncement.
 # The create-handler Lambda calls UpsertSlackThread after posting the "Sandbox
 # Ready" message so user replies in that thread benefit from Phase 91.3
-# thread-bypass (no @-mention required). Without this grant, the PutItem fails
+# thread-bypass (no @-mention required). Without this grant, the upsert fails
 # with AccessDeniedException, the upsert is logged as a WARN to CloudWatch,
 # and the row is silently missing — replies in the ready thread get blocked
 # by the mention-only filter.
@@ -122,6 +122,9 @@ resource "aws_iam_role_policy" "dynamodb_slack_threads" {
           "dynamodb:PutItem",
           "dynamodb:GetItem",
           "dynamodb:DescribeTable",
+          # 2026-10-17: DDBThreadStore.Upsert is an if_not_exists UpdateItem
+          # (it fills sandbox_id on a poller-created handoff row).
+          "dynamodb:UpdateItem",
         ]
         Resource = [
           "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.slack_threads_table_name}",

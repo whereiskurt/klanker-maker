@@ -17,7 +17,7 @@
 // Plan 67-05 additions:
 //   - SQSAdapter: sends inbound messages to per-sandbox FIFO queues.
 //   - DDBThreadStore: reads/writes km-slack-threads (idempotent Upsert via
-//     attribute_not_exists condition to avoid bridge↔poller race).
+//     if_not_exists UpdateItem so the bridge↔poller race clobbers nothing).
 //   - DDBSandboxByChannel: queries km-sandboxes via slack_channel_id-index GSI.
 //   - SSMSigningSecretFetcher: reads /km/slack/signing-secret; 15-min cache
 //     (mirrors SSMBotTokenFetcher exactly).
@@ -915,8 +915,8 @@ type DDBQueryGetPutAPI interface {
 }
 
 // DDBThreadStore implements SlackThreadStore using the km-slack-threads DynamoDB table.
-// Key: (channel_id, thread_ts). Upsert uses attribute_not_exists(channel_id) so
-// the bridge never overwrites a claude_session_id written by the poller.
+// Key: (channel_id, thread_ts). Upsert writes only bridge-owned attributes, each
+// through if_not_exists, so it never overwrites state written by the poller.
 type DDBThreadStore struct {
 	Client    DDBUpdateItemAPI
 	TableName string // e.g. "km-slack-threads" (from KM_SLACK_THREADS_TABLE env var)
@@ -1039,35 +1039,48 @@ func (s *DDBThreadStore) LookupBySession(ctx context.Context, sessionID, sandbox
 	return "", "", "", nil
 }
 
-// Upsert creates a new thread row keyed by (channelID, threadTS) only if one
-// does not already exist (attribute_not_exists condition). ConditionalCheckFailed
-// means the row already exists — this is the idempotent success path; we MUST NOT
-// overwrite claude_session_id set by the poller.
+// Upsert ensures the thread row for (channelID, threadTS) names sandboxID,
+// without disturbing anything already there. It is an UpdateItem with no
+// condition that writes each bridge-owned attribute through if_not_exists:
+//
+//   - absent row: created with sandbox_id, created_at, last_turn_ts,
+//     turn_count=0 and ttl_expiry (the old PutItem's shape);
+//   - row present WITHOUT sandbox_id: sandbox_id is filled. This is the
+//     Phase 70 handoff thread, whose row the poller writes itself after it
+//     posts the new top-level message; under the ec2spot v1.8.0 role the
+//     poller may not write sandbox_id, so the bridge fills it on the first
+//     turn it dispatches there. A conditional PutItem hit
+//     ConditionalCheckFailed on that row and never filled it, so the thread
+//     never regained continuity, mention bypass or routed-thread authz;
+//   - row present WITH sandbox_id: unchanged (rebinding is Rebind's job).
+//
+// It never names claude_session_id, agent_type, last_assistant_msg,
+// last_processed_event_ts or last_dispatch_ts, so replays and the
+// bridge-vs-poller race cannot clobber the poller's session state.
 func (s *DDBThreadStore) Upsert(ctx context.Context, channelID, threadTS, sandboxID string) error {
 	now := time.Now()
 	nowISO := now.UTC().Format(time.RFC3339)
 	ttlExpiry := strconv.FormatInt(now.Add(30*24*time.Hour).Unix(), 10)
 
-	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: awssdk.String(s.TableName),
-		Item: map[string]dynamodbtypes.AttributeValue{
-			"channel_id":   &dynamodbtypes.AttributeValueMemberS{Value: channelID},
-			"thread_ts":    &dynamodbtypes.AttributeValueMemberS{Value: threadTS},
-			"sandbox_id":   &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
-			"created_at":   &dynamodbtypes.AttributeValueMemberS{Value: nowISO},
-			"last_turn_ts": &dynamodbtypes.AttributeValueMemberS{Value: nowISO},
-			"turn_count":   &dynamodbtypes.AttributeValueMemberN{Value: "0"},
-			"ttl_expiry":   &dynamodbtypes.AttributeValueMemberN{Value: ttlExpiry},
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"channel_id": &dynamodbtypes.AttributeValueMemberS{Value: channelID},
+			"thread_ts":  &dynamodbtypes.AttributeValueMemberS{Value: threadTS},
 		},
-		ConditionExpression: awssdk.String("attribute_not_exists(channel_id)"),
+		UpdateExpression: awssdk.String("SET sandbox_id = if_not_exists(sandbox_id, :sb), " +
+			"created_at = if_not_exists(created_at, :now), " +
+			"last_turn_ts = if_not_exists(last_turn_ts, :now), " +
+			"turn_count = if_not_exists(turn_count, :zero), " +
+			"ttl_expiry = if_not_exists(ttl_expiry, :ttl)"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":sb":   &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+			":now":  &dynamodbtypes.AttributeValueMemberS{Value: nowISO},
+			":zero": &dynamodbtypes.AttributeValueMemberN{Value: "0"},
+			":ttl":  &dynamodbtypes.AttributeValueMemberN{Value: ttlExpiry},
+		},
 	})
 	if err != nil {
-		// ConditionalCheckFailed = row already exists (bridge↔poller race or
-		// duplicate delivery). This is the idempotent success path.
-		var ccfe *dynamodbtypes.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
-			return nil
-		}
 		return fmt.Errorf("threads upsert: %w", err)
 	}
 	return nil

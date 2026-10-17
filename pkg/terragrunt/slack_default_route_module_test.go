@@ -73,6 +73,40 @@ func TestOperatorPolicy_CreateHandlerCanSendToSlackInbound(t *testing.T) {
 	}
 }
 
+// DDBThreadStore.Upsert is an UpdateItem (it fills sandbox_id on a row the
+// poller created for a Phase 70 handoff thread), and it has two callers: the
+// bridge (DDBSlackThreads) and the create-handler's "Sandbox Ready" anchor row
+// (SlackThreadsTableUpsert). Without UpdateItem the create-handler's upsert is
+// an AccessDenied that only logs a WARN, and the ready thread loses its row.
+func TestThreadsTableUpsertCallersHaveUpdateItem(t *testing.T) {
+	cases := []struct{ file, sid string }{
+		{"infra/modules/lambda-slack-bridge/v1.0.0/main.tf", "DDBSlackThreads"},
+		{"infra/modules/km-operator-policy/v1.0.0/main.tf", "SlackThreadsTableUpsert"},
+	}
+	for _, c := range cases {
+		main := repoFile(t, c.file)
+		i := strings.Index(main, `Sid    = "`+c.sid+`"`)
+		if i == -1 {
+			t.Fatalf("%s: statement %s not found", c.file, c.sid)
+		}
+		stmt := main[i:]
+		stmt = stmt[:strings.Index(stmt, "Resource")]
+		if !strings.Contains(stmt, `"dynamodb:UpdateItem"`) {
+			t.Errorf("%s %s needs dynamodb:UpdateItem: DDBThreadStore.Upsert is an UpdateItem", c.file, c.sid)
+		}
+	}
+	src := repoFile(t, "pkg/slack/bridge/aws_adapters.go")
+	i := strings.Index(src, "func (s *DDBThreadStore) Upsert(")
+	if i == -1 {
+		t.Fatal("DDBThreadStore.Upsert not found")
+	}
+	body := src[i:]
+	body = body[:strings.Index(body, "\n}\n")]
+	if !strings.Contains(body, "s.Client.UpdateItem(") {
+		t.Fatal("DDBThreadStore.Upsert no longer calls UpdateItem; revisit this guard")
+	}
+}
+
 // KM_SLACK_REACT_QUIET_SECONDS must be plumbed module var → env block → live
 // get_env with the "180" default, or km init's export is silently dropped and
 // the bridge runs on its own default whatever km-config.yaml says.
