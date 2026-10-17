@@ -1262,6 +1262,9 @@ echo "[km-bootstrap] ~/.codex/config.toml installed"
 # ============================================================
 echo "[km-bootstrap] Installing km sidecars..."
 mkdir -p /opt/km/bin /etc/km/tracing
+# Userdata runs only on an instance's first boot, and a baked AMI carries the
+# init marker from its source box: clear it before the pollers start.
+rm -f /var/lib/km/init-done
 
 # Download sidecar binaries from S3 (km-sandbox-artifacts bucket)
 KM_ARTIFACTS_BUCKET="my-bucket"

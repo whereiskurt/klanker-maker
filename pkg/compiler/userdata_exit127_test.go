@@ -34,8 +34,9 @@ func runExit127WithHeartbeat(t *testing.T, runExit string) ([]string, bool) {
 		t.Fatal(err)
 	}
 	script := "set -euo pipefail\nPATH=" + shellQuote(dir) + ":$PATH\nRUN_EXIT=" + runExit + "\nQUEUE_URL=q\nRECEIPT=r\nREGION=us-east-1\n" +
-		"sleep 300 &\nHB_PID=$!\n" + block[s:e] +
-		"\nif kill -0 \"$HB_PID\" 2>/dev/null; then echo HB_ALIVE; kill \"$HB_PID\"; else echo HB_GONE; fi\n"
+		"sleep 300 &\nHB_PID=$!\nHB_ORIG=$HB_PID\n" + block[s:e] +
+		"\nif kill -0 \"$HB_ORIG\" 2>/dev/null; then echo HB_ALIVE; kill \"$HB_ORIG\"; else echo HB_GONE; fi\n" +
+		"echo \"HB_PID=[$HB_PID]\"\n" + trailingHeartbeatKill(t, block)
 	out, err := exec.Command("bash", "-c", script).CombinedOutput()
 	if err != nil {
 		t.Fatalf("failure arm failed under bash: %v\n%s", err, out)
@@ -47,7 +48,27 @@ func runExit127WithHeartbeat(t *testing.T, runExit string) ([]string, bool) {
 			calls = append(calls, l)
 		}
 	}
+	if runExit == "127" && !strings.Contains(string(out), "HB_PID=[]") {
+		t.Fatalf("the exit-127 arm must blank HB_PID so the later kill cannot hit a recycled pid:\n%s", out)
+	}
 	return calls, strings.Contains(string(out), "HB_ALIVE")
+}
+
+// trailingHeartbeatKill returns the poller's unconditional post-turn heartbeat
+// kill, so the test runs it after the arm exactly as the box does.
+func trailingHeartbeatKill(t *testing.T, block string) string {
+	t.Helper()
+	const anchor = "# Phase 119 (P119-E): kill the heartbeat ticker now that the turn is done."
+	s := strings.Index(block, anchor)
+	if s < 0 {
+		t.Fatal("post-turn heartbeat kill not found in the slack poller")
+	}
+	w := strings.Index(block[s:], "wait ")
+	if w < 0 {
+		t.Fatal("post-turn heartbeat wait not found")
+	}
+	nl := strings.Index(block[s+w:], "\n")
+	return block[s:s+w+nl] + "\n"
 }
 
 func TestExit127_ShortensVisibilityTo60(t *testing.T) {

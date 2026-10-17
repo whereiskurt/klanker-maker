@@ -186,3 +186,34 @@ func TestUserdata_InitDoneMarkerRendersWithoutInit(t *testing.T) {
 		t.Fatalf("init-done touch must render exactly once for a no-init profile, got %d", n)
 	}
 }
+
+// A baked AMI carries the marker from the box it was baked on. Userdata runs
+// only on an instance's first boot, so it must clear the marker before section 5
+// starts the pollers, and write it again only after profile init.
+func TestUserdata_StaleInitDoneMarkerClearedBeforePollersStart(t *testing.T) {
+	out := compileInboundUserData(t, minimalSlackInboundProfile(t, true))
+	const rm = "rm -f /var/lib/km/init-done"
+	if n := strings.Count(out, rm); n != 1 {
+		t.Fatalf("the stale-marker clear must render exactly once, got %d", n)
+	}
+	enable := -1
+	pos := 0
+	for _, l := range strings.SplitAfter(out, "\n") {
+		if strings.HasPrefix(l, "systemctl enable") && strings.Contains(l, "inbound-poller") {
+			enable = pos
+			break
+		}
+		pos += len(l)
+	}
+	if enable < 0 {
+		t.Fatal("no systemctl enable line names an inbound poller")
+	}
+	rmAt := strings.Index(out, rm)
+	touchAt := strings.Index(out, "touch /var/lib/km/init-done")
+	if rmAt > enable {
+		t.Fatal("the stale-marker clear must come before the pollers are enabled")
+	}
+	if touchAt < enable {
+		t.Fatal("the init-done touch must come after the pollers are enabled")
+	}
+}

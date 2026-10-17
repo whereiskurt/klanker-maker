@@ -1181,6 +1181,9 @@ echo "[km-bootstrap] Notify env defaults (systemd format) written to /etc/km/not
 # ============================================================
 echo "[km-bootstrap] Installing km sidecars..."
 mkdir -p /opt/km/bin /etc/km/tracing
+# Userdata runs only on an instance's first boot, and a baked AMI carries the
+# init marker from its source box: clear it before the pollers start.
+rm -f /var/lib/km/init-done
 
 # Download sidecar binaries from S3 (km-sandbox-artifacts bucket)
 KM_ARTIFACTS_BUCKET="{{ .KMArtifactsBucket }}"
@@ -2785,6 +2788,8 @@ while true; do
           # would re-extend the message. The kill after this block is idempotent.
           kill "$HB_PID" 2>/dev/null || true
           wait "$HB_PID" 2>/dev/null || true
+          # Blank it so the post-turn kill below cannot signal a recycled pid.
+          HB_PID=""
           # 127 = the agent binary is missing (the boot race the init gate now
           # prevents, or a profile with no agent install). Retry in 60 s instead
           # of the queue's 1800 s; the shared DLQ's maxReceiveCount still bounds it.
@@ -2796,8 +2801,9 @@ while true; do
 
       # Phase 119 (P119-E): kill the heartbeat ticker now that the turn is done.
       # || true swallows ReceiptHandleIsInvalid if the delete already landed.
-      kill "$HB_PID" 2>/dev/null || true
-      wait "$HB_PID" 2>/dev/null || true
+      # HB_PID is empty when the exit-127 arm already stopped it.
+      [ -n "$HB_PID" ] && kill "$HB_PID" 2>/dev/null || true
+      [ -n "$HB_PID" ] && wait "$HB_PID" 2>/dev/null || true
 
       # ---- end of per-message subshell ----
     ) &
