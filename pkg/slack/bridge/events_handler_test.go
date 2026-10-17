@@ -143,6 +143,12 @@ type fakeThreads struct {
 	// Part B: DispatchBoundary values (ch+"|"+ts) and recorded MarkDispatched calls.
 	boundary map[string]string
 	marks    []struct{ chan_, ts, ev string }
+	// Reaction quiet period: a boundary-only read error, a count of
+	// DispatchBoundary calls, and (when set) MarkDispatched advancing the
+	// boundary the way the real store does.
+	boundaryErr          error
+	boundaryCalls        int
+	markAdvancesBoundary bool
 	// Default route: recorded Rebind calls.
 	rebinds []struct{ chan_, ts, sb string }
 }
@@ -163,10 +169,20 @@ func (f *fakeThreads) LookupBySession(_ context.Context, _, _ string) (string, s
 }
 
 func (f *fakeThreads) DispatchBoundary(_ context.Context, ch, ts string) (string, error) {
+	f.boundaryCalls++
+	if f.boundaryErr != nil {
+		return "", f.boundaryErr
+	}
 	return f.boundary[ch+"|"+ts], f.err
 }
 func (f *fakeThreads) MarkDispatched(_ context.Context, ch, ts, ev string) error {
 	f.marks = append(f.marks, struct{ chan_, ts, ev string }{ch, ts, ev})
+	if f.markAdvancesBoundary {
+		if f.boundary == nil {
+			f.boundary = map[string]string{}
+		}
+		f.boundary[ch+"|"+ts] = ev
+	}
 	return f.err
 }
 func (f *fakeThreads) Rebind(ctx context.Context, ch, ts, sb string) error {

@@ -540,6 +540,20 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		dedupID = msg.TS
 	}
 
+	// Reaction quiet period (2026-10-17): decided HERE, before delivery, because
+	// recordDispatch advances last_dispatch_ts to this very message; a read at the
+	// reaction step would always see "0 s since the last dispatch". The same read
+	// serves the strict-mode context window below, so an event reads it at most once.
+	var boundary *dispatchBoundaryRead
+	skipReactQuiet := false
+	if h.Reactor != nil && msg.ThreadTS != "" && h.Threads != nil && h.effectiveReactAlways(info) {
+		if quiet := h.effectiveReactQuiet(info); quiet > 0 {
+			b := h.readDispatchBoundary(ctx, msg)
+			boundary = &b
+			skipReactQuiet = h.withinReactQuiet(msg, info, b, quiet)
+		}
+	}
+
 	// Part B: context for a mentioned reply in a strict thread. After dedup (step 6)
 	// so a Slack retry never repeats the fetch. Synchronous and bounded; never
 	// blocks the turn.
@@ -564,7 +578,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 				return ok
 			}
 		}
-		threadCtx = h.collectThreadContext(ctx, msg, info, allowed)
+		threadCtx = h.collectThreadContext(ctx, msg, info, allowed, boundary)
 	}
 	if h.FileDownloader != nil && len(msg.Files) > 0 {
 		// Phase 75.2: process file downloads SYNCHRONOUSLY within the handler.
@@ -724,14 +738,17 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		// at sandbox-create time from the profile's
 		// cli.notifySlackInboundReactAlways field. Absent attribute leaves
 		// info.ReactAlways nil → install default applies.
-		effectiveReactAlways := h.ReactAlways
-		if info.ReactAlways != nil {
-			effectiveReactAlways = *info.ReactAlways
-		}
-		if !effectiveReactAlways && msg.ThreadTS != "" {
+		//
+		// 2026-10-17: reaction quiet period. A thread reply that react_always
+		// would otherwise react to reacts only when the thread has been quiet for
+		// more than N seconds since the last dispatch (skipReactQuiet, decided
+		// before delivery; the skip is logged there).
+		if !h.effectiveReactAlways(info) && msg.ThreadTS != "" {
 			h.log().Debug("events: reaction skipped (react-always=false, thread reply)",
 				"channel", msg.Channel, "ts", msg.TS, "thread_ts", msg.ThreadTS,
 				"sandbox", info.SandboxID, "per_sandbox_override", info.ReactAlways != nil)
+		} else if skipReactQuiet {
+			// Logged at decision time.
 		} else {
 			emoji := h.AckEmoji
 			if emoji == "" {
@@ -1026,7 +1043,10 @@ const (
 // collectThreadContext reads the strict thread's messages since the bot's last
 // dispatch (the boundary), keeps the trusted human ones, and downloads their
 // files. It never fails the turn: errors land in ThreadContext.Error / FileErrors.
-func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, allowed func(context.Context, string) bool) *ThreadContext {
+//
+// prefetched, when non-nil, is the boundary already read for this event (the
+// reaction quiet-period check); it is used instead of a second read.
+func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, allowed func(context.Context, string) bool, prefetched *dispatchBoundaryRead) *ThreadContext {
 	// Budget against the Lambda deadline: the dedup nonce is already consumed, so a
 	// turn that times out after this point is lost silently. Leave room for the
 	// files fork, delivery, resume and reaction.
@@ -1043,7 +1063,13 @@ func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessa
 	}
 	cctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	oldest, err := h.Threads.DispatchBoundary(cctx, msg.Channel, msg.ThreadTS)
+	var oldest string
+	var err error
+	if prefetched != nil {
+		oldest, err = prefetched.ts, prefetched.err
+	} else {
+		oldest, err = h.Threads.DispatchBoundary(cctx, msg.Channel, msg.ThreadTS)
+	}
 	if err != nil {
 		h.log().Warn("events: context: boundary read failed; using thread root",
 			"err", err, "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
@@ -1125,6 +1151,94 @@ func (h *EventsHandler) deliver(ctx context.Context, info SandboxRoutingInfo, co
 		return "", err
 	}
 	return info.SandboxID, nil
+}
+
+// dispatchBoundaryRead is one DispatchBoundary result, shared within an event.
+type dispatchBoundaryRead struct {
+	ts  string
+	err error
+}
+
+// reactQuietReadMax bounds the pre-delivery boundary read. A slow read must not
+// hold up the enqueue; a timeout is an error, and an error means REACT.
+const reactQuietReadMax = 3 * time.Second
+
+func (h *EventsHandler) readDispatchBoundary(ctx context.Context, msg slackMessageEvent) dispatchBoundaryRead {
+	rctx, cancel := context.WithTimeout(ctx, reactQuietReadMax)
+	defer cancel()
+	ts, err := h.Threads.DispatchBoundary(rctx, msg.Channel, msg.ThreadTS)
+	return dispatchBoundaryRead{ts: ts, err: err}
+}
+
+// effectiveReactAlways: the sandbox row's slack_react_always wins over the
+// install-level ReactAlways (Phase 91.5).
+func (h *EventsHandler) effectiveReactAlways(info SandboxRoutingInfo) bool {
+	if info.ReactAlways != nil {
+		return *info.ReactAlways
+	}
+	return h.ReactAlways
+}
+
+// effectiveReactQuiet: the sandbox row's slack_react_quiet_seconds wins over the
+// install-level ReactQuietSeconds. 0 disables the quiet period.
+func (h *EventsHandler) effectiveReactQuiet(info SandboxRoutingInfo) int {
+	if info.ReactQuietSeconds != nil {
+		return *info.ReactQuietSeconds
+	}
+	return h.ReactQuietSeconds
+}
+
+// withinReactQuiet reports whether a thread reply falls inside the quiet period:
+// the thread's previous dispatch was quiet seconds ago or less. No row, a read
+// error, or an unparseable boundary all mean REACT (false).
+func (h *EventsHandler) withinReactQuiet(msg slackMessageEvent, info SandboxRoutingInfo, b dispatchBoundaryRead, quiet int) bool {
+	if b.err != nil {
+		h.log().Warn("events: reaction quiet period: boundary read failed; reacting",
+			"err", b.err, "channel", msg.Channel, "thread_ts", msg.ThreadTS, "sandbox", info.SandboxID)
+		return false
+	}
+	if b.ts == "" {
+		return false
+	}
+	last, ok := parseSlackTS(b.ts)
+	if !ok {
+		h.log().Warn("events: reaction quiet period: unparseable boundary; reacting",
+			"last_dispatch_ts", b.ts, "channel", msg.Channel, "thread_ts", msg.ThreadTS, "sandbox", info.SandboxID)
+		return false
+	}
+	since := h.now().Sub(last)
+	if since > time.Duration(quiet)*time.Second {
+		return false
+	}
+	h.log().Info("events: reaction skipped (quiet period)",
+		"channel", msg.Channel, "thread_ts", msg.ThreadTS, "sandbox", info.SandboxID,
+		"since_last_dispatch_s", int(since.Seconds()), "quiet_s", quiet)
+	return true
+}
+
+// parseSlackTS turns a Slack ts ("seconds.micros", the value MarkDispatched
+// stores as last_dispatch_ts) into a time.
+func parseSlackTS(ts string) (time.Time, bool) {
+	secPart, fracPart, _ := strings.Cut(ts, ".")
+	sec, err := strconv.ParseInt(secPart, 10, 64)
+	if err != nil || sec <= 0 {
+		return time.Time{}, false
+	}
+	var nsec int64
+	if fracPart != "" {
+		if len(fracPart) > 9 {
+			fracPart = fracPart[:9]
+		}
+		f, err := strconv.ParseInt(fracPart, 10, 64)
+		if err != nil || f < 0 {
+			return time.Time{}, false
+		}
+		for i := len(fracPart); i < 9; i++ {
+			f *= 10
+		}
+		nsec = f
+	}
+	return time.Unix(sec, nsec), true
 }
 
 // recordDispatch writes the km-slack-threads row after a SUCCESSFUL delivery
