@@ -1,14 +1,48 @@
-# Klanker Maker (km) 
-## Secure `sandbox.yaml` definitions running isolated AWS EC2+Claude in your AWS Organization/account.
-### Slack / Github / Email / herdr / vscode / browser+ubuntu / eBPF
-> [!NOTE]
-> Hihi! I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about the future of 'software factories.'.
->
-> It's currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
->
-> I've made a bunch of decisions along the way and that's why it's so easy to use. 🙇 For example - there is ZERO inbound network traffic to the klankers by default/design.
+#### Easy AWS EC2 with strong security controls defined by a `sandbox.yaml`
 
+# Klanker Maker (`km`)
+Hi! 👋 I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about "The Future of Software". I've been interested in [this topic a long time as an extension of 'home virtual labs'](https://github.com/whereiskurt/kvmlab/blob/v1.0/Virtual%20Lab%20Design%20(KVM).png) but for Claude + friends. Take it, and run. Free software. 🙇
+
+## What you get?
 <img alt="klanker with slack vscode herdr kasm ebpf" src="https://github.com/user-attachments/assets/3b9600db-3355-48c3-a172-85907c0c522c" />
+
+## Slack/Github/Webook Lambda+SQS, no ingress to sandboxes (only SSM)
+<img alt="image" src="https://github.com/user-attachments/assets/38dc63fd-e441-464c-9512-935d3dff6b12" />
+
+### What AWS Services are used?
+<img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
+
+## Easily run a bunch of AWS EC2s instances you can interact with over Slack / Github / Hackerone / email use herdr / vscode / browser+ubuntu / eBPF / Wiz Sensor
+
+Create an AWS EC2 that you can shell/vscode/web-linux into.
+
+#### Example 1 - creating a klanker and connect to xfce ubuntu desktop:
+```shell
+## One-time setup steps for your AWS Account
+  ./km configure                 #Creates the local `km-config.yaml` file with AWS details
+  ./km bootstrap --dry-run=false #Installs SCP, KMS, S3s, and support infrastructure 
+  ./km init --dry-run=false      #Deploy binary sidecars and artifacts to AWS 
+
+## Create many klankers and interact with them
+  ./km create profiles/desk.yaml desk1 #Create sandbox from profile - new EC2
+  ./km desktop start desk1 # Connect to a remote linux desktop over SSM
+  ./km vscode start desk1  # Connect to a remote vscode server over SSM
+  ./km herdr desk1         # Connect to a remote herdr over SSM
+  ./km shell desk2         # Open a remote shell over SSM
+```
+
+<img width="450"  alt="km create+desktop start" src="https://github.com/user-attachments/assets/a4d3c0da-4bbe-4021-abbc-9c08c71da172" />
+<img width="450" alt="km create + vscode" src="https://github.com/user-attachments/assets/f072982e-6442-4bee-8653-24e63ac05ee5" />
+<img width="450" alt="Screenshot 2026-09-22 at 10 29 02" src="https://github.com/user-attachments/assets/110d7051-2580-4990-bf3b-a9bc5cc3a19b" />
+
+
+FYI - I've made a bunch of decisions/conventions and put a tonne of thought / experience into building `klanker-maker` **the way it is.** This is approach is called 'opinionated software' and is what makes `klanker-maker` easy to use.🤞 Doesn't mean my opinions won't change, just that I've baked a bunch in, and they are often Security First.
+
+For example - you may not like the fact ZERO inbound network traffic is allowed by the AWS Security Group, blocking all inbound. Everything is over AWS SSM - even 'public network `klankers`'. 🤷 Maybe you don't use `herdr` / vscode / Github / Slack / Hackerone / Wiz or even want remote dev envs. 🤷 Maybe you just want to keep everything localhost?! Maybe you hate AWS EC2 even more than I do?!?! 🤡
+
+> [!WARNING]
+> `klanker-maker` currently a protoype `pre-v1.0.0` which means it has a lot of "vibes" and "abandonded paths." But! I've been writing software for +30-years and and working w/ Claude+friends has been amazing. 🤗
+
 
 # Why?
 This project **is not about** solving 'Agents at Scale'🙅 - **it is** about #2 above - isolated YAML defined virutal machines (AWS EC2) for my development and hacking purposes 🔐. To "safely-enable " my new "AI centric workflows/tasks" running Claude/Codex/vLLM sessions, in the cloud, on my AWS infrastructure (detached from my localhost.) 
@@ -17,16 +51,16 @@ This project **is not about** solving 'Agents at Scale'🙅 - **it is** about #2
 Manage/interact with AWS EC2 klankers over Slack/Github/email/herdr securely inside your own AWS account using AWS security primitives like SCP,IAM,KMS,SG,VPC,Lambda+SQS, etc. 
 
 # Details
-**Cloud native Claude/Codex in your AWS account. Declarative YAML templates, Slack+Github+Hackerone/email native, eBPF-centric with Lambda+EventBridge enforced hard budgets.**
 - A CLI for easily running AWS EC2 instances (`km create`, `km ls`, `km desktop start`, `km vscode start` ...)
-- Secure Architecture balancing privelege with contaiment/isolation (SSO+Organizations+Accounts, SCP, KMS, SSM, IAM, SG, VPC+NATGW+IGW, Lambda+SQS+SES+S3, Cloudtrail, Budgets)
+- Out-of-the-box support for the Slack / Github / Hackerone / herdr / vscode / KASM browser liunx / Wiz Sensor; extensible EC2 `UserData` interface
+- Secure AWS Architecture balancing privilege with containment/isolation (SSO+Organizations+Accounts, SCP, KMS, SSM, IAM, SG, VPC+NATGW+IGW, Lambda+SQS+SES+S3, Cloudtrail, Budgets)
 - Run SKILLS/plugins/prompts with Claude/Codex/Bedrock over Slack/Github/webhooks/email (AWS SES)
-- Out-of-the-box support for the Wiz Sensor; extensible EC2 `UserData` interface
+
 
 ### Overview of AWS Services Used
 <img alt="image" src="https://github.com/user-attachments/assets/68a8f944-1dd9-4fcf-9fd0-f370cbbe9e70" />
 
-I've been interested in this topic a long time and this kinda an extension of 'home virtual labs' but for Claude + friends. 
+I've been interested in [this topic a long time as an extension of 'home virtual labs'](https://github.com/whereiskurt/kvmlab/blob/v1.0/Virtual%20Lab%20Design%20(KVM).png) but for Claude + friends. 
 
 **Useful for security/engineer practitioners.** if team's coverage includes 100x of repos, and you need to move fast+safely - triaging, patching/PRs, reading code, and reasoning about vulnerabilities - without becoming the next breach.
 
@@ -37,9 +71,7 @@ Isolation and monitoring.
 
 <img alt="image" src="https://github.com/user-attachments/assets/38dc63fd-e441-464c-9512-935d3dff6b12" />
 
-YAML templates extending compute+storage for running untrusted code, dependencies, and AI agents inside a contained blast radius .
-
-A profile is the contract - declare what's allowed, get the infrastructure as the artifact. Here's a comprehesnive profile example that shows a lot of what's possible:
+A profile declares what's allowed (ie. egress network) and then is built/instantiated with `km create`. Here's a comprehensive profile example that shows a lot of what's possible:
 
 ```yaml
 # extends resolves left→right; base/os/redhat must come before base/platform
