@@ -50,6 +50,13 @@ type InboundQueueBody struct {
 	// ThreadContext (Part B, strict mode only): human messages since the bot's
 	// last turn, for a mentioned thread reply. Older pollers ignore it.
 	ThreadContext *ThreadContext `json:"thread_context,omitempty"`
+
+	// BotUserID is the bot's own Slack user id, so the poller can tell the agent
+	// that a `<@U…>` token for it in the message is the sender addressing the
+	// bot, not a third person to contact (an agent that does not know its own id
+	// answered "I'm not the person you're looking for"). Empty when the id could
+	// not be fetched; older pollers ignore it.
+	BotUserID string `json:"bot_user_id,omitempty"`
 }
 
 // Attachment is the per-file record written to the SQS body for the sandbox poller.

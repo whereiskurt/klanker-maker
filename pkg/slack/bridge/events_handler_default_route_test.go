@@ -129,6 +129,11 @@ func TestDefaultRoute_MentionFromListedSender_Dispatches(t *testing.T) {
 	if body.Channel != "CFOREIGN" || body.ThreadTS != "1.0" || body.User != "U0KURT" {
 		t.Fatalf("envelope %+v", body)
 	}
+	// The envelope carries the bot's own id so the poller's preamble can tell the
+	// agent that "<@UBOT123>" in the text is the sender addressing it.
+	if body.BotUserID != "UBOT123" {
+		t.Fatalf("envelope bot_user_id = %q, want UBOT123", body.BotUserID)
+	}
 	if len(threads.upserts) != 1 || threads.upserts[0].sb != "sb-irbot" || threads.upserts[0].chan_ != "CFOREIGN" {
 		t.Fatalf("thread row %+v", threads.upserts)
 	}

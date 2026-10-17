@@ -2349,7 +2349,15 @@ while true; do
       : "${REPLY_CHANNEL:=$(echo "$BODY" | jq -r '.channel // empty' 2>/dev/null || true)}"
       if [ -n "$SENDER_ID" ]; then
         HDR_FILE="$(mktemp)"
-        printf '[Slack] From: <@%s> in <#%s> (also in $KM_SLACK_SENDER_ID). Your final reply is posted to this thread automatically when the turn ends; to notify this person write <@%s> inline in that reply. Do not call km-slack post/reply to deliver your answer: any km-slack post/reply into this thread cancels the automatic final post, so such a call must carry your complete answer. A bare @name is plain text to Slack — never invent an id; use this one or a <@U…> token from the message.\n\n' "$SENDER_ID" "$REPLY_CHANNEL" "$SENDER_ID" > "$HDR_FILE"
+        # The bot's own id (bridge-supplied, may be absent on older bridges): without
+        # it an agent reads "<@BOT> you around?" as a question about a third person
+        # and answers "I'm not the person you're looking for".
+        BOT_ID=$(echo "$BODY" | jq -r '.bot_user_id // empty' 2>/dev/null || true)
+        BOT_NOTE=""
+        if [ -n "$BOT_ID" ]; then
+          BOT_NOTE=" You are the Slack bot <@$BOT_ID>: a <@$BOT_ID> token in the message is this person addressing you, not someone else to contact."
+        fi
+        printf '[Slack] From: <@%s> in <#%s> (also in $KM_SLACK_SENDER_ID).%s Your final reply is posted to this thread automatically when the turn ends; to notify this person write <@%s> inline in that reply. Do not call km-slack post/reply to deliver your answer: any km-slack post/reply into this thread cancels the automatic final post, so such a call must carry your complete answer. A bare @name is plain text to Slack — never invent an id; use this one or a <@U…> token from the message.\n\n' "$SENDER_ID" "$REPLY_CHANNEL" "$BOT_NOTE" "$SENDER_ID" > "$HDR_FILE"
         cat "$PROMPT_FILE" >> "$HDR_FILE"
         mv "$HDR_FILE" "$PROMPT_FILE"
         chmod 644 "$PROMPT_FILE"

@@ -580,6 +580,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			EventTS:       msg.TS,
 			Attachments:   atts,
 			ThreadContext: threadCtx,
+			BotUserID:     h.botUserIDForEnvelope(bgCtx),
 		}
 		TrimContextToFit(&sqsBody, MaxQueueBodyBytes)
 		delivered, err := h.deliver(bgCtx, info, coldCreate, sqsBody, threadTS, dedupID)
@@ -604,6 +605,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			User:          msg.User,
 			EventTS:       msg.TS,
 			ThreadContext: threadCtx,
+			BotUserID:     h.botUserIDForEnvelope(ctx),
 		}
 		TrimContextToFit(&body, MaxQueueBodyBytes)
 		delivered, err := h.deliver(ctx, info, coldCreate, body, threadTS, dedupID)
@@ -965,6 +967,20 @@ func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessa
 	h.log().Info("events: context collected", "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS,
 		"messages", len(tc.Messages), "omitted", tc.OmittedNonAllow, "truncated", tc.TruncatedOlder, "files", len(refs))
 	return &tc
+}
+
+// botUserIDForEnvelope returns the bot's own user id for the SQS envelope, or
+// "" when no fetcher is wired or the fetch fails. Fail-soft on purpose: the id
+// only improves the agent's preamble, and a Slack blip must never cost a turn.
+func (h *EventsHandler) botUserIDForEnvelope(ctx context.Context) string {
+	if h.BotUserID == nil {
+		return ""
+	}
+	uid, err := h.BotUserID.Fetch(ctx)
+	if err != nil {
+		return ""
+	}
+	return uid
 }
 
 // deliver enqueues a routed/owned turn, or publishes a cold-create carrying the
