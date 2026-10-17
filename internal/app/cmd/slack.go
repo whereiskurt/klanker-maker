@@ -105,6 +105,10 @@ type SlackCmdDeps struct {
 	// SsmPrefix is the SSM parameter path prefix (e.g. "/km/"). Populated by
 	// buildSlackCmdDeps from cfg.GetSsmPrefix(). Tests default to "/km/".
 	SsmPrefix string
+	// Cfg is the loaded km-config. RunSlackInit uses it to export the Slack
+	// default route (prepareSlackDefaultRoute, fail-closed) before applying
+	// lambda-slack-bridge. Set by buildSlackCmdDeps; nil (tests) ⇒ skipped.
+	Cfg *config.Config
 }
 
 // SlackInitOpts holds parsed flag values for km slack init.
@@ -410,6 +414,13 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	// Step 6: Deploy dynamodb-slack-nonces + lambda-slack-bridge, then read function_url.
 	bridgeURL, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/bridge-url", false)
 	if bridgeURL == "" || opts.Force {
+		// The bridge's env block carries KM_SLACK_DEFAULT_ROUTE_*. Fail closed:
+		// re-applying with a half-configured route would silently turn it off.
+		if d.Cfg != nil {
+			if err := prepareSlackDefaultRoute(d.Cfg); err != nil {
+				return fmt.Errorf("km slack init: %w", err)
+			}
+		}
 		noncesDir := filepath.Join(d.RepoRoot, "infra", "live", d.Region, "dynamodb-slack-nonces")
 		bridgeDir := filepath.Join(d.RepoRoot, "infra", "live", d.Region, "lambda-slack-bridge")
 		for _, dir := range []string{noncesDir, bridgeDir} {
@@ -885,6 +896,7 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 		Region:    regionLabel,
 		RepoRoot:  repoRoot,
 		SsmPrefix: cfg.GetSsmPrefix(),
+		Cfg:       cfg,
 	}, nil
 }
 

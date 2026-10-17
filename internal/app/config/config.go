@@ -176,7 +176,10 @@ type SlackConfig struct {
 	// byte-identical to Phase 96/118 behaviour.
 	//
 	// Maps to km-config.yaml key slack.default_route. Exported as
-	// KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW} by ExportTerragruntEnvVars.
+	// KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW} by ExportTerragruntEnvVars
+	// (best-effort) and km init / km slack init (fail-closed), both through
+	// effectiveSlackDefaultRoute: the route profile's allowEmails, when set,
+	// replaces AllowEmails.
 	// CRITICAL: "slack.default_route" must be in the v2→v merge-list.
 	DefaultRoute *SlackDefaultRoute `mapstructure:"default_route" yaml:"default_route,omitempty"`
 }
