@@ -675,6 +675,8 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	// profile declares no mitm block at all.
 	errs = append(errs, validateMITMIntercepts(p)...)
 
+	errs = append(errs, validateInitCommandAWSCalls(p)...)
+
 	return errs
 }
 
