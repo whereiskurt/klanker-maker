@@ -156,3 +156,33 @@ func TestEC2SpotRole_NewInputsDeclared(t *testing.T) {
 		}
 	}
 }
+
+// Operator verbs drive on-box uploads over SSM as the instance role: km agent
+// run writes agent-runs/{id}/{run}/* (km agent results reads it back once the
+// box is stopped), km rsync save writes rsync/{name}.tar.gz (operator-named and
+// shared, like its read grant). Both must sit in the artifacts-write PutObject
+// statement, or the `|| true`-silenced upload just never lands.
+func TestEC2SpotRole_OperatorVerbUploadsAreGranted(t *testing.T) {
+	s := readEC2SpotMainTF(t)
+	i := strings.Index(s, `resource "aws_iam_role_policy" "ec2spot_artifacts_write"`)
+	if i == -1 {
+		t.Fatal("ec2spot_artifacts_write not found")
+	}
+	res := s[i:]
+	res = res[:strings.Index(res, "\nresource ")+1]
+	var put string
+	for _, stmt := range iamStatements(t, res) {
+		if strings.Contains(stmt, `"s3:PutObject"`) {
+			put = stmt
+		}
+	}
+	if put == "" {
+		t.Fatal("no PutObject statement in ec2spot_artifacts_write")
+	}
+	if !regexp.MustCompile(`"agent-runs"`).MatchString(put) || !strings.Contains(put, "/${p}/${var.sandbox_id}/*") {
+		t.Error(`PutObject must cover agent-runs/${var.sandbox_id}/* (km agent run output.json/status)`)
+	}
+	if !strings.Contains(put, `"arn:aws:s3:::${var.artifacts_bucket}/rsync/*"`) {
+		t.Error(`PutObject must cover rsync/* (km rsync save)`)
+	}
+}

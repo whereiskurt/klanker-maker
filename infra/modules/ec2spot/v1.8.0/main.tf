@@ -496,8 +496,11 @@ resource "aws_iam_role_policy" "ec2spot_artifacts_read" {
   })
 }
 
-# Artifacts bucket: writes, all under this sandbox's own prefixes. Replaces
-# ec2spot_slack_transcript_s3 and adds the four prefixes that rode on the Allow-star.
+# Artifacts bucket: writes. Replaces ec2spot_slack_transcript_s3 and adds the
+# prefixes that rode on the Allow-star. Every prefix is this sandbox's own except
+# rsync/*: km rsync save uploads {name}.tar.gz there over SSM, and snapshots are
+# operator-named and shared by design (same scope as the read grant).
+# agent-runs/ is km agent run's output.json/status (uploaded over SSM, `|| true`).
 resource "aws_iam_role_policy" "ec2spot_artifacts_write" {
   count = (local.create_instance_role && var.artifacts_bucket != "") ? 1 : 0
   name  = "${var.resource_prefix}-${var.sandbox_id}-artifacts-write"
@@ -509,10 +512,13 @@ resource "aws_iam_role_policy" "ec2spot_artifacts_write" {
       {
         Effect = "Allow"
         Action = ["s3:PutObject", "s3:AbortMultipartUpload"]
-        Resource = [
-          for p in ["transcripts", "captures", "learn", "execs", "artifacts", "traces", "logs", "metrics"] :
-          "arn:aws:s3:::${var.artifacts_bucket}/${p}/${var.sandbox_id}/*"
-        ]
+        Resource = concat(
+          [
+            for p in ["transcripts", "captures", "learn", "execs", "artifacts", "traces", "logs", "metrics", "agent-runs"] :
+            "arn:aws:s3:::${var.artifacts_bucket}/${p}/${var.sandbox_id}/*"
+          ],
+          ["arn:aws:s3:::${var.artifacts_bucket}/rsync/*"],
+        )
       },
       {
         Effect   = "Allow"
