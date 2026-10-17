@@ -8,6 +8,18 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Slack 👀 quiet period, `*@domain` allowlists, per-klanker `allowEmails` (2026-10-17):**
+- **Thread replies react only after > N s of quiet** since the row's `last_dispatch_ts` (a Slack
+  ts), decided before delivery. **ON by default (180 s) on the next `km init`**; `0` disables;
+  top-level always reacts; `react_always: false` wins; `reactQuietSeconds` beats
+  `slack.react_quiet_seconds`; no row / read error ⇒ react. One `GetItem` per thread reply.
+- **Entries are exact or exactly `*@<domain>`** (no subdomains). **`inbound.allowEmails` REPLACES
+  the install list for that sandbox on every path** (`#sb-`, routed, DM, strict trust, its
+  `km-slack dm` targets); AND with Phase 118 ids; empty ⇒ error; silent Info drop.
+- **The route profile's `allowEmails` is the route's list** (`km init` exports it; config
+  `allow_emails` is the fallback; neither ⇒ error), so the cold-create mention is gated too; a
+  change needs `km init` AND a recreate. See `docs/slack-notifications.md` § Quiet period, § Allowlists.
+
 **Slack default route + strict mention-only threads (2026-10-16):**
 - **Invite the bot to any channel, or DM it, @-mention it, and the reply lands in a thread
   there.** New front-door-only `slack.default_route: {alias, profile, allow_emails}` sends
@@ -2020,6 +2032,7 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | Persistent agent panes that survive detach — `km herdr start`, the base/tools/herdr fragment, km-presence signal 8, the pause-vs-stop lifecycle trap, the ssh-config conflict, deploy surface | `docs/herdr-remote-attach.md` |
 | Ask the bot to DM someone — `km-slack dm`, who it may DM, the continuity row, the `im:write` scope | `docs/slack-notifications.md` § Bot-initiated DMs |
 | @-mention the bot from any channel or DM — `slack.default_route`, the email allowlist, the routing ladder, replies in the originating thread, the `channel_mismatch` rule, the DM scopes, deploy and half-deploy outcomes; strict `threadBypass: false` and thread context | `docs/slack-notifications.md` § Default route + § Phase 91 Strict mode |
+| Thread replies stopped getting 👀; admitting a whole email domain; one klanker answering only named people — `slack.react_quiet_seconds` / `reactQuietSeconds`, `*@<domain>` entries, `allowEmails` override rule, the route-profile list and its recreate consequence | `docs/slack-notifications.md` § Quiet period + § Allowlists: domains and per-sandbox lists |
 | Why the Slack default route and strict mode were built the way they were — every design decision with its rationale, the end-to-end ladder, the code map and tests, the `ec2spot_region_lock` security finding, deploy surface, log lines, UAT checklist, follow-ups | `docs/slack-default-route.md` |
 | Hibernate/resume cross-wiring additional EBS volumes — why fstab-by-UUID corrupted them, the live-Identify rule, the pre/post sleep hooks, `onVolumeMismatch`, `km-volumes repair`, re-materialising from snapshot, the `/shared` caveat | `docs/hibernate-volumes.md` |
 | Sharing a sandbox's VS Code / desktop / herdr / tunnel access between analysts — the SSM-held key + password under `/{prefix}/access/`, the sync table, rekey publish order, the mismatch guard, why the desktop has none | `docs/vscode.md` § Sharing a sandbox between analysts + `docs/desktop.md` § Sharing a desktop between analysts |

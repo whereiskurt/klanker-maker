@@ -141,6 +141,14 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 #   # silently. Omit for the default (true = react on every dispatch).
 #   react_always: false
 #
+#   # Reaction quiet period (2026-10-17). A thread reply gets 👀 only when the
+#   # thread has been quiet for MORE than this many seconds since the last
+#   # message the bridge dispatched in it; top-level messages always react, and
+#   # react_always: false wins. Absent → 180 (on by default). 0 → react on every
+#   # thread reply. A profile's notification.slack.inbound.reactQuietSeconds
+#   # overrides it per sandbox.
+#   react_quiet_seconds: 180
+#
 #   # Federated relay (Phase 95). One Slack App serving multiple km installs.
 #   # List the OTHER installs' bridge /events URLs here; Slack delivers all
 #   # events to this "front-door" install, which relays unknown-channel events
@@ -165,6 +173,21 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 #   # one threaded reply naming the #sb-{alias}-{profile} convention and listing
 #   # running sandbox channels across the fleet. Absent/false → no reply.
 #   default_router: true
+#
+#   # Default route (2026-10-16). Set on the FRONT-DOOR install only. Invite the
+#   # bot anywhere, or DM it, and @-mention it: the turn runs on `alias` and the
+#   # reply lands in a thread there. Deny-by-default: when the route profile sets
+#   # notification.slack.inbound.allowEmails, THAT list is the route's list and
+#   # allow_emails is ignored; otherwise allow_emails must list someone, or
+#   # `km init` stops. Entries are exact addresses or exactly *@<domain>
+#   # (subdomains do not match; quote the *). See docs/slack-notifications.md
+#   # § Default route.
+#   default_route:
+#     alias: ir-bot
+#     profile: profiles/ir-bot.yaml
+#     allow_emails:
+#       - kurt@example.com
+#       - "*@example.com"
 
 # =============================================================================
 # GITHUB BRIDGE — comment-trigger bridge (all OPTIONAL, dormant unless set)

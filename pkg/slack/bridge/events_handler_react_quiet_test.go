@@ -35,7 +35,9 @@ func threadReply(t *testing.T, now time.Time, eventID string) EventsRequest {
 }
 
 func TestReactQuiet_ThreadReply_Window(t *testing.T) {
-	now := time.Now()
+	// Pin the sub-second part: slackTSAgo truncates to the second and adds 100 µs,
+	// so a now in the first 100 µs of a second would read 59 s, not 60.
+	now := time.Unix(time.Now().Unix(), 500_000_000)
 	cases := []struct {
 		name      string
 		boundary  string // "" = no row
