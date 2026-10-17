@@ -76,7 +76,7 @@ func TestUserdata_SlackInbound_SenderPreambleIsPrepended(t *testing.T) {
 	// because "@Kurt" is the mistake it will otherwise make. It must also say the
 	// final reply is posted automatically, and must NOT steer the agent to
 	// deliver its answer with km-slack: that was the double post per turn.
-	for _, want := range []string{"<@U0KURT>", "posted to this thread automatically", "Do not call km-slack post/reply to deliver your answer", "never invent an id"} {
+	for _, want := range []string{"<@U0KURT>", "posted to this thread automatically", "Do not call km-slack post/reply to deliver your answer", "never invent an id", "km-slack dm --to U0KURT", "does not replace your reply here"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("preamble missing %q:\n%s", want, got)
 		}
