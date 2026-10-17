@@ -45,7 +45,7 @@ So the agent either says it cannot, or guesses a channel and gets the 403.
 | `--from-thread` | Optional. Envelope carries the originating `channel` + `thread_ts`; the bridge verifies that row names the sender (or the channel is the sender's own), mints `chat.getPermalink`, and appends `\n\nFrom: <permalink>` to the DM text. Verification failure → `403 channel_mismatch`, no DM sent. | The sandbox cannot mint it (`permalink` stays 403 in foreign channels); the bridge holds the bot token. |
 | Quota | Counted as `slack_post` through the existing `checkQuota`. | No new action class. |
 | Rate limiting | None new. | Targets are bounded by the allowlist and volume by the quota gate. YAGNI. |
-| Envelope field | `TargetUser string \`json:"target_user,omitempty"\`` on `SlackEnvelope`. | **Load-bearing:** the bridge re-canonicalises the struct before verifying. A non-`omitempty` field would make every pre-existing sandbox's `km-slack` (which does not know the field) fail `bad_signature` the moment the new bridge deploys. With `omitempty`, old envelopes canonicalise identically on both sides; a new `dm` envelope reaching an **old** bridge fails `bad_signature`, which is the correct "unsupported" outcome. |
+| Envelope field | `TargetUser string \`json:"target_user,omitempty"\`` on `SlackEnvelope`. | **Load-bearing:** the bridge re-canonicalises the struct before verifying. A non-`omitempty` field would make every pre-existing sandbox's `km-slack` (which does not know the field) fail `bad_signature` the moment the new bridge deploys. With `omitempty`, old envelopes canonicalise identically on both sides; a new `dm` envelope reaching an **old** bridge fails before the signature check (`400 missing_fields` top-level, `400 unknown_action` with `--from-thread`), which is the correct "unsupported" outcome. |
 | Infrastructure | None. | The bridge already holds `PutItem` on the threads table and the bot token. No table, IAM, or env var change. Dormant when `slack.default_route` is absent. |
 
 ## 4. Components
@@ -134,8 +134,10 @@ Logs: `bridge: dm` with sender, target, channel, ts; every refusal names its ste
 sidecar, create-handler poller preamble) → `km slack manifest` → paste, reinstall →
 `km slack rotate-token --bot-token <new>` → `km doctor` (default route scopes green) →
 `km destroy && km create` of the default sandbox (or let the next mention cold-create it), so
-its `km-slack` carries the verb. Half-deploys: new sidecar + old bridge → `dm` gets
-`bad_signature`, nothing else affected; new bridge + old sidecar → no change at all (omitempty);
+its `km-slack` carries the verb. Half-deploys: new sidecar + old bridge → the request never
+reaches the signature check: a top-level `dm` gets `400 missing_fields` (the old bridge requires
+a channel) and a `--from-thread` `dm` gets `400 unknown_action`; both fail closed, burn no nonce,
+and nothing else is affected; new bridge + old sidecar → no change at all (omitempty);
 scope not yet granted → `conversations.open` fails `missing_scope`, surfaced as `502 slack_error`.
 
 ## 7. Live UAT

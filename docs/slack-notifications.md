@@ -3482,9 +3482,10 @@ inbound gate) is on `slack.default_route.allow_emails`; without a default route 
 On success the bridge writes a `km-slack-threads` row for the DM message (after the post), so a
 reply typed under it routes back to the same sandbox; a fresh top-level DM still goes through
 the default route. The DM writes no one-reply marker.
-Refusals, all fail-closed: `dm_disabled`, `bad_target`, `dm_not_allowed`, `channel_mismatch`
-(`--from-thread` on a thread that is not the sender's), `quota_exceeded`, `dm_unsupported`.
-Operators cannot send `dm`. New scope `im:write`; `km doctor`'s `Slack default route scopes`
+Refusals, all fail-closed: `dm_disabled`, `bad_target`, `dm_not_allowed` (also returned when
+the `users.info` lookup fails), `channel_mismatch` (`--from-thread` on a thread that is not the
+sender's), `quota_exceeded`, `dm_unsupported`, and `operator_action_forbidden` (operators
+cannot send `dm`). New scope `im:write`; `km doctor`'s `Slack default route scopes`
 requires it. The envelope field `target_user` is `omitempty` on purpose: the bridge
 re-canonicalises before verifying, so a non-omitempty field would break every older
 `km-slack`'s signatures.
@@ -3492,6 +3493,11 @@ re-canonicalises before verifying, so a non-omitempty field would break every ol
 Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false` + `km slack manifest`
 → paste, reinstall → `km slack rotate-token --bot-token <new>` → `km doctor` → recreate the
 default sandbox so its `km-slack` carries the verb.
+
+Half-deploys fail closed. A new `km-slack` against an old bridge never reaches the signature
+check: a top-level `dm` gets `400 missing_fields` (the old bridge requires a channel) and a
+`--from-thread` `dm` gets `400 unknown_action`; neither burns a nonce. A new bridge with an old
+`km-slack` changes nothing, because `target_user` is `omitempty`.
 
 ### Verified live (2026-09-19)
 

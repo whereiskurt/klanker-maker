@@ -766,10 +766,13 @@ type routeDecision struct {
 
 // continuityBypass fills cont.row (and cont.alias for a gone box) and reports
 // whether a continuity reply may skip the mention. The decision follows the box
-// that will actually receive the turn: the row's box while the alias still names
-// it, else the alias's current box (the rebind case, or a gone row box). An
-// absent alias, or any lookup failure, is strict — a dead sandbox's absent
-// attribute must never read as a bypass.
+// that will actually receive the turn. A LIVE row box keeps the thread whatever
+// the alias names — after `km-slack dm` the row names the sending sandbox,
+// which is usually not the alias box, and the reply must return to it — so the
+// bypass comes from that box and the alias is not consulted. Only when the row's
+// box is gone does the alias's current box take over (bypass from it, strict
+// when the alias is absent too). Any lookup failure is strict — a dead sandbox's
+// absent attribute must never read as a bypass.
 func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEvent, cont *routeContinuity) bool {
 	if h.SandboxByID == nil {
 		h.log().Warn("events: route: no SandboxByID fetcher wired; continuity treated as strict",
@@ -784,14 +787,12 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 	}
 	if ci.SandboxID != "" {
 		cont.row = ci
+		return threadBypassAllowed(ci) // nil/&true ⇒ Phase 91.3 bypass; &false ⇒ strict
 	}
-	// Resolve the alias here (resolveDefaultRoute reuses cont.alias, so this costs
-	// no extra call): when it moved, the turn is delivered to the CURRENT box and
-	// the bypass must come from there, not from the row's box.
+	// Row box gone: resolve the alias here (resolveDefaultRoute reuses cont.alias,
+	// so this costs no extra call); the turn goes to its current box, so the bypass
+	// must come from there.
 	if h.AliasResolver == nil {
-		if ci.SandboxID != "" {
-			return threadBypassAllowed(ci)
-		}
 		return false
 	}
 	current, found, err := h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
@@ -804,9 +805,6 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 	if !found {
 		// Alias absent: the turn cold-creates a box with no setting yet ⇒ strict.
 		return false
-	}
-	if ci.SandboxID != "" && current.SandboxID == ci.SandboxID {
-		return threadBypassAllowed(ci) // nil/&true ⇒ Phase 91.3 bypass; &false ⇒ strict
 	}
 	return threadBypassAllowed(current)
 }
@@ -849,6 +847,12 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 		return routeDecision{}, false
 	}
 
+	if cont.sandboxID != "" && cont.row.SandboxID != "" {
+		// The thread's own box is live: the reply returns to it, whatever the alias
+		// names now, and the row is left alone.
+		return routeDecision{info: cont.row}, true
+	}
+
 	var current SandboxRoutingInfo
 	var found bool
 	if cont.alias != nil {
@@ -872,15 +876,12 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 			return routeDecision{coldCreate: true, rebind: true}, true
 		}
 		if current.SandboxID != cont.sandboxID {
-			// The alias was recreated: the row is rewritten after delivery rather
-			// than enqueueing to a dead queue (mirrors the GitHub bridge's
-			// InvalidateStaleSession).
+			// The row's box is gone and the alias names another: the row is
+			// rewritten after delivery rather than enqueueing to a dead queue
+			// (mirrors the GitHub bridge's InvalidateStaleSession).
 			h.log().Info("events: route: alias moved; rebinding thread after delivery",
 				"from", cont.sandboxID, "to", current.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
 			return routeDecision{info: current, rebind: true}, true
-		}
-		if cont.row.SandboxID != "" {
-			return routeDecision{info: cont.row}, true
 		}
 		return routeDecision{info: current}, true
 	}

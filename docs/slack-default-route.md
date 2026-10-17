@@ -580,8 +580,7 @@ unverified.
 
 ### Can wait
 
-Shipped 2026-10-17: bot-initiated DMs (`km-slack dm`).
-
+- Shipped 2026-10-17: bot-initiated DMs (`km-slack dm`).
 - The guard's exception is keyed by policy name, its write regex misses glob actions such as
   `dynamodb:Put*`, and its table regex also matches the GitHub and HackerOne threads tables.
 - No alias-resolution result in `km doctor`, and the profile result reads scopes from

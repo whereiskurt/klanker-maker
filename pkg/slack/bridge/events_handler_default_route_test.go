@@ -210,6 +210,8 @@ func TestDefaultRoute_ThreadContinuity_RebindsWhenAliasMoved(t *testing.T) {
 	now := time.Now()
 	h, sqs, threads, alias, _, _, _ := routedHandler(t, now)
 	alias.info = SandboxRoutingInfo{SandboxID: "sb-irbot2", QueueURL: "https://sqs.example/irbot2.fifo"}
+	// The row's box sb-irbot is gone: only then does the alias's current box take over.
+	h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot2": alias.info}}
 	threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-irbot"}
 	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "hello again", "1.5", "1.0", "DR6"))
 	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/irbot2.fifo" {
@@ -554,16 +556,16 @@ func TestDefaultRoute_ColdCreatePublishFailureWithFiles_NoRowNoMarkNoReaction(t 
 	}
 }
 
-// F5: the row names a LIVE box with bypass on, but the alias was recreated as a
-// strict box. The turn goes to the current box, so its strictness decides: a
-// no-mention follow-up drops; a mentioned one dispatches there and rebinds.
+// F5: the row's box is GONE and the alias was recreated as a strict box. The
+// turn goes to the current box, so its strictness decides: a no-mention
+// follow-up drops; a mentioned one dispatches there and rebinds. (A LIVE row box
+// keeps the turn and decides the bypass itself — see LiveRowBox below.)
 func TestDefaultRoute_ThreadContinuity_AliasMoved_BypassFromCurrentBox(t *testing.T) {
-	strict, on := false, true
+	strict := false
 	setup := func(t *testing.T, now time.Time) (*EventsHandler, *fakeSQS, *fakeThreads, *fakeAlias) {
 		h, sqs, threads, alias, _, _, _ := routedHandler(t, now)
-		old := SandboxRoutingInfo{SandboxID: "sb-irbot", QueueURL: "https://sqs.example/irbot.fifo", ThreadBypass: &on}
-		h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot": old}}
 		alias.info = SandboxRoutingInfo{SandboxID: "sb-irbot2", QueueURL: "https://sqs.example/irbot2.fifo", ThreadBypass: &strict}
+		h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot2": alias.info}} // sb-irbot gone
 		threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-irbot"}
 		return h, sqs, threads, alias
 	}
@@ -583,5 +585,75 @@ func TestDefaultRoute_ThreadContinuity_AliasMoved_BypassFromCurrentBox(t *testin
 	}
 	if len(threads.rebinds) != 1 || threads.rebinds[0].sb != "sb-irbot2" {
 		t.Fatalf("row must be rebound to the current box; rebinds=%+v", threads.rebinds)
+	}
+}
+
+// ---- final fix: continuity follows a LIVE row box, never the alias ----
+
+// liveRowBoxHandler: the alias is sb-irbot, but the thread row (written by a
+// `km-slack dm` from a mapped #sb- box) names sb-mapped, which is still live.
+func liveRowBoxHandler(t *testing.T, now time.Time, channel string, bypass *bool) (*EventsHandler, *fakeSQS, *fakeThreads, *fakeAlias) {
+	t.Helper()
+	h, sqs, threads, alias, _, _, _ := routedHandler(t, now)
+	mapped := SandboxRoutingInfo{SandboxID: "sb-mapped", QueueURL: "https://sqs.example/mapped.fifo", ThreadBypass: bypass}
+	h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot": alias.info, "sb-mapped": mapped}}
+	threads.sandboxByThread = map[string]string{channel + "|1.0": "sb-mapped"}
+	return h, sqs, threads, alias
+}
+
+func TestDefaultRoute_ThreadContinuity_LiveRowBox_NotAlias_RoutesToRowBox(t *testing.T) {
+	on := true
+	now := time.Now()
+	h, sqs, threads, _ := liveRowBoxHandler(t, now, "D0KURT", &on)
+	h.Handle(context.Background(), routedRequest(t, now, "D0KURT", "im", "U0KURT", "thanks, and also", "1.5", "1.0", "LR1"))
+	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/mapped.fifo" {
+		t.Fatalf("reply must return to the live row box; sends=%+v", sqs.sends)
+	}
+	if len(threads.rebinds) != 0 {
+		t.Fatalf("a live row box is never rebound; rebinds=%+v", threads.rebinds)
+	}
+	if len(threads.upserts) != 1 || threads.upserts[0].sb != "sb-mapped" || threads.upserts[0].chan_ != "D0KURT" {
+		t.Fatalf("thread row must name sb-mapped; upserts=%+v", threads.upserts)
+	}
+	if len(threads.marks) != 1 || threads.marks[0].chan_ != "D0KURT" || threads.marks[0].ts != "1.0" {
+		t.Fatalf("want one MarkDispatched on the DM thread; marks=%+v", threads.marks)
+	}
+}
+
+func TestDefaultRoute_ThreadContinuity_LiveRowBox_UnlistedSender_Dropped(t *testing.T) {
+	on := true
+	now := time.Now()
+	h, sqs, threads, _ := liveRowBoxHandler(t, now, "D0OTHER", &on)
+	h.Handle(context.Background(), routedRequest(t, now, "D0OTHER", "im", "U0OTHER", "let me in", "1.5", "1.0", "LR2"))
+	if len(sqs.sends) != 0 || len(threads.upserts) != 0 || len(threads.rebinds) != 0 || len(threads.marks) != 0 {
+		t.Fatalf("unlisted sender must produce nothing; sends=%+v upserts=%+v rebinds=%+v", sqs.sends, threads.upserts, threads.rebinds)
+	}
+}
+
+// The bypass is read from the LIVE row box, not from the alias's box. A routed
+// channel thread whose row box is strict drops a no-mention reply even though
+// the alias box (nil ThreadBypass) would allow it; a mention delivers to the row
+// box. A DM never needs a mention (requiresMention("im") is false), so the
+// strict row box still receives the DM reply.
+func TestDefaultRoute_ThreadContinuity_LiveRowBox_StrictBypassFromRowBox(t *testing.T) {
+	strict := false
+	now := time.Now()
+
+	h, sqs, threads, _ := liveRowBoxHandler(t, now, "CFOREIGN", &strict)
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "follow-up, no mention", "1.5", "1.0", "LS1"))
+	if len(sqs.sends) != 0 || len(threads.rebinds) != 0 {
+		t.Fatalf("strict row box: a no-mention follow-up must drop; sends=%+v rebinds=%+v", sqs.sends, threads.rebinds)
+	}
+
+	h, sqs, threads, _ = liveRowBoxHandler(t, now, "CFOREIGN", &strict)
+	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "<@UBOT123> follow-up", "1.6", "1.0", "LS2"))
+	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/mapped.fifo" || len(threads.rebinds) != 0 {
+		t.Fatalf("mentioned follow-up must reach the row box unrebound; sends=%+v rebinds=%+v", sqs.sends, threads.rebinds)
+	}
+
+	h, sqs, _, _ = liveRowBoxHandler(t, now, "D0KURT", &strict)
+	h.Handle(context.Background(), routedRequest(t, now, "D0KURT", "im", "U0KURT", "no mention in a DM", "1.7", "1.0", "LS3"))
+	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/mapped.fifo" {
+		t.Fatalf("a DM reply needs no mention even on a strict row box; sends=%+v", sqs.sends)
 	}
 }

@@ -87,7 +87,9 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - **`km-slack dm --to U… ` (2026-10-17): the bot opens a DM with a person on the route
   allowlist and posts top-level; a reply under it routes back to the sandbox (thread row written
   after the post). New scope `im:write`. `target_user` is `omitempty` because the bridge
-  re-canonicalises before verifying. See `docs/slack-notifications.md` § Bot-initiated DMs.
+  re-canonicalises before verifying. Half-deploy: a new `km-slack` against an old bridge gets
+  `400 missing_fields` (top-level) or `400 unknown_action` (`--from-thread`), fail-closed, no
+  nonce burned. See `docs/slack-notifications.md` § Bot-initiated DMs.
 - **One reply per turn (2026-10-17): every Slack turn posted TWICE** — the agent answered with
   `km-slack reply` (the 09-19 preamble told it to), then the poller posted its closing sentence.
   `km-slack` now touches `/tmp/km-slack-posted.<thread_ts>` after a successful threaded post;

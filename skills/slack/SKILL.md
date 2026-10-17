@@ -272,6 +272,8 @@ Reach for `--mention` only on a post you make deliberately and completely.
 - The bridge sends it only to a person on the install's `slack.default_route.allow_emails`.
   `bridge returned not-ok: dm_not_allowed` means the person is not listed; `dm_disabled` means
   this install has no default route. Say so in your reply rather than retrying.
+- `channel_mismatch` means `--from-thread` named a thread that is not yours: drop the flag.
+- `quota_exceeded` means this sandbox hit its action quota: stop, and say so in your reply.
 - A reply the person types **under** your DM message comes back to this sandbox.
 
 ## Limits
