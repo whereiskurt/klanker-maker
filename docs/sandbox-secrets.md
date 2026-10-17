@@ -38,6 +38,7 @@ still the right reference for those steps.
 - **`spec.execution.secrets`** (legacy SSM path): list of SSM SecureString paths
   injected at sandbox-side runtime. Right answer for secrets owned by other AWS
   systems (e.g., RDS connection strings provisioned by a separate stack).
+  Since ec2spot v1.8.0 the `iam.allowedSecretPaths` list plus the per-sandbox `/{prefix}/sandbox/{id}/*` path is the whole SSM read surface of the role (the managed Core policy's `GetParameter` on `*` is gone), and the SSM `kms:Decrypt` is pinned to the same parameter ARNs.
 
 ## Prerequisites
 

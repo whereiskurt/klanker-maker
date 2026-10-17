@@ -36,7 +36,7 @@ Phase 133 replaces that with an on-demand broker:
 The sandbox EC2 role permanently grants `kms:Decrypt` on
 `alias/{prefix}-sandbox-secrets` and `s3:GetObject` on
 `sandboxes/{id}/secrets.enc.yaml`. Any process that can reach IMDS could
-re-derive the bundle by calling AWS directly. AWS has no notion of which uid on
+re-derive the bundle by calling AWS directly. Since ec2spot v1.8.0 the per-sandbox `/{prefix}/sandbox/{id}/*` path list is the whole SSM read surface of the role (the managed Core policy's `GetParameter` on `*` is gone) and the SSM `kms:Decrypt` is pinned to the same parameter ARNs. AWS has no notion of which uid on
 an instance is making a call, so the only place a uid-granular fence can exist
 is the OS layer. That fence — `spec.secrets.fenceIMDS`, `km-creds`,
 `ec2spot/v1.7.0` — **ships and is opt-in**; see § The IMDS fence below. Leave it
