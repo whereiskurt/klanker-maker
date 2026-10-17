@@ -67,6 +67,12 @@ type Handler struct {
 	// will return 500 in that case, but all other actions are unaffected).
 	Threads SlackThreadStore
 
+	// 2026-10-17 — ActionDM (km-slack dm). Both set by wireDefaultRoute when the
+	// default route is configured; nil ⇒ every dm answers 403 dm_disabled. The
+	// target must pass the SAME email allowlist the inbound route applies.
+	DefaultRoute *DefaultRoute
+	SenderEmails SenderEmailFetcher
+
 	// Phase 121 (BRG-01) — quota enforcement on outbound chat actions.
 	// When both Quota and Limits are non-nil, quota.Record is called before each
 	// ActionPost/ActionTest/ActionUpload dispatch. nil Quota or nil Limits → dormant
@@ -119,7 +125,9 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 	// session-index GSI using SessionID (validated downstream at the dispatch).
 	// The sandbox correctly sends lookup-thread with an empty Channel, so the
 	// guard must not reject it here.
-	channelRequired := env.Action != slack.ActionLookupThread
+	// ActionDM likewise: a top-level dm carries no channel (the DM channel is
+	// opened by the bridge); with --from-thread it carries the originating one.
+	channelRequired := env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM
 	if env.Action == "" || env.SenderID == "" || env.Nonce == "" || env.Timestamp == 0 || env.Version == 0 || (channelRequired && env.Channel == "") {
 		logger.WarnContext(ctx, "bridge: missing_fields", "step", "parse", "action", env.Action, "sender_id", env.SenderID, "status", 400)
 		return errResp(400, "missing_fields")
@@ -128,7 +136,7 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		logger.WarnContext(ctx, "bridge: unsupported_version", "step", "parse", "version", env.Version, "status", 400)
 		return errResp(400, "unsupported_version")
 	}
-	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate && env.Action != slack.ActionLookupThread {
+	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate && env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM {
 		logger.WarnContext(ctx, "bridge: unknown_action", "step", "parse", "action", env.Action, "status", 400)
 		return errResp(400, "unknown_action")
 	}
@@ -243,6 +251,10 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 
 	// Step 6 — action authorization.
 	isOperator := env.SenderID == slack.SenderOperator
+	if isOperator && env.Action == slack.ActionDM {
+		logger.WarnContext(ctx, "bridge: operator_action_forbidden", "step", "authz", "action", env.Action, "status", 403)
+		return errResp(403, "operator_action_forbidden")
+	}
 	if !isOperator {
 		if env.Action == slack.ActionArchive || env.Action == slack.ActionTest {
 			logger.WarnContext(ctx, "bridge: sandbox_action_forbidden",
@@ -257,7 +269,9 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		// Channel-ownership cannot apply. The sandbox_id filter inside
 		// LookupBySession enforces the sandbox-never-reads-DDB boundary instead
 		// (pitfall 1 from RESEARCH.md). Skip the channel ownership check.
-		if env.Action != slack.ActionLookupThread {
+		// ActionDM: the DM channel does not exist yet; handleDM authorizes the
+		// target (email allowlist) and, with --from-thread, the originating thread.
+		if env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM {
 			// Sandbox post/upload/permalink/update: channel must match owned channel.
 			owned, err := h.Channels.OwnedChannel(ctx, env.SenderID)
 			if err != nil {
@@ -341,6 +355,9 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 			logger.InfoContext(ctx, "bridge: ok", "action", env.Action, "channel", env.Channel, "ts", ts, "status", 200)
 		}
 		return resp
+	case slack.ActionDM:
+		return h.handleDM(ctx, env)
+
 	case slack.ActionArchive:
 		err := h.Slack.ArchiveChannel(ctx, env.Channel)
 		resp := slackResponse("", err)

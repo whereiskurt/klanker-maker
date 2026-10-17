@@ -347,7 +347,7 @@ func wireEventsHandler() {
 	// @-mention in an unowned channel to a named sandbox alias. All three of
 	// KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW} or nothing; absent => OFF
 	// => byte-identical to before. Env-block change: km init --dry-run=false.
-	wireDefaultRoute(eventsHandler, os.Getenv, defaultRouteDeps{
+	wireDefaultRoute(eventsHandler, handler, os.Getenv, defaultRouteDeps{
 		ddb: initDDB, sandboxesTable: sandboxesTable,
 		eventBridge: initEventBridge, artifactBucket: artifactsBucket,
 		tokens: initToken, httpClient: initHTTPClient,
@@ -738,7 +738,7 @@ type defaultRouteDeps struct {
 // wireDefaultRoute reads KM_SLACK_DEFAULT_ROUTE_{ALIAS,PROFILE,ALLOW}. All three
 // or nothing: bridge.NewDefaultRoute returns nil for an empty allowlist, so a
 // half-set env leaves the route OFF rather than open.
-func wireDefaultRoute(h *bridge.EventsHandler, getenv func(string) string, d defaultRouteDeps) {
+func wireDefaultRoute(h *bridge.EventsHandler, out *bridge.Handler, getenv func(string) string, d defaultRouteDeps) {
 	alias := strings.TrimSpace(getenv("KM_SLACK_DEFAULT_ROUTE_ALIAS"))
 	profile := strings.TrimSpace(getenv("KM_SLACK_DEFAULT_ROUTE_PROFILE"))
 	var emails []string
@@ -762,6 +762,12 @@ func wireDefaultRoute(h *bridge.EventsHandler, getenv func(string) string, d def
 	h.SenderEmails = &bridge.CachedSenderEmailFetcher{
 		Inner: &bridge.SlackSenderEmailAdapter{Tokens: d.tokens, HTTPClient: d.httpClient},
 		TTL:   15 * time.Minute,
+	}
+	// ActionDM (km-slack dm) gates its target on the same allowlist and the same
+	// email cache; out == nil leaves the outbound handler's dm verb disabled.
+	if out != nil {
+		out.DefaultRoute = route
+		out.SenderEmails = h.SenderEmails // same cache; a deny is never cached
 	}
 	slog.Info("km-slack-bridge: default route enabled", "alias", alias, "profile", profile, "allow_count", len(emails))
 }
