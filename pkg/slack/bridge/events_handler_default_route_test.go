@@ -507,6 +507,7 @@ func TestDefaultRoute_AliasMoved_FrozenOrFailedSend_NoRebind(t *testing.T) {
 	now := time.Now()
 	h, _, threads, alias, _, _, _ := routedHandler(t, now)
 	alias.info = SandboxRoutingInfo{SandboxID: "sb-irbot2", QueueURL: "https://sqs.example/irbot2.fifo", ActionFrozen: true}
+	h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot2": alias.info}} // row box sb-irbot gone
 	threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-irbot"}
 	h.Slack = &fakeSlackPoster{}
 	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "hello", "1.5", "1.0", "DF1"))
@@ -516,6 +517,7 @@ func TestDefaultRoute_AliasMoved_FrozenOrFailedSend_NoRebind(t *testing.T) {
 
 	h, sqs, threads, alias, _, _, _ := routedHandler(t, now)
 	alias.info = SandboxRoutingInfo{SandboxID: "sb-irbot2", QueueURL: "https://sqs.example/irbot2.fifo"}
+	h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot2": alias.info}} // row box sb-irbot gone
 	threads.sandboxByThread = map[string]string{"CFOREIGN|1.0": "sb-irbot"}
 	sqs.err = errors.New("sqs down")
 	h.Handle(context.Background(), routedRequest(t, now, "CFOREIGN", "channel", "U0KURT", "hello", "1.6", "1.0", "DF2"))
