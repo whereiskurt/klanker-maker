@@ -42,7 +42,7 @@ func iamStatements(t *testing.T, s string) []string {
 
 func TestEC2SpotRole_NoAllowStar(t *testing.T) {
 	s := readEC2SpotMainTF(t)
-	allowStar := regexp.MustCompile(`Action\s*=\s*"\*"`)
+	allowStar := regexp.MustCompile(`Action\s*=\s*(\[\s*)?"\*"`)
 	for _, stmt := range iamStatements(t, s) {
 		if strings.Contains(stmt, `Effect = "Deny"`) || strings.Contains(stmt, `Effect   = "Deny"`) {
 			continue
@@ -73,9 +73,30 @@ func TestEC2SpotRole_RegionDenyShape(t *testing.T) {
 	if !strings.Contains(deny, "NotAction") || !strings.Contains(deny, "StringNotEquals") {
 		t.Errorf("region deny must be NotAction + StringNotEquals: %s", deny)
 	}
-	for _, exempt := range []string{`"sts:*"`, `"iam:*"`, `"bedrock:*"`, `"bedrock-mantle:*"`, `"aws-marketplace:*"`} {
-		if !strings.Contains(deny, exempt) {
-			t.Errorf("region deny NotAction is missing %s (cross-region Bedrock inference and the IMDS-fence self-assume both need it)", exempt)
+	want := []string{"iam:*", "sts:*", "organizations:*", "support:*", "health:*", "trustedadvisor:*",
+		"cloudfront:*", "waf:*", "shield:*", "route53:*", "route53domains:*", "budgets:*",
+		"ce:*", "cur:*", "globalaccelerator:*", "networkmanager:*", "pricing:*",
+		"bedrock:*", "bedrock-mantle:*", "aws-marketplace:*",
+		"s3:GetAccountPublicAccessBlock", "s3:ListAllMyBuckets", "s3:PutAccountPublicAccessBlock"}
+	i := strings.Index(deny, "NotAction")
+	j := strings.Index(deny[i:], "]")
+	if j < 0 {
+		t.Fatalf("cannot parse NotAction list: %s", deny)
+	}
+	got := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(deny[i:i+j], -1) {
+		got[m[1]] = true
+	}
+	wantSet := map[string]bool{}
+	for _, w := range want {
+		wantSet[w] = true
+		if !got[w] {
+			t.Errorf("region deny NotAction is missing %s", w)
+		}
+	}
+	for g := range got {
+		if !wantSet[g] {
+			t.Errorf("region deny NotAction has unexpected extra entry %s", g)
 		}
 	}
 }
@@ -90,6 +111,28 @@ func TestEC2SpotRole_SSMParameterReadsAreScoped(t *testing.T) {
 		res := stmtField(stmt, "Resource")
 		if strings.Contains(res, `"*"`) || (!strings.Contains(res, "parameter") && !strings.Contains(res, "local.ssm_param_arns")) {
 			t.Errorf("ssm:GetParameter must be granted on parameter ARNs only, never *: %s", stmt)
+		}
+	}
+	if i := strings.Index(s, "ssm_param_arns = concat("); i < 0 {
+		t.Error("locals.ssm_param_arns not found")
+	} else {
+		k, depth := strings.Index(s[i:], "(")+i, 0
+		end := len(s)
+		for n := k; n < len(s); n++ {
+			if s[n] == '(' {
+				depth++
+			} else if s[n] == ')' {
+				depth--
+				if depth == 0 {
+					end = n
+					break
+				}
+			}
+		}
+		for _, m := range regexp.MustCompile(`"([^"]*)"`).FindAllStringSubmatch(s[k:end], -1) {
+			if !strings.Contains(m[1], ":parameter") {
+				t.Errorf("ssm_param_arns literal %q does not name a parameter ARN", m[1])
+			}
 		}
 	}
 	kmsVia := false
