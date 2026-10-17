@@ -742,10 +742,13 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 // ("" for a fresh message); row is that sandbox's routing info (empty when the
 // box is gone or the fetch failed); alias is set when step 1 already had to
 // resolve the route alias (gone box), so step 5 does not resolve it twice.
+// lookupFailed is set when the row box's fetch errored: the turn is dropped
+// rather than rebound to the alias on a transient error.
 type routeContinuity struct {
-	sandboxID string
-	row       SandboxRoutingInfo
-	alias     *routeAlias
+	sandboxID    string
+	row          SandboxRoutingInfo
+	alias        *routeAlias
+	lookupFailed bool
 }
 
 type routeAlias struct {
@@ -783,13 +786,20 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 	if err != nil {
 		h.log().Warn("events: route: continuity fetch failed; treating as strict",
 			"err", err, "sandbox", cont.sandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+		cont.lookupFailed = true
 		return false
 	}
 	if ci.SandboxID != "" {
 		cont.row = ci
-		return threadBypassAllowed(ci) // nil/&true ⇒ Phase 91.3 bypass; &false ⇒ strict
+		if ci.QueueURL != "" {
+			return threadBypassAllowed(ci) // nil/&true ⇒ Phase 91.3 bypass; &false ⇒ strict
+		}
+		// A live box with no Slack inbound queue (a GitHub/H1/agent-run box that
+		// sent a DM) cannot take the reply: treated as gone below.
+		h.log().Info("events: route: row box has no inbound queue; falling back to alias",
+			"sandbox", ci.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
 	}
-	// Row box gone: resolve the alias here (resolveDefaultRoute reuses cont.alias,
+	// Row box gone (or queue-less): resolve the alias here (resolveDefaultRoute reuses cont.alias,
 	// so this costs no extra call); the turn goes to its current box, so the bypass
 	// must come from there.
 	if h.AliasResolver == nil {
@@ -847,7 +857,12 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 		return routeDecision{}, false
 	}
 
-	if cont.sandboxID != "" && cont.row.SandboxID != "" {
+	if cont.sandboxID != "" && cont.lookupFailed {
+		h.log().Warn("events: route: continuity lookup failed; dropping",
+			"sandbox", cont.sandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+		return routeDecision{}, false
+	}
+	if cont.sandboxID != "" && cont.row.SandboxID != "" && cont.row.QueueURL != "" {
 		// The thread's own box is live: the reply returns to it, whatever the alias
 		// names now, and the row is left alone.
 		return routeDecision{info: cont.row}, true

@@ -659,3 +659,32 @@ func TestDefaultRoute_ThreadContinuity_LiveRowBox_StrictBypassFromRowBox(t *test
 		t.Fatalf("a DM reply needs no mention even on a strict row box; sends=%+v", sqs.sends)
 	}
 }
+
+// A row-box lookup error drops the turn: it never rebinds the thread to the
+// alias (one transient DynamoDB error must not move a DM thread for good).
+func TestDefaultRoute_ThreadContinuity_RowLookupError_Drops(t *testing.T) {
+	now := time.Now()
+	h, sqs, threads, _, pub, _, _ := routedHandler(t, now)
+	h.SandboxByID = &fakeByID{err: errors.New("ddb blip")}
+	threads.sandboxByThread = map[string]string{"D0KURT|1.0": "sb-mapped"}
+	h.Handle(context.Background(), routedRequest(t, now, "D0KURT", "im", "U0KURT", "reply, no mention", "1.5", "1.0", "LE1"))
+	if len(sqs.sends) != 0 || len(threads.rebinds) != 0 || len(pub.calls) != 0 || len(threads.upserts) != 0 {
+		t.Fatalf("lookup error must drop; sends=%+v rebinds=%+v creates=%d upserts=%+v", sqs.sends, threads.rebinds, len(pub.calls), threads.upserts)
+	}
+}
+
+// A live row box without a Slack inbound queue (a GitHub/H1/agent-run box that
+// sent a DM) cannot take the reply; it falls back to the alias, with rebind.
+func TestDefaultRoute_ThreadContinuity_RowBoxNoQueue_FallsBackToAlias(t *testing.T) {
+	now := time.Now()
+	h, sqs, threads, alias, _, _, _ := routedHandler(t, now)
+	h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot": alias.info, "sb-gh": {SandboxID: "sb-gh"}}}
+	threads.sandboxByThread = map[string]string{"D0KURT|1.0": "sb-gh"}
+	h.Handle(context.Background(), routedRequest(t, now, "D0KURT", "im", "U0KURT", "reply", "1.5", "1.0", "LQ1"))
+	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/irbot.fifo" {
+		t.Fatalf("must fall back to the alias box; sends=%+v", sqs.sends)
+	}
+	if len(threads.rebinds) != 1 || threads.rebinds[0].sb != "sb-irbot" {
+		t.Fatalf("thread must be rebound to the alias box; rebinds=%+v", threads.rebinds)
+	}
+}
