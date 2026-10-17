@@ -2134,7 +2134,7 @@ set -euo pipefail
 QUEUE_URL="${KM_SLACK_INBOUND_QUEUE_URL:-}"
 SANDBOX_ID="${KM_SANDBOX_ID:-}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
-THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-slack-threads}"
+THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:?KM_RESOURCE_PREFIX is unset; the install prefix is required to name AWS resources}-slack-threads}"
 
 # Phase 70 (Plan 70-05): AGENT is the profile default read at boot. Resolved from
 # KM_AGENT in /etc/km/notify.env (emitted by the compiler when spec.cli.agent is set).
@@ -3027,7 +3027,7 @@ command -v "$AGENT" >/dev/null 2>&1 || echo "[km-inbound-poller] WARNING: agent 
 
 # km-github-threads table for session/thread continuity (GH-X-CONTINUITY).
 # Falls back to {prefix}-github-threads matching the default in main.go.
-GITHUB_THREADS_TABLE="${KM_GITHUB_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-github-threads}"
+GITHUB_THREADS_TABLE="${KM_GITHUB_THREADS_TABLE:-${KM_RESOURCE_PREFIX:?KM_RESOURCE_PREFIX is unset; the install prefix is required to name AWS resources}-github-threads}"
 
 # Export AWS_REGION so subprocesses (km-github comment, km-github review, aws CLI) inherit it.
 # The systemd unit's EnvironmentFile=/etc/km/notify.env uses systemd-native format
@@ -3704,6 +3704,7 @@ User=root
 EnvironmentFile=-/etc/km/notify.env
 Environment=SANDBOX_ID=sb-phase92-baseline
 Environment=KM_SANDBOX_ID=sb-phase92-baseline
+Environment=KM_RESOURCE_PREFIX=km
 # Phase 75.3: poller bash mirrors S3 attachments to /workspace/.km-slack/attachments/.
 # /etc/km/notify.env carries the spec.cli.notify* knobs but not KM_ARTIFACTS_BUCKET
 # (that's a userdata template variable, set per-substrate). Make it explicit here so
@@ -3730,6 +3731,7 @@ User=root
 EnvironmentFile=-/etc/km/notify.env
 Environment=SANDBOX_ID=sb-phase92-baseline
 Environment=KM_SANDBOX_ID=sb-phase92-baseline
+Environment=KM_RESOURCE_PREFIX=km
 ExecStart=/opt/km/bin/km-github-inbound-poller
 Restart=always
 RestartSec=5
@@ -4177,7 +4179,7 @@ done
 
 MAIL_DIR="/var/mail/km"
 SANDBOX_ID="${KM_SANDBOX_ID:-}"
-IDENTITIES_TABLE="${KM_IDENTITIES_TABLE:-${KM_RESOURCE_PREFIX:-km}-identities}"
+IDENTITIES_TABLE="${KM_IDENTITIES_TABLE:-${KM_RESOURCE_PREFIX:?KM_RESOURCE_PREFIX is unset; the install prefix is required to name AWS resources}-identities}"
 
 # ----------------------------------------------------------------
 # ed25519_pubkey_to_pem: convert a base64-encoded 32-byte Ed25519

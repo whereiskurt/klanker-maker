@@ -96,9 +96,13 @@ func main() {
 			idleAction := os.Getenv("IDLE_ACTION")
 
 			// DynamoDB client for reading updated idle timeout on re-arm.
-			sandboxTable := envOr("KM_SANDBOX_TABLE", "km-sandboxes")
+			sandboxTable := os.Getenv("KM_SANDBOX_TABLE")
+			if sandboxTable == "" {
+				log.Warn().Msg("KM_SANDBOX_TABLE unset; idle re-arm will not read updated timeouts")
+			}
 			var dynamoClient kmaws.SandboxMetadataAPI
-			if awsCfg, cfgErr := config.LoadDefaultConfig(ctx, config.WithRegion(envOr("AWS_REGION", "us-east-1"))); cfgErr == nil {
+			// With no table name dynamoClient stays nil and re-arm uses the env timeout.
+			if awsCfg, cfgErr := config.LoadDefaultConfig(ctx, config.WithRegion(envOr("AWS_REGION", "us-east-1"))); cfgErr == nil && sandboxTable != "" {
 				dynamoClient = dynamodb.NewFromConfig(awsCfg)
 			}
 
