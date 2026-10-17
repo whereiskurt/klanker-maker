@@ -1,0 +1,62 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: ir-bot-strict
+  labels:
+    tier: security
+    tool: ir-bot-strict
+  prefix: irbots
+
+# Strict-mode twin of ir-bot (Part B live UAT): threadBypass: false means every
+# dispatch needs an @-mention, including replies inside an engaged thread, and a
+# mentioned thread reply carries the human messages since the bot's last turn.
+# Not a default-route target; it lives in its own per-sandbox channel.
+# Bedrock on both knobs (see profiles/vulnhunt.yaml for why there are two):
+# useBedrock provisions the box; cli.noBedrock: false makes the agent use it.
+# A cold-created box has nobody around to run `claude login`, so Bedrock is the
+# only authentication that works unattended.
+extends:
+  - base/os/redhat
+  - base/network/safenetwork
+  - base/userinit
+  - base/platform
+  - base/slack-persandbox
+
+spec:
+  lifecycle:
+    ttl: "6h"
+    idleTimeout: "45m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.large
+    region: us-east-1
+    spot: false
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: true
+
+  sourceAccess:
+    mode: none
+
+  cli:
+    noBedrock: false
+
+  agent:
+    default: claude
+
+  notification:
+    events:
+      onIdle: false
+      onPermission: false
+    slack:
+      channelName: "sb-{alias}"
+      archiveOnDestroy: true
+      inbound:
+        enabled: true
+        mentionOnly: true
+        threadBypass: false
+        maxConcurrentThreads: 3

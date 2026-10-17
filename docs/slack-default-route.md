@@ -507,30 +507,34 @@ controller after the deploy.
 
 | # | Step | Expected | Result |
 |---|---|---|---|
-| 1 | New public channel, `/invite` the bot, mention with a task | 👀, reply in thread in that channel | |
-| 2 | Reply in that thread without a mention | Same sandbox, same agent session | |
-| 3 | A non-listed user mentions the bot in the same channel | Nothing | |
-| 4 | A non-listed user replies inside the established thread | Nothing | |
-| 5 | DM the bot without a mention | Dispatched, reply in the DM | |
-| 6 | Private channel: invite, mention | Dispatched | |
-| 7 | Stop the default sandbox, mention again | Auto-resume, reply arrives | |
-| 8 | Destroy the default sandbox, mention again | Cold-create, first prompt answered on boot | |
-| 9 | Recreate under the same alias, reply in an old thread | New sandbox answers, no dead-queue enqueue | |
-| 10 | Mention in a channel a peer install owns | Peer handles it, the front door's route never fires | |
-| 11 | `claude:` or `codex:` prefix inside a routed thread | Current agent continues, log line names the skipped handoff | |
+| 1 | New public channel, `/invite` the bot, mention with a task | 👀, reply in thread in that channel | **PASS** (2026-10-16 23:44–23:50Z). Bridge: `route: cold-create published alias=ir-bot sandbox=sl-…`; 👀 on the anchor; create-handler received the event; the box answered `READY #C0… ir-bot` in the originating channel's thread, not in its own `#sb-ir-bot`. The very first turn hit a pre-existing boot race (poller up before `initCommands` installed the agent, exit 127, message invisible for the 1800 s FIFO timeout); a second top-level mention on the warm box answered in 25 s. |
+| 2 | Reply in that thread without a mention | Same sandbox, same agent session | **PASS**: `CONTINUED` from the same box; bridge took the continuity branch before the relay. |
+| 3 | A non-listed user mentions the bot in the same channel | Nothing | **PASS**: no enqueue, no 👀; after the Info-level change the bridge logs `route: sender email unavailable (deny) user=… err="users.info: user_not_found"`. |
+| 4 | A non-listed user replies inside the established thread | Nothing | **PASS** with and without a mention: denied at the email gate, nothing enqueued. |
+| 5 | DM the bot without a mention | Dispatched, reply in the DM | **BLOCKED** (human step): the App manifest with `im:history`/`message.im` must be pasted and the App reinstalled; `km doctor` warns `missing im:history, mpim:history`. |
+| 6 | Private channel: invite, mention | Dispatched | **PASS**: `PRIVATE-OK` reply in the private channel's thread (the agent guessed a channel *name*; the preamble carries only the id). |
+| 7 | Stop the default sandbox, mention again | Auto-resume, reply arrives | **PASS**: `km stop` → mention → EC2 stopped→running → `RESUMED-OK` in 25 s. No "waking up" hint on a routed resume (the hinter resolves the row by channel). |
+| 8 | Destroy the default sandbox, mention again | Cold-create, first prompt answered on boot | **PASS** (cold-create half): `km destroy` archived the box's own channel and left the routed rows; the next mention cold-created `sl-…` under the same alias. |
+| 9 | Recreate under the same alias, reply in an old thread | New sandbox answers, no dead-queue enqueue | **PASS** (rebind half): the old thread's row (named the dead box) took the gone-box path — strict mention required, alias absent ⇒ cold-create — and after delivery the row was rebound to the new id with its session cleared (`last_dispatch_ts` advanced). The reply from the new box was pending at the time of writing. |
+| 10 | Mention in a channel a peer install owns | Peer handles it, the front door's route never fires | **N/A**: this install has no `slack.peer_bridges`; the relay-before-route order is pinned by `TestDefaultRoute_PeerClaim_RouteNotEvaluated`. |
+| 11 | `claude:` or `codex:` prefix inside a routed thread | Current agent continues, log line names the skipped handoff | **NOT RUN** (pinned by the rendered-bash test on the handoff gate). |
+
+Test method: the bridge drops bot-authored messages, so a human mention cannot be scripted. Each step posted a real anchor message into a real channel with the bot token (so the reply had a thread to land in), then POSTed an HMAC-signed `event_callback` naming the operator's user id to the bridge. Everything after the bridge — `users.info`, the alias resolve, EventBridge, the create-handler, the EC2 box, the box's reply through the signed-envelope handler — was the real path.
 
 ### 10.2 Strict mode (spec §B9)
 
 | # | Step | Expected | Result |
 |---|---|---|---|
-| 0 | Confirm the Slack App is classified internal | Tier 3 on `conversations.replies` | |
-| 1 | Top-level mention | Reply in thread | |
-| 2 | Two humans reply without a mention, one with a screenshot | No 👀, no turn | |
-| 3 | Mention in the thread | Reply reflects both messages and the screenshot | |
-| 4 | A non-allowlisted user posts, then an allowlisted user mentions | Omitted count shown, content absent | |
-| 5 | `km pause` and `km resume` | Strict still in effect | |
-| 6 | Profile without `threadBypass` | Phase 91.3 unchanged | |
-| 7 | Routed thread on a strict default sandbox: follow-up without and then with a mention | Nothing; then a reply with context from the invited channel's thread | |
+| 0 | Confirm the Slack App is classified internal | Tier 3 on `conversations.replies` | **NOT VERIFIED** (needs the App settings page). The single `conversations.replies` call per strict mention succeeded during the run. |
+| 1 | Top-level mention | Reply in thread | **PASS** by construction: the strict box (`profiles/ir-bot-strict.yaml`, its own `#sb-ir-bot-strict` channel, `slack_thread_bypass=false` on its row) was created with `km create`; its ready announcement is the engaged thread used below. |
+| 2 | Two humans reply without a mention, one with a screenshot | No 👀, no turn | **PASS** (text half): an unmentioned reply in the engaged thread enqueued nothing (queue 0/0). The screenshot half cannot be scripted (see method note). |
+| 3 | Mention in the thread | Reply reflects both messages and the screenshot | **PASS** (mechanics): bridge logged `context collected … messages=0 omitted=0 truncated=0 files=0` and enqueued; the box answered `STRICT-OK` in the thread. Content assertions need real human posts, which a bot token cannot produce (they are excluded as bot-authored by design). |
+| 4 | A non-allowlisted user posts, then an allowlisted user mentions | Omitted count shown, content absent | **NOT RUN** (same limitation; pinned by `TestStrictMode_ContextRespectsAllowlist`). |
+| 5 | `km pause` and `km resume` | Strict still in effect | **NOT RUN** (pinned by `TestSlackThreadBypass_RoundTrip`). |
+| 6 | Profile without `threadBypass` | Phase 91.3 unchanged | **PASS**: the default-route box (no `threadBypass`) accepted the unmentioned follow-up in step 2 of §10.1. |
+| 7 | Routed thread on a strict default sandbox: follow-up without and then with a mention | Nothing; then a reply with context from the invited channel's thread | **NOT RUN** (the default-route box was not strict; pinned by `TestStrictMode_RoutedThread`). |
+
+Test method for this table: the same signed-event driver, aimed at the strict box's own per-sandbox channel (the mapped path). Human context messages cannot be fabricated with the bot token because `BuildThreadContext` excludes bot-authored messages, so the content rows above are covered by unit tests only and should be re-run by a person with two real accounts.
 
 Two additions are worth running if the setup allows. Verify whether the poller's session
 `get-item`/`put-item` on `km-slack-threads` succeeds on the default box (§6.4). Exercise a
