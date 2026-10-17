@@ -3254,7 +3254,7 @@ slack:
       - "*@example.com"               # every member of the domain (quote the *)
 ```
 
-`km init` exports four bridge env vars, **all four or none**:
+`km init` exports four bridge env vars: alias and profile plus **at least one** of the two lists (install or route-profile), or none at all:
 
 | Env var | Value |
 |---|---|
@@ -3519,6 +3519,7 @@ cold-create drain; it had no such grant before.
 | New bridge | Old poller on the default box | Replies land in the sandbox's own `#sb-…` channel instead of the originating thread |
 | New poller | Old bridge | The route never fires |
 | New bridge | Old create-handler | The box is created, `slack_envelope` is ignored, the first prompt is lost; the sender re-mentions |
+| New env from `km init` (profile list) | Old bridge zip | `KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW` is ignored and everything gates on the install list; a profile-only route is OFF until the new zip lands. With both lists set the old bridge behaves exactly as before |
 
 ### `km doctor` group: Slack default route
 
