@@ -98,6 +98,13 @@ type SandboxMetadata struct {
 	// this field reverts the sandbox to install defaults (SandboxMetadata lossy round-trip
 	// footgun documented in project_sandboxmetadata_lossy_roundtrip).
 	SlackAllow []string `json:"slack_allow,omitempty"`
+	// 2026-10-17: per-sandbox email allowlist (normalised exact addresses or
+	// *@<domain>), stored as comma-joined S "slack_allow_emails", and the 👀
+	// reaction quiet period, stored as N "slack_react_quiet_seconds" (S when
+	// written by UpdateSandboxAttr). nil = install default. Both MUST round-trip
+	// for the same reason as SlackAllow above.
+	SlackAllowEmails       []string `json:"slack_allow_emails,omitempty"`
+	SlackReactQuietSeconds *int     `json:"slack_react_quiet_seconds,omitempty"`
 
 	// Phase 77 — failure discoverability. Set by the create-handler on failure
 	// (see UpdateSandboxStatusAndReasonDynamo). Reads as zero-value on records

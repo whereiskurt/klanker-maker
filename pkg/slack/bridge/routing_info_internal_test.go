@@ -35,3 +35,35 @@ func TestRoutingInfoFromItem_ThreadBypass(t *testing.T) {
 		t.Fatal("nil => bypass allowed")
 	}
 }
+
+func TestRoutingInfoFromItem_AllowEmailsAndReactQuiet(t *testing.T) {
+	item := threadBypassItem("sb-1")
+	got := routingInfoFromItem(item)
+	if got.AllowEmails != nil || got.ReactQuietSeconds != nil {
+		t.Fatal("absent attributes must be nil")
+	}
+	item["slack_allow_emails"] = &dynamodbtypes.AttributeValueMemberS{Value: "kurt@example.com,*@example.com"}
+	item["slack_react_quiet_seconds"] = &dynamodbtypes.AttributeValueMemberN{Value: "180"}
+	got = routingInfoFromItem(item)
+	if len(got.AllowEmails) != 2 || got.AllowEmails[0] != "kurt@example.com" || got.AllowEmails[1] != "*@example.com" {
+		t.Fatalf("AllowEmails = %v", got.AllowEmails)
+	}
+	if got.ReactQuietSeconds == nil || *got.ReactQuietSeconds != 180 {
+		t.Fatalf("ReactQuietSeconds = %v", got.ReactQuietSeconds)
+	}
+	// UpdateSandboxAttr writes S.
+	item["slack_react_quiet_seconds"] = &dynamodbtypes.AttributeValueMemberS{Value: "60"}
+	if got := routingInfoFromItem(item); got.ReactQuietSeconds == nil || *got.ReactQuietSeconds != 60 {
+		t.Fatalf("S-typed quiet: %v", got.ReactQuietSeconds)
+	}
+	for _, bad := range []dynamodbtypes.AttributeValue{
+		&dynamodbtypes.AttributeValueMemberS{Value: "soon"},
+		&dynamodbtypes.AttributeValueMemberN{Value: "1.5"},
+		&dynamodbtypes.AttributeValueMemberS{Value: "-5"},
+	} {
+		item["slack_react_quiet_seconds"] = bad
+		if got := routingInfoFromItem(item); got.ReactQuietSeconds != nil {
+			t.Fatalf("%#v must read nil, got %d", bad, *got.ReactQuietSeconds)
+		}
+	}
+}

@@ -219,7 +219,8 @@ func (r *SlackDefaultRoute) Validate() error {
 // routeDomainEntry / routeExactEntry duplicate reDomainEntry / reExactEntry in
 // pkg/slack/bridge/default_route.go (bridge.ValidateEmailEntry). config must not
 // import pkg/slack/bridge, so the copies are held in lockstep by a shared test
-// table (TestValidateRouteEmailEntry_MirrorsBridge ↔ emailEntryCases): change both.
+// table (TestValidateRouteEmailEntry_MirrorsBridge ↔ emailEntryCases ↔
+// pkg/profile TestValidateInboundEmailEntry_MirrorsBridge): change all three.
 var routeDomainEntry = regexp.MustCompile(`^\*@[a-z0-9.-]+\.[a-z]{2,}$`)
 var routeExactEntry = regexp.MustCompile(`^[^@\s*]+@[a-z0-9.-]+\.[a-z]{2,}$`)
 

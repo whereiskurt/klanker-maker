@@ -328,6 +328,18 @@ type NotificationSlackInboundSpec struct {
 	// A WARNING is emitted when Allow is non-empty and perSandbox is not true
 	// (the per-sandbox DDB row is not written for shared-channel sandboxes).
 	Allow []string `json:"allow,omitempty" yaml:"allow,omitempty"`
+	// AllowEmails (2026-10-17) is the per-sandbox email allowlist: exact
+	// addresses or exactly `*@<domain>` (case-insensitive). When set it REPLACES
+	// the install-level email list for this sandbox's routed/owned turns. An
+	// empty list is a validation error (omit the field instead). Persisted as a
+	// comma-joined, normalised S attribute "slack_allow_emails" on the
+	// km-sandboxes row (must round-trip through SandboxMetadata).
+	AllowEmails []string `json:"allowEmails,omitempty" yaml:"allowEmails,omitempty"`
+	// ReactQuietSeconds (2026-10-17) is the per-sandbox 👀 reaction quiet
+	// period in seconds; nil = install default. Minimum 0. Persisted as
+	// "slack_react_quiet_seconds" (N via marshalSandboxItem; S via
+	// UpdateSandboxAttr — readers accept both).
+	ReactQuietSeconds *int `json:"reactQuietSeconds,omitempty" yaml:"reactQuietSeconds,omitempty"`
 	// MaxConcurrentThreads bounds how many distinct Slack threads this sandbox's
 	// inbound poller dispatches in PARALLEL (Phase 119). nil/absent = 1 (serial,
 	// byte-identical to Phase 118). Different threads run concurrently up to this

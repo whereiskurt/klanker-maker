@@ -1633,3 +1633,69 @@ func contains(s, sub string) bool {
 			return false
 		}())
 }
+
+// TestSandboxMetadata_SlackAllowEmailsAndReactQuiet_RoundTrip guards the lossy
+// round-trip footgun for the two 2026-10-17 per-sandbox attributes:
+// slack_allow_emails (S, comma-joined) and slack_react_quiet_seconds (N).
+// Every read-modify-write path PutItems the whole row, so a dropped field
+// silently reverts the sandbox to install defaults.
+func TestSandboxMetadata_SlackAllowEmailsAndReactQuiet_RoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	quiet := 180
+	meta := &kmaws.SandboxMetadata{
+		SandboxID: "sb-ae", ProfileName: "dev", Substrate: "ec2", Region: "us-east-1", CreatedAt: now,
+		SlackAllowEmails:       []string{"kurt@example.com", "*@example.com"},
+		SlackReactQuietSeconds: &quiet,
+	}
+	item := mustMarshalSandboxItemFull(t, meta)
+	s, ok := item["slack_allow_emails"].(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || s.Value != "kurt@example.com,*@example.com" {
+		t.Fatalf("slack_allow_emails = %#v", item["slack_allow_emails"])
+	}
+	n, ok := item["slack_react_quiet_seconds"].(*dynamodbtypes.AttributeValueMemberN)
+	if !ok || n.Value != "180" {
+		t.Fatalf("slack_react_quiet_seconds = %#v", item["slack_react_quiet_seconds"])
+	}
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(),
+		&mockSandboxMetadataAPI{getItemOutput: &dynamodb.GetItemOutput{Item: item}}, "km-sandboxes", "sb-ae")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.SlackAllowEmails, ",") != "kurt@example.com,*@example.com" {
+		t.Errorf("SlackAllowEmails = %v", got.SlackAllowEmails)
+	}
+	if got.SlackReactQuietSeconds == nil || *got.SlackReactQuietSeconds != 180 {
+		t.Errorf("SlackReactQuietSeconds = %v", got.SlackReactQuietSeconds)
+	}
+
+	// UpdateSandboxAttr writes the quiet value as S; it must read back too.
+	item["slack_react_quiet_seconds"] = &dynamodbtypes.AttributeValueMemberS{Value: "60"}
+	got, _ = kmaws.ReadSandboxMetadataDynamo(context.Background(),
+		&mockSandboxMetadataAPI{getItemOutput: &dynamodb.GetItemOutput{Item: item}}, "km-sandboxes", "sb-ae")
+	if got.SlackReactQuietSeconds == nil || *got.SlackReactQuietSeconds != 60 {
+		t.Errorf("S-typed quiet value: got %v", got.SlackReactQuietSeconds)
+	}
+	// A non-numeric value reads as nil, never panics.
+	item["slack_react_quiet_seconds"] = &dynamodbtypes.AttributeValueMemberS{Value: "soon"}
+	got, _ = kmaws.ReadSandboxMetadataDynamo(context.Background(),
+		&mockSandboxMetadataAPI{getItemOutput: &dynamodb.GetItemOutput{Item: item}}, "km-sandboxes", "sb-ae")
+	if got.SlackReactQuietSeconds != nil {
+		t.Errorf("non-numeric must be nil, got %v", *got.SlackReactQuietSeconds)
+	}
+
+	// Absent attrs leave both nil.
+	bare := mustMarshalSandboxItemFull(t, &kmaws.SandboxMetadata{
+		SandboxID: "sb-bare", ProfileName: "dev", Substrate: "ec2", Region: "us-east-1", CreatedAt: now,
+	})
+	if _, ok := bare["slack_allow_emails"]; ok {
+		t.Error("nil SlackAllowEmails must not emit slack_allow_emails")
+	}
+	if _, ok := bare["slack_react_quiet_seconds"]; ok {
+		t.Error("nil SlackReactQuietSeconds must not emit slack_react_quiet_seconds")
+	}
+	got, _ = kmaws.ReadSandboxMetadataDynamo(context.Background(),
+		&mockSandboxMetadataAPI{getItemOutput: &dynamodb.GetItemOutput{Item: bare}}, "km-sandboxes", "sb-bare")
+	if got.SlackAllowEmails != nil || got.SlackReactQuietSeconds != nil {
+		t.Errorf("absent attrs must be nil: %v %v", got.SlackAllowEmails, got.SlackReactQuietSeconds)
+	}
+}

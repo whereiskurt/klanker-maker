@@ -106,8 +106,9 @@ func TestValidateEmailEntry_RejectsOtherGlobs(t *testing.T) {
 }
 
 // emailEntryCases is mirrored verbatim in internal/app/config
-// (TestValidateRouteEmailEntry_MirrorsBridge): config cannot import this
-// package, so the two validators are kept in lockstep by sharing this table.
+// (TestValidateRouteEmailEntry_MirrorsBridge) and pkg/profile
+// (TestValidateInboundEmailEntry_MirrorsBridge): neither can import this
+// package, so the three validators are kept in lockstep by sharing this table.
 var emailEntryCases = []struct {
 	in string
 	ok bool

@@ -1181,6 +1181,26 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 // routingInfoFromItem decodes a km-sandboxes row into SandboxRoutingInfo. Shared by
 // FetchByChannel (GSI), FetchBySandboxID (GetItem) and ResolveAlias (GSI → GetItem)
 // so the three can never disagree about an attribute name.
+// readNonNegIntAttr reads an integer attribute stored as N or S. Absent,
+// non-numeric or negative values read as nil (never a panic). Mirrors
+// pkg/aws readOptionalNonNegInt.
+func readNonNegIntAttr(item map[string]dynamodbtypes.AttributeValue, key string) *int {
+	var raw string
+	switch v := item[key].(type) {
+	case *dynamodbtypes.AttributeValueMemberN:
+		raw = v.Value
+	case *dynamodbtypes.AttributeValueMemberS:
+		raw = v.Value
+	default:
+		return nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < 0 {
+		return nil
+	}
+	return &n
+}
+
 func routingInfoFromItem(item map[string]dynamodbtypes.AttributeValue) SandboxRoutingInfo {
 	info := SandboxRoutingInfo{}
 	if v, ok := item["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS); ok {
@@ -1257,6 +1277,13 @@ func routingInfoFromItem(item map[string]dynamodbtypes.AttributeValue) SandboxRo
 	if v, ok := item["slack_allow"].(*dynamodbtypes.AttributeValueMemberS); ok && v.Value != "" {
 		info.Allow = strings.Split(v.Value, ",")
 	}
+	// 2026-10-17: per-sandbox email allowlist (comma-joined S) and reaction quiet
+	// period (N from marshalSandboxItem, S from UpdateSandboxAttr). Names MUST
+	// match create_slack_inbound.go and sandbox_dynamo.go.
+	if v, ok := item["slack_allow_emails"].(*dynamodbtypes.AttributeValueMemberS); ok && v.Value != "" {
+		info.AllowEmails = strings.Split(v.Value, ",")
+	}
+	info.ReactQuietSeconds = readNonNegIntAttr(item, "slack_react_quiet_seconds")
 	// Phase 121 (BRG-03): resolved action-limits JSON map. Written by km create;
 	// read by the bridge to call quota.Record per action and enforce frozen gate.
 	if v, ok := item["action_limits"].(*dynamodbtypes.AttributeValueMemberS); ok {

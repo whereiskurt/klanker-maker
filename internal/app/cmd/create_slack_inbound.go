@@ -23,6 +23,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -203,6 +204,41 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 		} else {
 			log.Info().Str("sandbox_id", deps.SandboxID).Str("value", v).
 				Msg("Slack: persisted per-sandbox allow-list override")
+		}
+	}
+
+	// 2026-10-17: per-sandbox email allowlist. Written only when the profile sets
+	// notification.slack.inbound.allowEmails (validation rejects an empty list).
+	// Entries are normalised (trimmed, lowercased) and comma-joined into the S
+	// attribute "slack_allow_emails". Absent = install-level list. Non-fatal.
+	if len(inbound.AllowEmails) > 0 {
+		norm := make([]string, 0, len(inbound.AllowEmails))
+		for _, e := range inbound.AllowEmails {
+			if n := strings.ToLower(strings.TrimSpace(e)); n != "" {
+				norm = append(norm, n)
+			}
+		}
+		v := strings.Join(norm, ",")
+		if updateErr := deps.UpdateSandboxAttr(ctx, deps.SandboxID, "slack_allow_emails", v); updateErr != nil {
+			log.Warn().Err(updateErr).Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("persist slack_allow_emails per-sandbox override failed; sandbox will use install-level default")
+		} else {
+			log.Info().Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("Slack: persisted per-sandbox email allow-list override")
+		}
+	}
+
+	// 2026-10-17: per-sandbox 👀 reaction quiet period. Written only when the
+	// profile sets notification.slack.inbound.reactQuietSeconds. UpdateSandboxAttr
+	// is string-only, so this lands as S; readers accept N or S. Non-fatal.
+	if inbound.ReactQuietSeconds != nil {
+		v := strconv.Itoa(*inbound.ReactQuietSeconds)
+		if updateErr := deps.UpdateSandboxAttr(ctx, deps.SandboxID, "slack_react_quiet_seconds", v); updateErr != nil {
+			log.Warn().Err(updateErr).Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("persist slack_react_quiet_seconds per-sandbox override failed; sandbox will use install-level default")
+		} else {
+			log.Info().Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("Slack: persisted per-sandbox react_quiet_seconds override")
 		}
 	}
 
