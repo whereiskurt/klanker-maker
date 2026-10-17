@@ -88,7 +88,7 @@ func TestEC2SpotRole_SSMParameterReadsAreScoped(t *testing.T) {
 			continue
 		}
 		res := stmtField(stmt, "Resource")
-		if strings.Contains(res, `"*"`) || !(!strings.Contains(res, "parameter") && !strings.Contains(res, "local.ssm_param_arns")) {
+		if strings.Contains(res, `"*"`) || (!strings.Contains(res, "parameter") && !strings.Contains(res, "local.ssm_param_arns")) {
 			t.Errorf("ssm:GetParameter must be granted on parameter ARNs only, never *: %s", stmt)
 		}
 	}
