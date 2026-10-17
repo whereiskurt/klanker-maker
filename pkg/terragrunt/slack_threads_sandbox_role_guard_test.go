@@ -25,7 +25,7 @@ var (
 	tfCommentRe      = regexp.MustCompile(`(?m)^\s*(#|//).*$`)
 	tfActionKeyRe    = regexp.MustCompile(`\b(Not)?Action\s*=`)
 	tfResourceDeclRe = regexp.MustCompile(`resource\s+"aws_iam_[a-z_]*policy[a-z_]*"\s+"([A-Za-z0-9_]+)"`)
-	threadsTableRe   = regexp.MustCompile(`(?i)slack[-_]threads|table/[^"]*threads`)
+	threadsTableRe   = regexp.MustCompile(`(?i)(slack|github|h1)[-_]threads|table/[^"]*threads`)
 	ddbWriteRe       = regexp.MustCompile(`"(\*|dynamodb:\*|dynamodb:(PutItem|UpdateItem|BatchWriteItem|DeleteItem|PartiQL[A-Za-z]*|TransactWriteItems)[^"]*)"`)
 	wildcardResRe    = regexp.MustCompile(`"\*"|:table/[^/"]*\*`) // a "*" inside the TABLE-NAME segment; ".../index/*" on a named table is fine
 )
@@ -132,6 +132,7 @@ func TestSandboxRole_ThreadsWriteGrantExcludesSandboxID(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		rel, _ := filepath.Rel(findRepoRoot(t), f)
 		s := tfCommentRe.ReplaceAllString(string(raw), "")
 		seen := map[int]bool{}
 		for _, m := range tfActionKeyRe.FindAllStringIndex(s, -1) {
@@ -148,7 +149,7 @@ func TestSandboxRole_ThreadsWriteGrantExcludesSandboxID(t *testing.T) {
 			actions := stmtField(stmt, "Action") + stmtField(stmt, "NotAction")
 			resources := stmtField(stmt, "Resource") + stmtField(stmt, "NotResource")
 			if ddbWriteRe.MatchString(actions) && wildcardResRe.MatchString(resources) {
-				t.Errorf("%s (policy %q): DynamoDB write on a wildcard resource reaches every threads table", filepath.Base(f), policy)
+				t.Errorf("%s (policy %q): DynamoDB write on a wildcard resource reaches every threads table", rel, policy)
 			}
 			if !threadsTableRe.MatchString(stmt) {
 				continue
@@ -156,18 +157,20 @@ func TestSandboxRole_ThreadsWriteGrantExcludesSandboxID(t *testing.T) {
 			sawThreads++
 			am := attrsRe.FindStringSubmatch(stmt)
 			if am == nil {
-				t.Errorf("%s (policy %q): an Allow on a threads table has no dynamodb:Attributes condition; a box could write sandbox_id and forge a routed-thread row", filepath.Base(f), policy)
+				t.Errorf("%s (policy %q): an Allow on a threads table has no dynamodb:Attributes condition; a box could write sandbox_id and forge a routed-thread row", rel, policy)
 				continue
 			}
 			if strings.Contains(am[1], `"sandbox_id"`) {
-				t.Errorf("%s (policy %q): sandbox_id is in the attribute set; the bridge trusts that attribute to authorize posts", filepath.Base(f), policy)
+				t.Errorf("%s (policy %q): sandbox_id is in the attribute set; the bridge trusts that attribute to authorize posts", rel, policy)
 			}
+			// Presence check only: IAM evaluates these keys as StringEqualsIfExists, so
+			// their absence on the request side is not something the guard can see.
 			if !strings.Contains(stmt, "dynamodb:ReturnValues") || !strings.Contains(stmt, "dynamodb:Select") {
-				t.Errorf("%s (policy %q): dynamodb:Attributes needs ReturnValues and Select pinned or the condition is bypassable", filepath.Base(f), policy)
+				t.Errorf("%s (policy %q): dynamodb:Attributes needs ReturnValues and Select pinned or the condition is bypassable", rel, policy)
 			}
 		}
 	}
-	if sawThreads == 0 {
-		t.Fatal("no Allow statement names a threads table; the pollers' session continuity would 403 or the table regex drifted")
+	if sawThreads < 3 {
+		t.Fatalf("only %d Allow statements name a threads table, want >= 3 (slack, github, h1); the table regex drifted or a grant was dropped", sawThreads)
 	}
 }
