@@ -2868,9 +2868,11 @@ while true; do
             # Slack-initiated chat sees structured messages, not literal markdown. Operator
             # override: KM_SLACK_RENDER=blocks|mrkdwn|plain via /etc/km/notify.env or
             # /etc/profile.d/km-notify-env.sh. km-slack demotes Tier 3 → Tier 2 → Tier 1
-            # automatically when a rich render overflows. The marker this post
-            # leaves is cleared before the next turn in this thread is dispatched.
-            if /opt/km/bin/km-slack post \
+            # automatically when a rich render overflows. KM_SLACK_POSTED_MARKER=0:
+            # the poller's own post must not leave a marker — it runs as root, and a
+            # root-owned marker in sticky /tmp would stop the sandbox user's km-slack
+            # from writing its own on a later post into this thread.
+            if KM_SLACK_POSTED_MARKER=0 /opt/km/bin/km-slack post \
                  --channel "$REPLY_CHANNEL" \
                  --subject "" \
                  --thread "$THREAD_TS" \

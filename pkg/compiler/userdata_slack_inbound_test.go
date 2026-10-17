@@ -329,10 +329,12 @@ func TestSlackInboundPoller_ReplyPost_RenderFlag(t *testing.T) {
 
 	// Bound to the km-slack post invocation in the success branch. The earlier
 	// occurrence of the literal "km-slack post" in a comment must be skipped —
-	// anchor on the actual `if /opt/km/bin/km-slack post` shell statement.
-	postStmtIdx := strings.Index(poller, "if /opt/km/bin/km-slack post")
+	// anchor on the actual `if KM_SLACK_POSTED_MARKER=0 /opt/km/bin/km-slack post`
+	// shell statement (the env prefix keeps the poller's own post from leaving a
+	// root-owned marker; see TestSlackInboundPoller_FinalPost_*).
+	postStmtIdx := strings.Index(poller, "if KM_SLACK_POSTED_MARKER=0 /opt/km/bin/km-slack post")
 	if postStmtIdx < 0 {
-		t.Fatalf("`if /opt/km/bin/km-slack post` shell statement not found in poller — structural assumption broken")
+		t.Fatalf("`if KM_SLACK_POSTED_MARKER=0 /opt/km/bin/km-slack post` shell statement not found in poller — structural assumption broken")
 	}
 	// The post call spans until the closing `; then` of the if-statement.
 	postSegmentEnd := strings.Index(poller[postStmtIdx:], "; then")

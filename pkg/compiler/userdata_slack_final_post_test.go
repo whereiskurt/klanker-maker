@@ -37,7 +37,10 @@ func runFinalPost(t *testing.T, threadTS string, markerPresent bool) (calls []st
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "km-slack")
 	rec := filepath.Join(dir, "calls")
-	fake := "#!/bin/bash\necho \"$*\" >> " + shellQuote(rec) + "\n"
+	// Record argv plus the marker opt-out the poller must set on its OWN post:
+	// as root it would otherwise leave a root-owned marker in sticky /tmp that the
+	// sandbox user's km-slack cannot replace on a later post into this thread.
+	fake := "#!/bin/bash\necho \"$* marker=${KM_SLACK_POSTED_MARKER:-unset}\" >> " + shellQuote(rec) + "\n"
 	if err := os.WriteFile(bin, []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +98,9 @@ func TestUserdata_SlackInbound_FinalPostPostsWhenNoMarker(t *testing.T) {
 	}
 	if !strings.HasPrefix(calls[0], "post ") || !strings.Contains(calls[0], "--thread 1700000000.000200") {
 		t.Fatalf("final post not threaded to the turn: %q", calls[0])
+	}
+	if !strings.Contains(calls[0], "marker=0") {
+		t.Fatalf("the poller's own final post must run with KM_SLACK_POSTED_MARKER=0 so it leaves no root-owned marker: %q", calls[0])
 	}
 }
 

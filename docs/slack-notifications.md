@@ -3451,9 +3451,21 @@ dispatches the agent. At the end of the turn it skips its own post when the mark
 logging `agent already posted in thread=…; skipping the final post`. The hook's
 transcript-stream drain posts progress into the same thread, so it sets
 `KM_SLACK_POSTED_MARKER=0` and leaves no marker; otherwise a mid-turn progress post would
-suppress the real answer. The marker is best-effort: if it cannot be written, the worst case
-is the old double post, never a lost reply. The preamble now tells the agent its final reply
-is posted automatically, so the common case never reaches the skip.
+suppress the real answer. The poller's own final post sets the same opt-out: the poller runs
+as root, and a root-owned marker in sticky `/tmp` would stop the sandbox user's `km-slack`
+from writing its own on a later post into that thread (found live, 2026-10-17: the write
+failed with `permission denied` and only the warning was lost). The marker is best-effort:
+if it cannot be written, the worst case is the old double post, never a lost reply. The
+preamble now tells the agent its final reply is posted automatically, so the common case
+never reaches the skip.
+
+Verified live on a recreated routed box (2026-10-17): a plain turn produced exactly one reply,
+the poller's; a `km-slack post` as the sandbox user into a routed thread posted (and exposed the root-owned
+marker problem above); and
+a turn whose marker was present at turn end logged `agent already posted … skipping the final
+post`, consumed the marker, and posted nothing. The agent itself declined two UAT prompts that
+asked it to post via `km-slack reply`, once citing the preamble and once calling the request a
+prompt injection, which is the preamble doing its job.
 
 Deploy = `make build` + `km init --dry-run=false`: the `km-slack` sidecar and the
 create-handler-rendered poller and hook both change. A sandbox gains it on
