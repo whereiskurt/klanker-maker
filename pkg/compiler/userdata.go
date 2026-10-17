@@ -2227,6 +2227,7 @@ while true; do
       DDB_ITEM=$(aws dynamodb get-item \
         --table-name "$THREADS_TABLE" \
         --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
+        --projection-expression "claude_session_id, agent_type, last_assistant_msg, last_processed_event_ts" \
         --region "$REGION" \
         --output json 2>/dev/null || true)
       CLAUDE_SESSION=$(echo "$DDB_ITEM" | jq -r '.Item.claude_session_id.S // empty' 2>/dev/null || true)
@@ -2702,16 +2703,20 @@ while true; do
         # turn_count on this same row; a put-item replaced the whole item every
         # turn and wiped them, so the reaction quiet period never saw a boundary
         # and strict-mode context fell back to the thread root.
+        #
+        # sandbox_id is NOT written here: the bridge writes it at dispatch
+        # (Upsert) and the v1.8.0 sandbox role's dynamodb:Attributes condition
+        # excludes it. --return-values NONE is pinned for the same condition.
         aws dynamodb update-item \
           --table-name "$THREADS_TABLE" \
           --region "$REGION" \
           --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
-          --update-expression "SET claude_session_id = :sid, agent_type = :agent, last_assistant_msg = :msg, sandbox_id = :sb, last_turn_ts = :lt, last_processed_event_ts = :ev, ttl_expiry = :ttl" \
+          --return-values NONE \
+          --update-expression "SET claude_session_id = :sid, agent_type = :agent, last_assistant_msg = :msg, last_turn_ts = :lt, last_processed_event_ts = :ev, ttl_expiry = :ttl" \
           --expression-attribute-values "{
             \":sid\":{\"S\":\"$NEW_SESSION\"},
             \":agent\":{\"S\":\"$EFFECTIVE_AGENT\"},
             \":msg\":{\"S\":$LAST_MSG_JSON},
-            \":sb\":{\"S\":\"$SANDBOX_ID\"},
             \":lt\":{\"S\":\"$NOW\"},
             \":ev\":{\"S\":\"$EVENT_TS\"},
             \":ttl\":{\"N\":\"$TTL_EXPIRY\"}
@@ -3177,6 +3182,7 @@ $COMMENT_BODY"
         aws dynamodb update-item \
           --table-name "$GITHUB_THREADS_TABLE" \
           --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
+          --return-values NONE \
           --update-expression "REMOVE agent_session_id" \
           --region "$REGION" 2>/dev/null || true
       fi
@@ -3218,6 +3224,7 @@ $COMMENT_BODY"
       aws dynamodb update-item \
         --table-name "$GITHUB_THREADS_TABLE" \
         --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
+        --return-values NONE \
         --update-expression "SET agent_session_id = :sid, agent_type = :at" \
         --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_GITHUB_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
         --region "$REGION" 2>/dev/null || true
@@ -3587,6 +3594,7 @@ $POSTING_SECTION"
       aws dynamodb update-item \
         --table-name "$H1_THREADS_TABLE" \
         --key "{\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}}" \
+        --return-values NONE \
         --update-expression "REMOVE agent_session_id" \
         --region "$REGION" 2>/dev/null || true
       dispatch_as_sandbox "
@@ -3624,6 +3632,7 @@ $POSTING_SECTION"
       aws dynamodb update-item \
         --table-name "$H1_THREADS_TABLE" \
         --key "{\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}}" \
+        --return-values NONE \
         --update-expression "SET agent_session_id = :sid, agent_type = :at" \
         --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_H1_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
         --region "$REGION" 2>/dev/null || true

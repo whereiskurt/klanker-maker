@@ -1002,7 +1002,6 @@ LAST_MSG_JSON=$(printf 'say "hi"\nback\\slash' | jq -Rs .)
 		"claude_session_id":       ":sid",
 		"agent_type":              ":agent",
 		"last_assistant_msg":      ":msg",
-		"sandbox_id":              ":sb",
 		"last_turn_ts":            ":lt",
 		"last_processed_event_ts": ":ev",
 		"ttl_expiry":              ":ttl",
@@ -1011,6 +1010,12 @@ LAST_MSG_JSON=$(printf 'say "hi"\nback\\slash' | jq -Rs .)
 		if !strings.Contains(expr, attr+" = "+ph) {
 			t.Errorf("update expression does not SET %s = %s: %q", attr, ph, expr)
 		}
+	}
+	if strings.Contains(expr, "sandbox_id") {
+		t.Errorf("update expression names sandbox_id — the bridge's authorization attribute; IAM (v1.8.0) denies the write and the box must never need it: %q", expr)
+	}
+	if rv := flag("--return-values"); rv != "NONE" {
+		t.Errorf("--return-values = %q, want NONE (dynamodb:Attributes conditions require ReturnValues pinned)", rv)
 	}
 	for _, bridgeOwned := range []string{"last_dispatch_ts", "created_at", "turn_count", "REMOVE", "DELETE"} {
 		if strings.Contains(expr, bridgeOwned) {
@@ -1026,7 +1031,7 @@ LAST_MSG_JSON=$(printf 'say "hi"\nback\\slash' | jq -Rs .)
 		t.Errorf("got %d values, want %d: %v", len(vals), len(owned), vals)
 	}
 	want := map[string][2]string{
-		":sid": {"S", "sess-1"}, ":agent": {"S", "claude"}, ":sb": {"S", "sb-1"},
+		":sid": {"S", "sess-1"}, ":agent": {"S", "claude"},
 		":lt": {"S", "2026-10-17T00:00:00Z"}, ":ev": {"S", "1700000001.000200"},
 		":ttl": {"N", "1799999999"}, ":msg": {"S", "say \"hi\"\nback\\slash"},
 	}
