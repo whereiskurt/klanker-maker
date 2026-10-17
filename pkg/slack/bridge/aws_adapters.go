@@ -488,6 +488,53 @@ func (s *SlackPosterAdapter) GetPermalink(ctx context.Context, channel, messageT
 	return apiResp.Permalink, nil
 }
 
+// OpenDM opens (or returns) the bot's DM channel with userID via
+// conversations.open and returns its id. 2026-10-17 — km-slack dm. Its own
+// decoder: chat.postMessage answers "channel" as a string, conversations.open
+// as an object, so slackAPIResponse cannot carry both.
+func (s *SlackPosterAdapter) OpenDM(ctx context.Context, userID string) (string, error) {
+	token, err := s.Tokens.Fetch(ctx)
+	if err != nil {
+		return "", fmt.Errorf("bridge: get bot token for conversations.open: %w", err)
+	}
+	b, _ := json.Marshal(map[string]any{"users": userID})
+	req, err := http.NewRequestWithContext(ctx, "POST", s.getBaseURL()+"/conversations.open", bytes.NewReader(b))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	hc := s.HTTPClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if rlErr := checkRateLimit(resp.StatusCode, resp.Header.Get("Retry-After"), "conversations.open"); rlErr != nil {
+		return "", rlErr
+	}
+	var out struct {
+		OK      bool   `json:"ok"`
+		Error   string `json:"error"`
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("bridge: decode conversations.open: %w", err)
+	}
+	if !out.OK {
+		return "", fmt.Errorf("bridge: conversations.open: %s", out.Error)
+	}
+	if out.Channel.ID == "" {
+		return "", errors.New("bridge: conversations.open: no channel id in response")
+	}
+	return out.Channel.ID, nil
+}
+
 // UpdateMessage edits a previously-posted bot message via chat.update.
 // Phase 70 — used by Plan 70-06's optional handoff-edit path.
 func (s *SlackPosterAdapter) UpdateMessage(ctx context.Context, channel, ts, text string) (string, error) {
