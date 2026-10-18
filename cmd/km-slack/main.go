@@ -74,6 +74,8 @@ func dispatch(args []string, stderr io.Writer) int {
 		return runReply(args[1:], stderr)
 	case "dm":
 		return runDM(args[1:], stderr)
+	case "session":
+		return runSession(args[1:], stderr)
 	case "-h", "--help", "help":
 		usage(stderr)
 		return 0
@@ -93,6 +95,8 @@ Subcommands:
   permalink      Resolve a Slack permalink URL for --channel + --ts.
   update         Edit a previously-posted bot message via --channel, --ts, and --text/--body.
   dm --to U… (--text <s> | --body <file>) [--render …] [--from-thread]   DM a person on the route allowlist (top-level; no marker)
+  session --source slack|github|h1 <key flags> (--session-id ID | --clear) --agent claude|codex
+                 Record the agent session id on a thread the bridge routed (poller end-of-turn).
   reply          Post a reply into the thread bound to the current session (4-step resolution chain).
                  Resolution: --thread > $KM_SLACK_THREAD_TS > session-id lookup > channel root.
   post/reply     --mention U…[,U…|here|channel] notifies people: the ids are prepended as <@U…>
