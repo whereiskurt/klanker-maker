@@ -43,6 +43,8 @@ is the OS layer. That fence — `spec.secrets.fenceIMDS`, `km-creds`,
 off and the authority described here is unfenced, which is what § Security
 posture spells out.
 
+Since ec2spot v1.8.0 the SSM read surface of the role is `/{prefix}/sandbox/{id}/*`, `/{prefix}/slack/bridge-url`, `/{prefix}/config/remote-create/safe-phrase`, `/{prefix}/config/h1/api-username|api-token`, `iam.allowedSecretPaths`, and `spec.otp.secrets`, all install-scoped, with no `GetParameter` on `*` (the managed Core policy's grant is gone), and the SSM `kms:Decrypt` is pinned to the same parameter ARNs.
+
 ## Decrypt-per-request, and its honest limit
 
 `km-secretsd` performs a live `kms:Decrypt` on every unseal — there is no

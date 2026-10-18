@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/goccy/go-yaml"
 	jschema "github.com/santhosh-tekuri/jsonschema/v6"
@@ -241,6 +242,21 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 				Message:   `"*" denies ALL egress, overriding every allow entry — use an explicit suffix unless you intend to seal the sandbox`,
 				IsWarning: true,
 			})
+		}
+	}
+
+	// spec.otp.secrets buys ssm:GetParameter/DeleteParameter + KMS on exactly
+	// those paths (ec2spot v1.8.0), so a wildcard or whitespace in an entry is
+	// granted nothing and the boot-time read fails. Warn, never block.
+	if p.Spec.OTP != nil {
+		for i, s := range p.Spec.OTP.Secrets {
+			if strings.Contains(s, "*") || strings.IndexFunc(s, unicode.IsSpace) >= 0 {
+				errs = append(errs, ValidationError{
+					Path:      fmt.Sprintf("spec.otp.secrets[%d]", i),
+					Message:   fmt.Sprintf("%q: the role grant is exact-path; wildcards are not granted (and whitespace never matches a parameter name)", s),
+					IsWarning: true,
+				})
+			}
 		}
 	}
 
@@ -674,6 +690,8 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	// the five locked errors and three locked warnings. A no-op when the
 	// profile declares no mitm block at all.
 	errs = append(errs, validateMITMIntercepts(p)...)
+
+	errs = append(errs, validateInitCommandAWSCalls(p)...)
 
 	return errs
 }

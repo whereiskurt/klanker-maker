@@ -267,7 +267,7 @@ changes.
 | `pkg/slack/bridge/aws_adapters_*_test.go`, `default_route_test.go`, `routing_info_internal_test.go` | By-id parse parity with by-channel, alias found, absent and ambiguous, the publisher, the email adapter, conditional monotonic `MarkDispatched`, case-insensitive allow, nil route on empty emails, `requiresMention`, cache-success-only, `ThreadBypass` parsing. |
 | `pkg/compiler/userdata_slack_reply_channel_test.go`, `userdata_slack_thread_context_test.go` | These execute the rendered poller bash under `bash` with a fake `km-slack` that records arguments: the reply channel comes from the envelope, every post uses it, dispatch exports it, the preamble names it, the handoff is skipped in a routed channel, and the context header renders with messages, files, counts, error and absence. Profiles without Slack inbound render byte-identically. |
 | `pkg/terragrunt/slack_default_route_module_test.go` | Each `KM_SLACK_DEFAULT_ROUTE_*` env var is set from a module variable that the live unit feeds from `get_env`; the bridge IAM carries `alias-index` and `events:PutEvents`; the create-handler can send to slack-inbound. |
-| `pkg/terragrunt/slack_threads_sandbox_role_guard_test.go` | `TestSandboxRole_HasNoWriteGrantOnSlackThreadsTable` reads every `ec2*` module and fails on any Allow naming the threads table or granting DynamoDB writes on a wildcard resource, with `ec2spot_region_lock` named as the single known exception. See §6.4. |
+| `pkg/terragrunt/slack_threads_sandbox_role_guard_test.go` | `TestSandboxRole_ThreadsWriteGrantExcludesSandboxID` reads the pinned ec2spot module and fails on any threads-table Allow lacking a `dynamodb:Attributes` condition, on an attribute set containing `sandbox_id`, on a missing ReturnValues/Select pin, and on any wildcard DynamoDB write. See §6.4. |
 | `pkg/profile/profile_thread_bypass_test.go`, `pkg/aws/sandbox_dynamo_thread_bypass_test.go`, `internal/app/cmd/create_slack_inbound_test.go`, `pkg/slack/client_userinfo_test.go` | Schema acceptance through YAML and the semantic warnings; the metadata round-trip; the create-time row write; `users.info` parsing and error return. |
 
 ## 6. Security posture
@@ -308,9 +308,9 @@ of a row: any write grant lets every sandbox write any row. Rows are meant to be
 bridge-side components only: the events handler at dispatch, and the create path's
 ready announcement, which `km create` posts and the create-handler runs for remote creates.
 
-### 6.4 The pre-existing `ec2spot_region_lock` finding
+### 6.4 The `ec2spot_region_lock` finding — closed in v1.8.0 (2026-10-17)
 
-The final review found that the premise in §6.3 does not hold on most profiles today. In
+The final review found that the premise in §6.3 did not hold on most profiles. In
 `infra/modules/ec2spot/v1.7.0/main.tf`, `aws_iam_role_policy.ec2spot_region_lock` is an
 `Allow` of `Action "*"` on `Resource "*"` conditioned only on `aws:RequestedRegion`. It is
 created whenever a profile sets `iam.allowedRegions`, and `profiles/base/platform.yaml` sets
@@ -332,21 +332,7 @@ without it they would fail quietly, since each is `2>/dev/null || true`. The led
 this as a pre-existing item to verify in live UAT. It also means that narrowing the region
 lock will break the poller's session writes unless they move behind the bridge first.
 
-It was not changed in this branch for three reasons. It predates the branch. The `Allow *`
-is very likely what lets boxes fetch sidecars, artifacts and SSM parameters today, so
-turning it into a deny needs an enumeration of the grants sandboxes actually rely on. And it
-is a fleet-wide IAM change that belongs to the operator, not to a feature branch. What
-shipped instead is a tripwire and the truth in writing. The guard test fails on any explicit
-grant on the threads table and on any wildcard DynamoDB write in an `ec2*` module, and lists
-`ec2spot_region_lock` by resource name as its one known exception, so a second path cannot
-appear silently. Spec §11 records the two follow-ups: narrow the region lock to a region deny
-plus explicit grants, and then move routed-thread authorization to a store the sandbox role
-cannot reach.
-
-The guard has three known gaps, all parked deliberately. Its exception is keyed by policy
-name, so a second wildcard statement added inside `ec2spot_region_lock` would pass. Its write
-regex does not match glob actions such as `dynamodb:Put*`. Its table regex also matches the
-GitHub and HackerOne threads tables, which errs safe.
+**How it closed.** `infra/modules/ec2spot/v1.8.0` replaced the `Allow */*` with a region Deny and explicit per-concern grants. The threads grant carries a `dynamodb:Attributes` condition that excludes `sandbox_id`, and the pollers no longer SET it. `LookupSandbox` treats a row without `sandbox_id` as unrouted, so a row the box creates authorizes nothing. `TestSandboxRole_ThreadsWriteGrantExcludesSandboxID` pins the grant. Residual, stated honestly: any box can still `UpdateItem` another thread's session attributes if it knows that thread's `(channel_id, thread_ts)`. Two of those attributes matter. A poisoned `last_assistant_msg` is pasted into the victim's handoff seed prompt, which is cross-sandbox prompt injection. A large `last_processed_event_ts` makes the victim's poller skip every later message as already processed. Both were possible under the Allow-star, and the hole is strictly narrower now, but it is not closed. Moving the session writes behind the bridge (the §11 follow-up) is what removes it. Handoff threads: the poller writes the row for a Phase 70 handoff thread itself and cannot write `sandbox_id`, so the bridge fills `sandbox_id` on the first turn it dispatches into that thread. In a mention-only channel the first reply in a handoff thread therefore still needs an @-mention. The role is created per sandbox, so existing boxes keep the old shape until recreate. See `docs/operational-gotchas.md` § The sandbox role is least-privilege.
 
 ### 6.5 Two smaller limits
 
@@ -570,12 +556,8 @@ unverified.
 
 ### Fix soon
 
-- **Narrow `ec2spot_region_lock`.** Replace the region-conditioned `Allow */*` with a region
-  deny plus explicit grants. This needs the grants sandboxes rely on enumerated first,
-  including the poller's own `km-slack-threads` session writes, which must move behind the
-  bridge or be granted separately. Spec §11.
-- **Move routed-thread authorization to a store the sandbox role cannot reach**, once the
-  first item is done, and remove the guard's named exception.
+- ~~**Narrow `ec2spot_region_lock`.**~~ **Fixed 2026-10-17 (ec2spot v1.8.0).** Region Deny plus explicit grants; see §6.4.
+- **Move the poller's thread-table session writes behind the bridge**, so the sandbox role needs no table access at all, and remove the conditioned grant.
 - **Confirm the poller's thread-table access in UAT.** On profiles without `allowedRegions`
   the poller's session reads and writes would be denied and swallowed today.
 - **Paginate or surface `has_more` in the context reader**, so a long thread yields its
@@ -641,5 +623,5 @@ unverified.
 | Phase summary | `CLAUDE.md`, "Slack default route + strict mention-only threads (2026-10-16)" |
 | Profile field reference | `docs/profile-reference.md`, `threadBypass` |
 | Slack App scopes and events | `docs/slack-app-permissions.md` |
-| The threads-table IAM rule | `docs/operational-gotchas.md` § Never grant the sandbox role access to km-slack-threads |
+| The threads-table IAM rule | `docs/operational-gotchas.md` § The sandbox role is least-privilege since ec2spot v1.8.0 |
 | This document | `docs/slack-default-route.md` |

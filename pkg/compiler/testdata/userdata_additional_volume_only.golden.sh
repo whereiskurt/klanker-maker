@@ -2530,7 +2530,7 @@ done
 
 MAIL_DIR="/var/mail/km"
 SANDBOX_ID="${KM_SANDBOX_ID:-}"
-IDENTITIES_TABLE="${KM_IDENTITIES_TABLE:-${KM_RESOURCE_PREFIX:-km}-identities}"
+IDENTITIES_TABLE="${KM_IDENTITIES_TABLE:-${KM_RESOURCE_PREFIX:?KM_RESOURCE_PREFIX is unset; the install prefix is required to name AWS resources}-identities}"
 
 # ----------------------------------------------------------------
 # ed25519_pubkey_to_pem: convert a base64-encoded 32-byte Ed25519

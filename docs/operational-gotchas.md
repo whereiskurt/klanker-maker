@@ -292,21 +292,37 @@ absent" as "fall back to install default".
 a targeted `UpdateItem` (like `UpdateSandboxTTLDynamo`) over a full-row rewrite when
 only one attribute changes.
 
-### Never grant the sandbox role access to `km-slack-threads`
+### The sandbox role is least-privilege since ec2spot v1.8.0 (2026-10-17)
 
-The Slack bridge's outbound authorizer lets a sandbox post into a foreign channel when the
-`km-slack-threads` row for that `(channel, thread_ts)` names the sandbox (the default route,
-2026-10-16). DynamoDB IAM cannot scope a grant by a row's `sandbox_id`, so any sandbox-role
-write grant on that table lets every sandbox forge a row and post into every routed thread.
-`TestSandboxRole_HasNoWriteGrantOnSlackThreadsTable` (`pkg/terragrunt`) fails on such a grant.
+**What was wrong.** Three holes let any sandbox act well outside its own resources.
 
-**Caveat: the rule is already broken on most profiles.** `ec2spot_region_lock` in the
-ec2spot module is an `Allow` of `Action "*"` on `Resource "*"` conditioned only on
-`aws:RequestedRegion`, created whenever a profile sets `iam.allowedRegions`, which
-`profiles/base/platform.yaml` does. On those boxes the sandbox role reaches every in-region
-table, `km-slack-threads` included, and the inbound poller's own session `get-item`/`put-item`
-on that table depends on it. The guard names that policy as its single known exception.
-Narrowing it is a separate decision that needs the sandbox's real grants enumerated first.
+- **The Allow-`*` region lock.** `ec2spot_region_lock` was an `Allow` of `Action "*"` on `Resource "*"`, conditioned only on `aws:RequestedRegion`. It was created for every profile with `iam.allowedRegions` (all of `base/platform`), so those boxes could write every in-region table.
+- **The managed SSM Core policy.** `AmazonSSMManagedInstanceCore` granted `ssm:GetParameter*` on `*`, and `kms:Decrypt` via SSM worked on every key. Any box could read every parameter in the account.
+- **The `sandbox_id` write.** The inbound pollers wrote the `sandbox_id` attribute on `km-slack-threads` rows, and the bridge's outbound authorizer trusts that attribute. DynamoDB IAM cannot scope by a row's value, so a box could forge a routed-thread row and post into any thread.
+
+**What v1.8.0 does.**
+
+- A region **Deny** replaces the lock. Its `NotAction` is the SCP exemption list plus `bedrock-mantle:*` and `aws-marketplace:*`.
+- One inline policy per concern. Every data-bearing grant (S3, DynamoDB, SSM parameters, SQS, logs, SES) names `{id}` or `{p}` (the install prefix); only the SSM agent channel, `events:PutEvents`, Bedrock, and the Bedrock-conditioned `aws-marketplace` grant remain on `*`. Two `kms:Decrypt` grants sit on `key/*`: the SSM one is condition-scoped to the same parameter ARNs, the sandbox-secrets one to its alias.
+- SSM reads are per path, and the SSM `kms:Decrypt` is pinned with `kms:EncryptionContext:PARAMETER_ARN`.
+- Threads tables are writable only for a named attribute set that excludes `sandbox_id`. A row the box creates has no `sandbox_id` and reads as unrouted.
+- `action-quota` is scoped by `dynamodb:LeadingKeys`.
+
+**Consequences.**
+
+- An operator `aws` call in `initCommands` now fails under `set -e`. `km validate` WARNs about it. Add SSM paths to `iam.allowedSecretPaths`.
+- The role is created per sandbox. Existing boxes keep the old shape until recreate, and `km doctor` "Sandbox role shape" lists them.
+- `KM_RESOURCE_PREFIX` unset now aborts a poller instead of silently targeting `km-*`.
+- A Phase 70 handoff thread's row is written by the poller without `sandbox_id`. The bridge fills it on the first turn it dispatches there, so in a mention-only channel the first reply in a handoff thread still needs an @-mention.
+
+**Residual.** Any box can still `UpdateItem` another thread's session attributes if it knows that thread's `(channel_id, thread_ts)`. A poisoned `last_assistant_msg` is pasted into the victim's handoff seed prompt, which is cross-sandbox prompt injection. A large `last_processed_event_ts` makes the victim's poller skip later messages. This was possible under the Allow-star and is strictly narrower now. Moving the session writes behind the bridge removes it; see `docs/slack-default-route.md` § 11.
+
+**Guards.** `TestEC2SpotRole_*`, `TestSandboxRole_ThreadsWriteGrantExcludesSandboxID`, `TestSandboxRole_EveryUserdataCLICallHasAGrant`, `TestSandboxRole_EverySDKActionHasAGrant` (all `pkg/terragrunt`), and `TestThreadsTableUpdates_FitTheIAMCondition` / `TestThreadsTableReads_ProjectOnlyOwnedAttributes` (`pkg/compiler`). **Never add `sandbox_id` to the threads write set.**
+
+**Deploy.** `make build` → `make build-lambdas` → `km init --dry-run=false` → recreate, canary first. No-go: repin `ec2spot` v1.7.0 at the three tracking sites.
+
+**Inline size limit.** IAM caps the aggregate of a role's inline policies at 10,240 characters. If a create ever fails with `LimitExceeded`, drop the `Sid`s first, then collapse the `PARAMETER_ARN` list to `parameter/{p}/sandbox/{id}/*`.
+
 See `docs/slack-default-route.md` § 6.4.
 
 ---

@@ -8,6 +8,11 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Sandbox instance role is least-privilege — ec2spot v1.8.0 (2026-10-17):**
+- **`ec2spot_region_lock` was an `Allow */*` conditioned on region, and the managed `AmazonSSMManagedInstanceCore` granted `ssm:GetParameter*` on `*`** with `kms:Decrypt` via SSM on every key: any box could read every parameter in the account and write every in-region table. v1.8.0 replaces them with a region **Deny** (`NotAction` = the SCP exemption list + `bedrock-mantle:*`, `aws-marketplace:*`) and one explicit grant per concern; every data-bearing grant (S3, DynamoDB, SSM parameters, SQS, logs, SES) names `{id}` or `{p}`, and only the SSM agent channel, `events:PutEvents`, Bedrock, the Bedrock-conditioned `aws-marketplace` grant, and the `kms:Decrypt` on `key/*` scoped by condition (SSM by parameter ARN, sandbox-secrets by alias) remain on `*`; SSM reads are per path, KMS pinned by `kms:EncryptionContext:PARAMETER_ARN`; threads tables are writable only for a named attribute set that excludes `sandbox_id`; `action-quota` by `LeadingKeys`.
+- **The role is created per sandbox at `km create`**, so existing boxes keep the old shape until recreate; `km doctor` "Sandbox role shape" lists them. Operator `aws` calls in `initCommands` now fail under `set -e` — `km validate` WARNs; use `iam.allowedSecretPaths` for SSM. `KM_RESOURCE_PREFIX` unset aborts a poller rather than targeting `km-*`.
+- **Deploy = `make build` → `make build-lambdas` → `km init --dry-run=false` → recreate (canary first).** No-go = repin v1.7.0 at the three sites. IAM aggregate inline-policy limit is 10,240 chars; drop `Sid`s, then collapse the PARAMETER_ARN list, if a create ever hits `LimitExceeded`. See `docs/operational-gotchas.md` § The sandbox role is least-privilege.
+
 **`km t3` — T3 Code on a sandbox, in the background (2026-10-17):**
 - **`km t3 start|stop|status <sb>` and `km t3 <sb>` (connect).** `start` installs the pinned t3
   (`0.1.0`, from the GitHub release tag's installer, plus `libatomic` as root, which AL2023
@@ -83,18 +88,11 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   `channel` (`REPLY_CHANNEL`) and exports a per-turn `KM_SLACK_CHANNEL_ID`, so the
   notify-hook and `km-slack reply` follow with no binary change. The bridge authorizes a
   foreign-channel post only when it carries a `thread_ts` whose `km-slack-threads` row names
-  the posting sandbox, and **only for `post` and `upload`**. That row is written only by
-  bridge-side components (events handler, create-handler); the sandbox role has no explicit
-  grant on the table, pinned by `TestSandboxRole_HasNoWriteGrantOnSlackThreadsTable` —
-  **never grant the sandbox role access to `km-slack-threads`** (DynamoDB IAM cannot scope by
-  `sandbox_id`). **Open hole:** `ec2spot_region_lock` is an `Allow *` on `*` conditioned on
-  region, created for every `iam.allowedRegions` profile (all of `base/platform`), so those
-  boxes CAN write the table (and every other in-region table) today. A forged row would be
-  honoured, so there the gate bounds posting to channels the bot is in, not to threads the
-  bridge routed. The guard names it as its one known exception; narrowing it (region Deny
-  plus explicit grants, after enumerating what sandboxes rely on) and then moving
-  routed-thread authz to a store the sandbox cannot reach is a separate phase (spec §11).
-  `permalink`/`update` there stay
+  the posting sandbox, and **only for `post` and `upload`**. `sandbox_id` on that row is written only by
+  bridge-side components; since ec2spot v1.8.0 (2026-10-17) the sandbox role may update a
+  threads row only for its session attributes (`dynamodb:Attributes` condition, `sandbox_id`
+  excluded, `TestSandboxRole_ThreadsWriteGrantExcludesSandboxID`), and the region lock is a
+  Deny, so a forged row cannot carry `sandbox_id` and authorizes nothing. `permalink`/`update` there stay
   `403 channel_mismatch` because the bot token is shared across sandboxes and neither verb is
   thread-anchored. Consequence: the Phase 70 `claude:`/`codex:` handoff (a new top-level
   post) is skipped in a routed thread, with a poller log line saying so.
@@ -2066,7 +2064,8 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | Ask the bot to DM someone — `km-slack dm`, who it may DM, the continuity row, the `im:write` scope | `docs/slack-notifications.md` § Bot-initiated DMs |
 | @-mention the bot from any channel or DM — `slack.default_route`, the email allowlist, the routing ladder, replies in the originating thread, the `channel_mismatch` rule, the DM scopes, deploy and half-deploy outcomes; strict `threadBypass: false` and thread context | `docs/slack-notifications.md` § Default route + § Phase 91 Strict mode |
 | Thread replies stopped getting 👀; admitting a whole email domain; one klanker answering only named people — `slack.react_quiet_seconds` / `reactQuietSeconds`, `*@<domain>` entries, `allowEmails` override rule, the route-profile list and its recreate consequence | `docs/slack-notifications.md` § Quiet period + § Allowlists: domains and per-sandbox lists |
-| Why the Slack default route and strict mode were built the way they were — every design decision with its rationale, the end-to-end ladder, the code map and tests, the `ec2spot_region_lock` security finding, deploy surface, log lines, UAT checklist, follow-ups | `docs/slack-default-route.md` |
+| Why a sandbox can no longer read every SSM parameter or write every table — the least-privilege role, what it grants, `km validate`'s `aws` warning, `km doctor` Sandbox role shape, the inline-size limit | `docs/operational-gotchas.md` § The sandbox role is least-privilege since ec2spot v1.8.0 |
+| Why the Slack default route and strict mode were built the way they were — every design decision with its rationale, the end-to-end ladder, the code map and tests, the closed `ec2spot_region_lock` finding, deploy surface, log lines, UAT checklist, follow-ups | `docs/slack-default-route.md` |
 | Hibernate/resume cross-wiring additional EBS volumes — why fstab-by-UUID corrupted them, the live-Identify rule, the pre/post sleep hooks, `onVolumeMismatch`, `km-volumes repair`, re-materialising from snapshot, the `/shared` caveat | `docs/hibernate-volumes.md` |
 | Sharing a sandbox's VS Code / desktop / herdr / tunnel access between analysts — the SSM-held key + password under `/{prefix}/access/`, the sync table, rekey publish order, the mismatch guard, why the desktop has none | `docs/vscode.md` § Sharing a sandbox between analysts + `docs/desktop.md` § Sharing a desktop between analysts |
 | How interactive sessions came to be enforced (Phase 135) — the cgroup v2 common-ancestor rule, the uid-or-scope predicate and why both clauses, fail-open constants, and the quiet half-deploy | `docs/operational-gotchas.md` § Interactive sessions and the eBPF enforcement cgroup |

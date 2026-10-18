@@ -656,36 +656,91 @@ func TestSQSAdapter_Send_SDKError(t *testing.T) {
 // DDBThreadStore tests
 // ============================================================
 
-func TestDDBThreadStore_Upsert_NewRow(t *testing.T) {
-	mock := &mockDDBQueryGetPut{}
-	s := &bridge.DDBThreadStore{Client: mock, TableName: "km-slack-threads"}
-	err := s.Upsert(context.Background(), "C1", "1.0", "sb-A")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if mock.putCalls != 1 {
-		t.Errorf("expected 1 PutItem call, got %d", mock.putCalls)
-	}
-}
-
-func TestDDBThreadStore_Upsert_AlreadyExists(t *testing.T) {
-	mock := &mockDDBQueryGetPut{
-		putItem: func(ctx context.Context, in *dynamodb.PutItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
-			return nil, &dynamodbtypes.ConditionalCheckFailedException{
-				Message: aws.String("already exists"),
-			}
+// Upsert is an UpdateItem that fills each bridge-owned attribute only when it is
+// absent. The poller cannot write sandbox_id under the ec2spot v1.8.0 role, so a
+// row the poller created (the Phase 70 handoff thread) exists WITHOUT it; a
+// conditional PutItem would hit ConditionalCheckFailed there and never fill it.
+func TestDDBThreadStore_Upsert_UpdateItemFillsMissingSandboxID(t *testing.T) {
+	var got *dynamodb.UpdateItemInput
+	mock := &mockDDBUpdateItem{
+		updateItem: func(_ context.Context, in *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+			got = in
+			return &dynamodb.UpdateItemOutput{}, nil
 		},
 	}
 	s := &bridge.DDBThreadStore{Client: mock, TableName: "km-slack-threads"}
-	err := s.Upsert(context.Background(), "C1", "1.0", "sb-A")
-	if err != nil {
-		t.Fatalf("ConditionalCheckFailed must map to nil (idempotent success), got: %v", err)
+	if err := s.Upsert(context.Background(), "C1", "1.0", "sb-A"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.updateCalled != 1 {
+		t.Fatalf("expected 1 UpdateItem call, got %d", mock.updateCalled)
+	}
+	if mock.putCalls != 0 {
+		t.Errorf("Upsert must not PutItem (a whole-row put wipes poller attributes), got %d", mock.putCalls)
+	}
+	if aws.ToString(got.TableName) != "km-slack-threads" {
+		t.Errorf("table = %q", aws.ToString(got.TableName))
+	}
+	if k, ok := got.Key["channel_id"].(*dynamodbtypes.AttributeValueMemberS); !ok || k.Value != "C1" {
+		t.Errorf("key channel_id = %#v", got.Key["channel_id"])
+	}
+	if k, ok := got.Key["thread_ts"].(*dynamodbtypes.AttributeValueMemberS); !ok || k.Value != "1.0" {
+		t.Errorf("key thread_ts = %#v", got.Key["thread_ts"])
+	}
+	if got.ConditionExpression != nil {
+		t.Errorf("Upsert must carry no ConditionExpression (it must fill an existing row), got %q", aws.ToString(got.ConditionExpression))
+	}
+	expr := aws.ToString(got.UpdateExpression)
+	for _, attr := range []string{"sandbox_id", "created_at", "last_turn_ts", "turn_count", "ttl_expiry"} {
+		want := attr + " = if_not_exists(" + attr + ","
+		if !strings.Contains(expr, want) {
+			t.Errorf("UpdateExpression %q missing %q", expr, want)
+		}
+	}
+	for _, attr := range []string{"claude_session_id", "agent_type", "last_assistant_msg", "last_processed_event_ts", "last_dispatch_ts"} {
+		if strings.Contains(expr, attr) {
+			t.Errorf("UpdateExpression %q must never touch poller/session attribute %s", expr, attr)
+		}
+	}
+	if v, ok := got.ExpressionAttributeValues[":sb"].(*dynamodbtypes.AttributeValueMemberS); !ok || v.Value != "sb-A" {
+		t.Errorf(":sb = %#v", got.ExpressionAttributeValues[":sb"])
+	}
+	if v, ok := got.ExpressionAttributeValues[":zero"].(*dynamodbtypes.AttributeValueMemberN); !ok || v.Value != "0" {
+		t.Errorf(":zero = %#v", got.ExpressionAttributeValues[":zero"])
+	}
+	if _, ok := got.ExpressionAttributeValues[":now"].(*dynamodbtypes.AttributeValueMemberS); !ok {
+		t.Errorf(":now = %#v", got.ExpressionAttributeValues[":now"])
+	}
+	if _, ok := got.ExpressionAttributeValues[":ttl"].(*dynamodbtypes.AttributeValueMemberN); !ok {
+		t.Errorf(":ttl = %#v", got.ExpressionAttributeValues[":ttl"])
+	}
+}
+
+// A row that already names a sandbox keeps it: sandbox_id is written through
+// if_not_exists, never a plain SET (rebinding is Rebind's job, not Upsert's).
+func TestDDBThreadStore_Upsert_KeepsExistingSandboxID(t *testing.T) {
+	var expr string
+	mock := &mockDDBUpdateItem{
+		updateItem: func(_ context.Context, in *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+			expr = aws.ToString(in.UpdateExpression)
+			return &dynamodb.UpdateItemOutput{}, nil
+		},
+	}
+	s := &bridge.DDBThreadStore{Client: mock, TableName: "km-slack-threads"}
+	if err := s.Upsert(context.Background(), "C1", "1.0", "sb-B"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(expr, "if_not_exists(sandbox_id") {
+		t.Errorf("sandbox_id must be guarded by if_not_exists, got %q", expr)
+	}
+	if strings.Contains(strings.ReplaceAll(expr, " ", ""), "sandbox_id=:sb") {
+		t.Errorf("sandbox_id must not be SET unconditionally, got %q", expr)
 	}
 }
 
 func TestDDBThreadStore_Upsert_OtherError(t *testing.T) {
-	mock := &mockDDBQueryGetPut{
-		putItem: func(ctx context.Context, in *dynamodb.PutItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
+	mock := &mockDDBUpdateItem{
+		updateItem: func(_ context.Context, _ *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
 			return nil, fmt.Errorf("DDB throttled")
 		},
 	}
@@ -696,6 +751,33 @@ func TestDDBThreadStore_Upsert_OtherError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "threads upsert") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// Rebind is unchanged: an unconditional whole-row PutItem naming the new box
+// with no session id, so the next turn starts a fresh session.
+func TestDDBThreadStore_Rebind_UnconditionalPut(t *testing.T) {
+	var got *dynamodb.PutItemInput
+	mock := &mockDDBUpdateItem{}
+	mock.putItem = func(_ context.Context, in *dynamodb.PutItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
+		got = in
+		return &dynamodb.PutItemOutput{}, nil
+	}
+	s := &bridge.DDBThreadStore{Client: mock, TableName: "km-slack-threads"}
+	if err := s.Rebind(context.Background(), "C1", "1.0", "sb-new"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.putCalls != 1 || mock.updateCalled != 0 {
+		t.Fatalf("Rebind: want 1 PutItem / 0 UpdateItem, got %d / %d", mock.putCalls, mock.updateCalled)
+	}
+	if got.ConditionExpression != nil {
+		t.Errorf("Rebind must be unconditional, got %q", aws.ToString(got.ConditionExpression))
+	}
+	if v, ok := got.Item["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS); !ok || v.Value != "sb-new" {
+		t.Errorf("sandbox_id = %#v", got.Item["sandbox_id"])
+	}
+	if _, ok := got.Item["claude_session_id"]; ok {
+		t.Error("Rebind must not carry claude_session_id")
 	}
 }
 

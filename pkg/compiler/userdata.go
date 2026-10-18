@@ -1976,7 +1976,7 @@ set -euo pipefail
 QUEUE_URL="${KM_SLACK_INBOUND_QUEUE_URL:-}"
 SANDBOX_ID="${KM_SANDBOX_ID:-}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
-THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-slack-threads}"
+THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:?KM_RESOURCE_PREFIX is unset; the install prefix is required to name AWS resources}-slack-threads}"
 
 # Phase 70 (Plan 70-05): AGENT is the profile default read at boot. Resolved from
 # KM_AGENT in /etc/km/notify.env (emitted by the compiler when spec.cli.agent is set).
@@ -2227,6 +2227,7 @@ while true; do
       DDB_ITEM=$(aws dynamodb get-item \
         --table-name "$THREADS_TABLE" \
         --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
+        --projection-expression "claude_session_id, agent_type, last_assistant_msg, last_processed_event_ts" \
         --region "$REGION" \
         --output json 2>/dev/null || true)
       CLAUDE_SESSION=$(echo "$DDB_ITEM" | jq -r '.Item.claude_session_id.S // empty' 2>/dev/null || true)
@@ -2702,16 +2703,20 @@ while true; do
         # turn_count on this same row; a put-item replaced the whole item every
         # turn and wiped them, so the reaction quiet period never saw a boundary
         # and strict-mode context fell back to the thread root.
+        #
+        # sandbox_id is NOT written here: the bridge writes it at dispatch
+        # (Upsert) and the v1.8.0 sandbox role's dynamodb:Attributes condition
+        # excludes it. --return-values NONE is pinned for the same condition.
         aws dynamodb update-item \
           --table-name "$THREADS_TABLE" \
           --region "$REGION" \
           --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
-          --update-expression "SET claude_session_id = :sid, agent_type = :agent, last_assistant_msg = :msg, sandbox_id = :sb, last_turn_ts = :lt, last_processed_event_ts = :ev, ttl_expiry = :ttl" \
+          --return-values NONE \
+          --update-expression "SET claude_session_id = :sid, agent_type = :agent, last_assistant_msg = :msg, last_turn_ts = :lt, last_processed_event_ts = :ev, ttl_expiry = :ttl" \
           --expression-attribute-values "{
             \":sid\":{\"S\":\"$NEW_SESSION\"},
             \":agent\":{\"S\":\"$EFFECTIVE_AGENT\"},
             \":msg\":{\"S\":$LAST_MSG_JSON},
-            \":sb\":{\"S\":\"$SANDBOX_ID\"},
             \":lt\":{\"S\":\"$NOW\"},
             \":ev\":{\"S\":\"$EVENT_TS\"},
             \":ttl\":{\"N\":\"$TTL_EXPIRY\"}
@@ -2867,7 +2872,7 @@ command -v "$AGENT" >/dev/null 2>&1 || echo "[km-inbound-poller] WARNING: agent 
 
 # km-github-threads table for session/thread continuity (GH-X-CONTINUITY).
 # Falls back to {prefix}-github-threads matching the default in main.go.
-GITHUB_THREADS_TABLE="${KM_GITHUB_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-github-threads}"
+GITHUB_THREADS_TABLE="${KM_GITHUB_THREADS_TABLE:-${KM_RESOURCE_PREFIX:?KM_RESOURCE_PREFIX is unset; the install prefix is required to name AWS resources}-github-threads}"
 
 # Export AWS_REGION so subprocesses (km-github comment, km-github review, aws CLI) inherit it.
 # The systemd unit's EnvironmentFile=/etc/km/notify.env uses systemd-native format
@@ -3177,6 +3182,7 @@ $COMMENT_BODY"
         aws dynamodb update-item \
           --table-name "$GITHUB_THREADS_TABLE" \
           --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
+          --return-values NONE \
           --update-expression "REMOVE agent_session_id" \
           --region "$REGION" 2>/dev/null || true
       fi
@@ -3218,6 +3224,7 @@ $COMMENT_BODY"
       aws dynamodb update-item \
         --table-name "$GITHUB_THREADS_TABLE" \
         --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
+        --return-values NONE \
         --update-expression "SET agent_session_id = :sid, agent_type = :at" \
         --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_GITHUB_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
         --region "$REGION" 2>/dev/null || true
@@ -3314,7 +3321,7 @@ TARGET="${KM_SANDBOX_ALIAS:-$SANDBOX_ID}"
 
 # km-h1-threads table for session/thread continuity (H1-THREAD-CONTINUITY).
 # Falls back to {prefix}-h1-threads matching the bridge default.
-H1_THREADS_TABLE="${KM_H1_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-h1-threads}"
+H1_THREADS_TABLE="${KM_H1_THREADS_TABLE:-${KM_RESOURCE_PREFIX:?KM_RESOURCE_PREFIX is unset; the install prefix is required to name AWS resources}-h1-threads}"
 
 # Export AWS_REGION so subprocesses (km-h1, aws CLI) inherit it. The systemd unit's
 # EnvironmentFile=/etc/km/notify.env uses systemd-native format which omits AWS_REGION.
@@ -3587,6 +3594,7 @@ $POSTING_SECTION"
       aws dynamodb update-item \
         --table-name "$H1_THREADS_TABLE" \
         --key "{\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}}" \
+        --return-values NONE \
         --update-expression "REMOVE agent_session_id" \
         --region "$REGION" 2>/dev/null || true
       dispatch_as_sandbox "
@@ -3624,6 +3632,7 @@ $POSTING_SECTION"
       aws dynamodb update-item \
         --table-name "$H1_THREADS_TABLE" \
         --key "{\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}}" \
+        --return-values NONE \
         --update-expression "SET agent_session_id = :sid, agent_type = :at" \
         --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_H1_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
         --region "$REGION" 2>/dev/null || true
@@ -4174,6 +4183,7 @@ User=root
 EnvironmentFile=-/etc/km/notify.env
 Environment=SANDBOX_ID={{ .SandboxID }}
 Environment=KM_SANDBOX_ID={{ .SandboxID }}
+Environment=KM_RESOURCE_PREFIX={{ .ResourcePrefix }}
 # Phase 75.3: poller bash mirrors S3 attachments to /workspace/.km-slack/attachments/.
 # /etc/km/notify.env carries the spec.cli.notify* knobs but not KM_ARTIFACTS_BUCKET
 # (that's a userdata template variable, set per-substrate). Make it explicit here so
@@ -4202,6 +4212,7 @@ User=root
 EnvironmentFile=-/etc/km/notify.env
 Environment=SANDBOX_ID={{ .SandboxID }}
 Environment=KM_SANDBOX_ID={{ .SandboxID }}
+Environment=KM_RESOURCE_PREFIX={{ .ResourcePrefix }}
 ExecStart=/opt/km/bin/km-github-inbound-poller
 Restart=always
 RestartSec=5
@@ -4224,6 +4235,7 @@ User=root
 EnvironmentFile=-/etc/km/notify.env
 Environment=SANDBOX_ID={{ .SandboxID }}
 Environment=KM_SANDBOX_ID={{ .SandboxID }}
+Environment=KM_RESOURCE_PREFIX={{ .ResourcePrefix }}
 ExecStart=/opt/km/bin/km-h1-inbound-poller
 Restart=always
 RestartSec=5
@@ -4988,7 +5000,7 @@ done
 
 MAIL_DIR="/var/mail/km"
 SANDBOX_ID="${KM_SANDBOX_ID:-}"
-IDENTITIES_TABLE="${KM_IDENTITIES_TABLE:-${KM_RESOURCE_PREFIX:-km}-identities}"
+IDENTITIES_TABLE="${KM_IDENTITIES_TABLE:-${KM_RESOURCE_PREFIX:?KM_RESOURCE_PREFIX is unset; the install prefix is required to name AWS resources}-identities}"
 
 # ----------------------------------------------------------------
 # ed25519_pubkey_to_pem: convert a base64-encoded 32-byte Ed25519
@@ -7036,7 +7048,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		return "", err
 	}
 
-	emailDomain := "sandboxes.klankermaker.ai" // TODO Phase 66 plan 04: migrate nil-network fallback to cfg.GetEmailDomain() via caller
+	emailDomain := defaultEmailDomain // TODO Phase 66 plan 04: migrate nil-network fallback to cfg.GetEmailDomain() via caller
 	alias := ""
 	if len(emailDomainOverride) > 0 && emailDomainOverride[0] != "" {
 		emailDomain = emailDomainOverride[0]

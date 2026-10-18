@@ -83,7 +83,10 @@ func main() {
 	var budgetOnUpdate httpproxy.BudgetUpdater
 
 	if budgetEnabled {
-		budgetTableName = getEnv("KM_BUDGET_TABLE", "km-budgets")
+		budgetTableName = os.Getenv("KM_BUDGET_TABLE")
+		if budgetTableName == "" {
+			log.Fatal().Msg("KM_BUDGET_TABLE is unset while budget enforcement is enabled; a km- default would miss the install's table (and its IAM grant)")
+		}
 
 		cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 		if err != nil {
