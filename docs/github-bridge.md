@@ -2236,3 +2236,6 @@ to pick up the Phase 115 poller (`KIND`-branched preamble).
 
 See `.planning/phases/115-generic-github-webhook-event-prompt-router/115-UAT.md` for
 the full live E2E runbook.
+
+
+**Session continuity (2026-10-18).** The GitHub poller keeps its session state in `/var/lib/km/sessions/github/<owner>_<repo>_<number>.json` and records the session id and agent type at the bridge through `km-slack session --source github`. It makes no DynamoDB call, and the sandbox role has no grant on the GitHub threads table. A profile with no `KM_SLACK_BRIDGE_URL` still resumes locally, but the bridge's `agent_type` for the thread goes stale. See `docs/operational-gotchas.md` § Thread session state behind the bridge.

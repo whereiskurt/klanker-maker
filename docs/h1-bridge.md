@@ -648,3 +648,6 @@ km doctor
 - **Manual:** orphan a test alias (terminate its instance, leave `status=stopped`), trigger
   the program webhook → the bridge logs `orphaned stopped row … cold-creating`, a new
   instance is created, and no message strands in the old FIFO.
+
+
+**Session continuity (2026-10-18).** The HackerOne poller keeps its session state in `/var/lib/km/sessions/h1/<report_id>_<target>.json` and records the session id and agent type at the bridge through `km-slack session --source h1`. It makes no DynamoDB call, and the sandbox role has no grant on the HackerOne threads table. A profile with no `KM_SLACK_BRIDGE_URL` still resumes locally, but the bridge's `agent_type` for the thread goes stale. See `docs/operational-gotchas.md` § Thread session state behind the bridge.

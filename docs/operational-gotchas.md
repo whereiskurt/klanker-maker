@@ -292,6 +292,17 @@ absent" as "fall back to install default".
 a targeted `UpdateItem` (like `UpdateSandboxTTLDynamo`) over a full-row rewrite when
 only one attribute changes.
 
+### Thread session state behind the bridge — ec2spot v1.9.0 (2026-10-18)
+
+v1.8.0 left one residual: any box could `UpdateItem` another thread's session attributes. v1.9.0 removes the grant, so the sandbox role has no access to any threads table (`TestSandboxRole_HasNoGrantOnThreadsTables`).
+
+- **Local state.** Each inbound poller keeps `/var/lib/km/sessions/<source>/<key>.json` with `session_id`, `agent_type`, `last_assistant_msg`, `last_processed_event_ts` and `updated_at`. Keys are `slack/<channel>_<thread_ts>`, `github/<owner>_<repo>_<number>` and `h1/<report_id>_<target>`. No poller makes a DynamoDB call. Local resume and the idempotency guard read this file.
+- **Bridge record.** After a turn the poller calls `km-slack session --source slack|github|h1 <key flags> --session-id ID|--clear --agent claude|codex`. The bridge writes only those two attributes, and only on a row that names the caller. `404 thread_unknown` never creates a row. `403 thread_not_owned` refuses another sandbox's thread. `503 source_unavailable` means the bridge has no table for that source.
+- **Rows are born only in the bridge:** dispatch, `dm`, and `km-slack post --new-message --claim-thread` for a Phase 70 handoff's new top-level message. This also removes the v1.8.0 caveat that a handoff thread's first reply needed an @-mention.
+- **GitHub-only or H1-only boxes.** Such a profile may have no `KM_SLACK_BRIDGE_URL`. Its `km-slack session` call then fails with a WARN in the poller log. Local resume still works, but the bridge's `agent_type` for that thread goes stale.
+- **Half-deploys.** New poller with an old bridge logs `400 unknown_action`, and the turn completes. New poller with an old `km-slack` makes the handoff's `--claim-thread` post fail, and the handoff aborts. One `km init` ships both, so only a split deploy hits it. The `--clear` retry branch loses its stderr to the retry dispatch.
+- **Deploy.** `make build`, `make build-lambdas`, `km init --dry-run=false` (bridge code, its `GetItem`/`UpdateItem` grants on the GitHub and H1 threads tables, `KM_GITHUB_THREADS_TABLE`/`KM_H1_THREADS_TABLE`, the v1.9.0 pin; `dynamodb-h1-threads` now applies before the bridges), then recreate. Existing boxes keep v1.8.0 until recreated, and `km doctor` "Sandbox role shape" names a `-threads-rw` role as pre-v1.9.0.
+
 ### The sandbox role is least-privilege since ec2spot v1.8.0 (2026-10-17)
 
 **What was wrong.** Three holes let any sandbox act well outside its own resources.
@@ -315,7 +326,7 @@ only one attribute changes.
 - `KM_RESOURCE_PREFIX` unset now aborts a poller instead of silently targeting `km-*`.
 - A Phase 70 handoff thread's row is written by the poller without `sandbox_id`. The bridge fills it on the first turn it dispatches there, so in a mention-only channel the first reply in a handoff thread still needs an @-mention.
 
-**Residual.** Any box can still `UpdateItem` another thread's session attributes if it knows that thread's `(channel_id, thread_ts)`. A poisoned `last_assistant_msg` is pasted into the victim's handoff seed prompt, which is cross-sandbox prompt injection. A large `last_processed_event_ts` makes the victim's poller skip later messages. This was possible under the Allow-star and is strictly narrower now. Moving the session writes behind the bridge removes it; see `docs/slack-default-route.md` § 11.
+**Residual (closed in v1.9.0, above).** Any box could still `UpdateItem` another thread's session attributes if it knows that thread's `(channel_id, thread_ts)`. A poisoned `last_assistant_msg` is pasted into the victim's handoff seed prompt, which is cross-sandbox prompt injection. A large `last_processed_event_ts` makes the victim's poller skip later messages. This was possible under the Allow-star and is strictly narrower now. Moving the session writes behind the bridge removes it; see `docs/slack-default-route.md` § 11.
 
 **Guards.** `TestEC2SpotRole_*`, `TestSandboxRole_ThreadsWriteGrantExcludesSandboxID`, `TestSandboxRole_EveryUserdataCLICallHasAGrant`, `TestSandboxRole_EverySDKActionHasAGrant` (all `pkg/terragrunt`), and `TestThreadsTableUpdates_FitTheIAMCondition` / `TestThreadsTableReads_ProjectOnlyOwnedAttributes` (`pkg/compiler`). **Never add `sandbox_id` to the threads write set.**
 
