@@ -2878,6 +2878,18 @@ command -v "$AGENT" >/dev/null 2>&1 || echo "[km-inbound-poller] WARNING: agent 
 # propagate it to spawned binaries unless explicitly exported.
 export AWS_REGION="$REGION"
 
+# --- km-bridge-url-resolve ---
+# km-slack session needs the bridge URL; notify.env never carries it (it is
+# minted after the box's env file is written), so resolve it from SSM once, as
+# the Slack poller does. Failure leaves it empty: the session call then WARNs
+# and the turn proceeds (local resume still works).
+if [ -z "${KM_SLACK_BRIDGE_URL:-}" ]; then
+  KM_SLACK_BRIDGE_URL=$(aws ssm get-parameter --name "{{ .SsmPrefix }}slack/bridge-url" --region "$REGION" --query 'Parameter.Value' --output text 2>/dev/null || true)
+  [ "$KM_SLACK_BRIDGE_URL" = "None" ] && KM_SLACK_BRIDGE_URL=""
+fi
+export KM_SLACK_BRIDGE_URL
+# --- end km-bridge-url-resolve ---
+
 [ -z "$SANDBOX_ID" ] && echo "[km-github-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
 
 # Phase 131 gap-fix: dispatch_as_sandbox joins this sandbox's eBPF cgroup scope
@@ -3339,6 +3351,18 @@ TARGET="${KM_SANDBOX_ALIAS:-$SANDBOX_ID}"
 # Export AWS_REGION so subprocesses (km-h1, aws CLI) inherit it. The systemd unit's
 # EnvironmentFile=/etc/km/notify.env uses systemd-native format which omits AWS_REGION.
 export AWS_REGION="$REGION"
+
+# --- km-bridge-url-resolve ---
+# km-slack session needs the bridge URL; notify.env never carries it (it is
+# minted after the box's env file is written), so resolve it from SSM once, as
+# the Slack poller does. Failure leaves it empty: the session call then WARNs
+# and the turn proceeds (local resume still works).
+if [ -z "${KM_SLACK_BRIDGE_URL:-}" ]; then
+  KM_SLACK_BRIDGE_URL=$(aws ssm get-parameter --name "{{ .SsmPrefix }}slack/bridge-url" --region "$REGION" --query 'Parameter.Value' --output text 2>/dev/null || true)
+  [ "$KM_SLACK_BRIDGE_URL" = "None" ] && KM_SLACK_BRIDGE_URL=""
+fi
+export KM_SLACK_BRIDGE_URL
+# --- end km-bridge-url-resolve ---
 
 [ -z "$SANDBOX_ID" ] && echo "[km-h1-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
 

@@ -1,6 +1,9 @@
 package compiler
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -107,5 +110,74 @@ func TestH1Poller_SessionViaLocalFileAndBridge(t *testing.T) {
 	}
 	if strings.Contains(h1, "aws dynamodb") {
 		t.Error("h1 poller still calls dynamodb")
+	}
+}
+
+// The GitHub and H1 pollers' units load only /etc/km/notify.env, which never
+// carries KM_SLACK_BRIDGE_URL, so each poller must resolve it from SSM before
+// its first km-slack session call, or every session record fails.
+func TestGitHubH1Pollers_ResolveBridgeURLBeforeSession(t *testing.T) {
+	for name, block := range map[string]string{
+		"github": pollerBlock(t, "# km-github-inbound-poller:", "chmod +x /opt/km/bin/km-github-inbound-poller"),
+		"h1":     pollerBlock(t, "# km-h1-inbound-poller:", "chmod +x /opt/km/bin/km-h1-inbound-poller"),
+	} {
+		r := strings.Index(block, "# --- km-bridge-url-resolve ---")
+		if r < 0 {
+			t.Errorf("%s poller lacks the km-bridge-url-resolve block", name)
+			continue
+		}
+		if !strings.Contains(block[r:], `--name "{{ .SsmPrefix }}slack/bridge-url"`) || !strings.Contains(block[r:], "export KM_SLACK_BRIDGE_URL") {
+			t.Errorf("%s resolve block does not read slack/bridge-url and export it", name)
+		}
+		s := strings.Index(block, "km-slack session")
+		if s < 0 || s < r {
+			t.Errorf("%s poller: resolve block (at %d) must precede the first km-slack session (at %d)", name, r, s)
+		}
+	}
+}
+
+// Runs the lifted resolve block under real bash with a fake aws on PATH.
+func TestBridgeURLResolveBlock_ExportsURLFromSSM(t *testing.T) {
+	gh := pollerBlock(t, "# km-github-inbound-poller:", "chmod +x /opt/km/bin/km-github-inbound-poller")
+	a := strings.Index(gh, "# --- km-bridge-url-resolve ---")
+	if a < 0 {
+		t.Fatal("resolve block not found")
+	}
+	b := strings.Index(gh[a:], "# --- end km-bridge-url-resolve ---")
+	if b < 0 {
+		t.Fatal("unterminated resolve block")
+	}
+	resolve := strings.ReplaceAll(gh[a:a+b], "{{ .SsmPrefix }}", "/km/")
+
+	dir := t.TempDir()
+	fakeAWS := "#!/bin/sh\necho \"$*\" >> \"" + filepath.Join(dir, "aws.log") + "\"\necho https://bridge.example/\n"
+	if err := os.WriteFile(filepath.Join(dir, "aws"), []byte(fakeAWS), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "set -euo pipefail\nREGION=us-east-1\nunset KM_SLACK_BRIDGE_URL\n" + resolve + "\nbash -c 'printf %s \"$KM_SLACK_BRIDGE_URL\"'\n"
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("resolve block failed: %v\n%s", err, out)
+	}
+	if string(out) != "https://bridge.example/" {
+		t.Fatalf("child saw KM_SLACK_BRIDGE_URL=%q, want https://bridge.example/", out)
+	}
+	log, _ := os.ReadFile(filepath.Join(dir, "aws.log"))
+	if !strings.Contains(string(log), "--name /km/slack/bridge-url") {
+		t.Errorf("aws not asked for /km/slack/bridge-url: %q", log)
+	}
+
+	// An already-set URL is kept and SSM is not consulted.
+	cmd = exec.Command("bash", "-c", "set -euo pipefail\nREGION=us-east-1\n"+resolve+"\nprintf %s \"$KM_SLACK_BRIDGE_URL\"\n")
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "KM_SLACK_BRIDGE_URL=https://preset/")
+	_ = os.Remove(filepath.Join(dir, "aws.log"))
+	out, err = cmd.CombinedOutput()
+	if err != nil || string(out) != "https://preset/" {
+		t.Fatalf("preset URL not kept: %v %q", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "aws.log")); err == nil {
+		t.Error("aws consulted although KM_SLACK_BRIDGE_URL was preset")
 	}
 }

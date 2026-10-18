@@ -96,7 +96,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   bridge-side components; since ec2spot v1.9.0 (2026-10-18) the sandbox role has NO grant on any
   threads table (`TestSandboxRole_HasNoGrantOnThreadsTables`) and the region lock is a Deny.
   Session attributes reach the row only through the bridge's `session` action, which requires
-  the row to name the caller, so a forged row is impossible. `permalink`/`update` there stay
+  the row to name the caller, so a box cannot create or write a thread row; rows are born only in the bridge. `permalink`/`update` there stay
   `403 channel_mismatch` because the bot token is shared across sandboxes and neither verb is
   thread-anchored. Consequence: the Phase 70 `claude:`/`codex:` handoff (a new top-level
   post) is skipped in a routed thread, with a poller log line saying so.

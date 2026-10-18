@@ -6,6 +6,10 @@ import (
 	"crypto/rand"
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/whereiskurt/klanker-maker/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 )
 
 // claim_thread: after a successful TOP-LEVEL post the bridge records the new
@@ -61,5 +65,29 @@ func TestPost_ClaimThread_FailedPostWritesNothing(t *testing.T) {
 	}
 	if len(th.upserts) != 0 {
 		t.Fatalf("failed post must not claim: %v", th.upserts)
+	}
+}
+
+// An operator-signed top-level post carrying claim_thread writes no row: a
+// thread row names a sandbox, and the operator is not one.
+func TestPost_ClaimThread_OperatorEnvelopeWritesNoRow(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	th := &recordingThreads{rows: map[string]string{}}
+	h := &bridge.Handler{
+		Now:      func() time.Time { return time.Unix(1714280400, 0) },
+		Keys:     &fakeKeys{keys: map[string]ed25519.PublicKey{slack.SenderOperator: pub}},
+		Nonces:   &fakeNonces{},
+		Channels: &fakeChannels{owned: map[string]string{}},
+		Token:    &fakeToken{tok: "xoxb"},
+		Slack:    &fakeSlack{returnTS: "1700.9"},
+		Threads:  th,
+	}
+	env := makeEnv(slack.ActionPost, slack.SenderOperator, "C0123ABC")
+	env.ClaimThread = true
+	if st := h.Handle(context.Background(), signRequest(t, env, priv)).StatusCode; st != 200 {
+		t.Fatalf("status %d", st)
+	}
+	if len(th.upserts) != 0 {
+		t.Fatalf("operator post must not claim: %v", th.upserts)
 	}
 }

@@ -374,8 +374,9 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 			// claim_thread (2026-10-18): the Phase 70 handoff posts a new top-level
 			// message and needs a thread row owned by the sender before any reply
 			// is dispatched into it. Only the bridge creates rows; here it knows
-			// exactly which message it just created and who asked for it.
-			if env.ClaimThread && env.ThreadTS == "" && env.Action == slack.ActionPost && h.Threads != nil {
+			// exactly which message it just created and who asked for it. A row
+			// names a sandbox, so an operator envelope never claims one.
+			if env.ClaimThread && !isOperator && env.ThreadTS == "" && env.Action == slack.ActionPost && h.Threads != nil {
 				if uerr := h.Threads.Upsert(ctx, env.Channel, ts, env.SenderID); uerr != nil {
 					logger.WarnContext(ctx, "bridge: claim_thread_failed", "step", "dispatch", "channel", env.Channel, "ts", ts, "sender_id", env.SenderID, "error", uerr.Error())
 				} else {

@@ -1292,8 +1292,9 @@ func parseSlackTS(ts string) (time.Time, bool) {
 
 // recordDispatch writes the km-slack-threads row after a SUCCESSFUL delivery
 // (never on failure — callers return or skip on a deliver error) and advances
-// the Part B dispatch boundary. Both writes are best-effort: the poller can
-// recreate the row when it does its DDB lookup.
+// the Part B dispatch boundary. Both writes are best-effort. No box can
+// create the row, so a failed Upsert means that thread's km-slack session
+// writes answer 404 until the next dispatch upserts it.
 func (h *EventsHandler) recordDispatch(ctx context.Context, msg slackMessageEvent, threadTS, sandboxID string, rebind bool) {
 	if rebind && msg.ThreadTS != "" {
 		// A routed thread whose row names a box that is no longer the alias's
