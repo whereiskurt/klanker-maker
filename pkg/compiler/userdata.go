@@ -1970,13 +1970,13 @@ cat > /opt/km/bin/km-slack-inbound-poller << 'SLACKINBOUND'
 #!/bin/bash
 set -euo pipefail
 # km-slack-inbound-poller: poll SQS FIFO queue for inbound Slack messages and
-# dispatch each turn via km agent run. Session continuity via DynamoDB km_slack_threads.
+# dispatch each turn via km agent run. Session continuity via per-thread state
+# files under /var/lib/km/sessions/slack, mirrored to the bridge by km-slack session.
 # Runs as root via systemd; claude invocation uses sudo -u sandbox for session files.
 
 QUEUE_URL="${KM_SLACK_INBOUND_QUEUE_URL:-}"
 SANDBOX_ID="${KM_SANDBOX_ID:-}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
-THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:?KM_RESOURCE_PREFIX is unset; the install prefix is required to name AWS resources}-slack-threads}"
 
 # Phase 70 (Plan 70-05): AGENT is the profile default read at boot. Resolved from
 # KM_AGENT in /etc/km/notify.env (emitted by the compiler when spec.cli.agent is set).
@@ -2051,6 +2051,33 @@ dispatch_as_sandbox() {
   )
 }
 
+# --- km-session-helpers ---
+# Per-thread agent-session state lives on the box (2026-10-18): the sandbox
+# role has no access to the threads tables any more. Only the session id and
+# agent type leave the box, through km-slack session (bridge-verified).
+km_session_file() { # <source> <key> -> path; creates the dir
+  local d="/var/lib/km/sessions/$1"
+  mkdir -p "$d" && chmod 700 /var/lib/km/sessions "$d" 2>/dev/null || true
+  printf '%s/%s.json' "$d" "$(printf '%s' "$2" | tr '/ ' '__')"
+}
+km_session_read() { # <file> -> S_SESSION_ID S_AGENT_TYPE S_LAST_MSG S_LAST_EVENT
+  S_SESSION_ID=""; S_AGENT_TYPE=""; S_LAST_MSG=""; S_LAST_EVENT=""
+  [ -s "$1" ] || return 0
+  S_SESSION_ID=$(jq -r '.session_id // empty' "$1" 2>/dev/null || true)
+  S_AGENT_TYPE=$(jq -r '.agent_type // empty' "$1" 2>/dev/null || true)
+  S_LAST_MSG=$(jq -r '.last_assistant_msg // empty' "$1" 2>/dev/null || true)
+  S_LAST_EVENT=$(jq -r '.last_processed_event_ts // empty' "$1" 2>/dev/null || true)
+}
+km_session_write() { # <file> <session_id> <agent_type> <last_msg_file|""> <last_event>
+  local f="$1" tmp msg=""
+  [ -n "$4" ] && [ -s "$4" ] && msg=$(head -c 4000 "$4")
+  tmp=$(mktemp "$(dirname "$f")/.tmp.XXXXXX") || return 1
+  jq -n --arg sid "$2" --arg at "$3" --arg msg "$msg" --arg ev "$5" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{session_id:$sid, agent_type:$at, last_assistant_msg:$msg, last_processed_event_ts:$ev, updated_at:$now}' > "$tmp" \
+    && mv -f "$tmp" "$f"
+}
+# --- end km-session-helpers ---
+
 # Fall back to SSM Parameter Store when the env var is empty. km create writes
 # /sandbox/${SANDBOX_ID}/slack-inbound-queue-url after the SQS queue is created
 # (an org-level SCP blocks SSM SendCommand, so the value cannot be injected
@@ -2119,7 +2146,7 @@ if [ -z "$KM_SLACK_CHANNEL_ID" ] || [ -z "$KM_SLACK_BRIDGE_URL" ]; then
 fi
 export KM_SLACK_CHANNEL_ID KM_SLACK_BRIDGE_URL
 
-echo "[km-slack-inbound-poller] Starting — queue=$QUEUE_URL table=$THREADS_TABLE region=$REGION"
+echo "[km-slack-inbound-poller] Starting — queue=$QUEUE_URL sessions=/var/lib/km/sessions/slack region=$REGION"
 
 # Phase 119 (P119-B): bounded-concurrent dispatch semaphore.
 # Default cap is 1 (serial, byte-compatible with Phase 118). Set KM_SLACK_MAX_CONCURRENCY
@@ -2223,24 +2250,15 @@ while true; do
       # (the bridge populates it on both the files and no-files paths).
       EVENT_TS=$(echo "$BODY" | jq -r '.event_ts // empty' 2>/dev/null || true)
 
-      # DDB lookup for existing Claude session in this thread.
-      DDB_ITEM=$(aws dynamodb get-item \
-        --table-name "$THREADS_TABLE" \
-        --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
-        --projection-expression "claude_session_id, agent_type, last_assistant_msg, last_processed_event_ts" \
-        --region "$REGION" \
-        --output json 2>/dev/null || true)
-      CLAUDE_SESSION=$(echo "$DDB_ITEM" | jq -r '.Item.claude_session_id.S // empty' 2>/dev/null || true)
-      # Phase 70 (Plan 70-05): read agent_type + last_assistant_msg alongside session ID.
-      # agent_type defaults to AGENT (profile default) when absent — backward compat with
-      # pre-Phase-70 rows that predate this attribute. last_assistant_msg is consumed by
-      # Plan 70-06's cross-agent switch; loaded here so DDB lookup stays single-pass.
-      CURRENT_AGENT=$(echo "$DDB_ITEM" | jq -r '.Item.agent_type.S // empty' 2>/dev/null || true)
-      LAST_ASSISTANT_MSG=$(echo "$DDB_ITEM" | jq -r '.Item.last_assistant_msg.S // empty' 2>/dev/null || true)
-      # Phase 119 (P119-F): idempotency guard — read last_processed_event_ts from same DDB row.
-      # A crash-redelivered SQS message carries the same event_ts; skip it if already processed+posted.
-      # Fail-OPEN: if the DDB read errored (empty DDB_ITEM), LAST_EVENT is empty and we proceed.
-      LAST_EVENT=$(echo "$DDB_ITEM" | jq -r '.Item.last_processed_event_ts.S // empty' 2>/dev/null || true)
+      # Per-thread session state for this thread, from the box's own state file
+      # (km_session_read leaves every field empty when the file is absent).
+      # agent_type defaults to AGENT (profile default) when absent.
+      # last_assistant_msg is consumed by Plan 70-06's cross-agent switch.
+      # Phase 119 (P119-F): last_processed_event_ts drives the idempotency guard
+      # below. Fail-OPEN: an absent or unreadable file leaves LAST_EVENT empty.
+      SESSION_FILE=$(km_session_file slack "${CHANNEL}_${THREAD_TS}")
+      km_session_read "$SESSION_FILE"
+      CLAUDE_SESSION="$S_SESSION_ID"; CURRENT_AGENT="$S_AGENT_TYPE"; LAST_ASSISTANT_MSG="$S_LAST_MSG"; LAST_EVENT="$S_LAST_EVENT"
       [ -z "$CURRENT_AGENT" ] && CURRENT_AGENT="$AGENT"
       # EFFECTIVE_AGENT = agent for this turn. Plan 70-06 prefix parser may override below.
       EFFECTIVE_AGENT="$CURRENT_AGENT"
@@ -2480,9 +2498,12 @@ while true; do
         } > "$NEW_MSG_BODY"
 
         # Step 3: post NEW top-level message; capture its ts from km-slack stdout.
+        # --claim-thread: the bridge records the new thread as routed to this
+        # sandbox, so the end-of-turn km-slack session on it is accepted.
         NEW_TOP_TS=$(/opt/km/bin/km-slack post \
           --channel "$REPLY_CHANNEL" \
           --new-message \
+          --claim-thread \
           --body "$NEW_MSG_BODY" 2>>"$RUN_DIR/stderr.log" \
           | grep '^ts=' | head -n1 | sed 's/^ts=//')
         rm -f "$NEW_MSG_BODY"
@@ -2533,9 +2554,10 @@ while true; do
 
         # Step 8: rewrite poller state so Plan 70-05's dispatch fork handles the new
         # agent as a FIRST turn (no session resume) into the NEW thread.
-        # OLD DDB row is INTACT — we never issued update-item or delete-item on it.
-        # Plan 70-05's update-item below will write a NEW row keyed on (CHANNEL, NEW_TOP_TS)
-        # with agent_type=NEW_AGENT because we've rewritten both THREAD_TS and EFFECTIVE_AGENT.
+        # The OLD thread's state file is INTACT and resumable. The NEW thread gets
+        # its own file, started here with no session and NEW_AGENT pinned; the
+        # end-of-turn record below fills it in, because SESSION_FILE, THREAD_TS
+        # and EFFECTIVE_AGENT are all rewritten.
         # RESUME_ARG is reset alongside CLAUDE_SESSION: the codex dispatch re-reads
         # CLAUDE_SESSION at fork time (so empty -> first-turn branch), but the claude
         # dispatch consumes RESUME_ARG which was computed earlier from the pre-switch
@@ -2543,6 +2565,8 @@ while true; do
         CLAUDE_SESSION=""
         RESUME_ARG=""
         THREAD_TS="$NEW_TOP_TS"
+        SESSION_FILE=$(km_session_file slack "${REPLY_CHANNEL}_${NEW_TOP_TS}")
+        km_session_write "$SESSION_FILE" "" "$NEW_AGENT" "" "" || echo "[km-slack-inbound-poller] WARN: session state write failed ($SESSION_FILE)" >&2
         EFFECTIVE_AGENT="$NEW_AGENT"
         PROMPT_FILE="$SEED_PROMPT_FILE"
         chmod 644 "$PROMPT_FILE"
@@ -2671,9 +2695,6 @@ while true; do
       fi
 
       if [ -n "$NEW_SESSION" ]; then
-        NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        TTL_EXPIRY=$(( $(date +%s) + 30*24*3600 ))
-
         # Phase 70 Path B (Plan 70-10): extract per-agent result text.
         # Codex: LAST agent_message.text from the JSONL stream.
         # Claude: .result // .response from output.json (single JSON document).
@@ -2683,44 +2704,25 @@ while true; do
           RESULT_TEXT=$(jq -r '.result // .response // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
         fi
 
-        # Phase 70 (Plan 70-05): JSON-encode RESULT_TEXT for the DDB update-item.
-        # CRITICAL (70-RESEARCH.md Pitfall 2): RESULT_TEXT may contain embedded
-        # double-quotes, backslashes, and newlines from agent replies. Direct shell
-        # interpolation into the DDB JSON literal would produce malformed JSON.
-        # jq -Rs . (raw input, string output) produces a properly-escaped JSON string
-        # *including* the surrounding double-quotes. Do NOT add extra quotes around
-        # $LAST_MSG_JSON in the item below — jq has already wrapped it.
+        # Phase 70 (Plan 70-05): JSON-encode RESULT_TEXT (first 2000 bytes) so it
+        # survives embedded quotes, backslashes and newlines; the session record
+        # below decodes it back to text with jq -r.
         LAST_MSG_JSON=$(echo "$RESULT_TEXT" | head -c 2000 | jq -Rs .)
         # Defensive fallback in case jq is absent or RESULT_TEXT is empty.
         [ -z "$LAST_MSG_JSON" ] && LAST_MSG_JSON='""'
 
-        # Phase 119 (P119-F): write last_processed_event_ts so crash-redelivery of
-        # this same SQS message (same event_ts) is caught by the idempotency guard
+        # Phase 119 (P119-F): last_processed_event_ts is recorded so crash-redelivery
+        # of this same SQS message (same event_ts) is caught by the idempotency guard
         # above and skipped without a second dispatch or Slack post.
         #
-        # update-item, NOT put-item: SET only the attributes the poller owns. The
-        # bridge writes last_dispatch_ts (MarkDispatched), created_at and
-        # turn_count on this same row; a put-item replaced the whole item every
-        # turn and wiped them, so the reaction quiet period never saw a boundary
-        # and strict-mode context fell back to the thread root.
-        #
-        # sandbox_id is NOT written here: the bridge writes it at dispatch
-        # (Upsert) and the v1.8.0 sandbox role's dynamodb:Attributes condition
-        # excludes it. --return-values NONE is pinned for the same condition.
-        aws dynamodb update-item \
-          --table-name "$THREADS_TABLE" \
-          --region "$REGION" \
-          --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
-          --return-values NONE \
-          --update-expression "SET claude_session_id = :sid, agent_type = :agent, last_assistant_msg = :msg, last_turn_ts = :lt, last_processed_event_ts = :ev, ttl_expiry = :ttl" \
-          --expression-attribute-values "{
-            \":sid\":{\"S\":\"$NEW_SESSION\"},
-            \":agent\":{\"S\":\"$EFFECTIVE_AGENT\"},
-            \":msg\":{\"S\":$LAST_MSG_JSON},
-            \":lt\":{\"S\":\"$NOW\"},
-            \":ev\":{\"S\":\"$EVENT_TS\"},
-            \":ttl\":{\"N\":\"$TTL_EXPIRY\"}
-          }" 2>/dev/null || true
+        # Record the turn's session: locally (what this box resumes from and
+        # dedupes on) and at the bridge (the session id and agent type other
+        # components read). The bridge refuses a thread it did not route to us.
+        LAST_MSG_FILE=$(mktemp /tmp/km-lastmsg.XXXXXX); printf '%s' "$LAST_MSG_JSON" | jq -r . > "$LAST_MSG_FILE" 2>/dev/null || : > "$LAST_MSG_FILE"
+        km_session_write "$SESSION_FILE" "$NEW_SESSION" "$EFFECTIVE_AGENT" "$LAST_MSG_FILE" "$EVENT_TS" || echo "[km-slack-inbound-poller] WARN: session state write failed ($SESSION_FILE)" >&2
+        rm -f "$LAST_MSG_FILE"
+        /opt/km/bin/km-slack session --source slack --channel "$CHANNEL" --thread "$THREAD_TS" --session-id "$NEW_SESSION" --agent "$EFFECTIVE_AGENT" 2>>"$RUN_DIR/stderr.log" \
+          || echo "[km-slack-inbound-poller] WARN: bridge session record failed for thread $THREAD_TS (see $RUN_DIR/stderr.log)" >&2
 
         # Phase 67-11 Gap A fix: post the canonical .result text to Slack from
         # the poller. The Stop hook's transcript-JSONL scraping is unreliable in

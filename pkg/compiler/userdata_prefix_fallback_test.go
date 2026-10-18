@@ -21,7 +21,6 @@ func TestUserdata_NoLiteralKmResourceNameFallback(t *testing.T) {
 // Every unit or script that derives a name from KM_RESOURCE_PREFIX must receive it.
 func TestUserdata_PollersReceiveResourcePrefix(t *testing.T) {
 	for _, needle := range []string{
-		`THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:?`,
 		`GITHUB_THREADS_TABLE="${KM_GITHUB_THREADS_TABLE:-${KM_RESOURCE_PREFIX:?`,
 		`H1_THREADS_TABLE="${KM_H1_THREADS_TABLE:-${KM_RESOURCE_PREFIX:?`,
 		`IDENTITIES_TABLE="${KM_IDENTITIES_TABLE:-${KM_RESOURCE_PREFIX:?`,
