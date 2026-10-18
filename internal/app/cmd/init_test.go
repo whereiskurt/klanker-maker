@@ -2150,3 +2150,28 @@ func TestInitExportsH1DebugCapture_DriftWarn(t *testing.T) {
 		t.Errorf("env-wins: KM_H1_DEBUG_CAPTURE = %q, want %q (pre-set env must not be overwritten)", got, "false")
 	}
 }
+
+// TestRegionalModules_SlackBridgeAfterSessionTables — 2026-10-18: the Slack
+// bridge's `session` action writes the GitHub and H1 threads tables, and its
+// terragrunt.hcl depends on both. km init applies units one at a time in this
+// order (no run-all), and those dependency blocks allow mock outputs on apply,
+// so both tables must come first or a fresh install wires the mock names.
+func TestRegionalModules_SlackBridgeAfterSessionTables(t *testing.T) {
+	idx := map[string]int{}
+	for i, m := range cmd.RegionalModules(t.TempDir()) {
+		idx[m.Name] = i
+	}
+	bridge, ok := idx["lambda-slack-bridge"]
+	if !ok {
+		t.Fatal("lambda-slack-bridge not in regionalModules()")
+	}
+	for _, tbl := range []string{"dynamodb-slack-threads", "dynamodb-github-threads", "dynamodb-h1-threads"} {
+		i, ok := idx[tbl]
+		if !ok {
+			t.Fatalf("%s not in regionalModules()", tbl)
+		}
+		if i >= bridge {
+			t.Errorf("%s (%d) must apply BEFORE lambda-slack-bridge (%d)", tbl, i, bridge)
+		}
+	}
+}

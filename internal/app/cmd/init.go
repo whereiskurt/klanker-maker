@@ -706,6 +706,25 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			// Phase 103 (H1-DEPLOY-WIRING): DynamoDB h1-threads table mapping
+			// (report_id, target) → {sandbox_id, agent_session_id, agent_type} for
+			// HackerOne report thread continuity + multi-target fanout. The bridge
+			// writes to it at runtime, so it MUST apply BEFORE lambda-h1-bridge.
+			// Mirrors dynamodb-github-threads.
+			//
+			// 2026-10-18: it must ALSO apply before lambda-slack-bridge, whose
+			// `session` action records H1 agent sessions here (dependency
+			// "h1_threads" in its terragrunt.hcl). km init applies each unit on its
+			// own, in this order — terragrunt does NOT apply a unit's dependencies
+			// for it, and the bridge's dependency blocks allow mock outputs on
+			// apply, so an out-of-order fresh install would wire the bridge to the
+			// mock table name. Hence it sits here, beside the github threads table
+			// and ahead of every bridge.
+			name:    "dynamodb-h1-threads",
+			dir:     filepath.Join(regionDir, "dynamodb-h1-threads"),
+			envReqs: nil,
+		},
+		{
 			// Phase 99.1 (GH-DLQ-SHARED / GH-DLQ-DEPLOY): two shared per-install FIFO
 			// DLQs (km-{github,slack}-inbound-dlq.fifo) created once at km init,
 			// idempotent via TF state. Per-sandbox inbound FIFO queues attach a
@@ -722,7 +741,9 @@ func regionalModules(regionDir string) []regionalModule {
 		{
 			// Phase 63: Slack-notify bridge Lambda with Function URL (auth=NONE;
 			// Ed25519 + nonce provide application-layer auth). Depends on
-			// dynamodb-identities, dynamodb-sandboxes, and dynamodb-slack-nonces.
+			// dynamodb-identities, dynamodb-sandboxes, and dynamodb-slack-nonces,
+			// and (2026-10-18, km-slack session) on dynamodb-github-threads and
+			// dynamodb-h1-threads, both ordered above.
 			name:    "lambda-slack-bridge",
 			dir:     filepath.Join(regionDir, "lambda-slack-bridge"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
@@ -737,23 +758,11 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
-			// Phase 103 (H1-DEPLOY-WIRING): DynamoDB h1-threads table mapping
-			// (report_id, target) → {sandbox_id, agent_session_id, agent_type} for
-			// HackerOne report thread continuity + multi-target fanout. The bridge
-			// writes to it at runtime, so it MUST apply BEFORE lambda-h1-bridge.
-			// Mirrors dynamodb-github-threads. Ordered here (after the github threads
-			// table, before the H1 bridge) so the bridge's terragrunt dependency on
-			// dynamodb-h1-threads resolves to a real table at apply time.
-			name:    "dynamodb-h1-threads",
-			dir:     filepath.Join(regionDir, "dynamodb-h1-threads"),
-			envReqs: nil,
-		},
-		{
 			// Phase 103 (H1-DEPLOY-WIRING): HackerOne comment-trigger bridge Lambda with
 			// Function URL (auth=NONE; X-H1-Signature HMAC + nonce replay provide
 			// application-layer auth). Depends on dynamodb-sandboxes (alias-index GSI),
 			// dynamodb-slack-nonces (shared nonce table, "h1-delivery:" key namespace),
-			// and dynamodb-h1-threads (continuity table, declared just above so it
+			// and dynamodb-h1-threads (continuity table, declared earlier so it
 			// applies first). artifacts bucket needed for cold-create EventBridge
 			// dispatch. Ordered AFTER lambda-github-bridge + all shared deps, BEFORE ses.
 			name:    "lambda-h1-bridge",

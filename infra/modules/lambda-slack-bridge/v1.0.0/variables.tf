@@ -70,6 +70,18 @@ variable "slack_threads_table_name" {
   default     = "km-slack-threads"
 }
 
+variable "github_threads_table_name" {
+  description = "km-github-threads table; when set, the bridge's `session` action may record agent sessions there on the pollers' behalf (2026-10-18). Empty = source unavailable (503)."
+  type        = string
+  default     = ""
+}
+
+variable "h1_threads_table_name" {
+  description = "km-h1-threads table; see github_threads_table_name."
+  type        = string
+  default     = ""
+}
+
 variable "signing_secret_path" {
   description = "SSM parameter path for the Slack signing secret (SecureString used for HMAC verification)"
   type        = string

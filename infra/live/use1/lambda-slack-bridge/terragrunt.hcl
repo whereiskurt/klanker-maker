@@ -72,6 +72,28 @@ dependency "slack_threads" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
 }
 
+# km-github-threads / km-h1-threads (2026-10-18): the bridge's `session` action
+# records GitHub/H1 agent sessions there on the pollers' behalf, since the
+# sandbox role has no threads-table grant (ec2spot v1.9.0). The dependency also
+# orders this unit after both tables under terragrunt run-all.
+dependency "github_threads" {
+  config_path = "../dynamodb-github-threads"
+  mock_outputs = {
+    table_name = "km-github-threads"
+    table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-github-threads"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
+}
+
+dependency "h1_threads" {
+  config_path = "../dynamodb-h1-threads"
+  mock_outputs = {
+    table_name = "km-h1-threads"
+    table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-h1-threads"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
+}
+
 # km-action-quota: provides the action-quota counter table (Phase 121). Populates
 # quota_table_arn → KM_QUOTA_TABLE env + the quota IAM grant. Without this the
 # bridge's quota/auto-freeze enforcement stays dormant (KM_QUOTA_TABLE="").
@@ -102,6 +124,9 @@ inputs = {
   resource_prefix          = local.site_vars.locals.site.label
   signing_secret_path      = "/${local.site_vars.locals.site.label}/slack/signing-secret"
   slack_threads_table_name = dependency.slack_threads.outputs.table_name
+  # 2026-10-18: km-slack session writes for the GitHub/H1 pollers
+  github_threads_table_name = dependency.github_threads.outputs.table_name
+  h1_threads_table_name     = dependency.h1_threads.outputs.table_name
   nonce_table_name = "${local.site_vars.locals.site.label}-slack-bridge-nonces"
 
   # Phase 91 — polite-bot mode toggle (install-level default). Operators export

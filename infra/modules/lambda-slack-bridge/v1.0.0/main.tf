@@ -158,7 +158,7 @@ resource "aws_iam_role_policy" "dynamodb_slack_threads" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid    = "DDBSlackThreads"
         Effect = "Allow"
@@ -182,8 +182,25 @@ resource "aws_iam_role_policy" "dynamodb_slack_threads" {
           "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandboxes_table_name}/index/slack_channel_id-index",
         ]
       }
-    ]
+      ],
+      # 2026-10-18: the `session` action records a GitHub/H1 poller's agent
+      # session on its behalf (the sandbox role has no threads-table grant since
+      # ec2spot v1.9.0). Only when a table is configured: an empty Resource list
+      # is an invalid policy, so the statement is dropped when both are unset.
+      length(local.other_threads_table_arns) > 0 ? [{
+        Sid      = "DDBOtherThreadsSession"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+        Resource = local.other_threads_table_arns
+    }] : [])
   })
+}
+
+locals {
+  other_threads_table_arns = compact([
+    var.github_threads_table_name != "" ? "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.github_threads_table_name}" : "",
+    var.h1_threads_table_name != "" ? "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.h1_threads_table_name}" : "",
+  ])
 }
 
 # 2026-10-16: default route - alias-index GSI query (alias -> sandbox) and
@@ -443,7 +460,10 @@ resource "aws_lambda_function" "slack_bridge" {
       # Phase 67-05 additions — inbound events path
       KM_SIGNING_SECRET_PATH = var.signing_secret_path
       KM_SLACK_THREADS_TABLE = var.slack_threads_table_name
-      KM_RESOURCE_PREFIX     = var.resource_prefix
+      # 2026-10-18 — km-slack session: GitHub/H1 session writes on the pollers' behalf
+      KM_GITHUB_THREADS_TABLE = var.github_threads_table_name
+      KM_H1_THREADS_TABLE     = var.h1_threads_table_name
+      KM_RESOURCE_PREFIX      = var.resource_prefix
       # Phase 67.1 addition — ACK reaction emoji
       KM_SLACK_ACK_EMOJI = var.slack_ack_emoji
       # Phase 68 addition — S3 artifacts bucket (transcripts/* read path)

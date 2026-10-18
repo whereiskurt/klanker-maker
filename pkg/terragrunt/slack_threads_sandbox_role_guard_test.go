@@ -4,22 +4,21 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
-	"strings"
 	"testing"
 )
 
 // The Slack bridge's outbound authorizer (threadRoutedToSender in
-// pkg/slack/bridge/handler.go) still trusts a km-slack-threads row as proof
-// that a sandbox may post into a thread. What protects it now is that the
-// sandbox role can write the threads tables only under a dynamodb:Attributes
-// condition naming an attribute set that excludes sandbox_id, so a row the box
-// creates has no sandbox_id and LookupSandbox reads it as unrouted.
+// pkg/slack/bridge/handler.go) trusts a km-slack-threads row as proof that a
+// sandbox may post into a thread. That trust holds only if nothing but
+// bridge-side components can write the threads tables. Since 2026-10-18 the
+// pollers keep their session state in local files on the box and record agent
+// sessions through the signed `km-slack session` bridge action, so threads rows
+// are born and updated only in the bridge (events handler, create-handler, the
+// session action) and the sandbox role needs no grant on any threads table.
 //
 // The guard reads the PINNED ec2spot module only (older versions stay on disk
-// as history) and fails on any Allow naming a threads table without that
-// condition, on a set containing sandbox_id, and on DynamoDB writes against a
-// wildcard resource.
+// as history) and fails on any Allow naming a threads table and on DynamoDB
+// writes against a wildcard resource.
 
 var (
 	tfCommentRe      = regexp.MustCompile(`(?m)^\s*(#|//).*$`)
@@ -111,30 +110,24 @@ func pinnedEC2SpotModuleDir(t *testing.T) string {
 	return "infra/modules/ec2spot/" + pin
 }
 
-// TestSandboxRole_ThreadsWriteGrantExcludesSandboxID replaces the pre-v1.8.0
-// "no grant at all" guard. The sandbox role MAY read and update the threads
-// tables for session continuity, but only under a dynamodb:Attributes
-// condition that names each attribute it may touch, and sandbox_id (the
-// bridge's authorization attribute) must not be in that set. Any Allow on a
-// threads table without the condition, any set containing sandbox_id, and any
-// Allow of DynamoDB writes on a wildcard resource fail the build.
-func TestSandboxRole_ThreadsWriteGrantExcludesSandboxID(t *testing.T) {
+// TestSandboxRole_HasNoGrantOnThreadsTables — the original invariant, true
+// again since the pollers moved their session state to local files and the
+// km-slack session bridge action (2026-10-18): no Allow statement in the pinned
+// ec2spot module may name a threads table, and none may grant DynamoDB writes
+// on a wildcard resource.
+func TestSandboxRole_HasNoGrantOnThreadsTables(t *testing.T) {
 	dir := filepath.Join(findRepoRoot(t), filepath.FromSlash(pinnedEC2SpotModuleDir(t)))
-	files, err := filepath.Glob(filepath.Join(dir, "*.tf"))
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no .tf files under %s (err=%v)", dir, err)
+	files, _ := filepath.Glob(filepath.Join(dir, "*.tf"))
+	if len(files) == 0 {
+		t.Fatalf("no .tf under %s", dir)
 	}
-	sort.Strings(files)
-	attrsRe := regexp.MustCompile(`"dynamodb:Attributes"\s*=\s*\[([^\]]*)\]`)
-	qualifierRe := regexp.MustCompile(`"ForAllValues:StringEquals"\s*=\s*$`)
-	sawThreads := 0
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
-		rel, _ := filepath.Rel(findRepoRoot(t), f)
 		s := tfCommentRe.ReplaceAllString(string(raw), "")
+		rel, _ := filepath.Rel(findRepoRoot(t), f)
 		seen := map[int]bool{}
 		for _, m := range tfActionKeyRe.FindAllStringIndex(s, -1) {
 			a, b := enclosingBlock(s, m[0])
@@ -146,42 +139,14 @@ func TestSandboxRole_ThreadsWriteGrantExcludesSandboxID(t *testing.T) {
 			if regexp.MustCompile(`Effect\s*=\s*"Deny"`).MatchString(stmt) {
 				continue
 			}
-			policy := owningPolicy(s, a)
+			if threadsTableRe.MatchString(stmt) {
+				t.Errorf("%s (policy %q): an Allow names a threads table; the sandbox role must have none (session state is local + km-slack session)", rel, owningPolicy(s, a))
+			}
 			actions := stmtField(stmt, "Action") + stmtField(stmt, "NotAction")
 			resources := stmtField(stmt, "Resource") + stmtField(stmt, "NotResource")
 			if ddbWriteRe.MatchString(actions) && wildcardResRe.MatchString(resources) {
-				t.Errorf("%s (policy %q): DynamoDB write on a wildcard resource reaches every threads table", rel, policy)
-			}
-			if !threadsTableRe.MatchString(stmt) {
-				continue
-			}
-			sawThreads++
-			am := attrsRe.FindStringSubmatch(stmt)
-			if am == nil {
-				t.Errorf("%s (policy %q): an Allow on a threads table has no dynamodb:Attributes condition; a box could write sandbox_id and forge a routed-thread row", rel, policy)
-				continue
-			}
-			// The qualifier is the whole guarantee. ForAllValues:StringEquals means
-			// EVERY attribute the request touches is in the set. ForAnyValue: is
-			// satisfied by ONE listed attribute, so a write of {thread_ts, sandbox_id}
-			// passes and the forged-row hole is back; a bare StringEquals on a
-			// multivalued key does not do set containment at all.
-			loc := attrsRe.FindStringIndex(stmt)
-			qa, _ := enclosingBlock(stmt, loc[0])
-			if qa == -1 || !qualifierRe.MatchString(stmt[:qa]) {
-				t.Errorf("%s (policy %q): dynamodb:Attributes must sit directly under \"ForAllValues:StringEquals\"; ForAnyValue: or a bare StringEquals lets a write that also names sandbox_id through", rel, policy)
-			}
-			if strings.Contains(am[1], `"sandbox_id"`) {
-				t.Errorf("%s (policy %q): sandbox_id is in the attribute set; the bridge trusts that attribute to authorize posts", rel, policy)
-			}
-			// Presence check only: IAM evaluates these keys as StringEqualsIfExists, so
-			// their absence on the request side is not something the guard can see.
-			if !strings.Contains(stmt, "dynamodb:ReturnValues") || !strings.Contains(stmt, "dynamodb:Select") {
-				t.Errorf("%s (policy %q): dynamodb:Attributes needs ReturnValues and Select pinned or the condition is bypassable", rel, policy)
+				t.Errorf("%s (policy %q): DynamoDB write on a wildcard resource reaches the threads tables", rel, owningPolicy(s, a))
 			}
 		}
-	}
-	if sawThreads < 3 {
-		t.Fatalf("only %d Allow statements name a threads table, want >= 3 (slack, github, h1); the table regex drifted or a grant was dropped", sawThreads)
 	}
 }

@@ -83,3 +83,36 @@ func TestCheckSandboxRoleShape_SkipsWithoutIAM(t *testing.T) {
 		t.Fatalf("want SKIP, got %+v", r)
 	}
 }
+
+// A v1.8.0 role carries the per-sandbox threads-rw inline policy, which v1.9.0
+// dropped (session state is local + the km-slack session bridge action).
+func TestCheckSandboxRoleShape_NamesThreadsRWRole(t *testing.T) {
+	lister := &fakeSandboxLister{records: []kmaws.SandboxRecord{
+		{SandboxID: "sb-x", Region: "us-east-1", Status: "running"},
+		{SandboxID: "sb-y", Region: "us-east-1", Status: "running"},
+	}}
+	iamc := &fakeRoleShapeIAM{inline: map[string][]string{
+		"km-ec2spot-ssm-sb-x-use1": {"km-ec2spot-region-deny-use1", "km-sb-x-threads-rw"},
+		"km-ec2spot-ssm-sb-y-use1": {"km-ec2spot-region-deny-use1", "km-sb-y-inbound-sqs"},
+	}}
+	r := checkSandboxRoleShape(context.Background(), iamc, lister, "km")
+	if r.Status != CheckWarn {
+		t.Fatalf("status = %v, want WARN: %+v", r.Status, r)
+	}
+	if !strings.Contains(r.Message, "sb-x (threads-table grant (pre-v1.9.0))") {
+		t.Errorf("message should name sb-x with the threads reason: %s", r.Message)
+	}
+	if strings.Contains(r.Message, "sb-y") {
+		t.Errorf("message must not name sb-y: %s", r.Message)
+	}
+	if !strings.Contains(r.Message, "pre-v1.9.0 role") {
+		t.Errorf("message should say pre-v1.9.0 role: %s", r.Message)
+	}
+
+	// A role with neither old shape nor the threads grant is OK.
+	ok := &fakeRoleShapeIAM{inline: map[string][]string{"km-ec2spot-ssm-sb-y-use1": {"km-sb-y-inbound-sqs"}}}
+	one := &fakeSandboxLister{records: []kmaws.SandboxRecord{{SandboxID: "sb-y", Region: "us-east-1", Status: "running"}}}
+	if r := checkSandboxRoleShape(context.Background(), ok, one, "km"); r.Status != CheckOK {
+		t.Fatalf("want OK, got %+v", r)
+	}
+}
