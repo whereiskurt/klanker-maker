@@ -22,6 +22,8 @@ func TestRunSession_FlagValidation(t *testing.T) {
 		{"slack missing thread", []string{"--source", "slack", "--channel", "C1", "--session-id", "s", "--agent", "claude"}, 2, "--thread"},
 		{"github missing number", []string{"--source", "github", "--repo", "o/r", "--session-id", "s", "--agent", "claude"}, 2, "--number"},
 		{"h1 missing target", []string{"--source", "h1", "--report", "r", "--session-id", "s", "--agent", "claude"}, 2, "--target"},
+		{"github number zero", []string{"--source", "github", "--repo", "o/r", "--number", "0", "--session-id", "s", "--agent", "claude"}, 2, "--number"},
+		{"github number negative", []string{"--source", "github", "--repo", "o/r", "--number", "-1", "--session-id", "s", "--agent", "claude"}, 2, "--number"},
 		{"bad source", []string{"--source", "jira", "--session-id", "s", "--agent", "claude"}, 2, "--source"},
 		{"bad agent", []string{"--source", "slack", "--channel", "C1", "--thread", "1.1", "--session-id", "s", "--agent", "gemini"}, 2, "--agent"},
 		{"session-id and clear", []string{"--source", "slack", "--channel", "C1", "--thread", "1.1", "--session-id", "s", "--clear", "--agent", "claude"}, 2, "--clear"},
@@ -78,5 +80,16 @@ func TestRunSessionWith_BridgeResponses(t *testing.T) {
 	defer good.Close()
 	if err := runSessionWith(context.Background(), priv, "sb-1", good.URL, o); err != nil {
 		t.Fatalf("200 ok must return nil, got %v", err)
+	}
+}
+
+func TestBuildSessionEnvelope_ClearGithubAndH1(t *testing.T) {
+	g, err := buildSessionEnvelope("sb-1", sessionOptions{source: "github", repo: "o/r", number: 7, clear: true, agent: "claude"})
+	if err != nil || g.SessionID != "" || g.Repo != "o/r" || g.Number != 7 || g.Source != "github" {
+		t.Fatalf("github clear envelope = %+v, %v", g, err)
+	}
+	h, err := buildSessionEnvelope("sb-1", sessionOptions{source: "h1", report: "r1", target: "ir-bot", clear: true, agent: "codex"})
+	if err != nil || h.SessionID != "" || h.ReportID != "r1" || h.Target != "ir-bot" || h.Source != "h1" {
+		t.Fatalf("h1 clear envelope = %+v, %v", h, err)
 	}
 }

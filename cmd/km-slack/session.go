@@ -75,8 +75,8 @@ func validateSessionOptions(o sessionOptions) string {
 			return "--source slack needs --channel and --thread"
 		}
 	case "github":
-		if o.repo == "" || o.number == 0 {
-			return "--source github needs --repo and --number"
+		if o.repo == "" || o.number <= 0 {
+			return "--source github needs --repo and --number (--number must be a positive integer)"
 		}
 	case "h1":
 		if o.report == "" || o.target == "" {

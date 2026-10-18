@@ -97,6 +97,7 @@ Subcommands:
   dm --to U… (--text <s> | --body <file>) [--render …] [--from-thread]   DM a person on the route allowlist (top-level; no marker)
   session --source slack|github|h1 <key flags> (--session-id ID | --clear) --agent claude|codex
                  Record the agent session id on a thread the bridge routed (poller end-of-turn).
+                 Key flags: slack: --channel --thread; github: --repo --number; h1: --report --target.
   reply          Post a reply into the thread bound to the current session (4-step resolution chain).
                  Resolution: --thread > $KM_SLACK_THREAD_TS > session-id lookup > channel root.
   post/reply     --mention U…[,U…|here|channel] notifies people: the ids are prepended as <@U…>
