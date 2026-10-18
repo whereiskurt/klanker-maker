@@ -22,9 +22,22 @@ func recordUpdates() (*mockDDBUpdateItem, *[]*dynamodb.UpdateItemInput) {
 	return m, &seen
 }
 
+// assertOwnerCondition: every session write is conditioned on the row naming
+// the caller, which also fails on an absent item (no row is ever created).
+func assertOwnerCondition(t *testing.T, in *dynamodb.UpdateItemInput, owner string) {
+	t.Helper()
+	if in.ConditionExpression == nil || *in.ConditionExpression != "sandbox_id = :sb" {
+		t.Fatalf("condition = %v, want sandbox_id = :sb", in.ConditionExpression)
+	}
+	sb, ok := in.ExpressionAttributeValues[":sb"].(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || sb.Value != owner {
+		t.Fatalf(":sb = %v, want %q", in.ExpressionAttributeValues[":sb"], owner)
+	}
+}
+
 var neverNamed = []string{"sandbox_id", "last_dispatch_ts", "created_at", "turn_count", "last_assistant_msg", "last_processed_event_ts"}
 
-func assertSessionOnly(t *testing.T, in *dynamodb.UpdateItemInput, attr string) {
+func assertSessionOnly(t *testing.T, in *dynamodb.UpdateItemInput, attr, owner string) {
 	t.Helper()
 	expr := *in.UpdateExpression
 	for _, want := range []string{attr + " = :sid", "agent_type = :at", "last_turn_ts = :lt", "ttl_expiry = :ttl"} {
@@ -37,9 +50,7 @@ func assertSessionOnly(t *testing.T, in *dynamodb.UpdateItemInput, attr string) 
 			t.Errorf("expression names %s: %s", never, expr)
 		}
 	}
-	if in.ConditionExpression != nil {
-		t.Error("SetSession must not carry a condition (ownership is checked by the handler before the write)")
-	}
+	assertOwnerCondition(t, in, owner)
 	if len(in.ExpressionAttributeNames) != 0 {
 		t.Errorf("unexpected attribute names %v", in.ExpressionAttributeNames)
 	}
@@ -48,14 +59,14 @@ func assertSessionOnly(t *testing.T, in *dynamodb.UpdateItemInput, attr string) 
 func TestDDBThreadStore_SetSession_SetsOnlySessionAttributes(t *testing.T) {
 	m, seen := recordUpdates()
 	s := &bridge.DDBThreadStore{Client: m, TableName: "km-slack-threads"}
-	if err := s.SetSession(context.Background(), "C1", "1.1", "sess-1", "codex"); err != nil {
+	if err := s.SetSession(context.Background(), "C1", "1.1", "sess-1", "codex", "sb-1"); err != nil {
 		t.Fatal(err)
 	}
 	if len(*seen) != 1 {
 		t.Fatalf("want one UpdateItem, got %d", len(*seen))
 	}
 	in := (*seen)[0]
-	assertSessionOnly(t, in, "claude_session_id")
+	assertSessionOnly(t, in, "claude_session_id", "sb-1")
 	if in.Key["channel_id"].(*dynamodbtypes.AttributeValueMemberS).Value != "C1" || in.Key["thread_ts"].(*dynamodbtypes.AttributeValueMemberS).Value != "1.1" {
 		t.Fatalf("key = %v", in.Key)
 	}
@@ -68,7 +79,7 @@ func TestDDBThreadStore_SetSession_SetsOnlySessionAttributes(t *testing.T) {
 func TestDDBThreadStore_SetSession_EmptyRemovesSession(t *testing.T) {
 	m, seen := recordUpdates()
 	s := &bridge.DDBThreadStore{Client: m, TableName: "t"}
-	if err := s.SetSession(context.Background(), "C1", "1.1", "", "claude"); err != nil {
+	if err := s.SetSession(context.Background(), "C1", "1.1", "", "claude", "sb-2"); err != nil {
 		t.Fatal(err)
 	}
 	in := (*seen)[0]
@@ -79,12 +90,13 @@ func TestDDBThreadStore_SetSession_EmptyRemovesSession(t *testing.T) {
 	if _, ok := in.ExpressionAttributeValues[":sid"]; ok {
 		t.Fatal(":sid must not be bound when the expression does not use it (DynamoDB rejects unused values)")
 	}
+	assertOwnerCondition(t, in, "sb-2")
 }
 
 func TestGitHubThreadSessions_KeyAndAttribute(t *testing.T) {
 	m, seen := recordUpdates()
 	s := &bridge.GitHubThreadSessions{Client: m, TableName: "km-github-threads"}
-	if err := s.SetSession(context.Background(), bridge.ThreadKey{Repo: "o/r", Number: 7}, "sess-1", "claude"); err != nil {
+	if err := s.SetSession(context.Background(), bridge.ThreadKey{Repo: "o/r", Number: 7}, "sess-1", "claude", "sb-gh"); err != nil {
 		t.Fatal(err)
 	}
 	in := (*seen)[0]
@@ -94,13 +106,13 @@ func TestGitHubThreadSessions_KeyAndAttribute(t *testing.T) {
 	if in.Key["repo"].(*dynamodbtypes.AttributeValueMemberS).Value != "o/r" || in.Key["number"].(*dynamodbtypes.AttributeValueMemberN).Value != "7" {
 		t.Fatalf("key = %v", in.Key)
 	}
-	assertSessionOnly(t, in, "agent_session_id")
+	assertSessionOnly(t, in, "agent_session_id", "sb-gh")
 }
 
 func TestH1ThreadSessions_KeyAndAttribute(t *testing.T) {
 	m, seen := recordUpdates()
 	s := &bridge.H1ThreadSessions{Client: m, TableName: "km-h1-threads"}
-	if err := s.SetSession(context.Background(), bridge.ThreadKey{ReportID: "r1", Target: "ir-bot"}, "", "claude"); err != nil {
+	if err := s.SetSession(context.Background(), bridge.ThreadKey{ReportID: "r1", Target: "ir-bot"}, "", "claude", "sb-h1"); err != nil {
 		t.Fatal(err)
 	}
 	in := (*seen)[0]
@@ -110,6 +122,7 @@ func TestH1ThreadSessions_KeyAndAttribute(t *testing.T) {
 	if !strings.Contains(*in.UpdateExpression, "REMOVE agent_session_id") {
 		t.Fatalf("expr = %s", *in.UpdateExpression)
 	}
+	assertOwnerCondition(t, in, "sb-h1")
 }
 
 func TestThreadSessions_LookupSandbox(t *testing.T) {

@@ -22,7 +22,7 @@ type sessionGH struct {
 func (s *sessionGH) LookupSandbox(_ context.Context, _ bridge.ThreadKey) (string, error) {
 	return s.owner, nil
 }
-func (s *sessionGH) SetSession(_ context.Context, _ bridge.ThreadKey, _, _ string) error {
+func (s *sessionGH) SetSession(_ context.Context, _ bridge.ThreadKey, _, _, _ string) error {
 	s.calls++
 	return nil
 }

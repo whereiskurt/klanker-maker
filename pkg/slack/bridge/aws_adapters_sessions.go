@@ -14,15 +14,21 @@ import (
 // sessionTTL matches the 30-day ttl_expiry the pollers have always written.
 const sessionTTL = 30 * 24 * time.Hour
 
+// sessionOwnerCondition guards every session write: the row must exist and
+// name the caller. An absent item fails the condition (sandbox_id is absent),
+// so UpdateItem can never create a row here.
+const sessionOwnerCondition = "sandbox_id = :sb"
+
 // sessionUpdate builds the SET/REMOVE expression shared by the three threads
 // tables (2026-10-18). attr is the table's session attribute
 // (claude_session_id for Slack, agent_session_id for GitHub and H1). It never
 // names sandbox_id, last_dispatch_ts, created_at or turn_count. An empty
 // sessionID REMOVEs attr and does not bind :sid (DynamoDB rejects unused
-// expression values).
-func sessionUpdate(attr, sessionID, agentType string) (string, map[string]dynamodbtypes.AttributeValue) {
+// expression values). ownerID binds :sb for sessionOwnerCondition.
+func sessionUpdate(attr, sessionID, agentType, ownerID string) (string, map[string]dynamodbtypes.AttributeValue) {
 	now := time.Now()
 	vals := map[string]dynamodbtypes.AttributeValue{
+		":sb":  &dynamodbtypes.AttributeValueMemberS{Value: ownerID},
 		":at":  &dynamodbtypes.AttributeValueMemberS{Value: agentType},
 		":lt":  &dynamodbtypes.AttributeValueMemberS{Value: now.UTC().Format(time.RFC3339)},
 		":ttl": &dynamodbtypes.AttributeValueMemberN{Value: strconv.FormatInt(now.Add(sessionTTL).Unix(), 10)},
@@ -54,8 +60,8 @@ func (s *GitHubThreadSessions) LookupSandbox(ctx context.Context, k ThreadKey) (
 }
 
 // SetSession writes agent_session_id + agent_type (see sessionUpdate).
-func (s *GitHubThreadSessions) SetSession(ctx context.Context, k ThreadKey, sessionID, agentType string) error {
-	return setSessionRow(ctx, s.Client, s.TableName, s.key(k), sessionID, agentType)
+func (s *GitHubThreadSessions) SetSession(ctx context.Context, k ThreadKey, sessionID, agentType, ownerID string) error {
+	return setSessionRow(ctx, s.Client, s.TableName, s.key(k), sessionID, agentType, ownerID)
 }
 
 // H1ThreadSessions implements ThreadSessionStore over km-h1-threads
@@ -78,16 +84,17 @@ func (s *H1ThreadSessions) LookupSandbox(ctx context.Context, k ThreadKey) (stri
 }
 
 // SetSession writes agent_session_id + agent_type (see sessionUpdate).
-func (s *H1ThreadSessions) SetSession(ctx context.Context, k ThreadKey, sessionID, agentType string) error {
-	return setSessionRow(ctx, s.Client, s.TableName, s.key(k), sessionID, agentType)
+func (s *H1ThreadSessions) SetSession(ctx context.Context, k ThreadKey, sessionID, agentType, ownerID string) error {
+	return setSessionRow(ctx, s.Client, s.TableName, s.key(k), sessionID, agentType, ownerID)
 }
 
-func setSessionRow(ctx context.Context, c DDBUpdateItemAPI, table string, key map[string]dynamodbtypes.AttributeValue, sessionID, agentType string) error {
-	expr, vals := sessionUpdate("agent_session_id", sessionID, agentType)
+func setSessionRow(ctx context.Context, c DDBUpdateItemAPI, table string, key map[string]dynamodbtypes.AttributeValue, sessionID, agentType, ownerID string) error {
+	expr, vals := sessionUpdate("agent_session_id", sessionID, agentType, ownerID)
 	_, err := c.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 awssdk.String(table),
 		Key:                       key,
 		UpdateExpression:          awssdk.String(expr),
+		ConditionExpression:       awssdk.String(sessionOwnerCondition),
 		ExpressionAttributeValues: vals,
 	})
 	if err != nil {

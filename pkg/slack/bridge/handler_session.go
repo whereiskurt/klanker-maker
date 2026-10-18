@@ -2,6 +2,9 @@ package bridge
 
 import (
 	"context"
+	"errors"
+
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/whereiskurt/klanker-maker/pkg/slack"
 )
@@ -11,7 +14,9 @@ import (
 // dispatched into it, or claim_thread created it) and name the caller; a box
 // can never mint a row here. An empty session_id clears the attribute.
 //
-// This check is the action's whole authorization: Handle exempts
+// The lookup separates 404 (no row) from 403 (another box's row); the write
+// itself is conditioned on sandbox_id = sender, which closes the window between
+// the two calls. This check is the action's whole authorization: Handle exempts
 // ActionSession from the channel-ownership block, because owning a channel is
 // neither necessary nor sufficient for owning a thread row.
 func (h *Handler) handleSession(ctx context.Context, env slack.SlackEnvelope) *Response {
@@ -31,7 +36,7 @@ func (h *Handler) handleSession(ctx context.Context, env slack.SlackEnvelope) *R
 		}
 		owner, err = h.Threads.LookupSandbox(ctx, env.Channel, env.ThreadTS)
 		write = func() error {
-			return h.Threads.SetSession(ctx, env.Channel, env.ThreadTS, env.SessionID, env.AgentType)
+			return h.Threads.SetSession(ctx, env.Channel, env.ThreadTS, env.SessionID, env.AgentType, env.SenderID)
 		}
 	case "github":
 		if env.Repo == "" || env.Number <= 0 {
@@ -42,7 +47,7 @@ func (h *Handler) handleSession(ctx context.Context, env slack.SlackEnvelope) *R
 		}
 		k := ThreadKey{Repo: env.Repo, Number: env.Number}
 		owner, err = h.GitHubSessions.LookupSandbox(ctx, k)
-		write = func() error { return h.GitHubSessions.SetSession(ctx, k, env.SessionID, env.AgentType) }
+		write = func() error { return h.GitHubSessions.SetSession(ctx, k, env.SessionID, env.AgentType, env.SenderID) }
 	case "h1":
 		if env.ReportID == "" || env.Target == "" {
 			return h.sessionReject(ctx, env, 400, "missing_fields", "report_id and target required")
@@ -52,7 +57,7 @@ func (h *Handler) handleSession(ctx context.Context, env slack.SlackEnvelope) *R
 		}
 		k := ThreadKey{ReportID: env.ReportID, Target: env.Target}
 		owner, err = h.H1Sessions.LookupSandbox(ctx, k)
-		write = func() error { return h.H1Sessions.SetSession(ctx, k, env.SessionID, env.AgentType) }
+		write = func() error { return h.H1Sessions.SetSession(ctx, k, env.SessionID, env.AgentType, env.SenderID) }
 	default:
 		return h.sessionReject(ctx, env, 400, "missing_fields", "source must be slack, github or h1")
 	}
@@ -67,6 +72,14 @@ func (h *Handler) handleSession(ctx context.Context, env slack.SlackEnvelope) *R
 		return h.sessionReject(ctx, env, 403, "thread_not_owned", "row names another sandbox")
 	}
 	if werr := write(); werr != nil {
+		// The write is conditioned on sandbox_id = sender. A failed condition
+		// means the row expired, was deleted or was rebound after the lookup:
+		// the sender no longer owns it.
+		var ccf *dynamodbtypes.ConditionalCheckFailedException
+		if errors.As(werr, &ccf) {
+			logger.WarnContext(ctx, "bridge: session_thread_not_owned_at_write", "step", "session", "source", env.Source, "sender_id", env.SenderID, "status", 403)
+			return errResp(403, "thread_not_owned")
+		}
 		logger.ErrorContext(ctx, "bridge: session_write_failed", "step", "session", "source", env.Source, "sender_id", env.SenderID, "error", werr.Error(), "status", 500)
 		return errResp(500, "session_write_failed")
 	}
