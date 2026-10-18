@@ -8,6 +8,31 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**`km t3` — T3 Code on a sandbox, in the background (2026-10-17):**
+- **`km t3 start|stop|status <sb>` and `km t3 <sb>` (connect).** `start` installs the pinned t3
+  (`0.1.0`, from the GitHub release tag's installer, plus `libatomic` as root, which AL2023
+  lacks) and enables a km-owned `km-t3code.service`: `t3 serve --host 127.0.0.1 --port 3773`
+  as `sandbox` under `bash -lc` (so `/opt/km/shims` and nvm apply; t3 resolves claude/codex
+  from PATH), `UnsetEnvironment=XDG_RUNTIME_DIR` (else t3 moves agents into `systemd-run --user`
+  scopes), log to `~/.t3/km-t3code.log` 0600, never the journal (t3 prints a pairing token at
+  startup). Connect = `runReconnectingPortForward` to 3773 on local **3774** + a 5-minute
+  single-use pairing link. `stop` disables, so resume keeps it down. Laptop browser and the
+  desktop app's "Add environment" only; T3 Connect, phone, LAN are out by design.
+- **Signal 9 detects the use, never the server.** Fires on an established socket with local
+  port 3773 (matched by port: the server's comm is `node-MainThread`; an idle SSM forward
+  holds 0 sockets, an open tab ≥1, both measured live) OR `GET /api/orchestration/shell` with
+  a read-only `orchestration:read` token showing an `activeRunId`/pending background task.
+  The token lives at `/etc/km/t3/presence.token` (root 0600), written by `start` straight from
+  t3, never echoed into SSM output. **Signal 5 now skips pids in `km-t3code.service`'s
+  cgroup**, because t3 keeps claude/codex children alive ≥30 min (up to ~4.5 h) after a turn
+  and the name match would latch the box awake.
+- **Locked egress:** t3 itself installs from GitHub (allowed), but the libatomic repos are not
+  in `base/network/locked`; `start` fails with a named error (add the repo suffix, or
+  `km ami bake`). `initCommands` is not a workaround (it runs after network setup).
+- **Deploy = `make build`** for the verbs (works on every running box over SSM). Signal 9 + the
+  signal 5 exclusion are km-presence: `make build` + `km init --sidecars`, existing boxes on
+  recreate; `km t3 status` warns on a box without signal 9. See `docs/t3code.md`.
+
 **Slack 👀 quiet period, `*@domain` allowlists, per-klanker `allowEmails` (2026-10-17):**
 - **Thread replies react only after > N s of quiet** since the row's `last_dispatch_ts` (a Slack
   ts), decided before delivery. **ON by default (180 s) on the next `km init`**; `0` disables;
@@ -2029,13 +2054,14 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | **What `km bootstrap` vs `km init` actually applies** — the SCP unit's own provider and non-regional state key, the TWO foundation resources created by direct SDK calls (so no plan shows them and only `km unbootstrap` removes them), why the 28-unit order is load-bearing, and one `resource_prefix` traced from yaml to a module variable | `docs/diagrams/security/09-bootstrap-and-init.html` + `docs/diagrams/security/README.md` § The HCL for bootstrap and init |
 | **What runs when Slack or HackerOne calls km** — the bridge Lambda read in code with permalinks: cold start, the per-request decision ladder, the SQS handoff, the on-box poller, which `km init` flag ships code vs env vs IAM | `docs/lambda-bridge-internals.md` |
 | Push webhook ingress — `webhooks:` block, Wiz Automation Rule setup, canonical km payload template, storm control (replay/cooldown/group_by/rate ceiling), deploy surface | `docs/webhook-ingress.md` |
-| Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the eight `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
+| Why an interactively-used sandbox got reaped as idle — the utmp/PTY root cause, the nine `km-presence` signals, why VNC/SSH are matched by socket not process, and the fail-idle rule | `docs/desktop.md` § Idle timeout + `docs/vscode.md` § Idle timeout |
 | Egress deny lists — `spec.network.egress.deniedDNSSuffixes` / `deniedHosts`, deny-beats-allow (incl. `*` and the GitHub/OpenAI/MITM carve-outs), the deliberately-broader deny matching, the `*`-allowlist-under-eBPF limitation, deploy surface | `docs/egress-deny-lists.md` |
 | Live egress census, allowlist pinning, on-demand packet capture — `km-netpolicy observed/flows/profile/pin/capture`, the deny-vs-pin union/intersection relationship, the `--exact` tradeoff, the two sharp edges, capture bounds, deploy surface | `docs/egress-census.md` (Phase 131) |
 | What a sandbox ran and who reached a host — `km-netpolicy execs/who/execs save`, why `who`'s pid attribution comes from the HTTP proxy (not the eBPF ring buffer) and needs `enforcement: ebpf`/`both`, the root-only unredacted store, argv bounds, rotation, `ExecStopPost` vs. `ExecStop`, deploy surface | `docs/exec-capture.md` (Phase 132) |
 | Declarative MITM intercepts — `spec.network.mitm.intercepts`, `redirect`/`respond` actions, precedence (deny → metering/GitHub → intercepts → allowlist), by-name last-wins override, the `profiles/base/mitm-rickroll.yaml` migration fragment, deploy surface | `docs/mitm-intercepts.md` (Phase 129) |
 | kubectl in a sandbox against a cluster only your laptop can reach — `km tunnel` operator runbook: prerequisites, flags, troubleshooting, the `socks` mode, deploy surface | `docs/k8s-reverse-tunnel.md` (Phase 130) |
 | **How the k8s tunnel actually works** — the three nested tunnels and why SSM forced SSH-inside-SSM, the ExecCredential proxy and why the broker is deliberately dumb, the `tls-server-name`-vs-CA split, the exec apiVersion exact-match trap, the precise trust boundary, and why the deploy surface is `make build` alone | `docs/k8s-reverse-tunnel-internals.md` (Phase 130) |
+| Run T3 Code on a sandbox in the background and reach it from a browser — `km t3 start|stop|status`, `km t3 <sb>` pairing over SSM, signal 9 and the signal 5 cgroup exclusion, the presence token, locked-egress libatomic recipe | `docs/t3code.md` |
 | Persistent agent panes that survive detach — `km herdr start`, the base/tools/herdr fragment, km-presence signal 8, the pause-vs-stop lifecycle trap, the ssh-config conflict, deploy surface | `docs/herdr-remote-attach.md` |
 | Ask the bot to DM someone — `km-slack dm`, who it may DM, the continuity row, the `im:write` scope | `docs/slack-notifications.md` § Bot-initiated DMs |
 | @-mention the bot from any channel or DM — `slack.default_route`, the email allowlist, the routing ladder, replies in the originating thread, the `channel_mismatch` rule, the DM scopes, deploy and half-deploy outcomes; strict `threadBypass: false` and thread context | `docs/slack-notifications.md` § Default route + § Phase 91 Strict mode |
@@ -2173,6 +2199,9 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km herdr <sandbox-id>` — bring up the SSM+SSH transport and attach Herdr to it in one terminal; the forward runs in the background for the life of the session and dies with it (`--session`, `--local-port`, `--no-install`)
 - `km herdr start <sandbox-id>` — transport only: hold the forward + ssh-config entry open in the foreground and print the `herdr --remote` line; herdr is never launched locally (`--local-port`, `--no-install`; `--no-attach` accepted as a no-op)
 - `km herdr status <sandbox-id>` — report sshd, authorized_keys, the herdr binary, and whether the box's km-presence carries signal 8
+- `km t3 start <sandbox-id>` — install T3 Code if needed and start it in the background as `km-t3code.service` on the box's 127.0.0.1:3773 (`--version`)
+- `km t3 <sandbox-id>` — reconnecting SSM forward to the t3 server on localhost:3774, plus a single-use 5-minute pairing link (`--local-port`, `--no-pair`)
+- `km t3 status <sandbox-id>` / `km t3 stop <sandbox-id>` — report install/server/providers/signal 9; stop and disable the server (stays stopped across resume)
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role
