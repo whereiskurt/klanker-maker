@@ -34,7 +34,7 @@ km_session_write "$F" sess-1 codex "` + msg + `" 1700.2
 km_session_read "$F"
 printf '%s|%s|%s|%s\n' "$S_SESSION_ID" "$S_AGENT_TYPE" "$S_LAST_EVENT" "$S_LAST_MSG"
 km_session_read "$(km_session_file slack nope)"; printf 'absent=[%s|%s]\n' "$S_SESSION_ID" "$S_AGENT_TYPE"
-stat -f '%Lp' "$(dirname "$F")" 2>/dev/null || stat -c '%a' "$(dirname "$F")"`
+D=$(dirname "$F"); printf 'mode=%s\n' "$(stat -c '%a' "$D" 2>/dev/null || stat -f '%Lp' "$D")"`
 	out, err := exec.Command("bash", "-c", script).CombinedOutput()
 	if err != nil {
 		t.Fatalf("helpers failed: %v\n%s", err, out)
@@ -46,7 +46,7 @@ stat -f '%Lp' "$(dirname "$F")" 2>/dev/null || stat -c '%a' "$(dirname "$F")"`
 	if !strings.Contains(s, "absent=[|]") {
 		t.Fatalf("absent file must read as empty:\n%s", s)
 	}
-	if !strings.Contains(s, "700") {
+	if !strings.Contains(s, "\nmode=700\n") {
 		t.Fatalf("sessions dir must be 0700:\n%s", s)
 	}
 }

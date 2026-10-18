@@ -2232,7 +2232,7 @@ km_session_write() { # <file> <session_id> <agent_type> <last_msg_file|""> <last
   tmp=$(mktemp "$(dirname "$f")/.tmp.XXXXXX") || return 1
   jq -n --arg sid "$2" --arg at "$3" --arg msg "$msg" --arg ev "$5" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{session_id:$sid, agent_type:$at, last_assistant_msg:$msg, last_processed_event_ts:$ev, updated_at:$now}' > "$tmp" \
-    && mv -f "$tmp" "$f"
+    && mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
 }
 # --- end km-session-helpers ---
 
@@ -3027,10 +3027,6 @@ fi
 command -v "$AGENT" >/dev/null 2>&1 || echo "[km-inbound-poller] WARNING: agent '$AGENT' not on PATH — dispatched turns will NOT run; add the agent install to the profile initCommands (e.g. npm install -g @anthropic-ai/claude-code)" >&2
 # --- end km-init-gate ---
 
-# km-github-threads table for session/thread continuity (GH-X-CONTINUITY).
-# Falls back to {prefix}-github-threads matching the default in main.go.
-GITHUB_THREADS_TABLE="${KM_GITHUB_THREADS_TABLE:-${KM_RESOURCE_PREFIX:?KM_RESOURCE_PREFIX is unset; the install prefix is required to name AWS resources}-github-threads}"
-
 # Export AWS_REGION so subprocesses (km-github comment, km-github review, aws CLI) inherit it.
 # The systemd unit's EnvironmentFile=/etc/km/notify.env uses systemd-native format
 # which doesn't include AWS_REGION; the bash fallback above sets REGION but does not
@@ -3072,6 +3068,33 @@ dispatch_as_sandbox() {
     exec runuser -u sandbox -- bash -lc "$1"
   )
 }
+
+# --- km-session-helpers ---
+# Per-thread agent-session state lives on the box (2026-10-18): the sandbox
+# role has no access to the threads tables any more. Only the session id and
+# agent type leave the box, through km-slack session (bridge-verified).
+km_session_file() { # <source> <key> -> path; creates the dir
+  local d="/var/lib/km/sessions/$1"
+  mkdir -p "$d" && chmod 700 /var/lib/km/sessions "$d" 2>/dev/null || true
+  printf '%s/%s.json' "$d" "$(printf '%s' "$2" | tr '/ ' '__')"
+}
+km_session_read() { # <file> -> S_SESSION_ID S_AGENT_TYPE S_LAST_MSG S_LAST_EVENT
+  S_SESSION_ID=""; S_AGENT_TYPE=""; S_LAST_MSG=""; S_LAST_EVENT=""
+  [ -s "$1" ] || return 0
+  S_SESSION_ID=$(jq -r '.session_id // empty' "$1" 2>/dev/null || true)
+  S_AGENT_TYPE=$(jq -r '.agent_type // empty' "$1" 2>/dev/null || true)
+  S_LAST_MSG=$(jq -r '.last_assistant_msg // empty' "$1" 2>/dev/null || true)
+  S_LAST_EVENT=$(jq -r '.last_processed_event_ts // empty' "$1" 2>/dev/null || true)
+}
+km_session_write() { # <file> <session_id> <agent_type> <last_msg_file|""> <last_event>
+  local f="$1" tmp msg=""
+  [ -n "$4" ] && [ -s "$4" ] && msg=$(head -c 4000 "$4")
+  tmp=$(mktemp "$(dirname "$f")/.tmp.XXXXXX") || return 1
+  jq -n --arg sid "$2" --arg at "$3" --arg msg "$msg" --arg ev "$5" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{session_id:$sid, agent_type:$at, last_assistant_msg:$msg, last_processed_event_ts:$ev, updated_at:$now}' > "$tmp" \
+    && mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+}
+# --- end km-session-helpers ---
 
 # Fall back to SSM Parameter Store when the env var is empty. km create writes
 # /{prefix}/sandbox/{id}/github-inbound-queue-url after the SQS FIFO queue is
@@ -3147,7 +3170,8 @@ while true; do
     --visibility-timeout 1800 \
     --region "$REGION" 2>/dev/null || true
 
-  # GH-X-CONTINUITY: look up existing agent session for (repo, number) in km-github-threads.
+  # GH-X-CONTINUITY: look up the agent session for (repo, number) in this box's
+  # local state file (/var/lib/km/sessions/github).
   # If present, resume the session so the agent has memory of prior turns.
   # If absent (first dispatch), no resume arg is passed.
   # Phase 102 Plan 03: also read agent_type so the precedence block can pin the thread agent.
@@ -3157,15 +3181,11 @@ while true; do
   # alias: long-lived; they just lack cross-event session continuity.
   GITHUB_SESSION=""
   THREAD_AGENT_TYPE=""
+  SESSION_FILE=""
   if [ -n "$REPO" ] && [ -n "$NUMBER" ] && [ "$NUMBER" != "0" ]; then
-    DDB_THREAD=$(aws dynamodb get-item \
-      --table-name "$GITHUB_THREADS_TABLE" \
-      --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
-      --projection-expression "agent_session_id, agent_type" \
-      --region "$REGION" \
-      --output json 2>/dev/null || true)
-    GITHUB_SESSION=$(echo "$DDB_THREAD" | jq -r '.Item.agent_session_id.S // empty' 2>/dev/null || true)
-    THREAD_AGENT_TYPE=$(echo "$DDB_THREAD" | jq -r '.Item.agent_type.S // empty' 2>/dev/null || true)
+    SESSION_FILE=$(km_session_file github "${REPO}_${NUMBER}")
+    km_session_read "$SESSION_FILE"
+    GITHUB_SESSION="$S_SESSION_ID"; THREAD_AGENT_TYPE="$S_AGENT_TYPE"
   fi
   # Default THREAD_AGENT_TYPE to profile default when the attribute is absent (Pitfall 2:
   # pre-Phase-102 rows have no agent_type; treat them as pinned to the profile default).
@@ -3334,14 +3354,11 @@ $COMMENT_BODY"
       echo "[km-github-inbound-poller] WARN: --resume session not found (${GITHUB_SESSION:0:8}...), retrying as fresh session — repo=$REPO PR=#$NUMBER"
       # Clear the stale exit/output before retry.
       rm -f "$RUN_DIR/output.json" "$RUN_DIR/exit_code"
-      # Also clear the stale DDB session row so the next dispatch doesn't retry --resume.
-      if [ -n "$REPO" ] && [ -n "$NUMBER" ]; then
-        aws dynamodb update-item \
-          --table-name "$GITHUB_THREADS_TABLE" \
-          --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
-          --return-values NONE \
-          --update-expression "REMOVE agent_session_id" \
-          --region "$REGION" 2>/dev/null || true
+      # Also clear the stale session (locally and at the bridge) so the next
+      # dispatch doesn't retry --resume.
+      if [ -n "$REPO" ] && [ -n "$NUMBER" ] && [ "$NUMBER" != "0" ]; then
+        km_session_write "$SESSION_FILE" "" "$EFFECTIVE_AGENT" "" "" || true
+        /opt/km/bin/km-slack session --source github --repo "$REPO" --number "$NUMBER" --clear --agent "$EFFECTIVE_AGENT" 2>>"$RUN_DIR/stderr.log" || true
       fi
       dispatch_as_sandbox "
         export HOME=/home/sandbox
@@ -3362,7 +3379,8 @@ $COMMENT_BODY"
   RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
 
   if [ "$RUN_EXIT" -eq 0 ] && [ -s "$RUN_DIR/output.json" ]; then
-    # GH-X-CONTINUITY: extract session_id from agent output and write to km-github-threads.
+    # GH-X-CONTINUITY: extract session_id from agent output; record it locally and
+    # at the bridge (km-slack session).
     # Claude: .session_id from output.json (single JSON document).
     # Codex: thread_id from thread.started event in JSONL stream.
     NEW_GITHUB_SESSION=""
@@ -3372,19 +3390,16 @@ $COMMENT_BODY"
       NEW_GITHUB_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
     fi
 
-    # Phase 115: skip DDB session writeback for event-rule envelopes (NUMBER==0).
-    # A (repo, 0) row would incorrectly merge sessions across different event firings.
+    # Phase 115: skip session writeback for event-rule envelopes (NUMBER==0).
+    # A (repo, 0) record would incorrectly merge sessions across different event
+    # firings, and the bridge has no thread for it (it answers 400).
     # The Phase 106 resume-hint comment is also skipped (no originating PR comment to reply to).
     if [ -n "$NEW_GITHUB_SESSION" ] && [ -n "$REPO" ] && [ -n "$NUMBER" ] && [ "$NUMBER" != "0" ]; then
-      # Phase 102 Plan 03: write agent_type alongside agent_session_id (D3 persistence).
+      # Phase 102 Plan 03: record agent_type alongside the session id (D3 persistence).
       # Pins the thread to EFFECTIVE_AGENT so future turns without a verb default correctly.
-      aws dynamodb update-item \
-        --table-name "$GITHUB_THREADS_TABLE" \
-        --key "{\"repo\":{\"S\":\"$REPO\"},\"number\":{\"N\":\"$NUMBER\"}}" \
-        --return-values NONE \
-        --update-expression "SET agent_session_id = :sid, agent_type = :at" \
-        --expression-attribute-values "{\":sid\":{\"S\":\"$NEW_GITHUB_SESSION\"},\":at\":{\"S\":\"$EFFECTIVE_AGENT\"}}" \
-        --region "$REGION" 2>/dev/null || true
+      km_session_write "$SESSION_FILE" "$NEW_GITHUB_SESSION" "$EFFECTIVE_AGENT" "" "" || echo "[km-github-inbound-poller] WARN: session state write failed" >&2
+      /opt/km/bin/km-slack session --source github --repo "$REPO" --number "$NUMBER" --session-id "$NEW_GITHUB_SESSION" --agent "$EFFECTIVE_AGENT" 2>>"$RUN_DIR/stderr.log" \
+        || echo "[km-github-inbound-poller] WARN: bridge session record failed — repo=$REPO PR=#$NUMBER" >&2
       echo "[km-github-inbound-poller] Session updated — repo=$REPO PR=#$NUMBER session=${NEW_GITHUB_SESSION:0:8}... agent=$EFFECTIVE_AGENT"
       # Phase 106: post resume-hint fold on session mint (first turn or Gap-E re-mint).
       # Post-on-mint: fires only when the session id is new or changed. Best-effort

@@ -298,9 +298,10 @@ func TestUserdata_GitHubInboundPoller_Phase102AgentVerbs(t *testing.T) {
 
 	must := []string{
 		"AGENT_OVERRIDE",            // D1: parse .agent from envelope
-		"THREAD_AGENT_TYPE",         // D3: thread-pinned agent read from DDB
+		"THREAD_AGENT_TYPE",         // D3: thread-pinned agent read from the local session file
 		"command -v codex",          // D6: codex-missing helpful-error guard
-		"agent_type = :at",          // D3: agent_type write-back in update-expression
+		`km_session_write "$SESSION_FILE" "$NEW_GITHUB_SESSION" "$EFFECTIVE_AGENT"`, // D3: agent_type write-back (local)
+		`--session-id "$NEW_GITHUB_SESSION" --agent "$EFFECTIVE_AGENT"`,           // D3: agent_type write-back (bridge)
 		"/codex is unavailable here", // Follow-up #2: D6 message uses the /codex slash verb (not 'codex:')
 		"codex exec resume '$GITHUB_SESSION'", // Follow-up #1: Codex thread resume on GitHub (mirrors Slack)
 		"KM_GITHUB_REPLY_AGENT='codex'",       // Follow-up #3: reply-agent env for the km-github attribution footer
