@@ -41,7 +41,7 @@ func runSession(args []string, stderr io.Writer) int {
 		return 2
 	}
 	if msg := validateSessionOptions(o); msg != "" {
-		fmt.Fprintln(stderr, "km-slack session: "+msg)
+		fmt.Fprintf(stderr, "km-slack session: %s\n", msg)
 		return 2
 	}
 	sandboxID, bridgeURL := os.Getenv("KM_SANDBOX_ID"), os.Getenv("KM_SLACK_BRIDGE_URL")
