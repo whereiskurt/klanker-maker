@@ -140,3 +140,37 @@ extended to also name roles that still carry a `-threads-rw` inline policy.
 GitHub/H1 bridges getting their own sandbox-facing endpoints; per-recipient mail keys; a
 per-sandbox MITM CA; migrating historical session attributes (a recreated box has no session to
 resume anyway).
+
+## 8. Live UAT — canary `ir-bot` (2026-10-18, go/no-go)
+
+Deploy: `make build` → `make build-lambdas` → `km init --dry-run=false` (28 modules, 11 changed —
+the Slack bridge code plus its two new table grants/env — 0 destroyed). Canary: `km destroy
+irbot-136169c8 --remote --yes` → `km create profiles/ir-bot.yaml ir-bot` → `irbot-fee8539b`. Role
+`km-ec2spot-ssm-irbot-fee8539b-use1`: 16 inline policies, no `-threads-rw`, no managed policy,
+aggregate 7,186 of 10,240 characters. Boot `SANDBOX_READY`; sidecars active.
+
+Negative controls as uid `sandbox` (all as required): `get-item` and `update-item` on
+`km-slack-threads` ⇒ AccessDenied (any attribute, not only `sandbox_id`); `get-item` on
+`km-github-threads` ⇒ AccessDenied; `km-slack session` on an unknown thread ⇒ `404 thread_unknown`
+for both the `slack` and `github` sources (so the bridge has the GitHub table wired).
+
+Positive controls: an owned-channel turn and a routed turn both replied in ~6 s; each row carries
+the bridge-written `claude_session_id`/`agent_type`/`last_turn_ts` beside `sandbox_id`/
+`last_dispatch_ts`; `last_assistant_msg` and `last_processed_event_ts` are absent from DynamoDB
+and present in `/var/lib/km/sessions/slack/<channel>_<ts>.json` (dir and files `0700`/`0600`).
+A second turn in the same thread resumed the same session id and answered from memory. A `codex:`
+handoff posted its new top-level message, the bridge claimed the row (`sandbox_id` set at post
+time) and the new thread's state file started with `agent_type: codex`; the codex turn itself
+failed `401` (this profile has no OpenAI credentials — environment, not the feature; the failed
+message was purged from the canary queue). `km-slack reply --session <id>` found the thread
+through the bridge's session lookup and posted. `km stop`/`km resume`: the three state files
+survived, pollers active, `km doctor` 0 errors, "Sandbox role shape" OK.
+
+One driver artifact, not a defect: a synthetic thread reply that reuses the anchor's `ts` as its
+event `ts` is skipped by the Phase 119 guard (same `last_processed_event_ts`); real Slack events
+never do that.
+
+**Verdict: GO.** Follow-ups recorded: the handoff's root-run Step 6 post leaves a root-owned
+posted marker (set `KM_SLACK_POSTED_MARKER=0` there); pre-v1.9.0 GitHub/H1 rows lacking
+`sandbox_id` block the bridge's upsert (doctor note or sweep); a cold-created GitHub/H1 box's
+first-turn session record answers 404 until the second turn.
