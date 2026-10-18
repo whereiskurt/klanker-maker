@@ -126,3 +126,31 @@ A bridge action that removes the box's access to the threads tables entirely; pe
 mail keys so `mail/*` can narrow; a per-sandbox MITM CA; `bedrock:CountTokens` if Claude Code
 turns out to call it (watch the canary's proxy log); SSM agent self-update bucket access if
 the deny ever surfaces it (CloudTrail on the canary).
+
+## 9. Live UAT — canary `ir-bot` (2026-10-17/18, go/no-go)
+
+Deploy: `make build` → `make build-lambdas` → `km init --dry-run=false` (28 modules, 10 changed, 0
+destroyed; one transient Lambda upload 408 and one SSO-expiry hang on the way, both retried). Canary:
+`km destroy sl-40741914 --remote --yes` → `km create profiles/ir-bot.yaml ir-bot` → `irbot-136169c8`
+(t3.large on-demand, us-east-1a). Role `km-ec2spot-ssm-irbot-136169c8-use1`: no managed policy
+attached, 17 inline policies, `region-deny` present, **aggregate 8,479 of 10,240 characters** (no
+fence/sops/secret paths on this profile). No Session Manager preferences document exists in the
+region, so the inline Core copy needs nothing extra.
+
+Negative controls, run as uid `sandbox` on the box (all **AccessDenied** as required): another
+sandbox's `signing-key`; `/{p}/slack/bot-token`; `UpdateItem … SET sandbox_id` on `km-slack-threads`;
+`Scan km-sandboxes`; `s3 ls …/sandboxes/`; `s3 ls --region eu-west-1 …/sidecars/` (region Deny).
+`sts get-caller-identity --region eu-west-1` succeeded (exempt).
+
+Positive controls (all green): boot `SANDBOX_READY` with every sidecar fetched; the role created its
+own CloudWatch log group and `audit` stream; `logs:GetLogEvents` on its own group; bridge-url and
+own-channel SSM reads; sidecar read from S3; own session-attribute `UpdateItem` on the threads table;
+Claude on Bedrock answered (`canary-ok`, 200 via the MITM proxy, tokens metered into `km-budgets`);
+`km-send` delivered (SES MessageId returned); `km-slack post` to `#sb-`; `km-slack dm` to the operator;
+a Slack turn in the owned channel and one through the default route both answered in ~10 s and both
+thread rows carry the bridge's `sandbox_id`/`last_dispatch_ts`/`created_at` next to the poller's
+`claude_session_id`/`agent_type`/`last_processed_event_ts`. `km doctor` after the apply: 0 errors;
+"Sandbox role shape" runs. Not exercisable on this profile: action quotas (no `limits`).
+Stop/resume: `km stop` → stopped → `km resume` → SSM Online in ~2 min, all four sidecar units active, poller re-read its queue URL from SSM, `/var/lib/km/init-done` persisted (no boot gate on resume).
+
+**Verdict: GO.** Existing boxes stay on the v1.7.0 role until recreated (`km doctor` names them).
