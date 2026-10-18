@@ -47,8 +47,14 @@ func (e *dmEmails) SenderEmail(_ context.Context, u string) (string, error) {
 
 // recordingThreads: LookupSandbox from rows, records Upserts.
 type recordingThreads struct {
-	rows    map[string]string
-	upserts []string // "chan|ts|sb"
+	rows     map[string]string
+	upserts  []string // "chan|ts|sb"
+	sessions []string // "chan|ts|sid|agent" (ActionSession)
+}
+
+func (r *recordingThreads) SetSession(_ context.Context, ch, ts, sid, agent string) error {
+	r.sessions = append(r.sessions, ch+"|"+ts+"|"+sid+"|"+agent)
+	return nil
 }
 
 func (r *recordingThreads) Get(_ context.Context, _, _ string) (string, error) { return "", nil }

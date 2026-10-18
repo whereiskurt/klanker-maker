@@ -76,6 +76,14 @@ type Handler struct {
 	// replaces the route list for the dm target check. nil ⇒ route list only.
 	SandboxByID SandboxByIDFetcher
 
+	// 2026-10-18 — ActionSession for the GitHub and H1 threads tables. The
+	// Slack bridge writes those rows on the pollers' behalf (it is the only
+	// sandbox-facing bridge). Wired from KM_GITHUB_THREADS_TABLE /
+	// KM_H1_THREADS_TABLE; nil ⇒ a session write for that source answers
+	// 503 source_unavailable. The Slack source uses Threads.
+	GitHubSessions ThreadSessionStore
+	H1Sessions     ThreadSessionStore
+
 	// Phase 121 (BRG-01) — quota enforcement on outbound chat actions.
 	// When both Quota and Limits are non-nil, quota.Record is called before each
 	// ActionPost/ActionTest/ActionUpload dispatch. nil Quota or nil Limits → dormant
@@ -130,7 +138,9 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 	// guard must not reject it here.
 	// ActionDM likewise: a top-level dm carries no channel (the DM channel is
 	// opened by the bridge); with --from-thread it carries the originating one.
-	channelRequired := env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM
+	// ActionSession: GitHub/H1 sources carry no channel; handleSession checks
+	// the per-source key fields itself.
+	channelRequired := env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM && env.Action != slack.ActionSession
 	if env.Action == "" || env.SenderID == "" || env.Nonce == "" || env.Timestamp == 0 || env.Version == 0 || (channelRequired && env.Channel == "") {
 		logger.WarnContext(ctx, "bridge: missing_fields", "step", "parse", "action", env.Action, "sender_id", env.SenderID, "status", 400)
 		return errResp(400, "missing_fields")
@@ -139,7 +149,7 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		logger.WarnContext(ctx, "bridge: unsupported_version", "step", "parse", "version", env.Version, "status", 400)
 		return errResp(400, "unsupported_version")
 	}
-	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate && env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM {
+	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate && env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM && env.Action != slack.ActionSession {
 		logger.WarnContext(ctx, "bridge: unknown_action", "step", "parse", "action", env.Action, "status", 400)
 		return errResp(400, "unknown_action")
 	}
@@ -274,7 +284,12 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		// (pitfall 1 from RESEARCH.md). Skip the channel ownership check.
 		// ActionDM: the DM channel does not exist yet; handleDM authorizes the
 		// target (email allowlist) and, with --from-thread, the originating thread.
-		if env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM {
+		// ActionSession: the row it writes must already name the sender
+		// (handleSession checks row.sandbox_id == SenderID before any write), so
+		// owning the channel is neither necessary (routed threads, GitHub/H1
+		// rows have no channel) nor sufficient (a box's own channel can hold a
+		// thread routed to another box). The row check is the authorization.
+		if env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM && env.Action != slack.ActionSession {
 			// Sandbox post/upload/permalink/update: channel must match owned channel.
 			owned, err := h.Channels.OwnedChannel(ctx, env.SenderID)
 			if err != nil {
@@ -360,6 +375,8 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		return resp
 	case slack.ActionDM:
 		return h.handleDM(ctx, env)
+	case slack.ActionSession:
+		return h.handleSession(ctx, env)
 
 	case slack.ActionArchive:
 		err := h.Slack.ArchiveChannel(ctx, env.Channel)

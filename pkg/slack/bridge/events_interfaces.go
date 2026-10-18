@@ -105,6 +105,27 @@ type SlackThreadStore interface {
 	// and clears claude_session_id — used when the alias behind a routed
 	// thread now resolves to a different (recreated) sandbox.
 	Rebind(ctx context.Context, channelID, threadTS, sandboxID string) error
+	// SetSession records the poller's agent session on a row the bridge routed
+	// (2026-10-18): SET claude_session_id (or REMOVE it when sessionID is ""),
+	// agent_type, last_turn_ts, ttl_expiry. Never touches sandbox_id,
+	// last_dispatch_ts, created_at or turn_count. Ownership is the handler's job.
+	SetSession(ctx context.Context, channelID, threadTS, sessionID, agentType string) error
+}
+
+// ThreadKey addresses a GitHub (Repo, Number) or H1 (ReportID, Target) thread row.
+type ThreadKey struct {
+	Repo     string
+	Number   int
+	ReportID string
+	Target   string
+}
+
+// ThreadSessionStore is the session-write surface for the GitHub and H1 threads
+// tables, served by the Slack bridge on the pollers' behalf (the only
+// sandbox-facing bridge).
+type ThreadSessionStore interface {
+	LookupSandbox(ctx context.Context, k ThreadKey) (sandboxID string, err error)
+	SetSession(ctx context.Context, k ThreadKey, sessionID, agentType string) error
 }
 
 // SandboxByChannelFetcher resolves a Slack channel_id to sandbox routing info

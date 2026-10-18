@@ -17,6 +17,9 @@ type routedThreads struct {
 func (r *routedThreads) Get(_ context.Context, _, _ string) (string, error) { return "", nil }
 func (r *routedThreads) Upsert(_ context.Context, _, _, _ string) error     { return nil }
 func (r *routedThreads) Rebind(_ context.Context, _, _, _ string) error     { return nil }
+func (r *routedThreads) SetSession(_ context.Context, _, _, _, _ string) error {
+	return nil
+}
 func (r *routedThreads) MarkDispatched(_ context.Context, _, _, _ string) error {
 	return nil
 }

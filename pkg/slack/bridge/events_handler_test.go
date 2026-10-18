@@ -151,6 +151,13 @@ type fakeThreads struct {
 	markAdvancesBoundary bool
 	// Default route: recorded Rebind calls.
 	rebinds []struct{ chan_, ts, sb string }
+	// ActionSession: recorded SetSession calls ("ch|ts|sid|agent").
+	setSessionCalls []string
+}
+
+func (f *fakeThreads) SetSession(_ context.Context, ch, ts, sid, agent string) error {
+	f.setSessionCalls = append(f.setSessionCalls, ch+"|"+ts+"|"+sid+"|"+agent)
+	return f.err
 }
 
 func (f *fakeThreads) Get(ctx context.Context, ch, ts string) (string, error) { return "", nil }
