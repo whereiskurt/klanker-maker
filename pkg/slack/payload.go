@@ -41,6 +41,7 @@ const (
 	ActionUpdate       = "update"        // Phase 70 — wraps chat.update
 	ActionLookupThread = "lookup-thread" // Phase 110 — session_id → (channel_id, thread_ts)
 	ActionDM           = "dm"            // 2026-10-17 — bot-initiated DM: conversations.open + top-level chat.postMessage
+	ActionSession      = "session"       // 2026-10-18 — poller records its agent session id + agent_type on a thread row the bridge routed to it
 )
 
 // SenderOperator is the canonical sender_id for operator-signed envelopes.
@@ -93,7 +94,18 @@ type SlackEnvelope struct {
 	// omitempty is LOAD-BEARING: the bridge re-canonicalises the struct before
 	// verifying, so a field that always serialises would change the signed bytes
 	// of every envelope from a km-slack built before this field existed.
-	TargetUser  string `json:"target_user,omitempty"`
+	TargetUser string `json:"target_user,omitempty"`
+	// Session action (2026-10-18). All omitempty — see the TargetUser note: a
+	// field that serialises when zero changes every older km-slack's signed bytes.
+	Source    string `json:"source,omitempty"`     // "slack" | "github" | "h1"
+	Repo      string `json:"repo,omitempty"`       // github: owner/name
+	Number    int    `json:"number,omitempty"`     // github: issue/PR number
+	ReportID  string `json:"report_id,omitempty"`  // h1
+	Target    string `json:"target,omitempty"`     // h1: alias (or sandbox id)
+	AgentType string `json:"agent_type,omitempty"` // "claude" | "codex"
+	// ClaimThread on a top-level post: the bridge writes the thread row for the
+	// message it just posted, owned by the sender (the Phase 70 handoff thread).
+	ClaimThread bool   `json:"claim_thread,omitempty"`
 	Text        string `json:"text"` // Phase 70 — used by update action (new message text)
 	ThreadTS    string `json:"thread_ts"`
 	Timestamp   int64  `json:"timestamp"`
