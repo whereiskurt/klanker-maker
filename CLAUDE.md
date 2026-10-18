@@ -93,10 +93,10 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
   notify-hook and `km-slack reply` follow with no binary change. The bridge authorizes a
   foreign-channel post only when it carries a `thread_ts` whose `km-slack-threads` row names
   the posting sandbox, and **only for `post` and `upload`**. `sandbox_id` on that row is written only by
-  bridge-side components; since ec2spot v1.8.0 (2026-10-17) the sandbox role may update a
-  threads row only for its session attributes (`dynamodb:Attributes` condition, `sandbox_id`
-  excluded, `TestSandboxRole_ThreadsWriteGrantExcludesSandboxID`), and the region lock is a
-  Deny, so a forged row cannot carry `sandbox_id` and authorizes nothing. `permalink`/`update` there stay
+  bridge-side components; since ec2spot v1.9.0 (2026-10-18) the sandbox role has NO grant on any
+  threads table (`TestSandboxRole_HasNoGrantOnThreadsTables`) and the region lock is a Deny.
+  Session attributes reach the row only through the bridge's `session` action, which requires
+  the row to name the caller, so a forged row is impossible. `permalink`/`update` there stay
   `403 channel_mismatch` because the bot token is shared across sandboxes and neither verb is
   thread-anchored. Consequence: the Phase 70 `claude:`/`codex:` handoff (a new top-level
   post) is skipped in a routed thread, with a poller log line saying so.

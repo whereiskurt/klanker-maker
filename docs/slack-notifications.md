@@ -3459,13 +3459,12 @@ Two halves that ship together:
 - **Bridge outbound authorization.** A sandbox may post to its own channel (as before), or
   into a foreign channel when the envelope carries a `thread_ts` **and** the
   `km-slack-threads` row for that `(channel, thread_ts)` names the posting sandbox. That row
-  is written only by bridge-side components: the events handler and the create-handler. The
-  sandbox role has a conditioned grant on the table: session attributes only, with
-  `sandbox_id` excluded (`dynamodb:Attributes`). DynamoDB IAM cannot scope by a row's
-  `sandbox_id`, so adding it to that set would let every sandbox forge a routed-thread row.
-  `TestSandboxRole_ThreadsWriteGrantExcludesSandboxID` (`pkg/terragrunt`) pins it. **Never add
-  `sandbox_id` to that set.** Since ec2spot v1.8.0 the region lock is a Deny, so no wildcard
-  allow reaches the table. Only the thread-anchored
+  is written only by bridge-side components: dispatch, `dm`, `claim_thread` and the `session`
+  action. As of ec2spot v1.9.0 the sandbox role has no grant on the table
+  (`TestSandboxRole_HasNoGrantOnThreadsTables`, `pkg/terragrunt`). DynamoDB IAM cannot scope
+  by a row's `sandbox_id`, so any grant would let every sandbox forge a routed-thread row.
+  **Never grant the sandbox role access to a threads table.** The region lock is a Deny, so
+  no wildcard allow reaches the table. Only the thread-anchored
   verbs, `post` and `upload`, are admitted this way. `permalink` and `update` in a foreign
   channel stay `403 channel_mismatch`, because the bot token is shared across sandboxes and
   neither verb is scoped by a thread. A top-level post into a routed channel is also refused.
@@ -3776,7 +3775,7 @@ via `--restart` — run it when the box is quiet.
 | `upload` | `--channel`, `--s3-key`, `--filename`, `--content-type`, `--size-bytes` required; `--thread` | stderr `km-slack upload: ok ts=…` | The bridge streams the S3 object into Slack's 3-step upload. It requires the key under `transcripts/<sender>/`, a filename with no `/` and at most 255 bytes, a content type of `application/gzip`, `application/json` or `text/plain`, and a size in (0, 100 MB]. Fails on Slack-Connect-shared channels; see Known limitations above. |
 | `permalink` | `--channel`, `--ts` required | stdout the URL | Wraps `chat.getPermalink`. Own channel only. Used by the Phase 70 agent handoff. |
 | `update` | `--channel`, `--ts` required; one of `--text`/`--body` | nothing on success | Wraps `chat.update`. Own channel only. The text is sent unrendered, with no subject and no mention. No caller in km today. |
-| `session` | `--source slack\|github\|h1`, the key flags for that source (`--channel`/`--thread` for slack; `--repo`/`--number` for github; `--report`/`--target` for h1), exactly one of `--session-id ID`/`--clear`, `--agent claude\|codex` | nothing on success | Called by the inbound pollers after a turn. The bridge updates only the session id and agent type, on an existing row that names the sender: `404 thread_unknown` (never creates), `403 thread_not_owned`, `503 source_unavailable`. The write is also conditioned on `sandbox_id = sender`. `--number` must be positive. A box with no `KM_SLACK_BRIDGE_URL` fails with a WARN. |
+| `session` | `--source slack\|github\|h1`, the key flags for that source (`--channel`/`--thread` for slack; `--repo`/`--number` for github; `--report`/`--target` for h1), exactly one of `--session-id ID`/`--clear`, `--agent claude\|codex` | nothing on success | Called by the inbound pollers after a turn. The bridge updates only the session fields (session id, agent type) plus the turn time and TTL, on an existing row that names the sender: `404 thread_unknown` (never creates), `403 thread_not_owned`, `503 source_unavailable`. The write is also conditioned on `sandbox_id = sender`. `--number` must be positive. A box with no `KM_SLACK_BRIDGE_URL` fails with a WARN. |
 | `record-mapping` | `--channel`, `--slack-ts`, `--offset`, `--session` required | nothing on success | **Internal to the transcript-streaming hook.** Writes a `(channel_id, slack_ts)` row with a 30-day TTL straight to `KM_SLACK_STREAM_TABLE` with the sandbox role; it does not use the bridge. Agents do not call it. |
 
 `--mention` (on `post` and `reply`) accepts `U…`, `W…`, `@U…`, `<@U…>` and lowercase ids,
