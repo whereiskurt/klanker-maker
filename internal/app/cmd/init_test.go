@@ -2175,3 +2175,29 @@ func TestRegionalModules_SlackBridgeAfterSessionTables(t *testing.T) {
 		}
 	}
 }
+
+// TestRegionalModules_ActionQuotaBeforeBridges — 2026-10-18: the Slack, H1 and
+// webhook bridge units read dynamodb-action-quota as a dependency whose mock
+// outputs are allowed on apply, and km init applies in list order, not
+// dependency order. The quota table must therefore come before every bridge or
+// a fresh install wires the bridges to the mock table name until the next init.
+// The GitHub bridge is included so a later dependency on the table is covered.
+func TestRegionalModules_ActionQuotaBeforeBridges(t *testing.T) {
+	idx := map[string]int{}
+	for i, m := range cmd.RegionalModules(t.TempDir()) {
+		idx[m.Name] = i
+	}
+	quota, ok := idx["dynamodb-action-quota"]
+	if !ok {
+		t.Fatal("dynamodb-action-quota not in regionalModules()")
+	}
+	for _, b := range []string{"lambda-slack-bridge", "lambda-github-bridge", "lambda-h1-bridge", "lambda-webhook-bridge", "lambda-quota-alerter"} {
+		i, ok := idx[b]
+		if !ok {
+			t.Fatalf("%s not in regionalModules()", b)
+		}
+		if quota >= i {
+			t.Errorf("dynamodb-action-quota (%d) must apply BEFORE %s (%d)", quota, b, i)
+		}
+	}
+}

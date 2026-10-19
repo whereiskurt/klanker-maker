@@ -739,6 +739,23 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			// Phase 121: {prefix}-action-quota DynamoDB table with Streams enabled
+			// (NEW_AND_OLD_IMAGES). PK={sandbox}#{action}, SK=window (lifetime|hour#N|day#N).
+			// Streams drive the km-quota-alerter Lambda (plan 09 event-source mapping).
+			// Plain table — no upstream deps.
+			//
+			// 2026-10-18: it must apply BEFORE every bridge. The slack, h1 and
+			// webhook bridge units read it as a dependency (quota table name/ARN),
+			// and km init applies each unit on its own, in this order — terragrunt
+			// does NOT apply a unit's dependencies for it, and those dependency
+			// blocks allow mock outputs on apply, so an out-of-order fresh install
+			// would wire the bridges to the mock table name until the next km init.
+			// Mirrors the dynamodb-h1-threads placement above.
+			name:    "dynamodb-action-quota",
+			dir:     filepath.Join(regionDir, "dynamodb-action-quota"),
+			envReqs: nil,
+		},
+		{
 			// Phase 63: Slack-notify bridge Lambda with Function URL (auth=NONE;
 			// Ed25519 + nonce provide application-layer auth). Depends on
 			// dynamodb-identities, dynamodb-sandboxes, and dynamodb-slack-nonces,
@@ -789,15 +806,6 @@ func regionalModules(regionDir string) []regionalModule {
 			// Ordered BEFORE ses (ses applies last per the module-order invariant).
 			name:    "dynamodb-checks",
 			dir:     filepath.Join(regionDir, "dynamodb-checks"),
-			envReqs: nil,
-		},
-		{
-			// Phase 121: {prefix}-action-quota DynamoDB table with Streams enabled
-			// (NEW_AND_OLD_IMAGES). PK={sandbox}#{action}, SK=window (lifetime|hour#N|day#N).
-			// Streams drive the km-quota-alerter Lambda (plan 09 event-source mapping).
-			// Plain table — no upstream deps. Ordered BEFORE ses.
-			name:    "dynamodb-action-quota",
-			dir:     filepath.Join(regionDir, "dynamodb-action-quota"),
 			envReqs: nil,
 		},
 		{
