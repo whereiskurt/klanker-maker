@@ -82,10 +82,9 @@ func TestUninitDestroyOrder(t *testing.T) {
 		// check-runner-role, ses, so the reverse destroy order places these two
 		// right after ses:
 		"check-runner-role",
-		// Phase 121 (action-quota counter table + stream-triggered alerter);
-		// applied after dynamodb-checks so they destroy right after check-runner-role:
+		// Phase 121 stream-triggered alerter; applied after dynamodb-checks so it
+		// destroys right after check-runner-role:
 		"lambda-quota-alerter",
-		"dynamodb-action-quota",
 		"dynamodb-checks",
 		// Phase 127 (generic webhook ingress bridge; applied right after
 		// lambda-h1-bridge, before dynamodb-checks — see regionalModules()):
@@ -96,6 +95,11 @@ func TestUninitDestroyOrder(t *testing.T) {
 		"lambda-github-bridge",
 		// Phase 63 (lambda-slack-bridge):
 		"lambda-slack-bridge",
+		// Phase 121 (dynamodb-action-quota) — applied right after sqs-inbound-dlq
+		// since 2026-10-18 so the bridges that read it see the real table name
+		// (km init applies in list order, not dependency order); the reverse
+		// destroy therefore tears it down after every bridge.
+		"dynamodb-action-quota",
 		// Phase 99.1 (sqs-inbound-dlq):
 		"sqs-inbound-dlq",
 		// Phase 103 (dynamodb-h1-threads) — applied right after the github threads

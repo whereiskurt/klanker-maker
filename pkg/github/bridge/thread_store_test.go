@@ -1,12 +1,13 @@
 // thread_store_test.go — GREEN unit tests for DynamoGitHubThreadStore (98-02).
 //
 // Implements: GH-X-CONTINUITY requirement.
-// Tests: Upsert (conditional PutItem), LookupSandbox (GetItem), UpdateSession (UpdateItem).
+// Tests: Upsert (unconditional if_not_exists UpdateItem), LookupSandbox (GetItem), UpdateSession (UpdateItem).
 package bridge_test
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,9 +64,11 @@ func (f *fakeGitHubThreadDynamo) UpdateItem(_ context.Context, params *dynamodb.
 // TestGitHubThreadStore (GH-X-CONTINUITY)
 // ============================================================
 
-// TestGitHubThreadStore_Upsert verifies that Upsert performs a conditional PutItem
-// with attribute_not_exists(repo) condition, keys repo(S)/number(N)/sandbox_id(S),
-// and ttl_expiry(N) approximately 30 days in the future.
+// TestGitHubThreadStore_Upsert verifies that Upsert is an unconditional UpdateItem
+// keyed repo(S)/number(N) that sets sandbox_id and ttl_expiry only where absent
+// (if_not_exists), never a conditional PutItem. A conditional PutItem could never
+// claim a pre-v1.9.0 row that exists without sandbox_id, so km-slack session on
+// that thread answered 404 forever.
 func TestGitHubThreadStore_Upsert(t *testing.T) {
 	fake := &fakeGitHubThreadDynamo{}
 	store := &bridge.DynamoGitHubThreadStore{
@@ -80,58 +83,47 @@ func TestGitHubThreadStore_Upsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Upsert returned error: %v", err)
 	}
-	if len(fake.putItems) != 1 {
-		t.Fatalf("expected 1 PutItem call; got %d", len(fake.putItems))
+	if len(fake.putItems) != 0 {
+		t.Fatalf("Upsert must not PutItem; got %d PutItem calls", len(fake.putItems))
+	}
+	if len(fake.updateInputs) != 1 {
+		t.Fatalf("expected 1 UpdateItem call; got %d", len(fake.updateInputs))
 	}
 
-	put := fake.putItems[0]
-	if *put.TableName != "km-github-threads" {
-		t.Errorf("TableName = %q; want km-github-threads", *put.TableName)
+	upd := fake.updateInputs[0]
+	if *upd.TableName != "km-github-threads" {
+		t.Errorf("TableName = %q; want km-github-threads", *upd.TableName)
+	}
+	if upd.ConditionExpression != nil {
+		t.Errorf("ConditionExpression = %q; want none (an existing ownerless row must be claimable)", *upd.ConditionExpression)
 	}
 
-	// Verify condition expression uses attribute_not_exists(repo).
-	if put.ConditionExpression == nil || *put.ConditionExpression == "" {
-		t.Fatal("ConditionExpression is nil/empty; want attribute_not_exists(repo)")
+	// Key: repo (S) + number (N).
+	if v, ok := upd.Key["repo"].(*dynamodbtypes.AttributeValueMemberS); !ok || v.Value != "owner/repo" {
+		t.Errorf("key.repo = %v; want S{owner/repo}", upd.Key["repo"])
+	}
+	if v, ok := upd.Key["number"].(*dynamodbtypes.AttributeValueMemberN); !ok || v.Value != "42" {
+		t.Errorf("key.number = %v; want N{42}", upd.Key["number"])
 	}
 
-	// Verify hash key repo (S).
-	repoVal, ok := put.Item["repo"]
+	expr := awsString(upd.UpdateExpression)
+	for _, want := range []string{"sandbox_id = if_not_exists(sandbox_id, :sb)", "ttl_expiry = if_not_exists(ttl_expiry, :ttl)"} {
+		if !strings.Contains(expr, want) {
+			t.Errorf("UpdateExpression %q missing %q", expr, want)
+		}
+	}
+	for _, banned := range []string{"agent_session_id", "agent_type"} {
+		if strings.Contains(expr, banned) {
+			t.Errorf("UpdateExpression %q touches %s; the poller owns it", expr, banned)
+		}
+	}
+
+	if v, ok := upd.ExpressionAttributeValues[":sb"].(*dynamodbtypes.AttributeValueMemberS); !ok || v.Value != "sb-abc123" {
+		t.Errorf(":sb = %v; want S{sb-abc123}", upd.ExpressionAttributeValues[":sb"])
+	}
+	ttlN, ok := upd.ExpressionAttributeValues[":ttl"].(*dynamodbtypes.AttributeValueMemberN)
 	if !ok {
-		t.Fatal("PutItem item missing 'repo' key")
-	}
-	repoS, ok := repoVal.(*dynamodbtypes.AttributeValueMemberS)
-	if !ok || repoS.Value != "owner/repo" {
-		t.Errorf("item.repo = %v; want S{owner/repo}", repoVal)
-	}
-
-	// Verify range key number (N).
-	numVal, ok := put.Item["number"]
-	if !ok {
-		t.Fatal("PutItem item missing 'number' key")
-	}
-	numN, ok := numVal.(*dynamodbtypes.AttributeValueMemberN)
-	if !ok || numN.Value != "42" {
-		t.Errorf("item.number = %v; want N{42}", numVal)
-	}
-
-	// Verify sandbox_id (S).
-	sidVal, ok := put.Item["sandbox_id"]
-	if !ok {
-		t.Fatal("PutItem item missing 'sandbox_id' key")
-	}
-	sidS, ok := sidVal.(*dynamodbtypes.AttributeValueMemberS)
-	if !ok || sidS.Value != "sb-abc123" {
-		t.Errorf("item.sandbox_id = %v; want S{sb-abc123}", sidVal)
-	}
-
-	// Verify ttl_expiry (N) is approx now + 30 days.
-	ttlVal, ok := put.Item["ttl_expiry"]
-	if !ok {
-		t.Fatal("PutItem item missing 'ttl_expiry' key")
-	}
-	ttlN, ok := ttlVal.(*dynamodbtypes.AttributeValueMemberN)
-	if !ok {
-		t.Fatalf("item.ttl_expiry is not N; got %T", ttlVal)
+		t.Fatalf(":ttl is not N; got %T", upd.ExpressionAttributeValues[":ttl"])
 	}
 	var ttlEpoch int64
 	fmt.Sscanf(ttlN.Value, "%d", &ttlEpoch)
@@ -140,6 +132,56 @@ func TestGitHubThreadStore_Upsert(t *testing.T) {
 	maxTTL := after + thirtyDays + 60 // 60s slack
 	if ttlEpoch < minTTL || ttlEpoch > maxTTL {
 		t.Errorf("ttl_expiry = %d; want in [%d, %d] (now+30d)", ttlEpoch, minTTL, maxTTL)
+	}
+}
+
+// TestGitHubThreadStore_Upsert_ClaimsOwnerlessRow: a pre-v1.9.0 row that exists
+// WITHOUT sandbox_id gains it, and its session fields survive.
+func TestGitHubThreadStore_Upsert_ClaimsOwnerlessRow(t *testing.T) {
+	fake := &fakeGitHubThreadDynamo{}
+	store := &bridge.DynamoGitHubThreadStore{Client: fake, TableName: "km-github-threads"}
+	if err := store.Upsert(context.Background(), "owner/repo", 7, "sb-new"); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	row := map[string]dynamodbtypes.AttributeValue{
+		"repo":             &dynamodbtypes.AttributeValueMemberS{Value: "owner/repo"},
+		"number":           &dynamodbtypes.AttributeValueMemberN{Value: "7"},
+		"agent_session_id": &dynamodbtypes.AttributeValueMemberS{Value: "sess-old"},
+		"agent_type":       &dynamodbtypes.AttributeValueMemberS{Value: "claude"},
+		"ttl_expiry":       &dynamodbtypes.AttributeValueMemberN{Value: "123"},
+	}
+	applyIfNotExistsSet(t, row, fake.updateInputs[0])
+
+	if v := row["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS).Value; v != "sb-new" {
+		t.Errorf("sandbox_id = %q; want sb-new (ownerless row must be claimed)", v)
+	}
+	if v := row["agent_session_id"].(*dynamodbtypes.AttributeValueMemberS).Value; v != "sess-old" {
+		t.Errorf("agent_session_id = %q; want sess-old (untouched)", v)
+	}
+	if v := row["ttl_expiry"].(*dynamodbtypes.AttributeValueMemberN).Value; v != "123" {
+		t.Errorf("ttl_expiry = %q; want 123 (existing value kept)", v)
+	}
+}
+
+// TestGitHubThreadStore_Upsert_KeepsExistingOwner: a row owned by another sandbox
+// keeps its sandbox_id.
+func TestGitHubThreadStore_Upsert_KeepsExistingOwner(t *testing.T) {
+	fake := &fakeGitHubThreadDynamo{}
+	store := &bridge.DynamoGitHubThreadStore{Client: fake, TableName: "km-github-threads"}
+	if err := store.Upsert(context.Background(), "owner/repo", 7, "sb-new"); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	row := map[string]dynamodbtypes.AttributeValue{
+		"repo":       &dynamodbtypes.AttributeValueMemberS{Value: "owner/repo"},
+		"number":     &dynamodbtypes.AttributeValueMemberN{Value: "7"},
+		"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: "sb-owner"},
+	}
+	applyIfNotExistsSet(t, row, fake.updateInputs[0])
+	if v := row["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS).Value; v != "sb-owner" {
+		t.Errorf("sandbox_id = %q; want sb-owner (existing owner kept)", v)
+	}
+	if _, ok := row["ttl_expiry"]; !ok {
+		t.Error("ttl_expiry absent after upsert; want it set when missing")
 	}
 }
 

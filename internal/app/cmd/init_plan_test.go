@@ -433,9 +433,10 @@ func TestRunInitPlan_VerboseStreamsPlan(t *testing.T) {
 // ttl-handler, email-handler, dynamodb-slack-nonces, dynamodb-slack-threads,
 // dynamodb-slack-channels, dynamodb-slack-stream-messages, dynamodb-github-threads,
 // dynamodb-h1-threads (moved ahead of the bridges 2026-10-18: the Slack bridge's
-// session action depends on it), sqs-inbound-dlq, lambda-slack-bridge,
-// lambda-github-bridge, lambda-h1-bridge, lambda-webhook-bridge, dynamodb-checks, check-runner-role,
-// dynamodb-action-quota, lambda-quota-alerter, ses
+// session action depends on it), sqs-inbound-dlq, dynamodb-action-quota (moved
+// ahead of the bridges 2026-10-18: the slack/h1/webhook bridge units depend on it),
+// lambda-slack-bridge, lambda-github-bridge, lambda-h1-bridge, lambda-webhook-bridge,
+// dynamodb-checks, lambda-quota-alerter, check-runner-role, ses
 // 27 + lambda-webhook-bridge (Phase 127)
 func TestRunInitPlan_ModuleOrder(t *testing.T) {
 	repoRoot := t.TempDir()

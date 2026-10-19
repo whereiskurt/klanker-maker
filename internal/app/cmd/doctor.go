@@ -437,6 +437,9 @@ type DoctorDeps struct {
 	// IdentityRowClient reads the operator public-key row for checkOperatorIdentity
 	// (a GetItem view; DynamoClient is DescribeTable-only). Nil → the check is skipped.
 	IdentityRowClient IdentityRowGetItemAPI
+	// DynamoScanClient backs checkThreadRowsWithoutOwner (Select COUNT scans of
+	// the three thread tables). Populated beside DynamoClient. Nil → skipped.
+	DynamoScanClient DynamoScanAPI
 	// EC2Clients is a map from region name to EC2 client (one per region checked).
 	EC2Clients map[string]EC2DescribeAPI
 	// Lambda client for TTL handler existence check.
@@ -3940,6 +3943,17 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// Thread rows without sandbox_id (pre-v1.9.0 poller writes). Advisory: the
+	// bridges' if_not_exists Upsert claims each one on its thread's next dispatch.
+	// The Slack table name honours slack_threads_table_name (as the other Slack
+	// checks do); the GitHub and H1 tables have no override.
+	threadRowScanner := deps.DynamoScanClient
+	threadRowPrefix := cfg.GetResourcePrefix()
+	threadRowSlackTable := cfg.GetSlackThreadsTableName()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkThreadRowsWithoutOwner(ctx, threadRowScanner, threadRowSlackTable, threadRowPrefix)
+	})
+
 	// Content check on the same table: a stored row can diverge from the profile
 	// that created it, and resolution never notices (the row is consulted before
 	// the derived name, and the two are never compared). READ-ONLY — alias rows
@@ -4813,7 +4827,8 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkInitFailed(ctx, cwFilter, presenceLister, presenceLogGroupPrefix)
 	})
 
-	// v1.8.0 least-privilege role: name the running sandboxes still on the old shape.
+	// v1.8.0 least-privilege role: name the running, stopped or paused sandboxes
+	// still on the old shape (a stopped or paused box resumes on its old role).
 	iamForRoleShape := deps.IAMCleanupClient
 	listerForRoleShape := deps.Lister
 	checks = append(checks, func(ctx context.Context) CheckResult {
@@ -5007,6 +5022,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.S3Client = s3.NewFromConfig(awsCfg)
 	deps.DynamoClient = dynamodb.NewFromConfig(awsCfg)
 	deps.IdentityRowClient = dynamodb.NewFromConfig(awsCfg)
+	deps.DynamoScanClient = dynamodb.NewFromConfig(awsCfg)
 	deps.KMSClient = kms.NewFromConfig(awsCfg)
 	deps.SSMReadClient = ssm.NewFromConfig(awsCfg)
 

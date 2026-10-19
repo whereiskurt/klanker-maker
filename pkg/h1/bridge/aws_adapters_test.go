@@ -1,7 +1,7 @@
 // aws_adapters_test.go — Phase 103 Plan 04 tests for the H1 AWS adapters.
 //
 // Covers:
-//   - DynamoH1ThreadStore: Upsert (conditional PutItem keyed report_id+target),
+//   - DynamoH1ThreadStore: Upsert (if_not_exists UpdateItem keyed report_id+target),
 //     LookupSandbox (GetItem), UpdateSession (UpdateItem), and N-target no-collision.
 //   - DynamoH1NonceStore: CheckAndStore dedupes a replayed GUID with the
 //     "h1-delivery:" key prefix (shared nonces table, 24h TTL).
@@ -14,6 +14,7 @@ package bridge_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,7 +67,9 @@ func (f *fakeH1ThreadDynamo) UpdateItem(_ context.Context, params *dynamodb.Upda
 }
 
 // ============================================================
-// TestThreadStore_Upsert — conditional PutItem keyed report_id + target
+// TestThreadStore_Upsert — unconditional if_not_exists UpdateItem keyed
+// report_id + target. A conditional PutItem could never claim a pre-v1.9.0 row
+// that exists without sandbox_id, so km-slack session on it answered 404 forever.
 // ============================================================
 
 func TestThreadStore_Upsert(t *testing.T) {
@@ -79,39 +82,100 @@ func TestThreadStore_Upsert(t *testing.T) {
 	}
 	after := time.Now().Unix()
 
-	if len(fake.putItems) != 1 {
-		t.Fatalf("expected 1 PutItem call; got %d", len(fake.putItems))
+	if len(fake.putItems) != 0 {
+		t.Fatalf("Upsert must not PutItem; got %d PutItem calls", len(fake.putItems))
 	}
-	put := fake.putItems[0]
-	if *put.TableName != "km-h1-threads" {
-		t.Errorf("TableName = %q; want km-h1-threads", *put.TableName)
+	if len(fake.updateInputs) != 1 {
+		t.Fatalf("expected 1 UpdateItem call; got %d", len(fake.updateInputs))
 	}
-	if put.ConditionExpression == nil || *put.ConditionExpression == "" {
-		t.Fatal("ConditionExpression is nil/empty; want attribute_not_exists(report_id)")
+	upd := fake.updateInputs[0]
+	if *upd.TableName != "km-h1-threads" {
+		t.Errorf("TableName = %q; want km-h1-threads", *upd.TableName)
+	}
+	if upd.ConditionExpression != nil {
+		t.Errorf("ConditionExpression = %q; want none (an existing ownerless row must be claimable)", *upd.ConditionExpression)
 	}
 
-	// Hash key report_id (S).
-	if v, ok := put.Item["report_id"].(*dynamodbtypes.AttributeValueMemberS); !ok || v.Value != "1234" {
-		t.Errorf("item.report_id = %v; want S{1234}", put.Item["report_id"])
+	// Hash key report_id (S), range key target (S).
+	if v, ok := upd.Key["report_id"].(*dynamodbtypes.AttributeValueMemberS); !ok || v.Value != "1234" {
+		t.Errorf("key.report_id = %v; want S{1234}", upd.Key["report_id"])
 	}
-	// Range key target (S).
-	if v, ok := put.Item["target"].(*dynamodbtypes.AttributeValueMemberS); !ok || v.Value != "h1-km-sandbox" {
-		t.Errorf("item.target = %v; want S{h1-km-sandbox}", put.Item["target"])
+	if v, ok := upd.Key["target"].(*dynamodbtypes.AttributeValueMemberS); !ok || v.Value != "h1-km-sandbox" {
+		t.Errorf("key.target = %v; want S{h1-km-sandbox}", upd.Key["target"])
 	}
-	// sandbox_id (S).
-	if v, ok := put.Item["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS); !ok || v.Value != "sb-abc123" {
-		t.Errorf("item.sandbox_id = %v; want S{sb-abc123}", put.Item["sandbox_id"])
+
+	expr := awsString(upd.UpdateExpression)
+	for _, want := range []string{"sandbox_id = if_not_exists(sandbox_id, :sb)", "ttl_expiry = if_not_exists(ttl_expiry, :ttl)"} {
+		if !strings.Contains(expr, want) {
+			t.Errorf("UpdateExpression %q missing %q", expr, want)
+		}
 	}
-	// ttl_expiry (N) approx now + 30 days.
-	ttlV, ok := put.Item["ttl_expiry"].(*dynamodbtypes.AttributeValueMemberN)
+	for _, banned := range []string{"agent_session_id", "agent_type"} {
+		if strings.Contains(expr, banned) {
+			t.Errorf("UpdateExpression %q touches %s; the poller owns it", expr, banned)
+		}
+	}
+	if v, ok := upd.ExpressionAttributeValues[":sb"].(*dynamodbtypes.AttributeValueMemberS); !ok || v.Value != "sb-abc123" {
+		t.Errorf(":sb = %v; want S{sb-abc123}", upd.ExpressionAttributeValues[":sb"])
+	}
+	ttlV, ok := upd.ExpressionAttributeValues[":ttl"].(*dynamodbtypes.AttributeValueMemberN)
 	if !ok {
-		t.Fatalf("item.ttl_expiry not N; got %T", put.Item["ttl_expiry"])
+		t.Fatalf(":ttl not N; got %T", upd.ExpressionAttributeValues[":ttl"])
 	}
 	var ttlEpoch int64
 	fmt.Sscanf(ttlV.Value, "%d", &ttlEpoch)
 	thirtyDays := int64(30 * 24 * 3600)
 	if ttlEpoch < before+thirtyDays || ttlEpoch > after+thirtyDays+60 {
 		t.Errorf("ttl_expiry = %d; want ~now+30d", ttlEpoch)
+	}
+}
+
+// TestThreadStore_Upsert_ClaimsOwnerlessRow: a pre-v1.9.0 row that exists
+// WITHOUT sandbox_id gains it, and its session fields survive.
+func TestThreadStore_Upsert_ClaimsOwnerlessRow(t *testing.T) {
+	fake := &fakeH1ThreadDynamo{}
+	store := &bridge.DynamoH1ThreadStore{Client: fake, TableName: "km-h1-threads"}
+	if err := store.Upsert(context.Background(), "1234", "h1-prog", "sb-new"); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	row := map[string]dynamodbtypes.AttributeValue{
+		"report_id":        &dynamodbtypes.AttributeValueMemberS{Value: "1234"},
+		"target":           &dynamodbtypes.AttributeValueMemberS{Value: "h1-prog"},
+		"agent_session_id": &dynamodbtypes.AttributeValueMemberS{Value: "sess-old"},
+		"agent_type":       &dynamodbtypes.AttributeValueMemberS{Value: "codex"},
+		"ttl_expiry":       &dynamodbtypes.AttributeValueMemberN{Value: "123"},
+	}
+	applyIfNotExistsSet(t, row, fake.updateInputs[0])
+	if v := row["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS).Value; v != "sb-new" {
+		t.Errorf("sandbox_id = %q; want sb-new (ownerless row must be claimed)", v)
+	}
+	if v := row["agent_session_id"].(*dynamodbtypes.AttributeValueMemberS).Value; v != "sess-old" {
+		t.Errorf("agent_session_id = %q; want sess-old (untouched)", v)
+	}
+	if v := row["ttl_expiry"].(*dynamodbtypes.AttributeValueMemberN).Value; v != "123" {
+		t.Errorf("ttl_expiry = %q; want 123 (existing value kept)", v)
+	}
+}
+
+// TestThreadStore_Upsert_KeepsExistingOwner: a row owned by another sandbox keeps
+// its sandbox_id.
+func TestThreadStore_Upsert_KeepsExistingOwner(t *testing.T) {
+	fake := &fakeH1ThreadDynamo{}
+	store := &bridge.DynamoH1ThreadStore{Client: fake, TableName: "km-h1-threads"}
+	if err := store.Upsert(context.Background(), "1234", "h1-prog", "sb-new"); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	row := map[string]dynamodbtypes.AttributeValue{
+		"report_id":  &dynamodbtypes.AttributeValueMemberS{Value: "1234"},
+		"target":     &dynamodbtypes.AttributeValueMemberS{Value: "h1-prog"},
+		"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: "sb-owner"},
+	}
+	applyIfNotExistsSet(t, row, fake.updateInputs[0])
+	if v := row["sandbox_id"].(*dynamodbtypes.AttributeValueMemberS).Value; v != "sb-owner" {
+		t.Errorf("sandbox_id = %q; want sb-owner (existing owner kept)", v)
+	}
+	if _, ok := row["ttl_expiry"]; !ok {
+		t.Error("ttl_expiry absent after upsert; want it set when missing")
 	}
 }
 
@@ -126,17 +190,17 @@ func TestThreadStore_MultiTarget(t *testing.T) {
 			t.Fatalf("Upsert(%s) error: %v", tgt, err)
 		}
 	}
-	if len(fake.putItems) != 2 {
-		t.Fatalf("expected 2 PutItem calls (one per target); got %d", len(fake.putItems))
+	if len(fake.updateInputs) != 2 {
+		t.Fatalf("expected 2 UpdateItem calls (one per target); got %d", len(fake.updateInputs))
 	}
 	// Same report_id, distinct target range keys.
-	t0 := fake.putItems[0].Item["target"].(*dynamodbtypes.AttributeValueMemberS).Value
-	t1 := fake.putItems[1].Item["target"].(*dynamodbtypes.AttributeValueMemberS).Value
+	t0 := fake.updateInputs[0].Key["target"].(*dynamodbtypes.AttributeValueMemberS).Value
+	t1 := fake.updateInputs[1].Key["target"].(*dynamodbtypes.AttributeValueMemberS).Value
 	if t0 == t1 {
 		t.Errorf("both rows share target %q; want distinct targets (collision)", t0)
 	}
-	r0 := fake.putItems[0].Item["report_id"].(*dynamodbtypes.AttributeValueMemberS).Value
-	r1 := fake.putItems[1].Item["report_id"].(*dynamodbtypes.AttributeValueMemberS).Value
+	r0 := fake.updateInputs[0].Key["report_id"].(*dynamodbtypes.AttributeValueMemberS).Value
+	r1 := fake.updateInputs[1].Key["report_id"].(*dynamodbtypes.AttributeValueMemberS).Value
 	if r0 != "5678" || r1 != "5678" {
 		t.Errorf("report_id mismatch: %q, %q; want both 5678", r0, r1)
 	}

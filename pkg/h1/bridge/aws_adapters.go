@@ -623,27 +623,30 @@ func (s *DynamoH1ThreadStore) LookupSandbox(ctx context.Context, reportID, targe
 	return sandboxID, sessionID, agentType, nil
 }
 
-// Upsert creates a (reportID, target) row only if one does not already exist
-// (attribute_not_exists(report_id) condition). ConditionalCheckFailed is
-// idempotent success (the row exists with valid data). ttl_expiry = now + 30 days.
+// Upsert records (reportID, target) → sandbox_id with an unconditional UpdateItem
+// that sets sandbox_id and ttl_expiry only where absent (if_not_exists), mirroring
+// DDBThreadStore.Upsert in pkg/slack/bridge. An existing owner is never
+// overwritten and agent_session_id/agent_type are never touched. Not a
+// conditional PutItem: a pre-v1.9.0 row exists WITHOUT sandbox_id, and
+// attribute_not_exists(report_id) could never claim it, so km-slack session on
+// that thread answered 404 forever. ttl_expiry = now + 30 days when absent.
 func (s *DynamoH1ThreadStore) Upsert(ctx context.Context, reportID, target, sandboxID string) error {
 	ttlExpiry := time.Now().Unix() + 30*24*3600
 
-	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: awssdk.String(s.TableName),
-		Item: map[string]dynamodbtypes.AttributeValue{
-			"report_id":  &dynamodbtypes.AttributeValueMemberS{Value: reportID},
-			"target":     &dynamodbtypes.AttributeValueMemberS{Value: target},
-			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
-			"ttl_expiry": &dynamodbtypes.AttributeValueMemberN{Value: strconv.FormatInt(ttlExpiry, 10)},
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"report_id": &dynamodbtypes.AttributeValueMemberS{Value: reportID},
+			"target":    &dynamodbtypes.AttributeValueMemberS{Value: target},
 		},
-		ConditionExpression: awssdk.String("attribute_not_exists(report_id)"),
+		UpdateExpression: awssdk.String("SET sandbox_id = if_not_exists(sandbox_id, :sb), " +
+			"ttl_expiry = if_not_exists(ttl_expiry, :ttl)"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":sb":  &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+			":ttl": &dynamodbtypes.AttributeValueMemberN{Value: strconv.FormatInt(ttlExpiry, 10)},
+		},
 	})
 	if err != nil {
-		var condFailed *dynamodbtypes.ConditionalCheckFailedException
-		if errors.As(err, &condFailed) {
-			return nil // idempotent — row already live
-		}
 		return fmt.Errorf("h1-threads: upsert (%s, %s): %w", reportID, target, err)
 	}
 	return nil

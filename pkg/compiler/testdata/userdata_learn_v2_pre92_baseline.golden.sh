@@ -2671,7 +2671,7 @@ while true; do
           echo "[km-slack-inbound-poller] cross-agent switch: failed to create new top-level; aborting" >&2
           ERR_BODY=$(mktemp /tmp/km-switch-err.XXXXXX)
           printf 'Failed to spawn new %s thread (see journald). Try again.\n' "$NEW_AGENT" > "$ERR_BODY"
-          /opt/km/bin/km-slack post \
+          KM_SLACK_POSTED_MARKER=0 /opt/km/bin/km-slack post \
             --channel "$REPLY_CHANNEL" \
             --thread "$THREAD_TS" \
             --body "$ERR_BODY" 2>>"$RUN_DIR/stderr.log" || true
@@ -2691,7 +2691,7 @@ while true; do
         # Step 6: post handoff in OLD thread with NEW_PERMALINK embedded.
         HANDOFF_BODY=$(mktemp /tmp/km-handoff.XXXXXX)
         printf 'Switching to %s → continuing in this thread.\n%s\n' "$NEW_AGENT" "$NEW_PERMALINK" > "$HANDOFF_BODY"
-        /opt/km/bin/km-slack post \
+        KM_SLACK_POSTED_MARKER=0 /opt/km/bin/km-slack post \
           --channel "$REPLY_CHANNEL" \
           --thread "$THREAD_TS" \
           --body "$HANDOFF_BODY" 2>>"$RUN_DIR/stderr.log" || true
@@ -3702,6 +3702,7 @@ else
 fi
 KMSEND
 chmod +x /opt/km/bin/km-send
+ln -sf /opt/km/bin/km-send /usr/local/bin/km-send
 echo "[km-bootstrap] km-send installed at /opt/km/bin/km-send"
 
 cat > /etc/systemd/system/km-mail-poller.service << 'UNIT'
@@ -4705,6 +4706,7 @@ else
 fi
 KMRECV
 chmod +x /opt/km/bin/km-recv
+ln -sf /opt/km/bin/km-recv /usr/local/bin/km-recv
 echo "[km-bootstrap] km-recv installed at /opt/km/bin/km-recv"
 # In eBPF/gatekeeper mode, skip km-dns-proxy (enforcer runs its own DNS resolver)
 # daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
