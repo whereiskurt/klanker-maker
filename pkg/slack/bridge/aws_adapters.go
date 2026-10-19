@@ -942,6 +942,30 @@ func (s *DDBThreadStore) Get(ctx context.Context, channelID, threadTS string) (s
 	return "", nil
 }
 
+// SetSession records the poller's agent session on an existing row
+// (2026-10-18). It SETs only claude_session_id, agent_type, last_turn_ts and
+// ttl_expiry (or REMOVEs claude_session_id when sessionID is ""), conditioned
+// on sandbox_id = ownerID. The condition fails on an absent item too, so a row
+// that TTL-expired or was rebound after the handler's lookup is neither
+// recreated nor written for the wrong owner.
+func (s *DDBThreadStore) SetSession(ctx context.Context, channelID, threadTS, sessionID, agentType, ownerID string) error {
+	expr, vals := sessionUpdate("claude_session_id", sessionID, agentType, ownerID)
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(s.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"channel_id": &dynamodbtypes.AttributeValueMemberS{Value: channelID},
+			"thread_ts":  &dynamodbtypes.AttributeValueMemberS{Value: threadTS},
+		},
+		UpdateExpression:          awssdk.String(expr),
+		ConditionExpression:       awssdk.String(sessionOwnerCondition),
+		ExpressionAttributeValues: vals,
+	})
+	if err != nil {
+		return fmt.Errorf("threads set-session: %w", err)
+	}
+	return nil
+}
+
 // LookupSandbox returns the sandbox_id for (channelID, threadTS), or "" if no
 // row exists. Phase 91.3: distinct from Get because Get returns
 // claude_session_id (which the poller sets later) — sandbox_id is set by

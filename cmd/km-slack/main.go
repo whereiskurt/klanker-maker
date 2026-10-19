@@ -74,6 +74,8 @@ func dispatch(args []string, stderr io.Writer) int {
 		return runReply(args[1:], stderr)
 	case "dm":
 		return runDM(args[1:], stderr)
+	case "session":
+		return runSession(args[1:], stderr)
 	case "-h", "--help", "help":
 		usage(stderr)
 		return 0
@@ -87,12 +89,15 @@ func dispatch(args []string, stderr io.Writer) int {
 func usage(w io.Writer) {
 	fmt.Fprintln(w, `usage: km-slack <subcommand> [args]
 Subcommands:
-  post           Post a message to a channel/thread (signs and POSTs to bridge). --new-message omits thread_ts.
+  post           Post a message to a channel/thread (signs and POSTs to bridge). --new-message omits thread_ts; --claim-thread (with --new-message) has the bridge record the new thread.
   upload         Upload a file via the bridge (3-step flow), referencing an S3 key.
   record-mapping Write a (channel_id, slack_ts) → transcript-offset row to DDB.
   permalink      Resolve a Slack permalink URL for --channel + --ts.
   update         Edit a previously-posted bot message via --channel, --ts, and --text/--body.
   dm --to U… (--text <s> | --body <file>) [--render …] [--from-thread]   DM a person on the route allowlist (top-level; no marker)
+  session --source slack|github|h1 <key flags> (--session-id ID | --clear) --agent claude|codex
+                 Record the agent session id on a thread the bridge routed (poller end-of-turn).
+                 Key flags: slack: --channel --thread; github: --repo --number; h1: --report --target.
   reply          Post a reply into the thread bound to the current session (4-step resolution chain).
                  Resolution: --thread > $KM_SLACK_THREAD_TS > session-id lookup > channel root.
   post/reply     --mention U…[,U…|here|channel] notifies people: the ids are prepended as <@U…>
@@ -125,7 +130,7 @@ func runPost(args []string, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var channel, subject, bodyPath, thread string
 	var renderMode string
-	var newMessage bool
+	var newMessage, claimThread bool
 	var mentions mentionFlag
 	fs.StringVar(&channel, "channel", "", "Slack channel ID (C...)")
 	fs.StringVar(&subject, "subject", "", "Optional subject text (rendered as bold header by bridge; omit for clean threaded replies)")
@@ -133,8 +138,13 @@ func runPost(args []string, stderr io.Writer) int {
 	fs.StringVar(&thread, "thread", "", "Thread parent ts")
 	fs.StringVar(&renderMode, "render", "", "Render mode: plain (default, no-op), mrkdwn (Phase 74 Tier 1 transformer), blocks (Phase 74 PR2 Tier 2 Block Kit; falls back to mrkdwn on 50-block cap), blocks-rich (Phase 111 Tier 3 markdown/table blocks, opt-in; falls back to blocks then mrkdwn)")
 	fs.BoolVar(&newMessage, "new-message", false, "Post as new top-level message (omits thread_ts); prints ts=<value> to stdout for poller capture. Phase 70.")
+	fs.BoolVar(&claimThread, "claim-thread", false, "With --new-message: ask the bridge to record the new top-level message as a thread owned by this sandbox (Phase 70 handoff)")
 	fs.Var(&mentions, "mention", mentionFlagUsage)
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if claimThread && !newMessage {
+		fmt.Fprintln(stderr, "km-slack post: --claim-thread requires --new-message")
 		return 2
 	}
 	mentionTokens, err := slack.ParseMentions(mentions)
@@ -172,7 +182,7 @@ func runPost(args []string, stderr io.Writer) int {
 		threadArg = ""
 	}
 
-	ts, err := run(channel, subject, bodyPath, threadArg, renderMode, mentionTokens)
+	ts, err := run(channel, subject, bodyPath, threadArg, renderMode, claimThread, mentionTokens)
 	if err != nil {
 		fmt.Fprintf(stderr, "km-slack post: %v\n", err)
 		return 1
@@ -320,7 +330,7 @@ func runRecordMapping(args []string, stderr io.Writer) int {
 // calling runWith. Separated so tests can inject an ephemeral key via runWith.
 // renderMode is one of "plain", "mrkdwn", "blocks" — resolved by runPost before calling run.
 // Returns the message ts on success (empty string if the bridge didn't return one).
-func run(channel, subject, bodyPath, thread, renderMode string, mentions []string) (string, error) {
+func run(channel, subject, bodyPath, thread, renderMode string, claimThread bool, mentions []string) (string, error) {
 	sandboxID := os.Getenv("KM_SANDBOX_ID")
 	if sandboxID == "" {
 		return "", errors.New("KM_SANDBOX_ID env var not set")
@@ -350,7 +360,7 @@ func run(channel, subject, bodyPath, thread, renderMode string, mentions []strin
 		return "", fmt.Errorf("load signing key: %w", err)
 	}
 
-	return runWith(ctx, priv, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode, mentions...)
+	return runWithClaim(ctx, priv, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode, claimThread, mentions...)
 }
 
 // renderBody applies the km-slack render tier to body and returns the text
@@ -407,6 +417,13 @@ func renderBody(renderMode string, body []byte) (rendered, blocksJSON string) {
 // carries it visibly (see slack.PrependMentionBlock for why not the markdown
 // block). Empty ⇒ byte-identical to before.
 func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode string, mentions ...string) (string, error) {
+	return runWithClaim(ctx, priv, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode, false, mentions...)
+}
+
+// runWithClaim is runWith plus claimThread: set on the envelope (and on the
+// invalid_blocks fallback envelope) so the bridge records the new top-level
+// message as a thread owned by this sandbox. Only meaningful with thread == "".
+func runWithClaim(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode string, claimThread bool, mentions ...string) (string, error) {
 	if sandboxID == "" {
 		return "", errors.New("sandboxID is required")
 	}
@@ -448,6 +465,7 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 	if err != nil {
 		return "", err
 	}
+	env.ClaimThread = claimThread
 	// Tier 2: populate the Blocks field if RenderBlocks succeeded.
 	if blocksJSON != "" {
 		env.Blocks = blocksJSON
@@ -473,6 +491,7 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 			if fbErr != nil {
 				return "", err // original error
 			}
+			fbEnv.ClaimThread = claimThread
 			_, fbSig, fbErr := slack.SignEnvelope(fbEnv, priv)
 			if fbErr != nil {
 				return "", err // original error

@@ -648,3 +648,6 @@ km doctor
 - **Manual:** orphan a test alias (terminate its instance, leave `status=stopped`), trigger
   the program webhook → the bridge logs `orphaned stopped row … cold-creating`, a new
   instance is created, and no message strands in the old FIFO.
+
+
+**Session continuity (2026-10-18).** The HackerOne poller keeps its session state in `/var/lib/km/sessions/h1/<report_id>_<target>.json` and records the session id and agent type at the bridge through `km-slack session --source h1`. It makes no DynamoDB call, and the sandbox role has no grant on the HackerOne threads table. The poller resolves the bridge URL from SSM (`/{prefix}/slack/bridge-url`) at start, as the Slack poller does. The `km-slack session` call WARNs in the poller log only when that read fails or the Slack bridge is not yet deployed; local resume still works, but the bridge's `agent_type` for the thread goes stale. On a cold-created box the first turn's session record answers `404 thread_unknown`, because the cold-create path publishes without writing a thread row; the second turn's warm dispatch writes the row and the record succeeds from then on. See `docs/operational-gotchas.md` § Thread session state behind the bridge.

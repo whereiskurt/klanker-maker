@@ -256,6 +256,26 @@ func wireEventsHandler() {
 	// silently falls back to channel root instead of posting into its thread.
 	handler.Threads = threadStore
 
+	// 2026-10-18 — ActionSession for GitHub and H1 threads rows. The Slack
+	// bridge is the only sandbox-facing bridge, so it writes those tables on the
+	// pollers' behalf. Unset env ⇒ nil store ⇒ 503 source_unavailable for that
+	// source only.
+	ghThreadsTable := os.Getenv("KM_GITHUB_THREADS_TABLE")
+	if ghThreadsTable != "" {
+		handler.GitHubSessions = &bridge.GitHubThreadSessions{Client: initDDB, TableName: ghThreadsTable}
+	}
+	h1ThreadsTable := os.Getenv("KM_H1_THREADS_TABLE")
+	if h1ThreadsTable != "" {
+		handler.H1Sessions = &bridge.H1ThreadSessions{Client: initDDB, TableName: h1ThreadsTable}
+	}
+	slog.Info("km-slack-bridge: session sources",
+		"slack", true,
+		"github", ghThreadsTable != "",
+		"KM_GITHUB_THREADS_TABLE", ghThreadsTable,
+		"h1", h1ThreadsTable != "",
+		"KM_H1_THREADS_TABLE", h1ThreadsTable,
+	)
+
 	sandboxResolver := &bridge.DDBSandboxByChannel{
 		Client:    initDDB,
 		TableName: sandboxesTable,

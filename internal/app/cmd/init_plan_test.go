@@ -432,8 +432,9 @@ func TestRunInitPlan_VerboseStreamsPlan(t *testing.T) {
 // dynamodb-capacity, dynamodb-schedules, ssm-session-doc, s3-replication, create-handler,
 // ttl-handler, email-handler, dynamodb-slack-nonces, dynamodb-slack-threads,
 // dynamodb-slack-channels, dynamodb-slack-stream-messages, dynamodb-github-threads,
-// sqs-inbound-dlq, lambda-slack-bridge, lambda-github-bridge, dynamodb-h1-threads,
-// lambda-h1-bridge, lambda-webhook-bridge, dynamodb-checks, check-runner-role,
+// dynamodb-h1-threads (moved ahead of the bridges 2026-10-18: the Slack bridge's
+// session action depends on it), sqs-inbound-dlq, lambda-slack-bridge,
+// lambda-github-bridge, lambda-h1-bridge, lambda-webhook-bridge, dynamodb-checks, check-runner-role,
 // dynamodb-action-quota, lambda-quota-alerter, ses
 // 27 + lambda-webhook-bridge (Phase 127)
 func TestRunInitPlan_ModuleOrder(t *testing.T) {

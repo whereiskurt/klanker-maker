@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -788,11 +789,11 @@ func TestPoller_CodexDispatch_Resume(t *testing.T) {
 	}
 }
 
-// TestPoller_AgentTypeWriteback confirms the DDB update-item always carries the
-// agent_type attribute AND uses $LAST_MSG_JSON (jq-escaped) without extra quotes.
-// SC-4/SC-5: Plan 70-05.
+// TestPoller_AgentTypeWriteback confirms the end-of-turn session record always
+// carries the turn's agent type, to the local state file and to the bridge, and
+// that $LAST_MSG_JSON (jq-escaped) is decoded back to text rather than written
+// as a JSON literal. SC-4/SC-5: Plan 70-05; moved off DynamoDB 2026-10-18.
 func TestPoller_AgentTypeWriteback(t *testing.T) {
-	// Verify for both claude and codex profiles.
 	for _, tc := range []struct {
 		name   string
 		poller func(*testing.T) string
@@ -802,22 +803,14 @@ func TestPoller_AgentTypeWriteback(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			poller := tc.poller(t)
-
-			// agent_type attribute must be present. The rendered heredoc uses bash
-			// quoting so double-quotes are backslash-escaped in the Go raw string:
-			// agent_type = :agent ... \":agent\":{\"S\":\"$EFFECTIVE_AGENT\"}
-			if !strings.Contains(poller, `agent_type = :agent`) || !strings.Contains(poller, `\":agent\":{\"S\":\"$EFFECTIVE_AGENT\"}`) {
-				t.Errorf("poller DDB update-item missing agent_type attribute\n%s", abbreviateUD(poller))
-			}
-			// last_assistant_msg must use $LAST_MSG_JSON WITHOUT extra quotes
-			// (jq -Rs . already wraps it in double quotes per Pitfall 2).
-			// Rendered form: \":msg\":{\"S\":$LAST_MSG_JSON}
-			if !strings.Contains(poller, `\":msg\":{\"S\":$LAST_MSG_JSON}`) {
-				t.Errorf("poller DDB update-item must contain \\\":msg\\\":{\\\"S\\\":$LAST_MSG_JSON} (no extra quotes per Pitfall 2)\n%s", abbreviateUD(poller))
-			}
-			// Must NOT contain the double-quoted (broken) form.
-			if strings.Contains(poller, `\":msg\":{\"S\":\"$LAST_MSG_JSON\"}`) {
-				t.Errorf("poller DDB update-item has extra quotes around $LAST_MSG_JSON — will double-encode per Pitfall 2\n%s", abbreviateUD(poller))
+			for _, m := range []string{
+				`km_session_write "$SESSION_FILE" "$NEW_SESSION" "$EFFECTIVE_AGENT" "$LAST_MSG_FILE" "$EVENT_TS"`,
+				`--session-id "$NEW_SESSION" --agent "$EFFECTIVE_AGENT"`,
+				`printf '%s' "$LAST_MSG_JSON" | jq -r . > "$LAST_MSG_FILE"`,
+			} {
+				if !strings.Contains(poller, m) {
+					t.Errorf("poller end-of-turn record missing %q\n%s", m, abbreviateUD(poller))
+				}
 			}
 		})
 	}
@@ -919,15 +912,15 @@ func TestUserdata_ShellEnvFileStillWritten(t *testing.T) {
 	}
 }
 
-// TestPoller_ThreadRowWriteIsUpdateNotPut pins the fix for the poller clobbering
-// the bridge's attributes on the km-slack-threads row. A put-item replaced the
-// whole item every turn, wiping last_dispatch_ts (read by DispatchBoundary for
-// the reaction quiet period and strict-mode context), created_at and turn_count.
+// TestPoller_EndOfTurnRecordsSessionLocallyAndViaBridge pins where a turn's
+// session now goes (2026-10-18): a local state file (what the box resumes from
+// and dedupes on) and the bridge via `km-slack session`. The sandbox role no
+// longer reaches the threads table, so no `aws` call may remain.
 //
-// It is behavioural, not a grep: it lifts the rendered update-item command out
-// of the poller, runs it under bash against a fake `aws` that records argv, and
-// parses the key and value JSON it was handed.
-func TestPoller_ThreadRowWriteIsUpdateNotPut(t *testing.T) {
+// It is behavioural, not a grep: it lifts the rendered end-of-turn block out
+// of the poller and runs it under bash with a fake km-slack that records argv
+// and a fake aws that fails loudly.
+func TestPoller_EndOfTurnRecordsSessionLocallyAndViaBridge(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not on PATH")
 	}
@@ -940,104 +933,112 @@ func TestPoller_ThreadRowWriteIsUpdateNotPut(t *testing.T) {
 		}
 	}
 
-	start := strings.Index(poller, `aws dynamodb update-item \`)
+	start := strings.Index(poller, "# Record the turn's session")
 	if start < 0 {
-		t.Fatalf("poller has no thread-row update-item\n%s", abbreviateUD(poller))
+		t.Fatalf("poller has no end-of-turn session record block\n%s", abbreviateUD(poller))
 	}
-	end := strings.Index(poller[start:], `2>/dev/null || true`)
+	end := strings.Index(poller[start:], "\n\n")
 	if end < 0 {
-		t.Fatalf("update-item block has no terminator")
+		t.Fatalf("end-of-turn block has no terminator")
 	}
-	cmd := poller[start : start+end]
-	if !strings.Contains(cmd, `--table-name "$THREADS_TABLE"`) {
-		t.Fatalf("update-item is not against $THREADS_TABLE:\n%s", cmd)
+	block := poller[start : start+end]
+	if !strings.Contains(block, "km-slack session") {
+		t.Fatalf("end-of-turn block does not call km-slack session:\n%s", block)
 	}
 
 	dir := t.TempDir()
-	fake := dir + "/aws"
-	// Record each argv element NUL-separated so embedded newlines survive.
-	if err := os.WriteFile(fake, []byte("#!/bin/bash\nprintf '%s\\0' \"$@\" > \""+dir+"/argv\"\n"), 0o755); err != nil {
+	sessions := filepath.Join(dir, "sessions")
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Record each km-slack invocation's argv NUL-separated, one line per call.
+	fakeSlack := filepath.Join(bin, "km-slack")
+	if err := os.WriteFile(fakeSlack, []byte("#!/bin/bash\n{ printf '%s\\0' \"$@\"; printf '\\n'; } >> \""+dir+"/slack-argv\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "aws"), []byte("#!/bin/bash\necho \"aws $*\" >> \""+dir+"/aws-called\"\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	helpers := strings.ReplaceAll(sessionHelpersBlock(t), "/var/lib/km/sessions", sessions)
+	body := strings.ReplaceAll(block, "/opt/km/bin/km-slack", fakeSlack)
 	script := `set -euo pipefail
-export PATH="` + dir + `:$PATH"
-THREADS_TABLE=km-slack-threads REGION=us-east-1
-CHANNEL=C123 THREAD_TS=1700000000.000100
-NEW_SESSION=sess-1 EFFECTIVE_AGENT=claude SANDBOX_ID=sb-1
-NOW=2026-10-17T00:00:00Z EVENT_TS=1700000001.000200 TTL_EXPIRY=1799999999
+export PATH="` + bin + `:$PATH"
+` + helpers + `
+RUN_DIR="` + dir + `"
+CHANNEL=C1 THREAD_TS=1700.1
+NEW_SESSION=sess-1 EFFECTIVE_AGENT=claude EVENT_TS=1700.2
 LAST_MSG_JSON=$(printf 'say "hi"\nback\\slash' | jq -Rs .)
-` + cmd + "\n"
+SESSION_FILE=$(km_session_file slack "${CHANNEL}_${THREAD_TS}")
+` + body + "\n"
 	out, err := exec.Command("bash", "-c", script).CombinedOutput()
 	if err != nil {
-		t.Fatalf("rendered update-item failed under bash: %v\n%s", err, out)
+		t.Fatalf("rendered end-of-turn block failed under bash: %v\n%s", err, out)
 	}
-	raw, err := os.ReadFile(dir + "/argv")
+	if _, err := os.Stat(dir + "/aws-called"); err == nil {
+		raw, _ := os.ReadFile(dir + "/aws-called")
+		t.Fatalf("end-of-turn block invoked aws:\n%s", raw)
+	}
+
+	state, err := os.ReadFile(filepath.Join(sessions, "slack", "C1_1700.1.json"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("state file not written: %v\n%s", err, out)
 	}
-	args := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
-	flag := func(name string) string {
-		for i, a := range args {
-			if a == name && i+1 < len(args) {
-				return args[i+1]
-			}
-		}
-		t.Fatalf("fake aws got no %s; argv=%q", name, args)
-		return ""
+	var st map[string]string
+	if err := json.Unmarshal(state, &st); err != nil {
+		t.Fatalf("state file is not JSON: %v\n%s", err, state)
 	}
-	if args[0] != "dynamodb" || args[1] != "update-item" {
-		t.Fatalf("argv = %q, want dynamodb update-item", args[:2])
-	}
-
-	var key map[string]map[string]string
-	if err := json.Unmarshal([]byte(flag("--key")), &key); err != nil {
-		t.Fatalf("--key is not valid JSON: %v", err)
-	}
-	if len(key) != 2 || key["channel_id"]["S"] != "C123" || key["thread_ts"]["S"] != "1700000000.000100" {
-		t.Fatalf("--key = %v, want exactly channel_id=C123 thread_ts=1700000000.000100", key)
-	}
-
-	expr := flag("--update-expression")
-	owned := map[string]string{
-		"claude_session_id":       ":sid",
-		"agent_type":              ":agent",
-		"last_assistant_msg":      ":msg",
-		"last_turn_ts":            ":lt",
-		"last_processed_event_ts": ":ev",
-		"ttl_expiry":              ":ttl",
-	}
-	for attr, ph := range owned {
-		if !strings.Contains(expr, attr+" = "+ph) {
-			t.Errorf("update expression does not SET %s = %s: %q", attr, ph, expr)
-		}
-	}
-	if strings.Contains(expr, "sandbox_id") {
-		t.Errorf("update expression names sandbox_id — the bridge's authorization attribute; IAM (v1.8.0) denies the write and the box must never need it: %q", expr)
-	}
-	if rv := flag("--return-values"); rv != "NONE" {
-		t.Errorf("--return-values = %q, want NONE (dynamodb:Attributes conditions require ReturnValues pinned)", rv)
-	}
-	for _, bridgeOwned := range []string{"last_dispatch_ts", "created_at", "turn_count", "REMOVE", "DELETE"} {
-		if strings.Contains(expr, bridgeOwned) {
-			t.Errorf("update expression touches %s, which the poller does not own: %q", bridgeOwned, expr)
+	for k, v := range map[string]string{
+		"session_id": "sess-1", "agent_type": "claude", "last_processed_event_ts": "1700.2",
+		"last_assistant_msg": "say \"hi\"\nback\\slash",
+	} {
+		if st[k] != v {
+			t.Errorf("state %s = %q, want %q", k, st[k], v)
 		}
 	}
 
-	var vals map[string]map[string]string
-	if err := json.Unmarshal([]byte(flag("--expression-attribute-values")), &vals); err != nil {
-		t.Fatalf("--expression-attribute-values is not valid JSON: %v", err)
+	raw, err := os.ReadFile(dir + "/slack-argv")
+	if err != nil {
+		t.Fatalf("km-slack was not called: %v", err)
 	}
-	if len(vals) != len(owned) {
-		t.Errorf("got %d values, want %d: %v", len(vals), len(owned), vals)
+	calls := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if len(calls) != 1 {
+		t.Fatalf("got %d km-slack calls, want exactly 1: %q", len(calls), calls)
 	}
-	want := map[string][2]string{
-		":sid": {"S", "sess-1"}, ":agent": {"S", "claude"},
-		":lt": {"S", "2026-10-17T00:00:00Z"}, ":ev": {"S", "1700000001.000200"},
-		":ttl": {"N", "1799999999"}, ":msg": {"S", "say \"hi\"\nback\\slash"},
+	got := strings.Split(strings.TrimSuffix(calls[0], "\x00"), "\x00")
+	want := []string{"session", "--source", "slack", "--channel", "C1", "--thread", "1700.1", "--session-id", "sess-1", "--agent", "claude"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("km-slack argv = %q, want %q", got, want)
 	}
-	for ph, w := range want {
-		if got := vals[ph][w[0]]; got != w[1] {
-			t.Errorf("%s.%s = %q, want %q", ph, w[0], got, w[1])
+}
+
+// TestPoller_HandoffPostClaimsThread pins the Phase 70 handoff after the move
+// off DynamoDB: the new top-level post asks the bridge to record the new
+// thread as ours, and the new thread's state file starts with no session and
+// the new agent pinned.
+func TestPoller_HandoffPostClaimsThread(t *testing.T) {
+	block := extractCrossAgentBlock(pollerWithAgentClaude(t))
+	if block == "" {
+		t.Fatal(`cross-agent block (if [ "$DO_SWITCH" -eq 1 ]) not found in poller`)
+	}
+	i := strings.Index(block, "NEW_TOP_TS=$(/opt/km/bin/km-slack post")
+	if i < 0 {
+		t.Fatalf("handoff Step 3 post not found:\n%s", block)
+	}
+	post := block[i:]
+	post = post[:strings.Index(post, ")\n")+1]
+	for _, f := range []string{"--new-message", "--claim-thread"} {
+		if !strings.Contains(post, f) {
+			t.Errorf("handoff Step 3 post lacks %s:\n%s", f, post)
+		}
+	}
+	for _, m := range []string{
+		`SESSION_FILE=$(km_session_file slack "${REPLY_CHANNEL}_${NEW_TOP_TS}")`,
+		`km_session_write "$SESSION_FILE" "" "$NEW_AGENT" "" ""`,
+	} {
+		if !strings.Contains(block, m) {
+			t.Errorf("handoff Step 8 missing %q:\n%s", m, block)
 		}
 	}
 }

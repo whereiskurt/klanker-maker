@@ -20,8 +20,10 @@ type roleShapeIAM interface {
 }
 
 // checkSandboxRoleShape WARNs for every running sandbox whose instance role
-// still has the pre-v1.8.0 shape: the Allow-*/* "region-lock" inline policy or
-// the managed AmazonSSMManagedInstanceCore attachment. The role is created per
+// predates the current shape: the pre-v1.8.0 Allow-*/* "region-lock" inline
+// policy or managed AmazonSSMManagedInstanceCore attachment, or the v1.8.0
+// "-threads-rw" inline policy that v1.9.0 dropped (session state is local and
+// the bridge writes the session attributes). The role is created per
 // sandbox at km create, so the fleet converges only as boxes are recreated; this
 // makes the remaining ones visible. A role that does not exist in this account
 // (a linked-account launch) is skipped.
@@ -51,23 +53,25 @@ func checkSandboxRoleShape(ctx context.Context, iamClient roleShapeIAM, lister S
 			return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not read role %s: %v", role, err)}
 		}
 		checked++
-		reason := ""
+		var reasons []string
+		add := func(r string) { reasons = append(reasons, r) }
 		for _, pn := range inline.PolicyNames {
 			if strings.HasSuffix(pn, "-ec2spot-region-lock-"+label) {
-				reason = "Allow-* region lock"
+				add("Allow-* region lock")
+			}
+			if strings.HasSuffix(pn, "-threads-rw") {
+				add("threads-table grant (pre-v1.9.0)")
 			}
 		}
 		attached, err := iamClient.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{RoleName: aws.String(role)})
 		if err == nil {
 			for _, ap := range attached.AttachedPolicies {
 				if ap.PolicyArn != nil && strings.HasSuffix(*ap.PolicyArn, "/AmazonSSMManagedInstanceCore") {
-					if reason != "" {
-						reason += " + "
-					}
-					reason += "managed SSM Core (ssm:GetParameter on *)"
+					add("managed SSM Core (ssm:GetParameter on *)")
 				}
 			}
 		}
+		reason := strings.Join(reasons, " + ")
 		if reason != "" {
 			old = append(old, fmt.Sprintf("%s (%s)", r.SandboxID, reason))
 		}
@@ -79,7 +83,7 @@ func checkSandboxRoleShape(ctx context.Context, iamClient roleShapeIAM, lister S
 	return CheckResult{
 		Name:        name,
 		Status:      CheckWarn,
-		Message:     fmt.Sprintf("%d running sandbox(es) still hold the pre-v1.8.0 role (in-region Allow-* and/or account-wide SSM reads):\n    %s", len(old), strings.Join(old, "\n    ")),
+		Message:     fmt.Sprintf("%d running sandbox(es) still hold a pre-v1.9.0 role (in-region Allow-*, account-wide SSM reads, and/or a threads-table grant):\n    %s", len(old), strings.Join(old, "\n    ")),
 		Remediation: "The role is created at km create. Recreate each: 'km destroy <id> --remote --yes && km create <profile> <alias>'. See docs/operational-gotchas.md § The sandbox role is least-privilege since v1.8.0.",
 	}
 }

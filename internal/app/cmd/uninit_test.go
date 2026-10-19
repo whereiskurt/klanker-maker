@@ -92,13 +92,17 @@ func TestUninitDestroyOrder(t *testing.T) {
 		"lambda-webhook-bridge",
 		// Phase 103 (lambda-h1-bridge + dynamodb-h1-threads):
 		"lambda-h1-bridge",
-		"dynamodb-h1-threads",
 		// Phase 97/100 (lambda-github-bridge):
 		"lambda-github-bridge",
 		// Phase 63 (lambda-slack-bridge):
 		"lambda-slack-bridge",
 		// Phase 99.1 (sqs-inbound-dlq):
 		"sqs-inbound-dlq",
+		// Phase 103 (dynamodb-h1-threads) — applied right after the github threads
+		// table since 2026-10-18 so the slack bridge's session action sees the real
+		// table name (km init applies in list order, not dependency order); the
+		// reverse destroy therefore tears it down after every bridge.
+		"dynamodb-h1-threads",
 		// Phase 98 (dynamodb-github-threads):
 		"dynamodb-github-threads",
 		// Phase 68 (dynamodb-slack-stream-messages):

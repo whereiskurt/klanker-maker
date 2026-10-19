@@ -155,8 +155,8 @@ func TestUserdataH1EnabledRendersPoller(t *testing.T) {
 		"/etc/systemd/system/km-h1-inbound-poller.service",      // systemd unit
 		"sidecars/km-h1",                                        // km-h1 binary download
 		"KM_H1_INBOUND_QUEUE_URL",                               // queue URL env slot
-		`\"report_id\":{\"S\":\"$REPORT_ID\"},\"target\":{\"S\":\"$TARGET\"}`, // (report_id,target) key (literal backslashes inside the heredoc)
-		"update-item",                                           // UpdateItem (not PutItem) write-back
+		`km_session_file h1 "${REPORT_ID}_${TARGET}"`,          // (report_id,target) key of the local session file
+		`km-slack session --source h1 --report "$REPORT_ID" --target "$TARGET"`, // session write-back through the bridge
 		"km-h1 comment --report $REPORT_ID",                     // internal-by-default reply preamble
 		// Phase 106 resume-hint markers
 		`<details>`,                                              // collapsible fold opener in the H1 poller
