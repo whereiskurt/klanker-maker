@@ -4824,7 +4824,8 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkInitFailed(ctx, cwFilter, presenceLister, presenceLogGroupPrefix)
 	})
 
-	// v1.8.0 least-privilege role: name the running sandboxes still on the old shape.
+	// v1.8.0 least-privilege role: name the running, stopped or paused sandboxes
+	// still on the old shape (a stopped or paused box resumes on its old role).
 	iamForRoleShape := deps.IAMCleanupClient
 	listerForRoleShape := deps.Lister
 	checks = append(checks, func(ctx context.Context) CheckResult {

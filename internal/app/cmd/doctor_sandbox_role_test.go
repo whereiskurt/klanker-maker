@@ -38,6 +38,9 @@ func TestCheckSandboxRoleShape(t *testing.T) {
 		{SandboxID: "sb-new", Region: "us-east-1", Status: "running"},
 		{SandboxID: "sb-core", Region: "us-east-1", Status: "running"},
 		{SandboxID: "sb-stopped", Region: "us-east-1", Status: "stopped"},
+		{SandboxID: "sb-stopped-new", Region: "us-east-1", Status: "stopped"},
+		{SandboxID: "sb-paused", Region: "us-east-1", Status: "paused"},
+		{SandboxID: "sb-failed", Region: "us-east-1", Status: "failed"},
 		{SandboxID: "sb-linked", Region: "us-east-1", Status: "running"},
 	}}
 	iamc := &fakeRoleShapeIAM{
@@ -45,6 +48,12 @@ func TestCheckSandboxRoleShape(t *testing.T) {
 			"km-ec2spot-ssm-sb-old-use1":  {"km-ec2spot-region-lock-use1", "km-sb-old-bedrock"},
 			"km-ec2spot-ssm-sb-new-use1":  {"km-ec2spot-region-deny-use1", "km-sb-new-ssm-core"},
 			"km-ec2spot-ssm-sb-core-use1": {"km-ec2spot-region-deny-use1"},
+			// A stopped or paused box resumes on its old role, so it is named too.
+			"km-ec2spot-ssm-sb-stopped-use1":     {"km-ec2spot-region-lock-use1"},
+			"km-ec2spot-ssm-sb-stopped-new-use1": {"km-ec2spot-region-deny-use1"},
+			"km-ec2spot-ssm-sb-paused-use1":      {"km-sb-paused-threads-rw"},
+			// Neither running nor resumable: never inspected.
+			"km-ec2spot-ssm-sb-failed-use1": {"km-ec2spot-region-lock-use1"},
 		},
 		attached: map[string][]string{
 			"km-ec2spot-ssm-sb-core-use1": {"arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"},
@@ -55,12 +64,12 @@ func TestCheckSandboxRoleShape(t *testing.T) {
 	if r.Status != CheckWarn {
 		t.Fatalf("status = %v, want WARN: %+v", r.Status, r)
 	}
-	for _, want := range []string{"sb-old", "sb-core"} {
+	for _, want := range []string{"sb-old [running]", "sb-core [running]", "sb-stopped [stopped] (Allow-* region lock)", "sb-paused [paused]"} {
 		if !strings.Contains(r.Message, want) {
 			t.Errorf("message should name %s: %s", want, r.Message)
 		}
 	}
-	for _, not := range []string{"sb-new", "sb-stopped", "sb-linked"} {
+	for _, not := range []string{"sb-new", "sb-stopped-new", "sb-failed", "sb-linked"} {
 		if strings.Contains(r.Message, not) {
 			t.Errorf("message must not name %s: %s", not, r.Message)
 		}
@@ -73,8 +82,12 @@ func TestCheckSandboxRoleShape(t *testing.T) {
 func TestCheckSandboxRoleShape_AllNewIsOK(t *testing.T) {
 	lister := &fakeSandboxLister{records: []kmaws.SandboxRecord{{SandboxID: "sb-new", Region: "us-east-1", Status: "running"}}}
 	iamc := &fakeRoleShapeIAM{inline: map[string][]string{"km-ec2spot-ssm-sb-new-use1": {"km-ec2spot-region-deny-use1"}}}
-	if r := checkSandboxRoleShape(context.Background(), iamc, lister, "km"); r.Status != CheckOK {
+	r := checkSandboxRoleShape(context.Background(), iamc, lister, "km")
+	if r.Status != CheckOK {
 		t.Fatalf("want OK, got %+v", r)
+	}
+	if !strings.Contains(r.Message, "1 running/stopped/paused sandbox role(s)") {
+		t.Errorf("OK message should count running/stopped/paused roles: %s", r.Message)
 	}
 }
 
@@ -99,7 +112,7 @@ func TestCheckSandboxRoleShape_NamesThreadsRWRole(t *testing.T) {
 	if r.Status != CheckWarn {
 		t.Fatalf("status = %v, want WARN: %+v", r.Status, r)
 	}
-	if !strings.Contains(r.Message, "sb-x (threads-table grant (pre-v1.9.0))") {
+	if !strings.Contains(r.Message, "sb-x [running] (threads-table grant (pre-v1.9.0))") {
 		t.Errorf("message should name sb-x with the threads reason: %s", r.Message)
 	}
 	if strings.Contains(r.Message, "sb-y") {
