@@ -3945,10 +3945,13 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// Thread rows without sandbox_id (pre-v1.9.0 poller writes). Advisory: the
 	// bridges' if_not_exists Upsert claims each one on its thread's next dispatch.
+	// The Slack table name honours slack_threads_table_name (as the other Slack
+	// checks do); the GitHub and H1 tables have no override.
 	threadRowScanner := deps.DynamoScanClient
 	threadRowPrefix := cfg.GetResourcePrefix()
+	threadRowSlackTable := cfg.GetSlackThreadsTableName()
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkThreadRowsWithoutOwner(ctx, threadRowScanner, threadRowPrefix)
+		return checkThreadRowsWithoutOwner(ctx, threadRowScanner, threadRowSlackTable, threadRowPrefix)
 	})
 
 	// Content check on the same table: a stored row can diverge from the profile

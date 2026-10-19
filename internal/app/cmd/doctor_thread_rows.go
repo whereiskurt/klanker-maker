@@ -24,13 +24,14 @@ type DynamoScanAPI interface {
 // claimed on its thread's next dispatch. Until then km-slack session on that
 // thread answers 404. The check is read-only (Select COUNT) and advisory.
 // A table that does not exist is skipped silently (an install without that bridge).
-func checkThreadRowsWithoutOwner(ctx context.Context, scanner DynamoScanAPI, prefix string) CheckResult {
+// slackTable is the configured Slack threads table name (slack_threads_table_name).
+func checkThreadRowsWithoutOwner(ctx context.Context, scanner DynamoScanAPI, slackTable, prefix string) CheckResult {
 	const name = "Thread rows without owner"
 	if scanner == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "DynamoDB scan client unavailable"}
 	}
 
-	tables := []string{prefix + "-slack-threads", prefix + "-github-threads", prefix + "-h1-threads"}
+	tables := []string{slackTable, prefix + "-github-threads", prefix + "-h1-threads"}
 	var counts, scanErrs []string
 	for _, table := range tables {
 		n, err := countRowsWithoutSandboxID(ctx, scanner, table)

@@ -46,7 +46,7 @@ func (f *fakeThreadRowScanner) Scan(_ context.Context, in *dynamodb.ScanInput, _
 
 func TestCheckThreadRowsWithoutOwner_AllZeroIsOK(t *testing.T) {
 	f := &fakeThreadRowScanner{pages: map[string][]int32{}}
-	r := checkThreadRowsWithoutOwner(context.Background(), f, "km")
+	r := checkThreadRowsWithoutOwner(context.Background(), f, "km-slack-threads", "km")
 	if r.Status != CheckOK {
 		t.Fatalf("status = %s (%s); want OK", r.Status, r.Message)
 	}
@@ -72,7 +72,7 @@ func TestCheckThreadRowsWithoutOwner_CountsWarnNamingEachTable(t *testing.T) {
 		"km2-github-threads": {3},
 		"km2-h1-threads":     {1},
 	}}
-	r := checkThreadRowsWithoutOwner(context.Background(), f, "km2")
+	r := checkThreadRowsWithoutOwner(context.Background(), f, "km2-slack-threads", "km2")
 	if r.Status != CheckWarn {
 		t.Fatalf("status = %s; want WARN", r.Status)
 	}
@@ -93,7 +93,7 @@ func TestCheckThreadRowsWithoutOwner_FollowsPagination(t *testing.T) {
 	f := &fakeThreadRowScanner{pages: map[string][]int32{
 		"km-slack-threads": {2, 0, 5},
 	}}
-	r := checkThreadRowsWithoutOwner(context.Background(), f, "km")
+	r := checkThreadRowsWithoutOwner(context.Background(), f, "km-slack-threads", "km")
 	if r.Status != CheckWarn {
 		t.Fatalf("status = %s; want WARN", r.Status)
 	}
@@ -127,7 +127,7 @@ func TestCheckThreadRowsWithoutOwner_MissingTableSkippedSilently(t *testing.T) {
 			"km-h1-threads": &dynamodbtypes.ResourceNotFoundException{Message: aws.String("Requested resource not found")},
 		},
 	}
-	r := checkThreadRowsWithoutOwner(context.Background(), f, "km")
+	r := checkThreadRowsWithoutOwner(context.Background(), f, "km-slack-threads", "km")
 	if r.Status != CheckWarn {
 		t.Fatalf("status = %s; want WARN from the slack table", r.Status)
 	}
@@ -138,7 +138,7 @@ func TestCheckThreadRowsWithoutOwner_MissingTableSkippedSilently(t *testing.T) {
 
 func TestCheckThreadRowsWithoutOwner_ScanErrorWarns(t *testing.T) {
 	f := &fakeThreadRowScanner{errs: map[string]error{"km-github-threads": errors.New("AccessDeniedException")}}
-	r := checkThreadRowsWithoutOwner(context.Background(), f, "km")
+	r := checkThreadRowsWithoutOwner(context.Background(), f, "km-slack-threads", "km")
 	if r.Status != CheckWarn {
 		t.Fatalf("status = %s; want WARN on a scan error", r.Status)
 	}
@@ -148,7 +148,7 @@ func TestCheckThreadRowsWithoutOwner_ScanErrorWarns(t *testing.T) {
 }
 
 func TestCheckThreadRowsWithoutOwner_NilScannerSkipped(t *testing.T) {
-	r := checkThreadRowsWithoutOwner(context.Background(), nil, "km")
+	r := checkThreadRowsWithoutOwner(context.Background(), nil, "km-slack-threads", "km")
 	if r.Status != CheckSkipped {
 		t.Fatalf("status = %s; want SKIPPED with no scanner", r.Status)
 	}
