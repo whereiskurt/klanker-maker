@@ -793,31 +793,31 @@ func (s *DynamoGitHubThreadStore) LookupSandbox(ctx context.Context, repo string
 	return sandboxID, sessionID, agentType, nil
 }
 
-// Upsert creates a new (repo, number) → sandbox_id row only if one does not already
-// exist (attribute_not_exists(repo) condition). ConditionalCheckFailed means the row
-// already exists — that is idempotent success (do NOT overwrite agent_session_id set
-// by the poller, mirroring the Slack bridge behavior).
-// ttl_expiry is set to now + 30 days.
+// Upsert records (repo, number) → sandbox_id with an unconditional UpdateItem that
+// sets sandbox_id and ttl_expiry only where they are absent (if_not_exists),
+// mirroring DDBThreadStore.Upsert in pkg/slack/bridge. An existing owner is never
+// overwritten, and agent_session_id/agent_type (written by the poller) are never
+// touched. It is deliberately NOT a conditional PutItem: a pre-v1.9.0 row written
+// by the old poller exists WITHOUT sandbox_id, and attribute_not_exists(repo)
+// could never claim it, so every km-slack session on that thread answered 404.
+// ttl_expiry is set to now + 30 days when absent.
 func (s *DynamoGitHubThreadStore) Upsert(ctx context.Context, repo string, number int, sandboxID string) error {
 	ttlExpiry := time.Now().Unix() + 30*24*3600
 
-	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: awssdk.String(s.TableName),
-		Item: map[string]dynamodbtypes.AttributeValue{
-			"repo":       &dynamodbtypes.AttributeValueMemberS{Value: repo},
-			"number":     &dynamodbtypes.AttributeValueMemberN{Value: strconv.Itoa(number)},
-			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
-			"ttl_expiry": &dynamodbtypes.AttributeValueMemberN{Value: strconv.FormatInt(ttlExpiry, 10)},
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"repo":   &dynamodbtypes.AttributeValueMemberS{Value: repo},
+			"number": &dynamodbtypes.AttributeValueMemberN{Value: strconv.Itoa(number)},
 		},
-		ConditionExpression: awssdk.String("attribute_not_exists(repo)"),
+		UpdateExpression: awssdk.String("SET sandbox_id = if_not_exists(sandbox_id, :sb), " +
+			"ttl_expiry = if_not_exists(ttl_expiry, :ttl)"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":sb":  &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+			":ttl": &dynamodbtypes.AttributeValueMemberN{Value: strconv.FormatInt(ttlExpiry, 10)},
+		},
 	})
 	if err != nil {
-		var condFailed *dynamodbtypes.ConditionalCheckFailedException
-		if errors.As(err, &condFailed) {
-			// Row already exists — the thread is live and sandbox_id is already set.
-			// This is the idempotent success path; do NOT overwrite.
-			return nil
-		}
 		return fmt.Errorf("github-threads: upsert (%s, %d): %w", repo, number, err)
 	}
 	return nil
