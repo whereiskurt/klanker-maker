@@ -2513,7 +2513,7 @@ while true; do
           echo "[km-slack-inbound-poller] cross-agent switch: failed to create new top-level; aborting" >&2
           ERR_BODY=$(mktemp /tmp/km-switch-err.XXXXXX)
           printf 'Failed to spawn new %s thread (see journald). Try again.\n' "$NEW_AGENT" > "$ERR_BODY"
-          /opt/km/bin/km-slack post \
+          KM_SLACK_POSTED_MARKER=0 /opt/km/bin/km-slack post \
             --channel "$REPLY_CHANNEL" \
             --thread "$THREAD_TS" \
             --body "$ERR_BODY" 2>>"$RUN_DIR/stderr.log" || true
@@ -2533,7 +2533,7 @@ while true; do
         # Step 6: post handoff in OLD thread with NEW_PERMALINK embedded.
         HANDOFF_BODY=$(mktemp /tmp/km-handoff.XXXXXX)
         printf 'Switching to %s → continuing in this thread.\n%s\n' "$NEW_AGENT" "$NEW_PERMALINK" > "$HANDOFF_BODY"
-        /opt/km/bin/km-slack post \
+        KM_SLACK_POSTED_MARKER=0 /opt/km/bin/km-slack post \
           --channel "$REPLY_CHANNEL" \
           --thread "$THREAD_TS" \
           --body "$HANDOFF_BODY" 2>>"$RUN_DIR/stderr.log" || true
