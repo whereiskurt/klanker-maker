@@ -3702,6 +3702,7 @@ else
 fi
 KMSEND
 chmod +x /opt/km/bin/km-send
+ln -sf /opt/km/bin/km-send /usr/local/bin/km-send
 echo "[km-bootstrap] km-send installed at /opt/km/bin/km-send"
 
 cat > /etc/systemd/system/km-mail-poller.service << 'UNIT'
@@ -4705,6 +4706,7 @@ else
 fi
 KMRECV
 chmod +x /opt/km/bin/km-recv
+ln -sf /opt/km/bin/km-recv /usr/local/bin/km-recv
 echo "[km-bootstrap] km-recv installed at /opt/km/bin/km-recv"
 # In eBPF/gatekeeper mode, skip km-dns-proxy (enforcer runs its own DNS resolver)
 # daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload

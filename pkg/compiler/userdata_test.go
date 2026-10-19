@@ -1349,6 +1349,24 @@ func TestKmSendPresentWhenEmailSet(t *testing.T) {
 	}
 }
 
+// TestKmSendAndRecvSymlinkedOntoPath verifies km-send and km-recv are symlinked
+// into /usr/local/bin like every other /opt/km/bin helper, so a bare km-send /
+// km-recv resolves on PATH (it did not before 2026-10-18).
+func TestKmSendAndRecvSymlinkedOntoPath(t *testing.T) {
+	out, err := generateUserData(emailProfile(), "sb-email-ln", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	for _, want := range []string{
+		"ln -sf /opt/km/bin/km-send /usr/local/bin/km-send",
+		"ln -sf /opt/km/bin/km-recv /usr/local/bin/km-recv",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("userdata missing %q", want)
+		}
+	}
+}
+
 // TestKmSendAbsentWhenNoEmail verifies km-send is NOT *deployed* when SandboxEmail is empty.
 // This tests the template directly with an empty SandboxEmail (bypassing generateUserData which always sets it).
 //
