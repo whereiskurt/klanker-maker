@@ -132,10 +132,10 @@ func TestTwoLists_ContinuityToAliasRowBox_UsesProfileList(t *testing.T) {
 
 func TestTwoLists_RouteGateFor(t *testing.T) {
 	h := &EventsHandler{DefaultRoute: twoListRoute()}
-	if f := h.routeAllows(gateRouteCreate); f == nil || f("bob@example.com") || !f("kurt@example.com") {
+	if f := h.routeAllows(h.DefaultRoute, gateRouteCreate); f == nil || f("bob@example.com") || !f("kurt@example.com") {
 		t.Fatal("gateRouteCreate ⇒ AllowsCreate")
 	}
-	if f := h.routeAllows(gateRouteInstall); f == nil || !f("bob@example.com") {
+	if f := h.routeAllows(h.DefaultRoute, gateRouteInstall); f == nil || !f("bob@example.com") {
 		t.Fatal("gateRouteInstall ⇒ Allows")
 	}
 }

@@ -152,6 +152,10 @@ type EventsHandler struct {
 	AliasResolver   SlackAliasResolver
 	CreatePublisher SandboxCreatePublisher
 	SenderEmails    SenderEmailFetcher
+	// Routes (2026-10-22): channel id → route, from SSM /{prefix}/slack/routes
+	// at cold start. Consulted only on the ownership miss, before the default
+	// route; a DM (D… id) never matches. nil/empty ⇒ default route only.
+	Routes map[string]*DefaultRoute
 
 	// Part B: reads a strict thread's human messages since the bot's last turn
 	// (conversations.replies) for a mentioned reply. nil ⇒ context never collected.
@@ -283,18 +287,22 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		h.log().Error("events: channel lookup", "err", err, "channel", msg.Channel)
 		return EventsResponse{StatusCode: 200, Body: "ok"} // 200 to prevent retry storm
 	}
-	routed := false     // info came from the default route, not channel ownership
+	routed := false     // info came from a route, not channel ownership
 	coldCreate := false // route alias absent: publish a SandboxCreate instead of enqueueing
 	rebind := false     // routed thread row must be rewritten (alias moved / orphaned thread), after delivery
 	gate := gateOwned   // which email list decides when the box's row carries none
+	// The route this message runs against: the channel's own entry, else the
+	// default route. Selected before continuity so every rung reads one value.
+	route, routeName := h.selectRoute(msg)
 	if info.SandboxID == "" || info.QueueURL == "" {
 		// Default-route ladder step 1: thread continuity. A thread the front door
 		// routed earlier carries its sandbox in km-slack-threads. Decide this BEFORE
 		// the relay so a follow-up never fans out to peers. A relayed request never
 		// takes this path — peers are not front doors, so they never route.
 		var cont routeContinuity
+		cont.route = route
 		skipMention := false // Part B: continuity skips the mention only when the box allows the bypass
-		if h.DefaultRoute != nil && msg.ThreadTS != "" && req.Headers["x-km-relayed"] == "" {
+		if route != nil && msg.ThreadTS != "" && req.Headers["x-km-relayed"] == "" {
 			if sb, lookupErr := h.Threads.LookupSandbox(ctx, msg.Channel, msg.ThreadTS); lookupErr != nil {
 				h.log().Warn("events: route: thread lookup failed; treating as new thread",
 					"err", lookupErr, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
@@ -375,7 +383,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			// as before. A configured route retires the orphan reply on this install:
 			// a listed sender gets a dispatch and an unlisted one a silent drop, so
 			// there is nobody left to hint.
-			if h.DefaultRoute == nil {
+			if route == nil {
 				if h.Relayer != nil {
 					h.maybePostOrphanReply(ctx, msg, claimResults)
 				} else {
@@ -391,6 +399,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		}
 		info, coldCreate, rebind, gate = decision.info, decision.coldCreate, decision.rebind, decision.gate
 		routed = true
+		h.log().Info("events: route: selected", "route", routeName, "channel", msg.Channel, "alias", route.Alias, "cold_create", coldCreate)
 		if coldCreate {
 			// Mint the id now, BEFORE the files fork, so attachment keys
 			// (slack-inbound/<id>/<thread_ts>/…), the SandboxCreate event and the
@@ -431,7 +440,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		// the whole rule for who may talk to that sandbox; without one the owned
 		// path has no email gate (today's behaviour). ANDed with the id gate above,
 		// and before the thread bypass for the same reason.
-		if !h.senderAllowedForSandbox(ctx, info, msg.User, msg.Channel, gateOwned) {
+		if !h.senderAllowedForSandbox(ctx, nil, info, msg.User, msg.Channel, gateOwned) {
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
 
@@ -571,12 +580,12 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			if len(effectiveAllow) > 0 && !isInSlackAllowlist(u, effectiveAllow) {
 				return false
 			}
-			ok, _ := h.senderEmailAllowed(cctx, info, u, gateOwned)
+			ok, _ := h.senderEmailAllowed(cctx, route, info, u, gateOwned)
 			return ok
 		}
 		if routed {
 			allowed = func(cctx context.Context, u string) bool {
-				ok, _ := h.senderEmailAllowed(cctx, info, u, gate)
+				ok, _ := h.senderEmailAllowed(cctx, route, info, u, gate)
 				return ok
 			}
 		}
@@ -628,7 +637,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			BotUserID:     h.botUserIDForEnvelope(bgCtx),
 		}
 		TrimContextToFit(&sqsBody, MaxQueueBodyBytes)
-		delivered, err := h.deliver(bgCtx, info, coldCreate, sqsBody, threadTS, dedupID)
+		delivered, err := h.deliver(bgCtx, route, info, coldCreate, sqsBody, threadTS, dedupID)
 		if err != nil {
 			h.log().Error("events: deliver (files-sync) failed",
 				"err", err, "queue", info.QueueURL, "sandbox", info.SandboxID, "cold_create", coldCreate)
@@ -653,7 +662,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			BotUserID:     h.botUserIDForEnvelope(ctx),
 		}
 		TrimContextToFit(&body, MaxQueueBodyBytes)
-		delivered, err := h.deliver(ctx, info, coldCreate, body, threadTS, dedupID)
+		delivered, err := h.deliver(ctx, route, info, coldCreate, body, threadTS, dedupID)
 		if err != nil {
 			// Internal error — log and 200 (NOT 500) per RESEARCH.md Pitfall 2.
 			// CONTEXT.md flow step 9 mandates 200 on transport failure: 5xx triggers
@@ -793,6 +802,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 // lookupFailed is set when the row box's fetch errored: the turn is dropped
 // rather than rebound to the alias on a transient error.
 type routeContinuity struct {
+	route        *DefaultRoute // the route selected for this message (never nil on the ladder)
 	sandboxID    string
 	row          SandboxRoutingInfo
 	alias        *routeAlias
@@ -810,6 +820,7 @@ type routeAlias struct {
 // successful delivery, so a frozen box, a dedup hit or a failed send never
 // rewrites the row.
 type routeDecision struct {
+	route      *DefaultRoute // the route the decision was made against
 	info       SandboxRoutingInfo
 	coldCreate bool
 	rebind     bool
@@ -864,10 +875,10 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 	if h.AliasResolver == nil {
 		return false
 	}
-	current, found, err := h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
+	current, found, err := h.AliasResolver.ResolveAlias(ctx, cont.route.Alias)
 	if err != nil {
 		h.log().Warn("events: route: alias resolve failed for continuity; treating as strict",
-			"err", err, "alias", h.DefaultRoute.Alias, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+			"err", err, "alias", cont.route.Alias, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
 		return false
 	}
 	cont.alias = &routeAlias{info: current, found: found}
@@ -878,6 +889,17 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 	return threadBypassAllowed(current)
 }
 
+// selectRoute picks the channel's route or the default route. routeName is the
+// log field: the channel id when the table matched, "default" otherwise.
+func (h *EventsHandler) selectRoute(msg slackMessageEvent) (*DefaultRoute, string) {
+	if msg.ChannelType != "im" {
+		if r, ok := h.Routes[msg.Channel]; ok && r != nil {
+			return r, msg.Channel
+		}
+	}
+	return h.DefaultRoute, "default"
+}
+
 // resolveDefaultRoute runs ladder steps 4 (mention + sender-email gate) and 5
 // (alias resolve). ok=false means "drop silently, 200". A decision with
 // coldCreate set means the alias has no row and the caller must publish a
@@ -886,7 +908,7 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 // follow-up needs a mention again). DMs (channel_type "im") never need a
 // mention. The email gate applies on every path, continuity included.
 func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessageEvent, cont routeContinuity, skipMention bool) (routeDecision, bool) {
-	if !skipMention && requiresMention(msg.ChannelType) {
+	if !skipMention && requiresMention(msg.ChannelType) && cont.route.MentionOnly {
 		uid, err := h.BotUserID.Fetch(ctx)
 		if err != nil {
 			// Fail CLOSED here, unlike the owned-path 5b filter: a route dispatches
@@ -908,7 +930,7 @@ func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessag
 	// allowEmails when it has one, else the list decision.gate names — the route
 	// profile's list for the route's own box (a cold-create has no row yet), the
 	// install list for any other box.
-	if !h.senderAllowedForSandbox(ctx, decision.info, msg.User, msg.Channel, decision.gate) {
+	if !h.senderAllowedForSandbox(ctx, cont.route, decision.info, msg.User, msg.Channel, decision.gate) {
 		return routeDecision{}, false
 	}
 	return decision, true
@@ -926,25 +948,25 @@ func (h *EventsHandler) routeTarget(ctx context.Context, msg slackMessageEvent, 
 		// The thread's own box is live: the reply returns to it, whatever the alias
 		// names now, and the row is left alone.
 		gate := gateRouteInstall
-		if len(cont.row.AllowEmails) == 0 && h.DefaultRoute.HasProfileList() {
+		if len(cont.row.AllowEmails) == 0 && cont.route.HasProfileList() {
 			// Only here can the two lists disagree: ask whether the row box is the
 			// alias's box (the route's own box ⇒ the profile list). A failed resolve
 			// drops: the narrower list may be the one that applies.
 			if h.AliasResolver == nil {
-				h.log().Warn("events: route: no AliasResolver wired; dropping", "alias", h.DefaultRoute.Alias)
+				h.log().Warn("events: route: no AliasResolver wired; dropping", "alias", cont.route.Alias)
 				return routeDecision{}, false
 			}
-			current, found, rerr := h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
+			current, found, rerr := h.AliasResolver.ResolveAlias(ctx, cont.route.Alias)
 			if rerr != nil {
 				h.log().Error("events: route: alias resolve failed",
-					"alias", h.DefaultRoute.Alias, "err", rerr, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+					"alias", cont.route.Alias, "err", rerr, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
 				return routeDecision{}, false
 			}
 			if found && current.SandboxID == cont.row.SandboxID {
 				gate = gateRouteCreate
 			}
 		}
-		return routeDecision{info: cont.row, gate: gate}, true
+		return routeDecision{route: cont.route, info: cont.row, gate: gate}, true
 	}
 
 	var current SandboxRoutingInfo
@@ -953,13 +975,13 @@ func (h *EventsHandler) routeTarget(ctx context.Context, msg slackMessageEvent, 
 		current, found = cont.alias.info, cont.alias.found
 	} else {
 		if h.AliasResolver == nil {
-			h.log().Warn("events: route: no AliasResolver wired; dropping", "alias", h.DefaultRoute.Alias)
+			h.log().Warn("events: route: no AliasResolver wired; dropping", "alias", cont.route.Alias)
 			return routeDecision{}, false
 		}
-		current, found, err = h.AliasResolver.ResolveAlias(ctx, h.DefaultRoute.Alias)
+		current, found, err = h.AliasResolver.ResolveAlias(ctx, cont.route.Alias)
 		if err != nil {
 			h.log().Error("events: route: alias resolve failed",
-				"alias", h.DefaultRoute.Alias, "err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+				"alias", cont.route.Alias, "err", err, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
 			return routeDecision{}, false
 		}
 	}
@@ -967,7 +989,7 @@ func (h *EventsHandler) routeTarget(ctx context.Context, msg slackMessageEvent, 
 		if !found {
 			// Old box gone and alias absent: cold-create, and rebind the orphaned
 			// row to the minted box once the publish succeeds.
-			return routeDecision{coldCreate: true, rebind: true, gate: gateRouteCreate}, true
+			return routeDecision{route: cont.route, coldCreate: true, rebind: true, gate: gateRouteCreate}, true
 		}
 		if current.SandboxID != cont.sandboxID {
 			// The row's box is gone and the alias names another: the row is
@@ -975,22 +997,22 @@ func (h *EventsHandler) routeTarget(ctx context.Context, msg slackMessageEvent, 
 			// (mirrors the GitHub bridge's InvalidateStaleSession).
 			h.log().Info("events: route: alias moved; rebinding thread after delivery",
 				"from", cont.sandboxID, "to", current.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
-			return routeDecision{info: current, rebind: true, gate: gateRouteCreate}, true
+			return routeDecision{route: cont.route, info: current, rebind: true, gate: gateRouteCreate}, true
 		}
-		return routeDecision{info: current, gate: gateRouteCreate}, true
+		return routeDecision{route: cont.route, info: current, gate: gateRouteCreate}, true
 	}
 	if !found {
-		return routeDecision{coldCreate: true, gate: gateRouteCreate}, true
+		return routeDecision{route: cont.route, coldCreate: true, gate: gateRouteCreate}, true
 	}
-	return routeDecision{info: current, gate: gateRouteCreate}, true
+	return routeDecision{route: cont.route, info: current, gate: gateRouteCreate}, true
 }
 
 // senderAllowedForSandbox is the sender-email gate for one sandbox, logged. A
 // row carrying allowEmails decides alone (override, not merge); without one,
 // gate picks the route list on the route paths and nothing gates the owned
 // #sb- path. Any lookup failure with a list in force is a deny (never cached).
-func (h *EventsHandler) senderAllowedForSandbox(ctx context.Context, info SandboxRoutingInfo, userID, channel string, gate emailGate) bool {
-	ok, source := h.senderEmailAllowed(ctx, info, userID, gate)
+func (h *EventsHandler) senderAllowedForSandbox(ctx context.Context, route *DefaultRoute, info SandboxRoutingInfo, userID, channel string, gate emailGate) bool {
+	ok, source := h.senderEmailAllowed(ctx, route, info, userID, gate)
 	if ok {
 		return true
 	}
@@ -1008,7 +1030,7 @@ func (h *EventsHandler) senderAllowedForSandbox(ctx context.Context, info Sandbo
 // senderEmailAllowed decides without logging (the strict-context trust
 // predicate calls it once per author). source names the list that decided:
 // "sandbox", "route", or "" when no list applies.
-func (h *EventsHandler) senderEmailAllowed(ctx context.Context, info SandboxRoutingInfo, userID string, gate emailGate) (bool, string) {
+func (h *EventsHandler) senderEmailAllowed(ctx context.Context, route *DefaultRoute, info SandboxRoutingInfo, userID string, gate emailGate) (bool, string) {
 	var allows func(string) bool
 	var source string
 	switch {
@@ -1017,7 +1039,7 @@ func (h *EventsHandler) senderEmailAllowed(ctx context.Context, info SandboxRout
 	case gate == gateOwned:
 		return true, ""
 	default:
-		if allows = h.routeAllows(gate); allows == nil {
+		if allows = h.routeAllows(route, gate); allows == nil {
 			return false, "route" // a route path with no route: nothing admits anyone
 		}
 		source = "route"
@@ -1040,18 +1062,18 @@ func (h *EventsHandler) senderEmailAllowed(ctx context.Context, info SandboxRout
 	return allows(email), source
 }
 
-// routeAllows returns the route list a route-path gate names: AllowsCreate for
-// the route's own box, Allows (the install list) otherwise. nil when no route
-// is configured or gate is gateOwned.
-func (h *EventsHandler) routeAllows(gate emailGate) func(string) bool {
-	if h.DefaultRoute == nil {
+// routeAllows returns the list a route-path gate names on route: AllowsCreate
+// for the route's own box, Allows (the route's install list) otherwise. nil
+// when route is nil or gate is gateOwned.
+func (h *EventsHandler) routeAllows(route *DefaultRoute, gate emailGate) func(string) bool {
+	if route == nil {
 		return nil
 	}
 	switch gate {
 	case gateRouteCreate:
-		return h.DefaultRoute.AllowsCreate
+		return route.AllowsCreate
 	case gateRouteInstall:
-		return h.DefaultRoute.Allows
+		return route.Allows
 	}
 	return nil
 }
@@ -1184,16 +1206,19 @@ func (h *EventsHandler) botUserIDForEnvelope(ctx context.Context) string {
 // deliver enqueues a routed/owned turn, or publishes a cold-create carrying the
 // envelope for the id Handle pre-minted into info.SandboxID. Returns the sandbox
 // id the thread row must name.
-func (h *EventsHandler) deliver(ctx context.Context, info SandboxRoutingInfo, coldCreate bool, body InboundQueueBody, threadTS, dedupID string) (string, error) {
+func (h *EventsHandler) deliver(ctx context.Context, route *DefaultRoute, info SandboxRoutingInfo, coldCreate bool, body InboundQueueBody, threadTS, dedupID string) (string, error) {
 	bodyBytes, _ := json.Marshal(body)
 	if coldCreate {
-		if h.CreatePublisher == nil || h.DefaultRoute == nil {
+		if h.CreatePublisher == nil {
 			return "", errors.New("cold-create publish: no CreatePublisher wired")
 		}
-		if err := h.CreatePublisher.PutSandboxCreate(ctx, info.SandboxID, h.DefaultRoute.Alias, h.DefaultRoute.Profile, string(bodyBytes)); err != nil {
+		if route == nil {
+			return "", errors.New("cold-create publish: no route selected")
+		}
+		if err := h.CreatePublisher.PutSandboxCreate(ctx, info.SandboxID, route.Alias, route.Profile, string(bodyBytes)); err != nil {
 			return "", fmt.Errorf("cold-create publish: %w", err)
 		}
-		h.log().Info("events: route: cold-create published", "alias", h.DefaultRoute.Alias, "sandbox", info.SandboxID, "channel", body.Channel)
+		h.log().Info("events: route: cold-create published", "alias", route.Alias, "profile", route.Profile, "sandbox", info.SandboxID, "channel", body.Channel)
 		return info.SandboxID, nil
 	}
 	if err := h.SQS.Send(ctx, info.QueueURL, string(bodyBytes), threadTS, dedupID); err != nil {
