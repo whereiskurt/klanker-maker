@@ -211,3 +211,9 @@ variable "slack_default_route_profile_allow" {
   type        = string
   default     = ""
 }
+
+variable "slack_routes_sha256" {
+  description = "Hex SHA-256 of the channel route table at SSM /{prefix}/slack/routes (km init --slack writes both). Only a cold-start trigger: a changed table changes this value and the Lambda re-reads the parameter."
+  type        = string
+  default     = ""
+}

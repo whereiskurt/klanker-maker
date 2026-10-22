@@ -18,6 +18,8 @@
 //	KM_SIGNING_SECRET_PATH  — SSM parameter path for Slack signing secret (default: /km/slack/signing-secret)
 //	KM_SLACK_THREADS_TABLE  — DynamoDB table for Slack thread tracking (default: km-slack-threads)
 //	KM_RESOURCE_PREFIX      — resource prefix for SQS queue name pattern (default: km)
+//	KM_SLACK_ROUTES_PARAM   — SSM parameter path of the channel route table (default: /{prefix}/slack/routes)
+//	KM_SLACK_ROUTES_SHA256  — hash of the route table, logged for correlation only; changing it cold-starts the Lambda
 //	KM_ARTIFACTS_BUCKET     — S3 bucket holding transcript objects for ActionUpload (Phase 68; required for upload path, otherwise upload returns 502)
 package main
 
@@ -37,6 +39,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -44,6 +47,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	pkgslack "github.com/whereiskurt/klanker-maker/pkg/slack"
@@ -374,6 +378,12 @@ func wireEventsHandler() {
 		eventBridge: initEventBridge, artifactBucket: artifactsBucket,
 		tokens: initToken, httpClient: initHTTPClient,
 	})
+
+	// 2026-10-22: channel route table (SSM, read at cold start). The hash env
+	// var only exists so km init --slack cold-starts this function on a change.
+	wireChannelRoutes(context.Background(), eventsHandler, initSSMC,
+		envOr("KM_SLACK_ROUTES_PARAM", bridge.RoutesParamPath(prefix)),
+		defaultRouteDeps{ddb: initDDB, sandboxesTable: sandboxesTable, eventBridge: initEventBridge, artifactBucket: artifactsBucket})
 
 	// Wire DDBPauseHinter to eventsHandler.PauseHinter.
 	postHintFn := bridge.PostHintFunc(func(ctx context.Context, channelID, threadTS, text string) error {
@@ -813,8 +823,7 @@ func wireDefaultRoute(h *bridge.EventsHandler, out *bridge.Handler, getenv func(
 		return
 	}
 	h.DefaultRoute = route
-	h.AliasResolver = &bridge.DDBAliasResolver{Client: d.ddb, TableName: d.sandboxesTable}
-	h.CreatePublisher = &bridge.EventBridgeAdapter{Client: d.eventBridge, ArtifactBucket: d.artifactBucket}
+	wireRouteDeps(h, d)
 	// ActionDM (km-slack dm) gates its target on the install list (or the
 	// posting sandbox's own allowEmails). With no route at all (the early return
 	// above) out.DefaultRoute stays nil and km-slack dm answers 403 dm_disabled.
@@ -823,6 +832,59 @@ func wireDefaultRoute(h *bridge.EventsHandler, out *bridge.Handler, getenv func(
 	}
 	slog.Info("km-slack-bridge: default route enabled", "alias", alias, "profile", profile,
 		"allow_count", len(emails), "profile_allow_count", len(profileEmails))
+}
+
+// wireRouteDeps wires what any route (default or channel) needs to resolve an
+// alias and cold-create. Idempotent.
+func wireRouteDeps(h *bridge.EventsHandler, d defaultRouteDeps) {
+	if h.AliasResolver == nil {
+		h.AliasResolver = &bridge.DDBAliasResolver{Client: d.ddb, TableName: d.sandboxesTable}
+	}
+	if h.CreatePublisher == nil {
+		h.CreatePublisher = &bridge.EventBridgeAdapter{Client: d.eventBridge, ArtifactBucket: d.artifactBucket}
+	}
+}
+
+// routesParamReader is the one SSM call the channel route table needs.
+type routesParamReader interface {
+	GetParameter(ctx context.Context, in *ssm.GetParameterInput, opts ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
+}
+
+// wireChannelRoutes reads the channel route table once per cold start. An
+// absent parameter is an empty table (Info); a read or decode error logs once
+// at WARN and leaves the table empty, so the default route keeps working and
+// no event ever fails on it. KM_SLACK_ROUTES_SHA256 is logged for correlation
+// with km init; it is not verified (the parameter is the truth).
+func wireChannelRoutes(ctx context.Context, h *bridge.EventsHandler, reader routesParamReader, path string, d defaultRouteDeps) {
+	out, err := reader.GetParameter(ctx, &ssm.GetParameterInput{Name: aws.String(path)})
+	if err != nil {
+		var nf *ssmtypes.ParameterNotFound
+		if errors.As(err, &nf) {
+			slog.Info("km-slack-bridge: no channel route table", "param", path)
+		} else {
+			slog.Warn("km-slack-bridge: channel route table unreadable; channel routes OFF", "param", path, "err", err)
+		}
+		return
+	}
+	if out.Parameter == nil {
+		slog.Warn("km-slack-bridge: channel route table has no value; channel routes OFF", "param", path)
+		return
+	}
+	raw := []byte(aws.ToString(out.Parameter.Value))
+	doc, err := bridge.ParseRoutesDocument(raw)
+	if err != nil {
+		slog.Warn("km-slack-bridge: channel route table invalid; channel routes OFF", "param", path, "err", err)
+		return
+	}
+	table := bridge.BuildRouteTable(doc, func(msg string, kv ...any) { slog.Warn(msg, kv...) })
+	if len(table) == 0 {
+		slog.Info("km-slack-bridge: channel route table empty", "param", path)
+		return
+	}
+	h.Routes = table
+	wireRouteDeps(h, d)
+	slog.Info("km-slack-bridge: channel routes enabled", "count", len(table),
+		"sha256", bridge.RoutesSHA256(raw), "env_sha256", os.Getenv("KM_SLACK_ROUTES_SHA256"))
 }
 
 // splitEmailEnv splits a comma-joined email env var, dropping blanks.

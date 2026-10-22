@@ -1444,6 +1444,20 @@ slack:
     # (omit the slack: block → terragrunt fallback "false" applies)
 ```
 
+**Channel routes** (2026-10-22) map named channels to klankers; unlisted channels keep using `slack.default_route`:
+
+```yaml
+slack:
+    routes:
+        - channel: "#security-alerts"   # "#name" or a channel id (C…)
+          alias: ir-bot
+          profile: profiles/ir-bot.yaml
+          allow_emails: ["*@example.com"]   # optional
+          mention_only: false               # optional; default true
+```
+
+`km init` resolves names from the bot's own channels and writes the table to SSM `/{prefix}/slack/routes`. First deploy: `make build` → `make build-lambdas` → `km init --dry-run=false`; later changes: `km init --slack`. No recreate. See `docs/slack-notifications.md` § Channel routes.
+
 `km init` reads this and exports `KM_SLACK_MENTION_ONLY` into terragrunt. The bridge Lambda's
 environment block is updated on `terragrunt apply` (full `km init`).
 

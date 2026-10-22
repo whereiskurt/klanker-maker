@@ -890,3 +890,44 @@ func TestPostToBridge_ContextCancel_ReturnsCtxErr(t *testing.T) {
 		t.Fatal("timed out waiting for PostToBridge to return after cancel")
 	}
 }
+
+func TestListBotChannels_PaginatesUsersConversations(t *testing.T) {
+	var calls []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.URL.Path)
+		if r.URL.Path != "/users.conversations" {
+			t.Errorf("unexpected method %s", r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["types"] != "public_channel,private_channel" {
+			t.Errorf("types = %v", body["types"])
+		}
+		if body["cursor"] == nil {
+			w.Write([]byte(`{"ok":true,"channels":[{"id":"C1","name":"sec"}],"response_metadata":{"next_cursor":"p2"}}`))
+			return
+		}
+		w.Write([]byte(`{"ok":true,"channels":[{"id":"G2","name":"private-ops"}],"response_metadata":{"next_cursor":""}}`))
+	}))
+	defer ts.Close()
+	got, err := newClientAgainstServer(ts).ListBotChannels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "C1" || got[1].Name != "private-ops" {
+		t.Fatalf("got %+v", got)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("want 2 pages, got %d", len(calls))
+	}
+}
+
+func TestListBotChannels_SlackError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ok":false,"error":"missing_scope"}`))
+	}))
+	defer ts.Close()
+	if _, err := newClientAgainstServer(ts).ListBotChannels(context.Background()); err == nil || !strings.Contains(err.Error(), "missing_scope") {
+		t.Fatalf("want missing_scope error, got %v", err)
+	}
+}

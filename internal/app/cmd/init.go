@@ -434,6 +434,12 @@ func runInitScoped(cfg *config.Config, awsProfile, region string, verbose bool, 
 	if err := prestageSlackDefaultRouteForModule(ctx, cfg, module, &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}); err != nil {
 		return err
 	}
+	// 2026-10-22: channel routes — only a bridge apply reads the table.
+	if module == "lambda-slack-bridge" {
+		if err := prepareSlackChannelRoutesWithAWS(ctx, cfg, awsCfg, &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}); err != nil {
+			return fmt.Errorf("km init: %w", err)
+		}
+	}
 
 	// 2. Ensure Slack bot-user-id is cached in env (needed when applying lambda-slack-bridge
 	//    so KM_SLACK_BOT_USER_ID lands in the Lambda env block). Non-fatal.
@@ -1197,15 +1203,31 @@ func ValidateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPat
 	if err := route.Validate(); err != nil {
 		return nil, err
 	}
+	profileAllow, err := routeProfileInboundAllow("slack.default_route.profile", route, searchPaths)
+	if err != nil {
+		return nil, err
+	}
+	if len(profileAllow) == 0 && len(route.NormalizedEmails()) == 0 {
+		return nil, errSlackDefaultRouteNoAllowlist(route.Profile)
+	}
+	return profileAllow, nil
+}
+
+// routeProfileInboundAllow resolves a route's profile (extends included),
+// proves it has Slack inbound enabled, and returns its own
+// notification.slack.inbound.allowEmails normalised (nil when none). label
+// names the config key in errors ("slack.default_route.profile" or
+// "slack.routes[i].profile"). Shared by the default route and channel routes.
+func routeProfileInboundAllow(label string, route *config.SlackDefaultRoute, searchPaths []string) ([]string, error) {
 	p, err := resolveSlackDefaultRouteProfile(route, searchPaths)
 	if err != nil {
-		return nil, fmt.Errorf("slack.default_route.profile %q: %w", route.Profile, err)
+		return nil, fmt.Errorf("%s %q: %w", label, route.Profile, err)
 	}
 	n := p.Spec.Notification
 	slackOn := n != nil && n.Slack != nil && n.Slack.Enabled != nil && *n.Slack.Enabled
 	inboundOn := slackOn && n.Slack.Inbound != nil && n.Slack.Inbound.Enabled != nil && *n.Slack.Inbound.Enabled
 	if !slackOn || !inboundOn {
-		return nil, fmt.Errorf("slack.default_route.profile %q must set notification.slack.enabled and notification.slack.inbound.enabled: a default-route sandbox replies through its inbound poller and has no other way to answer", route.Profile)
+		return nil, fmt.Errorf("%s %q must set notification.slack.enabled and notification.slack.inbound.enabled: a routed sandbox replies through its inbound poller and has no other way to answer", label, route.Profile)
 	}
 	var profileAllow []string
 	for _, e := range n.Slack.Inbound.AllowEmails {
@@ -1214,12 +1236,9 @@ func ValidateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPat
 		}
 		norm, _, verr := slackbridge.ValidateEmailEntry(e)
 		if verr != nil {
-			return nil, fmt.Errorf("slack.default_route.profile %q: notification.slack.inbound.allowEmails: %w", route.Profile, verr)
+			return nil, fmt.Errorf("%s %q: notification.slack.inbound.allowEmails: %w", label, route.Profile, verr)
 		}
 		profileAllow = append(profileAllow, norm)
-	}
-	if len(profileAllow) == 0 && len(route.NormalizedEmails()) == 0 {
-		return nil, errSlackDefaultRouteNoAllowlist(route.Profile)
 	}
 	return profileAllow, nil
 }
@@ -1804,15 +1823,18 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		}
 	}
 
-	// 2026-10-16: Slack default route. Validate (deny-by-default + the profile
-	// must carry Slack inbound) and pre-stage the profile for cold-create.
-	if cfg.Slack.DefaultRoute != nil {
-		if err := prepareSlackDefaultRoute(cfg); err != nil {
-			return fmt.Errorf("km init: %w", err)
-		}
-		if err := prestageSlackDefaultRoute(ctx, cfg, &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}); err != nil {
-			return err
-		}
+	// 2026-10-16 / 2026-10-22: Slack default route + channel routes. Validate
+	// (deny-by-default, profiles carry Slack inbound), pre-stage for cold-create,
+	// write the channel table and export its hash. With neither block the call
+	// still runs: it empties a table left by an earlier config and exports "".
+	if err := prepareSlackDefaultRoute(cfg); err != nil {
+		return fmt.Errorf("km init: %w", err)
+	}
+	if err := prestageSlackDefaultRoute(ctx, cfg, &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}); err != nil {
+		return err
+	}
+	if err := prepareSlackChannelRoutesWithAWS(ctx, cfg, awsCfg, &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}); err != nil {
+		return fmt.Errorf("km init: %w", err)
 	}
 
 	repoRoot := findRepoRoot()
@@ -3466,6 +3488,9 @@ func runInitPlan(cfg *config.Config, awsProfile, region string, verbose, acceptD
 	if err := prepareSlackDefaultRoute(cfg); err != nil {
 		return fmt.Errorf("km init --plan: %w", err)
 	}
+	// Plan: never resolves or writes the table; the hash of the LIVE table keeps
+	// the env diff honest. km doctor reports config-vs-table drift.
+	exportSlackRoutesHashFromSSM(ctx, cfg, &productionSSMParamStore{client: ssm.NewFromConfig(awsCfg)})
 
 	// 3. Construct runner (Verbose=false — RunInitPlanWithRunner captures stdout
 	//    per-module and echoes based on verbose flag post-hoc).

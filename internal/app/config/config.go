@@ -185,6 +185,16 @@ type SlackConfig struct {
 	// may be empty, not both.
 	// CRITICAL: "slack.default_route" must be in the v2→v merge-list.
 	DefaultRoute *SlackDefaultRoute `mapstructure:"default_route" yaml:"default_route,omitempty"`
+
+	// Routes (2026-10-22): per-channel routes beside DefaultRoute. A message in
+	// a listed channel that no sandbox owns is dispatched to that route's alias
+	// instead of the default route; unlisted channels fall through to
+	// DefaultRoute, then Phase 96. Names resolve to ids at km init from the
+	// bot's own conversation list (users.conversations). The table reaches the
+	// bridge as SSM /{prefix}/slack/routes + KM_SLACK_ROUTES_SHA256 (km init
+	// --slack after every change). CRITICAL: "slack.routes" must be in the
+	// v2→v merge-list.
+	Routes []SlackRoute `mapstructure:"routes" yaml:"routes,omitempty"`
 }
 
 // SlackDefaultRoute is the slack.default_route block. See SlackConfig.DefaultRoute.
@@ -231,6 +241,99 @@ func (r *SlackDefaultRoute) Validate() error {
 		}
 		if err := validateRouteEmailEntry(e); err != nil {
 			return fmt.Errorf("slack.default_route.allow_emails: %w", err)
+		}
+	}
+	return nil
+}
+
+// SlackRoute is one entry of slack.routes. Channel is "#name" or a channel id.
+type SlackRoute struct {
+	Channel     string   `mapstructure:"channel"      yaml:"channel"`
+	Alias       string   `mapstructure:"alias"        yaml:"alias"`
+	Profile     string   `mapstructure:"profile"      yaml:"profile"`
+	AllowEmails []string `mapstructure:"allow_emails" yaml:"allow_emails,omitempty"`
+	MentionOnly *bool    `mapstructure:"mention_only" yaml:"mention_only,omitempty"`
+}
+
+// slackRouteChannelName: "#" + a Slack-legal name (lowercase letters, digits,
+// '.', '_', '-'; 1–80 chars). slackRouteChannelID: a public (C) or legacy
+// private (G) channel id.
+var slackRouteChannelName = regexp.MustCompile(`^#[a-z0-9][a-z0-9._-]{0,79}$`)
+var slackRouteChannelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
+
+// ChannelName returns the name without '#' when Channel is a name.
+func (r *SlackRoute) ChannelName() (string, bool) {
+	c := strings.TrimSpace(r.Channel)
+	if slackRouteChannelName.MatchString(c) {
+		return strings.TrimPrefix(c, "#"), true
+	}
+	return "", false
+}
+
+// ChannelID returns the id when Channel is an id.
+func (r *SlackRoute) ChannelID() (string, bool) {
+	c := strings.TrimSpace(r.Channel)
+	if slackRouteChannelID.MatchString(c) {
+		return c, true
+	}
+	return "", false
+}
+
+// MentionRequired: absent mention_only ⇒ true (same rule as the default route).
+func (r *SlackRoute) MentionRequired() bool { return r.MentionOnly == nil || *r.MentionOnly }
+
+// NormalizedEmails returns AllowEmails lowercased, trimmed, empties dropped.
+func (r *SlackRoute) NormalizedEmails() []string {
+	out := make([]string, 0, len(r.AllowEmails))
+	for _, e := range r.AllowEmails {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// Validate checks one route's own shape. No disk, no Slack. An empty
+// allow_emails is valid: the install list or the route profile's list may
+// supply it (km init decides, the only place that sees all three).
+func (r *SlackRoute) Validate() error {
+	c := strings.TrimSpace(r.Channel)
+	if !slackRouteChannelName.MatchString(c) && !slackRouteChannelID.MatchString(c) {
+		return fmt.Errorf("slack.routes: channel %q must be \"#name\" (lowercase Slack channel name) or a channel id (C…)", r.Channel)
+	}
+	if strings.TrimSpace(r.Alias) == "" {
+		return fmt.Errorf("slack.routes: channel %q: alias is required", r.Channel)
+	}
+	if strings.TrimSpace(r.Profile) == "" {
+		return fmt.Errorf("slack.routes: channel %q: profile is required", r.Channel)
+	}
+	for _, e := range r.AllowEmails {
+		if strings.TrimSpace(e) == "" {
+			continue
+		}
+		if err := validateRouteEmailEntry(e); err != nil {
+			return fmt.Errorf("slack.routes: channel %q: allow_emails: %w", r.Channel, err)
+		}
+	}
+	return nil
+}
+
+// ValidateRoutes validates every route and rejects two routes naming the same
+// channel literally (case-insensitive, trimmed). A name and an id that resolve
+// to one channel are caught at km init, after resolution.
+func (s *SlackConfig) ValidateRoutes() error {
+	seen := map[string]int{}
+	for i := range s.Routes {
+		// Duplicate check first: it is case-insensitive, so " #A " is reported
+		// as a duplicate of "#a" rather than as an uppercase-name shape error.
+		key := strings.ToLower(strings.TrimSpace(s.Routes[i].Channel))
+		if j, dup := seen[key]; dup {
+			return fmt.Errorf("slack.routes: channel %q listed twice (entries %d and %d)", key, j, i)
+		}
+		seen[key] = i
+		if err := s.Routes[i].Validate(); err != nil {
+			return fmt.Errorf("slack.routes[%d]: %w", i, err)
 		}
 	}
 	return nil
@@ -1251,6 +1354,9 @@ func Load() (*Config, error) {
 			// because the load below uses UnmarshalKey on the parent (same shape
 			// as "github"). CRITICAL: without it the block is silently dropped.
 			"slack.default_route",
+			// 2026-10-22: per-channel route table (list-of-objects, UnmarshalKey).
+			// CRITICAL: without it the whole list is silently dropped.
+			"slack.routes",
 			// Phase 97: github block (repos list-of-objects + default_profile). CRITICAL:
 			// without this entry, the entire github: block is silently dropped regardless
 			// of km-config.yaml content (project_config_key_merge_list footgun).
@@ -1457,6 +1563,14 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("unmarshal slack.default_route: %w", err)
 		}
 		cfg.Slack.DefaultRoute = &dr
+	}
+
+	// 2026-10-22: slack.routes is a list of objects → UnmarshalKey (same shape
+	// as github.repos). Absent ⇒ empty ⇒ no channel routes anywhere downstream.
+	if v.IsSet("slack.routes") {
+		if err := v.UnmarshalKey("slack.routes", &cfg.Slack.Routes); err != nil {
+			return nil, fmt.Errorf("unmarshal slack.routes: %w", err)
+		}
 	}
 
 	// Clusters is a structured slice — viper's UnmarshalKey handles the

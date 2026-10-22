@@ -3573,6 +3573,96 @@ Skipped silently when the block is absent. Otherwise three results from one eval
   external member's email, so the gate applies; reaction and reply behaviour there is not yet
   live-tested.
 
+### Channel routes (2026-10-22)
+
+Map known channels to klankers by name. Unlisted channels keep using
+`slack.default_route`, then the Phase 96 behaviour.
+
+```yaml
+slack:
+  routes:
+    - channel: "#security-alerts"      # "#name" or a channel id (C…)
+      alias: ir-bot
+      profile: profiles/ir-bot.yaml
+      allow_emails: ["*@example.com"]  # optional
+      mention_only: false              # optional; default true
+    - channel: "#platform-eng"
+      alias: platform-bot
+      profile: profiles/platform.yaml
+  default_route: {alias: ir-bot, profile: profiles/ir-bot.yaml, allow_emails: [ops@example.com]}
+```
+
+**Resolution.** `km init` lists the channels the bot is a member of
+(`users.conversations`, never `conversations.list`) and matches each route by name
+or id. A name the bot cannot see is an error listing the bot's channels, so a
+renamed channel or a missing invite fails the init, never routes silently. Ids
+(for example `C0AB12CD3`) are stable across renames. The table records each
+channel's name at resolution time, so renaming a channel the config names by id
+shows as `km doctor` drift until the next `km init --slack`; routing is
+unaffected. Two routes resolving to one channel is an error. Several routes may
+name one alias, but only with one profile: an alias named with two different
+profiles, across routes or with `default_route`, fails `km init`, because the
+first cold-create would decide the box's profile. Each route's profile is
+pre-staged to `slack-profiles/{slug}/.km-profile.yaml`, flattened when it uses
+`extends:`, exactly as for the default route.
+
+**Who may trigger.** First non-empty wins: the route's `allow_emails`, then
+`slack.default_route.allow_emails`, then the route profile's
+`notification.slack.inbound.allowEmails`. All empty fails `km init`. The box's
+own row list still wins once it exists. A route profile with its own
+`inbound.allowEmails` gates the cold-create and the alias's box with that list,
+as the default route does.
+
+**Mention.** A mention is required when the channel type needs one and either the
+route's `mention_only` is true or the message is a thread reply. So
+`mention_only: false` lets any allowed sender's top-level post start a turn, while
+thread follow-ups keep the box's `threadBypass` behaviour exactly as before (a
+strict box still needs a mention in a thread). The table routes channels only: `km init` resolves routes against the bot's channel
+list, so 1:1 DMs and group DMs are never routed by the table (they take the default
+route).
+
+**Precedence.** Owned `#sb-` channel → routed-thread continuity → a peer that
+claims the channel → `routes` → `default_route` → Phase 96.
+
+**Front-door only.** Like `default_route`, `slack.routes` takes effect on the
+front-door install only, the one Slack delivers events to. A relayed event never
+routes, so a table on a peer install is ignored, and `km doctor` there still
+reports it green.
+
+**Editing or removing a route.** After a route is edited and republished, a thread
+that already exists keeps its box (continuity), but its sender gate uses the NEW
+route's lists, and a thread whose box is gone falls back to the NEW route's alias.
+A route that is removed while no `default_route` exists sends its existing threads
+to the Phase 96 orphan handling.
+
+**Transport.** The resolved table is one canonical JSON SSM parameter,
+`/{prefix}/slack/routes`; its SHA-256 lands in the bridge env
+(`KM_SLACK_ROUTES_SHA256`) so a change cold-starts the Lambda, which re-reads the
+parameter at cold start.
+
+**Deploy.** First time: `make build` → `make build-lambdas` →
+`km init --dry-run=false`. Every later change to `routes:`: `km init --slack`.
+No sandbox recreate. Every full `km init` and `km init --slack` reads the live
+table from SSM even with no `routes:` block (to empty a stale table), so an SSM
+read error there stops the init. `km doctor` group **Slack channel routes**
+reports the profiles, the channel resolution and drift between the config and the
+live table. When `routes:` is configured, a hand-edited parameter that is byte-different from the canonical form
+shows as drift, and `km init --slack` rewrites it. The table is a Standard SSM
+parameter, so it holds at most 4096 bytes (about 20 routes); a larger one fails
+`km init` before anything is written.
+
+**Troubleshooting.**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `km init` fails "no channel named #x among the channels the bot is a member of" | bot not invited, or the channel was renamed | invite the bot or update `channel:` |
+| mention in a mapped channel goes to the default alias | table not published, or old bridge | `km doctor` (table drift) → `km init --slack`; first deploy needs the full sequence |
+| bridge log `channel route table invalid; channel routes OFF` | hand-edited parameter | `km init --slack` rewrites it |
+| `km-slack-bridge: channel routes enabled count=N sha256=…` missing after `km init --slack` | the hash did not change (same table) | nothing to do; the table is live |
+| `km init` fails "slack.routes table is N bytes; SSM Standard parameters hold 4096" | too many routes or long allow lists | remove routes, or use `*@<domain>` entries instead of long address lists |
+| `km init` fails "alias … uses profile …, but … gives the same alias profile …" | one alias named with two profiles | give each alias one profile |
+| `km init` fails reading the routes parameter | SSM read error (fail-closed, even with no `routes:` block) | fix the credentials or permissions and re-run |
+
 ## Mentioning people from a sandbox reply (2026-09-19)
 
 **The symptom this fixes:** an agent asked to "@ me back" replied with the literal text

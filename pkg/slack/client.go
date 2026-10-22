@@ -714,6 +714,40 @@ func (c *Client) FindChannelByName(ctx context.Context, name string, maxPages in
 	return "", ErrScanCapExceeded
 }
 
+// ListBotChannels lists every non-archived public and private channel the bot
+// is a member of (users.conversations with no user => the caller's own
+// memberships; scopes channels:read + groups:read). Unlike conversations.list
+// the result is bounded by the bot's membership, not the workspace, so it
+// pages to completion with no scan cap. The 100-page ceiling is a loop guard
+// against a server that never clears next_cursor.
+func (c *Client) ListBotChannels(ctx context.Context) ([]SlackChannelSummary, error) {
+	var out []SlackChannelSummary
+	cursor := ""
+	for page := 0; page < 100; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		body := map[string]any{
+			"types":            "public_channel,private_channel",
+			"limit":            1000,
+			"exclude_archived": true,
+		}
+		if cursor != "" {
+			body["cursor"] = cursor
+		}
+		resp, err := c.callJSON(ctx, "users.conversations", body)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, resp.Channels...)
+		if resp.ResponseMetadata.NextCursor == "" {
+			return out, nil
+		}
+		cursor = resp.ResponseMetadata.NextCursor
+	}
+	return nil, fmt.Errorf("slack: users.conversations: cursor never cleared after 100 pages")
+}
+
 // LookupUserByEmail wraps users.lookupByEmail. Returns (id, true, nil) on hit;
 // ("", false, nil) on users_not_found (typed boolean miss); ("", false, *SlackAPIError)
 // on any other Slack error including missing_scope.
