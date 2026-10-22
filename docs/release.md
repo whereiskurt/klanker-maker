@@ -6,7 +6,7 @@ Tag-driven releases via [goreleaser](https://goreleaser.com) + GitHub Actions. C
 
 | What | Where | Who bumps it |
 |---|---|---|
-| Dev build counter | `VERSION` file | Auto-bumped by every `make build` (see `scripts/bump-version.sh`) — currently ~v0.3.7xx |
+| Dev build counter | `VERSION` file | Auto-bumped by every `make build` (see `scripts/bump-version.sh`); re-synced to the release number as part of each release's prep (so a dev build between releases reads one patch above the last release) |
 | Release identity | git tag `vX.Y.Z` | You, when cutting a release |
 | Plugin version | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | You, in lockstep with km releases when skill content changes |
 
