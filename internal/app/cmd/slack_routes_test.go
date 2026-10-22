@@ -191,3 +191,51 @@ func TestExportSlackRoutesHashFromSSM(t *testing.T) {
 		t.Error("hash of the live parameter")
 	}
 }
+
+type errGetSSM struct{ fakeRoutesSSM }
+
+func (e *errGetSSM) Get(context.Context, string, bool) (string, error) {
+	return "", context.DeadlineExceeded
+}
+
+func TestPrepareSlackChannelRoutes_NoRoutesReadErrorFailsClosed(t *testing.T) {
+	t.Setenv(envSlackRoutesSHA, "")
+	ssm := &errGetSSM{fakeRoutesSSM{m: map[string]string{}}}
+	err := prepareSlackChannelRoutes(context.Background(), routesCfg(t, nil, nil), &fakeLister{}, ssm, &fakeUploader{})
+	if err == nil || !strings.Contains(err.Error(), "/km/slack/routes") || !strings.Contains(err.Error(), "deadline") {
+		t.Fatalf("a Get error on the no-routes path must be returned naming the parameter, got %v", err)
+	}
+}
+
+func TestEffectiveSlackChannelRoutes_SameBaseNameDifferentFilesErrors(t *testing.T) {
+	d1, d2 := t.TempDir(), t.TempDir()
+	p1 := writeProfile(t, d1, "bot.yaml", routeProfileOK)
+	p2 := writeProfile(t, d2, "bot.yaml", routeProfileOK)
+	_, err := effectiveSlackChannelRoutes(routesCfg(t, []config.SlackRoute{
+		{Channel: "#sec", Alias: "a", Profile: p1, AllowEmails: []string{"k@example.com"}},
+		{Channel: "#ops", Alias: "b", Profile: p2, AllowEmails: []string{"k@example.com"}},
+	}, nil), botChannels)
+	if err == nil || !strings.Contains(err.Error(), `"bot"`) || !strings.Contains(err.Error(), p1) || !strings.Contains(err.Error(), p2) {
+		t.Fatalf("want error naming bot and both paths, got %v", err)
+	}
+	// Same file twice is fine.
+	if _, err := effectiveSlackChannelRoutes(routesCfg(t, []config.SlackRoute{
+		{Channel: "#sec", Alias: "a", Profile: p1, AllowEmails: []string{"k@example.com"}},
+		{Channel: "#ops", Alias: "b", Profile: p1, AllowEmails: []string{"k@example.com"}},
+	}, nil), botChannels); err != nil {
+		t.Fatalf("one file shared by two routes must pass: %v", err)
+	}
+}
+
+func TestEffectiveSlackChannelRoutes_CollidesWithDefaultRouteProfile(t *testing.T) {
+	d1, d2 := t.TempDir(), t.TempDir()
+	dp := writeProfile(t, d1, "bot.yaml", routeProfileOK)
+	rp := writeProfile(t, d2, "bot.yaml", routeProfileOK)
+	cfg := routesCfg(t, []config.SlackRoute{
+		{Channel: "#sec", Alias: "a", Profile: rp, AllowEmails: []string{"k@example.com"}},
+	}, &config.SlackDefaultRoute{Alias: "d", Profile: dp, AllowEmails: []string{"k@example.com"}})
+	_, err := effectiveSlackChannelRoutes(cfg, botChannels)
+	if err == nil || !strings.Contains(err.Error(), "slack.default_route") || !strings.Contains(err.Error(), dp) || !strings.Contains(err.Error(), rp) {
+		t.Fatalf("want collision with the default route's profile, got %v", err)
+	}
+}

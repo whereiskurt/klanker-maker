@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -50,6 +51,22 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 	plan := &slackRoutesPlan{}
 	seen := map[string]int{}    // channel id → route index
 	staged := map[string]bool{} // pre-stage slug
+	// slug → (label, located profile path). The slug is the lowercased base name,
+	// so two different files named bot.yaml would share one staged object and
+	// the second channel would cold-create the wrong profile. Seeded with the
+	// default route's profile so a channel route cannot collide with it either.
+	type slugOwner struct{ label, path string }
+	slugPaths := map[string]slugOwner{}
+	profilePath := func(prof string) string {
+		v := &config.SlackDefaultRoute{Profile: prof}
+		if p, err := locateSlackDefaultRouteProfile(v, cfg.ProfileSearchPaths); err == nil {
+			return filepath.Clean(p)
+		}
+		return "builtin:" + SlackDefaultRouteProfileSlug(prof)
+	}
+	if dr := cfg.Slack.DefaultRoute; dr != nil && strings.TrimSpace(dr.Profile) != "" {
+		slugPaths[SlackDefaultRouteProfileSlug(dr.Profile)] = slugOwner{"slack.default_route", profilePath(dr.Profile)}
+	}
 	for i := range cfg.Slack.Routes {
 		r := &cfg.Slack.Routes[i]
 		label := fmt.Sprintf("slack.routes[%d] (%s)", i, strings.TrimSpace(r.Channel))
@@ -89,6 +106,12 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 		fmt.Fprintf(os.Stderr, "[info] slack.routes: #%s (%s) → alias %q, %d allowed (%s)\n", ch.Name, ch.ID, r.Alias, len(allow), source)
 
 		slug := SlackDefaultRouteProfileSlug(r.Profile)
+		pp := profilePath(r.Profile)
+		if prev, ok := slugPaths[slug]; ok && prev.path != pp {
+			return nil, fmt.Errorf("%s: profile %q (%s) has the same name %q as the profile of %s (%s); both would stage to slack-profiles/%s/ and one channel would cold-create the wrong profile — rename one file", label, r.Profile, pp, slug, prev.label, prev.path, slug)
+		} else if !ok {
+			slugPaths[slug] = slugOwner{label, pp}
+		}
 		if !staged[slug] {
 			staged[slug] = true
 			plan.Profiles = append(plan.Profiles, view)
@@ -133,7 +156,13 @@ func prepareSlackChannelRoutes(ctx context.Context, cfg *config.Config, lister S
 	writer, canWrite := store.(ssmParamWriter)
 	if len(cfg.Slack.Routes) == 0 {
 		os.Setenv(envSlackRoutesSHA, "") //nolint:errcheck
-		if existing, _ := store.Get(ctx, param, false); existing != "" && canWrite {
+		existing, gerr := store.Get(ctx, param, false)
+		if gerr != nil {
+			// ParameterNotFound is already ("", nil) in the production store, so an
+			// error here is real; proceeding would leave a removed table routing.
+			return fmt.Errorf("km init: slack.routes removed but the old table at %s could not be read: %w", param, gerr)
+		}
+		if existing != "" && canWrite {
 			empty, _ := slackbridge.CanonicalRoutesJSON(nil)
 			if string(existing) == string(empty) {
 				os.Setenv(envSlackRoutesSHA, slackbridge.RoutesSHA256(empty)) //nolint:errcheck
