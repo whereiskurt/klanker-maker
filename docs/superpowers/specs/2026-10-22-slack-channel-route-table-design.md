@@ -320,3 +320,27 @@ profile), default route left on `ir-bot`:
   pattern would need the scan at event time.
 - Peer-install routes: a mapping lives on the front door only, like
   `default_route`.
+
+## 11. Live UAT — GO (2026-10-22, this install)
+
+Deployed with `make build` → `make build-lambdas` → `km init --dry-run=false`
+(km v0.8.36), then two `km init --slack`. Two fresh channels the bot was
+invited to served as routes; events were injected with the synthetic HMAC
+driver against real anchor messages so the boxes could reply.
+
+| # | Step | Result |
+|---|---|---|
+| 0 | Bridge cold start | `channel routes enabled count=2`, `sha256` == `env_sha256` |
+| 1 | Mention in channel A (→ `ir-bot`, stopped) | `route=<A id> alias=ir-bot cold_create=false`; box resumed; reply `ALPHA` in the anchor thread |
+| 2 | Mention in channel B (→ `ir-bot-b`, no box) | `cold_create=true`, `cold-create published alias=ir-bot-b profile=ir-bot`; box created |
+| 3 | `mention_only: false` top-level post in B, operator / unlisted id | operator dispatched warm; unlisted: `sender email unavailable (deny)` + silent drop |
+| 4 | Un-mentioned thread follow-up in A | continuity to `ir-bot`'s box (row `last_dispatch_ts` advanced) |
+| 5 | Mention in an unmapped channel | `route=default alias=ir-bot` |
+| 6 | Remap B → `ir-bot`, `km init --slack` | new hash cold-started the bridge; new mention in B → `ir-bot`; the OLD B thread kept `ir-bot-b`'s box (continuity); un-mentioned anchor post in B answered `BRAVO` by `ir-bot` |
+| 7 | Rename B in Slack, `km init --slack` with the stale name | exit 1 naming the route, the rename hint and the bot's channel list; fixed config applied clean |
+| 8 | `km doctor` | three green results; WARN drift (naming `km init --slack`) between the step-6 edit and its apply |
+
+Also confirmed live: `users.conversations` accepts the JSON body (spec §4.1).
+Observed, not a defect: a synthetic event whose `ts` names no real Slack
+message dispatches fine but the box's reply fails (`thread_not_found`), so
+UAT drivers must anchor on a real message.
