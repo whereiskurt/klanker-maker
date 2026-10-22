@@ -31,6 +31,9 @@ type SlackRouteChannelLister interface {
 // profiles to pre-stage, and the canonical bytes + hash.
 type slackRoutesPlan struct {
 	Entries  []slackbridge.RouteEntry
+	Sources  []string                    // parallel to Entries: where each allowlist came from
+	Counts   []int                       // parallel to Entries: allowlist size
+	Chans    []string                    // parallel to Entries: channel id
 	Profiles []*config.SlackDefaultRoute // one per distinct pre-stage slug
 	JSON     []byte
 	SHA      string
@@ -105,7 +108,9 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 		if len(allow) == 0 {
 			return nil, fmt.Errorf("%s has no allowlist: set allow_emails on the route, slack.default_route.allow_emails, or notification.slack.inbound.allowEmails in %q — a route is deny-by-default", label, r.Profile)
 		}
-		fmt.Fprintf(os.Stderr, "[info] slack.routes: #%s (%s) → alias %q, %d allowed (%s)\n", ch.Name, ch.ID, r.Alias, len(allow), source)
+		plan.Sources = append(plan.Sources, source)
+		plan.Counts = append(plan.Counts, len(allow))
+		plan.Chans = append(plan.Chans, ch.ID)
 
 		slug := SlackDefaultRouteProfileSlug(r.Profile)
 		pp := profilePath(r.Profile)
@@ -200,6 +205,9 @@ func prepareSlackChannelRoutes(ctx context.Context, cfg *config.Config, lister S
 		return fmt.Errorf("km init: slack.routes: write %s: %w", param, err)
 	}
 	os.Setenv(envSlackRoutesSHA, plan.SHA) //nolint:errcheck
+	for i, e := range plan.Entries {
+		fmt.Fprintf(os.Stderr, "[info] slack.routes: #%s (%s) → alias %q, %d allowed (%s)\n", e.Name, plan.Chans[i], e.Alias, plan.Counts[i], plan.Sources[i])
+	}
 	fmt.Fprintf(os.Stderr, "[info] slack.routes: %d route(s) written to %s (sha256 %s…)\n", len(plan.Entries), param, plan.SHA[:12])
 	return nil
 }

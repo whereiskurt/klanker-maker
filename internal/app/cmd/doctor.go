@@ -345,6 +345,10 @@ func (a *appConfigAdapter) GetSlackPeerBridges() []string     { return a.cfg.Sla
 func (a *appConfigAdapter) GetSlackDefaultRoute() *appcfg.SlackDefaultRoute {
 	return a.cfg.Slack.DefaultRoute
 }
+
+// GetSlackRoutesConfig hands the channel-routes check the whole config (search
+// paths, SSM prefix, slack.routes); read through an optional interface.
+func (a *appConfigAdapter) GetSlackRoutesConfig() *appcfg.Config { return a.cfg }
 func (a *appConfigAdapter) GetSlackThreadsTableName() string { return a.cfg.GetSlackThreadsTableName() }
 func (a *appConfigAdapter) GetSandboxTableName() string      { return a.cfg.GetSandboxTableName() }
 func (a *appConfigAdapter) GetClusterRoleNames() []string {
@@ -552,6 +556,9 @@ type DoctorDeps struct {
 	SlackListSandboxesWithInbound func(ctx context.Context) ([]inboundRow, error)
 	// SlackAuthTestScopes returns the list of OAuth scopes the bot token has.
 	SlackAuthTestScopes func(ctx context.Context) ([]string, error)
+	// SlackChannelLister lists the channels the bot is in (users.conversations)
+	// for the channel-routes group; nil => channels/table results SKIPPED.
+	SlackChannelLister SlackRouteChannelLister
 
 	// SlackListChannelMappings reads the km-slack-channels alias→channel rows, and
 	// SlackResolveChannel reports a channel's current name (dead=true only for a
@@ -4725,6 +4732,32 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		}
 	}
 
+	// 2026-10-22 — Slack channel routes. Absent: one SKIPPED, no calls.
+	// Configured: three results over one once-computed evaluation.
+	var routesCfg *appcfg.Config
+	if rc, ok := cfg.(interface{ GetSlackRoutesConfig() *appcfg.Config }); ok {
+		routesCfg = rc.GetSlackRoutesConfig()
+	}
+	if routesCfg == nil || len(routesCfg.Slack.Routes) == 0 {
+		checks = append(checks, func(ctx context.Context) CheckResult {
+			return checkSlackChannelRoutes(ctx, nil, nil, nil)[0]
+		})
+	} else {
+		routesLister := deps.SlackChannelLister
+		var chOnce sync.Once
+		var chResults []CheckResult
+		evalCh := func(ctx context.Context) []CheckResult {
+			chOnce.Do(func() {
+				chResults = checkSlackChannelRoutes(ctx, routesCfg, routesLister, slackSSMStore)
+			})
+			return chResults
+		}
+		for i := 0; i < 3; i++ {
+			idx := i
+			checks = append(checks, func(ctx context.Context) CheckResult { return evalCh(ctx)[idx] })
+		}
+	}
+
 	// Phase 110 Plan 06 — dead-channel doctor checks.
 	// Both checks SKIP when SlackDeadChannelChecker is nil (bot token absent).
 	// Both use DDBScanDeleteClient (already has Scan) to avoid adding a new field.
@@ -5388,6 +5421,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 		slackClientForDoctor := slackpkg.NewClient(awssdk.ToString(botToken.Parameter.Value), nil)
 		deps.SlackDeadChannelChecker = &slackClientChannelChecker{client: slackClientForDoctor}
 		deps.SlackEmailLookup = slackClientForDoctor
+		deps.SlackChannelLister = slackClientForDoctor
 	}
 
 	// Phase 126 Plan 09 — cross-account link doctor checks. base is this
