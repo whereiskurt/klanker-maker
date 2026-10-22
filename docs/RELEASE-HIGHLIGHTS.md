@@ -11,7 +11,7 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Curated by hand for v0.9.1 from PRs #154 (Slack channel routes), #155
+  Curated by hand for v0.9.2 from PRs #154 (Slack channel routes), #155
   (km-slack react + --broadcast) and #157 (update --render/--subject). No phase blocks since v0.9.0, so
   scripts/draft-release-highlights.sh had nothing to draft.
 -->
