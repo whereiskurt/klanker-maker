@@ -154,3 +154,25 @@ func TestChannelRoutes_NoDefaultRouteStillRoutesMappedChannels(t *testing.T) {
 		t.Fatal("an unmapped channel with no default route is the Phase 96 path: no dispatch")
 	}
 }
+
+// mention_only: false lifts the mention for top-level posts only. A thread
+// reply on a strict box (threadBypass: false) still needs one.
+func TestChannelRoutes_MentionOnlyFalseKeepsStrictThreadMention(t *testing.T) {
+	now := time.Now()
+	h, sqs, threads, alias, _, _ := channelRoutedHandler(t, now)
+	strict := false
+	ops := alias.infos["ops-bot"]
+	ops.ThreadBypass = &strict
+	alias.infos["ops-bot"] = ops
+	h.SandboxByID = &fakeByID{infos: map[string]SandboxRoutingInfo{"sb-irbot": alias.infos["ir-bot"], "sb-ops": ops}}
+	threads.sandboxByThread = map[string]string{"COPS|7.0": "sb-ops"}
+
+	h.Handle(context.Background(), req(t, now, "COPS", "channel", "U0KURT", "follow-up", "7.1", "7.0", "CR14", false))
+	if len(sqs.sends) != 0 {
+		t.Fatalf("an un-mentioned reply in a strict thread must be dropped on a mention_only:false channel: %+v", sqs.sends)
+	}
+	h.Handle(context.Background(), req(t, now, "COPS", "channel", "U0KURT", "follow-up", "7.2", "7.0", "CR15", true))
+	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/ops.fifo" {
+		t.Fatalf("a mentioned reply in a strict thread must dispatch to sb-ops: %+v", sqs.sends)
+	}
+}

@@ -906,9 +906,12 @@ func (h *EventsHandler) selectRoute(msg slackMessageEvent) (*DefaultRoute, strin
 // SandboxCreate, not enqueue. skipMention is true only for continuity on a box
 // whose ThreadBypass allows it (Part B strict mode leaves it false, so a
 // follow-up needs a mention again). DMs (channel_type "im") never need a
+// mention. A route's MentionOnly=false (mention_only: false) lifts the mention
+// for TOP-LEVEL posts only: a thread reply keeps the skipMention rule above, so
+// a strict box's follow-up, or a reply in a thread with no row, still needs a
 // mention. The email gate applies on every path, continuity included.
 func (h *EventsHandler) resolveDefaultRoute(ctx context.Context, msg slackMessageEvent, cont routeContinuity, skipMention bool) (routeDecision, bool) {
-	if !skipMention && requiresMention(msg.ChannelType) && cont.route.MentionOnly {
+	if !skipMention && requiresMention(msg.ChannelType) && (cont.route.MentionOnly || msg.ThreadTS != "") {
 		uid, err := h.BotUserID.Fetch(ctx)
 		if err != nil {
 			// Fail CLOSED here, unlike the owned-path 5b filter: a route dispatches
