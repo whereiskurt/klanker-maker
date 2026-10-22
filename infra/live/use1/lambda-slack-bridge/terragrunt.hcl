@@ -177,6 +177,10 @@ inputs = {
   slack_default_route_allow         = get_env("KM_SLACK_DEFAULT_ROUTE_ALLOW", "")
   slack_default_route_profile_allow = get_env("KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW", "")
 
+  # 2026-10-22 - channel route table hash. km init / km init --slack export it
+  # after writing SSM /{prefix}/slack/routes. Empty = no routes (dormant).
+  slack_routes_sha256 = get_env("KM_SLACK_ROUTES_SHA256", "")
+
   tags = {
     "km:component" = "slack-bridge"
     "km:managed"   = "true"

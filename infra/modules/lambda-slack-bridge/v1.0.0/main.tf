@@ -415,6 +415,28 @@ resource "aws_iam_role_policy" "ssm_signing_secret" {
   })
 }
 
+# 2026-10-22 — channel route table (km init writes it; the bridge reads it at
+# cold start). Exact ARN: the bridge needs this one parameter and nothing else
+# under /{prefix}/slack/.
+resource "aws_iam_role_policy" "ssm_channel_routes" {
+  name = "${local.function_name}-ssm-channel-routes"
+  role = aws_iam_role.slack_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SSMChannelRoutes"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+        ]
+        Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/slack/routes"
+      }
+    ]
+  })
+}
+
 # ============================================================
 # Lambda function
 # ============================================================
@@ -487,6 +509,10 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SLACK_DEFAULT_ROUTE_PROFILE       = var.slack_default_route_profile
       KM_SLACK_DEFAULT_ROUTE_ALLOW         = var.slack_default_route_allow
       KM_SLACK_DEFAULT_ROUTE_PROFILE_ALLOW = var.slack_default_route_profile_allow
+      # 2026-10-22 - channel route table: the bridge reads the SSM parameter at
+      # cold start; the hash only exists to force that cold start on a change.
+      KM_SLACK_ROUTES_PARAM  = "/${var.resource_prefix}/slack/routes"
+      KM_SLACK_ROUTES_SHA256 = var.slack_routes_sha256
       # Phase 121 — action-quota table name for bridge-side quota enforcement
       KM_QUOTA_TABLE = var.quota_table_arn != "" ? "${var.resource_prefix}-action-quota" : ""
     }
