@@ -570,11 +570,25 @@ func (s *SlackPosterAdapter) OpenDM(ctx context.Context, userID string) (string,
 // UpdateMessage edits a previously-posted bot message via chat.update.
 // Phase 70 — used by Plan 70-06's optional handoff-edit path.
 func (s *SlackPosterAdapter) UpdateMessage(ctx context.Context, channel, ts, text string) (string, error) {
-	resp, httpStatus, retryAfter, err := s.call(ctx, "chat.update", map[string]any{
+	return s.updateMessage(ctx, channel, ts, text, "")
+}
+
+// UpdateMessageBlocks implements BlockUpdater: chat.update with a Block Kit
+// array beside the plain-text fallback.
+func (s *SlackPosterAdapter) UpdateMessageBlocks(ctx context.Context, channel, ts, text, blocksJSON string) (string, error) {
+	return s.updateMessage(ctx, channel, ts, text, blocksJSON)
+}
+
+func (s *SlackPosterAdapter) updateMessage(ctx context.Context, channel, ts, text, blocksJSON string) (string, error) {
+	payload := map[string]any{
 		"channel": channel,
 		"ts":      ts,
 		"text":    text,
-	})
+	}
+	if blocksJSON != "" {
+		payload["blocks"] = json.RawMessage(blocksJSON)
+	}
+	resp, httpStatus, retryAfter, err := s.call(ctx, "chat.update", payload)
 	if err != nil {
 		return "", err
 	}

@@ -11,8 +11,8 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Curated by hand for v0.9.1 from PRs #154 (Slack channel routes) and #155
-  (km-slack react + --broadcast). No phase blocks since v0.9.0, so
+  Curated by hand for v0.9.1 from PRs #154 (Slack channel routes), #155
+  (km-slack react + --broadcast) and #157 (update --render/--subject). No phase blocks since v0.9.0, so
   scripts/draft-release-highlights.sh had nothing to draft.
 -->
 
@@ -25,7 +25,7 @@ Slack App change.
   After that, every edit to `slack.routes:` is just `km init --slack`.
 - **No reinstall.** `reactions:write` has been a required bot scope since the 👀 ACK, and
   `km doctor` already checks it. `--broadcast` needs no scope.
-- **Existing sandboxes** gain `km-slack react` and `--broadcast` on a sidecar refresh or
+- **Existing sandboxes** gain `km-slack react`, `--broadcast` and `update --render` on a sidecar refresh or
   `km destroy && km create`. Until then, a new bridge with an old `km-slack` is byte-identical,
   and an old bridge with a new `km-slack` fails closed (`400 unknown_action`, or a signature
   failure for `--broadcast`). Nothing half-deployed is dangerous.
@@ -105,9 +105,14 @@ refuses when no thread resolves rather than silently posting top-level.
 
 See `docs/slack-notifications.md` § Reactions and broadcast.
 
+## ✏️ `km-slack update` renders like `post`
+
+`update` gains `--render plain|mrkdwn|blocks|blocks-rich` and `--subject`, with `post`'s
+precedence and its one-shot `invalid_blocks` retry. An edit can now reproduce a `blocks-rich`
+post instead of hand-written mrkdwn, and a plain edit of a rich message drops the old blocks
+(Slack does that on a text-only `chat.update`). Own channel only, as before; still no `--mention`.
+
 ## ✨ Small things
 
 - `km doctor` gains the **Slack channel routes** group.
-- The `klanker:slack` skill documents `react` and `--broadcast` (plugin `0.4.20`).
-- Known gap, deferred: `km-slack update` still takes no `--render`/`--subject`, so an edit
-  cannot reproduce a `blocks-rich` post. Post messages you intend to edit with `--render plain`.
+- The `klanker:slack` skill documents `react`, `--broadcast` and `update --render` (plugin `0.4.21`).

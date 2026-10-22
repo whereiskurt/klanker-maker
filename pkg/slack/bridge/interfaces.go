@@ -84,6 +84,16 @@ type DMOpener interface {
 	OpenDM(ctx context.Context, userID string) (channelID string, err error)
 }
 
+// BlockUpdater is the optional Slack-API surface for an update that carries a
+// Block Kit array (2026-10-22: `km-slack update --render blocks|blocks-rich`).
+// text is the plain-text fallback Slack uses for notifications. The handler
+// falls back to UpdateMessage(text) when the poster lacks it, so the edit still
+// lands as text. Slack itself removes a message's existing blocks on a
+// text-only chat.update, so no explicit clearing is needed on that path.
+type BlockUpdater interface {
+	UpdateMessageBlocks(ctx context.Context, channel, ts, text, blocksJSON string) (string, error)
+}
+
 // ReactionPoster is the optional Slack-API surface for ActionReact (2026-10-22):
 // reactions.add / reactions.remove on one message. The handler type-asserts
 // h.Slack.(ReactionPoster) and answers 500 react_unsupported when the poster
