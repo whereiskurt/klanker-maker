@@ -64,8 +64,8 @@ type BotTokenFetcher interface {
 type SlackPoster interface {
 	PostMessage(ctx context.Context, channel, subject, body, threadTS string) (string, error)
 	ArchiveChannel(ctx context.Context, channelID string) error
-	GetPermalink(ctx context.Context, channel, messageTS string) (string, error)  // Phase 70 — chat.getPermalink
-	UpdateMessage(ctx context.Context, channel, ts, text string) (string, error)  // Phase 70 — chat.update
+	GetPermalink(ctx context.Context, channel, messageTS string) (string, error) // Phase 70 — chat.getPermalink
+	UpdateMessage(ctx context.Context, channel, ts, text string) (string, error) // Phase 70 — chat.update
 }
 
 // BlockPoster is an optional Slack-API surface for posts carrying a Block Kit
@@ -82,6 +82,25 @@ type BlockPoster interface {
 // the poster lacks it, so existing fakes keep satisfying SlackPoster.
 type DMOpener interface {
 	OpenDM(ctx context.Context, userID string) (channelID string, err error)
+}
+
+// ReactionPoster is the optional Slack-API surface for ActionReact (2026-10-22):
+// reactions.add / reactions.remove on one message. The handler type-asserts
+// h.Slack.(ReactionPoster) and answers 500 react_unsupported when the poster
+// lacks it, so existing fakes keep satisfying SlackPoster. Both return the
+// Slack error code as the last colon-separated token of the error; the handler
+// treats already_reacted and no_reaction as success.
+type ReactionPoster interface {
+	AddReaction(ctx context.Context, channel, ts, emoji string) error
+	RemoveReaction(ctx context.Context, channel, ts, emoji string) error
+}
+
+// BroadcastPoster is the optional Slack-API surface for a threaded post that
+// also shows in the channel (chat.postMessage reply_broadcast). blocksJSON may
+// be empty (text-only). The handler falls back to the plain PostMessage /
+// PostMessageBlocks path when the poster lacks it, so the reply still lands.
+type BroadcastPoster interface {
+	PostMessageBroadcast(ctx context.Context, channel, subject, body, blocksJSON, threadTS string) (string, error)
 }
 
 // S3ObjectGetter abstracts S3 GetObject for streaming transcripts to Slack

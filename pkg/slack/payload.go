@@ -42,6 +42,7 @@ const (
 	ActionLookupThread = "lookup-thread" // Phase 110 — session_id → (channel_id, thread_ts)
 	ActionDM           = "dm"            // 2026-10-17 — bot-initiated DM: conversations.open + top-level chat.postMessage
 	ActionSession      = "session"       // 2026-10-18 — poller records its agent session id + agent_type on a thread row the bridge routed to it
+	ActionReact        = "react"         // 2026-10-22 — wraps reactions.add / reactions.remove on a message in the sender's own channel
 )
 
 // SenderOperator is the canonical sender_id for operator-signed envelopes.
@@ -105,11 +106,22 @@ type SlackEnvelope struct {
 	AgentType string `json:"agent_type,omitempty"` // "claude" | "codex"
 	// ClaimThread on a top-level post: the bridge writes the thread row for the
 	// message it just posted, owned by the sender (the Phase 70 handoff thread).
-	ClaimThread bool   `json:"claim_thread,omitempty"`
-	Text        string `json:"text"` // Phase 70 — used by update action (new message text)
-	ThreadTS    string `json:"thread_ts"`
-	Timestamp   int64  `json:"timestamp"`
-	Version     int    `json:"version"`
+	ClaimThread bool `json:"claim_thread,omitempty"`
+	// React action (2026-10-22). All omitempty — see the TargetUser note.
+	// Emoji is the bare name (no colons); Remove flips reactions.add to
+	// reactions.remove; Exclusive lists the other names of a mutually exclusive
+	// status set, each removed after Emoji is added (capped at
+	// MaxExclusiveReactions on both sides). MessageTS carries the target.
+	Emoji     string   `json:"emoji,omitempty"`
+	Remove    bool     `json:"remove,omitempty"`
+	Exclusive []string `json:"exclusive,omitempty"`
+	// Broadcast on a threaded post sets chat.postMessage reply_broadcast, so
+	// the reply is also shown in the channel. Ignored without ThreadTS.
+	Broadcast bool   `json:"broadcast,omitempty"`
+	Text      string `json:"text"` // Phase 70 — used by update action (new message text)
+	ThreadTS  string `json:"thread_ts"`
+	Timestamp int64  `json:"timestamp"`
+	Version   int    `json:"version"`
 }
 
 // BuildEnvelope constructs a fresh envelope with a random 128-bit nonce and the

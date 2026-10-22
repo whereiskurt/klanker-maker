@@ -149,7 +149,7 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		logger.WarnContext(ctx, "bridge: unsupported_version", "step", "parse", "version", env.Version, "status", 400)
 		return errResp(400, "unsupported_version")
 	}
-	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate && env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM && env.Action != slack.ActionSession {
+	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate && env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM && env.Action != slack.ActionSession && env.Action != slack.ActionReact {
 		logger.WarnContext(ctx, "bridge: unknown_action", "step", "parse", "action", env.Action, "status", 400)
 		return errResp(400, "unknown_action")
 	}
@@ -350,7 +350,13 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		// env.Blocks == "", the original PostMessage path runs unchanged (BRDG-01).
 		var ts string
 		var err error
-		if env.Blocks != "" {
+		bcast, okBcast := h.Slack.(BroadcastPoster)
+		if env.Broadcast && env.ThreadTS != "" && okBcast {
+			// 2026-10-22: --broadcast on a threaded post sets reply_broadcast so the
+			// reply also shows in the channel. Degrades to the plain path (reply
+			// lands in the thread, not the channel) when the poster lacks it.
+			ts, err = bcast.PostMessageBroadcast(ctx, env.Channel, env.Subject, env.Body, env.Blocks, env.ThreadTS)
+		} else if env.Blocks != "" {
 			if bp, okBP := h.Slack.(BlockPoster); okBP {
 				ts, err = bp.PostMessageBlocks(ctx, env.Channel, env.Subject, env.Body, env.Blocks, env.ThreadTS)
 			} else {
@@ -389,6 +395,8 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		return h.handleDM(ctx, env)
 	case slack.ActionSession:
 		return h.handleSession(ctx, env)
+	case slack.ActionReact:
+		return h.handleReact(ctx, env)
 
 	case slack.ActionArchive:
 		err := h.Slack.ArchiveChannel(ctx, env.Channel)

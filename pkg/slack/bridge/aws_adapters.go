@@ -31,8 +31,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	cryptorand "crypto/rand"
-	"encoding/hex"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -281,8 +281,8 @@ type slackAPIResponse struct {
 // stable and avoids an awkward back-channel for header exposure.
 type SlackPosterAdapter struct {
 	HTTPClient *http.Client
-	BaseURL    string            // defaults to "https://slack.com/api"; overridden in tests
-	Tokens     BotTokenFetcher   // fetches and caches the bot token
+	BaseURL    string          // defaults to "https://slack.com/api"; overridden in tests
+	Tokens     BotTokenFetcher // fetches and caches the bot token
 }
 
 // getBaseURL returns the effective base URL.
@@ -356,19 +356,36 @@ func checkRateLimit(httpStatus int, retryAfterHeader, method string) error {
 // An empty subject renders the body alone (no bold header) — useful for
 // per-sandbox threaded replies where the channel already conveys context.
 func (s *SlackPosterAdapter) PostMessage(ctx context.Context, channel, subject, body, threadTS string) (string, error) {
+	return s.postMessage(ctx, channel, subject, body, "", threadTS, false)
+}
+
+// postMessage is the one chat.postMessage call site. blocksJSON == "" posts
+// text only (subject folded into the text as a bold header); otherwise the
+// blocks ride with body as the plain-text fallback and subject is ignored
+// (a Block Kit header block expresses it). broadcast sets reply_broadcast,
+// only when threadTS is present: Slack rejects it on a top-level post.
+func (s *SlackPosterAdapter) postMessage(ctx context.Context, channel, subject, body, blocksJSON, threadTS string, broadcast bool) (string, error) {
 	text := body
-	if subject != "" {
+	if blocksJSON == "" && subject != "" {
 		text = fmt.Sprintf("*%s*\n\n%s", subject, body)
 	}
 	payload := map[string]any{
 		"channel":      channel,
-		"text":         text,
+		"text":         text, // with blocks: plain-text fallback for push/search (required by Slack)
 		"unfurl_links": false,
 		"unfurl_media": false,
 		"mrkdwn":       true,
 	}
+	label := "chat.postMessage"
+	if blocksJSON != "" {
+		payload["blocks"] = json.RawMessage(blocksJSON)
+		label = "chat.postMessage (blocks)"
+	}
 	if threadTS != "" {
 		payload["thread_ts"] = threadTS
+		if broadcast {
+			payload["reply_broadcast"] = true
+		}
 	}
 
 	resp, httpStatus, retryAfter, err := s.call(ctx, "chat.postMessage", payload)
@@ -379,9 +396,47 @@ func (s *SlackPosterAdapter) PostMessage(ctx context.Context, channel, subject, 
 		return "", rlErr
 	}
 	if !resp.OK {
-		return "", fmt.Errorf("bridge: chat.postMessage: %s", resp.Error)
+		return "", fmt.Errorf("bridge: %s: %s", label, resp.Error)
 	}
 	return resp.TS, nil
+}
+
+// PostMessageBroadcast implements BroadcastPoster: a threaded post also shown
+// in the channel (reply_broadcast). Text-only when blocksJSON is empty.
+func (s *SlackPosterAdapter) PostMessageBroadcast(ctx context.Context, channel, subject, body, blocksJSON, threadTS string) (string, error) {
+	return s.postMessage(ctx, channel, subject, body, blocksJSON, threadTS, true)
+}
+
+// AddReaction implements ReactionPoster via reactions.add. The Slack error
+// code is returned verbatim as the last token ("bridge: reactions.add: <code>");
+// the handler decides what is idempotent.
+func (s *SlackPosterAdapter) AddReaction(ctx context.Context, channel, ts, emoji string) error {
+	return s.reaction(ctx, "reactions.add", channel, ts, emoji)
+}
+
+// RemoveReaction implements ReactionPoster via reactions.remove. Slack removes
+// only the calling bot's own reaction, so a human's identical reaction on the
+// same message is never touched.
+func (s *SlackPosterAdapter) RemoveReaction(ctx context.Context, channel, ts, emoji string) error {
+	return s.reaction(ctx, "reactions.remove", channel, ts, emoji)
+}
+
+func (s *SlackPosterAdapter) reaction(ctx context.Context, method, channel, ts, emoji string) error {
+	resp, httpStatus, retryAfter, err := s.call(ctx, method, map[string]any{
+		"channel":   channel,
+		"timestamp": ts,
+		"name":      emoji,
+	})
+	if err != nil {
+		return err
+	}
+	if rlErr := checkRateLimit(httpStatus, retryAfter, method); rlErr != nil {
+		return rlErr
+	}
+	if !resp.OK {
+		return fmt.Errorf("bridge: %s: %s", method, resp.Error)
+	}
+	return nil
 }
 
 // PostMessageBlocks posts to a Slack channel with both a plain-text fallback and a
@@ -391,30 +446,7 @@ func (s *SlackPosterAdapter) PostMessage(ctx context.Context, channel, subject, 
 //
 // Rate-limit handling and error mapping are identical to PostMessage.
 func (s *SlackPosterAdapter) PostMessageBlocks(ctx context.Context, channel, subject, body, blocksJSON, threadTS string) (string, error) {
-	payload := map[string]any{
-		"channel":      channel,
-		"text":         body, // plain-text fallback for push/search (required by Slack)
-		"blocks":       json.RawMessage(blocksJSON),
-		"unfurl_links": false,
-		"unfurl_media": false,
-		"mrkdwn":       true,
-	}
-	if threadTS != "" {
-		payload["thread_ts"] = threadTS
-	}
-	// subject is intentionally NOT in the payload — Block Kit header blocks express it.
-
-	resp, httpStatus, retryAfter, err := s.call(ctx, "chat.postMessage", payload)
-	if err != nil {
-		return "", err
-	}
-	if rlErr := checkRateLimit(httpStatus, retryAfter, "chat.postMessage"); rlErr != nil {
-		return "", rlErr
-	}
-	if !resp.OK {
-		return "", fmt.Errorf("bridge: chat.postMessage (blocks): %s", resp.Error)
-	}
-	return resp.TS, nil
+	return s.postMessage(ctx, channel, subject, body, blocksJSON, threadTS, false)
 }
 
 // ArchiveChannel archives a Slack channel via conversations.archive.
@@ -571,10 +603,10 @@ type reactionErrorClass int
 
 const (
 	classSuccess          reactionErrorClass = iota
-	classTerminalAuth     // operator action required (token rotation, scope grant) — log at Error
-	classTerminalBadInput // unrecoverable client-side error — log at Warn (final give-up)
-	classTransient        // retryable: 5xx, net error, internal_error, unknown error string
-	classRateLimited      // 429 with Retry-After header — honor RetryAfterSeconds
+	classTerminalAuth                        // operator action required (token rotation, scope grant) — log at Error
+	classTerminalBadInput                    // unrecoverable client-side error — log at Warn (final give-up)
+	classTransient                           // retryable: 5xx, net error, internal_error, unknown error string
+	classRateLimited                         // 429 with Retry-After header — honor RetryAfterSeconds
 )
 
 // classifyReactionError returns the appropriate retry bucket for a
@@ -1406,9 +1438,9 @@ type CachedBotUserIDFetcher struct {
 	SlackAPI     SlackAuthTestAPI
 	TokenFetcher BotTokenFetcher // fetches the bot token for auth.test
 
-	mu      sync.Mutex
-	cache   tokenCache    // reuses tokenCache; token field holds the user_id string
-	ttl     time.Duration // defaults to 1h
+	mu    sync.Mutex
+	cache tokenCache    // reuses tokenCache; token field holds the user_id string
+	ttl   time.Duration // defaults to 1h
 }
 
 // Fetch returns the bot user_id, using the in-process cache when valid.
@@ -1492,11 +1524,11 @@ type PostHintFunc func(ctx context.Context, channelID, threadTS, text string) er
 //  3. If cooldown active: return nil without posting.
 type DDBPauseHinter struct {
 	Client             DDBUpdateItemAPI
-	SandboxesTableName string                 // e.g. "km-sandboxes" (from KM_SANDBOX_TABLE_NAME env var)
+	SandboxesTableName string                  // e.g. "km-sandboxes" (from KM_SANDBOX_TABLE_NAME env var)
 	SandboxByChannel   SandboxByChannelFetcher // resolves channel_id → sandbox_id
 	Post               PostHintFunc
-	HintText           string          // posted hint message
-	CooldownSeconds    int64           // 3600 (1h per CONTEXT.md)
+	HintText           string           // posted hint message
+	CooldownSeconds    int64            // 3600 (1h per CONTEXT.md)
 	Now                func() time.Time // injectable for tests; nil → time.Now
 }
 

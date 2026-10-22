@@ -3835,8 +3835,8 @@ via `--restart` — run it when the box is quiet.
 - **Env.** The bridge verbs need `KM_SANDBOX_ID`, `KM_SLACK_BRIDGE_URL` and `AWS_REGION`
   (or `AWS_DEFAULT_REGION`). `record-mapping` needs `KM_SANDBOX_ID` and `KM_SLACK_STREAM_TABLE`.
 - **Exit codes.** `0` success. `2` a usage error: unknown subcommand, missing required flag,
-  bad `--mention`/`--to`; `upload`, `permalink`, `update` and `record-mapping` also use `2`
-  for missing env. `1` a runtime failure: missing env on `post`/`reply`/`dm`, the key, the
+  bad `--mention`/`--to`/`--emoji`/`--exclusive`, `--broadcast` without a thread; `upload`,
+  `permalink`, `update`, `react` and `record-mapping` also use `2` for missing env. `1` a runtime failure: missing env on `post`/`reply`/`dm`, the key, the
   bridge, or a not-ok response.
 - **Errors.** A bridge refusal reads
   `km-slack <verb>: slack: bridge returned <status>: {"ok":false,"error":"<code>"}`.
@@ -3852,21 +3852,64 @@ via `--restart` — run it when the box is quiet.
 - **Authorization at the bridge.** A sandbox may act in its own channel. `post` and `upload`
   may also go into a foreign channel when they carry a `thread_ts` whose `km-slack-threads` row
   names the sender. Everything else in a foreign channel, including a top-level post,
-  `permalink` and `update`, is `403 channel_mismatch`. `post`, `upload` and `dm` count against
+  `permalink`, `update` and `react`, is `403 channel_mismatch`. `post`, `upload` and `dm` count against
   the `slack_post` action quota (`429 quota_exceeded`).
 
 ### Verbs
 
 | Verb | Flags | Output | Notes |
 |---|---|---|---|
-| `post` | `--channel C…` and `--body file` required; `--subject`, `--thread ts`, `--render`, `--mention`, `--new-message`, `--claim-thread` | stderr `km-slack: posted ts=…`; with `--new-message`, stdout `ts=…` | `--new-message` drops `--thread` and posts top-level. `--claim-thread` (only with `--new-message`) makes the bridge write the thread row for the message it just posted, owned by the sender; it works only in the sender's own channel because the channel check runs first. The Phase 70 handoff uses it. Unknown `--render` warns and uses `plain`. Writes the posted marker after a successful threaded post. |
-| `reply` | `--body file` required; `--thread`, `--channel`, `--session`, `--subject`, `--render`, `--mention` | as `post` | Target, first hit wins: `--thread` (channel from `--channel` or `$KM_SLACK_CHANNEL_ID`), `$KM_SLACK_THREAD_TS`, the session id's thread via the bridge's `lookup-thread`, the channel root. The session id is `--session` or the newest `~/.claude/projects/**/*.jsonl` (`~/.codex/store/` when `KM_AGENT=codex`). Marker as `post`; the channel-root fallback writes none. |
+| `post` | `--channel C…` and `--body file` required; `--subject`, `--thread ts`, `--render`, `--mention`, `--new-message`, `--claim-thread`, `--broadcast` | stderr `km-slack: posted ts=…`; with `--new-message`, stdout `ts=…` | `--broadcast` (needs `--thread`, refuses `--new-message`) sets `reply_broadcast`, so the threaded reply also shows in the channel; see [Reactions and broadcast](#reactions-and-broadcast-2026-10-22). `--new-message` drops `--thread` and posts top-level. `--claim-thread` (only with `--new-message`) makes the bridge write the thread row for the message it just posted, owned by the sender; it works only in the sender's own channel because the channel check runs first. The Phase 70 handoff uses it. Unknown `--render` warns and uses `plain`. Writes the posted marker after a successful threaded post. |
+| `reply` | `--body file` required; `--thread`, `--channel`, `--session`, `--subject`, `--render`, `--mention`, `--broadcast` | as `post` | Target, first hit wins: `--thread` (channel from `--channel` or `$KM_SLACK_CHANNEL_ID`), `$KM_SLACK_THREAD_TS`, the session id's thread via the bridge's `lookup-thread`, the channel root. The session id is `--session` or the newest `~/.claude/projects/**/*.jsonl` (`~/.codex/store/` when `KM_AGENT=codex`). Marker as `post`; the channel-root fallback writes none. |
 | `dm` | `--to U…` and exactly one of `--text`/`--body` required; `--render`, `--from-thread` | stdout `channel=D… ts=…` | `--to` must be a bare uppercase `U…`/`W…`. No `--mention`, no marker. `--from-thread` reads `KM_SLACK_CHANNEL_ID` and `KM_SLACK_THREAD_TS` (exit 2 if either is empty) and the bridge appends a permalink to that thread. See [Bot-initiated DMs](#bot-initiated-dms-2026-10-17) for the refusal codes. |
 | `upload` | `--channel`, `--s3-key`, `--filename`, `--content-type`, `--size-bytes` required; `--thread` | stderr `km-slack upload: ok ts=…` | The bridge streams the S3 object into Slack's 3-step upload. It requires the key under `transcripts/<sender>/`, a filename with no `/` and at most 255 bytes, a content type of `application/gzip`, `application/json` or `text/plain`, and a size in (0, 100 MB]. Fails on Slack-Connect-shared channels; see Known limitations above. |
 | `permalink` | `--channel`, `--ts` required | stdout the URL | Wraps `chat.getPermalink`. Own channel only. Used by the Phase 70 agent handoff. |
 | `update` | `--channel`, `--ts` required; one of `--text`/`--body` | nothing on success | Wraps `chat.update`. Own channel only. The text is sent unrendered, with no subject and no mention. No caller in km today. |
+| `react` | `--ts`, `--emoji name` required; `--channel` (default `$KM_SLACK_CHANNEL_ID`), `--exclusive a,b,c`, `--remove` | stdout `km-slack: reacted\|removed ts=… emoji=…` | Wraps `reactions.add` / `reactions.remove`. Own channel only. `--exclusive` names a mutually exclusive status set: the bridge adds `--emoji`, then removes the bot's own reaction for every other name (at most 10). `already_reacted` and `no_reaction` are success. Colons are optional; the name must match `^[a-z0-9_+'-]{1,100}$`. Other Slack codes (`message_not_found`, `invalid_name`, `missing_scope`) come back verbatim as exit 1. |
 | `session` | `--source slack\|github\|h1`, the key flags for that source (`--channel`/`--thread` for slack; `--repo`/`--number` for github; `--report`/`--target` for h1), exactly one of `--session-id ID`/`--clear`, `--agent claude\|codex` | nothing on success | Called by the inbound pollers after a turn. The bridge updates only the session fields (session id, agent type) plus the turn time and TTL, on an existing row that names the sender: `404 thread_unknown` (never creates), `403 thread_not_owned`, `503 source_unavailable`. The write is also conditioned on `sandbox_id = sender`. `--number` must be positive. A box with no `KM_SLACK_BRIDGE_URL` fails with a WARN. |
 | `record-mapping` | `--channel`, `--slack-ts`, `--offset`, `--session` required | nothing on success | **Internal to the transcript-streaming hook.** Writes a `(channel_id, slack_ts)` row with a 30-day TTL straight to `KM_SLACK_STREAM_TABLE` with the sandbox role; it does not use the bridge. Agents do not call it. |
+
+### Reactions and broadcast (2026-10-22)
+
+`km-slack react` lets a sandbox show a verdict on a message as a reaction instead of (or as
+well as) an edited status line: `:hourglass_flowing_sand:` while a check runs, then
+`:white_check_mark:` or `:rotating_light:`. The common shape is one call per state change with
+the whole state set in `--exclusive`, so the caller never tracks the previous state:
+
+```bash
+km-slack react --ts "$TS" --emoji hourglass_flowing_sand \
+  --exclusive hourglass_flowing_sand,white_check_mark,rotating_light
+# …later…
+km-slack react --ts "$TS" --emoji white_check_mark \
+  --exclusive hourglass_flowing_sand,white_check_mark,rotating_light
+```
+
+- **One signed envelope, the bridge fans out.** The bridge calls `reactions.add` for `--emoji`,
+  then `reactions.remove` for each other name in `--exclusive` (with `--remove`, a single
+  `reactions.remove`). The set is capped at 10 names on both sides, and every name is
+  re-validated at the bridge, so a bypassed client cannot sign a wider request.
+- **Idempotent.** Slack's `already_reacted` (add) and `no_reaction` (remove) are success, so a
+  cron job retrying a react never fails on its own earlier success. The first other error stops
+  the fan-out and is returned with its Slack code.
+- **Only the bot's own reaction is removed.** `reactions.remove` without a `user` acts on the
+  calling token, so `--exclusive` can never take away a human's identical reaction.
+- **Own channel only.** `react` is not in the routed-thread carve-out (`post`/`upload`), so in a
+  foreign channel it is `403 channel_mismatch` even with a thread the bridge routed to you.
+- **Scope.** `reactions:write` has been a required bot scope since the 👀 ACK (Phase 67.1), and
+  `km doctor` checks it. No manifest change, no reinstall.
+
+`post --broadcast` and `reply --broadcast` set `reply_broadcast: true` on a threaded post, so the
+reply is also shown in the channel. That lets a channel-wide ping live in the advisory's thread
+instead of a separate top-level post (an `@here` inside a thread reaches only its followers).
+`post` requires `--thread` and refuses `--new-message`; `reply` refuses when no thread resolves
+(the channel-root fallback would otherwise post top-level and silently drop the flag). No new scope.
+
+**Half-deploys are fail-closed.** A new `km-slack` against an old bridge gets `400 unknown_action`
+for `react`, and a signature failure for `--broadcast` (the old bridge canonicalises without the
+new field). An old `km-slack` against a new bridge is byte-identical: every new envelope field is
+`omitempty`. Deploy = `make build` + `make build-lambdas` + `km init --dry-run=false` (or
+`km init --sidecars` for the verb and `km init --slack` for the bridge, in either order); existing
+sandboxes gain the verb on a sidecar refresh or recreate.
 
 `--mention` (on `post` and `reply`) accepts `U…`, `W…`, `@U…`, `<@U…>` and lowercase ids,
 plus `here` and `channel` in the same forms; it is comma-separated or repeatable and
