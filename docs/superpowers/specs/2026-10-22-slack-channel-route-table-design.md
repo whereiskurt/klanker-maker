@@ -140,6 +140,25 @@ Transport:
   the bot-token and signing-secret statements.
 - The sandbox role is not involved: routing is entirely bridge-side.
 
+### 4.1 Refinements made while planning (2026-10-22)
+
+- **Resolution uses `users.conversations`, not `conversations.list`.** It lists
+  only the channels the bot is a member of (public and private, scopes
+  `channels:read` + `groups:read`), so it is bounded by the bot's membership,
+  needs no scan cap, and makes "the bot must be a member" structural: a name
+  or id absent from that list is unresolvable. Steps 2–4 above collapse to one
+  listing per `km init`; the by-name SSM cache is not consulted. A name that
+  is not found fails with the bot's current channel names in the message, so a
+  rename shows as "`#old` not found; bot channels: `#new`, …".
+- **No routes ⇒ the parameter is overwritten with the empty document
+  (`{"v":1,"routes":[]}`) only when it already exists; it is never deleted.**
+  Same dormancy (the bridge treats an empty table and a missing parameter
+  alike), no SSM delete capability added to the operator-side store.
+- **The hash is a cold-start trigger only.** The bridge reads the parameter,
+  logs the hash it computed beside `KM_SLACK_ROUTES_SHA256`, and never fails
+  on a mismatch. `km init --plan` exports the hash of the live parameter and
+  neither resolves nor writes; `km doctor` reports config-vs-table drift.
+
 ## 5. Bridge (`pkg/slack/bridge`, `cmd/km-slack-bridge`)
 
 ### 5.1 Table
