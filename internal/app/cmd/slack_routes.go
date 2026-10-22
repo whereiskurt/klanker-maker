@@ -21,6 +21,11 @@ import (
 // it only decides whether the next apply restarts the Lambda.
 const envSlackRoutesSHA = "KM_SLACK_ROUTES_SHA256"
 
+// slackRoutesMaxBytes is the SSM Standard-tier parameter value limit (4 KB).
+// The table is written as a Standard String, so km init refuses a larger one
+// with a named error rather than letting PutParameter fail mid-apply.
+const slackRoutesMaxBytes = 4096
+
 // SlackRouteChannelLister is the one Slack call channel-route resolution makes;
 // *kmslack.Client satisfies it.
 type SlackRouteChannelLister interface {
@@ -69,8 +74,16 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 		}
 		return "builtin:" + SlackDefaultRouteProfileSlug(prof)
 	}
+	// alias → (label, profile slug). The first cold-create of an alias decides
+	// its profile, so one alias named with two profiles would make the other
+	// route's profile silently never apply. Seeded with the default route.
+	type aliasOwner struct{ label, slug string }
+	aliasProfiles := map[string]aliasOwner{}
 	if dr := cfg.Slack.DefaultRoute; dr != nil && strings.TrimSpace(dr.Profile) != "" {
 		slugPaths[SlackDefaultRouteProfileSlug(dr.Profile)] = slugOwner{"slack.default_route", profilePath(dr.Profile)}
+		if a := strings.TrimSpace(dr.Alias); a != "" {
+			aliasProfiles[a] = aliasOwner{"slack.default_route", SlackDefaultRouteProfileSlug(dr.Profile)}
+		}
 	}
 	for i := range cfg.Slack.Routes {
 		r := &cfg.Slack.Routes[i]
@@ -113,6 +126,12 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 		plan.Chans = append(plan.Chans, ch.ID)
 
 		slug := SlackDefaultRouteProfileSlug(r.Profile)
+		alias := strings.TrimSpace(r.Alias)
+		if prev, ok := aliasProfiles[alias]; ok && prev.slug != slug {
+			return nil, fmt.Errorf("%s: alias %q uses profile %q, but %s gives the same alias profile %q; one alias is one box, and whichever cold-creates first decides its profile — use one profile per alias", label, alias, slug, prev.label, prev.slug)
+		} else if !ok {
+			aliasProfiles[alias] = aliasOwner{label, slug}
+		}
 		pp := profilePath(r.Profile)
 		if prev, ok := slugPaths[slug]; ok && prev.path != pp {
 			return nil, fmt.Errorf("%s: profile %q (%s) has the same name %q as the profile of %s (%s); both would stage to slack-profiles/%s/ and one channel would cold-create the wrong profile — rename one file", label, r.Profile, pp, slug, prev.label, prev.path, slug)
@@ -125,7 +144,7 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 		}
 		plan.Entries = append(plan.Entries, slackbridge.RouteEntry{
 			Channel: ch.ID, Name: ch.Name, Alias: r.Alias, Profile: slug,
-			Allow: allow, MentionOnly: r.MentionRequired(),
+			Allow: allow, ProfileAllow: profileAllow, MentionOnly: r.MentionRequired(),
 		})
 	}
 	b, err := slackbridge.CanonicalRoutesJSON(plan.Entries)
@@ -193,6 +212,9 @@ func prepareSlackChannelRoutes(ctx context.Context, cfg *config.Config, lister S
 	plan, err := effectiveSlackChannelRoutes(cfg, channels)
 	if err != nil {
 		return fmt.Errorf("km init: %w", err)
+	}
+	if n := len(plan.JSON); n > slackRoutesMaxBytes {
+		return fmt.Errorf("km init: slack.routes table is %d bytes; SSM Standard parameters hold %d — remove routes or shorten allow lists (about 20 routes fit)", n, slackRoutesMaxBytes)
 	}
 	if up != nil && cfg.ArtifactsBucket != "" {
 		for _, view := range plan.Profiles {

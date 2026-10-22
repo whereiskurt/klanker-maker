@@ -176,3 +176,24 @@ func TestChannelRoutes_MentionOnlyFalseKeepsStrictThreadMention(t *testing.T) {
 		t.Fatalf("a mentioned reply in a strict thread must dispatch to sb-ops: %+v", sqs.sends)
 	}
 }
+
+// A route whose profile has its own allowEmails gates the cold-create with
+// that list, as the default route does: a sender on the effective list but
+// not on the profile's must not create the box.
+func TestChannelRoutes_ProfileAllowGatesColdCreate(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, alias, pub, _ := channelRoutedHandler(t, now)
+	delete(alias.infos, "ir-bot")
+	table := BuildRouteTable(&RoutesDocument{V: 1, Routes: []RouteEntry{
+		{Channel: "CSEC", Alias: "ir-bot", Profile: "ir-bot", Allow: []string{"*@example.com"}, ProfileAllow: []string{"kurt@example.com"}, MentionOnly: true},
+	}}, func(string, ...any) {})
+	h.Routes = table
+	h.Handle(context.Background(), req(t, now, "CSEC", "channel", "U0OTHER", "hi", "8.0", "", "CR16", true))
+	if len(pub.calls) != 0 || len(sqs.sends) != 0 {
+		t.Fatalf("a sender off the route profile's list must not cold-create: %+v", pub.calls)
+	}
+	h.Handle(context.Background(), req(t, now, "CSEC", "channel", "U0KURT", "hi", "8.1", "", "CR17", true))
+	if len(pub.calls) != 1 || pub.calls[0].alias != "ir-bot" {
+		t.Fatalf("a sender on the route profile's list must cold-create: %+v", pub.calls)
+	}
+}

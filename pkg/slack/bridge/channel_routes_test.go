@@ -85,3 +85,48 @@ func TestBuildRouteTable(t *testing.T) {
 		t.Error("NewDefaultRoute must default MentionOnly to true")
 	}
 }
+
+// profile_allow is the route profile's own list: sorted in the canonical form
+// when present, absent from it when nil, so a table without one keeps its bytes.
+func TestCanonicalRoutesJSON_ProfileAllow(t *testing.T) {
+	with, err := CanonicalRoutesJSON([]RouteEntry{{Channel: "C1", Alias: "a", Profile: "p", Allow: []string{"*@example.com"}, ProfileAllow: []string{"z@example.com", "kurt@example.com"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"v":1,"routes":[{"channel":"C1","alias":"a","profile":"p","allow":["*@example.com"],"profile_allow":["kurt@example.com","z@example.com"],"mention_only":false}]}`
+	if string(with) != want {
+		t.Fatalf("with profile_allow:\n got %s\nwant %s", with, want)
+	}
+	without, _ := CanonicalRoutesJSON([]RouteEntry{{Channel: "C1", Alias: "a", Profile: "p", Allow: []string{"*@example.com"}, ProfileAllow: []string{}}})
+	if strings.Contains(string(without), "profile_allow") {
+		t.Fatalf("an empty profile_allow must be omitted: %s", without)
+	}
+	if doc, err := ParseRoutesDocument(without); err != nil || doc.Routes[0].ProfileAllow != nil {
+		t.Fatalf("profile_allow is optional on parse: %v %+v", err, doc)
+	}
+}
+
+// With a profile_allow, AllowsCreate answers from it alone (the cold-create
+// and the alias's own box); Allows still answers from the effective list.
+func TestBuildRouteTable_ProfileAllowGatesCreate(t *testing.T) {
+	var warned []string
+	warn := func(msg string, kv ...any) { warned = append(warned, msg) }
+	table := BuildRouteTable(&RoutesDocument{V: 1, Routes: []RouteEntry{
+		{Channel: "C1", Alias: "ir-bot", Profile: "ir-bot", Allow: []string{"*@example.com"}, ProfileAllow: []string{"kurt@example.com"}},
+		{Channel: "C2", Alias: "ops-bot", Profile: "ops", Allow: []string{"*@example.com"}},
+		{Channel: "C3", Alias: "bad", Profile: "bad", Allow: []string{"*@example.com"}, ProfileAllow: []string{"kurt@example.com", "not-an-email"}},
+	}}, warn)
+	r := table["C1"]
+	if r == nil || !r.HasProfileList() {
+		t.Fatalf("C1 must carry the profile list: %+v", r)
+	}
+	if !r.Allows("other@example.com") || r.AllowsCreate("other@example.com") || !r.AllowsCreate("kurt@example.com") {
+		t.Error("C1: Allows from the effective list, AllowsCreate from profile_allow only")
+	}
+	if r2 := table["C2"]; r2 == nil || r2.HasProfileList() || !r2.AllowsCreate("other@example.com") {
+		t.Error("C2: without profile_allow, AllowsCreate falls back to the effective list")
+	}
+	if _, ok := table["C3"]; ok || len(warned) != 1 {
+		t.Errorf("an invalid profile_allow entry must skip the route with one warn: %v", warned)
+	}
+}

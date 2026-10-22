@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 )
 
 // The channel route table reaches the bridge as SSM /{prefix}/slack/routes.
@@ -14,7 +16,9 @@ func TestSlackBridgeModule_ChannelRoutesParamEnvIAMAndHash(t *testing.T) {
 	vars := repoFile(t, "infra/modules/lambda-slack-bridge/v1.0.0/variables.tf")
 	live := repoFile(t, "infra/live/use1/lambda-slack-bridge/terragrunt.hcl")
 
-	path := `/${var.resource_prefix}/slack/routes`
+	// Derived from the Go writer's own path function, so the parameter km init
+	// writes and the ARN the bridge is granted cannot drift apart.
+	path := slackbridge.RoutesParamPath("${var.resource_prefix}")
 	if !regexp.MustCompile(`KM_SLACK_ROUTES_PARAM\s*=\s*"` + regexp.QuoteMeta(path) + `"`).MatchString(main) {
 		t.Errorf("main.tf must set KM_SLACK_ROUTES_PARAM = %q", path)
 	}

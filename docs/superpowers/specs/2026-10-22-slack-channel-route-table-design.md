@@ -218,10 +218,14 @@ publish, and continuity's own-box check.
   (`gateRouteCreate` for the route's own box and a cold-create) or the install
   list (`gateRouteInstall` for any other box). The route's compiled list is the
   effective list computed at `km init` (§3), so the install fall-back is
-  already folded in. Identity resolution and the no-cached-deny rule are
-  untouched.
+  already folded in. The route profile's own `inbound.allowEmails`, when
+  present, travels beside it as `profile_allow` in the table and gates the
+  cold-create and the alias's own box exactly as it does for the default
+  route; without one, those gates use the effective list. Identity resolution
+  and the no-cached-deny rule are untouched.
 - **Cold-create:** `PutSandboxCreate(ctx, id, route.Alias, route.Profile, body)`.
-  Two routes sharing an alias produce one box; a second mention on the other
+  Two routes sharing an alias produce one box, so `km init` refuses one alias
+  named with two different profiles (across routes and the default route); a second mention on the other
   channel while the first create is in flight hits the Phase 109 alias
   resolution exactly as two mentions in one channel do today.
 

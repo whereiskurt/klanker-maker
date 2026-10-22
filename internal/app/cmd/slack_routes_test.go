@@ -239,3 +239,83 @@ func TestEffectiveSlackChannelRoutes_CollidesWithDefaultRouteProfile(t *testing.
 		t.Fatalf("want collision with the default route's profile, got %v", err)
 	}
 }
+
+// Every entry carries its route profile's own allowEmails as ProfileAllow,
+// whichever list became Allow, so the bridge gates the cold-create with it.
+func TestEffectiveSlackChannelRoutes_CarriesProfileAllow(t *testing.T) {
+	dir := t.TempDir()
+	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
+	pl := writeProfile(t, dir, "listed.yaml", routeProfileOK+"        allowEmails: [Prof@Example.com]\n")
+	plan, err := effectiveSlackChannelRoutes(routesCfg(t, []config.SlackRoute{
+		{Channel: "#sec", Alias: "ir-bot", Profile: p, AllowEmails: []string{"*@example.com"}},
+		{Channel: "G2", Alias: "ops-bot", Profile: pl, AllowEmails: []string{"*@example.com"}},
+	}, nil), botChannels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range plan.Entries {
+		switch e.Channel {
+		case "C1":
+			if e.ProfileAllow != nil {
+				t.Errorf("C1: a profile without allowEmails must carry nil: %+v", e.ProfileAllow)
+			}
+		case "G2":
+			if len(e.ProfileAllow) != 1 || e.ProfileAllow[0] != "prof@example.com" || e.Allow[0] != "*@example.com" {
+				t.Errorf("G2: ProfileAllow must be the normalised profile list beside the route's own Allow: %+v", e)
+			}
+		}
+	}
+	if !strings.Contains(string(plan.JSON), `"profile_allow":["prof@example.com"]`) {
+		t.Errorf("the written table must carry profile_allow: %s", plan.JSON)
+	}
+}
+
+// The table is a Standard SSM String: past 4096 bytes km init refuses with a
+// named error and writes nothing.
+func TestPrepareSlackChannelRoutes_RefusesTableOverSSMStandardLimit(t *testing.T) {
+	t.Setenv(envSlackRoutesSHA, "")
+	dir := t.TempDir()
+	p := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
+	var emails []string
+	for i := 0; i < 200; i++ {
+		emails = append(emails, "someone-with-a-long-name-"+strings.Repeat("x", 3)+string(rune('a'+i%26))+strings.Repeat("y", i%7)+"@example.com")
+	}
+	cfg := routesCfg(t, []config.SlackRoute{{Channel: "#sec", Alias: "ir-bot", Profile: p, AllowEmails: emails}}, nil)
+	ssm := &fakeRoutesSSM{m: map[string]string{}}
+	up := &fakeUploader{}
+	err := prepareSlackChannelRoutes(context.Background(), cfg, &fakeLister{channels: botChannels}, ssm, up)
+	if err == nil || !strings.Contains(err.Error(), "4096") {
+		t.Fatalf("want an error naming the 4096-byte limit, got %v", err)
+	}
+	if len(ssm.m) != 0 || len(up.keys) != 0 {
+		t.Fatalf("nothing may be written or staged: ssm=%v staged=%v", ssm.m, up.keys)
+	}
+}
+
+// One alias is one box: two routes (or a route and the default route) naming
+// the same alias with different profiles is refused, naming both.
+func TestEffectiveSlackChannelRoutes_AliasWithTwoProfilesErrors(t *testing.T) {
+	dir := t.TempDir()
+	a := writeProfile(t, dir, "ir-bot.yaml", routeProfileOK)
+	b := writeProfile(t, dir, "ops.yaml", routeProfileOK)
+	_, err := effectiveSlackChannelRoutes(routesCfg(t, []config.SlackRoute{
+		{Channel: "#sec", Alias: "shared", Profile: a, AllowEmails: []string{"k@example.com"}},
+		{Channel: "#ops", Alias: "shared", Profile: b, AllowEmails: []string{"k@example.com"}},
+	}, nil), botChannels)
+	if err == nil || !strings.Contains(err.Error(), `"ir-bot"`) || !strings.Contains(err.Error(), `"ops"`) || !strings.Contains(err.Error(), `"shared"`) {
+		t.Fatalf("two routes, one alias, two profiles: want error naming both, got %v", err)
+	}
+	_, err = effectiveSlackChannelRoutes(routesCfg(t, []config.SlackRoute{
+		{Channel: "#sec", Alias: "ir-bot", Profile: b, AllowEmails: []string{"k@example.com"}},
+	}, &config.SlackDefaultRoute{Alias: "ir-bot", Profile: a, AllowEmails: []string{"k@example.com"}}), botChannels)
+	if err == nil || !strings.Contains(err.Error(), "slack.default_route") || !strings.Contains(err.Error(), `"ir-bot"`) || !strings.Contains(err.Error(), `"ops"`) {
+		t.Fatalf("route vs default route, one alias, two profiles: want error, got %v", err)
+	}
+	// Same alias, same profile: fine.
+	if _, err := effectiveSlackChannelRoutes(routesCfg(t, []config.SlackRoute{
+		{Channel: "#sec", Alias: "shared", Profile: a, AllowEmails: []string{"k@example.com"}},
+		{Channel: "#ops", Alias: "shared", Profile: a, AllowEmails: []string{"k@example.com"}},
+	}, &config.SlackDefaultRoute{Alias: "shared", Profile: a, AllowEmails: []string{"k@example.com"}}), botChannels); err != nil {
+		t.Fatalf("one alias, one profile, many channels must pass: %v", err)
+	}
+}
