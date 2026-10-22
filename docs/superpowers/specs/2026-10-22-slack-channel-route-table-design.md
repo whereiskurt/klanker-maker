@@ -207,10 +207,11 @@ publish, and continuity's own-box check.
 
 ### 5.4 Gates
 
-- **Mention:** required when `requiresMention(msg.ChannelType)` and
-  `route.MentionOnly`. `mention_only: false` dispatches an allowed sender's
-  top-level post without a mention. Thread follow-ups keep the existing
-  `skipMention` logic (the box's `threadBypass`). The bot-user-id fetch still
+- **Mention:** required when `requiresMention(msg.ChannelType)` and either
+  the route's `mention_only` is true or the message is a thread reply.
+  `mention_only: false` lifts the mention for an allowed sender's top-level
+  post only. Thread follow-ups keep the existing `skipMention` logic (the
+  box's `threadBypass`), so a strict box still needs a mention in a thread. The bot-user-id fetch still
   fails closed.
 - **Email:** `senderAllowedForSandbox` unchanged: the receiving box's row list
   wins when it carries one; otherwise the gate names the route's list

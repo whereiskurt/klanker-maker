@@ -100,6 +100,7 @@ ledger records the rulings.
 | Context predicate signature | `func(ctx, userID) bool`, called with the context sub-deadline | The plan's `func(string) bool` let per-author `users.info` calls escape the 20 s budget. The spec's error-handling table wins over the plan text. |
 | Pre-staged profile shape | Flattened when the profile uses `extends:` | The create-handler Lambda has no `profiles/base/**` fragments, so a raw child profile fails cold-create with "profile base/... not found". A monolithic profile is uploaded verbatim. |
 | Merge-list entry | One `slack.default_route` block entry, loaded with `UnmarshalKey` | The `github` block precedent. The spec originally said three leaf entries; one block entry shipped and the spec was corrected. |
+| Channel routes (2026-10-22) | A table of default routes keyed by channel id; the ladder is unchanged, only the route it runs against is selected per message | See `docs/slack-notifications.md` § Channel routes. |
 
 ## 4. How it works, end to end
 
@@ -122,7 +123,7 @@ The second step is the relay, unchanged. A relayed request with no owner returns
 96 claim response and stops. The front door broadcasts to its peers and stops if any peer
 claims the channel, so an install that owns a channel always wins over the route.
 
-The third step is route selection. With no route configured, the Phase 96 orphan reply runs
+The third step is route selection: the channel's own entry in `slack.routes` when the table has one, else `slack.default_route`; neither means Phase 96. With no route configured, the Phase 96 orphan reply runs
 exactly as before. With a route configured, the orphan reply is retired on this install and
 the ladder continues.
 
