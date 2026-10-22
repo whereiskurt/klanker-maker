@@ -57,8 +57,13 @@ func TestSessionPolicy_DeniesTheSecretsKMSAlias(t *testing.T) {
 		if s.Effect != "Deny" || !strings.Contains(string(s.Action), "kms:Decrypt") {
 			continue
 		}
-		if got := s.Condition["StringEquals"]["kms:ResourceAliases"]; got != "alias/km2-sandbox-secrets" {
-			t.Fatalf("kms Deny condition = %q, want alias/km2-sandbox-secrets", got)
+		// kms:ResourceAliases is multivalued: without the ForAnyValue set operator
+		// the Deny never matches and the fence buys nothing (2026-10-22).
+		if _, bare := s.Condition["StringEquals"]; bare {
+			t.Fatalf("kms Deny uses a bare StringEquals on the multivalued kms:ResourceAliases; it never matches")
+		}
+		if got := s.Condition["ForAnyValue:StringEquals"]["kms:ResourceAliases"]; got != "alias/km2-sandbox-secrets" {
+			t.Fatalf("kms Deny condition = %q, want alias/km2-sandbox-secrets under ForAnyValue:StringEquals", got)
 		}
 		return
 	}

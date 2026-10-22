@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -17,6 +18,24 @@ import (
 type roleShapeIAM interface {
 	ListRolePolicies(ctx context.Context, params *iam.ListRolePoliciesInput, optFns ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error)
 	ListAttachedRolePolicies(ctx context.Context, params *iam.ListAttachedRolePoliciesInput, optFns ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error)
+	GetRolePolicy(ctx context.Context, params *iam.GetRolePolicyInput, optFns ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error)
+}
+
+// secretsKMSGrantInert reports whether a role's `-sandbox-secrets-kms` inline
+// policy document (as GetRolePolicy returns it, URL-encoded) still carries the
+// v1.8.0/v1.9.0 shape: a kms:ResourceAliases condition under a bare string
+// operator. That key is multivalued and needs ForAnyValue/ForAllValues; without
+// one the Decrypt grant never matches and the sandbox cannot unseal its SOPS
+// bundle (ec2spot v1.10.0, 2026-10-22).
+func secretsKMSGrantInert(encodedDoc string) bool {
+	doc, err := url.PathUnescape(encodedDoc)
+	if err != nil {
+		doc = encodedDoc
+	}
+	if !strings.Contains(doc, "kms:ResourceAliases") {
+		return false
+	}
+	return !strings.Contains(doc, "ForAnyValue:") && !strings.Contains(doc, "ForAllValues:")
 }
 
 // roleShapeInspectedStatus lists the sandbox statuses whose role the check reads:
@@ -68,6 +87,17 @@ func checkSandboxRoleShape(ctx context.Context, iamClient roleShapeIAM, lister S
 			if strings.HasSuffix(pn, "-threads-rw") {
 				add("threads-table grant (pre-v1.9.0)")
 			}
+			if strings.HasSuffix(pn, "-sandbox-secrets-kms") {
+				// Read the document: the name is the same on every version, only the
+				// condition operator changed. A read error is reported, not guessed.
+				pol, perr := iamClient.GetRolePolicy(ctx, &iam.GetRolePolicyInput{RoleName: aws.String(role), PolicyName: aws.String(pn)})
+				if perr != nil {
+					return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not read policy %s on role %s: %v", pn, role, perr)}
+				}
+				if pol.PolicyDocument != nil && secretsKMSGrantInert(*pol.PolicyDocument) {
+					add("SOPS KMS grant inert: bare StringEquals on kms:ResourceAliases (pre-v1.10.0; the box cannot decrypt its secrets bundle)")
+				}
+			}
 		}
 		attached, err := iamClient.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{RoleName: aws.String(role)})
 		if err == nil {
@@ -89,7 +119,7 @@ func checkSandboxRoleShape(ctx context.Context, iamClient roleShapeIAM, lister S
 	return CheckResult{
 		Name:        name,
 		Status:      CheckWarn,
-		Message:     fmt.Sprintf("%d running/stopped/paused sandbox(es) still hold a pre-v1.9.0 role (in-region Allow-*, account-wide SSM reads, and/or a threads-table grant):\n    %s", len(old), strings.Join(old, "\n    ")),
+		Message:     fmt.Sprintf("%d running/stopped/paused sandbox(es) still hold a pre-v1.10.0 role (in-region Allow-*, account-wide SSM reads, a threads-table grant, and/or an inert SOPS KMS grant):\n    %s", len(old), strings.Join(old, "\n    ")),
 		Remediation: "The role is created at km create. Recreate each: 'km destroy <id> --remote --yes && km create <profile> <alias>'. See docs/operational-gotchas.md § The sandbox role is least-privilege since v1.8.0.",
 	}
 }

@@ -207,7 +207,8 @@ func (s *Server) Selftest(o SelftestOpts) []Check {
 			checks = append(checks, Check{"fence", false, true,
 				"the narrowed credentials CAN still decrypt the secrets bundle — the session " +
 					"policy Deny is not matching, so the fence buys nothing (check the " +
-					"kms:ResourceAliases condition against the key's real aliases): " + detail})
+					"kms:ResourceAliases condition against the key's real aliases; the key is " +
+					"multivalued and needs ForAnyValue:StringEquals, a bare StringEquals never matches): " + detail})
 		default:
 			checks = append(checks, Check{"fence", true, true, detail})
 		}

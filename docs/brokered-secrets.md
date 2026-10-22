@@ -505,7 +505,7 @@ The broker self-assumes the instance role with this inline session policy
 {"Version":"2012-10-17","Statement":[
  {"Sid":"InheritTheInstanceRole","Effect":"Allow","Action":"*","Resource":"*"},
  {"Sid":"DenySecretsBundleKMS","Effect":"Deny","Action":"kms:Decrypt","Resource":"*",
-  "Condition":{"StringEquals":{"kms:ResourceAliases":"alias/{prefix}-sandbox-secrets"}}},
+  "Condition":{"ForAnyValue:StringEquals":{"kms:ResourceAliases":"alias/{prefix}-sandbox-secrets"}}},
  {"Sid":"DenySecretsBundleObject","Effect":"Deny","Action":"s3:GetObject",
   "Resource":"arn:aws:s3:::{artifacts-bucket}/sandboxes/{sandbox-id}/secrets.enc.yaml"}
 ]}
@@ -572,9 +572,11 @@ The selftest's `fence` check names its failing clause. Read it first:
   `runuser -u sandbox -- /opt/km/bin/km-creds` directly: it prints a diagnosable
   error naming the broker.
 - **"the narrowed credentials CAN still decrypt the secrets bundle"** — the
-  negative control failed, so the fence buys nothing. The usual cause is the
-  `kms:ResourceAliases` condition not matching the key's real aliases; check
-  `aws kms list-aliases` against `alias/{prefix}-sandbox-secrets`.
+  negative control failed, so the fence buys nothing. Two causes: the
+  `kms:ResourceAliases` condition not matching the key's real aliases (check
+  `aws kms list-aliases` against `alias/{prefix}-sandbox-secrets`), or a broker
+  built before 2026-10-22, whose Deny used a bare `StringEquals` on that
+  multivalued key and so never matched (`ForAnyValue:StringEquals` is required).
 - **`AccessDenied` on the assume, naming the role** — the sandbox predates
   `ec2spot/v1.7.0`, or `km init` has not applied it. The self-assume trust and
   its matching grant live in that module version; both halves are required.
