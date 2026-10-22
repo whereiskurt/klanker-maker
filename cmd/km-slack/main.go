@@ -95,7 +95,8 @@ Subcommands:
   upload         Upload a file via the bridge (3-step flow), referencing an S3 key.
   record-mapping Write a (channel_id, slack_ts) → transcript-offset row to DDB.
   permalink      Resolve a Slack permalink URL for --channel + --ts.
-  update         Edit a previously-posted bot message via --channel, --ts, and --text/--body.
+  update         Edit a previously-posted bot message via --channel, --ts, and --text/--body;
+                 --render and --subject as post, so an edit can reproduce a blocks-rich post.
   react --ts <ts> --emoji <name> [--exclusive a,b,c] [--remove] [--channel C…]
                  Add (or --remove) the bot's reaction on a message in this sandbox's channel.
                  --exclusive names a status set: every name other than --emoji is removed after
@@ -663,10 +664,12 @@ func runUpdate(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		channel  = fs.String("channel", "", "Slack channel ID (C...) — required")
-		ts       = fs.String("ts", "", "Slack message ts — required")
-		text     = fs.String("text", "", "New message text (or use --body file)")
-		bodyPath = fs.String("body", "", "Path to body file (alternative to --text)")
+		channel    = fs.String("channel", "", "Slack channel ID (C...) — required")
+		ts         = fs.String("ts", "", "Slack message ts — required")
+		text       = fs.String("text", "", "New message text (or use --body file)")
+		bodyPath   = fs.String("body", "", "Path to body file (alternative to --text)")
+		subject    = fs.String("subject", "", "Optional subject (bold header in text modes; ignored with blocks, as for post)")
+		renderMode = fs.String("render", "", "Render mode: plain (default), mrkdwn, blocks, blocks-rich — same precedence as post (flag > KM_SLACK_RENDER > plain)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -674,6 +677,19 @@ func runUpdate(args []string, stderr io.Writer) int {
 	if *channel == "" || *ts == "" {
 		fmt.Fprintln(stderr, "km-slack update: --channel and --ts are required")
 		return 2
+	}
+	render := *renderMode
+	if render == "" {
+		render = os.Getenv("KM_SLACK_RENDER")
+	}
+	if render == "" {
+		render = "plain"
+	}
+	switch render {
+	case "plain", "mrkdwn", "blocks", "blocks-rich":
+	default:
+		fmt.Fprintf(stderr, "km-slack update: unknown --render value %q; falling back to plain\n", render)
+		render = "plain"
 	}
 	body := *text
 	if body == "" && *bodyPath != "" {
@@ -716,30 +732,83 @@ func runUpdate(args []string, stderr io.Writer) int {
 		return 1
 	}
 
-	env, err := slack.BuildEnvelope(slack.ActionUpdate, sandboxID, *channel, "", "", "")
-	if err != nil {
-		fmt.Fprintf(stderr, "km-slack update: build envelope: %v\n", err)
-		return 1
-	}
-	env.MessageTS = *ts
-	env.Text = body
-
-	_, sig, err := slack.SignEnvelope(env, priv)
-	if err != nil {
-		fmt.Fprintf(stderr, "km-slack update: sign: %v\n", err)
-		return 1
-	}
-
-	resp, err := slack.PostToBridge(ctx, bridgeURL, env, sig)
-	if err != nil {
-		fmt.Fprintf(stderr, "km-slack update: bridge POST: %v\n", err)
-		return 1
-	}
-	if !resp.OK {
-		fmt.Fprintf(stderr, "km-slack update: bridge returned not-ok: %s\n", resp.Error)
+	if err := runUpdateOpts(ctx, priv, sandboxID, bridgeURL, updateOptions{
+		channel: *channel, ts: *ts, body: body, subject: *subject, render: render,
+	}); err != nil {
+		fmt.Fprintf(stderr, "km-slack update: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// updateOptions is the parsed `km-slack update` command line (2026-10-22: the
+// verb renders like post, so an edit can reproduce a blocks-rich post).
+type updateOptions struct {
+	channel, ts, body, subject, render string
+}
+
+// runUpdateOpts renders the body exactly as post does (renderBody, the 35 KB
+// truncation, the 40 KB cap), signs one update envelope carrying Text (the
+// rendered fallback), Blocks and Subject, and POSTs it. On invalid_blocks it
+// re-sends once with a fresh nonce and no blocks. No posted marker: an edit is
+// not a new reply.
+func runUpdateOpts(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL string, o updateOptions) error {
+	if sandboxID == "" {
+		return errors.New("sandboxID is required")
+	}
+	if bridgeURL == "" {
+		return errors.New("bridgeURL is required")
+	}
+	rendered, blocksJSON := renderBody(o.render, []byte(o.body))
+	if len(rendered) > slack.MaxRenderedBytes {
+		rendered = rendered[:slack.MaxRenderedBytes] + "\n_…truncated_"
+	}
+	if len(rendered) > slack.MaxBodyBytes {
+		return fmt.Errorf("rendered body exceeds %d bytes (40KB Slack limit)", slack.MaxBodyBytes)
+	}
+	build := func(withBlocks bool) (*slack.SlackEnvelope, []byte, error) {
+		env, err := slack.BuildEnvelope(slack.ActionUpdate, sandboxID, o.channel, o.subject, "", "")
+		if err != nil {
+			return nil, nil, fmt.Errorf("build envelope: %w", err)
+		}
+		env.MessageTS = o.ts
+		env.Text = rendered
+		if withBlocks {
+			env.Blocks = blocksJSON
+		}
+		_, sig, err := slack.SignEnvelope(env, priv)
+		if err != nil {
+			return nil, nil, fmt.Errorf("sign: %w", err)
+		}
+		return env, sig, nil
+	}
+	env, sig, err := build(blocksJSON != "")
+	if err != nil {
+		return err
+	}
+	resp, err := slack.PostToBridge(ctx, bridgeURL, env, sig)
+	if err != nil {
+		if blocksJSON != "" && strings.Contains(err.Error(), "invalid_blocks") {
+			fmt.Fprintf(os.Stderr, "km-slack update: blocks rejected (invalid_blocks); re-sending as text\n")
+			fbEnv, fbSig, fbErr := build(false)
+			if fbErr != nil {
+				return err
+			}
+			fbResp, fbErr := slack.PostToBridge(ctx, bridgeURL, fbEnv, fbSig)
+			if fbErr != nil {
+				return err // original error — fallback also failed
+			}
+			if !fbResp.OK {
+				return fmt.Errorf("bridge returned not-ok on text fallback: %s", fbResp.Error)
+			}
+			return nil
+		}
+		return fmt.Errorf("bridge POST: %w", err)
+	}
+	if !resp.OK {
+		return fmt.Errorf("bridge returned not-ok: %s", resp.Error)
+	}
+	return nil
 }
 
 // postForPermalink signs and POSTs a permalink envelope and returns the permalink URL.
@@ -782,31 +851,7 @@ func runPermalinkWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, b
 // Tests inject an ephemeral key and stub bridge server URL directly, bypassing SSM.
 // Returns nil on success. Phase 70.
 func runUpdateWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, messageTS, text string) error {
-	if sandboxID == "" {
-		return errors.New("sandboxID is required")
-	}
-	if bridgeURL == "" {
-		return errors.New("bridgeURL is required")
-	}
-	env, err := slack.BuildEnvelope(slack.ActionUpdate, sandboxID, channel, "", "", "")
-	if err != nil {
-		return fmt.Errorf("build envelope: %w", err)
-	}
-	env.MessageTS = messageTS
-	env.Text = text
-
-	_, sig, err := slack.SignEnvelope(env, priv)
-	if err != nil {
-		return fmt.Errorf("sign: %w", err)
-	}
-	resp, err := slack.PostToBridge(ctx, bridgeURL, env, sig)
-	if err != nil {
-		return err
-	}
-	if !resp.OK {
-		return fmt.Errorf("bridge returned not-ok: %s", resp.Error)
-	}
-	return nil
+	return runUpdateOpts(ctx, priv, sandboxID, bridgeURL, updateOptions{channel: channel, ts: messageTS, body: text, render: "plain"})
 }
 
 // ---------------------------------------------------------------------------

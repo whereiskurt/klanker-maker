@@ -564,7 +564,21 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 			)
 			return errResp(400, "missing_text")
 		}
-		ts, err := h.Slack.UpdateMessage(ctx, env.Channel, env.MessageTS, env.Text)
+		// 2026-10-22: update renders like post. With blocks and a BlockUpdater the
+		// array rides beside the fallback text and the subject is ignored (a header
+		// block expresses it); in text mode the subject folds into a bold header,
+		// the same shape PostMessage uses. No blocks, no subject ⇒ unchanged.
+		var ts string
+		var err error
+		if bu, okBU := h.Slack.(BlockUpdater); okBU && env.Blocks != "" {
+			ts, err = bu.UpdateMessageBlocks(ctx, env.Channel, env.MessageTS, env.Text, env.Blocks)
+		} else {
+			text := env.Text
+			if env.Subject != "" {
+				text = fmt.Sprintf("*%s*\n\n%s", env.Subject, env.Text)
+			}
+			ts, err = h.Slack.UpdateMessage(ctx, env.Channel, env.MessageTS, text)
+		}
 		if err != nil {
 			logger.ErrorContext(ctx, "bridge: slack_call_failed",
 				"step", "dispatch",
