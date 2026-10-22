@@ -11,89 +11,103 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Curated by hand for v0.9.0 from PRs #146–#153 (no phase blocks since
-  v0.8.24, so scripts/draft-release-highlights.sh had nothing to draft).
+  Curated by hand for v0.9.1 from PRs #154 (Slack channel routes) and #155
+  (km-slack react + --broadcast). No phase blocks since v0.9.0, so
+  scripts/draft-release-highlights.sh had nothing to draft.
 -->
 
 ## ⚠️ Upgrade notes — read before deploying
 
-This release changes the sandbox IAM role twice (`ec2spot` v1.8.0 → **v1.9.0**), the
-Slack bridge, the pollers, and the Slack App's scopes.
+This release changes the Slack bridge and the `km-slack` sidecar. No IAM, no schema, no
+Slack App change.
 
 - **Deploy order:** `make build` → `make build-lambdas` → `km init --dry-run=false`.
-  `--sidecars` alone is not enough.
-- **Slack App:** run `km slack manifest`, reinstall the App, then
-  `km slack rotate-token --bot-token <new>`. The new scopes are `im:history`,
-  `mpim:history`, `im:write`, and the `message.im`/`message.mpim` events.
-- **Existing sandboxes** keep their old role and poller until `km destroy && km create`.
-  `km doctor` → **Sandbox role shape** lists the boxes still on the old role. Recreate a
-  canary first.
-- **Behaviour change:** operator `aws` calls inside `initCommands` (SSM, S3, DynamoDB
-  outside the sandbox's own scope) now fail under `set -e`. `km validate` warns on them.
-  Use `iam.allowedSecretPaths` for SSM.
+  After that, every edit to `slack.routes:` is just `km init --slack`.
+- **No reinstall.** `reactions:write` has been a required bot scope since the 👀 ACK, and
+  `km doctor` already checks it. `--broadcast` needs no scope.
+- **Existing sandboxes** gain `km-slack react` and `--broadcast` on a sidecar refresh or
+  `km destroy && km create`. Until then, a new bridge with an old `km-slack` is byte-identical,
+  and an old bridge with a new `km-slack` fails closed (`400 unknown_action`, or a signature
+  failure for `--broadcast`). Nothing half-deployed is dangerous.
+- **`km init` now reads the live routes table on every full and `--slack` apply**, even with
+  no `routes:` block, so a stale table can be emptied. An SSM read error there stops the init.
 
-## 🔒 The sandbox role is least-privilege
+## 📍 Route named channels to specific klankers
 
-Before this release, any sandbox could read every SSM parameter in the account and write
-every DynamoDB table in its region. Two grants caused it:
-- the region lock was an **`Allow *` conditioned on region**
-- the managed `AmazonSSMManagedInstanceCore` policy granted `ssm:GetParameter*` on `*`
+`slack.routes:` sits beside `slack.default_route` and maps channels to aliases by name:
 
-**`ec2spot` v1.8.0** replaces both with a region **Deny** and one explicit grant per concern.
-Every data-bearing grant (S3, DynamoDB, SSM, SQS, logs, SES) is scoped to the sandbox id or
-the install prefix, and KMS decrypt is pinned to the parameter it serves.
+```yaml
+slack:
+  routes:
+    - channel: "#security-alerts"      # "#name" or a channel id (C…)
+      alias: ir-bot
+      profile: profiles/ir-bot.yaml
+      allow_emails: ["*@example.com"]  # optional; else default_route's, else the profile's
+      mention_only: false              # optional; default true
+    - channel: "#platform-eng"
+      alias: platform-bot
+      profile: profiles/platform.yaml
+```
 
-**v1.9.0** removes the sandbox role's last access to the Slack, GitHub and HackerOne threads
-tables. Pollers now keep agent-session state in `/var/lib/km/sessions/`. They report it
-through a new signed `km-slack session` action, and the bridge writes the row only if it
-names the sandbox making the call. That closes the cross-thread prompt-injection residual
-that v1.8.0 left open.
+- **Names are resolved at `km init`**, from the channels the bot is a member of (never a
+  workspace-wide `conversations.list`). A channel the bot cannot see fails the init with the
+  list of channels it can, so a renamed channel or a missing invite never routes silently.
+- **The ladder is unchanged, with one new rung:** owned `#sb-` channel → thread continuity →
+  peer claim → **`routes`** → `default_route` → the orphan reply. Several channels may share
+  one alias, but an alias gets exactly one profile, or `km init` refuses: the first
+  cold-create would otherwise decide the box's profile.
+- **`mention_only: false` lifts the mention for top-level posts only.** Any allowed sender's
+  message starts a turn; thread follow-ups keep the box's `threadBypass` rule. The table
+  routes channels only, so DMs and group DMs still take the default route.
+- **Deny by default, same as the default route.** Each route takes `allow_emails` (exact or
+  `*@domain`), falling back to `default_route`'s list, then the profile's. All empty fails
+  `km init`.
+- **Transport is one canonical JSON SSM parameter** (`/{prefix}/slack/routes`, 4096 bytes,
+  about 20 routes). Its hash lands in the bridge env, so a change cold-starts the Lambda.
+  `km doctor` → **Slack channel routes** reports the profiles, channel resolution, and drift
+  between the config and the live table.
+- **Front-door only**, like `default_route`: a table on a peer install is ignored.
 
-## 💬 Talk to the bot from any channel or DM
+See `docs/slack-notifications.md` § Channel routes.
 
-- **`slack.default_route` routes conversations no install owns.** Invite the bot to a channel
-  or DM it, @-mention it, and the reply lands in a thread right there. It goes to one alias:
-  warm enqueue, resume, or cold-create.
-- **Deny by default.** Senders are gated by email allowlist. Entries are exact addresses or
-  `*@domain`, and a profile's `allowEmails` replaces the install list for that sandbox.
-- **Strict threads (`threadBypass: false`).** Every turn needs an @-mention, and the agent
-  receives the thread's human messages since its last reply.
-- **One reply per turn.** Turns used to post twice: once when the agent replied with
-  `km-slack`, once when the poller posted its closing line.
-- **`km-slack dm --to U…`** lets an agent DM someone on the allowlist. Replies route back to
-  the sandbox.
-- **Quiet 👀.** Thread replies react only after 180 s of quiet (on by default; `0` disables).
-  Top-level messages always react.
+## ✅ Show a verdict as a reaction — `km-slack react`
 
-See `docs/slack-notifications.md` § Default route.
+A watcher that posts an advisory and later reaches a verdict can now say so with a reaction
+instead of (or as well as) an edited status line:
 
-## 🧑‍💻 `km t3` — T3 Code on a sandbox, in the background
+```bash
+km-slack react --ts "$TS" --emoji hourglass_flowing_sand \
+  --exclusive hourglass_flowing_sand,white_check_mark,rotating_light
+# …later…
+km-slack react --ts "$TS" --emoji white_check_mark \
+  --exclusive hourglass_flowing_sand,white_check_mark,rotating_light
+```
 
-`km t3 start <sb>` installs [T3 Code](https://github.com/pingdotgg/t3code) and runs it as a
-background service on the box's `127.0.0.1`. `km t3 <sb>` connects your browser or the t3
-desktop app through an auto-reconnecting SSM tunnel and prints a single-use pairing link.
-`stop` and `status` complete the set.
+- **`--exclusive` is a status set.** The bridge adds `--emoji`, then removes the bot's own
+  reaction for every other name, so `pending → done` never leaves the hourglass behind and
+  the caller never tracks the previous state. `--remove` takes one reaction off.
+- **Idempotent.** Slack's `already_reacted` and `no_reaction` count as success, so a cron job
+  retrying a react never fails on its own earlier success. Any other Slack code
+  (`message_not_found`, `invalid_name`, `missing_scope`) comes back verbatim.
+- **Only the bot's reaction moves.** `reactions.remove` acts on the calling token, so
+  `--exclusive` can never take away a human's identical reaction.
+- **One signed request, bounded fan-out.** The set is capped at 10 names and every name is
+  re-validated at the bridge (`^[a-z0-9_+'-]{1,100}$`, colons optional), so a bypassed client
+  cannot sign a wider request. Own channel only, same rule as `update`.
 
-The idle timer keeps the box awake while a browser is connected or an agent turn is running.
-A started server nobody is using still idles out: t3's long-lived agent processes no longer
-hold the box up by name. The verbs work on running sandboxes with just `make build`. The idle
-signal ships with the `km-presence` sidecar and reaches existing boxes on recreate.
-See `docs/t3code.md`.
+## 📣 Thread replies that the whole channel sees — `--broadcast`
 
-## ⏱️ A cold-created sandbox answers its first message on time
+`km-slack post --thread T --broadcast` and `km-slack reply --broadcast` set `reply_broadcast`,
+so a reply lives in the advisory's thread and still shows in the channel. Until now a
+channel-wide ping had to be a separate top-level post, because an `@here` inside a thread only
+reaches the thread's followers. `post` requires `--thread` and refuses `--new-message`; `reply`
+refuses when no thread resolves rather than silently posting top-level.
 
-The inbound pollers started before `initCommands` had installed claude or codex. The first
-dispatched turn exited 127, and the message sat invisible for the queue's 30-minute
-timeout. Pollers now wait for the boot's `init-done` marker, and an exit-127 turn retries in
-60 s.
+See `docs/slack-notifications.md` § Reactions and broadcast.
 
 ## ✨ Small things
 
-- `km doctor` gains a **Slack default route** group, plus **Sandbox role shape**, which also
-  inspects stopped and paused boxes.
-- GitHub and HackerOne thread rows with no owner are reclaimed by the next bridge write, and
-  `km doctor` counts them.
-- `km-send` and `km-recv` are on `/usr/local/bin` like every other helper.
-- Resource names derived from `KM_RESOURCE_PREFIX` fail loudly when it is unset, instead of
-  silently targeting `km-*`.
-- New doc: a code walkthrough of the bridge Lambdas (`docs/lambda-bridge-internals.md`).
+- `km doctor` gains the **Slack channel routes** group.
+- The `klanker:slack` skill documents `react` and `--broadcast` (plugin `0.4.20`).
+- Known gap, deferred: `km-slack update` still takes no `--render`/`--subject`, so an edit
+  cannot reproduce a `blocks-rich` post. Post messages you intend to edit with `--render plain`.
