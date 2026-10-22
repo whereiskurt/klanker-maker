@@ -3610,10 +3610,9 @@ own row list still wins once it exists.
 route's `mention_only` is true or the message is a thread reply. So
 `mention_only: false` lets any allowed sender's top-level post start a turn, while
 thread follow-ups keep the box's `threadBypass` behaviour exactly as before (a
-strict box still needs a mention in a thread). 1:1 DMs never need a mention and
-never match a route. A group DM (`mpim`) matches only if an operator lists its id
-explicitly and it appears in the bot's channel list at `km init`; the bridge
-excludes only 1:1 DMs (`im`).
+strict box still needs a mention in a thread). The table routes channels only: `km init` resolves routes against the bot's channel
+list, so 1:1 DMs and group DMs are never routed by the table (they take the default
+route).
 
 **Precedence.** Owned `#sb-` channel → routed-thread continuity → a peer that
 claims the channel → `routes` → `default_route` → Phase 96.
@@ -3635,7 +3634,7 @@ No sandbox recreate. Every full `km init` and `km init --slack` reads the live
 table from SSM even with no `routes:` block (to empty a stale table), so an SSM
 read error there stops the init. `km doctor` group **Slack channel routes**
 reports the profiles, the channel resolution and drift between the config and the
-live table. A hand-edited parameter that is byte-different from the canonical form
+live table. When `routes:` is configured, a hand-edited parameter that is byte-different from the canonical form
 shows as drift, and `km init --slack` rewrites it.
 
 **Troubleshooting.**

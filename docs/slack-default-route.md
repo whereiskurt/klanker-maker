@@ -128,7 +128,7 @@ exactly as before. With a route configured, the orphan reply is retired on this 
 the ladder continues.
 
 The fourth step is the gate. A mention is required when the event's `channel_type` is
-`channel`, `group` or `mpim`, and not for `im`. Then the sender's email is resolved through
+`channel`, `group` or `mpim`, and not for `im`. A channel route with `mention_only: false` lifts the mention for top-level posts (see `docs/slack-notifications.md` § Channel routes). Then the sender's email is resolved through
 the cached `users.info` lookup and checked against the route's effective list (the route
 profile's `allowEmails` when it has one, else `allow_emails`). Either failure returns 200 with
 an Info log line and nothing else. On the enqueue and resume branches the target box's own
