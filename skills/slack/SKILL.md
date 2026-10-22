@@ -144,6 +144,17 @@ Pick one leading glyph so the operator can scan a busy channel:
 | 🔄 | In progress — heartbeat / midway update |
 | ❓ | Question for the operator — waiting on input |
 
+To show a verdict on an existing message as a reaction instead, use `km-slack react` with the
+whole state set in `--exclusive`, so the previous state is removed for you:
+
+```bash
+/opt/km/bin/km-slack react --ts "$TS" --emoji white_check_mark \
+  --exclusive hourglass_flowing_sand,white_check_mark,rotating_light
+```
+
+Retrying is safe (`already_reacted` and `no_reaction` count as success); the name is bare or
+`:colon:`-wrapped, lowercase, no spaces. Own channel only.
+
 ## Transcript Streaming (read-only awareness)
 
 When the profile sets `notification.slack.transcript.enabled: true` (and `notification.slack.enabled` + `notification.slack.perSandbox`), every Claude turn auto-streams to the sandbox's Slack channel:
@@ -419,6 +430,8 @@ You will rarely need these; each goes through the bridge with the same signed en
 | `km-slack upload --channel C… [--thread ts] --s3-key transcripts/$KM_SANDBOX_ID/… --filename f --content-type application/gzip\|application/json\|text/plain --size-bytes N` | The bridge posts an S3 object as a Slack file | The key must sit under `transcripts/<your sandbox id>/`, the file must exist with exactly that size (≤ 100 MB), and the filename must have no `/`. Prints `km-slack upload: ok ts=…` to stderr. Same channel rule as `post`. Writes no marker. |
 | `km-slack permalink --channel C… --ts T` | Prints the message's permalink URL to stdout | Own channel only: in a routed foreign channel it is `403 channel_mismatch`. |
 | `km-slack update --channel C… --ts T (--text s \| --body file)` | Edits a message the bot posted (`chat.update`) | Own channel only, as `permalink`. The text is sent as-is: no `--render`, no `--mention`, no subject. |
+| `km-slack react --ts T --emoji name [--exclusive a,b,c] [--remove] [--channel C…]` | Adds (or removes) the bot's reaction on a message; `--exclusive` removes every other name in the set after the add | Own channel only, as `permalink`. At most 10 exclusive names. `already_reacted`/`no_reaction` are success. Prints `km-slack: reacted ts=… emoji=…` to stdout. |
+| `km-slack post\|reply … --broadcast` | With a thread, also shows the reply in the channel (`reply_broadcast`) | `post` needs `--thread` and refuses `--new-message`; `reply` fails if no thread resolves. Use it for a channel-wide ping that should live in the thread. |
 
 `km-slack record-mapping` is internal to the transcript-streaming hook (it writes a DynamoDB row
 mapping a posted message to a transcript offset); an agent never calls it.

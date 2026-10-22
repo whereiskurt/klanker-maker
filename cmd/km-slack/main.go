@@ -74,6 +74,8 @@ func dispatch(args []string, stderr io.Writer) int {
 		return runReply(args[1:], stderr)
 	case "dm":
 		return runDM(args[1:], stderr)
+	case "react":
+		return runReact(args[1:], stderr)
 	case "session":
 		return runSession(args[1:], stderr)
 	case "-h", "--help", "help":
@@ -94,6 +96,11 @@ Subcommands:
   record-mapping Write a (channel_id, slack_ts) → transcript-offset row to DDB.
   permalink      Resolve a Slack permalink URL for --channel + --ts.
   update         Edit a previously-posted bot message via --channel, --ts, and --text/--body.
+  react --ts <ts> --emoji <name> [--exclusive a,b,c] [--remove] [--channel C…]
+                 Add (or --remove) the bot's reaction on a message in this sandbox's channel.
+                 --exclusive names a status set: every name other than --emoji is removed after
+                 the add, so pending → done never leaves the old state behind. Colons optional.
+  post/reply     --broadcast (with a thread) also shows the reply in the channel (reply_broadcast).
   dm --to U… (--text <s> | --body <file>) [--render …] [--from-thread]   DM a person on the route allowlist (top-level; no marker)
   session --source slack|github|h1 <key flags> (--session-id ID | --clear) --agent claude|codex
                  Record the agent session id on a thread the bridge routed (poller end-of-turn).
@@ -130,7 +137,7 @@ func runPost(args []string, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var channel, subject, bodyPath, thread string
 	var renderMode string
-	var newMessage, claimThread bool
+	var newMessage, claimThread, broadcast bool
 	var mentions mentionFlag
 	fs.StringVar(&channel, "channel", "", "Slack channel ID (C...)")
 	fs.StringVar(&subject, "subject", "", "Optional subject text (rendered as bold header by bridge; omit for clean threaded replies)")
@@ -139,12 +146,17 @@ func runPost(args []string, stderr io.Writer) int {
 	fs.StringVar(&renderMode, "render", "", "Render mode: plain (default, no-op), mrkdwn (Phase 74 Tier 1 transformer), blocks (Phase 74 PR2 Tier 2 Block Kit; falls back to mrkdwn on 50-block cap), blocks-rich (Phase 111 Tier 3 markdown/table blocks, opt-in; falls back to blocks then mrkdwn)")
 	fs.BoolVar(&newMessage, "new-message", false, "Post as new top-level message (omits thread_ts); prints ts=<value> to stdout for poller capture. Phase 70.")
 	fs.BoolVar(&claimThread, "claim-thread", false, "With --new-message: ask the bridge to record the new top-level message as a thread owned by this sandbox (Phase 70 handoff)")
+	fs.BoolVar(&broadcast, "broadcast", false, "With --thread: also show the reply in the channel (chat.postMessage reply_broadcast). Not with --new-message.")
 	fs.Var(&mentions, "mention", mentionFlagUsage)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if claimThread && !newMessage {
 		fmt.Fprintln(stderr, "km-slack post: --claim-thread requires --new-message")
+		return 2
+	}
+	if broadcast && (thread == "" || newMessage) {
+		fmt.Fprintln(stderr, "km-slack post: --broadcast requires --thread and cannot be combined with --new-message")
 		return 2
 	}
 	mentionTokens, err := slack.ParseMentions(mentions)
@@ -182,7 +194,7 @@ func runPost(args []string, stderr io.Writer) int {
 		threadArg = ""
 	}
 
-	ts, err := run(channel, subject, bodyPath, threadArg, renderMode, claimThread, mentionTokens)
+	ts, err := run(channel, subject, bodyPath, threadArg, renderMode, claimThread, broadcast, mentionTokens)
 	if err != nil {
 		fmt.Fprintf(stderr, "km-slack post: %v\n", err)
 		return 1
@@ -330,7 +342,7 @@ func runRecordMapping(args []string, stderr io.Writer) int {
 // calling runWith. Separated so tests can inject an ephemeral key via runWith.
 // renderMode is one of "plain", "mrkdwn", "blocks" — resolved by runPost before calling run.
 // Returns the message ts on success (empty string if the bridge didn't return one).
-func run(channel, subject, bodyPath, thread, renderMode string, claimThread bool, mentions []string) (string, error) {
+func run(channel, subject, bodyPath, thread, renderMode string, claimThread, broadcast bool, mentions []string) (string, error) {
 	sandboxID := os.Getenv("KM_SANDBOX_ID")
 	if sandboxID == "" {
 		return "", errors.New("KM_SANDBOX_ID env var not set")
@@ -360,7 +372,10 @@ func run(channel, subject, bodyPath, thread, renderMode string, claimThread bool
 		return "", fmt.Errorf("load signing key: %w", err)
 	}
 
-	return runWithClaim(ctx, priv, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode, claimThread, mentions...)
+	return runWithOpts(ctx, priv, sandboxID, bridgeURL, postOptions{
+		channel: channel, subject: subject, bodyPath: bodyPath, thread: thread,
+		renderMode: renderMode, claimThread: claimThread, broadcast: broadcast, mentions: mentions,
+	})
 }
 
 // renderBody applies the km-slack render tier to body and returns the text
@@ -424,6 +439,27 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 // invalid_blocks fallback envelope) so the bridge records the new top-level
 // message as a thread owned by this sandbox. Only meaningful with thread == "".
 func runWithClaim(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode string, claimThread bool, mentions ...string) (string, error) {
+	return runWithOpts(ctx, priv, sandboxID, bridgeURL, postOptions{
+		channel: channel, subject: subject, bodyPath: bodyPath, thread: thread,
+		renderMode: renderMode, claimThread: claimThread, mentions: mentions,
+	})
+}
+
+// postOptions is everything a post envelope is built from. runWith and
+// runWithClaim are positional wrappers kept for the existing call sites and tests.
+type postOptions struct {
+	channel, subject, bodyPath, thread, renderMode string
+	claimThread                                    bool // --claim-thread: bridge records the new top-level message as this sandbox's thread
+	broadcast                                      bool // --broadcast: reply_broadcast on a threaded post (2026-10-22)
+	mentions                                       []string
+}
+
+// runWithOpts renders, signs and POSTs one post envelope (plus the one
+// invalid_blocks fallback). Both envelopes carry the same claim/broadcast flags.
+func runWithOpts(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL string, o postOptions) (string, error) {
+	channel, subject, bodyPath, thread, renderMode := o.channel, o.subject, o.bodyPath, o.thread, o.renderMode
+	claimThread, mentions := o.claimThread, o.mentions
+	broadcast := o.broadcast && thread != ""
 	if sandboxID == "" {
 		return "", errors.New("sandboxID is required")
 	}
@@ -466,6 +502,7 @@ func runWithClaim(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridg
 		return "", err
 	}
 	env.ClaimThread = claimThread
+	env.Broadcast = broadcast
 	// Tier 2: populate the Blocks field if RenderBlocks succeeded.
 	if blocksJSON != "" {
 		env.Blocks = blocksJSON
@@ -492,6 +529,7 @@ func runWithClaim(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridg
 				return "", err // original error
 			}
 			fbEnv.ClaimThread = claimThread
+			fbEnv.Broadcast = broadcast
 			_, fbSig, fbErr := slack.SignEnvelope(fbEnv, priv)
 			if fbErr != nil {
 				return "", err // original error
@@ -801,6 +839,9 @@ type runReplyOptions struct {
 	render string
 	// mentions are normalised Slack mention tokens from --mention (may be empty).
 	mentions []string
+	// broadcast sets reply_broadcast on the resolved thread; the channel-root
+	// fallback has no thread, so it is refused rather than silently top-level.
+	broadcast bool
 }
 
 // runReply is the dispatch entry point for the "reply" subcommand.
@@ -814,6 +855,7 @@ func runReply(args []string, stderr io.Writer) int {
 	fs.StringVar(&opts.subject, "subject", "", "Optional subject text")
 	fs.StringVar(&opts.bodyPath, "body", "", "Path to body file (required)")
 	fs.StringVar(&opts.render, "render", "", "Render mode: plain (default), mrkdwn, blocks, blocks-rich (Phase 111 Tier 3 opt-in)")
+	fs.BoolVar(&opts.broadcast, "broadcast", false, "Also show the reply in the channel (reply_broadcast); fails if no thread resolves")
 	var mentions mentionFlag
 	fs.Var(&mentions, "mention", mentionFlagUsage)
 	if err := fs.Parse(args); err != nil {
@@ -962,8 +1004,15 @@ func runReplyWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridg
 		return errors.New("Slack not configured for this sandbox; re-create with notification.slack.enabled: true")
 	}
 
-	// Reuse the existing runWith post path with the resolved (channel, thread).
-	_, err := runWith(ctx, priv, sandboxID, bridgeURL, resolvedChannel, opts.subject, opts.bodyPath, resolvedThread, opts.render, opts.mentions...)
+	if opts.broadcast && resolvedThread == "" {
+		return errors.New("km-slack reply: --broadcast needs a thread, and none resolved (pass --thread, or set KM_SLACK_THREAD_TS)")
+	}
+
+	// Reuse the existing post path with the resolved (channel, thread).
+	_, err := runWithOpts(ctx, priv, sandboxID, bridgeURL, postOptions{
+		channel: resolvedChannel, subject: opts.subject, bodyPath: opts.bodyPath, thread: resolvedThread,
+		renderMode: opts.render, broadcast: opts.broadcast, mentions: opts.mentions,
+	})
 	return err
 }
 
