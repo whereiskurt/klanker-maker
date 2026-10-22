@@ -122,9 +122,11 @@ profile-to-bundle topology based on blast radius — km does NOT enforce 1:1 or
 
 **Decrypt 403 at boot**
 Check: (a) the sandbox IAM role has `kms:Decrypt` with a
-`kms:ResourceAliases` condition matching
+`ForAnyValue:StringEquals` / `kms:ResourceAliases` condition matching
 `alias/${resource_prefix}-sandbox-secrets` (auto-emitted by ec2spot module
-v1.2.0+); (b) the alias is attached to the key — run
+v1.2.0+; **v1.8.0 and v1.9.0 wrote a bare `StringEquals`, which never matches
+the multivalued key — every sandbox on those roles gets this 403; recreate on
+v1.10.0+**); (b) the alias is attached to the key — run
 `aws kms list-aliases --query 'Aliases[?AliasName==\`alias/km-sandbox-secrets\`]'`.
 
 **Sandbox boots but the agent has no secrets (as of Phase 133)**

@@ -15,13 +15,13 @@ import (
 
 // fakeIAMCleanup implements IAMCleanupAPI for stale-role teardown tests.
 type fakeIAMCleanup struct {
-	roles                  []string
-	inlinePolicies         map[string][]string
-	deleteRolePolicyErr    error
-	deleteRoleErrs         map[string]error
-	deletedRoles           []string
-	deleteRoleCallCount    int
-	deletePolicyCallCount  int
+	roles                 []string
+	inlinePolicies        map[string][]string
+	deleteRolePolicyErr   error
+	deleteRoleErrs        map[string]error
+	deletedRoles          []string
+	deleteRoleCallCount   int
+	deletePolicyCallCount int
 }
 
 func (f *fakeIAMCleanup) ListRoles(_ context.Context, _ *iam.ListRolesInput, _ ...func(*iam.Options)) (*iam.ListRolesOutput, error) {
@@ -250,4 +250,10 @@ func TestCheckStaleIAMRoles_HappyPath(t *testing.T) {
 	if strings.Contains(r.Message, "first failures") {
 		t.Errorf("happy path should not mention failures: %q", r.Message)
 	}
+}
+
+// GetRolePolicy satisfies IAMCleanupAPI for the Sandbox role shape check; the
+// cleanup tests never reach it.
+func (f *fakeIAMCleanup) GetRolePolicy(_ context.Context, in *iam.GetRolePolicyInput, _ ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error) {
+	return &iam.GetRolePolicyOutput{RoleName: in.RoleName, PolicyName: in.PolicyName, PolicyDocument: new(string)}, nil
 }

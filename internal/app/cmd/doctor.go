@@ -125,6 +125,7 @@ type IAMCleanupAPI interface {
 	DeleteRolePolicy(ctx context.Context, params *iam.DeleteRolePolicyInput, optFns ...func(*iam.Options)) (*iam.DeleteRolePolicyOutput, error)
 	DeleteRole(ctx context.Context, params *iam.DeleteRoleInput, optFns ...func(*iam.Options)) (*iam.DeleteRoleOutput, error)
 	ListAttachedRolePolicies(ctx context.Context, params *iam.ListAttachedRolePoliciesInput, optFns ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error)
+	GetRolePolicy(ctx context.Context, params *iam.GetRolePolicyInput, optFns ...func(*iam.Options)) (*iam.GetRolePolicyOutput, error) // Sandbox role shape reads the secrets-KMS policy document
 	DetachRolePolicy(ctx context.Context, params *iam.DetachRolePolicyInput, optFns ...func(*iam.Options)) (*iam.DetachRolePolicyOutput, error)
 	ListInstanceProfilesForRole(ctx context.Context, params *iam.ListInstanceProfilesForRoleInput, optFns ...func(*iam.Options)) (*iam.ListInstanceProfilesForRoleOutput, error)
 	RemoveRoleFromInstanceProfile(ctx context.Context, params *iam.RemoveRoleFromInstanceProfileInput, optFns ...func(*iam.Options)) (*iam.RemoveRoleFromInstanceProfileOutput, error)
@@ -349,8 +350,8 @@ func (a *appConfigAdapter) GetSlackDefaultRoute() *appcfg.SlackDefaultRoute {
 // GetSlackRoutesConfig hands the channel-routes check the whole config (search
 // paths, SSM prefix, slack.routes); read through an optional interface.
 func (a *appConfigAdapter) GetSlackRoutesConfig() *appcfg.Config { return a.cfg }
-func (a *appConfigAdapter) GetSlackThreadsTableName() string { return a.cfg.GetSlackThreadsTableName() }
-func (a *appConfigAdapter) GetSandboxTableName() string      { return a.cfg.GetSandboxTableName() }
+func (a *appConfigAdapter) GetSlackThreadsTableName() string     { return a.cfg.GetSlackThreadsTableName() }
+func (a *appConfigAdapter) GetSandboxTableName() string          { return a.cfg.GetSandboxTableName() }
 func (a *appConfigAdapter) GetClusterRoleNames() []string {
 	out := make([]string, 0, len(a.cfg.Clusters))
 	for _, c := range a.cfg.Clusters {

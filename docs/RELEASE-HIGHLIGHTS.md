@@ -11,15 +11,22 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Curated by hand for v0.9.2 from PRs #154 (Slack channel routes), #155
-  (km-slack react + --broadcast) and #157 (update --render/--subject). No phase blocks since v0.9.0, so
+  Curated by hand for v0.9.3 from PRs #154 (Slack channel routes), #155
+  (km-slack react + --broadcast), #157 (update --render/--subject) and #159
+  (ec2spot v1.10.0: the SOPS KMS grant). No phase blocks since v0.9.0, so
   scripts/draft-release-highlights.sh had nothing to draft.
 -->
 
 ## ⚠️ Upgrade notes — read before deploying
 
-This release changes the Slack bridge and the `km-slack` sidecar. No IAM, no schema, no
-Slack App change.
+This release changes the sandbox IAM role (`ec2spot` **v1.10.0**), the Slack bridge and the
+`km-slack` sidecar. No schema or Slack App change.
+
+- **If you run SOPS secrets (`spec.secrets.sopsFile`), deploy this before recreating any
+  sandbox.** The v0.9.0 and v0.9.2 notes told you to recreate boxes onto the least-privilege
+  role; on v1.8.0/v1.9.0 that role could not decrypt the bundle, so a recreated box's agent
+  started with no API key. See the first section below. Boxes already recreated need one
+  more `km destroy && km create` on v1.10.0; `km doctor` → **Sandbox role shape** names them.
 
 - **Deploy order:** `make build` → `make build-lambdas` → `km init --dry-run=false`.
   After that, every edit to `slack.routes:` is just `km init --slack`.
@@ -31,6 +38,28 @@ Slack App change.
   failure for `--broadcast`). Nothing half-deployed is dangerous.
 - **`km init` now reads the live routes table on every full and `--slack` apply**, even with
   no `routes:` block, so a stale table can be emptied. An SSM read error there stops the init.
+
+## 🔑 SOPS bundles decrypt again on the least-privilege role
+
+`ec2spot` v1.8.0 scoped the sandbox role's `kms:Decrypt` to the SOPS bundle key with a
+`kms:ResourceAliases` condition. That key is **multivalued** (the set of aliases on the key)
+and AWS requires a `ForAnyValue`/`ForAllValues` set operator for it. The policy used a bare
+`StringEquals`, which never matches, so the grant authorized nothing. It had been that way
+since Phase 89; the old `Allow */*` region lock covered for it, and v1.8.0 removed the cover.
+
+Symptoms on a v1.8.0/v1.9.0 role with a SOPS profile: `km-secretsd` cannot unseal
+(`AccessDeniedException … no identity-based policy allows the kms:Decrypt action`), `km-env`
+injects nothing, `claude` exits with `Not logged in`, and the inbound poller retries the
+message forever.
+
+- **v1.10.0** writes `ForAnyValue:StringEquals`. The IMDS fence's session-policy Deny had the
+  identical bug (so the Deny was inert) and is fixed the same way.
+- **`km doctor` → Sandbox role shape** now reads each role's secrets-KMS policy and names the
+  ones still carrying the bare operator.
+- A guard test scans the pinned module and every Go policy builder for the pattern.
+- The IAM policy simulator cannot see this class of bug. Verify from a box:
+  `cat /opt/km/.km-secrets-check.json` (`unseal` ok) and
+  `km-env exec --as claude -- sh -c 'env | grep -c ^ANTHROPIC_API_KEY='` (prints `1`).
 
 ## 📍 Route named channels to specific klankers
 

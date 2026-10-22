@@ -26,6 +26,11 @@ import (
 //     sandbox-secrets alias. The separate grant that lets helpers read SSM
 //     SecureStrings targets a different key and is conditioned on
 //     kms:ViaService=ssm, so it matches neither condition and keeps working.
+//     kms:ResourceAliases is MULTIVALUED (the set of aliases on the key), so
+//     the condition needs the ForAnyValue set operator; a plain StringEquals
+//     never matches and the Deny would be inert (2026-10-22, the same bug as
+//     ec2spot v1.8.0/v1.9.0's grant). Assertion 6's negative control is what
+//     proves this Deny bites on a real box.
 //   - s3:GetObject is denied on this sandbox's own bundle object, not a prefix.
 //
 // The Allow is not decoration. A session policy INTERSECTS with the role's
@@ -58,7 +63,7 @@ func SessionPolicy(resourcePrefix, artifactsBucket, sandboxID string) (string, e
 				"Action":   "kms:Decrypt",
 				"Resource": "*",
 				"Condition": map[string]any{
-					"StringEquals": map[string]any{
+					"ForAnyValue:StringEquals": map[string]any{
 						"kms:ResourceAliases": "alias/" + resourcePrefix + "-sandbox-secrets",
 					},
 				},
