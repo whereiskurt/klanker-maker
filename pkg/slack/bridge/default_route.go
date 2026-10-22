@@ -30,6 +30,10 @@ type DefaultRoute struct {
 	Profile     string
 	list        *EmailAllowlist
 	profileList *EmailAllowlist
+	// MentionOnly: a top-level post in a channel needs an @-mention of the bot
+	// to start a turn. Always true for the default route; a channel route may
+	// set mention_only: false. DMs never need one (requiresMention).
+	MentionOnly bool
 }
 
 // NewDefaultRoute compiles both allowlists. An invalid entry is logged and
@@ -41,7 +45,7 @@ func NewDefaultRoute(alias, profile string, installEmails, profileEmails []strin
 	if alias == "" || profile == "" || (install.Len() == 0 && prof.Len() == 0) {
 		return nil
 	}
-	return &DefaultRoute{Alias: alias, Profile: profile, list: install, profileList: prof}
+	return &DefaultRoute{Alias: alias, Profile: profile, list: install, profileList: prof, MentionOnly: true}
 }
 
 func compileRouteList(name string, emails []string) *EmailAllowlist {
