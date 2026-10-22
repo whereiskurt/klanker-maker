@@ -1197,15 +1197,31 @@ func ValidateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPat
 	if err := route.Validate(); err != nil {
 		return nil, err
 	}
+	profileAllow, err := routeProfileInboundAllow("slack.default_route.profile", route, searchPaths)
+	if err != nil {
+		return nil, err
+	}
+	if len(profileAllow) == 0 && len(route.NormalizedEmails()) == 0 {
+		return nil, errSlackDefaultRouteNoAllowlist(route.Profile)
+	}
+	return profileAllow, nil
+}
+
+// routeProfileInboundAllow resolves a route's profile (extends included),
+// proves it has Slack inbound enabled, and returns its own
+// notification.slack.inbound.allowEmails normalised (nil when none). label
+// names the config key in errors ("slack.default_route.profile" or
+// "slack.routes[i].profile"). Shared by the default route and channel routes.
+func routeProfileInboundAllow(label string, route *config.SlackDefaultRoute, searchPaths []string) ([]string, error) {
 	p, err := resolveSlackDefaultRouteProfile(route, searchPaths)
 	if err != nil {
-		return nil, fmt.Errorf("slack.default_route.profile %q: %w", route.Profile, err)
+		return nil, fmt.Errorf("%s %q: %w", label, route.Profile, err)
 	}
 	n := p.Spec.Notification
 	slackOn := n != nil && n.Slack != nil && n.Slack.Enabled != nil && *n.Slack.Enabled
 	inboundOn := slackOn && n.Slack.Inbound != nil && n.Slack.Inbound.Enabled != nil && *n.Slack.Inbound.Enabled
 	if !slackOn || !inboundOn {
-		return nil, fmt.Errorf("slack.default_route.profile %q must set notification.slack.enabled and notification.slack.inbound.enabled: a default-route sandbox replies through its inbound poller and has no other way to answer", route.Profile)
+		return nil, fmt.Errorf("%s %q must set notification.slack.enabled and notification.slack.inbound.enabled: a routed sandbox replies through its inbound poller and has no other way to answer", label, route.Profile)
 	}
 	var profileAllow []string
 	for _, e := range n.Slack.Inbound.AllowEmails {
@@ -1214,12 +1230,9 @@ func ValidateSlackDefaultRouteProfile(route *config.SlackDefaultRoute, searchPat
 		}
 		norm, _, verr := slackbridge.ValidateEmailEntry(e)
 		if verr != nil {
-			return nil, fmt.Errorf("slack.default_route.profile %q: notification.slack.inbound.allowEmails: %w", route.Profile, verr)
+			return nil, fmt.Errorf("%s %q: notification.slack.inbound.allowEmails: %w", label, route.Profile, verr)
 		}
 		profileAllow = append(profileAllow, norm)
-	}
-	if len(profileAllow) == 0 && len(route.NormalizedEmails()) == 0 {
-		return nil, errSlackDefaultRouteNoAllowlist(route.Profile)
 	}
 	return profileAllow, nil
 }
