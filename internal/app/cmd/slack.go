@@ -115,6 +115,9 @@ type SlackCmdDeps struct {
 	// list equals the bridge's gate list. Set by buildSlackCmdDeps; nil (tests)
 	// ⇒ skipped.
 	RouteProfileUploader S3ProfileUploader
+	// RouteChannelLister lists the bot's channels for slack.routes resolution.
+	// nil ⇒ built from the bot token in SSM.
+	RouteChannelLister SlackRouteChannelLister
 }
 
 // SlackInitOpts holds parsed flag values for km slack init.
@@ -430,6 +433,17 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 				if err := prestageSlackDefaultRoute(ctx, d.Cfg, d.RouteProfileUploader); err != nil {
 					return fmt.Errorf("km slack init: %w", err)
 				}
+			}
+			lister := d.RouteChannelLister
+			if lister == nil && len(d.Cfg.Slack.Routes) > 0 {
+				l, err := newSlackRouteLister(ctx, d.Cfg, d.SSM)
+				if err != nil {
+					return fmt.Errorf("km slack init: %w", err)
+				}
+				lister = l
+			}
+			if err := prepareSlackChannelRoutes(ctx, d.Cfg, lister, d.SSM, d.RouteProfileUploader); err != nil {
+				return fmt.Errorf("km slack init: %w", err)
 			}
 		}
 		noncesDir := filepath.Join(d.RepoRoot, "infra", "live", d.Region, "dynamodb-slack-nonces")

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmslack "github.com/whereiskurt/klanker-maker/pkg/slack"
 	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
@@ -224,4 +226,21 @@ func newSlackRouteLister(ctx context.Context, cfg *config.Config, store SSMParam
 		return nil, fmt.Errorf("slack.routes is configured but %sslack/bot-token is not set — run `km slack init` first (%v)", cfg.GetSsmPrefix(), err)
 	}
 	return kmslack.NewClient(strings.TrimSpace(tok), nil), nil
+}
+
+// prepareSlackChannelRoutesWithAWS is prepareSlackChannelRoutes with production
+// deps: SSM for the table and the bot token, a Slack client built from that
+// token (only when routes are configured), S3 for pre-stage. Every command that
+// applies lambda-slack-bridge calls it right after prepareSlackDefaultRoute.
+func prepareSlackChannelRoutesWithAWS(ctx context.Context, cfg *config.Config, awsCfg aws.Config, up S3ProfileUploader) error {
+	store := &productionSSMParamStore{client: ssm.NewFromConfig(awsCfg)}
+	var lister SlackRouteChannelLister
+	if len(cfg.Slack.Routes) > 0 {
+		l, err := newSlackRouteLister(ctx, cfg, store)
+		if err != nil {
+			return err
+		}
+		lister = l
+	}
+	return prepareSlackChannelRoutes(ctx, cfg, lister, store, up)
 }

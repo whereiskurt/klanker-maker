@@ -434,6 +434,12 @@ func runInitScoped(cfg *config.Config, awsProfile, region string, verbose bool, 
 	if err := prestageSlackDefaultRouteForModule(ctx, cfg, module, &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}); err != nil {
 		return err
 	}
+	// 2026-10-22: channel routes — only a bridge apply reads the table.
+	if module == "lambda-slack-bridge" {
+		if err := prepareSlackChannelRoutesWithAWS(ctx, cfg, awsCfg, &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}); err != nil {
+			return fmt.Errorf("km init: %w", err)
+		}
+	}
 
 	// 2. Ensure Slack bot-user-id is cached in env (needed when applying lambda-slack-bridge
 	//    so KM_SLACK_BOT_USER_ID lands in the Lambda env block). Non-fatal.
@@ -1817,15 +1823,18 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		}
 	}
 
-	// 2026-10-16: Slack default route. Validate (deny-by-default + the profile
-	// must carry Slack inbound) and pre-stage the profile for cold-create.
-	if cfg.Slack.DefaultRoute != nil {
-		if err := prepareSlackDefaultRoute(cfg); err != nil {
-			return fmt.Errorf("km init: %w", err)
-		}
-		if err := prestageSlackDefaultRoute(ctx, cfg, &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}); err != nil {
-			return err
-		}
+	// 2026-10-16 / 2026-10-22: Slack default route + channel routes. Validate
+	// (deny-by-default, profiles carry Slack inbound), pre-stage for cold-create,
+	// write the channel table and export its hash. With neither block the call
+	// still runs: it empties a table left by an earlier config and exports "".
+	if err := prepareSlackDefaultRoute(cfg); err != nil {
+		return fmt.Errorf("km init: %w", err)
+	}
+	if err := prestageSlackDefaultRoute(ctx, cfg, &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}); err != nil {
+		return err
+	}
+	if err := prepareSlackChannelRoutesWithAWS(ctx, cfg, awsCfg, &s3ProfileUploaderClient{inner: s3.NewFromConfig(awsCfg)}); err != nil {
+		return fmt.Errorf("km init: %w", err)
 	}
 
 	repoRoot := findRepoRoot()
@@ -3479,6 +3488,9 @@ func runInitPlan(cfg *config.Config, awsProfile, region string, verbose, acceptD
 	if err := prepareSlackDefaultRoute(cfg); err != nil {
 		return fmt.Errorf("km init --plan: %w", err)
 	}
+	// Plan: never resolves or writes the table; the hash of the LIVE table keeps
+	// the env diff honest. km doctor reports config-vs-table drift.
+	exportSlackRoutesHashFromSSM(ctx, cfg, &productionSSMParamStore{client: ssm.NewFromConfig(awsCfg)})
 
 	// 3. Construct runner (Verbose=false — RunInitPlanWithRunner captures stdout
 	//    per-module and echoes based on verbose flag post-hoc).
