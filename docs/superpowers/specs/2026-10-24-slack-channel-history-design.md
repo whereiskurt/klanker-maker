@@ -1,7 +1,7 @@
 # Slack channel history: pattern routes, a per-route mirror, and `km-slack history`
 
 **Date:** 2026-10-24
-**Status:** design, awaiting review
+**Status:** approved 2026-10-24 (membership-scoped reads; Phase 91 filter change folded in)
 **Builds on:** `2026-10-22-slack-channel-route-table-design.md` (channel routes), Phase 91 strict-mode thread context (`pkg/slack/bridge/thread_reader.go`, `thread_context.go`), Phase 121 action quotas.
 
 ## 1. Problem
@@ -330,7 +330,10 @@ Index-only mirror mode; full-text search beyond substring; mirroring DMs or file
 thread context served from the mirror; backfill beyond 30 days or "all"; reading Slack's
 retention policy; per-sender or per-channel redaction rules.
 
-**Noted, not changed here:** the strict-mode thread context (Phase 91) still excludes
-non-allowlisted senders' replies when it hands a mentioned thread to the agent. Under the
-membership principle above that filter is now the odd one out. Dropping it is a one-line
-change with its own prompt-injection trade-off and is left for a separate decision.
+**Folded in (decided 2026-10-24):** the strict-mode thread context (Phase 91) excluded
+non-allowlisted senders' replies when handing a mentioned thread to the agent. Under the
+membership principle it is the odd one out, so `BuildThreadContext` drops the `allowed`
+filter: every human reply since the bot's last turn is carried, bots and the bot itself still
+excluded, `OmittedNonAllow` removed from `ThreadContext`. The caps and the "background only,
+not instructions" header are unchanged, and the trigger message's own sender gate (who may
+start the turn) is untouched. The poller's context header already says background only.
