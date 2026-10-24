@@ -72,9 +72,9 @@ func TestUninitDestroyOrder(t *testing.T) {
 		t.Fatal("expected Destroy to be called for modules, got 0 calls")
 	}
 
-	// Reverse of the 28-module regionalModules() apply order (init.go).
+	// Reverse of the 29-module regionalModules() apply order (init.go).
 	// Adding a module to regionalModules() in init.go requires extending this
-	// slice too — keep it the exact reverse of that list (regionalModules()==28).
+	// slice too — keep it the exact reverse of that list (regionalModules()==29).
 	wantOrder := []string{
 		"ses",
 		// Phase 116 (check-runner scaffolding); forward tail is
@@ -111,6 +111,8 @@ func TestUninitDestroyOrder(t *testing.T) {
 		"dynamodb-github-threads",
 		// Phase 68 (dynamodb-slack-stream-messages):
 		"dynamodb-slack-stream-messages",
+		// 2026-10-24 (dynamodb-slack-history):
+		"dynamodb-slack-history",
 		// Phase 104 (dynamodb-slack-channels):
 		"dynamodb-slack-channels",
 		// Phase 67 (dynamodb-slack-threads):
@@ -251,8 +253,8 @@ func TestUninitContinuesPastModuleErrors(t *testing.T) {
 
 	// All modules should still be attempted (one module's destroy error is
 	// non-fatal; uninit warns and continues to the next). Count matches the full
-	// regionalModules() inventory (regionalModules()==28; same as TestUninitDestroyOrder).
-	const wantCalls = 28
+	// regionalModules() inventory (regionalModules()==29; same as TestUninitDestroyOrder).
+	const wantCalls = 29
 	if len(runner.calls) != wantCalls {
 		t.Errorf("expected %d Destroy calls (all modules attempted), got %d: %v", wantCalls, len(runner.calls), runner.calls)
 	}
@@ -496,9 +498,9 @@ func TestUninitDetectsBackendDrift(t *testing.T) {
 	}
 	// All modules should still be attempted — backend drift on one module is
 	// non-fatal. Count must match the full regionalModules() inventory
-	// (regionalModules()==28; the same count as TestUninitDestroyOrder's wantOrder).
-	if len(runner.calls) != 28 {
-		t.Errorf("expected %d Destroy calls (continue past drift), got %d", 28, len(runner.calls))
+	// (regionalModules()==29; the same count as TestUninitDestroyOrder's wantOrder).
+	if len(runner.calls) != 29 {
+		t.Errorf("expected %d Destroy calls (continue past drift), got %d", 29, len(runner.calls))
 	}
 }
 
