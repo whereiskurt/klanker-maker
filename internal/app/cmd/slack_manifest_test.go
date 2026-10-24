@@ -164,6 +164,21 @@ func TestSlackManifest_DMScopesAndEvents(t *testing.T) {
 	}
 }
 
+// 2026-10-24: glob routes match channels the bot is invited to after km init,
+// and a mirrored channel is purged when the bot leaves. Both need events.
+func TestSlackManifest_HistoryEvents(t *testing.T) {
+	var buf bytes.Buffer
+	if err := cmd.RenderSlackManifest(&buf, cmd.SlackManifestData{AppName: "x", EventsURL: "https://e/events"}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{`"member_joined_channel"`, `"channel_left"`, `"group_left"`, `"channel_deleted"`, `"groups:read"`, `"channels:read"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("manifest lacks %s", want)
+		}
+	}
+}
+
 func TestVerifyEventsAPIScopes_RequiresIMHistory(t *testing.T) {
 	ok, missing := cmd.VerifyEventsAPIScopes([]string{"channels:history", "groups:history", "reactions:write", "files:read"})
 	if ok || !hasString(missing, "im:history") {
