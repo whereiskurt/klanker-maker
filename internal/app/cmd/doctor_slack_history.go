@@ -61,15 +61,9 @@ func checkSlackHistory(ctx context.Context, cfg *config.Config, lister SlackRout
 	} else {
 		var notes []string
 		for _, p := range plan.Patterns {
-			n := 0
-			for _, e := range plan.Entries {
-				if e.Pattern == p.Glob {
-					n++
-				}
-			}
-			notes = append(notes, fmt.Sprintf("#%s → %s (%d current channel(s))", p.Glob, p.Alias, n))
+			notes = append(notes, fmt.Sprintf("#%s → %s (%d current channel(s))", p.Glob, p.Alias, len(p.Channels)))
 		}
-		routes.Message = fmt.Sprintf("%d history route(s); %s", len(plan.Entries), strings.Join(notes, "; "))
+		routes.Message = fmt.Sprintf("%d named route(s), %d glob(s); %s", len(plan.Entries), len(plan.Patterns), strings.Join(notes, "; "))
 	}
 
 	// 2. Scopes: private channels need groups:read to be matched by name.

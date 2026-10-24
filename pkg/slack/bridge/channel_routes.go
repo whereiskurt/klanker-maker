@@ -48,16 +48,25 @@ type RouteHistory struct {
 }
 
 // PatternEntry is a glob route template: what a channel that matches Glob at
-// event time becomes (RouteFromPattern). Routes expanded at km init from the
-// same glob carry Pattern = Glob so km doctor can tell them apart.
+// event time becomes (RouteFromPattern). Channels are the current channels the
+// glob matched at km init: they ride on the pattern as {id, name} pairs rather
+// than as full RouteEntry rows, so a glob over many channels stays compact, and
+// removing the glob removes them with it. BuildRouteTable expands them.
 type PatternEntry struct {
-	Glob         string        `json:"glob"`
-	Alias        string        `json:"alias"`
-	Profile      string        `json:"profile"`
-	Allow        []string      `json:"allow"`
-	ProfileAllow []string      `json:"profile_allow,omitempty"`
-	MentionOnly  bool          `json:"mention_only"`
-	History      *RouteHistory `json:"history,omitempty"`
+	Glob         string           `json:"glob"`
+	Alias        string           `json:"alias"`
+	Profile      string           `json:"profile"`
+	Allow        []string         `json:"allow"`
+	ProfileAllow []string         `json:"profile_allow,omitempty"`
+	MentionOnly  bool             `json:"mention_only"`
+	History      *RouteHistory    `json:"history,omitempty"`
+	Channels     []PatternChannel `json:"channels,omitempty"`
+}
+
+// PatternChannel is one current channel a glob matched at km init.
+type PatternChannel struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // RoutesDocument is the on-the-wire table.
@@ -111,8 +120,8 @@ func CanonicalRoutesJSON(routes []RouteEntry) ([]byte, error) {
 
 // CanonicalRoutesDocument encodes the table so equal tables are equal bytes:
 // routes sorted by channel id, patterns in document (config) order because the
-// first matching glob wins at event time, every allow and
-// profile_allow list sorted, no HTML escaping, no trailing newline. km doctor
+// first matching glob wins at event time, each pattern's channels sorted by id,
+// every allow and profile_allow list sorted, no HTML escaping, no trailing newline. km doctor
 // recomputes it to detect drift, so the form must never depend on map order.
 func CanonicalRoutesDocument(routes []RouteEntry, patterns []PatternEntry) ([]byte, error) {
 	out := make([]RouteEntry, len(routes))
@@ -130,6 +139,11 @@ func CanonicalRoutesDocument(routes []RouteEntry, patterns []PatternEntry) ([]by
 		copy(pats, patterns)
 		for i := range pats {
 			pats[i].Allow, pats[i].ProfileAllow = sortedAllow(pats[i].Allow), sortedProfileAllow(pats[i].ProfileAllow)
+			if len(pats[i].Channels) > 0 {
+				chs := append([]PatternChannel(nil), pats[i].Channels...)
+				sort.SliceStable(chs, func(a, b int) bool { return chs[a].ID < chs[b].ID })
+				pats[i].Channels = chs
+			}
 		}
 	}
 	var buf bytes.Buffer
@@ -204,6 +218,11 @@ func ParseRoutesDocument(b []byte) (*RoutesDocument, error) {
 		if err := validateRouteHistory(p.History); err != nil {
 			return nil, fmt.Errorf("slack routes: pattern %d (%s): %w", i, p.Glob, err)
 		}
+		for j, ch := range p.Channels {
+			if ch.ID == "" {
+				return nil, fmt.Errorf("slack routes: pattern %d (%s) channel %d has no id", i, p.Glob, j)
+			}
+		}
 	}
 	for i, r := range doc.Routes {
 		if err := validateRouteHistory(r.History); err != nil {
@@ -232,11 +251,13 @@ func validateRouteHistory(h *RouteHistory) error {
 	return nil
 }
 
-// BuildRouteTable compiles a document into channel id → route. An entry whose
-// allow or profile_allow list fails to compile, or a second entry for a
-// channel, is skipped
-// with one warn line and never widens or replaces a route (same disposition
-// as NewDefaultRoute returning nil on an invalid list).
+// BuildRouteTable compiles a document into channel id → route: the static
+// routes first, then every pattern's matched channels (RouteFromPattern), so a
+// static entry for a channel beats any pattern and the first pattern listing a
+// channel beats a later one. An entry whose allow or profile_allow list fails
+// to compile, or a second static entry for a channel, is skipped with one warn
+// line and never widens or replaces a route (same disposition as
+// NewDefaultRoute returning nil on an invalid list).
 func BuildRouteTable(doc *RoutesDocument, warn func(msg string, kv ...any)) map[string]*DefaultRoute {
 	table := map[string]*DefaultRoute{}
 	if doc == nil {
@@ -247,29 +268,55 @@ func BuildRouteTable(doc *RoutesDocument, warn func(msg string, kv ...any)) map[
 			warn("km-slack-bridge: channel route listed twice; keeping the first", "channel", e.Channel, "alias", e.Alias)
 			continue
 		}
-		list, err := CompileEmailAllowlist(e.Allow)
-		if err != nil || list.Len() == 0 {
-			warn("km-slack-bridge: channel route has an invalid allow list; skipping", "channel", e.Channel, "alias", e.Alias, "err", err)
-			continue
+		if r := compileRouteEntry(e, warn); r != nil {
+			table[e.Channel] = r
 		}
-		if len(e.ProfileAllow) > 0 {
-			// NewDefaultRoute would drop a bad entry and keep the rest; a
-			// narrowed create gate must not silently lose entries, so skip.
-			if plist, perr := CompileEmailAllowlist(e.ProfileAllow); perr != nil || plist.Len() == 0 {
-				warn("km-slack-bridge: channel route has an invalid profile_allow list; skipping", "channel", e.Channel, "alias", e.Alias, "err", perr)
-				continue
+	}
+	staticIDs := map[string]bool{}
+	for id := range table {
+		staticIDs[id] = true
+	}
+	for _, p := range doc.Patterns {
+		pr := PatternRoute{Glob: p.Glob, Entry: p}
+		for _, ch := range p.Channels {
+			if _, dup := table[ch.ID]; dup {
+				if !staticIDs[ch.ID] {
+					warn("km-slack-bridge: channel matched by two patterns; keeping the first", "channel", ch.ID, "glob", p.Glob)
+				}
+				continue // exact beats glob; first glob wins
+			}
+			if r := compileRouteEntry(RouteFromPattern(pr, ch.ID, ch.Name), warn); r != nil {
+				table[ch.ID] = r
 			}
 		}
-		r := NewDefaultRoute(e.Alias, e.Profile, e.Allow, e.ProfileAllow)
-		if r == nil {
-			warn("km-slack-bridge: channel route incomplete; skipping", "channel", e.Channel, "alias", e.Alias)
-			continue
-		}
-		r.MentionOnly = e.MentionOnly
-		r.History, r.Pattern = e.History, e.Pattern
-		table[e.Channel] = r
 	}
 	return table
+}
+
+// compileRouteEntry is one entry's DefaultRoute, nil (after a warn line) when
+// either allowlist fails to compile or the entry is incomplete.
+func compileRouteEntry(e RouteEntry, warn func(msg string, kv ...any)) *DefaultRoute {
+	list, err := CompileEmailAllowlist(e.Allow)
+	if err != nil || list.Len() == 0 {
+		warn("km-slack-bridge: channel route has an invalid allow list; skipping", "channel", e.Channel, "alias", e.Alias, "err", err)
+		return nil
+	}
+	if len(e.ProfileAllow) > 0 {
+		// NewDefaultRoute would drop a bad entry and keep the rest; a
+		// narrowed create gate must not silently lose entries, so skip.
+		if plist, perr := CompileEmailAllowlist(e.ProfileAllow); perr != nil || plist.Len() == 0 {
+			warn("km-slack-bridge: channel route has an invalid profile_allow list; skipping", "channel", e.Channel, "alias", e.Alias, "err", perr)
+			return nil
+		}
+	}
+	r := NewDefaultRoute(e.Alias, e.Profile, e.Allow, e.ProfileAllow)
+	if r == nil {
+		warn("km-slack-bridge: channel route incomplete; skipping", "channel", e.Channel, "alias", e.Alias)
+		return nil
+	}
+	r.MentionOnly = e.MentionOnly
+	r.History, r.Pattern = e.History, e.Pattern
+	return r
 }
 
 // PatternRoute is one glob with its template and the DefaultRoute a matched

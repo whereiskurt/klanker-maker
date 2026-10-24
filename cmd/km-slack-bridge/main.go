@@ -954,6 +954,7 @@ func wireChannelRoutes(ctx context.Context, h *bridge.EventsHandler, reader rout
 	h.Patterns = bridge.BuildPatternTable(doc, func(msg string, kv ...any) { slog.Warn(msg, kv...) })
 	if handler != nil {
 		handler.Routes = table
+		handler.Patterns = h.Patterns
 	}
 	wireRouteDeps(h, d)
 	slog.Info("km-slack-bridge: channel routes enabled", "count", len(table),

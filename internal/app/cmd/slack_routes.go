@@ -132,12 +132,12 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 		}
 		return &registered{slug, allow, profileAllow, source}, nil
 	}
-	addEntry := func(r *config.SlackRoute, ch kmslack.SlackChannelSummary, pattern string, reg *registered, hist *slackbridge.RouteHistory) {
+	addEntry := func(r *config.SlackRoute, ch kmslack.SlackChannelSummary, reg *registered, hist *slackbridge.RouteHistory) {
 		plan.Sources = append(plan.Sources, reg.source)
 		plan.Counts = append(plan.Counts, len(reg.allow))
 		plan.Chans = append(plan.Chans, ch.ID)
 		plan.Entries = append(plan.Entries, slackbridge.RouteEntry{
-			Channel: ch.ID, Name: ch.Name, Pattern: pattern, Alias: r.Alias, Profile: reg.slug,
+			Channel: ch.ID, Name: ch.Name, Alias: r.Alias, Profile: reg.slug,
 			Allow: reg.allow, ProfileAllow: reg.profileAllow, MentionOnly: r.MentionRequired(), History: hist,
 		})
 	}
@@ -173,11 +173,14 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", label, err)
 		}
-		addEntry(r, ch, "", reg, hist)
+		addEntry(r, ch, reg, hist)
 	}
 
 	// Pass 2: glob routes, in config order (the first glob wins at event time,
 	// so the table keeps this order). A channel two globs both match is an error.
+	// A current channel a glob matches rides on the pattern as {id, name}, not as
+	// a full route entry: the table stays compact (a 4 KB Standard parameter) and
+	// a removed glob takes its channels with it.
 	globOwner := map[string]int{} // channel id → glob route index
 	for i := range cfg.Slack.Routes {
 		r := &cfg.Slack.Routes[i]
@@ -196,6 +199,7 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 		}
 		plan.Patterns = append(plan.Patterns, slackbridge.PatternEntry{Glob: glob, Alias: r.Alias, Profile: reg.slug,
 			Allow: reg.allow, ProfileAllow: reg.profileAllow, MentionOnly: r.MentionRequired(), History: hist})
+		pat := &plan.Patterns[len(plan.Patterns)-1]
 		for _, ch := range channels {
 			if !slackbridge.MatchChannelGlob(glob, ch.Name) {
 				continue
@@ -207,7 +211,7 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 				return nil, fmt.Errorf("%s: channel #%s (%s) matches two globs, this one and slack.routes[%d] (%s); narrow one so each channel has one route", label, ch.Name, ch.ID, j, cfg.Slack.Routes[j].Channel)
 			}
 			globOwner[ch.ID] = i
-			addEntry(r, ch, glob, reg, hist)
+			pat.Channels = append(pat.Channels, slackbridge.PatternChannel{ID: ch.ID, Name: ch.Name})
 		}
 	}
 	b, err := slackbridge.CanonicalRoutesDocument(plan.Entries, plan.Patterns)
@@ -290,7 +294,7 @@ func prepareSlackChannelRoutes(ctx context.Context, cfg *config.Config, lister S
 		return fmt.Errorf("km init: %w", err)
 	}
 	if n := len(plan.JSON); n > slackRoutesMaxBytes {
-		return fmt.Errorf("km init: slack.routes table is %d bytes; SSM Standard parameters hold %d — remove routes or shorten allow lists (about 20 routes fit)", n, slackRoutesMaxBytes)
+		return fmt.Errorf("km init: slack.routes table is %d bytes; SSM Standard parameters hold %d — remove routes, narrow a glob, or shorten allow lists (about 20 named routes, or roughly 60 glob-matched channels, fit)", n, slackRoutesMaxBytes)
 	}
 	if up != nil && cfg.ArtifactsBucket != "" {
 		for _, view := range plan.Profiles {
@@ -311,9 +315,9 @@ func prepareSlackChannelRoutes(ctx context.Context, cfg *config.Config, lister S
 		if p.History != nil {
 			hist = fmt.Sprintf("query=%v mirror=%v backfill=%ds retention=%ds max=%d", p.History.Query, p.History.Mirror, p.History.BackfillSeconds, p.History.RetentionSeconds, p.History.MaxMessages)
 		}
-		fmt.Fprintf(os.Stderr, "[info] slack.routes: glob #%s → alias %q (%s); new channels match at join time\n", p.Glob, p.Alias, hist)
+		fmt.Fprintf(os.Stderr, "[info] slack.routes: glob #%s → alias %q (%s); %d current channel(s) matched, new channels match at join time\n", p.Glob, p.Alias, hist, len(p.Channels))
 	}
-	fmt.Fprintf(os.Stderr, "[info] slack.routes: %d route(s) written to %s (sha256 %s…)\n", len(plan.Entries), param, plan.SHA[:12])
+	fmt.Fprintf(os.Stderr, "[info] slack.routes: %d route(s) and %d glob(s) written to %s (%d bytes, sha256 %s…)\n", len(plan.Entries), len(plan.Patterns), param, len(plan.JSON), plan.SHA[:12])
 	return nil
 }
 

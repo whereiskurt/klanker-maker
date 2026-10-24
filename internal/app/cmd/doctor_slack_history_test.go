@@ -104,6 +104,15 @@ func TestCheckSlackHistory_GlobWithNoCurrentMatchIsOKWithNote(t *testing.T) {
 	}
 }
 
+func TestCheckSlackHistory_GlobCountsItsPatternChannels(t *testing.T) {
+	cfg := historyDoctorCfg(t, globRoute())
+	res := checkSlackHistory(context.Background(), cfg, &fakeLister{channels: historyChannels}, &mockDynamoClient{output: &dynamodb.DescribeTableOutput{}}, goodTTL(),
+		&fakeHistoryMeta{}, scopesWith("groups:read"), "km")
+	if r := byName(res, "Slack history routes"); r.Status != CheckOK || !strings.Contains(r.Message, "#inc_* → ir (2 current channel(s))") {
+		t.Errorf("routes = %+v", r)
+	}
+}
+
 func TestCheckSlackHistory_GroupsReadMissingWarnsOnlyWithGlobs(t *testing.T) {
 	ok := &mockDynamoClient{output: &dynamodb.DescribeTableOutput{}}
 	glob := historyDoctorCfg(t, globRoute())

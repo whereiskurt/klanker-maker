@@ -124,37 +124,54 @@ func humanizeSeconds(sec int) string {
 // slackTS renders a time as a Slack ts ("1729700000.000000").
 func slackTS(t time.Time) string { return fmt.Sprintf("%d.%06d", t.Unix(), t.Nanosecond()/1000) }
 
-// routeForChannel is selectRoute's lookup: the static table, then a meta row
-// written when the bot joined a glob-matched channel, then nil.
-func (h *EventsHandler) routeForChannel(ctx context.Context, channel string) (*DefaultRoute, string) {
+// routeForChannel is the channel's route: the static table (named routes and
+// the channels each glob matched at km init), then a meta row written when the
+// bot joined a glob-matched channel, resolved through the CURRENT pattern table
+// (resolveMetaRoute), then nil. A meta-row read error is returned, never folded
+// into "no route": the caller must not fall back to the default route on a
+// store blip (wrong alias, wrong continuity row).
+func (h *EventsHandler) routeForChannel(ctx context.Context, channel string) (*DefaultRoute, string, error) {
 	if r, ok := h.Routes[channel]; ok && r != nil {
-		return r, channel
+		return r, channel, nil
 	}
 	if h.History == nil {
-		return nil, ""
+		return nil, "", nil
 	}
 	meta, err := h.History.GetMeta(ctx, channel)
 	if err != nil {
-		h.log().Warn("events: history meta read failed", "channel", channel, "err", err)
-		return nil, ""
+		return nil, "", err
 	}
-	if meta == nil {
-		return nil, ""
+	if r := resolveMetaRoute(meta, h.Patterns); r != nil {
+		return r, channel, nil
 	}
-	table := BuildRouteTable(&RoutesDocument{V: RoutesDocumentVersion, Routes: []RouteEntry{meta.Route}}, func(string, ...any) {})
-	if r := table[channel]; r != nil {
-		return r, channel
+	return nil, "", nil
+}
+
+// resolveMetaRoute is a meta row's route as TODAY's config defines it: the
+// route the row's glob (meta.Route.Pattern) produces from the current pattern
+// table, or nil when that glob is no longer configured (or the row was bound by
+// a named route, which the static table answers). meta.Route is bookkeeping for
+// km doctor and purge; it never routes or authorises on its own, so removing or
+// narrowing a glob takes effect at the next cold start.
+func resolveMetaRoute(meta *ChannelMeta, patterns []PatternRoute) *DefaultRoute {
+	if meta == nil || meta.Route.Pattern == "" {
+		return nil
 	}
-	return nil, ""
+	for _, p := range patterns {
+		if p.Glob == meta.Route.Pattern {
+			return compileRouteEntry(RouteFromPattern(p, meta.Channel, meta.Name), func(string, ...any) {})
+		}
+	}
+	return nil
 }
 
 // mirrorMessage stores what a member of a mirror: true channel can read. No
-// sender filter: membership is the permission. Errors are logged, never fatal.
-func (h *EventsHandler) mirrorMessage(ctx context.Context, msg slackMessageEvent) {
+// sender filter: membership is the permission. route is the channel's route as
+// Handle resolved it (nil = not mirrored). Errors are logged, never fatal.
+func (h *EventsHandler) mirrorMessage(ctx context.Context, msg slackMessageEvent, route *DefaultRoute) {
 	if h.History == nil || msg.ChannelType == "im" || msg.ChannelType == "mpim" {
 		return
 	}
-	route, _ := h.routeForChannel(ctx, msg.Channel)
 	if route == nil || route.History == nil || !route.History.Mirror {
 		return
 	}

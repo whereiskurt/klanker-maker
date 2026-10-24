@@ -114,11 +114,20 @@ func TestHandle_URLRequestStillDispatches(t *testing.T) {
 }
 
 func TestWireChannelRoutes_SetsPatterns(t *testing.T) {
+	origHandler := handler
+	handler = &bridge.Handler{}
+	t.Cleanup(func() { handler = origHandler })
 	h := &bridge.EventsHandler{}
-	p := &fakeParam{value: `{"v":1,"routes":[],"patterns":[{"glob":"proj-*","alias":"a","profile":"p","allow":["*@example.com"],"mention_only":true}]}`}
+	p := &fakeParam{value: `{"v":1,"routes":[],"patterns":[{"glob":"proj-*","alias":"a","profile":"p","allow":["*@example.com"],"mention_only":true,"channels":[{"id":"C1","name":"proj-a"}]}]}`}
 	wireChannelRoutes(context.Background(), h, p, "/km/slack/routes", defaultRouteDeps{})
 	if len(h.Patterns) != 1 {
 		t.Fatalf("patterns = %d, want 1", len(h.Patterns))
+	}
+	if len(handler.Patterns) != 1 || handler.Patterns[0].Glob != "proj-*" {
+		t.Fatalf("the history handler must get the same patterns: %+v", handler.Patterns)
+	}
+	if r := h.Routes["C1"]; r == nil || r.Alias != "a" || handler.Routes["C1"] == nil {
+		t.Fatalf("a pattern's matched channel must be in both route tables: events=%+v handler=%+v", h.Routes, handler.Routes)
 	}
 	h2 := &bridge.EventsHandler{}
 	p2 := &fakeParam{value: `{"v":1,"routes":[]}`}

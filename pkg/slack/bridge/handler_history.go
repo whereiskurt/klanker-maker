@@ -124,7 +124,10 @@ func (h *Handler) handleHistory(ctx context.Context, env slack.SlackEnvelope) *R
 	return jsonResp(200, resp)
 }
 
-// historyRoute is the static table, then the meta row (a glob matched at join).
+// historyRoute is the static table, then the meta row (a glob matched at join)
+// resolved through the CURRENT pattern table: a glob removed or narrowed since
+// the row was written governs the read, never the row's snapshot. Fail-closed:
+// a meta read error is logged and answers "no route".
 func (h *Handler) historyRoute(ctx context.Context, channel string) *DefaultRoute {
 	if r, ok := h.Routes[channel]; ok && r != nil {
 		return r
@@ -133,10 +136,11 @@ func (h *Handler) historyRoute(ctx context.Context, channel string) *DefaultRout
 		return nil
 	}
 	meta, err := h.History.GetMeta(ctx, channel)
-	if err != nil || meta == nil {
+	if err != nil {
+		logger.ErrorContext(ctx, "bridge: history meta read failed; treating as no route", "step", "history", "channel", channel, "err", err)
 		return nil
 	}
-	return BuildRouteTable(&RoutesDocument{V: RoutesDocumentVersion, Routes: []RouteEntry{meta.Route}}, func(string, ...any) {})[channel]
+	return resolveMetaRoute(meta, h.Patterns)
 }
 
 func (h *Handler) historyFailed(ctx context.Context, env slack.SlackEnvelope, err error) *Response {

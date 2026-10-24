@@ -3713,9 +3713,14 @@ fields are `omitempty`, so a table with no `history:` blocks is byte-identical t
 an old bridge ignores them.
 
 **Resolution at init.** `km init --slack` matches each glob against the bot's channel list
-(`users.conversations`, as for named routes) and writes one table entry per current match
-with the glob recorded as its `pattern`. The globs are also written to a `patterns` list so
-the bridge can match channels that do not exist yet. Patterns keep config order on the wire.
+(`users.conversations`, as for named routes) and writes the globs to a `patterns` list, in
+config order, so the bridge can also match channels that do not exist yet. The current
+channels a glob matches ride on the pattern itself as compact `{id, name}` pairs rather than
+as full route entries, so the table holds roughly 60 active glob-matched channels beside a
+few named routes (the lister already excludes archived channels). Removing or narrowing a
+glob revokes it everywhere at the next cold start: its matched channels leave the table, and
+meta rows written at join time resolve through the current pattern list, never through the
+copy they were written with.
 
 **Resolution at join.** The manifest subscribes to `member_joined_channel`. When the bot
 itself joins a channel, the bridge calls `conversations.info` for the name (the scope

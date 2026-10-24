@@ -171,8 +171,9 @@ func TestHandleHistory_RoutedChannelQueryOnlyReadsLive(t *testing.T) {
 
 func TestHandleHistory_MetaRowRouteCounts(t *testing.T) {
 	f := newHistFixture()
-	f.store.meta["CINC"] = ChannelMeta{Channel: "CINC", Route: RouteEntry{
-		Channel: "CINC", Alias: "ir", Profile: "p", Allow: []string{"a@example.com"},
+	f.h.Patterns = []PatternRoute{patternRoute("inc_*", "ir", &RouteHistory{Query: true})}
+	f.store.meta["CINC"] = ChannelMeta{Channel: "CINC", Name: "inc_1", Route: RouteEntry{
+		Channel: "CINC", Pattern: "inc_*", Alias: "ir", Profile: "p", Allow: []string{"a@example.com"},
 		History: &RouteHistory{Query: true},
 	}}
 	f.reader.msgs = replyMsgs(1, 5)
@@ -180,6 +181,49 @@ func TestHandleHistory_MetaRowRouteCounts(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status %d: %s", resp.StatusCode, resp.Body)
 	}
+}
+
+// A meta row never authorises on its own snapshot: the glob it was bound by
+// must still be configured, and today's version of it decides.
+func TestHandleHistory_MetaRowResolvesThroughCurrentPatterns(t *testing.T) {
+	snapshot := RouteEntry{Channel: "CINC", Pattern: "inc_*", Alias: "ir", Profile: "p", Allow: []string{"a@example.com"}, History: &RouteHistory{Query: true}}
+	t.Run("glob removed", func(t *testing.T) {
+		f := newHistFixture()
+		f.store.meta["CINC"] = ChannelMeta{Channel: "CINC", Name: "inc_1", Route: snapshot}
+		resp := f.h.handleHistory(context.Background(), historyEnv("sb-abc123", "CINC"))
+		if resp.StatusCode != 403 || !strings.Contains(resp.Body, "history_not_allowed") {
+			t.Fatalf("a removed glob must revoke history: %d %s", resp.StatusCode, resp.Body)
+		}
+		f.noReads(t)
+	})
+	t.Run("glob lost query", func(t *testing.T) {
+		f := newHistFixture()
+		f.h.Patterns = []PatternRoute{patternRoute("inc_*", "ir", nil)}
+		f.store.meta["CINC"] = ChannelMeta{Channel: "CINC", Name: "inc_1", Route: snapshot}
+		resp := f.h.handleHistory(context.Background(), historyEnv("sb-abc123", "CINC"))
+		if resp.StatusCode != 403 {
+			t.Fatalf("the current glob has no history block: %d %s", resp.StatusCode, resp.Body)
+		}
+	})
+	t.Run("glob moved to another alias", func(t *testing.T) {
+		f := newHistFixture()
+		f.h.Patterns = []PatternRoute{patternRoute("inc_*", "other", &RouteHistory{Query: true})}
+		f.h.AliasResolver = &fakeAliasResolver{byAlias: map[string]SandboxRoutingInfo{"ir": {SandboxID: "sb-abc123"}, "other": {SandboxID: "sb-other"}}}
+		f.store.meta["CINC"] = ChannelMeta{Channel: "CINC", Name: "inc_1", Route: snapshot}
+		resp := f.h.handleHistory(context.Background(), historyEnv("sb-abc123", "CINC"))
+		if resp.StatusCode != 403 {
+			t.Fatalf("the snapshot's alias must not authorise: %d %s", resp.StatusCode, resp.Body)
+		}
+	})
+	t.Run("meta read error fails closed", func(t *testing.T) {
+		f := newHistFixture()
+		f.h.Patterns = []PatternRoute{patternRoute("inc_*", "ir", &RouteHistory{Query: true})}
+		f.store.getMetaErr = fmt.Errorf("ddb down")
+		resp := f.h.handleHistory(context.Background(), historyEnv("sb-abc123", "CINC"))
+		if resp.StatusCode != 403 {
+			t.Fatalf("got %d %s", resp.StatusCode, resp.Body)
+		}
+	})
 }
 
 func TestHandleHistory_Refusals(t *testing.T) {

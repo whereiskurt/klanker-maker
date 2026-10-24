@@ -279,6 +279,9 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		h.log().Warn("events: bad inner event", "err", err)
 		return EventsResponse{StatusCode: 200, Body: "ok"} // ack to prevent Slack retry
 	}
+	var chRoute *DefaultRoute
+	var chRouteName string
+	var chRouteErr error
 	switch msg.Type {
 	case "member_joined_channel":
 		h.onMemberJoined(ctx, msg)
@@ -287,9 +290,19 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		h.onChannelLeft(ctx, msg.Channel)
 		return EventsResponse{StatusCode: 200, Body: "ok"}
 	case "message":
+		// The channel's route is resolved ONCE per event and shared by the mirror
+		// and route selection. A meta-row read error mirrors nothing and must
+		// never fall back to the default route (wrong alias, wrong continuity
+		// row): the routing decision below drops the message instead.
+		if msg.ChannelType != "im" {
+			chRoute, chRouteName, chRouteErr = h.routeForChannel(ctx, msg.Channel)
+			if chRouteErr != nil {
+				h.log().Error("events: channel route lookup failed (history meta read)", "channel", msg.Channel, "err", chRouteErr)
+			}
+		}
 		// The mirror sees every message in a mirror: true channel, BEFORE the
 		// bot-loop and mention filters: it records what a member reads.
-		h.mirrorMessage(ctx, msg)
+		h.mirrorMessage(ctx, msg, chRoute)
 	default:
 		// Reserved for future expansion (e.g. app_mention is deferred).
 		h.log().Info("events: ignoring non-message event", "type", msg.Type)
@@ -319,7 +332,14 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	rebind := false     // routed thread row must be rewritten (alias moved / orphaned thread), after delivery
 	// The route this message runs against: the channel's own entry, else the
 	// default route. Selected before continuity so every rung reads one value.
-	route, routeName := h.selectRoute(ctx, msg)
+	route, routeName := h.selectRoute(chRoute, chRouteName)
+	if (info.SandboxID == "" || info.QueueURL == "") && chRouteErr != nil {
+		// The channel's route is unknown (meta read failed): drop rather than
+		// run the default route's ladder against a channel a glob may own. An
+		// owned #sb- channel is unaffected (its route is never consulted).
+		h.log().Warn("events: dropping message: channel route unknown", "channel", msg.Channel, "ts", msg.TS)
+		return EventsResponse{StatusCode: 200, Body: "ok"}
+	}
 	if info.SandboxID == "" || info.QueueURL == "" {
 		// Default-route ladder step 1: thread continuity. A thread the front door
 		// routed earlier carries its sandbox in km-slack-threads. Decide this BEFORE
@@ -900,13 +920,13 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 	return threadBypassAllowed(current)
 }
 
-// selectRoute picks the channel's route or the default route. routeName is the
-// log field: the channel id when the table matched, "default" otherwise.
-func (h *EventsHandler) selectRoute(ctx context.Context, msg slackMessageEvent) (*DefaultRoute, string) {
-	if msg.ChannelType != "im" {
-		if r, name := h.routeForChannel(ctx, msg.Channel); r != nil {
-			return r, name
-		}
+// selectRoute picks the channel's route (as Handle resolved it with
+// routeForChannel; nil for a DM or an unrouted channel) or the default route.
+// routeName is the log field: the channel id when a route matched, "default"
+// otherwise.
+func (h *EventsHandler) selectRoute(chRoute *DefaultRoute, chRouteName string) (*DefaultRoute, string) {
+	if chRoute != nil {
+		return chRoute, chRouteName
 	}
 	return h.DefaultRoute, "default"
 }

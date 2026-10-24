@@ -242,22 +242,114 @@ func TestJoin_ChannelInfoErrorIsLoggedNotFatal(t *testing.T) {
 	}
 }
 
-func TestRouteForChannel_MetaRowRoutesLikeATableEntry(t *testing.T) {
+func TestRouteForChannel_MetaRowRoutesThroughCurrentPattern(t *testing.T) {
 	now := time.Now()
 	h, sqs, _, alias, _, _ := channelRoutedHandler(t, now)
 	st := newFakeHistoryStore()
 	h.History = st
 	alias.infos["ir"] = SandboxRoutingInfo{SandboxID: "sb-ir", QueueURL: "https://sqs.example/ir.fifo"}
 	pr := patternRoute("inc_*", "ir", week)
+	h.Patterns = []PatternRoute{pr}
 	st.meta["C7"] = ChannelMeta{Channel: "C7", Name: "inc_7", Route: RouteFromPattern(pr, "C7", "inc_7")}
 
-	r, name := h.selectRoute(context.Background(), slackMessageEvent{Channel: "C7", ChannelType: "channel"})
-	if r == nil || r.Alias != "ir" || r.History == nil || !r.History.Mirror || name != "C7" {
-		t.Fatalf("selectRoute: %+v %q", r, name)
+	r, name, err := h.routeForChannel(context.Background(), "C7")
+	if err != nil || r == nil || r.Alias != "ir" || r.History == nil || !r.History.Mirror || name != "C7" {
+		t.Fatalf("routeForChannel: %+v %q %v", r, name, err)
 	}
 	h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "message", "channel": "C7", "channel_type": "channel", "user": "U0OTHER", "text": "<@UBOT123> go", "ts": "7.1"}, "R1"))
 	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/ir.fifo" {
 		t.Fatalf("must dispatch to alias ir: %+v", sqs.sends)
+	}
+	if _, ok := st.rows["C7|7.1"]; !ok {
+		t.Fatal("a meta-row mirror channel must be mirrored")
+	}
+}
+
+// Removing a glob revokes its meta rows: routing falls to the default route
+// and nothing is mirrored any more.
+func TestRouteForChannel_RemovedGlobRevokesMetaRow(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, alias, _, _ := channelRoutedHandler(t, now)
+	st := newFakeHistoryStore()
+	h.History = st
+	alias.infos["ir"] = SandboxRoutingInfo{SandboxID: "sb-ir", QueueURL: "https://sqs.example/ir.fifo"}
+	st.meta["C7"] = ChannelMeta{Channel: "C7", Name: "inc_7", Route: RouteFromPattern(patternRoute("inc_*", "ir", week), "C7", "inc_7")}
+	// h.Patterns is empty: the glob was removed from config.
+	h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "message", "channel": "C7", "channel_type": "channel", "user": "U0KURT", "text": "<@UBOT123> go", "ts": "7.2"}, "RG1"))
+	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/irbot.fifo" {
+		t.Fatalf("a removed glob must route by the default route (ir-bot), not the snapshot (ir): %+v", sqs.sends)
+	}
+	if len(st.rows) != 0 {
+		t.Fatalf("a removed glob must stop mirroring: %+v", st.rows)
+	}
+}
+
+// Narrowing a glob's allow list takes effect for channels already bound.
+func TestRouteForChannel_NarrowedGlobAllowApplies(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, alias, _, _ := channelRoutedHandler(t, now)
+	st := newFakeHistoryStore()
+	h.History = st
+	alias.infos["ir"] = SandboxRoutingInfo{SandboxID: "sb-ir", QueueURL: "https://sqs.example/ir.fifo"}
+	wide := patternRoute("inc_*", "ir", week) // *@example.com
+	st.meta["C7"] = ChannelMeta{Channel: "C7", Name: "inc_7", Route: RouteFromPattern(wide, "C7", "inc_7")}
+	narrow := wide
+	narrow.Entry.Allow = []string{"kurt@example.com"}
+	narrow.Route = NewDefaultRoute("ir", "ir", narrow.Entry.Allow, nil)
+	h.Patterns = []PatternRoute{narrow}
+	h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "message", "channel": "C7", "channel_type": "channel", "user": "U0OTHER", "text": "<@UBOT123> go", "ts": "7.3"}, "NA1"))
+	if len(sqs.sends) != 0 {
+		t.Fatalf("other@ is off the narrowed list and must be dropped: %+v", sqs.sends)
+	}
+	h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "message", "channel": "C7", "channel_type": "channel", "user": "U0KURT", "text": "<@UBOT123> go", "ts": "7.4"}, "NA2"))
+	if len(sqs.sends) != 1 || sqs.sends[0].url != "https://sqs.example/ir.fifo" {
+		t.Fatalf("kurt@ is on the narrowed list: %+v", sqs.sends)
+	}
+}
+
+// A meta read error must never fall back to the default route.
+func TestRouteForChannel_MetaReadErrorDropsNeverDefaultRoutes(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, pub, _ := channelRoutedHandler(t, now)
+	st := newFakeHistoryStore()
+	st.getMetaErr = errors.New("ddb down")
+	h.History = st
+	h.AliasResolver = &fakeAliasByName{infos: map[string]SandboxRoutingInfo{}} // default alias absent ⇒ a fallback would cold-create
+	resp := h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "message", "channel": "C7", "channel_type": "channel", "user": "U0KURT", "text": "<@UBOT123> go", "ts": "7.5"}, "ME1"))
+	if resp.StatusCode != 200 || len(sqs.sends) != 0 || len(pub.calls) != 0 || len(st.rows) != 0 {
+		t.Fatalf("resp=%+v sends=%d creates=%d rows=%d", resp, len(sqs.sends), len(pub.calls), len(st.rows))
+	}
+	if st.getMetas != 1 {
+		t.Fatalf("the route is resolved once per event: %d GetMeta calls", st.getMetas)
+	}
+}
+
+// An owned #sb- channel never consults its route, so a meta read error there
+// still dispatches.
+func TestRouteForChannel_MetaReadErrorLeavesOwnedChannelAlone(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, _, _, _ := newHandler(now) // fakeSandboxes owns every channel
+	st := newFakeHistoryStore()
+	st.getMetaErr = errors.New("ddb down")
+	h.History = st
+	resp := h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "message", "channel": "C0123ABC", "channel_type": "channel", "user": "U0KURT", "text": "hello", "ts": "7.6"}, "ME2"))
+	if resp.StatusCode != 200 || len(sqs.sends) != 1 {
+		t.Fatalf("owned channel must still dispatch: %+v sends=%d", resp, len(sqs.sends))
+	}
+}
+
+func TestRouteForChannel_OneGetMetaPerMessage(t *testing.T) {
+	now := time.Now()
+	h, _, _, alias, _, _ := channelRoutedHandler(t, now)
+	st := newFakeHistoryStore()
+	h.History = st
+	alias.infos["ir"] = SandboxRoutingInfo{SandboxID: "sb-ir", QueueURL: "https://sqs.example/ir.fifo"}
+	pr := patternRoute("inc_*", "ir", week)
+	h.Patterns = []PatternRoute{pr}
+	st.meta["C7"] = ChannelMeta{Channel: "C7", Name: "inc_7", Route: RouteFromPattern(pr, "C7", "inc_7")}
+	h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "message", "channel": "C7", "channel_type": "channel", "user": "U0OTHER", "text": "<@UBOT123> go", "ts": "7.7"}, "OG1"))
+	if st.getMetas != 1 {
+		t.Fatalf("mirror and route selection must share one GetMeta: %d", st.getMetas)
 	}
 }
 

@@ -123,3 +123,58 @@ func TestBuildRouteTable_CarriesHistoryAndPattern(t *testing.T) {
 		t.Fatalf("RouteFromPattern = %+v", e)
 	}
 }
+
+func TestBuildRouteTable_ExpandsPatternChannels(t *testing.T) {
+	h := &RouteHistory{Query: true, Mirror: true, MaxMessages: 50}
+	doc := &RoutesDocument{V: RoutesDocumentVersion,
+		Routes: []RouteEntry{{Channel: "C1", Alias: "special", Profile: "p", Allow: []string{"x@example.com"}, MentionOnly: true}},
+		Patterns: []PatternEntry{
+			{Glob: "inc_*", Alias: "ir", Profile: "p", Allow: []string{"x@example.com"}, MentionOnly: true, History: h,
+				Channels: []PatternChannel{{ID: "C1", Name: "inc_a"}, {ID: "C2", Name: "inc_b"}, {ID: "C3", Name: "inc_c"}}},
+			{Glob: "inc_c*", Alias: "ir2", Profile: "p", Allow: []string{"x@example.com"},
+				Channels: []PatternChannel{{ID: "C3", Name: "inc_c"}}},
+		}}
+	var warns []string
+	table := BuildRouteTable(doc, func(msg string, _ ...any) { warns = append(warns, msg) })
+	if r := table["C1"]; r == nil || r.Alias != "special" || r.Pattern != "" {
+		t.Fatalf("a static entry must beat a pattern: %+v", r)
+	}
+	if r := table["C2"]; r == nil || r.Alias != "ir" || r.Pattern != "inc_*" || r.History == nil || r.History.MaxMessages != 50 || !r.MentionOnly {
+		t.Fatalf("pattern channel C2: %+v", r)
+	}
+	if r := table["C3"]; r == nil || r.Alias != "ir" {
+		t.Fatalf("the first pattern listing a channel wins: %+v", r)
+	}
+	if len(table) != 3 {
+		t.Fatalf("table = %d entries", len(table))
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "two patterns") {
+		t.Fatalf("warns = %v; want exactly one for the pattern duplicate (the static shadow is silent)", warns)
+	}
+}
+
+func TestCanonicalRoutesDocument_PatternChannelsSortedByID(t *testing.T) {
+	pats := []PatternEntry{{Glob: "inc_*", Alias: "ir", Profile: "p", Allow: []string{"x@example.com"},
+		Channels: []PatternChannel{{ID: "C9", Name: "inc_z"}, {ID: "C1", Name: "inc_a"}}}}
+	b, err := CanonicalRoutesDocument(nil, pats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"channels":[{"id":"C1","name":"inc_a"},{"id":"C9","name":"inc_z"}]`) {
+		t.Fatalf("pattern channels must be sorted by id: %s", b)
+	}
+	if pats[0].Channels[0].ID != "C9" {
+		t.Fatal("CanonicalRoutesDocument must not reorder the caller's slice")
+	}
+	noCh, _ := CanonicalRoutesDocument(nil, []PatternEntry{{Glob: "inc_*", Alias: "ir", Profile: "p", Allow: []string{"x@example.com"}}})
+	if strings.Contains(string(noCh), `"channels"`) {
+		t.Fatalf("a pattern with no matches must not serialise channels: %s", noCh)
+	}
+}
+
+func TestParseRoutesDocument_RejectsPatternChannelWithoutID(t *testing.T) {
+	b := []byte(`{"v":1,"routes":[],"patterns":[{"glob":"inc_*","alias":"ir","profile":"p","allow":["x@example.com"],"mention_only":true,"channels":[{"id":"","name":"inc_a"}]}]}`)
+	if _, err := ParseRoutesDocument(b); err == nil || !strings.Contains(err.Error(), "no id") {
+		t.Fatalf("err = %v; want a channel-without-id error", err)
+	}
+}

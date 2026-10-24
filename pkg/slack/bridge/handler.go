@@ -104,7 +104,10 @@ type Handler struct {
 	// to); History is the mirror store; HistoryReader and ThreadReader read Slack
 	// live (DefaultRoute above is not consulted: history needs a channel route).
 	// All nil ⇒ history answers 503 history_unavailable.
-	Routes          map[string]*DefaultRoute
+	Routes map[string]*DefaultRoute
+	// Patterns are the glob routes (config order). A meta row resolves its
+	// route through them, so a removed glob revokes history reads.
+	Patterns        []PatternRoute
 	AliasResolver   SlackAliasResolver
 	History         HistoryStore
 	HistoryReader   HistoryReader
