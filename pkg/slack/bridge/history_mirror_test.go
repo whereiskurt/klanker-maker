@@ -387,3 +387,134 @@ func TestJoin_AnnounceIgnoredOnQueryOnlyRoute(t *testing.T) {
 		t.Fatalf("query-only route must not announce: %+v", poster.msgs)
 	}
 }
+
+// orderPoster records how many PutMeta calls the store had seen when each
+// announcement was posted (the announcement must come first).
+type orderPoster struct {
+	*fakeSlackPoster
+	st          *fakeHistoryStore
+	metasAtPost []int
+}
+
+func (o *orderPoster) PostMessage(ctx context.Context, channel, subject, body, threadTS string) (string, error) {
+	o.st.mu.Lock()
+	o.metasAtPost = append(o.metasAtPost, o.st.putMetas)
+	o.st.mu.Unlock()
+	return o.fakeSlackPoster.PostMessage(ctx, channel, subject, body, threadTS)
+}
+
+func TestJoin_DuplicateEventBindsOnceAndAnnouncesBeforeMetaWrite(t *testing.T) {
+	now := time.Now()
+	hist := *week
+	hist.Announce = true
+	h, st, bf, poster := joinHandler(t, now, &hist)
+	op := &orderPoster{fakeSlackPoster: poster, st: st}
+	h.Slack = op
+	h.Handle(context.Background(), joinEvent(t, now, "UBOT123", "C7", "channel", "DUP1"))
+	h.Handle(context.Background(), joinEvent(t, now, "UBOT123", "C7", "channel", "DUP1")) // Slack retry: same event_id
+	if st.putMetas != 1 || len(bf.jobs) != 1 || len(poster.msgs) != 1 {
+		t.Fatalf("a duplicated join must bind once: putMetas=%d jobs=%d posts=%d", st.putMetas, len(bf.jobs), len(poster.msgs))
+	}
+	if len(op.metasAtPost) != 1 || op.metasAtPost[0] != 0 {
+		t.Fatalf("the announcement must precede the meta write: PutMeta count at post = %v", op.metasAtPost)
+	}
+	if !st.meta["C7"].Announced {
+		t.Fatal("the single meta write must carry announced")
+	}
+}
+
+func TestLeave_DuplicateEventPurgesOnce(t *testing.T) {
+	now := time.Now()
+	h, st, _, _ := joinHandler(t, now, week)
+	h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "channel_left", "channel": "C7"}, "LD1"))
+	h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "channel_left", "channel": "C7"}, "LD1"))
+	if len(st.purges) != 1 {
+		t.Fatalf("purges = %v; a retried leave must be deduplicated", st.purges)
+	}
+}
+
+// staticMirrorHandler: a named route C1 with mirror + backfill + announce.
+func staticMirrorHandler(t *testing.T, now time.Time, hist *RouteHistory) (*EventsHandler, *fakeHistoryStore, *fakeBackfill, *fakeSlackPoster) {
+	t.Helper()
+	h, st, _ := mirrorHandler(t, now)
+	bf := &fakeBackfill{}
+	poster := &fakeSlackPoster{}
+	h.Backfill, h.Slack = bf, poster
+	h.ChannelInfo = &fakeChannelInfo{name: map[string]string{"C1": "sec-ops"}}
+	r := histRoute("ir-bot", hist)
+	h.Routes["C1"] = r
+	return h, st, bf, poster
+}
+
+func TestMirror_StaticMirrorChannelBindsOnFirstSight(t *testing.T) {
+	now := time.Now()
+	hist := &RouteHistory{Query: true, Mirror: true, BackfillSeconds: 86400, RetentionSeconds: 86400, MaxMessages: 30, Announce: true}
+	h, st, bf, poster := staticMirrorHandler(t, now, hist)
+	ctx := context.Background()
+	h.Handle(ctx, rawEventReq(t, now, map[string]any{"type": "message", "channel": "C1", "channel_type": "channel", "user": "U1", "text": "a", "ts": "9.1"}, "FS1"))
+	h.Handle(ctx, rawEventReq(t, now, map[string]any{"type": "message", "channel": "C1", "channel_type": "channel", "user": "U1", "text": "b", "ts": "9.2"}, "FS2"))
+	m, ok := st.meta["C1"]
+	if !ok || m.Name != "sec-ops" || m.Route.Alias != "ir-bot" || m.Route.Pattern != "" || m.BackfillState != "pending" || !m.Announced {
+		t.Fatalf("meta: %+v", m)
+	}
+	if len(bf.jobs) != 1 || bf.jobs[0] != (BackfillJob{Channel: "C1", Oldest: slackTS(now.Add(-24 * time.Hour)), Remaining: 30}) {
+		t.Fatalf("one backfill job expected: %+v", bf.jobs)
+	}
+	if len(poster.msgs) != 1 || poster.msgs[0].channel != "C1" {
+		t.Fatalf("one announcement expected: %+v", poster.msgs)
+	}
+	if st.getMetas != 1 || st.putMetas != 1 {
+		t.Fatalf("first-sight bind costs one GetMeta per channel per cold start: getMetas=%d putMetas=%d", st.getMetas, st.putMetas)
+	}
+	if len(st.rows) != 2 {
+		t.Fatalf("both messages are still mirrored: %+v", st.rows)
+	}
+}
+
+func TestMirror_StaticMirrorWithoutBackfillBindsOff(t *testing.T) {
+	now := time.Now()
+	h, st, bf, poster := staticMirrorHandler(t, now, &RouteHistory{Query: true, Mirror: true})
+	h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "message", "channel": "C1", "channel_type": "channel", "user": "U1", "text": "a", "ts": "9.3"}, "FS3"))
+	if m := st.meta["C1"]; m.BackfillState != "off" || m.Announced {
+		t.Fatalf("meta: %+v", m)
+	}
+	if len(bf.jobs) != 0 || len(poster.msgs) != 0 {
+		t.Fatalf("no backfill, no announcement: jobs=%+v posts=%+v", bf.jobs, poster.msgs)
+	}
+}
+
+func TestMirror_ExistingMetaRowIsNotRebound(t *testing.T) {
+	now := time.Now()
+	h, st, bf, _ := staticMirrorHandler(t, now, &RouteHistory{Query: true, Mirror: true, BackfillSeconds: 3600})
+	st.meta["C1"] = ChannelMeta{Channel: "C1", BackfillState: "done"}
+	h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": "message", "channel": "C1", "channel_type": "channel", "user": "U1", "text": "a", "ts": "9.4"}, "FS4"))
+	if st.putMetas != 0 || len(bf.jobs) != 0 || st.meta["C1"].BackfillState != "done" {
+		t.Fatalf("an existing row must be left alone: putMetas=%d jobs=%+v", st.putMetas, bf.jobs)
+	}
+}
+
+func TestMirror_RebindsAfterLeaveInTheSameWarmLambda(t *testing.T) {
+	now := time.Now()
+	h, st, _, _ := staticMirrorHandler(t, now, &RouteHistory{Query: true, Mirror: true})
+	ctx := context.Background()
+	h.Handle(ctx, rawEventReq(t, now, map[string]any{"type": "message", "channel": "C1", "channel_type": "channel", "user": "U1", "text": "a", "ts": "9.5"}, "RB1"))
+	h.Handle(ctx, rawEventReq(t, now, map[string]any{"type": "channel_left", "channel": "C1"}, "RB2"))
+	delete(st.meta, "C1") // the purge removed the row
+	h.Handle(ctx, rawEventReq(t, now, map[string]any{"type": "message", "channel": "C1", "channel_type": "channel", "user": "U1", "text": "b", "ts": "9.6"}, "RB3"))
+	if st.putMetas != 2 {
+		t.Fatalf("a leave must clear the warm bound set: putMetas=%d", st.putMetas)
+	}
+}
+
+func TestJoin_StaticMirrorRouteBindsOnRejoin(t *testing.T) {
+	now := time.Now()
+	h, st, bf, _ := staticMirrorHandler(t, now, &RouteHistory{Query: true, Mirror: true, BackfillSeconds: 3600})
+	h.BotUserID = &fakeBotUserID{uid: "UBOT123"}
+	h.Handle(context.Background(), joinEvent(t, now, "UBOT123", "C1", "channel", "SJ1"))
+	if m := st.meta["C1"]; m.BackfillState != "pending" || m.Route.Pattern != "" {
+		t.Fatalf("meta: %+v", m)
+	}
+	if len(bf.jobs) != 1 {
+		t.Fatalf("jobs: %+v", bf.jobs)
+	}
+}

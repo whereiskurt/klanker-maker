@@ -141,6 +141,9 @@ func (h *EventsHandler) routeForChannel(ctx context.Context, channel string) (*D
 	if err != nil {
 		return nil, "", err
 	}
+	if meta != nil {
+		h.bound.Store(channel, true) // a row exists: the mirror need not bind it
+	}
 	if r := resolveMetaRoute(meta, h.Patterns); r != nil {
 		return r, channel, nil
 	}
@@ -175,6 +178,7 @@ func (h *EventsHandler) mirrorMessage(ctx context.Context, msg slackMessageEvent
 	if route == nil || route.History == nil || !route.History.Mirror {
 		return
 	}
+	h.bindOnFirstSight(ctx, msg.Channel, route)
 	var err error
 	switch msg.Subtype {
 	case "message_deleted":
@@ -201,18 +205,33 @@ func (h *EventsHandler) mirrorMessage(ctx context.Context, msg slackMessageEvent
 	}
 }
 
-// onMemberJoined matches a channel the bot just joined against the glob
-// patterns and, on a match, records the binding and queues the backfill.
+// onMemberJoined binds a channel the bot just joined: a static route with
+// mirror: true binds as it is (the rejoin case: leaving purged the old row),
+// otherwise the glob patterns are matched in config order and the first match
+// binds. Handle has already deduplicated the event, so a Slack retry never
+// re-binds.
 func (h *EventsHandler) onMemberJoined(ctx context.Context, msg slackMessageEvent) {
-	if h.History == nil || len(h.Patterns) == 0 || h.ChannelInfo == nil {
+	if h.History == nil {
 		return
 	}
 	uid, _ := h.BotUserID.Fetch(ctx)
 	if uid == "" || msg.User != uid || msg.ChannelType == "im" || msg.ChannelType == "mpim" {
 		return
 	}
-	if _, static := h.Routes[msg.Channel]; static {
-		return // exact beats glob
+	if r, static := h.Routes[msg.Channel]; static {
+		// Exact beats glob. Only a mirrored route has anything to bind.
+		if r != nil && r.History != nil && r.History.Mirror {
+			existing, err := h.History.GetMeta(ctx, msg.Channel)
+			if err != nil {
+				h.log().Warn("events: history: meta read failed; channel not bound", "channel", msg.Channel, "err", err)
+				return
+			}
+			h.bindChannel(ctx, msg.Channel, h.channelName(ctx, msg.Channel), routeEntryOf(msg.Channel, r), "", existing)
+		}
+		return
+	}
+	if len(h.Patterns) == 0 || h.ChannelInfo == nil {
+		return
 	}
 	name, _, err := h.ChannelInfo.Info(ctx, msg.Channel)
 	if err != nil {
@@ -234,20 +253,72 @@ func (h *EventsHandler) onMemberJoined(ctx context.Context, msg slackMessageEven
 	if match == nil {
 		return
 	}
-	existing, _ := h.History.GetMeta(ctx, msg.Channel)
+	existing, err := h.History.GetMeta(ctx, msg.Channel)
+	if err != nil {
+		h.log().Warn("events: history: meta read failed; channel not bound", "channel", msg.Channel, "err", err)
+		return
+	}
+	h.bindChannel(ctx, msg.Channel, name, RouteFromPattern(*match, msg.Channel, name), overlap, existing)
+}
+
+// bindOnFirstSight binds a mirrored channel that has no meta row: a static
+// route with mirror: true (named, or a glob match km init recorded) never gets
+// a join event while the bot is already a member, so the first message seen
+// binds it instead, with the same announcement and backfill as a join. The
+// per-warm-Lambda set keeps the extra GetMeta to once per channel per cold
+// start; a channel whose row Handle already read is marked by routeForChannel.
+func (h *EventsHandler) bindOnFirstSight(ctx context.Context, channel string, route *DefaultRoute) {
+	if _, done := h.bound.Load(channel); done {
+		return
+	}
+	existing, err := h.History.GetMeta(ctx, channel)
+	if err != nil {
+		h.log().Warn("events: history: meta read failed; will retry binding on the next message", "channel", channel, "err", err)
+		return
+	}
+	if existing != nil {
+		h.bound.Store(channel, true)
+		return
+	}
+	h.bindChannel(ctx, channel, h.channelName(ctx, channel), routeEntryOf(channel, route), "", nil)
+}
+
+// bindChannel records a channel's meta row and starts its backfill. The order
+// is fixed so no two writers race on the row: decide and post the
+// announcement FIRST (Announced set in memory on success), then ONE PutMeta
+// carrying it, then the single Enqueue; BackfillStep's later full-row writes
+// follow the enqueue. existing is the current row (nil when none): only its
+// Announced flag survives a rebind, so a rejoin never re-announces.
+func (h *EventsHandler) bindChannel(ctx context.Context, channel, name string, entry RouteEntry, overlap string, existing *ChannelMeta) {
 	now := h.now()
-	meta := ChannelMeta{Channel: msg.Channel, Name: name, Route: RouteFromPattern(*match, msg.Channel, name),
+	hist := entry.History
+	meta := ChannelMeta{Channel: channel, Name: name, Route: entry,
 		MatchedAt: now.UTC().Format(time.RFC3339), BackfillState: "off", Overlap: overlap}
 	if existing != nil {
 		meta.Announced = existing.Announced
 	}
-	hist := match.Entry.History
 	if hist != nil && hist.Mirror && hist.BackfillSeconds > 0 {
 		meta.BackfillOldest = slackTS(now.Add(-time.Duration(hist.BackfillSeconds) * time.Second))
 		meta.BackfillState = "pending"
 	}
+	h.bound.Store(channel, true) // before the announcement: its own message event must not bind again
+	if hist != nil && hist.Announce && !hist.Mirror {
+		h.log().Info("events: history: announce ignored on a query-only route", "channel", channel)
+	} else if hist != nil && hist.Announce && !meta.Announced && h.Slack != nil {
+		text := "I'm keeping this channel's recent history for context"
+		if hist.BackfillSeconds > 0 {
+			text += fmt.Sprintf(" (back %s from when I joined)", humanizeSeconds(hist.BackfillSeconds))
+		}
+		text += fmt.Sprintf("; messages expire from my copy after %s.", humanizeSeconds(effectiveRetentionSeconds(hist)))
+		if _, perr := h.Slack.PostMessage(ctx, channel, "", text, ""); perr == nil {
+			meta.Announced = true
+		} else {
+			h.log().Warn("events: history: announce failed", "channel", channel, "err", perr)
+		}
+	}
 	if err := h.History.PutMeta(ctx, meta); err != nil {
-		h.log().Error("events: history: meta write failed", "channel", msg.Channel, "err", err)
+		h.bound.Delete(channel) // let the next event retry the bind
+		h.log().Error("events: history: meta write failed", "channel", channel, "err", err)
 		return
 	}
 	if meta.BackfillState == "pending" && h.Backfill != nil {
@@ -255,26 +326,30 @@ func (h *EventsHandler) onMemberJoined(ctx context.Context, msg slackMessageEven
 		if maxMsgs <= 0 {
 			maxMsgs = 200
 		}
-		if err := h.Backfill.Enqueue(ctx, BackfillJob{Channel: msg.Channel, Oldest: meta.BackfillOldest, Remaining: maxMsgs}, 0); err != nil {
-			h.log().Error("events: history: backfill enqueue failed", "channel", msg.Channel, "err", err)
+		if err := h.Backfill.Enqueue(ctx, BackfillJob{Channel: channel, Oldest: meta.BackfillOldest, Remaining: maxMsgs}, 0); err != nil {
+			h.log().Error("events: history: backfill enqueue failed", "channel", channel, "err", err)
 		}
 	}
-	if hist != nil && hist.Announce && !hist.Mirror {
-		h.log().Info("events: history: announce ignored on a query-only route", "channel", msg.Channel)
-	} else if hist != nil && hist.Announce && !meta.Announced && h.Slack != nil {
-		text := "I'm keeping this channel's recent history for context"
-		if hist.BackfillSeconds > 0 {
-			text += fmt.Sprintf(" (back %s from when I joined)", humanizeSeconds(hist.BackfillSeconds))
-		}
-		text += fmt.Sprintf("; messages expire from my copy after %s.", humanizeSeconds(effectiveRetentionSeconds(hist)))
-		if _, perr := h.Slack.PostMessage(ctx, msg.Channel, "", text, ""); perr == nil {
-			meta.Announced = true
-			_ = h.History.PutMeta(ctx, meta)
-		} else {
-			h.log().Warn("events: history: announce failed", "channel", msg.Channel, "err", perr)
-		}
+	h.log().Info("events: history: channel bound", "channel", channel, "name", name, "glob", entry.Pattern, "alias", entry.Alias, "backfill", meta.BackfillState, "overlap", overlap, "announced", meta.Announced)
+}
+
+// routeEntryOf is the bookkeeping RouteEntry a meta row records for a static
+// route (km doctor and purge read its alias and pattern; nothing routes by it).
+func routeEntryOf(channel string, r *DefaultRoute) RouteEntry {
+	return RouteEntry{Channel: channel, Pattern: r.Pattern, Alias: r.Alias, Profile: r.Profile, MentionOnly: r.MentionOnly, History: r.History}
+}
+
+// channelName is the channel's name for a meta row, "" when it cannot be had.
+func (h *EventsHandler) channelName(ctx context.Context, channel string) string {
+	if h.ChannelInfo == nil {
+		return ""
 	}
-	h.log().Info("events: history: channel matched", "channel", msg.Channel, "name", name, "glob", match.Glob, "alias", match.Entry.Alias, "backfill", meta.BackfillState, "overlap", overlap)
+	name, _, err := h.ChannelInfo.Info(ctx, channel)
+	if err != nil {
+		h.log().Warn("events: history: channel name lookup failed; meta row has no name", "channel", channel, "err", err)
+		return ""
+	}
+	return name
 }
 
 // onChannelLeft drops the channel's mirror when the bot leaves or it is deleted.
@@ -282,6 +357,7 @@ func (h *EventsHandler) onChannelLeft(ctx context.Context, channel string) {
 	if h.History == nil {
 		return
 	}
+	h.bound.Delete(channel) // a rejoin binds afresh
 	n, err := h.History.PurgeChannel(ctx, channel)
 	if err != nil {
 		h.log().Warn("events: history: purge failed", "channel", channel, "err", err)

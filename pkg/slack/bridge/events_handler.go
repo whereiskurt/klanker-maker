@@ -48,9 +48,13 @@ type EventsHandler struct {
 	// fall back to the defaults (see historyPacing).
 	HistoryPageSize        int
 	HistoryIntervalSeconds int
-	SQS                    SQSSender
-	PauseHinter            PauseHintPoster // optional; if nil, paused-hint branch is skipped
-	Logger                 *slog.Logger
+	// bound is the per-warm-Lambda set of channels whose meta row is known to
+	// exist (or was just written), so a mirrored channel's first-sight bind
+	// costs one GetMeta per channel per cold start.
+	bound       sync.Map
+	SQS         SQSSender
+	PauseHinter PauseHintPoster // optional; if nil, paused-hint branch is skipped
+	Logger      *slog.Logger
 	// Now is injected for tests; defaults to time.Now.
 	Now func() time.Time
 
@@ -284,9 +288,16 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	var chRouteErr error
 	switch msg.Type {
 	case "member_joined_channel":
+		// Dedup first: a Slack retry must not re-bind, re-enqueue or re-announce.
+		if h.seenEvent(ctx, env.EventID) {
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
 		h.onMemberJoined(ctx, msg)
 		return EventsResponse{StatusCode: 200, Body: "ok"}
 	case "channel_left", "group_left", "channel_deleted":
+		if h.seenEvent(ctx, env.EventID) {
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
 		h.onChannelLeft(ctx, msg.Channel)
 		return EventsResponse{StatusCode: 200, Body: "ok"}
 	case "message":
@@ -918,6 +929,21 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 		return false
 	}
 	return threadBypassAllowed(current)
+}
+
+// seenEvent reserves the event_id nonce (the same reservation step 6 makes for
+// a message) and reports a duplicate. A store error proceeds: better a
+// duplicate than a dropped event.
+func (h *EventsHandler) seenEvent(ctx context.Context, eventID string) bool {
+	if eventID == "" || h.Nonces == nil {
+		return false
+	}
+	seen, err := h.Nonces.CheckAndStore(ctx, EventNoncePrefix+eventID, EventNonceTTL)
+	if err != nil {
+		h.log().Error("events: nonce check", "err", err, "event_id", eventID)
+		return false
+	}
+	return seen
 }
 
 // selectRoute picks the channel's route (as Handle resolved it with

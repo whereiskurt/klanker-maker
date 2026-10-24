@@ -3728,7 +3728,12 @@ itself joins a channel, the bridge calls `conversations.info` for the name (the 
 on a match writes a meta row binding the channel to the route. The first glob in config
 order wins, and `km doctor` reports an overlap. From then on the channel routes (and
 mirrors) as if it had been in the table. The ladder is: the static table first, the meta
-row second, `default_route` third, then Phase 96. When the bot leaves a channel
+row second, `default_route` third, then Phase 96. A channel already in the table with
+`mirror: true` (a named route, or a glob match `km init` recorded) never sees the bot join,
+so the bridge binds it the first time it sees a message there: the same meta row,
+announcement and backfill a join would start. Join and leave events are deduplicated by
+`event_id` before they act, so a Slack retry never re-announces or re-queues a backfill.
+When the bot leaves a channel
 (`channel_left`, `group_left`, `channel_deleted`) the meta row and any mirrored rows are
 purged asynchronously.
 
