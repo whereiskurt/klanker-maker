@@ -217,3 +217,24 @@ variable "slack_routes_sha256" {
   type        = string
   default     = ""
 }
+
+variable "slack_history_table_name" {
+  description = "Name of the {prefix}-slack-history mirror table (2026-10-24). Empty disables mirror + history reads at the bridge."
+  type        = string
+  default     = ""
+}
+variable "slack_history_table_arn" {
+  description = "ARN of the {prefix}-slack-history table; grants are gated on it being non-empty."
+  type        = string
+  default     = ""
+}
+variable "slack_history_page_size" {
+  description = "Messages per conversations.history call for backfill and live reads (slack.history_rate.page_size; default 200)."
+  type        = string
+  default     = "200"
+}
+variable "slack_history_interval_seconds" {
+  description = "Seconds between backfill steps (slack.history_rate.interval_seconds; default 2). Retry-After overrides."
+  type        = string
+  default     = "2"
+}

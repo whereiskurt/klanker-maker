@@ -695,6 +695,14 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			// 2026-10-24: Slack channel history mirror. The bridge writes and reads
+			// it at runtime, so it MUST apply before lambda-slack-bridge (list
+			// order is apply order on a fresh install).
+			name:    "dynamodb-slack-history",
+			dir:     filepath.Join(regionDir, "dynamodb-slack-history"),
+			envReqs: nil,
+		},
+		{
 			// Phase 68: DynamoDB stream-messages table mapping (channel_id, slack_ts)
 			// → transcript byte offset for per-turn Slack streaming. Hook script
 			// writes rows; future Phase B reaction-fork reads them.
@@ -2318,6 +2326,28 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			fmt.Fprintf(os.Stderr, "WARN: KM_SLACK_REACT_QUIET_SECONDS=%s (env) overrides km-config.yaml slack.react_quiet_seconds=%s\n", envVal, yamlSlackReactQuiet)
 		} else if envVal == "" {
 			os.Setenv("KM_SLACK_REACT_QUIET_SECONDS", yamlSlackReactQuiet) //nolint:errcheck
+		}
+	}
+
+	// 2026-10-24: slack.history_rate → KM_SLACK_HISTORY_PAGE_SIZE /
+	// KM_SLACK_HISTORY_INTERVAL_SECONDS, consumed by the lambda-slack-bridge live
+	// unit's get_env defaults ("200"/"2"). Only exported when the operator set the
+	// block; env-wins semantics preserved with the usual drift WARN.
+	if cfg.Slack.HistoryRate != nil {
+		pageSize, interval := cfg.Slack.HistoryRate.Effective()
+		for _, kv := range []struct {
+			env string
+			val string
+			key string
+		}{
+			{"KM_SLACK_HISTORY_PAGE_SIZE", strconv.Itoa(pageSize), "slack.history_rate.page_size"},
+			{"KM_SLACK_HISTORY_INTERVAL_SECONDS", strconv.Itoa(interval), "slack.history_rate.interval_seconds"},
+		} {
+			if envVal := os.Getenv(kv.env); envVal != "" && envVal != kv.val {
+				fmt.Fprintf(os.Stderr, "WARN: %s=%s (env) overrides km-config.yaml %s=%s\n", kv.env, envVal, kv.key, kv.val)
+			} else if envVal == "" {
+				os.Setenv(kv.env, kv.val) //nolint:errcheck
+			}
 		}
 	}
 

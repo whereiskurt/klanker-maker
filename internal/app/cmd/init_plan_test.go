@@ -427,7 +427,7 @@ func TestRunInitPlan_VerboseStreamsPlan(t *testing.T) {
 // TestRunInitPlan_ModuleOrder verifies that modules are planned in the order
 // returned by RegionalModules() — same ordering contract as RunInitWithRunner.
 //
-// Expected order (as of Phase 127 — 28 modules; 27 + lambda-webhook-bridge (Phase 127)):
+// Expected order (29 modules; 28 + dynamodb-slack-history, listed right after dynamodb-slack-channels):
 // network, efs, dynamodb-budget, dynamodb-identities, dynamodb-sandboxes,
 // dynamodb-capacity, dynamodb-schedules, ssm-session-doc, s3-replication, create-handler,
 // ttl-handler, email-handler, dynamodb-slack-nonces, dynamodb-slack-threads,
@@ -442,8 +442,8 @@ func TestRunInitPlan_ModuleOrder(t *testing.T) {
 	repoRoot := t.TempDir()
 	mods := cmd.RegionalModules(repoRoot)
 
-	if len(mods) != 28 {
-		t.Errorf("len(mods) = %d, want 28", len(mods))
+	if len(mods) != 29 {
+		t.Errorf("len(mods) = %d, want 29", len(mods))
 	}
 	if len(mods) == 0 {
 		t.Fatal("RegionalModules returned empty list")
@@ -455,6 +455,15 @@ func TestRunInitPlan_ModuleOrder(t *testing.T) {
 	// ses must be last
 	if mods[len(mods)-1].Name != "ses" {
 		t.Errorf("mods[last].Name = %q, want %q", mods[len(mods)-1].Name, "ses")
+	}
+	// The history table must apply before the bridge that reads it (list order
+	// IS apply order on a fresh install).
+	idx := map[string]int{}
+	for i, m := range mods {
+		idx[m.Name] = i
+	}
+	if idx["dynamodb-slack-history"] == 0 || idx["dynamodb-slack-history"] > idx["lambda-slack-bridge"] {
+		t.Errorf("dynamodb-slack-history (%d) must come before lambda-slack-bridge (%d)", idx["dynamodb-slack-history"], idx["lambda-slack-bridge"])
 	}
 }
 
