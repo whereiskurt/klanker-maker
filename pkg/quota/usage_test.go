@@ -152,3 +152,15 @@ func TestFetchUsage_Error(t *testing.T) {
 // compile-time assertion that *dynamodb.Client satisfies GetItemAPI.
 var _ GetItemAPI = (*dynamodb.Client)(nil)
 var _ = awssdk.String
+
+func TestAllActionsOrder_IncludesSlackHistoryOnce(t *testing.T) {
+	n := 0
+	for _, a := range AllActionsOrder() {
+		if a == ActionSlackHistory {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("ActionSlackHistory appears %d times in AllActionsOrder, want 1", n)
+	}
+}

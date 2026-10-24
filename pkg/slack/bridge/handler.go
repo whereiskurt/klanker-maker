@@ -98,6 +98,18 @@ type Handler struct {
 	// dormant — BreachFreeze still blocks the action but does not auto-quarantine.
 	// Implemented by DynamoFreezer (aws_adapters.go).
 	Freezer Freezer
+
+	// 2026-10-24 — signed `history` action. Routes and AliasResolver mirror the
+	// events handler's (the sender must be the box its channel's route resolves
+	// to); History is the mirror store; HistoryReader and ThreadReader read Slack
+	// live (DefaultRoute above is not consulted: history needs a channel route).
+	// All nil ⇒ history answers 503 history_unavailable.
+	Routes          map[string]*DefaultRoute
+	AliasResolver   SlackAliasResolver
+	History         HistoryStore
+	HistoryReader   HistoryReader
+	ThreadReader    SlackThreadReader
+	HistoryPageSize int // slack.history_rate.page_size; 0 ⇒ MaxHistoryPageSize governs live reads
 }
 
 // Freezer latches action_frozen=true on the sandbox row (auto-on-breach freeze).
@@ -149,7 +161,7 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		logger.WarnContext(ctx, "bridge: unsupported_version", "step", "parse", "version", env.Version, "status", 400)
 		return errResp(400, "unsupported_version")
 	}
-	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate && env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM && env.Action != slack.ActionSession && env.Action != slack.ActionReact {
+	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate && env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM && env.Action != slack.ActionSession && env.Action != slack.ActionReact && env.Action != slack.ActionHistory {
 		logger.WarnContext(ctx, "bridge: unknown_action", "step", "parse", "action", env.Action, "status", 400)
 		return errResp(400, "unknown_action")
 	}
@@ -289,7 +301,8 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		// owning the channel is neither necessary (routed threads, GitHub/H1
 		// rows have no channel) nor sufficient (a box's own channel can hold a
 		// thread routed to another box). The row check is the authorization.
-		if env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM && env.Action != slack.ActionSession {
+		// ActionHistory: authorised inside handleHistory (own channel OR route ownership + history.query); a thread row never admits a read.
+		if env.Action != slack.ActionLookupThread && env.Action != slack.ActionDM && env.Action != slack.ActionSession && env.Action != slack.ActionHistory {
 			// Sandbox post/upload/permalink/update: channel must match owned channel.
 			owned, err := h.Channels.OwnedChannel(ctx, env.SenderID)
 			if err != nil {
@@ -397,6 +410,8 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		return h.handleSession(ctx, env)
 	case slack.ActionReact:
 		return h.handleReact(ctx, env)
+	case slack.ActionHistory:
+		return h.handleHistory(ctx, env)
 
 	case slack.ActionArchive:
 		err := h.Slack.ArchiveChannel(ctx, env.Channel)

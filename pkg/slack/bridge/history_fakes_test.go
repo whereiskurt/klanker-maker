@@ -18,6 +18,13 @@ type fakeHistoryStore struct {
 	deletes    []string // channel|ts
 	purges     []string
 	putMetas   int
+
+	queryRows  []HistoryMessageRow // canned Query result (newest first)
+	queryMore  bool
+	queryErr   error
+	queryCalls int
+	queryLimit int // limit of the last Query call
+	getMetas   int // GetMeta calls
 }
 
 func newFakeHistoryStore() *fakeHistoryStore {
@@ -48,8 +55,12 @@ func (f *fakeHistoryStore) DeleteMessage(_ context.Context, channel, ts string) 
 	return nil
 }
 
-func (f *fakeHistoryStore) Query(context.Context, string, string, string, string, int) ([]HistoryMessageRow, bool, error) {
-	return nil, false, nil
+func (f *fakeHistoryStore) Query(_ context.Context, _, _, _, _ string, limit int) ([]HistoryMessageRow, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queryCalls++
+	f.queryLimit = limit
+	return f.queryRows, f.queryMore, f.queryErr
 }
 
 func (f *fakeHistoryStore) PutMeta(_ context.Context, m ChannelMeta) error {
@@ -63,6 +74,7 @@ func (f *fakeHistoryStore) PutMeta(_ context.Context, m ChannelMeta) error {
 func (f *fakeHistoryStore) GetMeta(_ context.Context, channel string) (*ChannelMeta, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.getMetas++
 	if f.getMetaErr != nil {
 		return nil, f.getMetaErr
 	}

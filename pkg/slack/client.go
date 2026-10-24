@@ -990,6 +990,12 @@ type PostResponse struct {
 	ChannelID string `json:"channel_id,omitempty"` // populated when found=true
 	ThreadTS  string `json:"thread_ts,omitempty"`  // populated when found=true
 	AgentType string `json:"agent_type,omitempty"` // populated when found=true
+
+	// History action (2026-10-24).
+	Source     string           `json:"source,omitempty"` // "mirror" | "live"
+	Messages   []HistoryMessage `json:"messages,omitempty"`
+	Truncated  bool             `json:"truncated,omitempty"`
+	NextBefore string           `json:"next_before,omitempty"`
 }
 
 // BridgeBackoff is the retry schedule for network-level errors in PostToBridge.
