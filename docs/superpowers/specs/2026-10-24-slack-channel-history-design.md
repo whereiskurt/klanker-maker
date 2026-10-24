@@ -405,4 +405,6 @@ Run against PR #162 at 4ad55dc6 (operator binary v0.9.8; bridge, table, queues d
 | 11 | `km doctor` | **GO** — routes (glob match counts, private included after 4ad55dc6), scopes, table hygiene, mirrored channels. Parked: no rows-past-TTL / oldest row / queue depth / pacing. |
 | + | Revocation (final-review extra) | **GO** — glob removed + `km init --slack` ⇒ the still-bound channel answers 403 and routes no longer go to the old alias. |
 
+| + | `km slack history fill` (added in-PR) | **GO** — `fill "#inc_uat2"` (private, by name) bound the channel and queued one job; the bridge wrote 13 rows within a second; a second `fill` without `--purge-first` refused ("already bound"); `fill --alias ir-bot --purge-first` purged 13 then rebound and backfilled 13; no announcement is posted by `fill`. |
+
 Not covered live: a non-allowlisted human sender (step 3), a 429 from Slack during backfill, the 4096-byte table ceiling (≈60 active glob channels at ~55 B each).
