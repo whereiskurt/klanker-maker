@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -15,12 +16,14 @@ import (
 // are keyed channel|ts. Query honours real key-condition semantics: BETWEEN is
 // inclusive on both ends, so exclusivity must come from the store, not the fake.
 type fakeHistoryDDB struct {
-	items      map[string]map[string]types.AttributeValue
-	maxPage    int // simulated 1 MB page cap, in items; 0 = unlimited
-	batchSizes []int
-	puts       []*dynamodb.PutItemInput
-	updates    []*dynamodb.UpdateItemInput
-	queries    []*dynamodb.QueryInput
+	items       map[string]map[string]types.AttributeValue
+	maxPage     int // simulated 1 MB page cap, in items; 0 = unlimited
+	batchSizes  []int
+	unprocessed func(call int, reqs []types.WriteRequest) []types.WriteRequest // optional leftover per call
+	batchCalls  int
+	puts        []*dynamodb.PutItemInput
+	updates     []*dynamodb.UpdateItemInput
+	queries     []*dynamodb.QueryInput
 }
 
 func newFakeHistoryDDB() *fakeHistoryDDB {
@@ -69,16 +72,31 @@ func (f *fakeHistoryDDB) UpdateItem(_ context.Context, in *dynamodb.UpdateItemIn
 }
 
 func (f *fakeHistoryDDB) BatchWriteItem(_ context.Context, in *dynamodb.BatchWriteItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error) {
+	out := &dynamodb.BatchWriteItemOutput{}
 	for table, reqs := range in.RequestItems {
 		f.batchSizes = append(f.batchSizes, len(reqs))
-		_ = table
+		f.batchCalls++
+		var left []types.WriteRequest
+		if f.unprocessed != nil {
+			left = f.unprocessed(f.batchCalls, reqs)
+		}
+		skip := map[string]bool{}
+		for _, l := range left {
+			skip[hs(l.DeleteRequest.Key, "ts")] = true
+		}
+		if len(left) > 0 {
+			out.UnprocessedItems = map[string][]types.WriteRequest{table: left}
+		}
 		for _, r := range reqs {
+			if skip[hs(r.DeleteRequest.Key, "ts")] {
+				continue
+			}
 			if r.DeleteRequest != nil {
 				delete(f.items, hkey(hs(r.DeleteRequest.Key, "channel"), hs(r.DeleteRequest.Key, "ts")))
 			}
 		}
 	}
-	return &dynamodb.BatchWriteItemOutput{}, nil
+	return out, nil
 }
 
 func (f *fakeHistoryDDB) Query(_ context.Context, in *dynamodb.QueryInput, _ ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
@@ -394,5 +412,53 @@ func TestDDBHistoryStore_RowShape(t *testing.T) {
 	_ = s.PutMessage(context.Background(), HistoryMessageRow{Channel: "C1", TS: "1730000002.000100", Text: "x", ExpiresAt: 1})
 	if _, ok := f.puts[1].Item["files"]; ok {
 		t.Fatal("files written when empty")
+	}
+}
+
+func TestDDBHistoryStore_PurgeRetriesUnprocessedThenDrains(t *testing.T) {
+	s, f := testStore()
+	s.RetryBase = time.Millisecond
+	putN(t, s, "C1", 10)
+	f.unprocessed = func(call int, reqs []types.WriteRequest) []types.WriteRequest {
+		if call == 1 {
+			return reqs[:3] // throttle three deletes on the first call only
+		}
+		return nil
+	}
+	n, err := s.PurgeChannel(context.Background(), "C1")
+	if err != nil || n != 10 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if f.batchCalls != 2 {
+		t.Fatalf("batch calls = %d, want 2", f.batchCalls)
+	}
+	if rows, _, _ := s.Query(context.Background(), "C1", "", "", "", 50); len(rows) != 0 {
+		t.Fatalf("%d rows survived", len(rows))
+	}
+}
+
+func TestDDBHistoryStore_PurgeUnprocessedNeverDrainsIsBounded(t *testing.T) {
+	s, f := testStore()
+	s.RetryBase = time.Microsecond
+	putN(t, s, "C1", 4)
+	f.unprocessed = func(_ int, reqs []types.WriteRequest) []types.WriteRequest { return reqs[:2] }
+	_, err := s.PurgeChannel(context.Background(), "C1")
+	if err == nil || !strings.Contains(err.Error(), "2 deletes still unprocessed") {
+		t.Fatalf("err = %v", err)
+	}
+	if f.batchCalls != 1+purgeMaxAttempts {
+		t.Fatalf("batch calls = %d, want %d", f.batchCalls, 1+purgeMaxAttempts)
+	}
+}
+
+func TestDDBHistoryStore_PurgeRefusesMetaPartition(t *testing.T) {
+	s, _ := testStore()
+	ctx := context.Background()
+	_ = s.PutMeta(ctx, ChannelMeta{Channel: "C1"})
+	if _, err := s.PurgeChannel(ctx, historyMetaPK); err == nil {
+		t.Fatal("expected refusal")
+	}
+	if m, _ := s.GetMeta(ctx, "C1"); m == nil {
+		t.Fatal("meta rows were deleted")
 	}
 }

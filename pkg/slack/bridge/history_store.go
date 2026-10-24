@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -74,6 +75,7 @@ type DDBHistoryAPI interface {
 type DDBHistoryStore struct {
 	Client    DDBHistoryAPI
 	TableName string
+	RetryBase time.Duration // first purge-retry backoff; zero means 50ms
 }
 
 func hkeyS(v string) dynamodbtypes.AttributeValue {
@@ -303,10 +305,52 @@ func (s *DDBHistoryStore) ListMeta(ctx context.Context) ([]ChannelMeta, error) {
 	}
 }
 
+const (
+	purgeMaxAttempts = 8
+	purgeBaseBackoff = 50 * time.Millisecond
+)
+
+// drainUnprocessed retries throttled deletes with exponential backoff, bounded
+// by purgeMaxAttempts and the context.
+func (s *DDBHistoryStore) drainUnprocessed(ctx context.Context, left map[string][]dynamodbtypes.WriteRequest) error {
+	backoff := s.retryBase()
+	for attempt := 0; len(left) > 0; attempt++ {
+		if attempt >= purgeMaxAttempts {
+			n := 0
+			for _, r := range left {
+				n += len(r)
+			}
+			return fmt.Errorf("history purge: %d deletes still unprocessed after %d retries", n, purgeMaxAttempts)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		r, err := s.Client.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{RequestItems: left})
+		if err != nil {
+			return fmt.Errorf("history purge batch retry: %w", err)
+		}
+		left = r.UnprocessedItems
+	}
+	return nil
+}
+
+func (s *DDBHistoryStore) retryBase() time.Duration {
+	if s.RetryBase > 0 {
+		return s.RetryBase
+	}
+	return purgeBaseBackoff
+}
+
 // PurgeChannel deletes every message row of a channel (keys-only paging,
 // BatchWriteItem in chunks of 25) and then its meta row. It returns the number
 // of message rows deleted.
 func (s *DDBHistoryStore) PurgeChannel(ctx context.Context, channel string) (int, error) {
+	if channel == historyMetaPK {
+		return 0, fmt.Errorf("history purge: %q is the meta partition, not a channel", channel)
+	}
 	deleted := 0
 	var start map[string]dynamodbtypes.AttributeValue
 	for {
@@ -337,13 +381,8 @@ func (s *DDBHistoryStore) PurgeChannel(ctx context.Context, channel string) (int
 			if err != nil {
 				return deleted, fmt.Errorf("history purge batch: %w", err)
 			}
-			// Retry unprocessed deletes until the chunk drains.
-			for left := bo.UnprocessedItems; len(left) > 0; {
-				r, err := s.Client.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{RequestItems: left})
-				if err != nil {
-					return deleted, fmt.Errorf("history purge batch retry: %w", err)
-				}
-				left = r.UnprocessedItems
+			if err := s.drainUnprocessed(ctx, bo.UnprocessedItems); err != nil {
+				return deleted, err
 			}
 			deleted += end - i
 		}
