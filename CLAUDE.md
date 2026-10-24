@@ -123,8 +123,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - **Strict mode: `notification.slack.inbound.threadBypass: false`.** Every turn needs an
   @-mention, thread replies included, in mapped channels AND routed threads; a mentioned
   thread reply carries the human messages since the bot's last turn (100 msgs / 32 KiB /
-  10 files / 50 MiB, newest-first, 240 KiB body guard). Trust = the thread's own gate
-  (Phase 118 list, or the email gate under the 20 s context deadline, **fail-closed**).
+  10 files / 50 MiB, newest-first, 240 KiB body guard). The thread's own gate
+  (Phase 118 list, or the email gate) decides who may START a turn; since 2026-10-24 the context carries every human reply since the bot's last turn (bots and the bot itself excluded), with no per-author `users.info` lookup.
   `last_dispatch_ts` is advanced after EVERY successful delivery in every mode, so a box
   later flipped to strict has a correct boundary. Context never blocks a turn. Known limits:
   `conversations.replies` is single-page (`limit=200`); the header omits per-file errors;
