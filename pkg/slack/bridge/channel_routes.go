@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"path"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -67,15 +67,38 @@ type RoutesDocument struct {
 	Patterns []PatternEntry `json:"patterns,omitempty"`
 }
 
-// MatchChannelGlob matches a lowercase Slack channel name against a glob with
-// '*' and '?' (path.Match semantics; names never contain '/').
+// MatchChannelGlob matches a Slack channel name against a glob, case-insensitively.
+// Only '*' (any run, including empty) and '?' (exactly one character) are
+// special; every other character, including '[' and '\', is a literal.
 func MatchChannelGlob(glob, name string) bool {
 	if name == "" {
 		return false
 	}
-	ok, err := path.Match(strings.ToLower(glob), strings.ToLower(name))
-	return err == nil && ok
+	g, n := []rune(strings.ToLower(glob)), []rune(strings.ToLower(name))
+	gi, ni, star, mark := 0, 0, -1, 0
+	for ni < len(n) {
+		switch {
+		case gi < len(g) && g[gi] == '*':
+			star, mark = gi, ni
+			gi++
+		case gi < len(g) && (g[gi] == '?' || g[gi] == n[ni]):
+			gi++
+			ni++
+		case star >= 0:
+			mark++
+			ni, gi = mark, star+1
+		default:
+			return false
+		}
+	}
+	for gi < len(g) && g[gi] == '*' {
+		gi++
+	}
+	return gi == len(g)
 }
+
+// reChannelGlob is the config glob grammar without the leading '#'.
+var reChannelGlob = regexp.MustCompile(`^[a-z0-9*?][a-z0-9._*?-]{0,79}$`)
 
 // RoutesParamPath is the SSM parameter the table lives at.
 func RoutesParamPath(prefix string) string { return "/" + prefix + "/slack/routes" }
@@ -87,7 +110,8 @@ func CanonicalRoutesJSON(routes []RouteEntry) ([]byte, error) {
 }
 
 // CanonicalRoutesDocument encodes the table so equal tables are equal bytes:
-// routes sorted by channel id, patterns sorted by glob, every allow and
+// routes sorted by channel id, patterns in document (config) order because the
+// first matching glob wins at event time, every allow and
 // profile_allow list sorted, no HTML escaping, no trailing newline. km doctor
 // recomputes it to detect drift, so the form must never depend on map order.
 func CanonicalRoutesDocument(routes []RouteEntry, patterns []PatternEntry) ([]byte, error) {
@@ -107,7 +131,6 @@ func CanonicalRoutesDocument(routes []RouteEntry, patterns []PatternEntry) ([]by
 		for i := range pats {
 			pats[i].Allow, pats[i].ProfileAllow = sortedAllow(pats[i].Allow), sortedProfileAllow(pats[i].ProfileAllow)
 		}
-		sort.SliceStable(pats, func(i, j int) bool { return pats[i].Glob < pats[j].Glob })
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -169,6 +192,8 @@ func ParseRoutesDocument(b []byte) (*RoutesDocument, error) {
 		switch {
 		case p.Glob == "":
 			return nil, fmt.Errorf("slack routes: pattern %d has no glob", i)
+		case !reChannelGlob.MatchString(p.Glob) || !strings.ContainsAny(p.Glob, "*?"):
+			return nil, fmt.Errorf("slack routes: pattern %d has an invalid glob %q", i, p.Glob)
 		case p.Alias == "":
 			return nil, fmt.Errorf("slack routes: pattern %d (%s) has no alias", i, p.Glob)
 		case p.Profile == "":
