@@ -182,8 +182,8 @@ When a strict thread reply does carry a mention, the handler collects context af
 `DispatchBoundary` reads the row's `last_dispatch_ts`; without one the window starts at the
 thread root, root included. `SlackThreadReader.Replies` calls `conversations.replies` with
 `limit=200` and an exclusive `oldest`, a single page. `BuildThreadContext` drops the
-trigger, anything with `bot_id`, subtype `bot_message`, or the bot's own user id, and
-authors who fail the trust predicate, which are counted into `omitted_non_allow`. It keeps
+trigger, anything with `bot_id`, subtype `bot_message`, or the bot's own user id. Since 2026-10-24 it no longer filters by
+author trust: every human reply is carried (membership is the permission). It keeps
 at most 100 messages and 32 KiB of text, chosen newest-first and emitted chronologically,
 with the dropped count in `truncated_older`. Files are capped at 10 and 50 MiB in total,
 newest-first, with overflow names in `files_omitted`; they are downloaded through the
@@ -543,7 +543,7 @@ Test method: the bridge drops bot-authored messages, so a human mention cannot b
 | 1 | Top-level mention | Reply in thread | **PASS** by construction: the strict box (`profiles/ir-bot-strict.yaml`, its own `#sb-ir-bot-strict` channel, `slack_thread_bypass=false` on its row) was created with `km create`; its ready announcement is the engaged thread used below. |
 | 2 | Two humans reply without a mention, one with a screenshot | No 👀, no turn | **PASS** (text half): an unmentioned reply in the engaged thread enqueued nothing (queue 0/0). The screenshot half cannot be scripted (see method note). |
 | 3 | Mention in the thread | Reply reflects both messages and the screenshot | **PASS** (mechanics): bridge logged `context collected … messages=0 omitted=0 truncated=0 files=0` and enqueued; the box answered `STRICT-OK` in the thread. Content assertions need real human posts, which a bot token cannot produce (they are excluded as bot-authored by design). |
-| 4 | A non-allowlisted user posts, then an allowlisted user mentions | Omitted count shown, content absent | **NOT RUN** (same limitation; pinned by `TestStrictMode_ContextRespectsAllowlist`). |
+| 4 | A non-allowlisted user posts, then an allowlisted user mentions | Every human reply carried, the non-listed user's included (since 2026-10-24) | **NOT RUN** (same limitation; superseded behaviour, see § Channel history in `docs/slack-notifications.md`). |
 | 5 | `km pause` and `km resume` | Strict still in effect | **NOT RUN** (pinned by `TestSlackThreadBypass_RoundTrip`). |
 | 6 | Profile without `threadBypass` | Phase 91.3 unchanged | **PASS**: the default-route box (no `threadBypass`) accepted the unmentioned follow-up in step 2 of §10.1. |
 | 7 | Routed thread on a strict default sandbox: follow-up without and then with a mention | Nothing; then a reply with context from the invited channel's thread | **NOT RUN** (the default-route box was not strict; pinned by `TestStrictMode_RoutedThread`). |
