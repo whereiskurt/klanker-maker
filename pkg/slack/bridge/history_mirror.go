@@ -84,12 +84,41 @@ type BackfillEnqueuer interface {
 // are not stored. Everything else a member can read is.
 var historySystemSubtypes = map[string]bool{"channel_join": true, "channel_leave": true, "channel_topic": true, "channel_purpose": true, "channel_name": true, "channel_archive": true, "channel_unarchive": true}
 
-func historyExpiry(now time.Time, r *RouteHistory) int64 {
-	ret := 7 * 24 * 3600
+// defaultHistoryRetentionSeconds is what a route with no retention gets.
+const defaultHistoryRetentionSeconds = 7 * 24 * 3600
+
+// effectiveRetentionSeconds is the retention historyExpiry applies.
+func effectiveRetentionSeconds(r *RouteHistory) int {
 	if r != nil && r.RetentionSeconds > 0 {
-		ret = r.RetentionSeconds
+		return r.RetentionSeconds
 	}
-	return now.Add(time.Duration(ret) * time.Second).Unix()
+	return defaultHistoryRetentionSeconds
+}
+
+func historyExpiry(now time.Time, r *RouteHistory) int64 {
+	return now.Add(time.Duration(effectiveRetentionSeconds(r)) * time.Second).Unix()
+}
+
+// humanizeSeconds renders a window in the largest whole unit it divides into
+// exactly (days, then hours), else minutes (rounded up, at least 1).
+func humanizeSeconds(sec int) string {
+	unit := func(n int, name string) string {
+		if n == 1 {
+			return fmt.Sprintf("1 %s", name)
+		}
+		return fmt.Sprintf("%d %ss", n, name)
+	}
+	switch {
+	case sec >= 86400 && sec%86400 == 0:
+		return unit(sec/86400, "day")
+	case sec >= 3600 && sec%3600 == 0:
+		return unit(sec/3600, "hour")
+	}
+	m := (sec + 59) / 60
+	if m < 1 {
+		m = 1
+	}
+	return unit(m, "minute")
 }
 
 // slackTS renders a time as a Slack ts ("1729700000.000000").
@@ -213,9 +242,14 @@ func (h *EventsHandler) onMemberJoined(ctx context.Context, msg slackMessageEven
 			h.log().Error("events: history: backfill enqueue failed", "channel", msg.Channel, "err", err)
 		}
 	}
-	if hist != nil && hist.Announce && !meta.Announced && h.Slack != nil {
-		days := hist.RetentionSeconds / 86400
-		text := fmt.Sprintf("I'm keeping this channel's recent history for context (back %d days from when I joined); messages expire from my copy after %d days.", hist.BackfillSeconds/86400, days)
+	if hist != nil && hist.Announce && !hist.Mirror {
+		h.log().Info("events: history: announce ignored on a query-only route", "channel", msg.Channel)
+	} else if hist != nil && hist.Announce && !meta.Announced && h.Slack != nil {
+		text := "I'm keeping this channel's recent history for context"
+		if hist.BackfillSeconds > 0 {
+			text += fmt.Sprintf(" (back %s from when I joined)", humanizeSeconds(hist.BackfillSeconds))
+		}
+		text += fmt.Sprintf("; messages expire from my copy after %s.", humanizeSeconds(effectiveRetentionSeconds(hist)))
 		if _, perr := h.Slack.PostMessage(ctx, msg.Channel, "", text, ""); perr == nil {
 			meta.Announced = true
 			_ = h.History.PutMeta(ctx, meta)

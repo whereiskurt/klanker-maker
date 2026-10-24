@@ -271,3 +271,27 @@ func TestLeave_PurgesChannel(t *testing.T) {
 		t.Fatalf("purges: %v", st.purges)
 	}
 }
+
+func TestJoin_AnnounceTextHumanizesWindows(t *testing.T) {
+	now := time.Now()
+	h, _, _, poster := joinHandler(t, now, &RouteHistory{Mirror: true, Announce: true, BackfillSeconds: 90 * 60, RetentionSeconds: 7 * 86400})
+	h.Handle(context.Background(), joinEvent(t, now, "UBOT123", "C7", "channel", "H1"))
+	if len(poster.msgs) != 1 || !strings.Contains(poster.msgs[0].body, "90 minutes") || !strings.Contains(poster.msgs[0].body, "7 days") || strings.Contains(poster.msgs[0].body, "0 days") {
+		t.Fatalf("announce: %+v", poster.msgs)
+	}
+	// Retention unset: the text states the effective default (7 days), no backfill clause.
+	h2, _, _, p2 := joinHandler(t, now, &RouteHistory{Mirror: true, Announce: true})
+	h2.Handle(context.Background(), joinEvent(t, now, "UBOT123", "C7", "channel", "H2"))
+	if len(p2.msgs) != 1 || !strings.Contains(p2.msgs[0].body, "7 days") || strings.Contains(p2.msgs[0].body, "back ") {
+		t.Fatalf("default retention text: %+v", p2.msgs)
+	}
+}
+
+func TestJoin_AnnounceIgnoredOnQueryOnlyRoute(t *testing.T) {
+	now := time.Now()
+	h, st, _, poster := joinHandler(t, now, &RouteHistory{Query: true, Announce: true})
+	h.Handle(context.Background(), joinEvent(t, now, "UBOT123", "C7", "channel", "H3"))
+	if len(poster.msgs) != 0 || st.meta["C7"].Announced {
+		t.Fatalf("query-only route must not announce: %+v", poster.msgs)
+	}
+}
