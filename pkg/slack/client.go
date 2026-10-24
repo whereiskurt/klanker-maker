@@ -1073,6 +1073,10 @@ func PostToBridge(ctx context.Context, bridgeURL string, env *SlackEnvelope, sig
 			return nil, fmt.Errorf("slack: bridge rejected operator signature (%d): %s",
 				resp.StatusCode, hint)
 		}
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			return nil, fmt.Errorf("slack: bridge returned %d: %s retry-after=%s",
+				resp.StatusCode, string(body), ra)
+		}
 		return nil, fmt.Errorf("slack: bridge returned %d: %s",
 			resp.StatusCode, string(body))
 	}
