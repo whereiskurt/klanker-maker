@@ -99,6 +99,9 @@ func TestSQSBackfillQueue_SendsStandardWithDelay(t *testing.T) {
 	if err := json.Unmarshal([]byte(*in.MessageBody), &got); err != nil || got != job {
 		t.Fatalf("body %q -> %+v %v", *in.MessageBody, got, err)
 	}
+	if err := q.Enqueue(context.Background(), job, 3600); err != nil || f.in[1].DelaySeconds != 900 {
+		t.Fatalf("delay not clamped to 900: %v %+v", err, f.in)
+	}
 	if err := (&SQSBackfillQueue{Client: f}).Enqueue(context.Background(), job, 0); err == nil {
 		t.Error("empty queue url must error")
 	}
@@ -238,5 +241,54 @@ func TestBackfillStep_BotAndAppMessagesStored(t *testing.T) {
 	}
 	if st.meta["C7"].BackfillWritten != 2 {
 		t.Fatalf("written %d", st.meta["C7"].BackfillWritten)
+	}
+}
+
+func TestBackfillStep_CursorAdvancesOverSkippedMessages(t *testing.T) {
+	var msgs []SlackReplyMessage
+	for i := 0; i < 5; i++ {
+		msgs = append(msgs, SlackReplyMessage{User: "U1", Subtype: "channel_join", TS: fmt.Sprintf("%d.000100", 1700000100-i)})
+	}
+	rd := &fakeHistoryReader{msgs: msgs, more: true}
+	h, st, bf := backfillHandler(pendingMeta(), rd)
+	if err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Latest: "1700000200.000000", Remaining: 200}); err != nil {
+		t.Fatal(err)
+	}
+	oldest := "1700000096.000100"
+	m := st.meta["C7"]
+	if m.BackfillState != "running" || m.BackfillWritten != 0 || len(st.rows) != 0 || m.BackfillCursor != oldest {
+		t.Fatalf("meta %+v rows %d", m, len(st.rows))
+	}
+	if len(bf.jobs) != 1 || bf.jobs[0].Latest != oldest {
+		t.Fatalf("jobs %+v", bf.jobs)
+	}
+}
+
+type failTSStore struct {
+	*fakeHistoryStore
+	failTS string
+}
+
+func (f *failTSStore) PutMessage(ctx context.Context, m HistoryMessageRow) error {
+	if m.TS == f.failTS {
+		return fmt.Errorf("boom")
+	}
+	return f.fakeHistoryStore.PutMessage(ctx, m)
+}
+
+func TestBackfillStep_CursorStopsAtFailedWrite(t *testing.T) {
+	rd := &fakeHistoryReader{msgs: descMsgs(4, 1700000100), more: true}
+	h, st, bf := backfillHandler(pendingMeta(), rd)
+	failTS := "1700000097.000100" // the oldest of the page
+	h.History = &failTSStore{fakeHistoryStore: st, failTS: failTS}
+	if err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Remaining: 200}); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.rows) != 3 {
+		t.Fatalf("rows %d", len(st.rows))
+	}
+	want := "1700000098.000100" // just newer than the failed one
+	if st.meta["C7"].BackfillCursor != want || len(bf.jobs) != 1 || bf.jobs[0].Latest != want {
+		t.Fatalf("cursor %q jobs %+v", st.meta["C7"].BackfillCursor, bf.jobs)
 	}
 }

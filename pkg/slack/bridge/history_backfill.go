@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -15,6 +16,7 @@ const (
 	DefaultHistoryPageSize        = 200 // Slack's documented Tier 3 posture: <=999, 200 recommended
 	DefaultHistoryIntervalSeconds = 2
 	MaxHistoryPageSize            = 999
+	MaxSQSDelaySeconds            = 900 // SQS DelaySeconds ceiling
 )
 
 // historyPacing returns the install's page size and backfill interval
@@ -46,6 +48,10 @@ type SQSBackfillQueue struct {
 func (q *SQSBackfillQueue) Enqueue(ctx context.Context, job BackfillJob, delaySeconds int32) error {
 	if q.QueueURL == "" {
 		return fmt.Errorf("history backfill: no queue url")
+	}
+	if delaySeconds > MaxSQSDelaySeconds {
+		slog.Default().Warn("history backfill: delay exceeds SQS maximum; clamping", "requested", delaySeconds, "clamped", MaxSQSDelaySeconds, "channel", job.Channel)
+		delaySeconds = MaxSQSDelaySeconds
 	}
 	b, _ := json.Marshal(job)
 	_, err := q.Client.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: aws.String(q.QueueURL), MessageBody: aws.String(string(b)), DelaySeconds: delaySeconds})
@@ -94,9 +100,23 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 		_ = h.History.PutMeta(ctx, *meta)
 		return nil
 	}
+	// Newest-first. The cursor advances over every message with a ts, written or
+	// skipped as a system subtype, until the first failed write; after that it
+	// stays put so the next step refetches from the failed message and retries it
+	// (PutItem is idempotent, so later writes still go ahead).
 	cursor := job.Latest
+	failed := false
+	advance := func(ts string) {
+		if !failed && (cursor == "" || ts < cursor) {
+			cursor = ts
+		}
+	}
 	for _, m := range msgs {
-		if m.TS == "" || historySystemSubtypes[m.Subtype] {
+		if m.TS == "" {
+			continue
+		}
+		if historySystemSubtypes[m.Subtype] {
+			advance(m.TS)
 			continue
 		}
 		row := HistoryMessageRow{Channel: job.Channel, TS: m.TS, User: m.User, BotID: m.BotID, Text: m.Text, ThreadTS: m.ThreadTS, Subtype: m.Subtype, ExpiresAt: historyExpiry(h.now(), meta.Route.History)}
@@ -105,12 +125,11 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 		}
 		if perr := h.History.PutMessage(ctx, row); perr != nil {
 			h.log().Warn("events: history backfill: row write failed", "channel", job.Channel, "ts", m.TS, "err", perr)
+			failed = true
 			continue
 		}
 		meta.BackfillWritten++
-		if cursor == "" || m.TS < cursor {
-			cursor = m.TS
-		}
+		advance(m.TS)
 	}
 	remaining := job.Remaining - len(msgs)
 	meta.BackfillCursor = cursor
