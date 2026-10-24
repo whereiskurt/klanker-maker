@@ -25,6 +25,10 @@ type slackMessageEvent struct {
 	// ChannelType is Slack's conversation kind: "channel", "group", "im", "mpim".
 	// The default route requires an @-mention everywhere except "im".
 	ChannelType string `json:"channel_type,omitempty"`
+	// message_changed carries the edited message here; message_deleted names the
+	// removed ts. Both subtypes are mirror-only: isBotLoop drops them for dispatch.
+	Message   *slackMessageEvent `json:"message,omitempty"`
+	DeletedTS string             `json:"deleted_ts,omitempty"`
 }
 
 // SlackFile is a Slack file object as delivered in a file_share message event's files[].
@@ -80,6 +84,6 @@ type EventsRequest struct {
 // EventsResponse is what the handler returns.
 type EventsResponse struct {
 	StatusCode int
-	Body       string            // JSON-encoded body or plain text
+	Body       string // JSON-encoded body or plain text
 	Headers    map[string]string
 }

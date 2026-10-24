@@ -29,12 +29,22 @@ const (
 type EventsHandler struct {
 	SigningSecret SigningSecretFetcher
 	BotUserID     BotUserIDFetcher
-	Nonces        EventNonceStore           // reuses km-slack-bridge-nonces table via EventNonceStore
+	Nonces        EventNonceStore // reuses km-slack-bridge-nonces table via EventNonceStore
 	Sandboxes     SandboxByChannelFetcher
 	Threads       SlackThreadStore
-	SQS           SQSSender
-	PauseHinter   PauseHintPoster           // optional; if nil, paused-hint branch is skipped
-	Logger        *slog.Logger
+	// History is the channel mirror store (optional; nil = mirror, pattern match
+	// and purge are all off, selectRoute consults only the static table).
+	History HistoryStore
+	// Patterns are the glob routes matched against a channel's name when the bot
+	// joins it (config order; first match wins). Needs History and ChannelInfo.
+	Patterns []PatternRoute
+	// ChannelInfo resolves a joined channel id to its name (conversations.info).
+	ChannelInfo ChannelInfoFetcher
+	// Backfill enqueues the history backfill job for a newly matched channel.
+	Backfill    BackfillEnqueuer
+	SQS         SQSSender
+	PauseHinter PauseHintPoster // optional; if nil, paused-hint branch is skipped
+	Logger      *slog.Logger
 	// Now is injected for tests; defaults to time.Now.
 	Now func() time.Time
 
@@ -196,14 +206,14 @@ func (h *EventsHandler) log() *slog.Logger {
 //  9. If info.Paused, fire PauseHinter.PostIfCooldownExpired in a goroutine
 //     so we still return 200 within Slack's 3s ack window. Errors logged.
 //  10. If Reactor is wired, call Reactor.Add SYNCHRONOUSLY to ACK with 👀
-//      (or whatever KM_SLACK_ACK_EMOJI is set to). Errors logged.
-//      Reacts on msg.TS (the originating message), NOT threadTS.
-//      Synchronous (not goroutine) for the same reason as step 8's file
-//      download: AWS Lambda freezes the runtime when Handle returns, and
-//      any goroutine still mid-retry has its wall-clock context elapse
-//      during the freeze. If reactions.add pushes past Slack's 3s ack
-//      window, Slack re-fires the event → the event_id dedup in step 5
-//      returns 200 immediately; already_reacted is treated as success.
+//     (or whatever KM_SLACK_ACK_EMOJI is set to). Errors logged.
+//     Reacts on msg.TS (the originating message), NOT threadTS.
+//     Synchronous (not goroutine) for the same reason as step 8's file
+//     download: AWS Lambda freezes the runtime when Handle returns, and
+//     any goroutine still mid-retry has its wall-clock context elapse
+//     during the freeze. If reactions.add pushes past Slack's 3s ack
+//     window, Slack re-fires the event → the event_id dedup in step 5
+//     returns 200 immediately; already_reacted is treated as success.
 //
 // Response codes:
 //   - 400 ONLY for malformed JSON / missing required fields (truly bad request)
@@ -263,7 +273,18 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		h.log().Warn("events: bad inner event", "err", err)
 		return EventsResponse{StatusCode: 200, Body: "ok"} // ack to prevent Slack retry
 	}
-	if msg.Type != "message" {
+	switch msg.Type {
+	case "member_joined_channel":
+		h.onMemberJoined(ctx, msg)
+		return EventsResponse{StatusCode: 200, Body: "ok"}
+	case "channel_left", "group_left", "channel_deleted":
+		h.onChannelLeft(ctx, msg.Channel)
+		return EventsResponse{StatusCode: 200, Body: "ok"}
+	case "message":
+		// The mirror sees every message in a mirror: true channel, BEFORE the
+		// bot-loop and mention filters: it records what a member reads.
+		h.mirrorMessage(ctx, msg)
+	default:
 		// Reserved for future expansion (e.g. app_mention is deferred).
 		h.log().Info("events: ignoring non-message event", "type", msg.Type)
 		return EventsResponse{StatusCode: 200, Body: "ok"}
@@ -292,7 +313,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	rebind := false     // routed thread row must be rewritten (alias moved / orphaned thread), after delivery
 	// The route this message runs against: the channel's own entry, else the
 	// default route. Selected before continuity so every rung reads one value.
-	route, routeName := h.selectRoute(msg)
+	route, routeName := h.selectRoute(ctx, msg)
 	if info.SandboxID == "" || info.QueueURL == "" {
 		// Default-route ladder step 1: thread continuity. A thread the front door
 		// routed earlier carries its sandbox in km-slack-threads. Decide this BEFORE
@@ -873,10 +894,10 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 
 // selectRoute picks the channel's route or the default route. routeName is the
 // log field: the channel id when the table matched, "default" otherwise.
-func (h *EventsHandler) selectRoute(msg slackMessageEvent) (*DefaultRoute, string) {
+func (h *EventsHandler) selectRoute(ctx context.Context, msg slackMessageEvent) (*DefaultRoute, string) {
 	if msg.ChannelType != "im" {
-		if r, ok := h.Routes[msg.Channel]; ok && r != nil {
-			return r, msg.Channel
+		if r, name := h.routeForChannel(ctx, msg.Channel); r != nil {
+			return r, name
 		}
 	}
 	return h.DefaultRoute, "default"
