@@ -54,7 +54,11 @@ A klanker invited to a channel can now look back. Three pieces, all default-off:
 - **A per-route mirror.** `history: {mirror: true, backfill: 7d, retention: 7d}` makes the
   bridge keep the channel's text (never file bytes, never DMs) in a table with a TTL, point-in-time
   recovery off, and only the bridge able to read it. Backfill runs in the background, paced by
-  `slack.history_rate`. `km slack history purge` removes it on demand.
+  `slack.history_rate`. `km slack history purge <#name|C…|--alias|--all>` removes it on demand;
+  `km slack history fill <#name|C…|--alias> [--purge-first]` binds and backfills a channel the
+  bot was already sitting in before the route existed (the join event never fires for those), or
+  clears and reloads one. Both resolve private channels by name (the bot's channel list was
+  silently public-only before this release).
 - **`km-slack history`.** `--since 7d --grep topic`, paged with `--before`, `--thread` for one
   thread. Allowed only in the box's own channel or a channel routed to it with `history.query`.
 
