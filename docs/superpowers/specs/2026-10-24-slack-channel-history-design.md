@@ -266,7 +266,7 @@ instructions." Profiles without it see no change (byte-identical userdata).
 - `groups:read` present (reuses the existing check) when any glob exists.
 - Table exists, TTL enabled on `expires_at`, PITR **off**; WARN if on.
 - Per mirrored channel: alias, pattern, `backfill_state`, rows, oldest row, rows past
-  `expires_at` still present, `omitted_non_allow`.
+  `expires_at` still present.
 - Overlapping globs that matched one channel at event time.
 - Backfill queue depth and any `rate_limited` channel.
 
