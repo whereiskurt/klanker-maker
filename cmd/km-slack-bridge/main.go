@@ -24,6 +24,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -445,6 +446,34 @@ func wireEventsHandler() {
 	// sandbox row carries slack_thread_bypass=false.
 	eventsHandler.ThreadReader = &bridge.SlackThreadReaderAdapter{HTTPClient: initHTTPClient, Tokens: initToken}
 
+	// 2026-10-24 — channel history mirror. Dormant without the table env.
+	if ht := os.Getenv("KM_SLACK_HISTORY_TABLE"); ht != "" {
+		store := &bridge.DDBHistoryStore{Client: initDDB, TableName: ht}
+		eventsHandler.History = store
+		eventsHandler.HistoryReader = &bridge.SlackThreadReaderAdapter{HTTPClient: initHTTPClient, Tokens: initToken}
+		eventsHandler.ChannelInfo = &bridge.SlackChannelInfoAdapter{HTTPClient: initHTTPClient, Tokens: initToken}
+		if qu := os.Getenv("KM_SLACK_HISTORY_QUEUE_URL"); qu != "" {
+			eventsHandler.Backfill = &bridge.SQSBackfillQueue{Client: initSQSClient, QueueURL: qu}
+		}
+		if n, err := strconv.Atoi(os.Getenv("KM_SLACK_HISTORY_PAGE_SIZE")); err == nil && n > 0 {
+			eventsHandler.HistoryPageSize = n
+		}
+		if n, err := strconv.Atoi(os.Getenv("KM_SLACK_HISTORY_INTERVAL_SECONDS")); err == nil && n >= 0 {
+			eventsHandler.HistoryIntervalSeconds = n
+		}
+		// The signed `history` action reads the same store and authorises routed
+		// reads through the same alias resolver, with or without a default route.
+		if eventsHandler.AliasResolver == nil {
+			eventsHandler.AliasResolver = &bridge.DDBAliasResolver{Client: initDDB, TableName: sandboxesTable}
+		}
+		handler.AliasResolver = eventsHandler.AliasResolver
+		handler.History = store
+		handler.HistoryReader = eventsHandler.HistoryReader
+		handler.ThreadReader = eventsHandler.ThreadReader
+		handler.HistoryPageSize = eventsHandler.HistoryPageSize
+		slog.Info("km-slack-bridge: channel history enabled", "table", ht, "backfill_queue", os.Getenv("KM_SLACK_HISTORY_QUEUE_URL") != "")
+	}
+
 	// Phase 75: wire S3FileDownloader for inbound file_share events.
 	if artifactsBucket != "" {
 		eventsHandler.FileDownloader = &bridge.S3FileDownloader{
@@ -533,12 +562,52 @@ func WireActionQuota(h *bridge.Handler, ddb *dynamodb.Client, sandboxesTable str
 	return true
 }
 
-// handle converts a Lambda Function URL request into the appropriate handler request,
+// handle is the single Lambda entry: the Function URL delivers an HTTP event,
+// the history backfill queue delivers an SQS event. One function, two
+// triggers; the shape of the JSON decides.
+func handle(ctx context.Context, raw json.RawMessage) (any, error) {
+	if bytes.Contains(raw, []byte(`"Records"`)) {
+		var ev events.SQSEvent
+		if err := json.Unmarshal(raw, &ev); err == nil && len(ev.Records) > 0 && strings.Contains(ev.Records[0].EventSource, "sqs") {
+			return handleSQS(ctx, ev)
+		}
+	}
+	var ev events.LambdaFunctionURLRequest
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		return events.LambdaFunctionURLResponse{StatusCode: 400, Body: "bad request"}, nil
+	}
+	return handleURL(ctx, ev)
+}
+
+// handleSQS runs one history backfill step per record. A malformed record is
+// dropped (retrying cannot fix it); a store or handler failure reports only
+// that record so SQS redelivers it alone.
+func handleSQS(ctx context.Context, ev events.SQSEvent) (events.SQSEventResponse, error) {
+	var resp events.SQSEventResponse
+	for _, rec := range ev.Records {
+		var job bridge.BackfillJob
+		if err := json.Unmarshal([]byte(rec.Body), &job); err != nil || job.Channel == "" {
+			slog.Warn("km-slack-bridge: backfill record malformed; dropping", "id", rec.MessageId, "err", err)
+			continue
+		}
+		if eventsHandler == nil {
+			resp.BatchItemFailures = append(resp.BatchItemFailures, events.SQSBatchItemFailure{ItemIdentifier: rec.MessageId})
+			continue
+		}
+		if err := eventsHandler.BackfillStep(ctx, job); err != nil {
+			slog.Warn("km-slack-bridge: backfill step failed; SQS will retry", "channel", job.Channel, "err", err)
+			resp.BatchItemFailures = append(resp.BatchItemFailures, events.SQSBatchItemFailure{ItemIdentifier: rec.MessageId})
+		}
+	}
+	return resp, nil
+}
+
+// handleURL converts a Lambda Function URL request into the appropriate handler request,
 // dispatching by RawPath:
 //
 //	/events  → bridge.EventsHandler.Handle (Phase 67 Slack Events API)
 //	default  → bridge.Handler.Handle (Phase 63 operator-signed envelopes)
-func handle(ctx context.Context, ev events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
+func handleURL(ctx context.Context, ev events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
 	// Normalize body — Lambda Function URL may base64-encode binary bodies.
 	body := ev.Body
 	if ev.IsBase64Encoded {
@@ -877,11 +946,15 @@ func wireChannelRoutes(ctx context.Context, h *bridge.EventsHandler, reader rout
 		return
 	}
 	table := bridge.BuildRouteTable(doc, func(msg string, kv ...any) { slog.Warn(msg, kv...) })
-	if len(table) == 0 {
+	if len(table) == 0 && len(doc.Patterns) == 0 {
 		slog.Info("km-slack-bridge: channel route table empty", "param", path)
 		return
 	}
 	h.Routes = table
+	h.Patterns = bridge.BuildPatternTable(doc, func(msg string, kv ...any) { slog.Warn(msg, kv...) })
+	if handler != nil {
+		handler.Routes = table
+	}
 	wireRouteDeps(h, d)
 	slog.Info("km-slack-bridge: channel routes enabled", "count", len(table),
 		"sha256", bridge.RoutesSHA256(raw), "env_sha256", os.Getenv("KM_SLACK_ROUTES_SHA256"))

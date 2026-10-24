@@ -76,7 +76,7 @@ func TestHandle_BadEnvelope(t *testing.T) {
 		Headers: map[string]string{},
 	}
 
-	resp, err := handle(context.Background(), ev)
+	resp, err := handleURL(context.Background(), ev)
 	if err != nil {
 		t.Fatalf("handle returned error: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestHandle_ResponseHeadersPresent(t *testing.T) {
 		Headers: map[string]string{},
 	}
 
-	resp, err := handle(context.Background(), ev)
+	resp, err := handleURL(context.Background(), ev)
 	if err != nil {
 		t.Fatalf("handle returned error: %v", err)
 	}

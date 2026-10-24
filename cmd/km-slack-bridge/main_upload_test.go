@@ -139,7 +139,7 @@ func TestActionUploadRouting(t *testing.T) {
 		},
 	}
 
-	resp, err := handle(context.Background(), ev)
+	resp, err := handleURL(context.Background(), ev)
 	if err != nil {
 		t.Fatalf("handle returned error: %v", err)
 	}
