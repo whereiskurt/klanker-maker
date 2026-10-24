@@ -3611,6 +3611,8 @@ first cold-create would decide the box's profile. Each route's profile is
 pre-staged to `slack-profiles/{slug}/.km-profile.yaml`, flattened when it uses
 `extends:`, exactly as for the default route.
 
+Private channels resolve by name too (since the 2026-10-24 fix: `users.conversations` is sent form-encoded, because Slack ignores a JSON body on that legacy method and had returned public channels only); this needs the `groups:read` scope.
+
 **Who may trigger.** First non-empty wins: the route's `allow_emails`, then
 `slack.default_route.allow_emails`, then the route profile's
 `notification.slack.inbound.allowEmails`. All empty fails `km init`. The box's

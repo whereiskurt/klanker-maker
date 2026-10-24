@@ -409,10 +409,8 @@ func listPage(channels []map[string]any, nextCursor string) map[string]any {
 func TestFindChannelByName_MatchOnLastPage(t *testing.T) {
 	var pageCount int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		var req map[string]any
-		json.Unmarshal(body, &req)
-		cursor, _ := req["cursor"].(string)
+		_ = r.ParseForm()
+		cursor := r.PostForm.Get("cursor")
 		atomic.AddInt32(&pageCount, 1)
 
 		w.Header().Set("Content-Type", "application/json")
@@ -453,10 +451,8 @@ func TestFindChannelByName_MatchOnLastPage(t *testing.T) {
 func TestFindChannelByName_RetriesOnRateLimit(t *testing.T) {
 	var page2Hits int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		var req map[string]any
-		json.Unmarshal(body, &req)
-		cursor, _ := req["cursor"].(string)
+		_ = r.ParseForm()
+		cursor := r.PostForm.Get("cursor")
 
 		w.Header().Set("Content-Type", "application/json")
 		switch cursor {
@@ -898,12 +894,11 @@ func TestListBotChannels_PaginatesUsersConversations(t *testing.T) {
 		if r.URL.Path != "/users.conversations" {
 			t.Errorf("unexpected method %s", r.URL.Path)
 		}
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["types"] != "public_channel,private_channel" {
-			t.Errorf("types = %v", body["types"])
+		_ = r.ParseForm()
+		if got := r.PostForm.Get("types"); got != "public_channel,private_channel" {
+			t.Errorf("types = %v", got)
 		}
-		if body["cursor"] == nil {
+		if r.PostForm.Get("cursor") == "" {
 			w.Write([]byte(`{"ok":true,"channels":[{"id":"C1","name":"sec"}],"response_metadata":{"next_cursor":"p2"}}`))
 			return
 		}
