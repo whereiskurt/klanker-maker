@@ -121,6 +121,9 @@ func humanizeSeconds(sec int) string {
 	return unit(m, "minute")
 }
 
+// HumanizeSeconds is humanizeSeconds for the operator CLI ("7 days").
+func HumanizeSeconds(sec int) string { return humanizeSeconds(sec) }
+
 // slackTS renders a time as a Slack ts ("1729700000.000000").
 func slackTS(t time.Time) string { return fmt.Sprintf("%d.%06d", t.Unix(), t.Nanosecond()/1000) }
 
@@ -292,17 +295,12 @@ func (h *EventsHandler) bindOnFirstSight(ctx context.Context, channel string, ro
 func (h *EventsHandler) bindChannel(ctx context.Context, channel, name string, entry RouteEntry, overlap string, existing *ChannelMeta) {
 	now := h.now()
 	hist := entry.History
-	meta := ChannelMeta{Channel: channel, Name: name, Route: entry,
-		MatchedAt: now.UTC().Format(time.RFC3339), BackfillState: "off", Overlap: overlap}
+	meta := NewBoundChannelMeta(channel, name, entry, overlap, now)
 	if existing != nil {
 		meta.Announced = existing.Announced
 	}
 	if _, posted := h.announced.Load(channel); posted {
 		meta.Announced = true // posted earlier from this container; only the write is retried
-	}
-	if hist != nil && hist.Mirror && hist.BackfillSeconds > 0 {
-		meta.BackfillOldest = slackTS(now.Add(-time.Duration(hist.BackfillSeconds) * time.Second))
-		meta.BackfillState = "pending"
 	}
 	h.bound.Store(channel, true) // before the announcement: its own message event must not bind again
 	if hist != nil && hist.Announce && !hist.Mirror {
@@ -326,15 +324,35 @@ func (h *EventsHandler) bindChannel(ctx context.Context, channel, name string, e
 		return
 	}
 	if meta.BackfillState == "pending" && h.Backfill != nil {
-		maxMsgs := hist.MaxMessages
-		if maxMsgs <= 0 {
-			maxMsgs = 200
-		}
-		if err := h.Backfill.Enqueue(ctx, BackfillJob{Channel: channel, Oldest: meta.BackfillOldest, Remaining: maxMsgs}, 0); err != nil {
+		if err := h.Backfill.Enqueue(ctx, NewBackfillJob(meta), 0); err != nil {
 			h.log().Error("events: history: backfill enqueue failed", "channel", channel, "err", err)
 		}
 	}
 	h.log().Info("events: history: channel bound", "channel", channel, "name", name, "glob", entry.Pattern, "alias", entry.Alias, "backfill", meta.BackfillState, "overlap", overlap, "announced", meta.Announced)
+}
+
+// NewBoundChannelMeta is the meta row a bind records: Announced is left false
+// (the caller decides), and a backfill is "pending" only for a mirrored route
+// with a backfill window. It is shared by the bridge's bindChannel and the
+// operator's `km slack history fill` so the two can never write different rows.
+func NewBoundChannelMeta(channel, name string, entry RouteEntry, overlap string, now time.Time) ChannelMeta {
+	meta := ChannelMeta{Channel: channel, Name: name, Route: entry,
+		MatchedAt: now.UTC().Format(time.RFC3339), BackfillState: "off", Overlap: overlap}
+	if hist := entry.History; hist != nil && hist.Mirror && hist.BackfillSeconds > 0 {
+		meta.BackfillOldest = slackTS(now.Add(-time.Duration(hist.BackfillSeconds) * time.Second))
+		meta.BackfillState = "pending"
+	}
+	return meta
+}
+
+// NewBackfillJob is the single job a freshly bound pending channel enqueues:
+// the window start from the meta row and max_messages (default 200).
+func NewBackfillJob(meta ChannelMeta) BackfillJob {
+	maxMsgs := 200
+	if h := meta.Route.History; h != nil && h.MaxMessages > 0 {
+		maxMsgs = h.MaxMessages
+	}
+	return BackfillJob{Channel: meta.Channel, Oldest: meta.BackfillOldest, Remaining: maxMsgs}
 }
 
 // routeEntryOf is the bookkeeping RouteEntry a meta row records for a static

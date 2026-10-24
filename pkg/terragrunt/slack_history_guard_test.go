@@ -86,3 +86,29 @@ func TestSandboxRole_HasNoGrantOnHistoryTable(t *testing.T) {
 		}
 	}
 }
+
+// `km slack history fill` queues a backfill job with operator credentials; the
+// operator policy must grant exactly the send path on exactly that queue.
+func TestOperatorPolicy_GrantsHistoryBackfillQueueSend(t *testing.T) {
+	b, err := os.ReadFile("../../infra/modules/km-operator-policy/v1.0.0/main.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	i := strings.Index(s, "SlackHistoryBackfillQueueSend")
+	if i < 0 {
+		t.Fatal("operator policy lacks the SlackHistoryBackfillQueueSend statement")
+	}
+	stmt := s[i:]
+	if j := strings.Index(stmt, "\n  })"); j > 0 {
+		stmt = stmt[:j] // this resource's policy document only
+	}
+	for _, want := range []string{"sqs:SendMessage", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", `${var.resource_prefix}-slack-history-backfill"`} {
+		if !strings.Contains(stmt, want) {
+			t.Errorf("statement lacks %s", want)
+		}
+	}
+	if strings.Contains(stmt, "slack-history-backfill*") || strings.Contains(stmt, `"sqs:*"`) {
+		t.Error("the grant must name the one queue, not a wildcard")
+	}
+}

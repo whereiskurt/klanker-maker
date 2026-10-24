@@ -3863,6 +3863,28 @@ cannot purge. Names resolve through the bot's own channel list. It prints the ro
 channel, refuses to purge the `#meta` partition as a channel, and `--yes` skips the
 confirmation.
 
+**`km slack history fill` (operator only).**
+
+```
+km slack history fill (<#name> | <C…> | --alias <alias>) [--purge-first] [--yes]
+```
+
+Forces the bind the bridge does on `member_joined_channel`: writes the channel's meta row
+(exactly as the bridge would, from the same constructor) and queues one backfill job on
+`{prefix}-slack-history-backfill`. Use it for a channel the bot already sat in before its route
+existed, a quiet channel the bridge has not yet seen a message in, or to reload after a
+purge (`--purge-first` deletes the rows and meta first, in that order). The channel must
+resolve through the live route table (a named route, else the first matching glob) to a route
+with `history.mirror`; otherwise fill refuses and names the fix, so it never widens policy.
+`--alias` fills every channel the bot is in that resolves to the alias, and prints a line for
+each routed one it skips for lacking `mirror`. Fill never posts the announcement: the row is
+written already announced, so the bridge does not announce later either. A channel that
+already has a meta row is refused (nothing written or sent) unless `--purge-first` is given,
+so a backfill is never doubled. It uses DynamoDB and SQS with operator credentials, with no
+bridge action and no `km-slack` form. The operator policy needs `sqs:SendMessage`,
+`sqs:GetQueueUrl` and `sqs:GetQueueAttributes` on the backfill queue, applied by one full
+`km init --dry-run=false`.
+
 **Security posture.**
 
 - **The mirror is one copy among several.** Once an agent reads history, the text is in the

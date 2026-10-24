@@ -660,6 +660,31 @@ resource "aws_iam_role_policy" "sqs_slack_inbound" {
   })
 }
 
+# Policy: SQS for `km slack history fill` (2026-10-24). The operator queues one
+# backfill job on the shared {prefix}-slack-history-backfill queue after writing
+# a channel's meta row. Scoped to that one queue; the queue itself is owned by
+# the sqs-slack-history-backfill module.
+resource "aws_iam_role_policy" "sqs_slack_history_backfill" {
+  name = "${var.resource_prefix}-operator-sqs-slack-history-backfill"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SlackHistoryBackfillQueueSend"
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage",
+          "sqs:GetQueueUrl",
+          "sqs:GetQueueAttributes",
+        ]
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-slack-history-backfill"
+      }
+    ]
+  })
+}
+
 # Policy: SQS for Phase 97 github-inbound queue lifecycle (per-sandbox FIFO
 # queues named km-github-inbound-<sandbox-id>.fifo). km create provisions the
 # queue at create time (rollback deletes it on failure); the cold-create path

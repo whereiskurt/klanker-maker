@@ -111,6 +111,9 @@ func newSlackHistoryCmd(cfg *config.Config, sharedDeps *SlackCmdDeps) *cobra.Com
 		return store, lister, routes, nil
 	}
 	hist.AddCommand(newSlackHistoryPurgeCmd(backend, os.Stdout))
+	hist.AddCommand(newSlackHistoryFillCmd(func(ctx context.Context) (*fillDeps, error) {
+		return buildFillDeps(ctx, cfg, sharedDeps)
+	}, os.Stdout))
 	return hist
 }
 
