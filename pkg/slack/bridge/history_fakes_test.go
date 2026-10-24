@@ -13,6 +13,7 @@ type fakeHistoryStore struct {
 	rows       map[string]HistoryMessageRow // channel|ts
 	meta       map[string]ChannelMeta
 	putErr     error
+	putMetaErr error
 	getMetaErr error
 	updates    []string // channel|ts|text|editedTS
 	deletes    []string // channel|ts
@@ -67,6 +68,9 @@ func (f *fakeHistoryStore) PutMeta(_ context.Context, m ChannelMeta) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.putMetas++
+	if f.putMetaErr != nil {
+		return f.putMetaErr
+	}
 	f.meta[m.Channel] = m
 	return nil
 }

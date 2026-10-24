@@ -35,6 +35,11 @@ type EventsHandler struct {
 	// History is the channel mirror store (optional; nil = mirror, pattern match
 	// and purge are all off, selectRoute consults only the static table).
 	History HistoryStore
+	// RoutesLoaded is set by the cold-start wiring once the route table was read:
+	// parsed, or legitimately absent (no routes configured). False means the
+	// table could not be read, so "no route for this channel" is unknown, not
+	// a fact: BackfillStep then leaves the job to SQS instead of ending it.
+	RoutesLoaded bool
 	// Patterns are the glob routes matched against a channel's name when the bot
 	// joins it (config order; first match wins). Needs History and ChannelInfo.
 	Patterns []PatternRoute
@@ -51,7 +56,12 @@ type EventsHandler struct {
 	// bound is the per-warm-Lambda set of channels whose meta row is known to
 	// exist (or was just written), so a mirrored channel's first-sight bind
 	// costs one GetMeta per channel per cold start.
-	bound       sync.Map
+	bound sync.Map
+	// announced is the per-warm-Lambda set of channels this container has
+	// posted the history announcement in. It outlives a failed meta write, so
+	// the bot's own announcement event (the mirror sees it before the bot-loop
+	// filter) can only retry the write, never post again.
+	announced   sync.Map
 	SQS         SQSSender
 	PauseHinter PauseHintPoster // optional; if nil, paused-hint branch is skipped
 	Logger      *slog.Logger

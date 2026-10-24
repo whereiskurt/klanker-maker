@@ -920,8 +920,9 @@ type routesParamReader interface {
 }
 
 // wireChannelRoutes reads the channel route table once per cold start. An
-// absent parameter is an empty table (Info); a read or decode error logs once
-// at WARN and leaves the table empty, so the default route keeps working and
+// absent parameter is an empty table (Info) and counts as loaded; a read or
+// decode error logs once at WARN, leaves the table empty and RoutesLoaded
+// false (so history backfills retry instead of ending), so the default route keeps working and
 // no event ever fails on it. KM_SLACK_ROUTES_SHA256 is logged for correlation
 // with km init; it is not verified (the parameter is the truth).
 func wireChannelRoutes(ctx context.Context, h *bridge.EventsHandler, reader routesParamReader, path string, d defaultRouteDeps) {
@@ -930,6 +931,7 @@ func wireChannelRoutes(ctx context.Context, h *bridge.EventsHandler, reader rout
 		var nf *ssmtypes.ParameterNotFound
 		if errors.As(err, &nf) {
 			slog.Info("km-slack-bridge: no channel route table", "param", path)
+			h.RoutesLoaded = true // no routes configured is a loaded state
 		} else {
 			slog.Warn("km-slack-bridge: channel route table unreadable; channel routes OFF", "param", path, "err", err)
 		}
@@ -945,6 +947,7 @@ func wireChannelRoutes(ctx context.Context, h *bridge.EventsHandler, reader rout
 		slog.Warn("km-slack-bridge: channel route table invalid; channel routes OFF", "param", path, "err", err)
 		return
 	}
+	h.RoutesLoaded = true
 	table := bridge.BuildRouteTable(doc, func(msg string, kv ...any) { slog.Warn(msg, kv...) })
 	if len(table) == 0 && len(doc.Patterns) == 0 {
 		slog.Info("km-slack-bridge: channel route table empty", "param", path)

@@ -297,6 +297,9 @@ func (h *EventsHandler) bindChannel(ctx context.Context, channel, name string, e
 	if existing != nil {
 		meta.Announced = existing.Announced
 	}
+	if _, posted := h.announced.Load(channel); posted {
+		meta.Announced = true // posted earlier from this container; only the write is retried
+	}
 	if hist != nil && hist.Mirror && hist.BackfillSeconds > 0 {
 		meta.BackfillOldest = slackTS(now.Add(-time.Duration(hist.BackfillSeconds) * time.Second))
 		meta.BackfillState = "pending"
@@ -312,6 +315,7 @@ func (h *EventsHandler) bindChannel(ctx context.Context, channel, name string, e
 		text += fmt.Sprintf("; messages expire from my copy after %s.", humanizeSeconds(effectiveRetentionSeconds(hist)))
 		if _, perr := h.Slack.PostMessage(ctx, channel, "", text, ""); perr == nil {
 			meta.Announced = true
+			h.announced.Store(channel, true)
 		} else {
 			h.log().Warn("events: history: announce failed", "channel", channel, "err", perr)
 		}
@@ -358,6 +362,7 @@ func (h *EventsHandler) onChannelLeft(ctx context.Context, channel string) {
 		return
 	}
 	h.bound.Delete(channel) // a rejoin binds afresh
+	h.announced.Delete(channel)
 	n, err := h.History.PurgeChannel(ctx, channel)
 	if err != nil {
 		h.log().Warn("events: history: purge failed", "channel", channel, "err", err)

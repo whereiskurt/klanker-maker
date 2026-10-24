@@ -83,6 +83,13 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 	if route == nil {
 		route = resolveMetaRoute(meta, h.Patterns)
 	}
+	if route == nil && !h.RoutesLoaded {
+		// The route table did not load at cold start: "no route" is unknown,
+		// not a revocation. Leave the meta row alone and let SQS retry (a
+		// later container, or the DLQ after maxReceiveCount).
+		h.log().Warn("events: history backfill: route table not loaded; SQS will retry", "channel", job.Channel)
+		return fmt.Errorf("history backfill %s: channel route table not loaded", job.Channel)
+	}
 	if route == nil || route.History == nil || !route.History.Mirror {
 		meta.BackfillState = "off"
 		h.log().Info("events: history backfill: channel no longer mirrored; stopping", "channel", job.Channel)
@@ -175,6 +182,10 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 	if meta.BackfillState == "running" && h.Backfill != nil {
 		if eerr := h.Backfill.Enqueue(ctx, BackfillJob{Channel: job.Channel, Oldest: job.Oldest, Latest: cursor, Remaining: remaining}, int32(interval)); eerr != nil {
 			h.log().Error("events: history backfill: re-enqueue failed; SQS will retry the page", "channel", job.Channel, "err", eerr)
+			meta.BackfillWritten -= written // SQS redoes this page; count it then
+			if perr := h.History.PutMeta(ctx, *meta); perr != nil {
+				h.log().Warn("events: history backfill: meta write failed", "channel", job.Channel, "err", perr)
+			}
 			return eerr
 		}
 	}

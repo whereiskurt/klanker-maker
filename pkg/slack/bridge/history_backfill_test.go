@@ -119,7 +119,7 @@ func backfillHandler(meta *ChannelMeta, rd *fakeHistoryReader) (*EventsHandler, 
 	// C7 is a static route that mirrors (retention 1h): the backfill resolves
 	// the channel's CURRENT route, never the meta row's copy.
 	routes := map[string]*DefaultRoute{"C7": histRoute("ir", &RouteHistory{Query: true, Mirror: true, RetentionSeconds: 3600})}
-	return &EventsHandler{History: st, HistoryReader: rd, Backfill: bf, Routes: routes, Now: func() time.Time { return now }}, st, bf
+	return &EventsHandler{History: st, HistoryReader: rd, Backfill: bf, Routes: routes, RoutesLoaded: true, Now: func() time.Time { return now }}, st, bf
 }
 
 func pendingMeta() *ChannelMeta {
@@ -376,5 +376,34 @@ func TestBackfillStep_MetaRowResolvesThroughCurrentPattern(t *testing.T) {
 	}
 	if len(st.rows) != 2 || st.meta["C7"].BackfillState != "done" {
 		t.Fatalf("rows=%d meta=%+v", len(st.rows), st.meta["C7"])
+	}
+}
+
+// Finding B: a container whose route table failed to load cannot tell "no
+// longer mirrored" from "unknown"; it must leave the job to SQS, never end it.
+func TestBackfillStep_RouteTableNotLoadedRetriesWithoutTouchingMeta(t *testing.T) {
+	rd := &fakeHistoryReader{msgs: descMsgs(3, 1700000100), more: true}
+	h, st, bf := backfillHandler(pendingMeta(), rd)
+	h.Routes, h.RoutesLoaded = nil, false
+	err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Remaining: 200})
+	if err == nil {
+		t.Fatal("an unloaded route table must return an error so SQS retries")
+	}
+	if st.putMetas != 0 || st.meta["C7"].BackfillState != "pending" || len(rd.calls) != 0 || len(bf.jobs) != 0 {
+		t.Fatalf("putMetas=%d meta=%+v calls=%d jobs=%+v", st.putMetas, st.meta["C7"], len(rd.calls), bf.jobs)
+	}
+}
+
+// Finding (minor): a lost re-enqueue is retried by SQS, which redoes the page;
+// the page must not have been counted already.
+func TestBackfillStep_ReenqueueFailureDoesNotCountThePage(t *testing.T) {
+	rd := &fakeHistoryReader{msgs: descMsgs(3, 1700000100), more: true}
+	h, st, _ := backfillHandler(pendingMeta(), rd)
+	h.Backfill = &failingBackfill{}
+	if err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Remaining: 200}); err == nil {
+		t.Fatal("want an error")
+	}
+	if w := st.meta["C7"].BackfillWritten; w != 0 {
+		t.Fatalf("written = %d; a page SQS will redo must not be counted yet", w)
 	}
 }

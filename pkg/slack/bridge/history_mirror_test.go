@@ -524,3 +524,33 @@ func TestJoin_StaticMirrorRouteBindsOnRejoin(t *testing.T) {
 		t.Fatalf("jobs: %+v", bf.jobs)
 	}
 }
+
+// Finding A: once this container has posted the announcement, a failed meta
+// write must never lead to a second post. The bot's own announcement arrives
+// as a message event (the mirror runs before the bot-loop filter), finds no
+// row, and must retry only the write.
+func TestMirror_AnnouncementNeverRepeatsWhenMetaWriteFails(t *testing.T) {
+	now := time.Now()
+	hist := &RouteHistory{Query: true, Mirror: true, Announce: true}
+	h, st, _, poster := staticMirrorHandler(t, now, hist)
+	st.putMetaErr = errors.New("ddb write down")
+	ctx := context.Background()
+	h.Handle(ctx, rawEventReq(t, now, map[string]any{"type": "message", "channel": "C1", "channel_type": "channel", "user": "U1", "text": "hi", "ts": "9.7"}, "AL1"))
+	if len(poster.msgs) != 1 || st.putMetas != 1 {
+		t.Fatalf("first sight: posts=%d putMetas=%d; want one announcement and one failed write", len(poster.msgs), st.putMetas)
+	}
+	// The bot's own announcement comes back as a message event.
+	h.Handle(ctx, rawEventReq(t, now, map[string]any{"type": "message", "channel": "C1", "channel_type": "channel", "user": "UBOT123", "bot_id": "BBOT", "text": poster.msgs[0].body, "ts": "9.8"}, "AL2"))
+	if len(poster.msgs) != 1 {
+		t.Fatalf("the announcement must not repeat: %d posts", len(poster.msgs))
+	}
+	if st.putMetas != 2 {
+		t.Fatalf("the meta write must be retried on the next sighting: putMetas=%d", st.putMetas)
+	}
+	// Once the store recovers, the retried write records announced=true.
+	st.putMetaErr = nil
+	h.Handle(ctx, rawEventReq(t, now, map[string]any{"type": "message", "channel": "C1", "channel_type": "channel", "user": "U1", "text": "again", "ts": "9.9"}, "AL3"))
+	if len(poster.msgs) != 1 || !st.meta["C1"].Announced {
+		t.Fatalf("posts=%d meta=%+v", len(poster.msgs), st.meta["C1"])
+	}
+}
