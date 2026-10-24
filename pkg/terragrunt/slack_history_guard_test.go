@@ -42,6 +42,16 @@ func TestSlackBridgeModule_HistoryTableEnvHasIAMGrant(t *testing.T) {
 	if !strings.Contains(s, `"ReportBatchItemFailures"`) {
 		t.Error("event source mapping must enable ReportBatchItemFailures")
 	}
+	// BackfillStep returns its errors so SQS redelivers; without a redrive
+	// policy a job that always fails would loop until retention expires.
+	if !strings.Contains(s, `resource "aws_sqs_queue" "history_backfill_dlq"`) {
+		t.Fatal("backfill dead-letter queue missing")
+	}
+	q := s[strings.Index(s, `resource "aws_sqs_queue" "history_backfill" {`):]
+	q = q[:strings.Index(q, "\n}\n")]
+	if !regexp.MustCompile(`redrive_policy\s*=\s*jsonencode\(\{[^}]*deadLetterTargetArn\s*=\s*aws_sqs_queue\.history_backfill_dlq\[0\]\.arn[^}]*maxReceiveCount\s*=\s*\d+`).MatchString(q) {
+		t.Errorf("history_backfill must carry a redrive_policy to history_backfill_dlq with a maxReceiveCount:\n%s", q)
+	}
 }
 
 // The sandbox role must never read the mirror: only the bridge does.

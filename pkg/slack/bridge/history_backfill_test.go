@@ -4,9 +4,11 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,7 +116,10 @@ func backfillHandler(meta *ChannelMeta, rd *fakeHistoryReader) (*EventsHandler, 
 	}
 	bf := &fakeBackfill{}
 	now := time.Unix(1_800_000_000, 0)
-	return &EventsHandler{History: st, HistoryReader: rd, Backfill: bf, Now: func() time.Time { return now }}, st, bf
+	// C7 is a static route that mirrors (retention 1h): the backfill resolves
+	// the channel's CURRENT route, never the meta row's copy.
+	routes := map[string]*DefaultRoute{"C7": histRoute("ir", &RouteHistory{Query: true, Mirror: true, RetentionSeconds: 3600})}
+	return &EventsHandler{History: st, HistoryReader: rd, Backfill: bf, Routes: routes, Now: func() time.Time { return now }}, st, bf
 }
 
 func pendingMeta() *ChannelMeta {
@@ -281,14 +286,95 @@ func TestBackfillStep_CursorStopsAtFailedWrite(t *testing.T) {
 	h, st, bf := backfillHandler(pendingMeta(), rd)
 	failTS := "1700000097.000100" // the oldest of the page
 	h.History = &failTSStore{fakeHistoryStore: st, failTS: failTS}
-	if err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Remaining: 200}); err != nil {
-		t.Fatal(err)
+	err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Remaining: 200})
+	if err == nil {
+		t.Fatal("a failed row write must return an error so SQS redelivers the page")
 	}
 	if len(st.rows) != 3 {
 		t.Fatalf("rows %d", len(st.rows))
 	}
 	want := "1700000098.000100" // just newer than the failed one
-	if st.meta["C7"].BackfillCursor != want || len(bf.jobs) != 1 || bf.jobs[0].Latest != want {
-		t.Fatalf("cursor %q jobs %+v", st.meta["C7"].BackfillCursor, bf.jobs)
+	m := st.meta["C7"]
+	if m.BackfillCursor != want || !strings.HasPrefix(m.BackfillState, "error:") || m.BackfillWritten != 0 {
+		t.Fatalf("meta %+v; want cursor %s, an error state, and the redone page not counted yet", m, want)
+	}
+	if len(bf.jobs) != 0 {
+		t.Fatalf("SQS redelivers the same job; no re-enqueue: %+v", bf.jobs)
+	}
+}
+
+// A failed write on the LAST page used to end the backfill as done.
+func TestBackfillStep_FailedWriteOnLastPageIsRetriedNotDone(t *testing.T) {
+	rd := &fakeHistoryReader{msgs: descMsgs(2, 1700000100), more: false}
+	h, st, bf := backfillHandler(pendingMeta(), rd)
+	h.History = &failTSStore{fakeHistoryStore: st, failTS: "1700000100.000100"}
+	if err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Remaining: 200}); err == nil {
+		t.Fatal("want an error")
+	}
+	if st.meta["C7"].BackfillState == "done" || len(bf.jobs) != 0 {
+		t.Fatalf("meta %+v jobs %+v", st.meta["C7"], bf.jobs)
+	}
+}
+
+func TestBackfillStep_SlackErrorIsRecordedAndReturned(t *testing.T) {
+	rd := &fakeHistoryReader{err: errors.New("conversations.history: internal_error")}
+	h, st, bf := backfillHandler(pendingMeta(), rd)
+	err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Remaining: 50})
+	if err == nil {
+		t.Fatal("a non-rate-limit Slack error must be returned so SQS redelivers (and dead-letters after maxReceiveCount)")
+	}
+	if s := st.meta["C7"].BackfillState; s != "error: conversations.history: internal_error" {
+		t.Fatalf("state %q", s)
+	}
+	if len(bf.jobs) != 0 {
+		t.Fatalf("no self re-enqueue on an error: %+v", bf.jobs)
+	}
+}
+
+func TestBackfillStep_ReenqueueFailureIsReturned(t *testing.T) {
+	rd := &fakeHistoryReader{msgs: descMsgs(3, 1700000100), more: true}
+	h, _, _ := backfillHandler(pendingMeta(), rd)
+	h.Backfill = &failingBackfill{}
+	if err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Remaining: 200}); err == nil {
+		t.Fatal("a lost re-enqueue would end the backfill silently; it must be returned")
+	}
+}
+
+type failingBackfill struct{}
+
+func (failingBackfill) Enqueue(context.Context, BackfillJob, int32) error {
+	return errors.New("sqs down")
+}
+
+func TestBackfillStep_StopsWhenTheRouteNoLongerMirrors(t *testing.T) {
+	rd := &fakeHistoryReader{msgs: descMsgs(3, 1700000100), more: true}
+	h, st, bf := backfillHandler(pendingMeta(), rd)
+	h.Routes = nil // the glob or named route was removed
+	if err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Remaining: 200}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rd.calls) != 0 || len(st.rows) != 0 || len(bf.jobs) != 0 || st.meta["C7"].BackfillState != "off" {
+		t.Fatalf("calls=%d rows=%d jobs=%+v meta=%+v", len(rd.calls), len(st.rows), bf.jobs, st.meta["C7"])
+	}
+}
+
+func TestBackfillStep_MetaRowResolvesThroughCurrentPattern(t *testing.T) {
+	rd := &fakeHistoryReader{msgs: descMsgs(2, 1700000100), more: false}
+	meta := pendingMeta()
+	meta.Route = RouteEntry{Channel: "C7", Pattern: "inc_*", Alias: "ir", History: &RouteHistory{Mirror: true, Query: true, RetentionSeconds: 60}}
+	h, st, _ := backfillHandler(meta, rd)
+	h.Routes = nil
+	h.Patterns = []PatternRoute{patternRoute("inc_*", "ir", &RouteHistory{Mirror: true, Query: true, RetentionSeconds: 7200})}
+	if err := h.BackfillStep(context.Background(), BackfillJob{Channel: "C7", Oldest: "1.0", Remaining: 200}); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Unix(1_800_000_000, 0).Add(2 * time.Hour).Unix()
+	for _, r := range st.rows {
+		if r.ExpiresAt != want {
+			t.Fatalf("expiry must follow the current pattern's retention: %d want %d", r.ExpiresAt, want)
+		}
+	}
+	if len(st.rows) != 2 || st.meta["C7"].BackfillState != "done" {
+		t.Fatalf("rows=%d meta=%+v", len(st.rows), st.meta["C7"])
 	}
 }

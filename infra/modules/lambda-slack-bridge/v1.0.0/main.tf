@@ -458,12 +458,27 @@ resource "aws_iam_role_policy" "dynamodb_slack_history" {
   })
 }
 
+# Dead-letter queue for backfill jobs that keep failing (a Slack error other
+# than a rate limit, a row write, a lost re-enqueue): BackfillStep returns the
+# error, SQS redelivers, and after maxReceiveCount the job lands here instead of
+# vanishing. Nothing reads it; the bridge needs no grant on it.
+resource "aws_sqs_queue" "history_backfill_dlq" {
+  count                     = var.slack_history_table_arn != "" ? 1 : 0
+  name                      = "${var.resource_prefix}-slack-history-backfill-dlq"
+  message_retention_seconds = 1209600 # 14 days
+  tags                      = var.tags
+}
+
 resource "aws_sqs_queue" "history_backfill" {
   count                      = var.slack_history_table_arn != "" ? 1 : 0
   name                       = "${var.resource_prefix}-slack-history-backfill"
   visibility_timeout_seconds = 120 # > Lambda timeout (60)
   message_retention_seconds  = 86400
-  tags                       = var.tags
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.history_backfill_dlq[0].arn
+    maxReceiveCount     = 5
+  })
+  tags = var.tags
 }
 
 resource "aws_iam_role_policy" "sqs_history_backfill" {

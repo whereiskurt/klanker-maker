@@ -3766,7 +3766,11 @@ them, moves a cursor to the oldest `ts` seen, and re-enqueues itself after
 `interval_seconds` (the SQS delay is clamped to 900 s). Slack's `Retry-After` on a 429
 overrides the interval for that step and marks the channel `rate_limited`; it resumes by
 itself. The final state is `done` (the window was exhausted) or `capped` (`max_messages` was
-reached first). At the defaults a 200-message backfill is one step.
+reached first). Any other failure (a Slack error, a row write that failed, a lost re-enqueue)
+records an `error: …` state for `km doctor` and fails the SQS record, so the same page is
+retried (every write is idempotent); after 5 receives the job moves to
+`{prefix}-slack-history-backfill-dlq`, kept 14 days. A backfill whose route no longer mirrors
+(the glob or route was removed) stops with state `off`. At the defaults a 200-message backfill is one step.
 
 **Pacing: `slack.history_rate`.** `page_size` (1 to 999, default 200) is the messages per
 `conversations.history` call, and `interval_seconds` (0 to 600, default 2) is the gap

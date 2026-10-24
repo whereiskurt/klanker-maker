@@ -60,8 +60,12 @@ func (q *SQSBackfillQueue) Enqueue(ctx context.Context, job BackfillJob, delaySe
 
 // BackfillStep runs one page of a channel's backfill. It is the SQS consumer
 // body: idempotent (PutItem on (channel, ts)), bounded (one Slack call), and
-// self-scheduling (re-enqueues with a delay). It returns nil on every Slack
-// error so SQS never retries a step that already re-enqueued itself.
+// self-scheduling (re-enqueues with a delay). A rate limit re-enqueues the job
+// with Slack's Retry-After and returns nil. Any other failure — a Slack error,
+// a row write, a re-enqueue — records the state for km doctor and RETURNS the
+// error, so SQS redelivers the same job (ReportBatchItemFailures) and, after
+// the queue's maxReceiveCount, parks it on the dead-letter queue. A page is
+// safe to redo: every write is a PutItem on (channel, ts).
 func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error {
 	if h.History == nil || h.HistoryReader == nil {
 		return nil
@@ -72,6 +76,17 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 	}
 	if meta == nil {
 		return nil // channel left since the job was queued
+	}
+	// The route as TODAY's config defines it: a glob removed (or a route that
+	// stopped mirroring) since the job was queued ends the backfill.
+	route := h.Routes[job.Channel]
+	if route == nil {
+		route = resolveMetaRoute(meta, h.Patterns)
+	}
+	if route == nil || route.History == nil || !route.History.Mirror {
+		meta.BackfillState = "off"
+		h.log().Info("events: history backfill: channel no longer mirrored; stopping", "channel", job.Channel)
+		return h.History.PutMeta(ctx, *meta)
 	}
 	page, interval := h.historyPacing()
 	limit := job.Remaining
@@ -90,24 +105,27 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 			_ = h.History.PutMeta(ctx, *meta)
 			if h.Backfill != nil {
 				if eerr := h.Backfill.Enqueue(ctx, job, int32(rl.RetryAfterSeconds)); eerr != nil {
-					h.log().Error("events: history backfill: re-enqueue after rate limit failed", "channel", job.Channel, "err", eerr)
+					h.log().Error("events: history backfill: re-enqueue after rate limit failed; SQS will retry", "channel", job.Channel, "err", eerr)
+					return eerr
 				}
 			}
 			return nil
 		}
-		h.log().Warn("events: history backfill: history fetch failed", "channel", job.Channel, "err", err)
+		h.log().Warn("events: history backfill: history fetch failed; SQS will retry", "channel", job.Channel, "err", err)
 		meta.BackfillState = "error: " + err.Error()
-		_ = h.History.PutMeta(ctx, *meta)
-		return nil
+		if perr := h.History.PutMeta(ctx, *meta); perr != nil {
+			h.log().Warn("events: history backfill: meta write failed", "channel", job.Channel, "err", perr)
+		}
+		return err
 	}
 	// Newest-first. The cursor advances over every message with a ts, written or
 	// skipped as a system subtype, until the first failed write; after that it
-	// stays put so the next step refetches from the failed message and retries it
-	// (PutItem is idempotent, so later writes still go ahead).
+	// stays put (PutItem is idempotent, so later writes still go ahead).
 	cursor := job.Latest
-	failed := false
+	failed := 0
+	written := 0
 	advance := func(ts string) {
-		if !failed && (cursor == "" || ts < cursor) {
+		if failed == 0 && (cursor == "" || ts < cursor) {
 			cursor = ts
 		}
 	}
@@ -119,20 +137,30 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 			advance(m.TS)
 			continue
 		}
-		row := HistoryMessageRow{Channel: job.Channel, TS: m.TS, User: m.User, BotID: m.BotID, Text: m.Text, ThreadTS: m.ThreadTS, Subtype: m.Subtype, ExpiresAt: historyExpiry(h.now(), meta.Route.History)}
+		row := HistoryMessageRow{Channel: job.Channel, TS: m.TS, User: m.User, BotID: m.BotID, Text: m.Text, ThreadTS: m.ThreadTS, Subtype: m.Subtype, ExpiresAt: historyExpiry(h.now(), route.History)}
 		for _, f := range m.Files {
 			row.Files = append(row.Files, f.Name)
 		}
 		if perr := h.History.PutMessage(ctx, row); perr != nil {
 			h.log().Warn("events: history backfill: row write failed", "channel", job.Channel, "ts", m.TS, "err", perr)
-			failed = true
+			failed++
 			continue
 		}
-		meta.BackfillWritten++
+		written++
 		advance(m.TS)
 	}
-	remaining := job.Remaining - len(msgs)
 	meta.BackfillCursor = cursor
+	if failed > 0 {
+		// The page is redone as a whole when SQS redelivers this job, so its
+		// writes are not counted yet; the cursor records how far it got.
+		meta.BackfillState = fmt.Sprintf("error: %d row write(s) failed; retrying", failed)
+		if perr := h.History.PutMeta(ctx, *meta); perr != nil {
+			h.log().Warn("events: history backfill: meta write failed", "channel", job.Channel, "err", perr)
+		}
+		return fmt.Errorf("history backfill %s: %d row write(s) failed", job.Channel, failed)
+	}
+	meta.BackfillWritten += written
+	remaining := job.Remaining - len(msgs)
 	switch {
 	case remaining <= 0 && more:
 		meta.BackfillState = "capped"
@@ -146,9 +174,10 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 	}
 	if meta.BackfillState == "running" && h.Backfill != nil {
 		if eerr := h.Backfill.Enqueue(ctx, BackfillJob{Channel: job.Channel, Oldest: job.Oldest, Latest: cursor, Remaining: remaining}, int32(interval)); eerr != nil {
-			h.log().Error("events: history backfill: re-enqueue failed", "channel", job.Channel, "err", eerr)
+			h.log().Error("events: history backfill: re-enqueue failed; SQS will retry the page", "channel", job.Channel, "err", eerr)
+			return eerr
 		}
 	}
-	h.log().Info("events: history backfill step", "channel", job.Channel, "written", len(msgs), "state", meta.BackfillState, "remaining", remaining)
+	h.log().Info("events: history backfill step", "channel", job.Channel, "written", written, "state", meta.BackfillState, "remaining", remaining)
 	return nil
 }

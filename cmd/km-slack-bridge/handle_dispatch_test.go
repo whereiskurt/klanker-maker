@@ -45,7 +45,9 @@ func (dispatchReader) History(context.Context, string, string, string, int) ([]b
 func withEventsHandler(t *testing.T, st *dispatchStore) {
 	t.Helper()
 	orig := eventsHandler
-	eventsHandler = &bridge.EventsHandler{History: st, HistoryReader: dispatchReader{}}
+	r := bridge.NewDefaultRoute("ir", "ir", []string{"*@example.com"}, nil)
+	r.History = &bridge.RouteHistory{Query: true, Mirror: true}
+	eventsHandler = &bridge.EventsHandler{History: st, HistoryReader: dispatchReader{}, Routes: map[string]*bridge.DefaultRoute{"C7": r}}
 	t.Cleanup(func() { eventsHandler = orig })
 }
 
