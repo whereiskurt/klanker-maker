@@ -644,6 +644,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			Attachments:   atts,
 			ThreadContext: threadCtx,
 			BotUserID:     h.botUserIDForEnvelope(bgCtx),
+			HistoryQuery:  routed && route != nil && route.History != nil && route.History.Query,
 		}
 		TrimContextToFit(&sqsBody, MaxQueueBodyBytes)
 		delivered, err := h.deliver(bgCtx, route, info, coldCreate, sqsBody, threadTS, dedupID)
@@ -669,6 +670,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			EventTS:       msg.TS,
 			ThreadContext: threadCtx,
 			BotUserID:     h.botUserIDForEnvelope(ctx),
+			HistoryQuery:  routed && route != nil && route.History != nil && route.History.Query,
 		}
 		TrimContextToFit(&body, MaxQueueBodyBytes)
 		delivered, err := h.deliver(ctx, route, info, coldCreate, body, threadTS, dedupID)

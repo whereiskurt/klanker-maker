@@ -61,6 +61,11 @@ type InboundQueueBody struct {
 	// answered "I'm not the person you're looking for"). Empty when the id could
 	// not be fetched; older pollers ignore it.
 	BotUserID string `json:"bot_user_id,omitempty"`
+
+	// HistoryQuery (2026-10-24): the dispatching route has history.query, so the
+	// poller tells the agent it may run `km-slack history` here. omitempty: a
+	// box without it sees a byte-identical body.
+	HistoryQuery bool `json:"history_query,omitempty"`
 }
 
 // Attachment is the per-file record written to the SQS body for the sandbox poller.

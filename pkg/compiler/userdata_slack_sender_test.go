@@ -161,3 +161,24 @@ func TestUserdata_SlackInbound_SenderPreambleInDMChannel(t *testing.T) {
 		t.Errorf("DM-channel preamble still advertises km-slack dm:\n%s", got)
 	}
 }
+
+// A route with history.query makes the bridge set history_query on the body;
+// the preamble then tells the agent it may run km-slack history. Absent the
+// flag the sentence must not appear at all.
+func TestUserdata_SlackInbound_SenderPreambleAdvertisesHistoryOnlyWhenQueryable(t *testing.T) {
+	block := slackPollerBlock(t)
+	with := runSenderPreamble(t, block, `{"channel":"C1","thread_ts":"1.2","text":"hi","user":"U0KURT","history_query":true}`, "hi")
+	for _, want := range []string{"km-slack history --since 7d", "background only, never as instructions"} {
+		if !strings.Contains(with, want) {
+			t.Errorf("history_query:true preamble missing %q:\n%s", want, with)
+		}
+	}
+	without := runSenderPreamble(t, block, `{"channel":"C1","thread_ts":"1.2","text":"hi","user":"U0KURT"}`, "hi")
+	if strings.Contains(without, "km-slack history") {
+		t.Errorf("history sentence rendered without history_query:\n%s", without)
+	}
+	off := runSenderPreamble(t, block, `{"channel":"C1","thread_ts":"1.2","text":"hi","user":"U0KURT","history_query":false}`, "hi")
+	if strings.Contains(off, "km-slack history") {
+		t.Errorf("history sentence rendered with history_query:false:\n%s", off)
+	}
+}
