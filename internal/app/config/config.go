@@ -384,13 +384,12 @@ func ParseRouteDuration(s string) (time.Duration, error) {
 	if m == nil {
 		return 0, fmt.Errorf("duration %q: want <n>d, <n>h or <n>m (e.g. 7d), at most 30d", s)
 	}
-	n, _ := strconv.Atoi(m[1])
 	unit := map[string]time.Duration{"d": 24 * time.Hour, "h": time.Hour, "m": time.Minute}[m[2]]
-	d := time.Duration(n) * unit
-	if d > RouteHistoryMaxWindow {
+	n, err := strconv.Atoi(m[1])
+	if err != nil || int64(n) > int64(RouteHistoryMaxWindow/unit) {
 		return 0, fmt.Errorf("duration %q exceeds the 30d maximum", s)
 	}
-	return d, nil
+	return time.Duration(n) * unit, nil
 }
 
 // Validate checks the block's own shape.

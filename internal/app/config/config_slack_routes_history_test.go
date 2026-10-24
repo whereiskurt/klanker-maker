@@ -16,7 +16,7 @@ func TestParseRouteDuration(t *testing.T) {
 			t.Errorf("ParseRouteDuration(%q) = %v, %v; want %v", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "31d", "0d", "7", "7 days", "-1d", "all"} {
+	for _, bad := range []string{"", "31d", "0d", "7", "7 days", "-1d", "all", "99999999999d", "99999999999999999999d"} {
 		if _, err := config.ParseRouteDuration(bad); err == nil {
 			t.Errorf("ParseRouteDuration(%q): want error", bad)
 		}
