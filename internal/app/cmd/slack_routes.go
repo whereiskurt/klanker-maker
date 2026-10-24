@@ -36,6 +36,7 @@ type SlackRouteChannelLister interface {
 // profiles to pre-stage, and the canonical bytes + hash.
 type slackRoutesPlan struct {
 	Entries  []slackbridge.RouteEntry
+	Patterns []slackbridge.PatternEntry  // glob routes, in config order
 	Sources  []string                    // parallel to Entries: where each allowlist came from
 	Counts   []int                       // parallel to Entries: allowlist size
 	Chans    []string                    // parallel to Entries: channel id
@@ -85,26 +86,17 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 			aliasProfiles[a] = aliasOwner{"slack.default_route", SlackDefaultRouteProfileSlug(dr.Profile)}
 		}
 	}
-	for i := range cfg.Slack.Routes {
-		r := &cfg.Slack.Routes[i]
-		label := fmt.Sprintf("slack.routes[%d] (%s)", i, strings.TrimSpace(r.Channel))
-
-		var ch kmslack.SlackChannelSummary
-		var ok bool
-		if name, isName := r.ChannelName(); isName {
-			if ch, ok = byName[name]; !ok {
-				return nil, fmt.Errorf("%s: no channel named #%s among the channels the bot is a member of (invite the bot, or the channel was renamed); bot channels: %s", label, name, botChannelNames(channels))
-			}
-		} else if id, isID := r.ChannelID(); isID {
-			if ch, ok = byID[id]; !ok {
-				return nil, fmt.Errorf("%s: the bot is not a member of channel %s (invite it first)", label, id)
-			}
-		}
-		if j, dup := seen[ch.ID]; dup {
-			return nil, fmt.Errorf("%s: resolves to channel %s (#%s), which slack.routes[%d] already names — a channel is listed twice", label, ch.ID, ch.Name, j)
-		}
-		seen[ch.ID] = i
-
+	// registerProfile does the per-route work shared by named and glob routes:
+	// the allowlist fallback, the alias and slug collision checks, and the
+	// pre-stage registration. A glob calls it once, before matching channels,
+	// so its profile is staged even when no current channel matches.
+	type registered struct {
+		slug         string
+		allow        []string
+		profileAllow []string
+		source       string
+	}
+	registerProfile := func(label string, r *config.SlackRoute) (*registered, error) {
 		view := &config.SlackDefaultRoute{Alias: r.Alias, Profile: r.Profile}
 		profileAllow, err := routeProfileInboundAllow(label+".profile", view, cfg.ProfileSearchPaths)
 		if err != nil {
@@ -121,10 +113,6 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 		if len(allow) == 0 {
 			return nil, fmt.Errorf("%s has no allowlist: set allow_emails on the route, slack.default_route.allow_emails, or notification.slack.inbound.allowEmails in %q — a route is deny-by-default", label, r.Profile)
 		}
-		plan.Sources = append(plan.Sources, source)
-		plan.Counts = append(plan.Counts, len(allow))
-		plan.Chans = append(plan.Chans, ch.ID)
-
 		slug := SlackDefaultRouteProfileSlug(r.Profile)
 		alias := strings.TrimSpace(r.Alias)
 		if prev, ok := aliasProfiles[alias]; ok && prev.slug != slug {
@@ -142,17 +130,105 @@ func effectiveSlackChannelRoutes(cfg *config.Config, channels []kmslack.SlackCha
 			staged[slug] = true
 			plan.Profiles = append(plan.Profiles, view)
 		}
+		return &registered{slug, allow, profileAllow, source}, nil
+	}
+	addEntry := func(r *config.SlackRoute, ch kmslack.SlackChannelSummary, pattern string, reg *registered, hist *slackbridge.RouteHistory) {
+		plan.Sources = append(plan.Sources, reg.source)
+		plan.Counts = append(plan.Counts, len(reg.allow))
+		plan.Chans = append(plan.Chans, ch.ID)
 		plan.Entries = append(plan.Entries, slackbridge.RouteEntry{
-			Channel: ch.ID, Name: ch.Name, Alias: r.Alias, Profile: slug,
-			Allow: allow, ProfileAllow: profileAllow, MentionOnly: r.MentionRequired(),
+			Channel: ch.ID, Name: ch.Name, Pattern: pattern, Alias: r.Alias, Profile: reg.slug,
+			Allow: reg.allow, ProfileAllow: reg.profileAllow, MentionOnly: r.MentionRequired(), History: hist,
 		})
 	}
-	b, err := slackbridge.CanonicalRoutesJSON(plan.Entries)
+
+	// Pass 1: named and id routes. An exact route beats any glob.
+	for i := range cfg.Slack.Routes {
+		r := &cfg.Slack.Routes[i]
+		if _, isGlob := r.ChannelGlob(); isGlob {
+			continue
+		}
+		label := fmt.Sprintf("slack.routes[%d] (%s)", i, strings.TrimSpace(r.Channel))
+
+		var ch kmslack.SlackChannelSummary
+		var ok bool
+		if name, isName := r.ChannelName(); isName {
+			if ch, ok = byName[name]; !ok {
+				return nil, fmt.Errorf("%s: no channel named #%s among the channels the bot is a member of (invite the bot, or the channel was renamed); bot channels: %s", label, name, botChannelNames(channels))
+			}
+		} else if id, isID := r.ChannelID(); isID {
+			if ch, ok = byID[id]; !ok {
+				return nil, fmt.Errorf("%s: the bot is not a member of channel %s (invite it first)", label, id)
+			}
+		}
+		if j, dup := seen[ch.ID]; dup {
+			return nil, fmt.Errorf("%s: resolves to channel %s (#%s), which slack.routes[%d] already names — a channel is listed twice", label, ch.ID, ch.Name, j)
+		}
+		seen[ch.ID] = i
+		reg, err := registerProfile(label, r)
+		if err != nil {
+			return nil, err
+		}
+		hist, err := routeHistoryWire(r.History)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", label, err)
+		}
+		addEntry(r, ch, "", reg, hist)
+	}
+
+	// Pass 2: glob routes, in config order (the first glob wins at event time,
+	// so the table keeps this order). A channel two globs both match is an error.
+	globOwner := map[string]int{} // channel id → glob route index
+	for i := range cfg.Slack.Routes {
+		r := &cfg.Slack.Routes[i]
+		glob, isGlob := r.ChannelGlob()
+		if !isGlob {
+			continue
+		}
+		label := fmt.Sprintf("slack.routes[%d] (%s)", i, strings.TrimSpace(r.Channel))
+		hist, err := routeHistoryWire(r.History)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", label, err)
+		}
+		reg, err := registerProfile(label, r)
+		if err != nil {
+			return nil, err
+		}
+		plan.Patterns = append(plan.Patterns, slackbridge.PatternEntry{Glob: glob, Alias: r.Alias, Profile: reg.slug,
+			Allow: reg.allow, ProfileAllow: reg.profileAllow, MentionOnly: r.MentionRequired(), History: hist})
+		for _, ch := range channels {
+			if !slackbridge.MatchChannelGlob(glob, ch.Name) {
+				continue
+			}
+			if _, exact := seen[ch.ID]; exact {
+				continue // a named route owns it; exact beats glob
+			}
+			if j, dup := globOwner[ch.ID]; dup {
+				return nil, fmt.Errorf("%s: channel #%s (%s) matches two globs, this one and slack.routes[%d] (%s); narrow one so each channel has one route", label, ch.Name, ch.ID, j, cfg.Slack.Routes[j].Channel)
+			}
+			globOwner[ch.ID] = i
+			addEntry(r, ch, glob, reg, hist)
+		}
+	}
+	b, err := slackbridge.CanonicalRoutesDocument(plan.Entries, plan.Patterns)
 	if err != nil {
 		return nil, fmt.Errorf("slack.routes: encode: %w", err)
 	}
 	plan.JSON, plan.SHA = b, slackbridge.RoutesSHA256(b)
 	return plan, nil
+}
+
+// routeHistoryWire converts the config block to seconds for the table.
+func routeHistoryWire(h *config.SlackRouteHistory) (*slackbridge.RouteHistory, error) {
+	if h == nil {
+		return nil, nil
+	}
+	backfill, retention, maxMsgs, err := h.Resolved()
+	if err != nil {
+		return nil, err
+	}
+	return &slackbridge.RouteHistory{Query: h.Query, Mirror: h.Mirror, BackfillSeconds: int(backfill.Seconds()),
+		RetentionSeconds: int(retention.Seconds()), MaxMessages: maxMsgs, Announce: h.Announce}, nil
 }
 
 func botChannelNames(channels []kmslack.SlackChannelSummary) string {
@@ -229,6 +305,13 @@ func prepareSlackChannelRoutes(ctx context.Context, cfg *config.Config, lister S
 	os.Setenv(envSlackRoutesSHA, plan.SHA) //nolint:errcheck
 	for i, e := range plan.Entries {
 		fmt.Fprintf(os.Stderr, "[info] slack.routes: #%s (%s) → alias %q, %d allowed (%s)\n", e.Name, plan.Chans[i], e.Alias, plan.Counts[i], plan.Sources[i])
+	}
+	for _, p := range plan.Patterns {
+		hist := "no history"
+		if p.History != nil {
+			hist = fmt.Sprintf("query=%v mirror=%v backfill=%ds retention=%ds max=%d", p.History.Query, p.History.Mirror, p.History.BackfillSeconds, p.History.RetentionSeconds, p.History.MaxMessages)
+		}
+		fmt.Fprintf(os.Stderr, "[info] slack.routes: glob #%s → alias %q (%s); new channels match at join time\n", p.Glob, p.Alias, hist)
 	}
 	fmt.Fprintf(os.Stderr, "[info] slack.routes: %d route(s) written to %s (sha256 %s…)\n", len(plan.Entries), param, plan.SHA[:12])
 	return nil
