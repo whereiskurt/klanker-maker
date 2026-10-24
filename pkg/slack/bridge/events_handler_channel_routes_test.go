@@ -3,6 +3,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -195,5 +196,46 @@ func TestChannelRoutes_ProfileAllowGatesColdCreate(t *testing.T) {
 	h.Handle(context.Background(), req(t, now, "CSEC", "channel", "U0KURT", "hi", "8.1", "", "CR17", true))
 	if len(pub.calls) != 1 || pub.calls[0].alias != "ir-bot" {
 		t.Fatalf("a sender on the route profile's list must cold-create: %+v", pub.calls)
+	}
+}
+
+// history_query tells the poller to advertise `km-slack history` to the agent.
+// It is set only for a routed turn whose route carries history.query; an owned
+// #sb- dispatch never sets it.
+func TestChannelRoutes_HistoryQueryFlagOnQueueBody(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, _, _ := channelRoutedHandler(t, now)
+	h.Routes["CSEC"].History = &RouteHistory{Query: true}
+
+	queryFlag := func(t *testing.T, i int) bool {
+		t.Helper()
+		if i >= len(sqs.sends) {
+			t.Fatalf("expected send #%d, have %d", i, len(sqs.sends))
+		}
+		var b InboundQueueBody
+		if err := json.Unmarshal([]byte(sqs.sends[i].body), &b); err != nil {
+			t.Fatal(err)
+		}
+		return b.HistoryQuery
+	}
+
+	h.Handle(context.Background(), req(t, now, "CSEC", "channel", "U0OTHER", "hi", "3.0", "", "HQ1", true))
+	if !queryFlag(t, 0) {
+		t.Errorf("route with history.query must set history_query: %s", sqs.sends[0].body)
+	}
+
+	h.Handle(context.Background(), req(t, now, "COPS", "channel", "U0KURT", "hi", "3.1", "", "HQ2", false))
+	if queryFlag(t, 1) {
+		t.Errorf("route without history must not set history_query: %s", sqs.sends[1].body)
+	}
+	if strings.Contains(sqs.sends[1].body, "history_query") {
+		t.Errorf("history_query must be omitted when false: %s", sqs.sends[1].body)
+	}
+
+	// Owned #sb- channel: plain handler, no route involved.
+	h2, sqs2, _, _, _, _, _ := newHandler(now)
+	h2.Handle(context.Background(), req(t, now, "C1", "channel", "U1", "hi", "3.2", "", "HQ3", true))
+	if len(sqs2.sends) != 1 || strings.Contains(sqs2.sends[0].body, "history_query") {
+		t.Errorf("owned dispatch must not carry history_query: %+v", sqs2.sends)
 	}
 }

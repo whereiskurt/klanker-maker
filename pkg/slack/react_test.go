@@ -64,7 +64,7 @@ func TestCanonicalJSON_ReactFieldsOmittedWhenZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CanonicalJSON: %v", err)
 	}
-	for _, f := range []string{`"emoji"`, `"remove"`, `"exclusive"`, `"broadcast"`} {
+	for _, f := range []string{`"emoji"`, `"remove"`, `"exclusive"`, `"broadcast"`, `"oldest"`, `"latest"`, `"before"`, `"grep"`, `"limit"`} {
 		if strings.Contains(string(b), f) {
 			t.Errorf("zero-valued %s must not serialise: %s", f, b)
 		}

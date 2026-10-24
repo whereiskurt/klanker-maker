@@ -50,6 +50,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	profilepkg "github.com/whereiskurt/klanker-maker/pkg/profile"
 	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
+	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 	"gopkg.in/yaml.v3"
 )
 
@@ -445,6 +446,10 @@ type DoctorDeps struct {
 	// DynamoScanClient backs checkThreadRowsWithoutOwner (Select COUNT scans of
 	// the three thread tables). Populated beside DynamoClient. Nil → skipped.
 	DynamoScanClient DynamoScanAPI
+	// DynamoTTL + HistoryMeta back the Slack history group (TTL/PITR reads and
+	// the mirrored-channel meta rows). Populated beside DynamoClient. Nil → SKIPPED.
+	DynamoTTL   DynamoTTLAPI
+	HistoryMeta HistoryMetaLister
 	// EC2Clients is a map from region name to EC2 client (one per region checked).
 	EC2Clients map[string]EC2DescribeAPI
 	// Lambda client for TTL handler existence check.
@@ -4759,6 +4764,27 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		}
 	}
 
+	// Slack channel history. Absent history/glob: one SKIPPED, zero calls.
+	// Configured: four results over one once-computed evaluation.
+	if routesCfg == nil || !slackHistoryConfigured(routesCfg) {
+		checks = append(checks, func(ctx context.Context) CheckResult {
+			return checkSlackHistory(ctx, nil, nil, nil, nil, nil, nil, "")[0]
+		})
+	} else {
+		var hOnce sync.Once
+		var hResults []CheckResult
+		evalHist := func(ctx context.Context) []CheckResult {
+			hOnce.Do(func() {
+				hResults = checkSlackHistory(ctx, routesCfg, deps.SlackChannelLister, deps.DynamoClient, deps.DynamoTTL, deps.HistoryMeta, deps.SlackAuthTestScopes, cfg.GetResourcePrefix())
+			})
+			return hResults
+		}
+		for i := 0; i < 4; i++ {
+			idx := i
+			checks = append(checks, func(ctx context.Context) CheckResult { return evalHist(ctx)[idx] })
+		}
+	}
+
 	// Phase 110 Plan 06 — dead-channel doctor checks.
 	// Both checks SKIP when SlackDeadChannelChecker is nil (bot token absent).
 	// Both use DDBScanDeleteClient (already has Scan) to avoid adding a new field.
@@ -5057,6 +5083,11 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.DynamoClient = dynamodb.NewFromConfig(awsCfg)
 	deps.IdentityRowClient = dynamodb.NewFromConfig(awsCfg)
 	deps.DynamoScanClient = dynamodb.NewFromConfig(awsCfg)
+	{
+		histDDB := dynamodb.NewFromConfig(awsCfg)
+		deps.DynamoTTL = histDDB
+		deps.HistoryMeta = &slackbridge.DDBHistoryStore{Client: histDDB, TableName: cfg.GetResourcePrefix() + "-slack-history"}
+	}
 	deps.KMSClient = kms.NewFromConfig(awsCfg)
 	deps.SSMReadClient = ssm.NewFromConfig(awsCfg)
 

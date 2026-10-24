@@ -72,6 +72,17 @@ dependency "slack_threads" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
 }
 
+# km-slack-history (2026-10-24): the per-route channel mirror the bridge writes
+# and reads. Also orders this unit after the table under run-all.
+dependency "slack_history" {
+  config_path = "../dynamodb-slack-history"
+  mock_outputs = {
+    table_name = "km-slack-history"
+    table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-slack-history"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
+}
+
 # km-github-threads / km-h1-threads (2026-10-18): the bridge's `session` action
 # records GitHub/H1 agent sessions there on the pollers' behalf, since the
 # sandbox role has no threads-table grant (ec2spot v1.9.0). The dependency also
@@ -107,27 +118,32 @@ dependency "action_quota" {
 }
 
 inputs = {
-  lambda_zip_path          = "${local.repo_root}/build/km-slack-bridge.zip"
-  quota_table_arn          = dependency.action_quota.outputs.table_arn
-  identities_table_name    = dependency.identities.outputs.table_name
-  identities_table_arn     = dependency.identities.outputs.table_arn
-  sandboxes_table_name     = "${local.site_vars.locals.site.label}-sandboxes"
-  sandboxes_table_arn      = dependency.sandboxes.outputs.table_arn
-  nonces_table_name        = dependency.nonces.outputs.table_name
-  nonces_table_arn         = dependency.nonces.outputs.table_arn
-  kms_key_arn              = get_env("KM_PLATFORM_KMS_KEY_ARN", "")
-  bot_token_path           = "/${local.site_vars.locals.site.label}/slack/bot-token"
+  lambda_zip_path       = "${local.repo_root}/build/km-slack-bridge.zip"
+  quota_table_arn       = dependency.action_quota.outputs.table_arn
+  identities_table_name = dependency.identities.outputs.table_name
+  identities_table_arn  = dependency.identities.outputs.table_arn
+  sandboxes_table_name  = "${local.site_vars.locals.site.label}-sandboxes"
+  sandboxes_table_arn   = dependency.sandboxes.outputs.table_arn
+  nonces_table_name     = dependency.nonces.outputs.table_name
+  nonces_table_arn      = dependency.nonces.outputs.table_arn
+  kms_key_arn           = get_env("KM_PLATFORM_KMS_KEY_ARN", "")
+  bot_token_path        = "/${local.site_vars.locals.site.label}/slack/bot-token"
   # Phase 68: bridge needs S3 read access to fetch transcripts/* objects
   # uploaded by the sandbox-side hook before forwarding to Slack files.upload.
-  artifacts_bucket         = get_env("KM_ARTIFACTS_BUCKET", "")
+  artifacts_bucket = get_env("KM_ARTIFACTS_BUCKET", "")
   # Phase 66: prefix-aware inputs (Pitfall 9 fix)
   resource_prefix          = local.site_vars.locals.site.label
   signing_secret_path      = "/${local.site_vars.locals.site.label}/slack/signing-secret"
   slack_threads_table_name = dependency.slack_threads.outputs.table_name
+  # 2026-10-24: channel history mirror + pacing
+  slack_history_table_name       = dependency.slack_history.outputs.table_name
+  slack_history_table_arn        = dependency.slack_history.outputs.table_arn
+  slack_history_page_size        = get_env("KM_SLACK_HISTORY_PAGE_SIZE", "200")
+  slack_history_interval_seconds = get_env("KM_SLACK_HISTORY_INTERVAL_SECONDS", "2")
   # 2026-10-18: km-slack session writes for the GitHub/H1 pollers
   github_threads_table_name = dependency.github_threads.outputs.table_name
   h1_threads_table_name     = dependency.h1_threads.outputs.table_name
-  nonce_table_name = "${local.site_vars.locals.site.label}-slack-bridge-nonces"
+  nonce_table_name          = "${local.site_vars.locals.site.label}-slack-bridge-nonces"
 
   # Phase 91 — polite-bot mode toggle (install-level default). Operators export
   # KM_SLACK_MENTION_ONLY=true in their shell before `km init --sidecars` to flip

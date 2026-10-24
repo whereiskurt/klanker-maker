@@ -118,6 +118,9 @@ type SlackCmdDeps struct {
 	// RouteChannelLister lists the bot's channels for slack.routes resolution.
 	// nil ⇒ built from the bot token in SSM.
 	RouteChannelLister SlackRouteChannelLister
+	// DDB is the operator's DynamoDB client, used by km slack history purge.
+	// Set by buildSlackCmdDeps; nil (tests) ⇒ the verb reports it is unavailable.
+	DDB *dynamodb.Client
 }
 
 // SlackInitOpts holds parsed flag values for km slack init.
@@ -168,6 +171,7 @@ func newSlackCmdInternal(cfg *config.Config, deps *SlackCmdDeps) *cobra.Command 
 	slackCmd.AddCommand(newSlackForgetThreadCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackPruneThreadsCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackForgetChannelCmd(cfg, deps))
+	slackCmd.AddCommand(newSlackHistoryCmd(cfg, deps))
 	return slackCmd
 }
 
@@ -911,6 +915,7 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 		Terragrunt:   &slackTerragruntRunner{inner: tgRunner},
 		Prompter:     &slackPrompter{},
 		ThreadLookup: threadLookup,
+		DDB:          ddbClient,
 		OperatorKeyLoader: func(ctx context.Context, _ string) (ed25519.PrivateKey, error) {
 			return loadSlackOperatorKey(ctx, ssmClient, cfg.GetResourcePrefix())
 		},

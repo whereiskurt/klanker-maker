@@ -243,6 +243,49 @@ func TestExportTerragruntEnvVars_ReactQuietSeconds(t *testing.T) {
 	}
 }
 
+// slack.history_rate: nil ⇒ unset (terragrunt defaults apply); set ⇒ Effective()
+// values exported; env wins with a WARN.
+func TestExportTerragruntEnvVars_HistoryRate(t *testing.T) {
+	keys := []string{"KM_SLACK_HISTORY_PAGE_SIZE", "KM_SLACK_HISTORY_INTERVAL_SECONDS"}
+	for _, k := range keys {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+	ExportTerragruntEnvVars(&config.Config{})
+	for _, k := range keys {
+		if _, set := os.LookupEnv(k); set {
+			t.Fatalf("nil must leave %s unset", k)
+		}
+	}
+
+	zero := 0
+	cfg := &config.Config{}
+	cfg.Slack.HistoryRate = &config.SlackHistoryRate{PageSize: 50, IntervalSeconds: &zero}
+	ExportTerragruntEnvVars(cfg)
+	if got := os.Getenv("KM_SLACK_HISTORY_PAGE_SIZE"); got != "50" {
+		t.Fatalf("page size = %q, want 50", got)
+	}
+	if got := os.Getenv("KM_SLACK_HISTORY_INTERVAL_SECONDS"); got != "0" {
+		t.Fatalf("interval = %q, want 0", got)
+	}
+
+	os.Setenv("KM_SLACK_HISTORY_PAGE_SIZE", "300")
+	r, w, _ := os.Pipe()
+	orig := os.Stderr
+	os.Stderr = w
+	ExportTerragruntEnvVars(cfg)
+	w.Close()
+	os.Stderr = orig
+	buf := make([]byte, 64<<10)
+	n, _ := r.Read(buf)
+	if got := os.Getenv("KM_SLACK_HISTORY_PAGE_SIZE"); got != "300" {
+		t.Fatalf("env must win, got %q", got)
+	}
+	if out := string(buf[:n]); !strings.Contains(out, "WARN: KM_SLACK_HISTORY_PAGE_SIZE=300") {
+		t.Fatalf("want drift WARN, got %q", out)
+	}
+}
+
 // prepareSlackDefaultRoute is the one step every km init path runs: no route ⇒
 // no-op; a route ⇒ validated and exported with BOTH lists: ALLOW is the install
 // list (km-config.yaml), PROFILE_ALLOW the route profile's allowEmails. (Before

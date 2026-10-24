@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -195,6 +197,15 @@ type SlackConfig struct {
 	// --slack after every change). CRITICAL: "slack.routes" must be in the
 	// v2→v merge-list.
 	Routes []SlackRoute `mapstructure:"routes" yaml:"routes,omitempty"`
+
+	// HistoryRate (2026-10-24) paces the channel-history backfill and live reads:
+	// messages per conversations.history call and the gap between backfill steps.
+	// Defaults (200, 2 s) follow Slack's documented Tier 3 posture; an install
+	// Slack throttles to the non-Marketplace regime sets 15 / 60. Retry-After on a
+	// 429 always overrides the interval. Exported as KM_SLACK_HISTORY_PAGE_SIZE and
+	// KM_SLACK_HISTORY_INTERVAL_SECONDS. CRITICAL: "slack.history_rate" must be in
+	// the v2→v merge-list (UnmarshalKey, like slack.default_route).
+	HistoryRate *SlackHistoryRate `mapstructure:"history_rate" yaml:"history_rate,omitempty"`
 }
 
 // SlackDefaultRoute is the slack.default_route block. See SlackConfig.DefaultRoute.
@@ -248,11 +259,12 @@ func (r *SlackDefaultRoute) Validate() error {
 
 // SlackRoute is one entry of slack.routes. Channel is "#name" or a channel id.
 type SlackRoute struct {
-	Channel     string   `mapstructure:"channel"      yaml:"channel"`
-	Alias       string   `mapstructure:"alias"        yaml:"alias"`
-	Profile     string   `mapstructure:"profile"      yaml:"profile"`
-	AllowEmails []string `mapstructure:"allow_emails" yaml:"allow_emails,omitempty"`
-	MentionOnly *bool    `mapstructure:"mention_only" yaml:"mention_only,omitempty"`
+	Channel     string             `mapstructure:"channel"      yaml:"channel"`
+	Alias       string             `mapstructure:"alias"        yaml:"alias"`
+	Profile     string             `mapstructure:"profile"      yaml:"profile"`
+	AllowEmails []string           `mapstructure:"allow_emails" yaml:"allow_emails,omitempty"`
+	MentionOnly *bool              `mapstructure:"mention_only" yaml:"mention_only,omitempty"`
+	History     *SlackRouteHistory `mapstructure:"history"      yaml:"history,omitempty"`
 }
 
 // slackRouteChannelName: "#" + a Slack-legal name (lowercase letters, digits,
@@ -260,6 +272,19 @@ type SlackRoute struct {
 // private (G) channel id.
 var slackRouteChannelName = regexp.MustCompile(`^#[a-z0-9][a-z0-9._-]{0,79}$`)
 var slackRouteChannelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
+
+// slackRouteChannelGlob: a '#name' whose body may contain '*' or '?'. Only a
+// string that contains at least one of them is a glob (see ChannelGlob).
+var slackRouteChannelGlob = regexp.MustCompile(`^#[a-z0-9*?][a-z0-9._*?-]{0,79}$`)
+
+// ChannelGlob returns the glob without '#' when Channel is a pattern.
+func (r *SlackRoute) ChannelGlob() (string, bool) {
+	c := strings.TrimSpace(r.Channel)
+	if slackRouteChannelGlob.MatchString(c) && strings.ContainsAny(c, "*?") {
+		return strings.TrimPrefix(c, "#"), true
+	}
+	return "", false
+}
 
 // ChannelName returns the name without '#' when Channel is a name.
 func (r *SlackRoute) ChannelName() (string, bool) {
@@ -300,7 +325,9 @@ func (r *SlackRoute) NormalizedEmails() []string {
 func (r *SlackRoute) Validate() error {
 	c := strings.TrimSpace(r.Channel)
 	if !slackRouteChannelName.MatchString(c) && !slackRouteChannelID.MatchString(c) {
-		return fmt.Errorf("slack.routes: channel %q must be \"#name\" (lowercase Slack channel name) or a channel id (C…)", r.Channel)
+		if _, isGlob := r.ChannelGlob(); !isGlob {
+			return fmt.Errorf("slack.routes: channel %q must be \"#name\" (lowercase Slack channel name), \"#glob\" with * or ?, or a channel id (C…)", r.Channel)
+		}
 	}
 	if strings.TrimSpace(r.Alias) == "" {
 		return fmt.Errorf("slack.routes: channel %q: alias is required", r.Channel)
@@ -316,13 +343,143 @@ func (r *SlackRoute) Validate() error {
 			return fmt.Errorf("slack.routes: channel %q: allow_emails: %w", r.Channel, err)
 		}
 	}
+	if r.History != nil {
+		if err := r.History.Validate(); err != nil {
+			return fmt.Errorf("slack.routes: channel %q: %w", r.Channel, err)
+		}
+	}
 	return nil
+}
+
+// SlackRouteHistory is a route's history block (2026-10-24). Default-off: a
+// route without one mirrors nothing and admits no `km-slack history` query.
+// Query lets the owning klanker read the channel (mirror or live). Mirror
+// persists the channel to {prefix}-slack-history; it requires Query (a mirror
+// nobody may read is a liability with no use). Backfill/Retention are "7d",
+// "24h", "90m" (max 30d); Retention defaults to Backfill. MaxMessages caps
+// both the join-time backfill and a single query page (default 200, max 1000).
+// Announce posts one in-channel line when mirroring starts (default false).
+type SlackRouteHistory struct {
+	Query       bool   `mapstructure:"query"        yaml:"query,omitempty"`
+	Mirror      bool   `mapstructure:"mirror"       yaml:"mirror,omitempty"`
+	Backfill    string `mapstructure:"backfill"     yaml:"backfill,omitempty"`
+	Retention   string `mapstructure:"retention"    yaml:"retention,omitempty"`
+	MaxMessages int    `mapstructure:"max_messages" yaml:"max_messages,omitempty"`
+	Announce    bool   `mapstructure:"announce"     yaml:"announce,omitempty"`
+}
+
+const (
+	RouteHistoryDefaultWindow = 7 * 24 * time.Hour
+	RouteHistoryMaxWindow     = 30 * 24 * time.Hour
+	RouteHistoryDefaultMax    = 200
+	RouteHistoryMaxMax        = 1000
+)
+
+var routeDuration = regexp.MustCompile(`^([1-9][0-9]*)([dhm])$`)
+
+// ParseRouteDuration parses "7d", "24h" or "90m" into a Duration, 1 unit to
+// 30 days. Anything else (including "all") is an error: a window is bounded.
+func ParseRouteDuration(s string) (time.Duration, error) {
+	m := routeDuration.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return 0, fmt.Errorf("duration %q: want <n>d, <n>h or <n>m (e.g. 7d), at most 30d", s)
+	}
+	unit := map[string]time.Duration{"d": 24 * time.Hour, "h": time.Hour, "m": time.Minute}[m[2]]
+	n, err := strconv.Atoi(m[1])
+	if err != nil || int64(n) > int64(RouteHistoryMaxWindow/unit) {
+		return 0, fmt.Errorf("duration %q exceeds the 30d maximum", s)
+	}
+	return time.Duration(n) * unit, nil
+}
+
+// Validate checks the block's own shape.
+func (h *SlackRouteHistory) Validate() error {
+	if !h.Query && !h.Mirror {
+		return fmt.Errorf("history: set query or mirror (or remove the block)")
+	}
+	if h.Mirror && !h.Query {
+		return fmt.Errorf("history: mirror: true requires query: true")
+	}
+	if h.Backfill != "" {
+		if _, err := ParseRouteDuration(h.Backfill); err != nil {
+			return fmt.Errorf("history.backfill: %w", err)
+		}
+	}
+	if h.Retention != "" {
+		if _, err := ParseRouteDuration(h.Retention); err != nil {
+			return fmt.Errorf("history.retention: %w", err)
+		}
+	}
+	if h.MaxMessages < 0 || h.MaxMessages > RouteHistoryMaxMax {
+		return fmt.Errorf("history.max_messages: %d out of range 1..%d", h.MaxMessages, RouteHistoryMaxMax)
+	}
+	return nil
+}
+
+// Resolved applies the defaults: backfill 7d, retention = backfill, max 200.
+func (h *SlackRouteHistory) Resolved() (backfill, retention time.Duration, maxMessages int, err error) {
+	if err = h.Validate(); err != nil {
+		return
+	}
+	backfill = RouteHistoryDefaultWindow
+	if h.Backfill != "" {
+		backfill, _ = ParseRouteDuration(h.Backfill)
+	}
+	retention = backfill
+	if h.Retention != "" {
+		retention, _ = ParseRouteDuration(h.Retention)
+	}
+	maxMessages = h.MaxMessages
+	if maxMessages == 0 {
+		maxMessages = RouteHistoryDefaultMax
+	}
+	return
+}
+
+type SlackHistoryRate struct {
+	PageSize        int  `mapstructure:"page_size"        yaml:"page_size,omitempty"`
+	IntervalSeconds *int `mapstructure:"interval_seconds" yaml:"interval_seconds,omitempty"` // *int: an explicit 0 must survive
+}
+
+const (
+	HistoryRateDefaultPageSize = 200
+	HistoryRateDefaultInterval = 2
+)
+
+func (r *SlackHistoryRate) Validate() error {
+	if r == nil {
+		return nil
+	}
+	if r.PageSize < 0 || r.PageSize > 999 {
+		return fmt.Errorf("slack.history_rate.page_size: %d out of range 1..999", r.PageSize)
+	}
+	if r.IntervalSeconds != nil && (*r.IntervalSeconds < 0 || *r.IntervalSeconds > 600) {
+		return fmt.Errorf("slack.history_rate.interval_seconds: %d out of range 0..600", *r.IntervalSeconds)
+	}
+	return nil
+}
+
+func (r *SlackHistoryRate) Effective() (pageSize, intervalSeconds int) {
+	pageSize, intervalSeconds = HistoryRateDefaultPageSize, HistoryRateDefaultInterval
+	if r == nil {
+		return
+	}
+	if r.PageSize > 0 {
+		pageSize = r.PageSize
+	}
+	if r.IntervalSeconds != nil {
+		intervalSeconds = *r.IntervalSeconds
+	}
+	return
 }
 
 // ValidateRoutes validates every route and rejects two routes naming the same
 // channel literally (case-insensitive, trimmed). A name and an id that resolve
 // to one channel are caught at km init, after resolution.
 func (s *SlackConfig) ValidateRoutes() error {
+	if err := s.HistoryRate.Validate(); err != nil {
+		return err
+	}
 	seen := map[string]int{}
 	for i := range s.Routes {
 		// Duplicate check first: it is case-insensitive, so " #A " is reported
@@ -1357,6 +1514,9 @@ func Load() (*Config, error) {
 			// 2026-10-22: per-channel route table (list-of-objects, UnmarshalKey).
 			// CRITICAL: without it the whole list is silently dropped.
 			"slack.routes",
+			// 2026-10-24: install-level history pacing (struct, UnmarshalKey).
+			// CRITICAL: without it the block is silently dropped.
+			"slack.history_rate",
 			// Phase 97: github block (repos list-of-objects + default_profile). CRITICAL:
 			// without this entry, the entire github: block is silently dropped regardless
 			// of km-config.yaml content (project_config_key_merge_list footgun).
@@ -1571,6 +1731,14 @@ func Load() (*Config, error) {
 		if err := v.UnmarshalKey("slack.routes", &cfg.Slack.Routes); err != nil {
 			return nil, fmt.Errorf("unmarshal slack.routes: %w", err)
 		}
+	}
+
+	if v.IsSet("slack.history_rate") {
+		var hr SlackHistoryRate
+		if err := v.UnmarshalKey("slack.history_rate", &hr); err != nil {
+			return nil, fmt.Errorf("unmarshal slack.history_rate: %w", err)
+		}
+		cfg.Slack.HistoryRate = &hr
 	}
 
 	// Clusters is a structured slice — viper's UnmarshalKey handles the

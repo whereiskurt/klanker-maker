@@ -29,12 +29,42 @@ const (
 type EventsHandler struct {
 	SigningSecret SigningSecretFetcher
 	BotUserID     BotUserIDFetcher
-	Nonces        EventNonceStore           // reuses km-slack-bridge-nonces table via EventNonceStore
+	Nonces        EventNonceStore // reuses km-slack-bridge-nonces table via EventNonceStore
 	Sandboxes     SandboxByChannelFetcher
 	Threads       SlackThreadStore
-	SQS           SQSSender
-	PauseHinter   PauseHintPoster           // optional; if nil, paused-hint branch is skipped
-	Logger        *slog.Logger
+	// History is the channel mirror store (optional; nil = mirror, pattern match
+	// and purge are all off, selectRoute consults only the static table).
+	History HistoryStore
+	// RoutesLoaded is set by the cold-start wiring once the route table was read:
+	// parsed, or legitimately absent (no routes configured). False means the
+	// table could not be read, so "no route for this channel" is unknown, not
+	// a fact: BackfillStep then leaves the job to SQS instead of ending it.
+	RoutesLoaded bool
+	// Patterns are the glob routes matched against a channel's name when the bot
+	// joins it (config order; first match wins). Needs History and ChannelInfo.
+	Patterns []PatternRoute
+	// ChannelInfo resolves a joined channel id to its name (conversations.info).
+	ChannelInfo ChannelInfoFetcher
+	// Backfill enqueues the history backfill job for a newly matched channel.
+	Backfill BackfillEnqueuer
+	// HistoryReader pages conversations.history for the backfill step.
+	HistoryReader HistoryReader
+	// HistoryPageSize / HistoryIntervalSeconds are slack.history_rate; 0 values
+	// fall back to the defaults (see historyPacing).
+	HistoryPageSize        int
+	HistoryIntervalSeconds int
+	// bound is the per-warm-Lambda set of channels whose meta row is known to
+	// exist (or was just written), so a mirrored channel's first-sight bind
+	// costs one GetMeta per channel per cold start.
+	bound sync.Map
+	// announced is the per-warm-Lambda set of channels this container has
+	// posted the history announcement in. It outlives a failed meta write, so
+	// the bot's own announcement event (the mirror sees it before the bot-loop
+	// filter) can only retry the write, never post again.
+	announced   sync.Map
+	SQS         SQSSender
+	PauseHinter PauseHintPoster // optional; if nil, paused-hint branch is skipped
+	Logger      *slog.Logger
 	// Now is injected for tests; defaults to time.Now.
 	Now func() time.Time
 
@@ -196,14 +226,14 @@ func (h *EventsHandler) log() *slog.Logger {
 //  9. If info.Paused, fire PauseHinter.PostIfCooldownExpired in a goroutine
 //     so we still return 200 within Slack's 3s ack window. Errors logged.
 //  10. If Reactor is wired, call Reactor.Add SYNCHRONOUSLY to ACK with 👀
-//      (or whatever KM_SLACK_ACK_EMOJI is set to). Errors logged.
-//      Reacts on msg.TS (the originating message), NOT threadTS.
-//      Synchronous (not goroutine) for the same reason as step 8's file
-//      download: AWS Lambda freezes the runtime when Handle returns, and
-//      any goroutine still mid-retry has its wall-clock context elapse
-//      during the freeze. If reactions.add pushes past Slack's 3s ack
-//      window, Slack re-fires the event → the event_id dedup in step 5
-//      returns 200 immediately; already_reacted is treated as success.
+//     (or whatever KM_SLACK_ACK_EMOJI is set to). Errors logged.
+//     Reacts on msg.TS (the originating message), NOT threadTS.
+//     Synchronous (not goroutine) for the same reason as step 8's file
+//     download: AWS Lambda freezes the runtime when Handle returns, and
+//     any goroutine still mid-retry has its wall-clock context elapse
+//     during the freeze. If reactions.add pushes past Slack's 3s ack
+//     window, Slack re-fires the event → the event_id dedup in step 5
+//     returns 200 immediately; already_reacted is treated as success.
 //
 // Response codes:
 //   - 400 ONLY for malformed JSON / missing required fields (truly bad request)
@@ -263,7 +293,38 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		h.log().Warn("events: bad inner event", "err", err)
 		return EventsResponse{StatusCode: 200, Body: "ok"} // ack to prevent Slack retry
 	}
-	if msg.Type != "message" {
+	var chRoute *DefaultRoute
+	var chRouteName string
+	var chRouteErr error
+	switch msg.Type {
+	case "member_joined_channel":
+		// Dedup first: a Slack retry must not re-bind, re-enqueue or re-announce.
+		if h.seenEvent(ctx, env.EventID) {
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
+		h.onMemberJoined(ctx, msg)
+		return EventsResponse{StatusCode: 200, Body: "ok"}
+	case "channel_left", "group_left", "channel_deleted", "group_deleted":
+		if h.seenEvent(ctx, env.EventID) {
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
+		h.onChannelLeft(ctx, msg.Channel)
+		return EventsResponse{StatusCode: 200, Body: "ok"}
+	case "message":
+		// The channel's route is resolved ONCE per event and shared by the mirror
+		// and route selection. A meta-row read error mirrors nothing and must
+		// never fall back to the default route (wrong alias, wrong continuity
+		// row): the routing decision below drops the message instead.
+		if msg.ChannelType != "im" {
+			chRoute, chRouteName, chRouteErr = h.routeForChannel(ctx, msg.Channel)
+			if chRouteErr != nil {
+				h.log().Error("events: channel route lookup failed (history meta read)", "channel", msg.Channel, "err", chRouteErr)
+			}
+		}
+		// The mirror sees every message in a mirror: true channel, BEFORE the
+		// bot-loop and mention filters: it records what a member reads.
+		h.mirrorMessage(ctx, msg, chRoute)
+	default:
 		// Reserved for future expansion (e.g. app_mention is deferred).
 		h.log().Info("events: ignoring non-message event", "type", msg.Type)
 		return EventsResponse{StatusCode: 200, Body: "ok"}
@@ -290,10 +351,16 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	routed := false     // info came from a route, not channel ownership
 	coldCreate := false // route alias absent: publish a SandboxCreate instead of enqueueing
 	rebind := false     // routed thread row must be rewritten (alias moved / orphaned thread), after delivery
-	gate := gateOwned   // which email list decides when the box's row carries none
 	// The route this message runs against: the channel's own entry, else the
 	// default route. Selected before continuity so every rung reads one value.
-	route, routeName := h.selectRoute(msg)
+	route, routeName := h.selectRoute(chRoute, chRouteName)
+	if (info.SandboxID == "" || info.QueueURL == "") && chRouteErr != nil {
+		// The channel's route is unknown (meta read failed): drop rather than
+		// run the default route's ladder against a channel a glob may own. An
+		// owned #sb- channel is unaffected (its route is never consulted).
+		h.log().Warn("events: dropping message: channel route unknown", "channel", msg.Channel, "ts", msg.TS)
+		return EventsResponse{StatusCode: 200, Body: "ok"}
+	}
 	if info.SandboxID == "" || info.QueueURL == "" {
 		// Default-route ladder step 1: thread continuity. A thread the front door
 		// routed earlier carries its sandbox in km-slack-threads. Decide this BEFORE
@@ -397,7 +464,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		if !ok {
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
-		info, coldCreate, rebind, gate = decision.info, decision.coldCreate, decision.rebind, decision.gate
+		info, coldCreate, rebind = decision.info, decision.coldCreate, decision.rebind
 		routed = true
 		h.log().Info("events: route: selected", "route", routeName, "channel", msg.Channel, "alias", route.Alias, "cold_create", coldCreate)
 		if coldCreate {
@@ -570,26 +637,9 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	var threadCtx *ThreadContext
 	strict := !threadBypassAllowed(info) && (effectiveMentionOnly || routed)
 	if strict && msg.ThreadTS != "" && h.ThreadReader != nil {
-		// A context author is trusted only if they would pass the same gates as
-		// the sender: Phase 118 ids AND the sandbox's allowEmails on a mapped
-		// channel; on a routed thread, the same gate the dispatch decision used
-		// (the sandbox's allowEmails, else the route list that decision picked).
-		// Email lookups run under collectThreadContext's deadline; once it
-		// passes a lookup errors and the author counts as not allowed (fails closed).
-		allowed := func(cctx context.Context, u string) bool {
-			if len(effectiveAllow) > 0 && !isInSlackAllowlist(u, effectiveAllow) {
-				return false
-			}
-			ok, _ := h.senderEmailAllowed(cctx, route, info, u, gateOwned)
-			return ok
-		}
-		if routed {
-			allowed = func(cctx context.Context, u string) bool {
-				ok, _ := h.senderEmailAllowed(cctx, route, info, u, gate)
-				return ok
-			}
-		}
-		threadCtx = h.collectThreadContext(ctx, msg, info, allowed, boundary)
+		// Every human reply is carried: membership is the permission. The
+		// allowlists decide who may start a turn, not what context the bot reads.
+		threadCtx = h.collectThreadContext(ctx, msg, info, boundary)
 	}
 	if h.FileDownloader != nil && len(msg.Files) > 0 {
 		// Phase 75.2: process file downloads SYNCHRONOUSLY within the handler.
@@ -635,6 +685,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			Attachments:   atts,
 			ThreadContext: threadCtx,
 			BotUserID:     h.botUserIDForEnvelope(bgCtx),
+			HistoryQuery:  routed && route != nil && route.History != nil && route.History.Query,
 		}
 		TrimContextToFit(&sqsBody, MaxQueueBodyBytes)
 		delivered, err := h.deliver(bgCtx, route, info, coldCreate, sqsBody, threadTS, dedupID)
@@ -660,6 +711,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			EventTS:       msg.TS,
 			ThreadContext: threadCtx,
 			BotUserID:     h.botUserIDForEnvelope(ctx),
+			HistoryQuery:  routed && route != nil && route.History != nil && route.History.Query,
 		}
 		TrimContextToFit(&body, MaxQueueBodyBytes)
 		delivered, err := h.deliver(ctx, route, info, coldCreate, body, threadTS, dedupID)
@@ -889,13 +941,28 @@ func (h *EventsHandler) continuityBypass(ctx context.Context, msg slackMessageEv
 	return threadBypassAllowed(current)
 }
 
-// selectRoute picks the channel's route or the default route. routeName is the
-// log field: the channel id when the table matched, "default" otherwise.
-func (h *EventsHandler) selectRoute(msg slackMessageEvent) (*DefaultRoute, string) {
-	if msg.ChannelType != "im" {
-		if r, ok := h.Routes[msg.Channel]; ok && r != nil {
-			return r, msg.Channel
-		}
+// seenEvent reserves the event_id nonce (the same reservation step 6 makes for
+// a message) and reports a duplicate. A store error proceeds: better a
+// duplicate than a dropped event.
+func (h *EventsHandler) seenEvent(ctx context.Context, eventID string) bool {
+	if eventID == "" || h.Nonces == nil {
+		return false
+	}
+	seen, err := h.Nonces.CheckAndStore(ctx, EventNoncePrefix+eventID, EventNonceTTL)
+	if err != nil {
+		h.log().Error("events: nonce check", "err", err, "event_id", eventID)
+		return false
+	}
+	return seen
+}
+
+// selectRoute picks the channel's route (as Handle resolved it with
+// routeForChannel; nil for a DM or an unrouted channel) or the default route.
+// routeName is the log field: the channel id when a route matched, "default"
+// otherwise.
+func (h *EventsHandler) selectRoute(chRoute *DefaultRoute, chRouteName string) (*DefaultRoute, string) {
+	if chRoute != nil {
+		return chRoute, chRouteName
 	}
 	return h.DefaultRoute, "default"
 }
@@ -1030,9 +1097,9 @@ func (h *EventsHandler) senderAllowedForSandbox(ctx context.Context, route *Defa
 	return false
 }
 
-// senderEmailAllowed decides without logging (the strict-context trust
-// predicate calls it once per author). source names the list that decided:
-// "sandbox", "route", or "" when no list applies.
+// senderEmailAllowed decides without logging; senderAllowedForSandbox wraps it
+// with the drop log line. source names the list that decided: "sandbox",
+// "route", or "" when no list applies.
 func (h *EventsHandler) senderEmailAllowed(ctx context.Context, route *DefaultRoute, info SandboxRoutingInfo, userID string, gate emailGate) (bool, string) {
 	var allows func(string) bool
 	var source string
@@ -1115,12 +1182,12 @@ const (
 )
 
 // collectThreadContext reads the strict thread's messages since the bot's last
-// dispatch (the boundary), keeps the trusted human ones, and downloads their
+// dispatch (the boundary), keeps the human ones, and downloads their
 // files. It never fails the turn: errors land in ThreadContext.Error / FileErrors.
 //
 // prefetched, when non-nil, is the boundary already read for this event (the
 // reaction quiet-period check); it is used instead of a second read.
-func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, allowed func(context.Context, string) bool, prefetched *dispatchBoundaryRead) *ThreadContext {
+func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, prefetched *dispatchBoundaryRead) *ThreadContext {
 	// Budget against the Lambda deadline: the dedup nonce is already consumed, so a
 	// turn that times out after this point is lost silently. Leave room for the
 	// files fork, delivery, resume and reaction.
@@ -1156,18 +1223,7 @@ func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessa
 		return &ThreadContext{Error: err.Error()}
 	}
 	uid, _ := h.BotUserID.Fetch(cctx)
-	// The trust predicate (possibly a Slack lookup per author) is bound to the
-	// sub-context so a slow API cannot push the turn past the Lambda timeout.
-	// Memoised per author: a thread with many messages by one person costs one lookup.
-	trust := map[string]bool{}
-	tc, refs := BuildThreadContext(replies, msg.TS, uid, func(u string) bool {
-		ok, seen := trust[u]
-		if !seen {
-			ok = allowed(cctx, u)
-			trust[u] = ok
-		}
-		return ok
-	})
+	tc, refs := BuildThreadContext(replies, msg.TS, uid)
 	if h.FileDownloader != nil {
 		for i, ref := range refs {
 			if dl, ok := cctx.Deadline(); ok && time.Until(dl) < ContextFileFloor {
@@ -1188,7 +1244,7 @@ func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessa
 		}
 	}
 	h.log().Info("events: context collected", "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS,
-		"messages", len(tc.Messages), "omitted", tc.OmittedNonAllow, "truncated", tc.TruncatedOlder, "files", len(refs))
+		"messages", len(tc.Messages), "truncated", tc.TruncatedOlder, "files", len(refs))
 	return &tc
 }
 

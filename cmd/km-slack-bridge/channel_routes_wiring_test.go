@@ -59,3 +59,28 @@ func TestWireChannelRoutes_AbsentOrBrokenLeavesTableEmpty(t *testing.T) {
 		}
 	}
 }
+
+// RoutesLoaded is true only when the table was read: parsed, or legitimately
+// absent (no routes configured). An unreadable or invalid parameter is false,
+// so BackfillStep retries rather than ending in-flight backfills.
+func TestWireChannelRoutes_RoutesLoaded(t *testing.T) {
+	cases := []struct {
+		name string
+		p    *fakeParam
+		want bool
+	}{
+		{"parsed", &fakeParam{value: `{"v":1,"routes":[{"channel":"C1","alias":"a","profile":"p","allow":["*@example.com"],"mention_only":true}]}`}, true},
+		{"parsed empty", &fakeParam{value: `{"v":1,"routes":[]}`}, true},
+		{"absent", &fakeParam{err: &ssmtypes.ParameterNotFound{}}, true},
+		{"unreadable", &fakeParam{err: errors.New("boom")}, false},
+		{"bad version", &fakeParam{value: `{"v":9,"routes":[]}`}, false},
+		{"not json", &fakeParam{value: `not json`}, false},
+	}
+	for _, c := range cases {
+		h := &bridge.EventsHandler{}
+		wireChannelRoutes(context.Background(), h, c.p, "/km/slack/routes", defaultRouteDeps{})
+		if h.RoutesLoaded != c.want {
+			t.Errorf("%s: RoutesLoaded = %v, want %v", c.name, h.RoutesLoaded, c.want)
+		}
+	}
+}

@@ -91,7 +91,7 @@ func TestStrictMode_EngagedThread_Matrix(t *testing.T) {
 	}
 }
 
-func TestStrictMode_ContextRespectsAllowlist(t *testing.T) {
+func TestStrictMode_ContextCarriesUnlistedAuthors(t *testing.T) {
 	now := time.Now()
 	f := false
 	h, sqs, threads, _, sandboxes, _, _ := newHandler(now)
@@ -109,8 +109,9 @@ func TestStrictMode_ContextRespectsAllowlist(t *testing.T) {
 	}
 	var body InboundQueueBody
 	json.Unmarshal([]byte(sqs.sends[0].body), &body)
-	if body.ThreadContext == nil || len(body.ThreadContext.Messages) != 1 || body.ThreadContext.OmittedNonAllow != 1 {
-		t.Fatalf("context %+v", body.ThreadContext)
+	// 2026-10-24: membership is the permission; the allowlist gates who may start a turn, not what context the bot reads.
+	if body.ThreadContext == nil || len(body.ThreadContext.Messages) != 2 {
+		t.Fatalf("context must carry the unlisted author's reply too (the allowlist gates turns, not reads): %+v", body.ThreadContext)
 	}
 }
 
@@ -264,7 +265,8 @@ func TestStrictMode_RoutedThread(t *testing.T) {
 	}
 	var body InboundQueueBody
 	json.Unmarshal([]byte(sqs.sends[0].body), &body)
-	if body.ThreadContext == nil || len(body.ThreadContext.Messages) != 1 || body.ThreadContext.OmittedNonAllow != 1 {
+	// 2026-10-24: membership is the permission; the allowlist gates who may start a turn, not what context the bot reads.
+	if body.ThreadContext == nil || len(body.ThreadContext.Messages) != 2 {
 		t.Fatalf("routed context must use the email gate: %+v", body.ThreadContext)
 	}
 }
@@ -281,9 +283,10 @@ func (d *deadlineEmails) SenderEmail(ctx context.Context, u string) (string, err
 	return d.inner.SenderEmail(ctx, u)
 }
 
-// The routed trust predicate must run under collectThreadContext's bounded
-// sub-context, not Handle's, so a slow Slack API cannot outlive the turn.
-func TestStrictMode_RoutedPredicateUsesBoundedContext(t *testing.T) {
+// 2026-10-24: membership is the permission, so the routed context path makes no
+// per-author email lookup at all (the old predicate ran under the bounded
+// sub-context; with it gone there is nothing left to bound).
+func TestStrictMode_RoutedContextMakesNoAuthorLookup(t *testing.T) {
 	now := time.Now()
 	f := false
 	h, sqs, threads, alias, _, _, emails := routedHandler(t, now)
@@ -297,8 +300,8 @@ func TestStrictMode_RoutedPredicateUsesBoundedContext(t *testing.T) {
 	if len(sqs.sends) != 1 {
 		t.Fatalf("want dispatch, sends=%d", len(sqs.sends))
 	}
-	if !de.hadDeadline["U0OTHER"] {
-		t.Fatal("context-author lookup ran without the sub-context deadline")
+	if _, looked := de.hadDeadline["U0OTHER"]; looked {
+		t.Fatal("context author must not be looked up")
 	}
 }
 
@@ -380,9 +383,9 @@ func (c *countingEmails) SenderEmail(ctx context.Context, u string) (string, err
 	return c.inner.SenderEmail(ctx, u)
 }
 
-// F5: the context trust predicate is memoised per author inside one call, so
-// many messages by one ineligible author cost one lookup.
-func TestStrictMode_ContextTrustMemoisedPerAuthor(t *testing.T) {
+// F5 (superseded 2026-10-24): the context carries every human reply, so no
+// per-author email lookup runs at all for context authors.
+func TestStrictMode_ContextAuthorsNeverLookedUp(t *testing.T) {
 	now := time.Now()
 	f := false
 	h, sqs, threads, alias, _, _, emails := routedHandler(t, now)
@@ -400,13 +403,14 @@ func TestStrictMode_ContextTrustMemoisedPerAuthor(t *testing.T) {
 	if len(sqs.sends) != 1 {
 		t.Fatalf("want dispatch, sends=%d", len(sqs.sends))
 	}
-	if ce.byUser["U0OTHER"] != 1 {
-		t.Fatalf("ineligible author looked up %d times, want 1", ce.byUser["U0OTHER"])
+	if ce.byUser["U0OTHER"] != 0 {
+		t.Fatalf("context authors are never looked up (membership is the permission): %d lookups, want 0", ce.byUser["U0OTHER"])
 	}
 	var body InboundQueueBody
 	json.Unmarshal([]byte(sqs.sends[0].body), &body)
-	if body.ThreadContext == nil || body.ThreadContext.OmittedNonAllow != 3 {
-		t.Fatalf("all three must still be omitted: %+v", body.ThreadContext)
+	// 2026-10-24: membership is the permission; the allowlist gates who may start a turn, not what context the bot reads.
+	if body.ThreadContext == nil || len(body.ThreadContext.Messages) != 3 {
+		t.Fatalf("all three must be carried: %+v", body.ThreadContext)
 	}
 }
 

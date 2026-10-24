@@ -34,6 +34,10 @@ type DefaultRoute struct {
 	// to start a turn. Always true for the default route; a channel route may
 	// set mention_only: false. DMs never need one (requiresMention).
 	MentionOnly bool
+	// History is the route's history policy (nil ⇒ no mirror, no query).
+	History *RouteHistory
+	// Pattern is the glob this route was expanded or matched from ("" for a named route).
+	Pattern string
 }
 
 // NewDefaultRoute compiles both allowlists. An invalid entry is logged and

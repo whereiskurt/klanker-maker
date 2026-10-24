@@ -42,6 +42,7 @@ const (
 	ActionLookupThread = "lookup-thread" // Phase 110 — session_id → (channel_id, thread_ts)
 	ActionDM           = "dm"            // 2026-10-17 — bot-initiated DM: conversations.open + top-level chat.postMessage
 	ActionSession      = "session"       // 2026-10-18 — poller records its agent session id + agent_type on a thread row the bridge routed to it
+	ActionHistory      = "history"       // 2026-10-24 — bounded channel/thread history read (mirror or live)
 	ActionReact        = "react"         // 2026-10-22 — wraps reactions.add / reactions.remove on a message in the sender's own channel
 )
 
@@ -115,6 +116,12 @@ type SlackEnvelope struct {
 	Emoji     string   `json:"emoji,omitempty"`
 	Remove    bool     `json:"remove,omitempty"`
 	Exclusive []string `json:"exclusive,omitempty"`
+	// History action (2026-10-24). All omitempty — see the TargetUser note.
+	Oldest string `json:"oldest,omitempty"` // Slack ts, exclusive lower bound
+	Latest string `json:"latest,omitempty"` // Slack ts, inclusive upper bound
+	Before string `json:"before,omitempty"` // paging cursor: strictly older than this ts
+	Grep   string `json:"grep,omitempty"`   // case-insensitive substring, applied bridge-side before the cap
+	Limit  int    `json:"limit,omitempty"`  // page size; clamped by the bridge
 	// Broadcast on a threaded post sets chat.postMessage reply_broadcast, so
 	// the reply is also shown in the channel. Ignored without ThreadTS.
 	Broadcast bool   `json:"broadcast,omitempty"`
@@ -228,4 +235,14 @@ func VerifyEnvelope(env *SlackEnvelope, signature []byte, pub ed25519.PublicKey)
 		return errors.New("slack: signature verification failed")
 	}
 	return nil
+}
+
+// HistoryMessage is one message in a history response (bridge -> km-slack).
+type HistoryMessage struct {
+	TS       string   `json:"ts"`
+	User     string   `json:"user,omitempty"`
+	BotID    string   `json:"bot_id,omitempty"`
+	Text     string   `json:"text"`
+	ThreadTS string   `json:"thread_ts,omitempty"`
+	Files    []string `json:"files,omitempty"` // names only
 }

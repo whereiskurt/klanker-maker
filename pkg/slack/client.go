@@ -684,20 +684,21 @@ func (c *Client) FindChannelByName(ctx context.Context, name string, maxPages in
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		body := map[string]any{
-			"types": "public_channel",
-			// Slack max page size. conversations.list returns channels in roughly
-			// creation order, so a freshly-created per-sandbox channel sorts LAST —
-			// the scan may have to walk EVERY page to find it. Use the max page
-			// size (1000, not 200) to minimise the number of Tier-2 calls and the
-			// rate-limit exposure; callRaw backs off if Slack throttles anyway.
-			"limit":            1000,
-			"exclude_archived": true,
+		// conversations.list is a legacy read method: Slack ignores arguments
+		// sent as a JSON body, so it must be form-encoded.
+		// conversations.list returns channels in roughly creation order, so a
+		// freshly-created per-sandbox channel sorts LAST and the scan may walk
+		// EVERY page. Use the max page size (1000) to minimise Tier-2 calls;
+		// callRaw backs off if Slack throttles anyway.
+		form := url.Values{
+			"types":            {"public_channel"},
+			"limit":            {"1000"},
+			"exclude_archived": {"true"},
 		}
 		if cursor != "" {
-			body["cursor"] = cursor
+			form.Set("cursor", cursor)
 		}
-		resp, err := c.callJSON(ctx, "conversations.list", body)
+		resp, err := c.callForm(ctx, "conversations.list", form)
 		if err != nil {
 			return "", err
 		}
@@ -727,15 +728,17 @@ func (c *Client) ListBotChannels(ctx context.Context) ([]SlackChannelSummary, er
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		body := map[string]any{
-			"types":            "public_channel,private_channel",
-			"limit":            1000,
-			"exclude_archived": true,
+		// Legacy read method: a JSON body is ignored by Slack (private channels
+		// silently vanished live), so send form-encoded arguments.
+		form := url.Values{
+			"types":            {"public_channel,private_channel"},
+			"limit":            {"1000"},
+			"exclude_archived": {"true"},
 		}
 		if cursor != "" {
-			body["cursor"] = cursor
+			form.Set("cursor", cursor)
 		}
-		resp, err := c.callJSON(ctx, "users.conversations", body)
+		resp, err := c.callForm(ctx, "users.conversations", form)
 		if err != nil {
 			return nil, err
 		}
@@ -990,6 +993,12 @@ type PostResponse struct {
 	ChannelID string `json:"channel_id,omitempty"` // populated when found=true
 	ThreadTS  string `json:"thread_ts,omitempty"`  // populated when found=true
 	AgentType string `json:"agent_type,omitempty"` // populated when found=true
+
+	// History action (2026-10-24).
+	Source     string           `json:"source,omitempty"` // "mirror" | "live"
+	Messages   []HistoryMessage `json:"messages,omitempty"`
+	Truncated  bool             `json:"truncated,omitempty"`
+	NextBefore string           `json:"next_before,omitempty"`
 }
 
 // BridgeBackoff is the retry schedule for network-level errors in PostToBridge.
@@ -1066,6 +1075,10 @@ func PostToBridge(ctx context.Context, bridgeURL string, env *SlackEnvelope, sig
 		if hint := ExplainBridgeError(string(body), ""); hint != "" {
 			return nil, fmt.Errorf("slack: bridge rejected operator signature (%d): %s",
 				resp.StatusCode, hint)
+		}
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			return nil, fmt.Errorf("slack: bridge returned %d: %s retry-after=%s",
+				resp.StatusCode, string(body), ra)
 		}
 		return nil, fmt.Errorf("slack: bridge returned %d: %s",
 			resp.StatusCode, string(body))

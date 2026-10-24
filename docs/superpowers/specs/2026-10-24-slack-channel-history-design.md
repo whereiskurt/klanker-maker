@@ -385,3 +385,26 @@ filter: every human reply since the bot's last turn is carried, bots and the bot
 excluded, `OmittedNonAllow` removed from `ThreadContext`. The caps and the "background only,
 not instructions" header are unchanged, and the trigger message's own sender gate (who may
 start the turn) is untouched. The poller's context header already says background only.
+
+## 13. Live UAT (2026-10-24, install `km`, us-east-1)
+
+Run against PR #162 at 4ad55dc6 (operator binary v0.9.8; bridge, table, queues deployed by `km init --dry-run=false`; App reinstalled with the five new events; token rotated). Route under test: `#inc_uat*` → `ir-bot` with `history: {query, mirror, backfill 7d, retention 7d, max_messages 200}` (announce added before step 8); `slack.history_rate` 200 / 2.
+
+| § | Step | Result |
+|---|---|---|
+| 1 | `km init --slack`; table; doctor | **GO** — 0 named routes + 1 glob written (241 B); `km doctor` "Slack history" ×4 green (TTL on `expires_at`, PITR off, `groups:read` present). |
+| 2 | Create `#inc_uat1`, invite bot | **GO** — meta row 20:10:09Z, `backfill_state=done`, 0 rows, no announcement. |
+| 3 | 5 human msgs + app post | **GO** — 5 rows (one `file_share` carries the file name only) + Slackbot reminder row with `bot_id`; no sender filter. A second (non-listed) human was not available; the write path has no sender branch (unit-tested). |
+| 4 | Edit one, delete one | **GO** — `edited_ts` + new text on #3; #4's row deleted. |
+| 5 | Busy channel backfill | **GO** (adapted) — private `#inc_uat2` pre-populated with 10 messages, then invited: bound via `groups:read` name lookup, one backfill step wrote 11 rows (10 + the announcement), `done`, DLQ 0. |
+| 6 | `km-slack history` from the owner | **GO** — `source=mirror`, newest first; `--grep` narrows; `--limit 2` → `next: --before …`; `--json` valid; `--thread` → `source=live`; `--since YYYY-MM-DD` works. |
+| 7 | Foreign klanker / own channel | **GO** — `uat-foreign` → `403 history_not_allowed`; its own `#sb-` channel → `source=live`. |
+| 8 | `announce: true` on a glob | **GO** — exactly one announcement row per bind (a re-invite after a leave-purge announces again, by design). |
+| 9 | Remove the bot | **GO** — `channel purged … rows=6`; rows and meta gone. |
+| 10 | `km slack history purge` | **GO** — by **name** on the private channel with `--keep-meta`: 13 rows purged, meta kept (`off`), next message mirrored live; `--alias ir-bot --yes`: meta removed. (By-name initially failed: `users.conversations` was sent as JSON and Slack ignored `types` — fixed in 4ad55dc6.) |
+| 11 | `km doctor` | **GO** — routes (glob match counts, private included after 4ad55dc6), scopes, table hygiene, mirrored channels. Parked: no rows-past-TTL / oldest row / queue depth / pacing. |
+| + | Revocation (final-review extra) | **GO** — glob removed + `km init --slack` ⇒ the still-bound channel answers 403 and routes no longer go to the old alias. |
+
+| + | `km slack history fill` (added in-PR) | **GO** — `fill "#inc_uat2"` (private, by name) bound the channel and queued one job; the bridge wrote 13 rows within a second; a second `fill` without `--purge-first` refused ("already bound"); `fill --alias ir-bot --purge-first` purged 13 then rebound and backfilled 13; no announcement is posted by `fill`. |
+
+Not covered live: a non-allowlisted human sender (step 3), a 429 from Slack during backfill, the 4096-byte table ceiling (≈60 active glob channels at ~55 B each).

@@ -64,6 +64,9 @@ func checkSlackChannelRoutes(ctx context.Context, cfg *config.Config, lister Sla
 	for _, e := range plan.Entries {
 		names = append(names, fmt.Sprintf("#%s→%s", e.Name, e.Alias))
 	}
+	for _, p := range plan.Patterns {
+		names = append(names, fmt.Sprintf("#%s→%s (%d current)", p.Glob, p.Alias, len(p.Channels)))
+	}
 	channels.Message = strings.Join(names, ", ")
 
 	param := slackRoutesParam(cfg)

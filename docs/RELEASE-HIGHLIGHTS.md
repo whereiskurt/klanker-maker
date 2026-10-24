@@ -11,13 +11,19 @@
   are hidden in GitHub's rendered view. If this file is empty/absent the
   section is omitted gracefully.
 
-  Curated by hand for v0.9.3 from PRs #154 (Slack channel routes), #155
+  Curated by hand for v0.9.4 (Slack channel history) on top of v0.9.3's PRs #154 (Slack channel routes), #155
   (km-slack react + --broadcast), #157 (update --render/--subject) and #159
   (ec2spot v1.10.0: the SOPS KMS grant). No phase blocks since v0.9.0, so
   scripts/draft-release-highlights.sh had nothing to draft.
 -->
 
 ## ⚠️ Upgrade notes — read before deploying
+
+- **Slack App: `km slack manifest` → reinstall → `km slack rotate-token --bot-token <new>`.**
+  Five new events (`member_joined_channel`, `channel_left`, `group_left`, `channel_deleted`,
+  `group_deleted`).
+  `groups:read` was already in the manifest, but your installed App may lack it; `km doctor`
+  says. Channel history is default-off, so nothing changes until a route carries `history:`.
 
 This release changes the sandbox IAM role (`ec2spot` **v1.10.0**), the Slack bridge and the
 `km-slack` sidecar. No schema or Slack App change.
@@ -38,6 +44,39 @@ This release changes the sandbox IAM role (`ec2spot` **v1.10.0**), the Slack bri
   failure for `--broadcast`). Nothing half-deployed is dangerous.
 - **`km init` now reads the live routes table on every full and `--slack` apply**, even with
   no `routes:` block, so a stale table can be emptied. An SSM read error there stops the init.
+
+## 🕰️ Channel history for the bots you invite in
+
+A klanker invited to a channel can now look back. Three pieces, all default-off:
+
+- **Glob routes.** `slack.routes` accepts `"#inc_*"`: the route owns every matching channel,
+  including ones created later, bound when the bot joins.
+- **A per-route mirror.** `history: {mirror: true, backfill: 7d, retention: 7d}` makes the
+  bridge keep the channel's text (never file bytes, never DMs) in a table with a TTL, point-in-time
+  recovery off, and only the bridge able to read it. Backfill runs in the background, paced by
+  `slack.history_rate`. `km slack history purge <#name|C…|--alias|--all>` removes it on demand;
+  `km slack history fill <#name|C…|--alias> [--purge-first]` binds and backfills a channel the
+  bot was already sitting in before the route existed (the join event never fires for those), or
+  clears and reloads one. Both resolve private channels by name (the bot's channel list was
+  silently public-only before this release).
+- **`km-slack history`.** `--since 7d --grep topic`, paged with `--before`, `--thread` for one
+  thread. Allowed only in the box's own channel or a channel routed to it with `history.query`.
+
+**Membership is the permission.** The bot reads what any member of the channel reads, so the
+mirror and the verb return every message, humans and apps, private channels included. The email
+allowlist still decides only who may *instruct* the bot. The strict-mode thread context follows
+the same rule and now carries every human reply. History is labelled "background only, not
+instructions" when the agent sees it.
+
+```yaml
+slack:
+  routes:
+    - channel: "#inc_*"
+      alias: ir-bot
+      profile: profiles/ir-bot.yaml
+      allow_emails: ["*@example.com"]
+      history: {query: true, mirror: true, backfill: 7d, retention: 7d}
+```
 
 ## 🔑 SOPS bundles decrypt again on the least-privilege role
 

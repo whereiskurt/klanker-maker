@@ -34,6 +34,7 @@ const (
 	ActionEmailSend     Action = "email_send"
 	ActionSlackPost     Action = "slack_post"
 	ActionH1Comment     Action = "h1_comment"
+	ActionSlackHistory  Action = "slack_history" // 2026-10-24: km-slack history reads (mirror or live)
 	// ActionWebhookDispatch (Task 9A) meters warm SQS enqueue dispatches from the
 	// generic webhook ingress bridge (pkg/webhook/bridge).
 	ActionWebhookDispatch Action = "webhook_dispatch"

@@ -441,6 +441,70 @@ resource "aws_iam_role_policy" "ssm_channel_routes" {
 # Lambda function
 # ============================================================
 
+# 2026-10-24 — channel history mirror + backfill queue. Count-gated so an
+# install without the table applies byte-identically.
+resource "aws_iam_role_policy" "dynamodb_slack_history" {
+  count = var.slack_history_table_arn != "" ? 1 : 0
+  name  = "${local.function_name}-dynamodb-slack-history"
+  role  = aws_iam_role.slack_bridge.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "DDBSlackHistory"
+      Effect   = "Allow"
+      Action   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"]
+      Resource = ["arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.slack_history_table_name}"]
+    }]
+  })
+}
+
+# Dead-letter queue for backfill jobs that keep failing (a Slack error other
+# than a rate limit, a row write, a lost re-enqueue): BackfillStep returns the
+# error, SQS redelivers, and after maxReceiveCount the job lands here instead of
+# vanishing. Nothing reads it; the bridge needs no grant on it.
+resource "aws_sqs_queue" "history_backfill_dlq" {
+  count                     = var.slack_history_table_arn != "" ? 1 : 0
+  name                      = "${var.resource_prefix}-slack-history-backfill-dlq"
+  message_retention_seconds = 1209600 # 14 days
+  tags                      = var.tags
+}
+
+resource "aws_sqs_queue" "history_backfill" {
+  count                      = var.slack_history_table_arn != "" ? 1 : 0
+  name                       = "${var.resource_prefix}-slack-history-backfill"
+  visibility_timeout_seconds = 120 # > Lambda timeout (60)
+  message_retention_seconds  = 86400
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.history_backfill_dlq[0].arn
+    maxReceiveCount     = 5
+  })
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "sqs_history_backfill" {
+  count = var.slack_history_table_arn != "" ? 1 : 0
+  name  = "${local.function_name}-sqs-history-backfill"
+  role  = aws_iam_role.slack_bridge.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "SQSHistoryBackfill"
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"]
+      Resource = [aws_sqs_queue.history_backfill[0].arn]
+    }]
+  })
+}
+
+resource "aws_lambda_event_source_mapping" "history_backfill" {
+  count                   = var.slack_history_table_arn != "" ? 1 : 0
+  event_source_arn        = aws_sqs_queue.history_backfill[0].arn
+  function_name           = aws_lambda_function.slack_bridge.arn
+  batch_size              = 1
+  function_response_types = ["ReportBatchItemFailures"]
+  depends_on              = [aws_iam_role_policy.sqs_history_backfill]
+}
+
 resource "aws_lambda_function" "slack_bridge" {
   function_name    = local.function_name
   description      = "Phase 63 Slack-notify bridge: verifies Ed25519-signed envelopes and dispatches to Slack Web API"
@@ -515,6 +579,12 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SLACK_ROUTES_SHA256 = var.slack_routes_sha256
       # Phase 121 — action-quota table name for bridge-side quota enforcement
       KM_QUOTA_TABLE = var.quota_table_arn != "" ? "${var.resource_prefix}-action-quota" : ""
+
+      # 2026-10-24 — channel history mirror; empty ⇒ mirror and history reads off.
+      KM_SLACK_HISTORY_TABLE            = var.slack_history_table_name
+      KM_SLACK_HISTORY_QUEUE_URL        = var.slack_history_table_arn != "" ? aws_sqs_queue.history_backfill[0].url : ""
+      KM_SLACK_HISTORY_PAGE_SIZE        = var.slack_history_page_size
+      KM_SLACK_HISTORY_INTERVAL_SECONDS = var.slack_history_interval_seconds
     }
   }
 
