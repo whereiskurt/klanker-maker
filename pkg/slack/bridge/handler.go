@@ -723,7 +723,11 @@ func (h *Handler) checkQuota(ctx context.Context, sandboxID string, action quota
 		return d, false
 	}
 	// Trip: post a control-plane in-thread notice (uncounted, from the bot token).
-	h.postQuotaNotice(ctx, channel, threadTS, action, d)
+	// A history read never posts: it would turn a read verb into a write on the
+	// channel being read; the 429/warn decision already reaches the caller.
+	if action != quota.ActionSlackHistory {
+		h.postQuotaNotice(ctx, channel, threadTS, action, d)
+	}
 
 	switch d.OnBreach {
 	case quota.BreachFreeze:

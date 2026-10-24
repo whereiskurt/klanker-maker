@@ -14,6 +14,8 @@ import (
 // MaxContextMessages figure): an own channel has no route to supply max_messages.
 const HistoryOwnChannelMax = 100
 
+const historyTruncMarker = " …[truncated]"
+
 var reSlackTS = regexp.MustCompile(`^[0-9]{1,11}(\.[0-9]{1,6})?$`)
 
 // handleHistory serves the signed `history` action: a bounded read of a channel
@@ -104,11 +106,19 @@ func (h *Handler) handleHistory(ctx context.Context, env slack.SlackEnvelope) *R
 		}
 		rows, more = historyFromReplies(msgs, "", ""), m
 	}
+	scannedOldest := ""
+	if len(rows) > 0 {
+		scannedOldest = rows[len(rows)-1].TS // oldest of the fetched page, before grep
+	}
 	rows = filterHistory(rows, env.Grep)
-	rows, truncated := capHistory(rows, limit, MaxContextTextBytes)
-	resp := slack.PostResponse{OK: true, Source: source, Messages: rows, Truncated: truncated || more}
-	if resp.Truncated && len(rows) > 0 {
-		resp.NextBefore = rows[len(rows)-1].TS
+	rows, capped := capHistory(rows, limit, MaxContextTextBytes)
+	resp := slack.PostResponse{OK: true, Source: source, Messages: rows, Truncated: capped || more}
+	switch {
+	case capped && len(rows) > 0:
+		resp.NextBefore = rows[len(rows)-1].TS // oldest returned
+	case resp.Truncated:
+		// Nothing returned (or only the page's tail is unread): skip the scanned stretch.
+		resp.NextBefore = scannedOldest
 	}
 	logger.InfoContext(ctx, "bridge: history", "sender_id", env.SenderID, "channel", env.Channel, "source", source, "count", len(rows), "truncated", resp.Truncated, "grep", env.Grep != "", "status", 200)
 	return jsonResp(200, resp)
@@ -177,12 +187,20 @@ func filterHistory(in []slack.HistoryMessage, grep string) []slack.HistoryMessag
 func capHistory(in []slack.HistoryMessage, limit, maxBytes int) ([]slack.HistoryMessage, bool) {
 	var out []slack.HistoryMessage
 	bytes := 0
+	cut := false
 	for _, m := range in {
+		if len(out) == 0 && len(m.Text) > maxBytes {
+			// One message alone exceeds the budget: deliver it once, cut, so the cursor moves past it.
+			m.Text = strings.ToValidUTF8(m.Text[:maxBytes], "") + historyTruncMarker
+			out = append(out, m)
+			bytes, cut = maxBytes, true
+			continue
+		}
 		if len(out) >= limit || bytes+len(m.Text) > maxBytes {
 			return out, true
 		}
 		out = append(out, m)
 		bytes += len(m.Text)
 	}
-	return out, false
+	return out, cut
 }

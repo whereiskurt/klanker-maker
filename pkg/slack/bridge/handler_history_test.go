@@ -192,6 +192,13 @@ func TestHandleHistory_Refusals(t *testing.T) {
 			f.route("CINC", "other", &RouteHistory{Query: true})
 			f.h.AliasResolver = &fakeAliasResolver{byAlias: map[string]SandboxRoutingInfo{"other": {SandboxID: "sb-other"}}}
 		}},
+		{"alias not found", func(f *histFixture) {
+			f.route("CINC", "ghost", &RouteHistory{Query: true})
+		}},
+		{"alias resolver error", func(f *histFixture) {
+			f.route("CINC", "ir", &RouteHistory{Query: true})
+			f.h.AliasResolver = &errAliasResolver{}
+		}},
 		{"route without history block", func(f *histFixture) { f.route("CINC", "ir", nil) }},
 		{"history without query", func(f *histFixture) { f.route("CINC", "ir", &RouteHistory{Mirror: true, MaxMessages: 10}) }},
 		{"thread row names sender but no route", func(f *histFixture) {
@@ -210,6 +217,81 @@ func TestHandleHistory_Refusals(t *testing.T) {
 			}
 			f.noReads(t)
 		})
+	}
+}
+
+type errAliasResolver struct{}
+
+func (*errAliasResolver) ResolveAlias(context.Context, string) (SandboxRoutingInfo, bool, error) {
+	return SandboxRoutingInfo{SandboxID: "sb-abc123"}, true, fmt.Errorf("ddb down")
+}
+
+func TestHandleHistory_NilAliasResolverIs503(t *testing.T) {
+	f := newHistFixture()
+	f.route("CINC", "ir", &RouteHistory{Query: true})
+	f.h.AliasResolver = nil
+	resp := f.h.handleHistory(context.Background(), historyEnv("sb-abc123", "CINC"))
+	if resp.StatusCode != 503 || !strings.Contains(resp.Body, "history_unavailable") {
+		t.Fatalf("got %d %s", resp.StatusCode, resp.Body)
+	}
+	f.noReads(t)
+}
+
+type countingPoster struct{ posts int }
+
+func (c *countingPoster) PostMessage(context.Context, string, string, string, string) (string, error) {
+	c.posts++
+	return "1.1", nil
+}
+func (c *countingPoster) ArchiveChannel(context.Context, string) error { return nil }
+func (c *countingPoster) GetPermalink(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (c *countingPoster) UpdateMessage(context.Context, string, string, string) (string, error) {
+	return "", nil
+}
+
+func TestHandleHistory_QuotaTripNeverPostsNotice(t *testing.T) {
+	for _, mode := range []string{"block", "warn"} {
+		f := newHistFixture()
+		f.route("CINC", "ir", &RouteHistory{Query: true})
+		f.reader.msgs = replyMsgs(1, 5)
+		poster := &countingPoster{}
+		f.h.Slack = poster
+		f.h.Quota = NewFakeQuotaClient(2)
+		f.h.QuotaTable = "km-action-quota"
+		f.h.Limits = &histLimits{json: `{"slack_history":{"perHour":1,"onBreach":"` + mode + `"}}`}
+		resp := f.h.handleHistory(context.Background(), historyEnv("sb-abc123", "CINC"))
+		if mode == "block" && resp.StatusCode != 429 {
+			t.Errorf("block: want 429, got %d", resp.StatusCode)
+		}
+		if poster.posts != 0 {
+			t.Errorf("%s: a history read posted %d notice(s)", mode, poster.posts)
+		}
+	}
+}
+
+func TestHandleHistory_PagingCursorSurvivesEmptyPage(t *testing.T) {
+	f := newHistFixture()
+	f.reader.msgs = []SlackReplyMessage{{TS: "1700000003.000100", Text: "a"}, {TS: "1700000002.000100", Text: "b"}}
+	f.reader.more = true
+	e := historyEnv("sb-abc123", "C0123ABC")
+	e.Grep = "zzz"
+	pr := decodeHistory(t, f.h.handleHistory(context.Background(), e))
+	if len(pr.Messages) != 0 || !pr.Truncated || pr.NextBefore != "1700000002.000100" {
+		t.Fatalf("got %+v", pr)
+	}
+}
+
+func TestHandleHistory_OversizeMessageDeliveredCut(t *testing.T) {
+	f := newHistFixture()
+	f.reader.msgs = []SlackReplyMessage{{TS: "1700000001.000100", Text: strings.Repeat("y", 40<<10)}}
+	pr := decodeHistory(t, f.h.handleHistory(context.Background(), historyEnv("sb-abc123", "C0123ABC")))
+	if len(pr.Messages) != 1 || !strings.HasSuffix(pr.Messages[0].Text, "…[truncated]") || !pr.Truncated || pr.NextBefore != "1700000001.000100" {
+		t.Fatalf("got %d msgs truncated=%v next=%q", len(pr.Messages), pr.Truncated, pr.NextBefore)
+	}
+	if len(pr.Messages[0].Text) > MaxContextTextBytes+len(historyTruncMarker) {
+		t.Errorf("text not cut: %d", len(pr.Messages[0].Text))
 	}
 }
 
