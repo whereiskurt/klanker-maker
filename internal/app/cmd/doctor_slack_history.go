@@ -50,6 +50,7 @@ func checkSlackHistory(ctx context.Context, cfg *config.Config, lister SlackRout
 	channels := CheckResult{Name: "Slack history channels", Status: CheckOK}
 
 	// 1. Routes: validation + which globs match a current channel.
+	var planDoc *slackbridge.RoutesDocument // the table km init would write, for step 4
 	if err := cfg.Slack.ValidateRoutes(); err != nil {
 		routes.Status, routes.Message = CheckWarn, err.Error()
 	} else if lister == nil {
@@ -59,6 +60,7 @@ func checkSlackHistory(ctx context.Context, cfg *config.Config, lister SlackRout
 	} else if plan, err := effectiveSlackChannelRoutes(cfg, list); err != nil {
 		routes.Status, routes.Message = CheckWarn, err.Error()
 	} else {
+		planDoc, _ = slackbridge.ParseRoutesDocument(plan.JSON)
 		var notes []string
 		for _, p := range plan.Patterns {
 			notes = append(notes, fmt.Sprintf("#%s → %s (%d current channel(s))", p.Glob, p.Alias, len(p.Channels)))
@@ -99,7 +101,9 @@ func checkSlackHistory(ctx context.Context, cfg *config.Config, lister SlackRout
 		}
 	}
 
-	// 4. Channels: every meta row with its backfill state.
+	// 4. Channels: every meta row with its backfill state. The list is meta rows
+	// only; a channel the table mirrors statically gets its row on the first
+	// message the bridge sees there, so the unbound ones are counted, not listed.
 	if meta == nil {
 		channels.Status, channels.Message = CheckSkipped, "no history store"
 	} else if rows, err := meta.ListMeta(ctx); err != nil {
@@ -120,6 +124,19 @@ func checkSlackHistory(ctx context.Context, cfg *config.Config, lister SlackRout
 		}
 		sort.Strings(lines)
 		channels.Message = fmt.Sprintf("%d matched channel(s)", len(rows))
+		bound := map[string]bool{}
+		for _, m := range rows {
+			bound[m.Channel] = true
+		}
+		unbound := 0
+		for id := range staticMirrorChannels(planDoc) {
+			if !bound[id] {
+				unbound++
+			}
+		}
+		if unbound > 0 {
+			channels.Message += fmt.Sprintf("; %d static mirror channel(s) not yet bound (listed below are meta rows only; the bridge binds a statically routed mirror channel on the first message it sees there)", unbound)
+		}
 		if len(lines) > 0 {
 			channels.Message += "\n    " + strings.Join(lines, "\n    ")
 		}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -83,22 +84,22 @@ func TestResolvePurgeTargets_ByIDNameAliasAll(t *testing.T) {
 		{"", "", true, "C1,C2,C3"},
 	}
 	for _, c := range cases {
-		got, err := resolvePurgeTargets(ctx, st, l, c.arg, c.alias, c.all)
+		got, err := resolvePurgeTargets(ctx, st, l, nil, c.arg, c.alias, c.all)
 		if err != nil || ids(got) != c.want {
 			t.Errorf("%+v: got %q err %v, want %q", c, ids(got), err, c.want)
 		}
 	}
-	if _, err := resolvePurgeTargets(ctx, st, l, "#nope", "", false); err == nil || !strings.Contains(err.Error(), "#inc_1") {
+	if _, err := resolvePurgeTargets(ctx, st, l, nil, "#nope", "", false); err == nil || !strings.Contains(err.Error(), "#inc_1") {
 		t.Errorf("#nope: want error listing bot channels, got %v", err)
 	}
-	if _, err := resolvePurgeTargets(ctx, st, l, "C9", "", false); err == nil || !strings.Contains(err.Error(), "not mirrored") {
+	if _, err := resolvePurgeTargets(ctx, st, l, nil, "C9", "", false); err == nil || !strings.Contains(err.Error(), "not mirrored") {
 		t.Errorf("C9: want not mirrored, got %v", err)
 	}
 	for _, c := range []struct {
 		arg, alias string
 		all        bool
 	}{{"", "", false}, {"C1", "ir", false}, {"", "ir", true}} {
-		if _, err := resolvePurgeTargets(ctx, st, l, c.arg, c.alias, c.all); err == nil {
+		if _, err := resolvePurgeTargets(ctx, st, l, nil, c.arg, c.alias, c.all); err == nil {
 			t.Errorf("%+v: want exactly-one error", c)
 		}
 	}
@@ -145,7 +146,7 @@ func TestSlackHistoryPurgeCmd_RequiresYesOrConfirms(t *testing.T) {
 	st, _ := purgeFixture()
 	run := func(args ...string) (string, error) {
 		var out bytes.Buffer
-		c := newSlackHistoryPurgeCmdWithStore(st, nil, &out)
+		c := newSlackHistoryPurgeCmdWithStore(st, nil, nil, &out)
 		c.SetArgs(args)
 		c.SetOut(&out)
 		c.SetErr(&out)
@@ -161,5 +162,88 @@ func TestSlackHistoryPurgeCmd_RequiresYesOrConfirms(t *testing.T) {
 	out, err := run("C1", "--yes")
 	if err != nil || len(st.purged) != 1 || !strings.Contains(out, "40 row(s) purged") {
 		t.Fatalf("with --yes: err=%v purged=%v out=%s", err, st.purged, out)
+	}
+}
+
+// liveRoutes is a purgeRouteTable over a fixed document: C4 is a named route
+// with mirror: true, C5 a glob match with mirror: true, C6 a query-only route,
+// and C1 (which has a meta row) is also listed.
+func liveRoutes() purgeRouteTable {
+	mirror := &slackbridge.RouteHistory{Query: true, Mirror: true}
+	doc := &slackbridge.RoutesDocument{V: slackbridge.RoutesDocumentVersion,
+		Routes: []slackbridge.RouteEntry{
+			{Channel: "C4", Name: "sec-ops", Alias: "sec", Profile: "p", Allow: []string{"a@example.com"}, History: mirror},
+			{Channel: "C6", Name: "plain", Alias: "sec", Profile: "p", Allow: []string{"a@example.com"}, History: &slackbridge.RouteHistory{Query: true}},
+			{Channel: "C1", Name: "inc_1", Alias: "ir", Profile: "p", Allow: []string{"a@example.com"}, History: mirror},
+		},
+		Patterns: []slackbridge.PatternEntry{{Glob: "inc_*", Alias: "ir", Profile: "p", Allow: []string{"a@example.com"}, History: mirror,
+			Channels: []slackbridge.PatternChannel{{ID: "C5", Name: "inc_5"}}}}}
+	return func(context.Context) (*slackbridge.RoutesDocument, error) { return doc, nil }
+}
+
+func TestResolvePurgeTargets_StaticMirrorChannelsWithoutMetaRows(t *testing.T) {
+	ctx := context.Background()
+	st, l := purgeFixture()
+	l.channels = append(l.channels, kmslack.SlackChannelSummary{ID: "C4", Name: "sec-ops"}, kmslack.SlackChannelSummary{ID: "C6", Name: "plain"})
+	cases := []struct {
+		arg, alias string
+		all        bool
+		want       string
+	}{
+		{"C4", "", false, "C4"},
+		{"#sec-ops", "", false, "C4"},
+		{"C5", "", false, "C5"},
+		{"", "sec", false, "C3,C4"},
+		{"", "ir", false, "C1,C2,C5"},
+		{"", "", true, "C1,C2,C3,C4,C5"},
+	}
+	for _, c := range cases {
+		got, err := resolvePurgeTargets(ctx, st, l, liveRoutes(), c.arg, c.alias, c.all)
+		if err != nil || ids(got) != c.want {
+			t.Errorf("%+v: got %q err %v, want %q", c, ids(got), err, c.want)
+		}
+		for _, tg := range got {
+			if want := tg.channelID == "C4" || tg.channelID == "C5"; tg.noMeta != want {
+				t.Errorf("%+v: %s noMeta=%v", c, tg.channelID, tg.noMeta)
+			}
+		}
+	}
+	if _, err := resolvePurgeTargets(ctx, st, l, liveRoutes(), "C6", "", false); err == nil || !strings.Contains(err.Error(), "not mirrored") {
+		t.Errorf("a query-only route has nothing mirrored: %v", err)
+	}
+	failing := func(context.Context) (*slackbridge.RoutesDocument, error) { return nil, errors.New("ssm down") }
+	if _, err := resolvePurgeTargets(ctx, st, l, failing, "", "", true); err == nil || !strings.Contains(err.Error(), "ssm down") {
+		t.Errorf("an unreadable route table must stop --all: %v", err)
+	}
+}
+
+func TestRunSlackHistoryPurge_NoMetaRowTargetSaysSo(t *testing.T) {
+	st, _ := purgeFixture()
+	st.rows["C4"] = 3
+	var out bytes.Buffer
+	if err := runSlackHistoryPurge(context.Background(), st, []historyPurgeTarget{{channelID: "C4", name: "sec-ops", alias: "sec", noMeta: true}}, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "#sec-ops (C4, alias sec): 3 row(s) purged, (no meta row)") || strings.Join(st.purged, ",") != "C4" {
+		t.Fatalf("out=%s purged=%v", out.String(), st.purged)
+	}
+}
+
+func TestReadLiveRoutesDocument(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeRoutesSSM{m: map[string]string{}}
+	if doc, err := readLiveRoutesDocument(store, "/km/slack/routes")(ctx); err != nil || doc != nil {
+		t.Fatalf("absent table: doc=%v err=%v", doc, err)
+	}
+	b, _ := slackbridge.CanonicalRoutesDocument(nil, []slackbridge.PatternEntry{{Glob: "inc_*", Alias: "ir", Profile: "p", Allow: []string{"a@example.com"},
+		History: &slackbridge.RouteHistory{Query: true, Mirror: true}, Channels: []slackbridge.PatternChannel{{ID: "C5", Name: "inc_5"}}}})
+	store.m["/km/slack/routes"] = string(b)
+	doc, err := readLiveRoutesDocument(store, "/km/slack/routes")(ctx)
+	if err != nil || len(staticMirrorChannels(doc)) != 1 {
+		t.Fatalf("doc=%+v err=%v", doc, err)
+	}
+	store.m["/km/slack/routes"] = "{not json"
+	if _, err := readLiveRoutesDocument(store, "/km/slack/routes")(ctx); err == nil {
+		t.Fatal("an invalid table must be an error")
 	}
 }

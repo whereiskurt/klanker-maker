@@ -113,6 +113,24 @@ func TestCheckSlackHistory_GlobCountsItsPatternChannels(t *testing.T) {
 	}
 }
 
+func TestCheckSlackHistory_CountsUnboundStaticMirrorChannels(t *testing.T) {
+	cfg := historyDoctorCfg(t, globRoute(), config.SlackRoute{Channel: "#sec-1", Alias: "sec", History: &config.SlackRouteHistory{Query: true, Mirror: true}})
+	meta := &fakeHistoryMeta{rows: []slackbridge.ChannelMeta{{Channel: "C1", Name: "inc_2026_a", Route: slackbridge.RouteEntry{Alias: "ir", Pattern: "inc_*"}, BackfillState: "done"}}}
+	res := checkSlackHistory(context.Background(), cfg, &fakeLister{channels: historyChannels}, &mockDynamoClient{output: &dynamodb.DescribeTableOutput{}}, goodTTL(),
+		meta, scopesWith("groups:read"), "km")
+	r := byName(res, "Slack history channels")
+	// C2 (glob match) and C3 (#sec-1) mirror statically with no meta row; C1 has one.
+	if !strings.Contains(r.Message, "1 matched channel(s); 2 static mirror channel(s) not yet bound") || !strings.Contains(r.Message, "meta rows only") {
+		t.Errorf("channels = %+v", r)
+	}
+	allBound := &fakeHistoryMeta{rows: []slackbridge.ChannelMeta{{Channel: "C1"}, {Channel: "C2"}, {Channel: "C3"}}}
+	res = checkSlackHistory(context.Background(), cfg, &fakeLister{channels: historyChannels}, &mockDynamoClient{output: &dynamodb.DescribeTableOutput{}}, goodTTL(),
+		allBound, scopesWith("groups:read"), "km")
+	if r := byName(res, "Slack history channels"); strings.Contains(r.Message, "not yet bound") {
+		t.Errorf("every channel bound ⇒ no note: %+v", r)
+	}
+}
+
 func TestCheckSlackHistory_GroupsReadMissingWarnsOnlyWithGlobs(t *testing.T) {
 	ok := &mockDynamoClient{output: &dynamodb.DescribeTableOutput{}}
 	glob := historyDoctorCfg(t, globRoute())

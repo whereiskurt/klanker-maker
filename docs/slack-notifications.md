@@ -3838,8 +3838,13 @@ km slack history purge (<#name> | <C…> | --alias <alias> | --all) [--keep-meta
 ```
 
 Deletes a channel's mirrored rows, for one channel, every channel bound to an alias, or
-every mirrored channel. By default the meta row goes too, so the channel is re-matched (and
-re-backfilled, bounded as ever) only on the bot's next join. `--keep-meta` leaves the route
+every mirrored channel. By default the meta row goes too, so a glob channel is re-matched
+(and re-backfilled, bounded as ever) only on the bot's next join, and a statically routed
+mirror channel is rebound on the next message the bridge sees there. A channel the live
+route table mirrors but the bridge has not bound yet has no meta row; purge reads the table
+and includes it anyway, printing `(no meta row)` (`--alias` and `--all` include such channels
+too). `km doctor` lists meta rows only and counts these as "static mirror channel(s) not yet
+bound". `--keep-meta` leaves the route
 binding so live mirroring continues from now without a new backfill. It talks to DynamoDB
 with operator credentials; there is no bridge action and no `km-slack` form, so a sandbox
 cannot purge. Names resolve through the bot's own channel list. It prints the row count per

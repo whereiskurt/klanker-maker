@@ -17,48 +17,106 @@ import (
 
 type historyPurgeTarget struct {
 	channelID, name, alias string
-	all                    bool
+	noMeta                 bool // a static mirror channel the bridge has not bound yet
 }
 
-// purgeBackend supplies the store and (only when a #name must be resolved) the
-// channel lister. Production builds both from operator credentials; tests
-// inject fakes.
-type purgeBackend func(ctx context.Context, needLister bool) (slackbridge.HistoryStore, SlackRouteChannelLister, error)
+// purgeRouteTable reads the live channel route table (/{prefix}/slack/routes),
+// nil when none is published. A channel a static route mirrors may have rows
+// but no meta row (the bridge binds it on first sight), so purge consults it.
+type purgeRouteTable func(ctx context.Context) (*slackbridge.RoutesDocument, error)
+
+// purgeBackend supplies the store, (only when a #name must be resolved) the
+// channel lister, and the live route table reader. Production builds them from
+// operator credentials; tests inject fakes.
+type purgeBackend func(ctx context.Context, needLister bool) (slackbridge.HistoryStore, SlackRouteChannelLister, purgeRouteTable, error)
+
+// staticMirror is a channel the live route table mirrors (a named route or a
+// glob match recorded at km init).
+type staticMirror struct{ channel, name, alias string }
+
+// staticMirrorChannels is every channel the table routes with mirror: true.
+func staticMirrorChannels(doc *slackbridge.RoutesDocument) map[string]staticMirror {
+	out := map[string]staticMirror{}
+	if doc == nil {
+		return out
+	}
+	names := map[string]string{}
+	for _, r := range doc.Routes {
+		if _, ok := names[r.Channel]; !ok {
+			names[r.Channel] = r.Name
+		}
+	}
+	for _, p := range doc.Patterns {
+		for _, ch := range p.Channels {
+			if _, ok := names[ch.ID]; !ok {
+				names[ch.ID] = ch.Name
+			}
+		}
+	}
+	for id, r := range slackbridge.BuildRouteTable(doc, func(string, ...any) {}) {
+		if r.History != nil && r.History.Mirror {
+			out[id] = staticMirror{channel: id, name: names[id], alias: r.Alias}
+		}
+	}
+	return out
+}
+
+// readLiveRoutesDocument is the production purgeRouteTable.
+func readLiveRoutesDocument(store SSMParamStore, param string) purgeRouteTable {
+	return func(ctx context.Context) (*slackbridge.RoutesDocument, error) {
+		val, err := store.Get(ctx, param, false)
+		if err != nil {
+			return nil, fmt.Errorf("read the channel route table %s: %w", param, err)
+		}
+		if val == "" {
+			return nil, nil
+		}
+		doc, err := slackbridge.ParseRoutesDocument([]byte(val))
+		if err != nil {
+			return nil, fmt.Errorf("channel route table %s: %w", param, err)
+		}
+		return doc, nil
+	}
+}
 
 // newSlackHistoryCmd is `km slack history`. Operator-only: it talks to DynamoDB
 // with the operator policy; there is deliberately no bridge action and no
 // km-slack form, so a sandbox can never purge (spec §6.4).
 func newSlackHistoryCmd(cfg *config.Config, sharedDeps *SlackCmdDeps) *cobra.Command {
 	hist := &cobra.Command{Use: "history", Short: "Manage the Slack channel history mirror"}
-	backend := func(ctx context.Context, needLister bool) (slackbridge.HistoryStore, SlackRouteChannelLister, error) {
+	backend := func(ctx context.Context, needLister bool) (slackbridge.HistoryStore, SlackRouteChannelLister, purgeRouteTable, error) {
 		deps := sharedDeps
 		if deps == nil {
 			var err error
 			if deps, err = buildSlackCmdDeps(cfg); err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 		}
 		if deps.DDB == nil {
-			return nil, nil, fmt.Errorf("km slack history purge: no DynamoDB client available")
+			return nil, nil, nil, fmt.Errorf("km slack history purge: no DynamoDB client available")
 		}
 		store := &slackbridge.DDBHistoryStore{Client: deps.DDB, TableName: cfg.GetResourcePrefix() + "-slack-history"}
 		var lister SlackRouteChannelLister
 		if needLister {
 			l, err := newSlackRouteLister(ctx, cfg, deps.SSM)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			lister = l
 		}
-		return store, lister, nil
+		var routes purgeRouteTable
+		if deps.SSM != nil {
+			routes = readLiveRoutesDocument(deps.SSM, slackRoutesParam(cfg))
+		}
+		return store, lister, routes, nil
 	}
 	hist.AddCommand(newSlackHistoryPurgeCmd(backend, os.Stdout))
 	return hist
 }
 
-func newSlackHistoryPurgeCmdWithStore(store slackbridge.HistoryStore, lister SlackRouteChannelLister, out io.Writer) *cobra.Command {
-	return newSlackHistoryPurgeCmd(func(context.Context, bool) (slackbridge.HistoryStore, SlackRouteChannelLister, error) {
-		return store, lister, nil
+func newSlackHistoryPurgeCmdWithStore(store slackbridge.HistoryStore, lister SlackRouteChannelLister, routes purgeRouteTable, out io.Writer) *cobra.Command {
+	return newSlackHistoryPurgeCmd(func(context.Context, bool) (slackbridge.HistoryStore, SlackRouteChannelLister, purgeRouteTable, error) {
+		return store, lister, routes, nil
 	}, out)
 }
 
@@ -70,9 +128,12 @@ func newSlackHistoryPurgeCmd(backend purgeBackend, out io.Writer) *cobra.Command
 		Short: "Delete a channel's mirrored history (rows and, unless --keep-meta, its route binding)",
 		Long: `Removes everything the bridge mirrored for a channel from {prefix}-slack-history.
 Target one channel by name or id, every channel bound to an alias (--alias), or every
-mirrored channel (--all). --keep-meta leaves the route binding so live mirroring continues
-from now with no new backfill; without it the channel is re-matched (and re-backfilled,
-bounded by the route) only on the bot's next join. Operator credentials only.`,
+mirrored channel (--all). A channel the live route table mirrors but the bridge has not
+bound yet (no meta row) is included and reported as "(no meta row)". --keep-meta leaves the
+route binding so live mirroring continues from now with no new backfill; without it a glob
+channel is re-matched (and re-backfilled, bounded by the route) only on the bot's next join,
+and a statically routed channel on the next message the bridge sees there. Operator
+credentials only.`,
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -84,11 +145,11 @@ bounded by the route) only on the bot's next join. Operator credentials only.`,
 			if len(args) == 1 {
 				arg = args[0]
 			}
-			store, lister, err := backend(ctx, strings.HasPrefix(arg, "#"))
+			store, lister, routes, err := backend(ctx, strings.HasPrefix(arg, "#"))
 			if err != nil {
 				return err
 			}
-			targets, err := resolvePurgeTargets(ctx, store, lister, arg, alias, all)
+			targets, err := resolvePurgeTargets(ctx, store, lister, routes, arg, alias, all)
 			if err != nil {
 				return err
 			}
@@ -113,7 +174,7 @@ bounded by the route) only on the bot's next join. Operator credentials only.`,
 	return purge
 }
 
-func resolvePurgeTargets(ctx context.Context, store slackbridge.HistoryStore, lister SlackRouteChannelLister, arg, alias string, all bool) ([]historyPurgeTarget, error) {
+func resolvePurgeTargets(ctx context.Context, store slackbridge.HistoryStore, lister SlackRouteChannelLister, routes purgeRouteTable, arg, alias string, all bool) ([]historyPurgeTarget, error) {
 	given := 0
 	for _, b := range []bool{arg != "", alias != "", all} {
 		if b {
@@ -128,18 +189,58 @@ func resolvePurgeTargets(ctx context.Context, store slackbridge.HistoryStore, li
 		return nil, fmt.Errorf("km slack history purge: list mirrored channels: %w", err)
 	}
 	var out []historyPurgeTarget
+	hasMeta := map[string]bool{}
+	for _, m := range metas {
+		hasMeta[m.Channel] = true
+	}
 	add := func(m slackbridge.ChannelMeta) {
 		out = append(out, historyPurgeTarget{channelID: m.Channel, name: m.Name, alias: m.Route.Alias})
+	}
+	// statics are the live table's mirror channels with no meta row yet.
+	statics := func() (map[string]staticMirror, error) {
+		if routes == nil {
+			return nil, nil
+		}
+		doc, err := routes(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("km slack history purge: %w", err)
+		}
+		found := staticMirrorChannels(doc)
+		for id := range found {
+			if hasMeta[id] {
+				delete(found, id)
+			}
+		}
+		return found, nil
+	}
+	addStatic := func(sm staticMirror) {
+		out = append(out, historyPurgeTarget{channelID: sm.channel, name: sm.name, alias: sm.alias, noMeta: true})
 	}
 	switch {
 	case all:
 		for _, m := range metas {
 			add(m)
 		}
+		st, err := statics()
+		if err != nil {
+			return nil, err
+		}
+		for _, sm := range st {
+			addStatic(sm)
+		}
 	case alias != "":
 		for _, m := range metas {
 			if m.Route.Alias == alias {
 				add(m)
+			}
+		}
+		st, err := statics()
+		if err != nil {
+			return nil, err
+		}
+		for _, sm := range st {
+			if sm.alias == alias {
+				addStatic(sm)
 			}
 		}
 		if len(out) == 0 {
@@ -171,7 +272,19 @@ func resolvePurgeTargets(ctx context.Context, store slackbridge.HistoryStore, li
 			}
 		}
 		if len(out) == 0 {
-			return nil, fmt.Errorf("km slack history purge: channel %s is not mirrored (no meta row)", id)
+			st, err := statics()
+			if err != nil {
+				return nil, err
+			}
+			if sm, ok := st[id]; ok {
+				if sm.name == "" && strings.HasPrefix(arg, "#") {
+					sm.name = strings.TrimPrefix(arg, "#")
+				}
+				addStatic(sm)
+			}
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("km slack history purge: channel %s is not mirrored (no meta row, and the live route table does not mirror it)", id)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].channelID < out[j].channelID })
@@ -194,6 +307,9 @@ func runSlackHistoryPurge(ctx context.Context, store slackbridge.HistoryStore, t
 		}
 		total += n
 		state := "meta removed"
+		if t.noMeta {
+			state = "(no meta row)"
+		}
 		if kept != nil {
 			kept.BackfillState, kept.BackfillWritten, kept.BackfillCursor = "off", 0, ""
 			if err := store.PutMeta(ctx, *kept); err != nil {
