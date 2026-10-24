@@ -17,7 +17,6 @@ const (
 // to the queue envelope for a mentioned thread reply (strict mention-only mode).
 type ThreadContext struct {
 	Messages        []ContextMessage `json:"messages,omitempty"`
-	OmittedNonAllow int              `json:"omitted_non_allow,omitempty"`
 	TruncatedOlder  int              `json:"truncated_older,omitempty"`
 	FilesOmitted    []string         `json:"files_omitted,omitempty"`
 	FileErrors      []FileError      `json:"file_errors,omitempty"`
@@ -39,10 +38,12 @@ type contextFileRef struct {
 }
 
 // BuildThreadContext is pure: no I/O. It excludes the trigger and anything at
-// or after it, bots, and non-allowed authors (counted, never carried), then
-// keeps the newest messages under the message and text caps in chronological
-// order, and applies a newest-first file budget.
-func BuildThreadContext(replies []SlackReplyMessage, triggerTS, botUserID string, allowed func(string) bool) (ThreadContext, []contextFileRef) {
+// or after it, and bots (the bot itself included), then keeps the newest
+// messages under the message and text caps in chronological order, and applies
+// a newest-first file budget. Every human reply is carried: membership is the
+// permission (2026-10-24); the allowlist decides who may START a turn, not what
+// the bot may read.
+func BuildThreadContext(replies []SlackReplyMessage, triggerTS, botUserID string) (ThreadContext, []contextFileRef) {
 	var out ThreadContext
 	var eligible []SlackReplyMessage
 	for _, r := range replies {
@@ -50,10 +51,6 @@ func BuildThreadContext(replies []SlackReplyMessage, triggerTS, botUserID string
 			continue
 		}
 		if r.BotID != "" || r.Subtype == "bot_message" || r.User == "" || (botUserID != "" && r.User == botUserID) {
-			continue
-		}
-		if !allowed(r.User) {
-			out.OmittedNonAllow++
 			continue
 		}
 		eligible = append(eligible, r)

@@ -2446,9 +2446,8 @@ while true; do
                 fi
               done < <(echo "$CTX_MSG" | jq -c '.attachments[]?' 2>/dev/null || true)
             done < <(echo "$BODY" | jq -c '.thread_context.messages[]?' 2>/dev/null || true)
-            OMIT=$(echo "$BODY" | jq -r '.thread_context.omitted_non_allow // 0' 2>/dev/null || echo 0)
             TRUNC=$(echo "$BODY" | jq -r '.thread_context.truncated_older // 0' 2>/dev/null || echo 0)
-            printf '(%s messages from non-allowlisted users omitted · %s older messages truncated)\n\n' "$OMIT" "$TRUNC"
+            printf '(%s older messages truncated)\n\n' "$TRUNC"
           } > "$CTX_FILE" || true
         fi
         if cat "$PROMPT_FILE" >> "$CTX_FILE" 2>/dev/null && mv "$CTX_FILE" "$PROMPT_FILE" 2>/dev/null; then

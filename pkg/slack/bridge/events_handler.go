@@ -290,7 +290,6 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	routed := false     // info came from a route, not channel ownership
 	coldCreate := false // route alias absent: publish a SandboxCreate instead of enqueueing
 	rebind := false     // routed thread row must be rewritten (alias moved / orphaned thread), after delivery
-	gate := gateOwned   // which email list decides when the box's row carries none
 	// The route this message runs against: the channel's own entry, else the
 	// default route. Selected before continuity so every rung reads one value.
 	route, routeName := h.selectRoute(msg)
@@ -397,7 +396,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		if !ok {
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
-		info, coldCreate, rebind, gate = decision.info, decision.coldCreate, decision.rebind, decision.gate
+		info, coldCreate, rebind = decision.info, decision.coldCreate, decision.rebind
 		routed = true
 		h.log().Info("events: route: selected", "route", routeName, "channel", msg.Channel, "alias", route.Alias, "cold_create", coldCreate)
 		if coldCreate {
@@ -570,26 +569,9 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	var threadCtx *ThreadContext
 	strict := !threadBypassAllowed(info) && (effectiveMentionOnly || routed)
 	if strict && msg.ThreadTS != "" && h.ThreadReader != nil {
-		// A context author is trusted only if they would pass the same gates as
-		// the sender: Phase 118 ids AND the sandbox's allowEmails on a mapped
-		// channel; on a routed thread, the same gate the dispatch decision used
-		// (the sandbox's allowEmails, else the route list that decision picked).
-		// Email lookups run under collectThreadContext's deadline; once it
-		// passes a lookup errors and the author counts as not allowed (fails closed).
-		allowed := func(cctx context.Context, u string) bool {
-			if len(effectiveAllow) > 0 && !isInSlackAllowlist(u, effectiveAllow) {
-				return false
-			}
-			ok, _ := h.senderEmailAllowed(cctx, route, info, u, gateOwned)
-			return ok
-		}
-		if routed {
-			allowed = func(cctx context.Context, u string) bool {
-				ok, _ := h.senderEmailAllowed(cctx, route, info, u, gate)
-				return ok
-			}
-		}
-		threadCtx = h.collectThreadContext(ctx, msg, info, allowed, boundary)
+		// Every human reply is carried: membership is the permission. The
+		// allowlists decide who may start a turn, not what context the bot reads.
+		threadCtx = h.collectThreadContext(ctx, msg, info, boundary)
 	}
 	if h.FileDownloader != nil && len(msg.Files) > 0 {
 		// Phase 75.2: process file downloads SYNCHRONOUSLY within the handler.
@@ -1115,12 +1097,12 @@ const (
 )
 
 // collectThreadContext reads the strict thread's messages since the bot's last
-// dispatch (the boundary), keeps the trusted human ones, and downloads their
+// dispatch (the boundary), keeps the human ones, and downloads their
 // files. It never fails the turn: errors land in ThreadContext.Error / FileErrors.
 //
 // prefetched, when non-nil, is the boundary already read for this event (the
 // reaction quiet-period check); it is used instead of a second read.
-func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, allowed func(context.Context, string) bool, prefetched *dispatchBoundaryRead) *ThreadContext {
+func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessageEvent, info SandboxRoutingInfo, prefetched *dispatchBoundaryRead) *ThreadContext {
 	// Budget against the Lambda deadline: the dedup nonce is already consumed, so a
 	// turn that times out after this point is lost silently. Leave room for the
 	// files fork, delivery, resume and reaction.
@@ -1156,18 +1138,7 @@ func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessa
 		return &ThreadContext{Error: err.Error()}
 	}
 	uid, _ := h.BotUserID.Fetch(cctx)
-	// The trust predicate (possibly a Slack lookup per author) is bound to the
-	// sub-context so a slow API cannot push the turn past the Lambda timeout.
-	// Memoised per author: a thread with many messages by one person costs one lookup.
-	trust := map[string]bool{}
-	tc, refs := BuildThreadContext(replies, msg.TS, uid, func(u string) bool {
-		ok, seen := trust[u]
-		if !seen {
-			ok = allowed(cctx, u)
-			trust[u] = ok
-		}
-		return ok
-	})
+	tc, refs := BuildThreadContext(replies, msg.TS, uid)
 	if h.FileDownloader != nil {
 		for i, ref := range refs {
 			if dl, ok := cctx.Deadline(); ok && time.Until(dl) < ContextFileFloor {
@@ -1188,7 +1159,7 @@ func (h *EventsHandler) collectThreadContext(ctx context.Context, msg slackMessa
 		}
 	}
 	h.log().Info("events: context collected", "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", msg.ThreadTS,
-		"messages", len(tc.Messages), "omitted", tc.OmittedNonAllow, "truncated", tc.TruncatedOlder, "files", len(refs))
+		"messages", len(tc.Messages), "truncated", tc.TruncatedOlder, "files", len(refs))
 	return &tc
 }
 
