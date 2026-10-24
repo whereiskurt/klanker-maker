@@ -19,7 +19,8 @@
 - Route table stays the Standard SSM parameter `/{prefix}/slack/routes` (4096 bytes). Every new field on `RouteEntry`/`RoutesDocument`/`SlackEnvelope`/`InboundQueueBody`/`PostResponse` is `omitempty`: a history-less table and every pre-existing envelope stay byte-identical. The signed-envelope rule: the bridge re-canonicalises before verifying, so a field that serialises when zero breaks every older `km-slack`.
 - Mirror table `{prefix}-slack-history`: PAY_PER_REQUEST, `point_in_time_recovery.enabled = false`, SSE with the platform CMK, TTL attribute `expires_at` (Number, epoch seconds). Messages: PK `channel`=`C…`, SK `ts`. Channel meta: PK `channel`=`#meta`, SK `ts`=`<channel id>`. Rows carry text and file **names** only. DMs (`im`/`mpim`) never mirror and never match a glob.
 - The sandbox role gets **no** grant on the history table (guard test). Only the bridge reads it.
-- Backfill: one `conversations.history` call per step, `limit` ≤ 15, re-enqueue with `DelaySeconds = 60` (or Slack's `Retry-After`), stop at window end (`done`) or `max_messages` (`capped`). Never "all".
+- Backfill: one `conversations.history` call per step, `limit` ≤ `slack.history_rate.page_size` (default 200, bounds 1..999), re-enqueue with `DelaySeconds = slack.history_rate.interval_seconds` (default 2, bounds 0..600) or Slack's `Retry-After` when a 429 says so, stop at window end (`done`) or `max_messages` (`capped`). Never "all". Env: `KM_SLACK_HISTORY_PAGE_SIZE`, `KM_SLACK_HISTORY_INTERVAL_SECONDS`, exported by `km init` with the usual env-vs-yaml drift WARN (model: `KM_SLACK_REACT_QUIET_SECONDS`, `init.go:2309-2320`).
+- Purge is operator-only: `km slack history purge` talks to DynamoDB with the operator policy; no bridge action, no `km-slack` form.
 - `history` authorisation, fail-closed: own `#sb-` channel ⇒ live reads; else the channel's route (static table, then meta row) must resolve to the sender's alias **and** have `history.query: true`; else `403 history_not_allowed`. A thread row never authorises a history read.
 - Per page: ≤ `limit` messages (≤ route `max_messages`; 100 in an own channel) and ≤ 32 KiB text (`MaxContextTextBytes`); `--grep` is a case-insensitive substring applied before the cap. New quota action `slack_history`.
 - No announcement unless `history.announce: true`; then exactly one `chat.postMessage` when the meta row is first written.
@@ -33,7 +34,8 @@
 
 | File | Responsibility |
 |---|---|
-| `internal/app/config/config.go` | `SlackRouteHistory`, `SlackRoute.History`, glob grammar + `ChannelGlob()`, validation, `ParseRouteDuration` |
+| `internal/app/config/config.go` | `SlackRouteHistory`, `SlackRoute.History`, glob grammar + `ChannelGlob()`, validation, `ParseRouteDuration`, `SlackHistoryRate` + merge-list entry |
+| `internal/app/cmd/slack_history_purge.go`, `_test.go`, `slack.go` | `km slack history purge` |
 | `internal/app/config/config_slack_routes_history_test.go` | config tests |
 | `pkg/slack/bridge/channel_routes.go` | `RouteHistory`, `PatternEntry`, `RoutesDocument.Patterns`, `MatchChannelGlob`, `CanonicalRoutesDocument`, `BuildPatternTable`, `DefaultRoute.History/Pattern` |
 | `pkg/slack/bridge/channel_routes_history_test.go` | document/table tests |
@@ -70,7 +72,7 @@
 - Create: `internal/app/config/config_slack_routes_history_test.go`
 
 **Interfaces:**
-- Produces: `type SlackRouteHistory struct{ Query, Mirror bool; Backfill, Retention string; MaxMessages int; Announce bool }`; `func (h *SlackRouteHistory) Validate() error`; `func (h *SlackRouteHistory) Resolved() (backfill, retention time.Duration, maxMessages int, err error)`; `func ParseRouteDuration(s string) (time.Duration, error)`; `func (r *SlackRoute) ChannelGlob() (string, bool)`; `SlackRoute.History *SlackRouteHistory`.
+- Produces: `type SlackHistoryRate struct{ PageSize int; IntervalSeconds *int }` on `SlackConfig.HistoryRate *SlackHistoryRate` (`mapstructure:"history_rate"`), `func (r *SlackHistoryRate) Validate() error` (PageSize 0 or 1..999; IntervalSeconds nil or 0..600), `func (r *SlackHistoryRate) Effective() (pageSize, intervalSeconds int)` (200, 2 when unset), merge-list entry `"slack.history_rate"` loaded with `UnmarshalKey` like `slack.default_route`; `type SlackRouteHistory struct{ Query, Mirror bool; Backfill, Retention string; MaxMessages int; Announce bool }`; `func (h *SlackRouteHistory) Validate() error`; `func (h *SlackRouteHistory) Resolved() (backfill, retention time.Duration, maxMessages int, err error)`; `func ParseRouteDuration(s string) (time.Duration, error)`; `func (r *SlackRoute) ChannelGlob() (string, bool)`; `SlackRoute.History *SlackRouteHistory`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -136,6 +138,35 @@ func TestSlackRouteHistory_Resolved_Defaults(t *testing.T) {
 	b, r, n, _ = h.Resolved()
 	if b != 3*24*time.Hour || r != 3*24*time.Hour || n != 50 {
 		t.Fatalf("retention must default to backfill: %v %v %d", b, r, n)
+	}
+}
+
+func TestSlackHistoryRate(t *testing.T) {
+	var nilRate *config.SlackHistoryRate
+	if p, i := nilRate.Effective(); p != 200 || i != 2 {
+		t.Fatalf("nil defaults = %d,%d; want 200,2", p, i)
+	}
+	zero := 0
+	r := config.SlackHistoryRate{PageSize: 15, IntervalSeconds: &zero}
+	if err := r.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if p, i := r.Effective(); p != 15 || i != 0 {
+		t.Fatalf("explicit 0 interval must survive: %d,%d", p, i)
+	}
+	big := 601
+	for _, bad := range []config.SlackHistoryRate{{PageSize: 1000}, {PageSize: -1}, {IntervalSeconds: &big}} {
+		if err := bad.Validate(); err == nil {
+			t.Errorf("%+v: want error", bad)
+		}
+	}
+}
+
+// The merge-list trap (project_config_key_merge_list): a key missing from it loads as zero.
+func TestLoad_SlackHistoryRateSurvivesMerge(t *testing.T) {
+	cfg := loadYAMLForTest(t, "slack:\n  history_rate:\n    page_size: 15\n    interval_seconds: 60\n") // use the helper the existing slack.routes merge test uses
+	if cfg.Slack.HistoryRate == nil || cfg.Slack.HistoryRate.PageSize != 15 || cfg.Slack.HistoryRate.IntervalSeconds == nil || *cfg.Slack.HistoryRate.IntervalSeconds != 60 {
+		t.Fatalf("history_rate dropped by the merge-list: %+v", cfg.Slack.HistoryRate)
 	}
 }
 
@@ -268,6 +299,60 @@ Add the field to `SlackRoute`:
 	MentionOnly *bool              `mapstructure:"mention_only" yaml:"mention_only,omitempty"`
 	History     *SlackRouteHistory `mapstructure:"history"      yaml:"history,omitempty"`
 ```
+
+Add the install-level pacing knob to `SlackConfig` (beside `Routes`) and its type:
+
+```go
+	// HistoryRate (2026-10-24) paces the channel-history backfill and live reads:
+	// messages per conversations.history call and the gap between backfill steps.
+	// Defaults (200, 2 s) follow Slack's documented Tier 3 posture; an install
+	// Slack throttles to the non-Marketplace regime sets 15 / 60. Retry-After on a
+	// 429 always overrides the interval. Exported as KM_SLACK_HISTORY_PAGE_SIZE and
+	// KM_SLACK_HISTORY_INTERVAL_SECONDS. CRITICAL: "slack.history_rate" must be in
+	// the v2→v merge-list (UnmarshalKey, like slack.default_route).
+	HistoryRate *SlackHistoryRate `mapstructure:"history_rate" yaml:"history_rate,omitempty"`
+```
+
+```go
+type SlackHistoryRate struct {
+	PageSize        int  `mapstructure:"page_size"        yaml:"page_size,omitempty"`
+	IntervalSeconds *int `mapstructure:"interval_seconds" yaml:"interval_seconds,omitempty"` // *int: an explicit 0 must survive
+}
+
+const (
+	HistoryRateDefaultPageSize = 200
+	HistoryRateDefaultInterval = 2
+)
+
+func (r *SlackHistoryRate) Validate() error {
+	if r == nil {
+		return nil
+	}
+	if r.PageSize < 0 || r.PageSize > 999 {
+		return fmt.Errorf("slack.history_rate.page_size: %d out of range 1..999", r.PageSize)
+	}
+	if r.IntervalSeconds != nil && (*r.IntervalSeconds < 0 || *r.IntervalSeconds > 600) {
+		return fmt.Errorf("slack.history_rate.interval_seconds: %d out of range 0..600", *r.IntervalSeconds)
+	}
+	return nil
+}
+
+func (r *SlackHistoryRate) Effective() (pageSize, intervalSeconds int) {
+	pageSize, intervalSeconds = HistoryRateDefaultPageSize, HistoryRateDefaultInterval
+	if r == nil {
+		return
+	}
+	if r.PageSize > 0 {
+		pageSize = r.PageSize
+	}
+	if r.IntervalSeconds != nil {
+		intervalSeconds = *r.IntervalSeconds
+	}
+	return
+}
+```
+
+Add `"slack.history_rate"` to the merge-list beside `"slack.routes"`, and load it the way `slack.default_route` is loaded (`v.IsSet` → `UnmarshalKey`). Call `cfg.Slack.HistoryRate.Validate()` from the same place `ValidateRoutes` is called.
 
 Grammar and accessor, beside `slackRouteChannelName`:
 
@@ -1211,6 +1296,16 @@ variable "slack_history_table_arn" {
   type        = string
   default     = ""
 }
+variable "slack_history_page_size" {
+  description = "Messages per conversations.history call for backfill and live reads (slack.history_rate.page_size; default 200)."
+  type        = string
+  default     = "200"
+}
+variable "slack_history_interval_seconds" {
+  description = "Seconds between backfill steps (slack.history_rate.interval_seconds; default 2). Retry-After overrides."
+  type        = string
+  default     = "2"
+}
 ```
 
 In `main.tf`, after `resource "aws_iam_role_policy" "ssm_channel_routes"` (ends ~:443) add:
@@ -1269,9 +1364,13 @@ In the Lambda `environment.variables` block (after `KM_QUOTA_TABLE`):
 
 ```hcl
       # 2026-10-24 — channel history mirror; empty ⇒ mirror and history reads off.
-      KM_SLACK_HISTORY_TABLE     = var.slack_history_table_name
-      KM_SLACK_HISTORY_QUEUE_URL = var.slack_history_table_arn != "" ? aws_sqs_queue.history_backfill[0].url : ""
+      KM_SLACK_HISTORY_TABLE            = var.slack_history_table_name
+      KM_SLACK_HISTORY_QUEUE_URL        = var.slack_history_table_arn != "" ? aws_sqs_queue.history_backfill[0].url : ""
+      KM_SLACK_HISTORY_PAGE_SIZE        = var.slack_history_page_size
+      KM_SLACK_HISTORY_INTERVAL_SECONDS = var.slack_history_interval_seconds
 ```
+
+In the live unit's `inputs` also add `slack_history_page_size = get_env("KM_SLACK_HISTORY_PAGE_SIZE", "200")` and `slack_history_interval_seconds = get_env("KM_SLACK_HISTORY_INTERVAL_SECONDS", "2")`. In `internal/app/cmd/init.go`, beside the `KM_SLACK_REACT_QUIET_SECONDS` export (`:2309-2320`), export both from `cfg.Slack.HistoryRate.Effective()` with the identical env-wins drift WARN, and add them to the guard test that lists exported `KM_*` vars if one exists (grep `KM_SLACK_REACT_QUIET_SECONDS` in `init_test.go`).
 
 In `infra/live/use1/lambda-slack-bridge/terragrunt.hcl`, after the `slack_threads` dependency block add:
 
@@ -1797,22 +1896,23 @@ Claude-Session: https://claude.ai/code/session_01WiMBVL8Bp4oSYyRukJfVSt"
 
 **Interfaces:**
 - Consumes: Task 6, Task 7 (`BackfillJob`, `BackfillEnqueuer`, `ChannelMeta`).
-- Produces: `type HistoryReader interface{ History(ctx, channel, oldest, latest string, limit int) (msgs []SlackReplyMessage, more bool, err error) }`; `func (a *SlackThreadReaderAdapter) History(...)` (same adapter, `conversations.history`, returns `*ErrSlackRateLimited` on 429/`ratelimited`); `type SQSBackfillQueue struct{ Client SQSSendMessageAPI; QueueURL string }` implementing `BackfillEnqueuer` (standard queue: `DelaySeconds`, no group id); `const BackfillPageSize = 15`, `BackfillDelaySeconds = 60`; `func (h *EventsHandler) BackfillStep(ctx, job BackfillJob) error`; `EventsHandler.HistoryReader HistoryReader`.
+- Produces: `type HistoryReader interface{ History(ctx, channel, oldest, latest string, limit int) (msgs []SlackReplyMessage, more bool, err error) }`; `func (a *SlackThreadReaderAdapter) History(...)` (same adapter, `conversations.history`, clamps `limit` to 1..999, returns `*ErrSlackRateLimited` on 429/`ratelimited`); `type SQSBackfillQueue struct{ Client SQSSendMessageAPI; QueueURL string }` implementing `BackfillEnqueuer` (standard queue: `DelaySeconds`, no group id); `const DefaultHistoryPageSize = 200`, `DefaultHistoryIntervalSeconds = 2`, `MaxHistoryPageSize = 999`; `EventsHandler.HistoryPageSize int`, `EventsHandler.HistoryIntervalSeconds int` (0 ⇒ defaults via `func (h *EventsHandler) historyPacing() (page, interval int)`); `func (h *EventsHandler) BackfillStep(ctx, job BackfillJob) error`; `EventsHandler.HistoryReader HistoryReader`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```go
 func TestHistoryAdapter_WireFormatAndRateLimit(t *testing.T)
-// httptest: assert POST /conversations.history form has channel, oldest, latest (omitted when ""), limit=15, inclusive=false;
+// httptest: assert POST /conversations.history form has channel, oldest, latest (omitted when ""), limit as passed (clamped to 999; 0 → 200), inclusive=false;
 // reply {"ok":true,"messages":[...],"has_more":true} → msgs + more; reply 429 Retry-After: 7 → *ErrSlackRateLimited{RetryAfterSeconds:7}; {"ok":false,"error":"ratelimited"} likewise with default 60.
 
 func TestSQSBackfillQueue_SendsStandardWithDelay(t *testing.T)
 // fake SQSSendMessageAPI: DelaySeconds==60, MessageGroupId nil, body decodes to the job.
 
 func TestBackfillStep_WritesPageAndReenqueues(t *testing.T)
-// meta C7 pending retention 3600; reader returns 15 msgs (ts descending) more=true; job Remaining 200
+// h.HistoryPageSize 15, h.HistoryIntervalSeconds 60 (the strict regime); meta C7 pending retention 3600; reader asked limit 15, returns 15 msgs (ts descending) more=true; job Remaining 200
 // → 15 PutMessage rows with expires_at now+3600; meta.BackfillState "running", BackfillCursor = oldest ts seen, BackfillWritten 15;
 //   one Enqueue with {Latest: cursor, Remaining: 185} delay 60.
+// A second case with the fields left 0: reader asked limit 200, re-enqueue delay 2.
 
 func TestBackfillStep_StopsAtWindow(t *testing.T)
 // reader returns 4 msgs, more=false → state "done", no enqueue.
@@ -1845,8 +1945,11 @@ Expected: FAIL.
 // non-Marketplace limit (1 req/min, 15 msgs/call) limit is clamped to 15 and a
 // 429 / "ratelimited" surfaces as *ErrSlackRateLimited so the caller can wait.
 func (a *SlackThreadReaderAdapter) History(ctx context.Context, channel, oldest, latest string, limit int) ([]SlackReplyMessage, bool, error) {
-	if limit <= 0 || limit > BackfillPageSize {
-		limit = BackfillPageSize
+	if limit <= 0 {
+		limit = DefaultHistoryPageSize
+	}
+	if limit > MaxHistoryPageSize {
+		limit = MaxHistoryPageSize
 	}
 	form := url.Values{"channel": {channel}, "limit": {strconv.Itoa(limit)}, "inclusive": {"false"}}
 	if oldest != "" {
@@ -1856,9 +1959,9 @@ func (a *SlackThreadReaderAdapter) History(ctx context.Context, channel, oldest,
 		form.Set("latest", latest)
 	}
 	// … same token/request/decode shape as Replies, path /conversations.history …
-	// on resp.StatusCode == 429: ra, _ := strconv.Atoi(resp.Header.Get("Retry-After")); if ra <= 0 { ra = BackfillDelaySeconds }
+	// on resp.StatusCode == 429: ra, _ := strconv.Atoi(resp.Header.Get("Retry-After")); if ra <= 0 { ra = 60 }
 	//   return nil, false, &ErrSlackRateLimited{RetryAfterSeconds: ra, Method: "conversations.history"}
-	// on out.Error == "ratelimited": same with BackfillDelaySeconds
+	// on out.Error == "ratelimited": same with 60
 	// return out.Messages, out.HasMore, nil
 }
 ```
@@ -1867,9 +1970,24 @@ func (a *SlackThreadReaderAdapter) History(ctx context.Context, channel, oldest,
 
 ```go
 const (
-	BackfillPageSize     = 15 // Slack's per-call cap for non-Marketplace apps
-	BackfillDelaySeconds = 60 // 1 request per minute
+	DefaultHistoryPageSize        = 200 // Slack's documented Tier 3 posture: ≤999, 200 recommended
+	DefaultHistoryIntervalSeconds = 2
+	MaxHistoryPageSize            = 999
 )
+
+// historyPacing returns the install's page size and backfill interval
+// (slack.history_rate), defaults when unset. Retry-After always overrides the
+// interval for the step that was throttled.
+func (h *EventsHandler) historyPacing() (page, interval int) {
+	page, interval = DefaultHistoryPageSize, DefaultHistoryIntervalSeconds
+	if h.HistoryPageSize > 0 {
+		page = h.HistoryPageSize
+	}
+	if h.HistoryIntervalSeconds >= 0 && h.HistoryPageSize > 0 { // an explicit 0 interval is honoured only alongside an explicit page size (env present)
+		interval = h.HistoryIntervalSeconds
+	}
+	return
+}
 
 type HistoryReader interface {
 	History(ctx context.Context, channel, oldest, latest string, limit int) ([]SlackReplyMessage, bool, error)
@@ -1904,9 +2022,10 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 	if meta == nil {
 		return nil // channel left since the job was queued
 	}
+	page, interval := h.historyPacing()
 	limit := job.Remaining
-	if limit > BackfillPageSize {
-		limit = BackfillPageSize
+	if limit > page {
+		limit = page
 	}
 	if limit <= 0 {
 		meta.BackfillState = "capped"
@@ -1962,7 +2081,7 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 		return err
 	}
 	if meta.BackfillState == "running" && h.Backfill != nil {
-		if eerr := h.Backfill.Enqueue(ctx, BackfillJob{Channel: job.Channel, Oldest: job.Oldest, Latest: cursor, Remaining: remaining}, BackfillDelaySeconds); eerr != nil {
+		if eerr := h.Backfill.Enqueue(ctx, BackfillJob{Channel: job.Channel, Oldest: job.Oldest, Latest: cursor, Remaining: remaining}, int32(interval)); eerr != nil {
 			h.log().Error("events: history backfill: re-enqueue failed", "channel", job.Channel, "err", eerr)
 		}
 	}
@@ -1971,7 +2090,7 @@ func (h *EventsHandler) BackfillStep(ctx context.Context, job BackfillJob) error
 }
 ```
 
-Add `HistoryReader HistoryReader` to `EventsHandler`.
+Add `HistoryReader HistoryReader`, `HistoryPageSize int`, `HistoryIntervalSeconds int` to `EventsHandler`.
 
 - [ ] **Step 4: Run tests**
 
@@ -2085,6 +2204,13 @@ In `wireEventsHandler`, after the thread reader line (:446):
 		if qu := os.Getenv("KM_SLACK_HISTORY_QUEUE_URL"); qu != "" {
 			eventsHandler.Backfill = &bridge.SQSBackfillQueue{Client: initSQS, QueueURL: qu}
 		}
+		if n, err := strconv.Atoi(os.Getenv("KM_SLACK_HISTORY_PAGE_SIZE")); err == nil && n > 0 {
+			eventsHandler.HistoryPageSize = n
+		}
+		if n, err := strconv.Atoi(os.Getenv("KM_SLACK_HISTORY_INTERVAL_SECONDS")); err == nil && n >= 0 {
+			eventsHandler.HistoryIntervalSeconds = n
+		}
+		handler.HistoryPageSize = eventsHandler.HistoryPageSize
 		handler.History = store // Task 10: the signed `history` action reads the same store
 		handler.HistoryReader = eventsHandler.HistoryReader
 		slog.Info("km-slack-bridge: channel history enabled", "table", ht, "backfill_queue", os.Getenv("KM_SLACK_HISTORY_QUEUE_URL") != "")
@@ -2157,7 +2283,7 @@ func TestHandleHistory_Refusals(t *testing.T)
 
 func TestHandleHistory_CapsAndPaging(t *testing.T)
 // own channel, reader returns 120 msgs → messages ≤ 100 (HistoryOwnChannelMax), truncated true, next_before = oldest ts returned.
-// routed with MaxMessages 50 and env.Limit 500 → 50. env.Limit 10 → 10.
+// routed with MaxMessages 50 and env.Limit 500 → 50. env.Limit 10 → 10. live read with h.HistoryPageSize 15 → reader asked 15.
 // text cap: 40 rows of 1 KiB → ≤ 32 messages, truncated true.
 
 func TestHandleHistory_GrepIsCaseInsensitiveSubstringBeforeCap(t *testing.T)
@@ -2231,9 +2357,10 @@ type HistoryMessage struct {
 	Routes        map[string]*DefaultRoute
 	DefaultRoute  *DefaultRoute
 	AliasResolver SlackAliasResolver
-	History       HistoryStore
-	HistoryReader HistoryReader
-	ThreadReader  SlackThreadReader
+	History         HistoryStore
+	HistoryReader   HistoryReader
+	ThreadReader    SlackThreadReader
+	HistoryPageSize int // slack.history_rate.page_size; 0 ⇒ MaxHistoryPageSize governs live reads
 ```
 
 Line 152: add `&& env.Action != slack.ActionReact && env.Action != slack.ActionHistory`. Line 292 (step 6): add `&& env.Action != slack.ActionHistory` to the exemption, with the comment: `// ActionHistory: authorised inside handleHistory (own channel OR route ownership + history.query); a thread row never admits a read.` Dispatch: `case slack.ActionHistory: return h.handleHistory(ctx, env)`.
@@ -2317,8 +2444,11 @@ func (h *Handler) handleHistory(ctx context.Context, env slack.SlackEnvelope) *R
 			latest = env.Before
 		}
 		page := limit
-		if page > BackfillPageSize {
-			page = BackfillPageSize
+		if h.HistoryPageSize > 0 && page > h.HistoryPageSize {
+			page = h.HistoryPageSize
+		}
+		if page > MaxHistoryPageSize {
+			page = MaxHistoryPageSize
 		}
 		msgs, m, rerr := h.HistoryReader.History(ctx, env.Channel, env.Oldest, latest, page)
 		if rerr != nil {
@@ -2831,6 +2961,224 @@ Claude-Session: https://claude.ai/code/session_01WiMBVL8Bp4oSYyRukJfVSt"
 
 ---
 
+### Task 14b: `km slack history purge` (operator verb)
+
+**Files:**
+- Create: `internal/app/cmd/slack_history_purge.go`, `slack_history_purge_test.go`
+- Modify: `internal/app/cmd/slack.go:157-163` (`slackCmd.AddCommand(newSlackHistoryCmd(cfg, deps))`)
+
+**Interfaces:**
+- Consumes: Task 6 (`HistoryStore.ListMeta`, `PurgeChannel`, `GetMeta`, `PutMeta`), existing `SlackRouteChannelLister` (`ListBotChannels`), `buildSlackCmdDeps`.
+- Produces: `type historyPurgeTarget struct{ channelID, name, alias string; all bool }`; `func resolvePurgeTargets(ctx, store HistoryStore, lister SlackRouteChannelLister, arg, alias string, all bool) ([]historyPurgeTarget, error)`; `func runSlackHistoryPurge(ctx, store HistoryStore, targets []historyPurgeTarget, keepMeta bool, out io.Writer) error`; cobra `km slack history purge`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Reuse `fakeHistoryStore` (export a copy into `internal/app/cmd` tests as `fakePurgeStore` with `meta []slackbridge.ChannelMeta`, `rows map[string]int`, `purged []string`, `putMeta []slackbridge.ChannelMeta`) and a `fakeLister` returning `[]kmslack.SlackChannelSummary`.
+
+```go
+func TestResolvePurgeTargets_ByIDNameAliasAll(t *testing.T)
+// meta: C1 (inc_1, alias ir), C2 (inc_2, alias ir), C3 (sec-1, alias sec); lister knows all three names.
+// "C1" → [C1]; "#inc_2" → [C2]; "--alias ir" → [C1,C2] sorted; "--all" → all three; "#nope" → error listing the bot's channels; "C9" (no meta) → error "not mirrored".
+// exactly one of arg / --alias / --all must be given → error otherwise.
+
+func TestRunSlackHistoryPurge_DeletesRowsAndMeta(t *testing.T)
+// two targets → PurgeChannel called for each; output has one line per channel "#inc_1 (C1): 40 row(s) purged, meta removed"; total line.
+
+func TestRunSlackHistoryPurge_KeepMetaRewritesMetaAfterPurge(t *testing.T)
+// keepMeta: PurgeChannel still called (it removes meta too), then PutMeta with the same ChannelMeta but BackfillState "off", BackfillWritten 0, BackfillCursor "" → output says "meta kept".
+
+func TestSlackHistoryPurgeCmd_RequiresYesOrConfirms(t *testing.T)
+// without --yes and a non-TTY stdin → error naming --yes; with --yes → runs.
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cd internal/app/cmd && go test -run 'PurgeTargets|SlackHistoryPurge' .`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement**
+
+```go
+// km slack history purge — operator-only removal of a channel's mirrored rows.
+// Talks to DynamoDB with the operator policy; there is deliberately no bridge
+// action and no km-slack form, so a sandbox can never purge (spec §6.4).
+func newSlackHistoryCmd(cfg *config.Config, sharedDeps *SlackCmdDeps) *cobra.Command {
+	hist := &cobra.Command{Use: "history", Short: "Manage the Slack channel history mirror"}
+	var alias string
+	var all, keepMeta, yes bool
+	purge := &cobra.Command{
+		Use:   "purge [<#name>|<C…>]",
+		Short: "Delete a channel's mirrored history (rows and, unless --keep-meta, its route binding)",
+		Long: `Removes everything the bridge mirrored for a channel from {prefix}-slack-history.
+Target one channel by name or id, every channel bound to an alias (--alias), or every
+mirrored channel (--all). --keep-meta leaves the route binding so live mirroring continues
+from now with no new backfill; without it the channel is re-matched (and re-backfilled,
+bounded by the route) only on the bot's next join. Operator credentials only.`,
+		Args:         cobra.MaximumNArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			deps := sharedDeps
+			if deps == nil {
+				var err error
+				if deps, err = buildSlackCmdDeps(cfg); err != nil {
+					return err
+				}
+			}
+			arg := ""
+			if len(args) == 1 {
+				arg = args[0]
+			}
+			store := &slackbridge.DDBHistoryStore{Client: deps.DDB, TableName: cfg.GetResourcePrefix() + "-slack-history"}
+			var lister SlackRouteChannelLister
+			if strings.HasPrefix(arg, "#") {
+				l, err := newSlackRouteLister(ctx, cfg, deps.SSM)
+				if err != nil {
+					return err
+				}
+				lister = l
+			}
+			targets, err := resolvePurgeTargets(ctx, store, lister, arg, alias, all)
+			if err != nil {
+				return err
+			}
+			if !yes {
+				if !isTerminal(os.Stdin) {
+					return fmt.Errorf("km slack history purge: %d channel(s) would be purged; pass --yes to confirm non-interactively", len(targets))
+				}
+				fmt.Fprintf(os.Stderr, "Purge mirrored history for %d channel(s)? [y/N] ", len(targets))
+				var ans string
+				fmt.Fscanln(os.Stdin, &ans)
+				if !strings.EqualFold(ans, "y") {
+					return fmt.Errorf("aborted")
+				}
+			}
+			return runSlackHistoryPurge(ctx, store, targets, keepMeta, os.Stdout)
+		},
+	}
+	purge.Flags().StringVar(&alias, "alias", "", "Purge every mirrored channel bound to this alias")
+	purge.Flags().BoolVar(&all, "all", false, "Purge every mirrored channel")
+	purge.Flags().BoolVar(&keepMeta, "keep-meta", false, "Keep the route binding; mirroring continues live, no new backfill")
+	purge.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation")
+	hist.AddCommand(purge)
+	return hist
+}
+```
+
+(`deps.DDB` is whatever DynamoDB client `SlackCmdDeps` already carries for `adopt`'s `SlackChannelStore`; if it holds only a store, add a `DDB *dynamodb.Client` field populated in `buildSlackCmdDeps`. `isTerminal` exists for the H1 token prompt; reuse it.)
+
+```go
+func resolvePurgeTargets(ctx context.Context, store slackbridge.HistoryStore, lister SlackRouteChannelLister, arg, alias string, all bool) ([]historyPurgeTarget, error) {
+	given := 0
+	for _, b := range []bool{arg != "", alias != "", all} {
+		if b {
+			given++
+		}
+	}
+	if given != 1 {
+		return nil, fmt.Errorf("km slack history purge: give exactly one of <#name|C…>, --alias, or --all")
+	}
+	metas, err := store.ListMeta(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("km slack history purge: list mirrored channels: %w", err)
+	}
+	var out []historyPurgeTarget
+	switch {
+	case all:
+		for _, m := range metas {
+			out = append(out, historyPurgeTarget{channelID: m.Channel, name: m.Name, alias: m.Route.Alias})
+		}
+	case alias != "":
+		for _, m := range metas {
+			if m.Route.Alias == alias {
+				out = append(out, historyPurgeTarget{channelID: m.Channel, name: m.Name, alias: m.Route.Alias})
+			}
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("km slack history purge: no mirrored channel is bound to alias %q", alias)
+		}
+	default:
+		id := arg
+		if strings.HasPrefix(arg, "#") {
+			if lister == nil {
+				return nil, fmt.Errorf("km slack history purge: a #name needs the Slack bot token to resolve")
+			}
+			chans, err := lister.ListBotChannels(ctx)
+			if err != nil {
+				return nil, err
+			}
+			id = ""
+			for _, c := range chans {
+				if c.Name == strings.TrimPrefix(arg, "#") {
+					id = c.ID
+				}
+			}
+			if id == "" {
+				return nil, fmt.Errorf("km slack history purge: no channel named %s among the bot's channels: %s", arg, botChannelNames(chans))
+			}
+		}
+		for _, m := range metas {
+			if m.Channel == id {
+				out = append(out, historyPurgeTarget{channelID: m.Channel, name: m.Name, alias: m.Route.Alias})
+			}
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("km slack history purge: channel %s is not mirrored (no meta row)", id)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].channelID < out[j].channelID })
+	return out, nil
+}
+
+func runSlackHistoryPurge(ctx context.Context, store slackbridge.HistoryStore, targets []historyPurgeTarget, keepMeta bool, out io.Writer) error {
+	total := 0
+	for _, t := range targets {
+		var kept *slackbridge.ChannelMeta
+		if keepMeta {
+			kept, _ = store.GetMeta(ctx, t.channelID)
+		}
+		n, err := store.PurgeChannel(ctx, t.channelID)
+		if err != nil {
+			return fmt.Errorf("km slack history purge: #%s (%s): %w", t.name, t.channelID, err)
+		}
+		total += n
+		state := "meta removed"
+		if kept != nil {
+			kept.BackfillState, kept.BackfillWritten, kept.BackfillCursor = "off", 0, ""
+			if err := store.PutMeta(ctx, *kept); err != nil {
+				return fmt.Errorf("km slack history purge: #%s: rewrite meta: %w", t.name, err)
+			}
+			state = "meta kept (mirroring continues live, no backfill)"
+		}
+		fmt.Fprintf(out, "#%s (%s, alias %s): %d row(s) purged, %s
+", t.name, t.channelID, t.alias, n, state)
+	}
+	fmt.Fprintf(out, "%d channel(s), %d row(s) purged
+", len(targets), total)
+	return nil
+}
+```
+
+- [ ] **Step 4: Run tests**
+
+Run: `cd internal/app/cmd && go test -run 'PurgeTargets|SlackHistoryPurge|Slack' .`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/app/cmd/slack_history_purge.go internal/app/cmd/slack_history_purge_test.go internal/app/cmd/slack.go
+git commit -m "feat(slack): km slack history purge — operator-only removal of a channel's mirrored rows
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01WiMBVL8Bp4oSYyRukJfVSt"
+```
+
+---
+
 ### Task 15: Docs, skill, plugin version, CLAUDE.md, highlights
 
 **Files:**
@@ -2851,7 +3199,10 @@ Cover, in this order and with the spec as source: the YAML (spec §3), resolutio
 | `backfill=rate_limited` for a long time | Slack's 1/min limit shared with every other read | wait; it resumes with `Retry-After` |
 | `backfill=capped` | `max_messages` hit before the window | raise `max_messages` (≤1000) or accept |
 | rows older than `retention` still present | DynamoDB TTL deletes lazily (≤48 h) | nothing; doctor reports the count |
-| `503 rate_limited` from `km-slack history` | live read under the 1/min limit | retry after the printed delay, or add `mirror: true` |
+| `503 rate_limited` from `km-slack history` | Slack throttled the live read | retry after the printed delay, add `mirror: true`, or lower `slack.history_rate` |
+| backfill is slow | `slack.history_rate` set to the strict regime (15 / 60) | raise it if Slack is not actually throttling you (one probe: `conversations.history` with `limit=200` from the bot token) |
+
+Also document `slack.history_rate` (defaults 200 / 2, when to set 15 / 60, `Retry-After` overrides) and `km slack history purge` (targets, `--keep-meta`, operator-only) in the same section, and add the purge verb to the `km slack` list in CLAUDE.md's CLI section.
 
 Verb table row:
 
@@ -2942,6 +3293,7 @@ Then walk spec §11 steps 1–10 on the default install, recording each as GO/NO
 
 ## Self-review notes (plan author)
 
-- **Spec coverage:** §3 → T1/T3; §4 → T2/T3/T7/T13; §5.1 → T5/T6; §5.2 → T7; §5.3 → T8/T9; §5.4 → T5 guard; §6.1 → T11; §6.2 → T10; §6.3 → T12; §7 → T15; §8 → T14; §9 → tests in each task; §10 → T5/T9/T13/T16; §11 → T16; Phase 91 fold-in → T4.
+- **Spec coverage:** §3 → T1/T3 (incl. `history_rate`); §4 → T2/T3/T7/T13; §5.1 → T5/T6; §5.2 → T7; §5.3 → T8/T9 (pacing from env); §5.4 → T5 guard; §6.1 → T11; §6.2 → T10; §6.3 → T12; §6.4 → T14b; §7 → T15; §8 → T14; §9 → tests in each task; §10 → T5/T9/T13/T16; §11 → T16 (incl. purge step); Phase 91 fold-in → T4.
+- **Pacing defaults (2026-10-24):** 200 per page, 2 s between steps, from Slack's documented Tier 3 posture. The earlier 15 / 60 figure was a recalled 2025 non-Marketplace restriction the current docs do not show; it is now the operator's choice via `slack.history_rate`, and `Retry-After` governs regardless.
 - **Shared names to keep consistent across tasks:** `RouteHistory` (wire) vs `SlackRouteHistory` (config); `HistoryStore`/`DDBHistoryStore`/`ChannelMeta`/`HistoryMessageRow`; `PatternRoute`/`PatternEntry`/`RouteFromPattern`; `BackfillJob`/`BackfillEnqueuer`/`SQSBackfillQueue`/`HistoryReader`/`BackfillStep`; `ChannelInfoFetcher`/`SlackChannelInfoAdapter`; `slack.HistoryMessage`; `ActionHistory`/`ActionSlackHistory`; `HistoryOwnChannelMax`; env `KM_SLACK_HISTORY_TABLE`/`KM_SLACK_HISTORY_QUEUE_URL`; `InboundQueueBody.HistoryQuery`.
 - **Known judgement calls recorded here so an executor does not re-decide them:** backfill queue lives inside the bridge module (no new live unit, count-gated); the one Lambda sniffs `"Records"` to dispatch; system subtypes (`channel_join` etc.) are not stored; `--thread` is always live; a `conversations.info` failure on join is logged and skipped, never fatal.

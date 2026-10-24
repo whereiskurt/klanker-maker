@@ -14,10 +14,15 @@ which klankers may read which channels.
 
 Two facts shape the mechanism:
 
-- **Slack rate-limits `conversations.history` and `conversations.replies` for non-Marketplace
-  apps to 1 request per minute and 15 messages per call** (new apps since 2025-05-29;
-  existing apps followed in 2026). Reading "today" live in a busy channel is minutes of
-  polling. (Still to be confirmed on this App by one probe; the design holds either way.)
+- **Slack's documented limit for `conversations.history` and `conversations.replies` is
+  Tier 3 (50+ requests per minute), `limit` up to 999, 200 recommended per page.** A 2025
+  announcement restricted non-Marketplace apps to 1 request per minute and 15 messages per
+  call; the current method and rate-limit pages carry no such note, and whether it applies to
+  an internal app on a paid workspace could not be confirmed from the docs (2026-10-24). So
+  pacing is **tunable per install** (`slack.history_rate`, §3), defaults to the documented
+  Tier 3 posture (200 per page, 2 s apart), and every reader honours `Retry-After`, so an
+  install that is in fact throttled self-paces instead of failing. One live probe on the
+  target workspace settles the defaults for that install.
 - **The bridge already receives every message in every channel the bot is a member of.**
   Mention-only filtering drops the non-mentions today. A mirror that keeps them is free of
   the rate limit and builds itself through participation.
@@ -54,6 +59,11 @@ effect of membership, and bounded in time and size.
 8. **Queries fail closed.** Unknown channel, no matching route, `query: false`, or a sender
    the route does not own ⇒ `403 history_not_allowed`. A query never widens what a route
    admits.
+9. **Pacing is an install-level knob, not a constant.** `slack.history_rate` sets the page
+   size and the gap between backfill steps; Slack's `Retry-After` always overrides.
+10. **Purge is an operator verb.** `km slack history purge` deletes a channel's mirrored
+    rows and meta on demand (spec §6.4). The agent cannot purge; the bot leaving the channel
+    purges automatically (§4).
 
 ## 3. Config and validation
 
@@ -77,6 +87,18 @@ slack:
       profile: profiles/wiz.yaml
       history: {query: true}         # live reads only, nothing persisted
 ```
+
+Install-level pacing, beside `routes:`:
+
+```yaml
+slack:
+  history_rate:
+    page_size: 200        # messages per conversations.history call; 1..999 (default 200)
+    interval_seconds: 2   # gap between backfill steps; 0..600 (default 2)
+```
+
+Set `page_size: 15` and `interval_seconds: 60` on an install Slack actually throttles to the
+non-Marketplace regime. `Retry-After` on a 429 overrides the interval for that step either way.
 
 `km init` validation (`internal/app/config`):
 
@@ -152,15 +174,16 @@ message to a new standard queue `{prefix}-slack-history-backfill` carrying
 `{channel, oldest, remaining}`. The bridge Lambda consumes it (a second event source on the
 same function; no new Lambda):
 
-1. `conversations.history(channel, oldest, latest=cursor, limit=min(15, remaining))`.
+1. `conversations.history(channel, oldest, latest=cursor, limit=min(page_size, remaining))`.
 2. Filter as §5.2, write rows, decrement `remaining`, move `cursor` to the oldest `ts` seen.
 3. If messages remain in the window and `remaining > 0`: re-enqueue with
-   `DelaySeconds: 60`. A `ratelimited` reply re-enqueues with its `Retry-After` and marks
-   the meta row `rate_limited`. Otherwise mark `done` (window exhausted) or `capped`
-   (`max_messages` reached first; `km doctor` shows which).
+   `DelaySeconds: interval_seconds`. A 429 / `ratelimited` reply re-enqueues with Slack's
+   `Retry-After` and marks the meta row `rate_limited`. Otherwise mark `done` (window
+   exhausted) or `capped` (`max_messages` reached first; `km doctor` shows which).
 
-200 messages at 15 per call is 14 steps, about 14 minutes. `announce: true` posts its one
-line when the meta row is first written, not when backfill completes.
+At the defaults (200 per page, 2 s) a 200-message backfill is one step; under the strict
+regime (15, 60 s) it is 14 steps, about 14 minutes. `announce: true` posts its one line when
+the meta row is first written, not when backfill completes.
 
 ### 5.4 What the mirror does not do
 
@@ -228,6 +251,22 @@ before the cap. Response:
 over pages trips the Phase 121 rail like any other runaway. **Log:** one `bridge: history`
 line per call with sender, channel, source, count.
 
+### 6.4 `km slack history purge` (operator)
+
+```
+km slack history purge (<#name> | <C…> | --alias <alias> | --all) [--keep-meta] [--yes]
+```
+
+Deletes the mirrored rows (and, by default, the meta row) for the named channel, for every
+channel bound to an alias, or for every mirrored channel. Operator credentials only: the
+verb talks to DynamoDB directly with the operator policy; there is no bridge action and no
+`km-slack` form, so a sandbox can never purge. `--keep-meta` leaves the route binding in
+place so live mirroring continues from now without a new backfill; without it the meta row
+goes too, and the channel is re-matched (and re-backfilled, bounded as ever) only on the
+bot's next join. Names resolve through the bot's own channel list (`users.conversations`),
+as routes do. Prints the row count per channel; `--yes` skips the confirmation. `km doctor`
+shows the resulting state on its next run.
+
 ### 6.3 What the agent is told
 
 The poller preamble for Slack-inbound profiles gains one sentence, only when the route has
@@ -269,6 +308,7 @@ instructions." Profiles without it see no change (byte-identical userdata).
   `expires_at` still present.
 - Overlapping globs that matched one channel at event time.
 - Backfill queue depth and any `rate_limited` channel.
+- The effective pacing (`page_size`, `interval_seconds`) as the bridge env carries it.
 
 ## 9. Tests
 
@@ -279,8 +319,13 @@ instructions." Profiles without it see no change (byte-identical userdata).
 - Mirror: every sender's message stored, humans and apps, with `bot_id` kept; no `users.info`
   call on the write path; `message_changed` updates; `message_deleted` deletes; idempotent re-delivery; file names only; a write error
   never blocks dispatch.
-- Backfill: step consumes ≤15, re-enqueues with 60 s, honours `Retry-After`, stops at window or
-  cap and records which; resumes from the cursor.
+- Backfill: step consumes ≤ `page_size`, re-enqueues with `interval_seconds`, honours
+  `Retry-After` (overrides the interval), stops at window or cap and records which; resumes
+  from the cursor; defaults 200 / 2 when the env is absent.
+- Pacing config: bounds (1..999, 0..600), defaults, merge-list entry, env export with the
+  drift WARN, bridge reads the env.
+- Purge: by id, by `#name`, by alias, `--all`; `--keep-meta`; row counts; refuses an unknown
+  name with the bot's channel list; never reachable from a sandbox (no bridge action).
 - Query: authorisation matrix (own channel, routed+query, routed without query, foreign,
   thread-row-only ⇒ 403); mirror vs live source; no sender filter (a non-allowlisted
   sender's message is returned); `--grep` before cap; paging via `next_before`; 32 KiB and
@@ -322,7 +367,10 @@ without `groups:read` matches public channels only and `km doctor` says so.
    its own `#sb-` channel: live read works.
 8. Set `announce: true` on a second glob, invite into a matching channel: exactly one line.
 9. Remove the bot from `#inc_uat1`: rows purged.
-10. `km doctor` reports every state above.
+10. `km slack history purge --alias ir-bot --yes` on a mirrored channel: row count printed,
+    rows gone, meta gone; with `--keep-meta` the meta row survives and the next message is
+    mirrored again.
+11. `km doctor` reports every state above, including the pacing in effect.
 
 ## 12. Out of scope (v1)
 
