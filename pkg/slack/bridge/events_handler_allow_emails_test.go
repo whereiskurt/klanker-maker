@@ -190,7 +190,7 @@ func TestAllowEmails_Route_ColdCreate_KeepsRouteList(t *testing.T) {
 	}
 }
 
-func TestAllowEmails_StrictRoutedContext_TrustsOnlyRowList(t *testing.T) {
+func TestAllowEmails_StrictRoutedContext_CarriesEveryHumanReply(t *testing.T) {
 	now := time.Now()
 	f := false
 	h, sqs, threads, alias, _ := overrideRoutedHandler(t, now, []string{"kurt@example.com"})
@@ -209,11 +209,11 @@ func TestAllowEmails_StrictRoutedContext_TrustsOnlyRowList(t *testing.T) {
 	json.Unmarshal([]byte(sqs.sends[0].body), &body)
 	// 2026-10-24: membership is the permission; the allowlist gates who may start a turn, not what context the bot reads.
 	if body.ThreadContext == nil || len(body.ThreadContext.Messages) != 2 {
-		t.Fatalf("routed context must trust only the row list: %+v", body.ThreadContext)
+		t.Fatalf("routed strict context must carry every human reply, listed or not: %+v", body.ThreadContext)
 	}
 }
 
-func TestAllowEmails_StrictMappedContext_TrustsOnlyRowList(t *testing.T) {
+func TestAllowEmails_StrictMappedContext_CarriesEveryHumanReply(t *testing.T) {
 	now := time.Now()
 	f := false
 	h, sqs, threads, sandboxes, _, _, _ := ownedEmailHandler(t, now, []string{"kurt@example.com"})
@@ -232,7 +232,7 @@ func TestAllowEmails_StrictMappedContext_TrustsOnlyRowList(t *testing.T) {
 	json.Unmarshal([]byte(sqs.sends[0].body), &body)
 	// 2026-10-24: membership is the permission; the allowlist gates who may start a turn, not what context the bot reads.
 	if body.ThreadContext == nil || len(body.ThreadContext.Messages) != 2 {
-		t.Fatalf("mapped context must trust only the row list: %+v", body.ThreadContext)
+		t.Fatalf("mapped strict context must carry every human reply, listed or not: %+v", body.ThreadContext)
 	}
 }
 

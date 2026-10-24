@@ -91,7 +91,7 @@ func TestStrictMode_EngagedThread_Matrix(t *testing.T) {
 	}
 }
 
-func TestStrictMode_ContextRespectsAllowlist(t *testing.T) {
+func TestStrictMode_ContextCarriesUnlistedAuthors(t *testing.T) {
 	now := time.Now()
 	f := false
 	h, sqs, threads, _, sandboxes, _, _ := newHandler(now)
@@ -111,7 +111,7 @@ func TestStrictMode_ContextRespectsAllowlist(t *testing.T) {
 	json.Unmarshal([]byte(sqs.sends[0].body), &body)
 	// 2026-10-24: membership is the permission; the allowlist gates who may start a turn, not what context the bot reads.
 	if body.ThreadContext == nil || len(body.ThreadContext.Messages) != 2 {
-		t.Fatalf("context %+v", body.ThreadContext)
+		t.Fatalf("context must carry the unlisted author's reply too (the allowlist gates turns, not reads): %+v", body.ThreadContext)
 	}
 }
 
@@ -385,7 +385,7 @@ func (c *countingEmails) SenderEmail(ctx context.Context, u string) (string, err
 
 // F5 (superseded 2026-10-24): the context carries every human reply, so no
 // per-author email lookup runs at all for context authors.
-func TestStrictMode_ContextTrustMemoisedPerAuthor(t *testing.T) {
+func TestStrictMode_ContextAuthorsNeverLookedUp(t *testing.T) {
 	now := time.Now()
 	f := false
 	h, sqs, threads, alias, _, _, emails := routedHandler(t, now)

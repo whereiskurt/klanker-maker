@@ -294,7 +294,7 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		}
 		h.onMemberJoined(ctx, msg)
 		return EventsResponse{StatusCode: 200, Body: "ok"}
-	case "channel_left", "group_left", "channel_deleted":
+	case "channel_left", "group_left", "channel_deleted", "group_deleted":
 		if h.seenEvent(ctx, env.EventID) {
 			return EventsResponse{StatusCode: 200, Body: "ok"}
 		}
@@ -1087,9 +1087,9 @@ func (h *EventsHandler) senderAllowedForSandbox(ctx context.Context, route *Defa
 	return false
 }
 
-// senderEmailAllowed decides without logging (the strict-context trust
-// predicate calls it once per author). source names the list that decided:
-// "sandbox", "route", or "" when no list applies.
+// senderEmailAllowed decides without logging; senderAllowedForSandbox wraps it
+// with the drop log line. source names the list that decided: "sandbox",
+// "route", or "" when no list applies.
 func (h *EventsHandler) senderEmailAllowed(ctx context.Context, route *DefaultRoute, info SandboxRoutingInfo, userID string, gate emailGate) (bool, string) {
 	var allows func(string) bool
 	var source string

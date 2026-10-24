@@ -239,10 +239,6 @@ func TestHandleHistory_Refusals(t *testing.T) {
 		{"alias not found", func(f *histFixture) {
 			f.route("CINC", "ghost", &RouteHistory{Query: true})
 		}},
-		{"alias resolver error", func(f *histFixture) {
-			f.route("CINC", "ir", &RouteHistory{Query: true})
-			f.h.AliasResolver = &errAliasResolver{}
-		}},
 		{"route without history block", func(f *histFixture) { f.route("CINC", "ir", nil) }},
 		{"history without query", func(f *histFixture) { f.route("CINC", "ir", &RouteHistory{Mirror: true, MaxMessages: 10}) }},
 		{"thread row names sender but no route", func(f *histFixture) {
@@ -268,6 +264,35 @@ type errAliasResolver struct{}
 
 func (*errAliasResolver) ResolveAlias(context.Context, string) (SandboxRoutingInfo, bool, error) {
 	return SandboxRoutingInfo{SandboxID: "sb-abc123"}, true, fmt.Errorf("ddb down")
+}
+
+// An alias lookup ERROR is a transient failure, answered 503 (retryable), not a
+// 403 refusal; not-found and a different box stay 403 (TestHandleHistory_Refusals).
+func TestHandleHistory_AliasResolverErrorIs503(t *testing.T) {
+	f := newHistFixture()
+	f.route("CINC", "ir", &RouteHistory{Query: true})
+	f.h.AliasResolver = &errAliasResolver{}
+	resp := f.h.handleHistory(context.Background(), historyEnv("sb-abc123", "CINC"))
+	if resp.StatusCode != 503 || !strings.Contains(resp.Body, "history_unavailable") {
+		t.Fatalf("got %d %s", resp.StatusCode, resp.Body)
+	}
+	f.noReads(t)
+}
+
+func TestHandleHistory_ChannelLookupErrorIs500(t *testing.T) {
+	f := newHistFixture()
+	f.h.Channels = &errHistChannels{}
+	resp := f.h.handleHistory(context.Background(), historyEnv("sb-abc123", "CINC"))
+	if resp.StatusCode != 500 || !strings.Contains(resp.Body, "channel_lookup_failed") {
+		t.Fatalf("got %d %s", resp.StatusCode, resp.Body)
+	}
+	f.noReads(t)
+}
+
+type errHistChannels struct{}
+
+func (errHistChannels) OwnedChannel(context.Context, string) (string, error) {
+	return "", fmt.Errorf("ddb down")
 }
 
 func TestHandleHistory_NilAliasResolverIs503(t *testing.T) {

@@ -172,7 +172,7 @@ func TestSlackManifest_HistoryEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	for _, want := range []string{`"member_joined_channel"`, `"channel_left"`, `"group_left"`, `"channel_deleted"`, `"groups:read"`, `"channels:read"`} {
+	for _, want := range []string{`"member_joined_channel"`, `"channel_left"`, `"group_left"`, `"channel_deleted"`, `"group_deleted"`, `"groups:read"`, `"channels:read"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("manifest lacks %s", want)
 		}

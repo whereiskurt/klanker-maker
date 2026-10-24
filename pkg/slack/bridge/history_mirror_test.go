@@ -356,11 +356,17 @@ func TestRouteForChannel_OneGetMetaPerMessage(t *testing.T) {
 func TestLeave_PurgesChannel(t *testing.T) {
 	now := time.Now()
 	h, st, _, _ := joinHandler(t, now, week)
-	for i, typ := range []string{"channel_left", "group_left", "channel_deleted"} {
+	types := []string{"channel_left", "group_left", "channel_deleted", "group_deleted"}
+	for i, typ := range types {
 		h.Handle(context.Background(), rawEventReq(t, now, map[string]any{"type": typ, "channel": "C7"}, fmt.Sprintf("L%d", i)))
 	}
-	if len(st.purges) != 3 || st.purges[0] != "C7" || st.purges[1] != "C7" || st.purges[2] != "C7" {
-		t.Fatalf("purges: %v", st.purges)
+	if len(st.purges) != len(types) {
+		t.Fatalf("purges: %v; want one per %v", st.purges, types)
+	}
+	for _, p := range st.purges {
+		if p != "C7" {
+			t.Fatalf("purges: %v", st.purges)
+		}
 	}
 }
 

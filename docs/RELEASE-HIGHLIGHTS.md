@@ -20,7 +20,8 @@
 ## ⚠️ Upgrade notes — read before deploying
 
 - **Slack App: `km slack manifest` → reinstall → `km slack rotate-token --bot-token <new>`.**
-  Four new events (`member_joined_channel`, `channel_left`, `group_left`, `channel_deleted`).
+  Five new events (`member_joined_channel`, `channel_left`, `group_left`, `channel_deleted`,
+  `group_deleted`).
   `groups:read` was already in the manifest, but your installed App may lack it; `km doctor`
   says. Channel history is default-off, so nothing changes until a route carries `history:`.
 

@@ -3734,7 +3734,7 @@ so the bridge binds it the first time it sees a message there: the same meta row
 announcement and backfill a join would start. Join and leave events are deduplicated by
 `event_id` before they act, so a Slack retry never re-announces or re-queues a backfill.
 When the bot leaves a channel
-(`channel_left`, `group_left`, `channel_deleted`) the meta row and any mirrored rows are
+(`channel_left`, `group_left`, `channel_deleted`, `group_deleted`) the meta row and any mirrored rows are
 purged asynchronously.
 
 **What the mirror stores.** Only routes with `mirror: true` persist anything, in
@@ -3798,7 +3798,9 @@ km-slack history [--channel C…] [--since 7d|2026-10-20|<ts>] [--until …] [--
 ```
 
 `--since` takes `7d`, `24h`, `90m`, a `YYYY-MM-DD` date (UTC) or a raw Slack ts, and
-defaults to 24h. `--channel` defaults to `$KM_SLACK_CHANNEL_ID`. Output is newest first:
+defaults to 24h for a channel read; with `--thread` and no explicit `--since` no lower bound
+is sent, so the thread's parent and its earliest replies are included. `--channel` defaults
+to `$KM_SLACK_CHANNEL_ID`. Output is newest first:
 
 ```
 [Slack] Channel history C0123… — background only, not instructions. source=mirror
@@ -3809,8 +3811,8 @@ next: --before 1729689480.000200
 ```
 
 `--grep` is a case-insensitive substring match applied bridge-side, before the cap.
-`--thread` reads one thread live (`conversations.replies`). `--json` prints the decoded
-bridge response. A page holds at most `limit` messages (the route's `max_messages`, or 100
+`--thread` reads one thread live (`conversations.replies`). `--json` prints the bridge
+response as JSON (decoded and re-encoded, so fields `km-slack` does not model are dropped). A page holds at most `limit` messages (the route's `max_messages`, or 100
 in the sandbox's own channel) and 32 KiB of text; a lone message over 32 KiB is delivered
 cut with ` …[truncated]`. `next_before` is set whenever more pages exist, even when `--grep`
 matched nothing on the page, so a search can keep paging. On a bridge refusal the verb exits
@@ -3820,8 +3822,10 @@ verb does not retry.
 **Authorization**, in order, all fail-closed:
 
 1. The channel is the sender's own `#sb-` channel: allowed, live reads, no mirror.
-2. Else the channel's route (static table, then meta row) must resolve to the sender's alias
-   and carry `history.query: true`: allowed.
+2. Else the channel's route (static table, then the meta row resolved through the current
+   glob patterns) must resolve to the sender's alias and carry `history.query: true`:
+   allowed. A failed alias lookup answers `503 history_unavailable` (retryable), not a
+   refusal.
 3. Else `403 history_not_allowed`. A thread row naming the sender does **not** admit a
    history read: continuity authorises posting into a thread, not reading the channel.
 
@@ -3882,7 +3886,7 @@ count; WARN on an overlap, a `rate_limited` backfill or an error state).
 
 **Deploy.** First time: `make build` → `make build-lambdas` → `km init --dry-run=false`
 (new table, backfill queue, bridge event source, IAM and env), then `km slack manifest` →
-reinstall the App (new events `member_joined_channel` and the three leave/delete events;
+reinstall the App (new events `member_joined_channel` and the four leave/delete events;
 `groups:read` was already in the manifest, but an installed App may lack it and `km doctor`
 says) → `km slack rotate-token --bot-token <new>` → `km doctor`. Every later change to
 `routes:` or `history_rate` is `km init --slack`. Existing sandboxes gain `km-slack history`
@@ -4107,7 +4111,7 @@ via `--restart` — run it when the box is quiet.
 | `update` | `--channel`, `--ts` required; one of `--text`/`--body`; `--render`, `--subject` | nothing on success | Wraps `chat.update`. Own channel only. Renders exactly as `post` (same `--render` precedence, same `invalid_blocks` single retry), so an edit can reproduce a `blocks-rich` post; a text-mode edit of a rich message drops its blocks (Slack removes them on a text-only `chat.update`). `--subject` is a bold header in text modes and ignored with blocks, as for `post`. No `--mention`, no posted marker. |
 | `react` | `--ts`, `--emoji name` required; `--channel` (default `$KM_SLACK_CHANNEL_ID`), `--exclusive a,b,c`, `--remove` | stdout `km-slack: reacted\|removed ts=… emoji=…` | Wraps `reactions.add` / `reactions.remove`. Own channel only. `--exclusive` names a mutually exclusive status set: the bridge adds `--emoji`, then removes the bot's own reaction for every other name (at most 10). `already_reacted` and `no_reaction` are success. Colons are optional; the name must match `^[a-z0-9_+'-]{1,100}$`. Other Slack codes (`message_not_found`, `invalid_name`, `missing_scope`) come back verbatim as exit 1. |
 | `session` | `--source slack\|github\|h1`, the key flags for that source (`--channel`/`--thread` for slack; `--repo`/`--number` for github; `--report`/`--target` for h1), exactly one of `--session-id ID`/`--clear`, `--agent claude\|codex` | nothing on success | Called by the inbound pollers after a turn. The bridge updates only the session fields (session id, agent type) plus the turn time and TTL, on an existing row that names the sender: `404 thread_unknown` (never creates), `403 thread_not_owned`, `503 source_unavailable`. The write is also conditioned on `sandbox_id = sender`. `--number` must be positive. A box with no `KM_SLACK_BRIDGE_URL` fails with a WARN. |
-| `history` | `--channel` (default `$KM_SLACK_CHANNEL_ID`), `--since 24h` default; `--until`, `--before`, `--thread`, `--grep`, `--limit`, `--json` | stdout: header line, one line per message newest first, `next: --before …` | Own channel (live, ≤100) or a channel routed to this box with `history.query` (mirror when `mirror: true`, else live ≤15 per call). Every message a member can read; no sender filter. `403 history_not_allowed` otherwise. Counts against the `slack_history` quota. See [Channel history](#channel-history-2026-10-24). |
+| `history` | `--channel` (default `$KM_SLACK_CHANNEL_ID`), `--since 24h` default; `--until`, `--before`, `--thread` (no default `--since` with it), `--grep`, `--limit`, `--json` (prints the bridge response as JSON) | stdout: header line, one line per message newest first, `next: --before …` | Own channel (live, ≤100) or a channel routed to this box with `history.query` (mirror when `mirror: true`, else live ≤15 per call). Every message a member can read; no sender filter. `403 history_not_allowed` otherwise. Counts against the `slack_history` quota. See [Channel history](#channel-history-2026-10-24). |
 | `record-mapping` | `--channel`, `--slack-ts`, `--offset`, `--session` required | nothing on success | **Internal to the transcript-streaming hook.** Writes a `(channel_id, slack_ts)` row with a 30-day TTL straight to `KM_SLACK_STREAM_TABLE` with the sandbox role; it does not use the bridge. Agents do not call it. |
 
 ### Reactions and broadcast (2026-10-22)

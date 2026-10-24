@@ -34,6 +34,7 @@ func (h *Handler) handleHistory(ctx context.Context, env slack.SlackEnvelope) *R
 	}
 	owned, err := h.Channels.OwnedChannel(ctx, env.SenderID)
 	if err != nil {
+		logger.ErrorContext(ctx, "bridge: channel_lookup_failed", "step", "history", "sender_id", env.SenderID, "channel", env.Channel, "err", err, "status", 500)
 		return errResp(500, "channel_lookup_failed")
 	}
 	var route *DefaultRoute
@@ -48,7 +49,12 @@ func (h *Handler) handleHistory(ctx context.Context, env slack.SlackEnvelope) *R
 			return errResp(503, "history_unavailable")
 		}
 		info, found, rerr := h.AliasResolver.ResolveAlias(ctx, route.Alias)
-		if rerr != nil || !found || info.SandboxID != env.SenderID {
+		if rerr != nil {
+			// A lookup failure is not a "no": answer retryably, never as a refusal.
+			logger.ErrorContext(ctx, "bridge: history_unavailable", "step", "history", "sender_id", env.SenderID, "channel", env.Channel, "alias", route.Alias, "reason", "alias lookup failed", "err", rerr, "status", 503)
+			return errResp(503, "history_unavailable")
+		}
+		if !found || info.SandboxID != env.SenderID {
 			logger.WarnContext(ctx, "bridge: history_not_allowed", "step", "history", "sender_id", env.SenderID, "channel", env.Channel, "alias", route.Alias, "reason", "sender is not the route's box", "status", 403)
 			return errResp(403, "history_not_allowed")
 		}

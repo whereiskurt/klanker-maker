@@ -50,7 +50,8 @@
         "member_joined_channel",
         "channel_left",
         "group_left",
-        "channel_deleted"
+        "channel_deleted",
+        "group_deleted"
       ]
     },
     "org_deploy_enabled": false,
