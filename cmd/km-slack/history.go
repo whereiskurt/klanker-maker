@@ -78,23 +78,10 @@ func formatHistoryLine(m slack.HistoryMessage) string {
 // newest first. Exit 2 is a usage error (checked before any key or network),
 // exit 1 a bridge refusal with its code on stderr. The verb never retries.
 func runHistory(args []string, stderr io.Writer) int {
-	fs := flag.NewFlagSet("history", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	var (
-		channel = fs.String("channel", "", "Slack channel ID (C...); default $KM_SLACK_CHANNEL_ID")
-		since   = fs.String("since", "24h", "Oldest message: 7d, 24h, 90m, YYYY-MM-DD (UTC), or a Slack ts")
-		until   = fs.String("until", "", "Newest message, same forms as --since")
-		before  = fs.String("before", "", "Page older: only messages strictly older than this ts")
-		thread  = fs.String("thread", "", "Read this thread (parent ts) instead of the channel")
-		grep    = fs.String("grep", "", "Case-insensitive substring filter, applied before the cap")
-		limit   = fs.Int("limit", 0, "Max messages (0 = the bridge's cap)")
-		asJSON  = fs.Bool("json", false, "Print the bridge response body verbatim")
-	)
-	if err := fs.Parse(args); err != nil {
+	o, ok := parseHistoryArgs(args, stderr)
+	if !ok {
 		return 2
 	}
-	o := historyOptions{channel: *channel, since: *since, until: *until, before: *before,
-		thread: *thread, grep: *grep, limit: *limit, json: *asJSON}
 	if o.channel == "" {
 		o.channel = os.Getenv("KM_SLACK_CHANNEL_ID")
 	}
@@ -145,6 +132,39 @@ func runHistory(args []string, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// parseHistoryArgs parses the flags. --since defaults to 24h for a channel
+// read; with --thread and no explicit --since no lower bound is sent, so the
+// thread's parent and its earliest replies are always included.
+func parseHistoryArgs(args []string, stderr io.Writer) (historyOptions, bool) {
+	fs := flag.NewFlagSet("history", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		channel = fs.String("channel", "", "Slack channel ID (C...); default $KM_SLACK_CHANNEL_ID")
+		since   = fs.String("since", "24h", "Oldest message: 7d, 24h, 90m, YYYY-MM-DD (UTC), or a Slack ts (with --thread: no lower bound unless given)")
+		until   = fs.String("until", "", "Newest message, same forms as --since")
+		before  = fs.String("before", "", "Page older: only messages strictly older than this ts")
+		thread  = fs.String("thread", "", "Read this thread (parent ts) instead of the channel")
+		grep    = fs.String("grep", "", "Case-insensitive substring filter, applied before the cap")
+		limit   = fs.Int("limit", 0, "Max messages (0 = the bridge's cap)")
+		asJSON  = fs.Bool("json", false, "Print the bridge response as JSON (re-encoded; fields km-slack does not model are dropped)")
+	)
+	if err := fs.Parse(args); err != nil {
+		return historyOptions{}, false
+	}
+	sinceSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "since" {
+			sinceSet = true
+		}
+	})
+	o := historyOptions{channel: *channel, since: *since, until: *until, before: *before,
+		thread: *thread, grep: *grep, limit: *limit, json: *asJSON}
+	if o.thread != "" && !sinceSet {
+		o.since = ""
+	}
+	return o, true
 }
 
 // runHistoryWith signs one history envelope, POSTs it, and renders the answer.

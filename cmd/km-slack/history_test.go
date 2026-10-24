@@ -122,6 +122,33 @@ func TestRunHistoryWith_ThreadSetsMessageTS(t *testing.T) {
 	}
 }
 
+// With --thread and no explicit --since, no oldest bound is sent: the thread's
+// parent and its earliest replies may be older than the 24h channel default.
+func TestParseHistoryArgs_ThreadDropsDefaultSince(t *testing.T) {
+	var stderr bytes.Buffer
+	o, ok := parseHistoryArgs([]string{"--channel", "C1", "--thread", "1.1"}, &stderr)
+	if !ok || o.since != "" || o.thread != "1.1" {
+		t.Fatalf("thread without --since: %+v ok=%v", o, ok)
+	}
+	o, ok = parseHistoryArgs([]string{"--channel", "C1", "--thread", "1.1", "--since", "7d"}, &stderr)
+	if !ok || o.since != "7d" {
+		t.Fatalf("an explicit --since is kept with --thread: %+v", o)
+	}
+	o, ok = parseHistoryArgs([]string{"--channel", "C1"}, &stderr)
+	if !ok || o.since != "24h" {
+		t.Fatalf("a channel read keeps the 24h default: %+v", o)
+	}
+	_, priv := genKey(t)
+	srv, envs := historyBridge(t, 200, "", historyBody)
+	var out bytes.Buffer
+	if err := runHistoryWith(context.Background(), priv, "sb-test", srv.URL, &out, historyOptions{channel: "C1", thread: "1.1"}); err != nil {
+		t.Fatal(err)
+	}
+	if (*envs)[0].Oldest != "" {
+		t.Errorf("Oldest = %q; a thread read with no --since sends none", (*envs)[0].Oldest)
+	}
+}
+
 func TestRunHistoryWith_RefusalSurfacesCode(t *testing.T) {
 	_, priv := genKey(t)
 	srv, _ := historyBridge(t, 403, "", `{"ok":false,"error":"history_not_allowed"}`)
