@@ -41,10 +41,16 @@ type EventsHandler struct {
 	// ChannelInfo resolves a joined channel id to its name (conversations.info).
 	ChannelInfo ChannelInfoFetcher
 	// Backfill enqueues the history backfill job for a newly matched channel.
-	Backfill    BackfillEnqueuer
-	SQS         SQSSender
-	PauseHinter PauseHintPoster // optional; if nil, paused-hint branch is skipped
-	Logger      *slog.Logger
+	Backfill BackfillEnqueuer
+	// HistoryReader pages conversations.history for the backfill step.
+	HistoryReader HistoryReader
+	// HistoryPageSize / HistoryIntervalSeconds are slack.history_rate; 0 values
+	// fall back to the defaults (see historyPacing).
+	HistoryPageSize        int
+	HistoryIntervalSeconds int
+	SQS                    SQSSender
+	PauseHinter            PauseHintPoster // optional; if nil, paused-hint branch is skipped
+	Logger                 *slog.Logger
 	// Now is injected for tests; defaults to time.Now.
 	Now func() time.Time
 

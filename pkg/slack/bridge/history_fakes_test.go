@@ -116,3 +116,22 @@ func (f *fakeBackfill) Enqueue(_ context.Context, job BackfillJob, delay int32) 
 	f.delays = append(f.delays, delay)
 	return nil
 }
+
+// fakeHistoryReader answers conversations.history from a canned page.
+type fakeHistoryReader struct {
+	msgs  []SlackReplyMessage
+	more  bool
+	err   error
+	calls []struct {
+		Channel, Oldest, Latest string
+		Limit                   int
+	}
+}
+
+func (f *fakeHistoryReader) History(_ context.Context, channel, oldest, latest string, limit int) ([]SlackReplyMessage, bool, error) {
+	f.calls = append(f.calls, struct {
+		Channel, Oldest, Latest string
+		Limit                   int
+	}{channel, oldest, latest, limit})
+	return f.msgs, f.more, f.err
+}
