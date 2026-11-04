@@ -1,4 +1,4 @@
-#### Easy AWS EC2 with strong security controls defined by a `sandbox.yaml`
+#### "Run agents in the cloud" w/ easy AWS EC2 configured with strong security controls defined by a `sandbox.yaml`
 
 # Klanker Maker (`km`)
 Hi! 👋 I'm [KPH](https://www.linkedin.com/in/kurthundeck/) and this project has been useful for me building [defcon.run.34](https://github.com/whereiskurt/defcon.run.34), [klanker-voice](https://github.com/whereiskurt/klanker-voice/) and just learning a tonne about "The Future of Software". I've been interested in [this topic a long time as an extension of 'home virtual labs'](https://github.com/whereiskurt/kvmlab/blob/v1.0/Virtual%20Lab%20Design%20(KVM).png) but for Claude + friends. Take it, and run. Free software. 🙇
