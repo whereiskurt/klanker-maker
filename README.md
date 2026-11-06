@@ -28,6 +28,7 @@ Create an AWS EC2 that you can shell/vscode/web-linux into.
   ./km desktop start desk1 # Connect to a remote linux desktop over SSM
   ./km vscode start desk1  # Connect to a remote vscode server over SSM
   ./km herdr desk1         # Connect to a remote herdr over SSM
+  ./km hermes start desk1  # Run Hermes Agent + WebUI in the background, then: ./km hermes desk1
   ./km shell desk2         # Open a remote shell over SSM
 ```
 
@@ -188,6 +189,7 @@ A sandbox is a **compiled policy object** - the YAML declares the constraints, t
 - **Lifecycle automation** - TTL auto-destroy via EventBridge Scheduler, idle timeout, hibernation (`km pause` preserves RAM), stop/resume, lock/unlock, clone, AMI bake.
 - **AMI snapshot lifecycle** - bake a tuned sandbox into a private AMI on shell exit, reference by slug or ID in profiles, copy across regions, garbage-collect via `km doctor`.
 - **VS Code Remote-SSH** - `km vscode start <sandbox>` opens an SSM port-forward and writes a managed `~/.ssh/config` block; VS Code "Remote-SSH: Connect to Host..." lands directly in `/workspace`. Per-sandbox ed25519 keypairs generated locally, pubkey shipped via userdata. No public IP, no SSH bastion. See [VS Code Remote-SSH](docs/vscode.md).
+- **Hermes Agent + WebUI** - `km hermes start <sandbox>` installs [Hermes Agent](https://github.com/NousResearch/hermes-agent) and [Hermes WebUI](https://github.com/nesquena/hermes-webui) as a pinned release pair and runs the WebUI in the background on the box's loopback. `km hermes <sandbox>` forwards it to `localhost:8788` over SSM with a login password. On Bedrock profiles it uses the instance role (keyless, metered). It keeps the box awake only while a browser is attached or a turn is running. See [Hermes](docs/hermes.md).
 
 ---
 
