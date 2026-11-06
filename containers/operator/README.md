@@ -156,6 +156,8 @@ Every one of those verbs opens an SSM port-forward and tells you to connect to
 | `km herdr start` | 2224 | `--local-port` |
 | `km model start` | 8001 | `--local-port` |
 | `km desktop start` | 8444 | `--local-port` |
+| `km t3` | 3774 | `--local-port` |
+| `km hermes` | 8788 | `--local-port` |
 | `km agent auth --codex` | 1455, 1457 fallback | fixed by codex |
 
 Publish on the **host's loopback only**. `0.0.0.0` inside the container is
