@@ -46,7 +46,19 @@ km hermes stop   <sandbox>   stop the server and keep it stopped across resume
 6. Writes and enables `km-hermes.service` (below), then waits for `/health`.
 
 `start` is idempotent. Re-running it on an up-to-date box changes nothing and
-does not restart the server. The first install takes a few minutes.
+does not restart the server. The first install takes a few minutes, and `start`
+waits up to 20 minutes for it.
+
+- **One `start` at a time.** A second concurrent `start` on the same box (yours
+  or another analyst's) stops with "another km hermes start is running".
+- **No restart over a live turn.** If `/health` shows a run or stream in
+  progress, a provider seed or `--model` change is written but the restart is
+  deferred. `start` says so, and the change applies on the next
+  `km hermes stop && km hermes start`. `--rotate-password` is not written at all
+  while busy, because the running server would reject the new password. Re-run
+  it when the box is idle. An install or upgrade still restarts, because its
+  files have already been replaced.
+- `--model` is set only when it differs from the configured default.
 
 ### `km hermes <sandbox>` (connect)
 
@@ -188,3 +200,11 @@ marked `UAT:` in `internal/app/cmd/hermes.go`:
 - The WebUI dependencies are present in the agent's Python.
 - The `hermes config get/set` key syntax.
 - Telemetry.
+
+Also confirm live:
+
+- `/health` stays unauthenticated once `HERMES_WEBUI_PASSWORD` is set. Signal 10
+  and the start-time readiness wait both depend on it.
+- The field names are still `active_runs` / `active_streams`. If a release
+  renames them, signal 10 can no longer see turns, and only an open tab keeps the
+  box awake.
