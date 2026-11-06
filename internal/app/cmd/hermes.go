@@ -54,18 +54,22 @@ const (
 	hermesStartPollAttempts = 600
 )
 
-// hermesPythonCandidates are where the agent installer's virtualenv may put
-// its interpreter. The WebUI must run under the agent's Python (it imports the
-// agent in-process); python3 is the fallback.
-// UAT: confirm which path install.sh v0.22.4 creates, then drop the other.
-const hermesPythonCandidates = "/home/sandbox/.hermes/hermes-agent/venv/bin/python /home/sandbox/.hermes/hermes-agent/.venv/bin/python"
-
-// hermesPickPython renders the shell that sets P to the agent's interpreter.
-// d is the dollar sign: "$$" inside a systemd ExecStart (systemd expands $VAR
-// itself before bash runs), "$" in a plain script.
-func hermesPickPython(d string) string {
-	return "P=python3; for c in " + hermesPythonCandidates + "; do if [ -x \"" + d + "c\" ]; then P=" + d + "c; break; fi; done"
-}
+// hermesPickPython is the ExecStart shell (systemd-escaped: $$ for $) that
+// sets P to the interpreter bootstrap.py must run under. The WebUI needs
+// Python ≥ 3.10 and imports the agent in-process; AL2023's system python3 is
+// 3.9 and dies on `X | None`, so python3 is never a fallback. Order:
+//  1. hermes-webui/.venv/bin/python — the venv bootstrap.py builds on its
+//     first run (it re-execs into it anyway);
+//  2. the first element of `hermes --print-runtime-command`, the agent's
+//     PM-managed runtime (~/.hermes/tools/python-3.x/bin/python3; agent v0.22
+//     has no venv/). Parsed without quotes, backslashes or %: systemd
+//     unescapes \" and treats % as a specifier inside ExecStart. The JSON
+//     array's first field, stripped to path characters, is the path.
+//  3. otherwise a named line in the log and exit 1.
+//
+// HERMES_WEBUI_PYTHON is deliberately NOT set: bootstrap.py finds the agent
+// dir itself and builds its own venv (live UAT 2026-11-05).
+const hermesPickPython = `W=/home/sandbox/.hermes/hermes-webui; P=; if [ -x "$$W/.venv/bin/python" ]; then P=$$W/.venv/bin/python; else H=$$(command -v hermes || echo /home/sandbox/.local/bin/hermes); P=$$("$$H" --print-runtime-command </dev/null 2>/dev/null | head -n1 | cut -d, -f1 | tr -dc A-Za-z0-9_./+-); fi; if [ -z "$$P" ] || [ ! -x "$$P" ]; then echo "km-hermes: no Python for the WebUI: no $$W/.venv and hermes --print-runtime-command named no runnable interpreter ($$P)" >>"$$L"; exit 1; fi`
 
 // hermesUnitFile is the systemd unit `km hermes start` writes. Every line is
 // load-bearing — see spec §3.2 and the t3 unit (t3UnitFile) it copies:
@@ -86,8 +90,8 @@ func hermesPickPython(d string) string {
 //     run drain plus margin);
 //   - Restart=on-failure, not always, so `km hermes stop` sticks.
 //
-// UAT: confirm bootstrap.py runs under the picked interpreter and that
-// HERMES_WEBUI_PYTHON is the variable it honours.
+// No backslash and no % anywhere in ExecStart (systemd escapes/specifiers);
+// TestHermesUnitFile_LoadBearingLines pins that.
 var hermesUnitFile = `[Unit]
 Description=Hermes WebUI + Agent (km hermes)
 After=network-online.target
@@ -102,7 +106,7 @@ Environment=HERMES_WEBUI_HOST=127.0.0.1
 Environment=HERMES_WEBUI_PORT=8787
 Environment=HERMES_WEBUI_DEFAULT_WORKSPACE=/workspace
 UnsetEnvironment=XDG_RUNTIME_DIR
-ExecStart=/bin/bash -lc 'umask 077; L=/home/sandbox/.hermes/km-hermes.log; mkdir -p /home/sandbox/.hermes; if [ -e "$$L" ] && [ ! -O "$$L" ]; then rm -f "$$L"; fi; touch "$$L" && chmod 600 "$$L"; ` + hermesPickPython("$$") + `; export HERMES_WEBUI_PYTHON="$$P"; cd /home/sandbox/.hermes/hermes-webui && exec "$$P" bootstrap.py --foreground --no-browser --host 127.0.0.1 8787 >>"$$L" 2>&1'
+ExecStart=/bin/bash -lc 'umask 077; L=/home/sandbox/.hermes/km-hermes.log; mkdir -p /home/sandbox/.hermes; if [ -e "$$L" ] && [ ! -O "$$L" ]; then rm -f "$$L"; fi; touch "$$L" && chmod 600 "$$L"; ` + hermesPickPython + `; cd "$$W" && exec "$$P" bootstrap.py --foreground --no-browser --host 127.0.0.1 8787 >>"$$L" 2>&1'
 KillMode=mixed
 TimeoutStopSec=120
 Restart=on-failure
@@ -130,6 +134,8 @@ echo "=== unit active ==="
 systemctl is-active km-hermes.service 2>/dev/null || true
 echo "=== unit enabled ==="
 systemctl is-enabled km-hermes.service 2>/dev/null || true
+echo "=== unit log ==="
+if ! systemctl is-active --quiet km-hermes.service; then runuser -u sandbox -- tail -15 /home/sandbox/.hermes/km-hermes.log 2>/dev/null | ` + hermesRedactSed + ` || true; fi
 echo "=== health ==="
 curl -sS --max-time 3 -w '\n=== health code ===\n%{http_code}\n' http://127.0.0.1:8787/health 2>/dev/null || true
 echo "=== provider ==="
@@ -140,6 +146,10 @@ echo "=== libatomic present ==="
 if has_libatomic; then echo yes; else echo no; fi
 echo "=== presence signal10 ==="
 if grep -aq checkHermesInUse /opt/km/bin/km-presence 2>/dev/null; then echo yes; else echo no; fi`
+
+// hermesRedactSed masks password/token values in a server log tail before it
+// reaches SSM output.
+const hermesRedactSed = `sed -E 's/((PASSWORD|[Pp]assword|token|Token)[=:] ?)[^ ]+/\1REDACTED/g'`
 
 // hermesStopScript disables as well as stops, so a later km resume does not
 // bring the server back. ~/.hermes (memory, skills, sessions) is left alone.
@@ -240,10 +250,9 @@ hermes_ver() {
 # 2. The agent (sandbox user), pinned, from the installer at the pinned TAG on
 # raw.githubusercontent.com — not the vendor's website installer and not the
 # floating stable channel. Tags live on main: resolve the tag's commit and pin
-# the checkout to it. Compared as an exact version so a re-run on an
-# up-to-date box never reinstalls and restarts mid-run.
-# UAT: confirm --branch main --commit <sha> lands exactly on the tag, that
-# install.sh runs under bash -s, and that hermes --version then reports it.
+# the checkout to it (verified live: v0.22.4 → "Hermes Agent v0.22.4"). Compared
+# as an exact version so a re-run on an up-to-date box never reinstalls and
+# restarts mid-run.
 hermes_ver
 if [ "$CUR" != "$KM_HERMES_AGENT_VERSION" ]; then
   echo "installing hermes-agent v$KM_HERMES_AGENT_VERSION"
@@ -301,10 +310,8 @@ mv hermes-webui.km-new hermes-webui
   rm -f "$INSTLOG"
   NEED_RESTART=1
 fi
-# The WebUI's only deps are pyyaml + cryptography, in the agent's Python.
-# UAT: whether the agent env already has both; if not, which installer works
-# there (a uv venv may have no pip) — or HERMES_WEBUI_AUTO_INSTALL=1.
-runuser -u sandbox -- bash -lc '` + hermesPickPython("$") + `; "$P" -c "import yaml, cryptography" 2>/dev/null || "$P" -m pip install -q pyyaml cryptography' >/dev/null 2>&1 9>&- || true
+# The WebUI's deps (pyyaml, cryptography) are bootstrap.py's job: on its first
+# run it builds hermes-webui/.venv from PyPI. Nothing to do here.
 # A run or stream in flight: a restart (KillMode=mixed) would kill it. Config
 # and password changes then wait for the next restart; an install or a unit
 # change still restarts (the files on disk already changed under the server).
@@ -333,9 +340,10 @@ elif [ "$KM_HERMES_ROTATE" = 1 ] || [ ! -s /etc/km/hermes/webui.env ]; then
 fi
 # 5. Provider seeding (sandbox user), only when model.provider is unset —
 # never clobber an operator's choice — and only when the profile routes
-# through Bedrock (execution.useBedrock, block-scoped). The region comes from
-# IMDS as root: under the IMDS fence the sandbox user cannot reach it.
-# UAT: hermes config get/set key syntax and what get prints when unset.
+# through Bedrock (execution.useBedrock, block-scoped). The installer's own
+# config.yaml says provider "auto" (and an Anthropic default model), which
+# counts as unset. The region comes from IMDS as root: under the IMDS fence
+# the sandbox user cannot reach it.
 TOK=$(curl -sS -X PUT --max-time 2 -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null || true)
 REGION=$(curl -sS --max-time 2 -H "X-aws-ec2-metadata-token: $TOK" http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || true)
 case "$REGION" in *[!a-z0-9-]*) REGION="";; esac
@@ -347,7 +355,7 @@ runuser -u sandbox -- env KM_REGION="$REGION" KM_MODEL="$KM_HERMES_MODEL" KM_HBI
 # Every hermes call reads /dev/null, never this heredoc: the script itself is
 # bash's stdin, and a call that reads stdin would swallow the rest of it.
 cur=$("$KM_HBIN" config get model.provider </dev/null 2>/dev/null | head -1 | tr -d '[:space:]')
-case "$cur" in ""|None|none|null|"(notset)"|notset) cur="";; esac
+case "$cur" in ""|auto|Auto|None|none|null|"(notset)"|notset) cur="";; esac
 if [ -z "$cur" ] && awk '` + hermesUseBedrockAwk + `' /opt/km/.km-profile.yaml 2>/dev/null; then
   "$KM_HBIN" config set model.provider bedrock </dev/null >/dev/null 2>&1 && echo "km-seed: provider bedrock"
   "$KM_HBIN" config set model.default "${KM_MODEL:-us.anthropic.claude-sonnet-4-6}" </dev/null >/dev/null 2>&1 && echo "km-seed: model ${KM_MODEL:-us.anthropic.claude-sonnet-4-6}"
@@ -389,13 +397,13 @@ if [ -n "$DEFERRED" ]; then
   for d in $DEFERRED; do echo "$d"; done
 fi
 if [ "$NEED_RESTART" = 1 ]; then systemctl restart km-hermes.service; else systemctl start km-hermes.service; fi
-# 7. Wait for it to answer. The first boot may install the WebUI's deps.
+# 7. Wait for it to answer. The first boot builds the WebUI's venv from PyPI.
 i=0
 until curl -fsS -o /dev/null --max-time 2 http://127.0.0.1:8787/health 2>/dev/null; do
   i=$((i+1))
-  if [ "$i" -ge 60 ]; then
+  if [ "$i" -ge 180 ]; then
     echo "=== not ready ==="
-    runuser -u sandbox -- tail -20 /home/sandbox/.hermes/km-hermes.log 2>/dev/null | sed -E 's/((PASSWORD|[Pp]assword|token|Token)[=:] ?)[^ ]+/\1REDACTED/g'
+    runuser -u sandbox -- tail -20 /home/sandbox/.hermes/km-hermes.log 2>/dev/null | ` + hermesRedactSed + `
     break
   fi
   sleep 1
@@ -410,6 +418,9 @@ type hermesBoxState struct {
 	Version          string
 	WebUITag         string
 	Active           bool
+	ActiveState      string // systemctl is-active: active, activating, failed, inactive…
+	Failing          bool   // the unit is trying to run and crashing (activating/failed)
+	UnitLog          string // redacted log tail, only when the unit is not active
 	Enabled          bool
 	HealthCode       int
 	HealthStatus     string
@@ -442,7 +453,8 @@ func parseHermesStatus(out string) hermesBoxState {
 		Path:             field("=== hermes path ==="),
 		Version:          herdrSemverRe.FindString(sectionOf(out, "=== hermes version ===")),
 		WebUITag:         firstLine(field("=== webui tag ===")),
-		Active:           field("=== unit active ===") == "active",
+		ActiveState:      firstLine(field("=== unit active ===")),
+		UnitLog:          field("=== unit log ==="),
 		Enabled:          field("=== unit enabled ===") == "enabled",
 		PasswordFile:     field("=== password file ===") == "yes",
 		Libatomic:        field("=== libatomic present ===") == "yes",
@@ -450,8 +462,13 @@ func parseHermesStatus(out string) hermesBoxState {
 		LibatomicMissing: field("=== libatomic ===") == "missing",
 		Password:         firstLine(field("=== password ===")),
 	}
+	st.Active = st.ActiveState == "active"
+	switch st.ActiveState {
+	case "activating", "deactivating", "reloading", "failed":
+		st.Failing = true
+	}
 	switch p := firstLine(field("=== provider ===")); strings.ToLower(strings.ReplaceAll(p, " ", "")) {
-	case "", "none", "null", "(notset)", "notset":
+	case "", "auto", "none", "null", "(notset)", "notset":
 	default:
 		st.Provider = p
 	}
@@ -507,6 +524,16 @@ func hermesSetupError(st hermesBoxState, sandboxID string) error {
 			"a locked egress allowlist blocks them — see docs/hermes.md § Egress", sandboxID, st.InstallFailed)
 	case st.Path == "" || st.WebUITag == "":
 		return fmt.Errorf("hermes is not installed on %s — run `km hermes start %s`", sandboxID, sandboxID)
+	case st.Failing:
+		log := st.UnitLog
+		if log == "" {
+			log = st.NotReadyLog
+		}
+		if log == "" {
+			log = "(no log output — see `km hermes status " + sandboxID + "`)"
+		}
+		return fmt.Errorf("%s on %s is failing to start (state: %s). Last lines of /home/sandbox/.hermes/km-hermes.log:\n%s",
+			hermesUnitName, sandboxID, st.ActiveState, log)
 	case !st.Active:
 		return fmt.Errorf("hermes is installed on %s but %s is not running — run `km hermes start %s`", sandboxID, hermesUnitName, sandboxID)
 	}

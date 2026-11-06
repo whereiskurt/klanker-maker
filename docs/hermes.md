@@ -102,6 +102,14 @@ Runs `systemctl disable --now km-hermes.service`. The server stays down across
 - `Restart=on-failure`, so `km hermes stop` sticks.
 - The log is `/home/sandbox/.hermes/km-hermes.log` (sandbox, 0600), opened by the
   sandbox user's shell rather than by systemd as root.
+- `bootstrap.py` runs under the WebUI's own venv
+  (`~/.hermes/hermes-webui/.venv`) once it exists. Before that it runs under the
+  agent's managed runtime, the first element of `hermes --print-runtime-command`
+  (`~/.hermes/tools/python-3.x/bin/python3`). Never the system `python3`: AL2023's
+  is 3.9 and the WebUI needs 3.10+. On its first run `bootstrap.py` builds the
+  venv from PyPI and installs its own dependencies, so the first start can take a
+  couple of minutes. `start` waits up to 180 s for `/health`. If no interpreter
+  is found, the unit logs `km-hermes: no Python for the WebUI` and exits.
 
 ## Keeping the box awake
 
@@ -126,6 +134,10 @@ box awake. An idle-reaped box misses its scheduled jobs. Use `km extend <sb>
 
 ## Providers, metering and secrets
 
+- **Seeding.** The installer writes `model.provider: auto` (and an Anthropic
+  default model). `start` treats `auto` as unconfigured. On a `useBedrock: true`
+  profile it sets `model.provider: bedrock`, `model.default`
+  (`us.anthropic.claude-sonnet-4-6`, or `--model`) and `bedrock.region`.
 - **Bedrock** goes to `bedrock-runtime.*.amazonaws.com`. km's http-proxy already
   meters that host under `useBedrock: true`, so Hermes spend shows in
   `km status` / `km otel`.
@@ -164,6 +176,9 @@ egress profiles).
   already `km shell --root`. `start` and `status` never print it.
 - The running server's environment holds the password and is readable by uid
   `sandbox`. That is not a boundary, the same posture as t3's presence token.
+- **Telemetry is off by default upstream** (`telemetry.shared_metrics.enabled:
+  false`, `send: false` in the installer's config). km sets nothing. An operator
+  who turns it on in `~/.hermes/config.yaml` sends usage metrics to Nous Research.
 - `start` does every operation that touches `~/.hermes` as `sandbox` (including
   `git`, which would otherwise run a repo's hooks as root). It writes as root
   only inside root-owned `/etc/km/hermes`, never on a fixed `/tmp` name.
@@ -185,21 +200,24 @@ whose km-presence predates signal 10, `km hermes status` warns.
 | `start` says install failed | Egress (above). `km shell <sb>` → `tail ~/.hermes/logs/install.log` |
 | Not answering `/health` | `km shell <sb> --root` → `tail /home/sandbox/.hermes/km-hermes.log`, `systemctl status km-hermes` |
 | Connect says the unit is not running | `km hermes start <sb>` (after `stop` it stays disabled) |
+| "failing to start (state: activating/failed)" | The error carries the log tail. `km hermes status <sb>` shows it again. `km-hermes: no Python` means no WebUI venv and no agent runtime |
 | "no model provider configured" | The WebUI onboarding wizard, or `km shell <sb>` → `hermes model` |
 | Login rejected | You copied an old password. Re-run `km hermes <sb>`, or `start --rotate-password` |
 | Box idled out during a cron job | Expected (above) |
 
 ## UAT
 
-Pending. The live checklist is in the design spec, § 6. These assumptions are
-marked `UAT:` in `internal/app/cmd/hermes.go`:
+First live run 2026-11-05 (AL2023, unprivileged; agent and WebUI installed in
+3.5 min). Confirmed:
 
-- `--branch main --commit <tag sha>` lands exactly on the tag.
-- The agent's binary and venv paths.
-- `git describe --tags` on a shallow clone.
-- The WebUI dependencies are present in the agent's Python.
-- The `hermes config get/set` key syntax.
-- Telemetry.
+- `--branch main --commit <tag sha>` lands on the tag (`Hermes Agent v0.22.4`).
+- Agent v0.22 has no venv. Its runtime is PM-managed under `~/.hermes/tools/`,
+  and the WebUI builds its own venv (see § The unit).
+- `hermes config get model.provider` prints `auto` on a fresh install.
+- Telemetry is off by default.
+
+Still marked `UAT:` in `internal/app/cmd/hermes.go`: `git describe --tags` on a
+shallow clone, which the upgrade-in-place path exercises.
 
 Also confirm live:
 

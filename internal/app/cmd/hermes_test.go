@@ -96,20 +96,53 @@ func TestParseHermesStatus_ChattyVersion(t *testing.T) {
 	}
 }
 
+// A stopped unit is "run km hermes start"; an enabled unit that is crashing
+// (auto-restart shows as activating, a start-limit hit as failed) is named as
+// failing with its log tail — telling the operator to rerun the command they
+// just ran was the live-UAT bug.
 func TestParseHermesStatus_NotRunning(t *testing.T) {
-	out := strings.Replace(hermesStatusAllPresent, "=== unit active ===\nactive", "=== unit active ===\nfailed", 1)
-	st := parseHermesStatus(out)
-	if st.Active {
-		t.Fatal("Active = true for a failed unit")
+	for _, state := range []string{"inactive", "unknown"} {
+		out := strings.Replace(hermesStatusAllPresent, "=== unit active ===\nactive", "=== unit active ===\n"+state, 1)
+		st := parseHermesStatus(out)
+		if st.Active || st.Failing {
+			t.Fatalf("%s: Active=%v Failing=%v", state, st.Active, st.Failing)
+		}
+		err := hermesSetupError(st, "sb-1")
+		if err == nil || !strings.Contains(err.Error(), "not running") || !strings.Contains(err.Error(), "km hermes start sb-1") {
+			t.Fatalf("%s: err = %v", state, err)
+		}
 	}
-	err := hermesSetupError(st, "sb-1")
-	if err == nil || !strings.Contains(err.Error(), "not running") || !strings.Contains(err.Error(), "km hermes start sb-1") {
+	for _, state := range []string{"activating", "failed"} {
+		out := strings.Replace(hermesStatusAllPresent, "=== unit active ===\nactive\n=== unit enabled ===\nenabled",
+			"=== unit active ===\n"+state+"\n=== unit enabled ===\nenabled\n=== unit log ===\nSyntaxError: X | None\nkm-hermes: no Python", 1)
+		st := parseHermesStatus(out)
+		if !st.Failing {
+			t.Fatalf("%s: Failing = false", state)
+		}
+		err := hermesSetupError(st, "sb-1")
+		if err == nil || !strings.Contains(err.Error(), "failing to start (state: "+state+")") || !strings.Contains(err.Error(), "SyntaxError: X | None") {
+			t.Fatalf("%s: err = %v", state, err)
+		}
+		if strings.Contains(err.Error(), "run `km hermes start") {
+			t.Errorf("%s: a failing unit must not be told to rerun start: %v", state, err)
+		}
+	}
+	// No log captured: point at status rather than print nothing.
+	st := parseHermesStatus(strings.Replace(hermesStatusAllPresent, "=== unit active ===\nactive", "=== unit active ===\nactivating", 1))
+	if err := hermesSetupError(st, "sb-1"); err == nil || !strings.Contains(err.Error(), "km hermes status sb-1") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
+func TestHermesStatusScript_LogTailOnlyWhenNotActive(t *testing.T) {
+	want := "if ! systemctl is-active --quiet km-hermes.service; then runuser -u sandbox -- tail -15 /home/sandbox/.hermes/km-hermes.log 2>/dev/null | " + hermesRedactSed
+	if !strings.Contains(hermesStatusScript, want) {
+		t.Error("status must read the log tail as sandbox, redacted, only for a non-active unit")
+	}
+}
+
 func TestParseHermesStatus_NoProvider(t *testing.T) {
-	for _, v := range []string{"", "None", "null", "(not set)"} {
+	for _, v := range []string{"", "auto", "None", "null", "(not set)"} {
 		out := strings.Replace(hermesStatusAllPresent, "=== provider ===\nbedrock", "=== provider ===\n"+v, 1)
 		if st := parseHermesStatus(out); st.Provider != "" {
 			t.Errorf("provider output %q parsed as %q; want empty", v, st.Provider)
@@ -188,7 +221,11 @@ func TestHermesUnitFile_LoadBearingLines(t *testing.T) {
 	if m := regexp.MustCompile(`[^$]\$[A-Za-z_{]`).FindString(hermesUnitFile); m != "" {
 		t.Errorf("unit file uses a bare $ (%q); systemd expands it — write $$", m)
 	}
-	for _, bad := range []string{"0.0.0.0", "journal", "Restart=always", "StandardOutput=", "StandardError=", "HERMES_WEBUI_PASSWORD"} {
+	// systemd unescapes backslashes and expands % specifiers inside ExecStart;
+	// system python3 (3.9 on AL2023) cannot run the WebUI; bootstrap.py finds
+	// the agent itself, so HERMES_WEBUI_PYTHON must stay unset.
+	for _, bad := range []string{"0.0.0.0", "journal", "Restart=always", "StandardOutput=", "StandardError=", "HERMES_WEBUI_PASSWORD",
+		`\`, "%", "HERMES_WEBUI_PYTHON", "P=python3", "hermes-agent/venv", "hermes-agent/.venv"} {
 		if strings.Contains(hermesUnitFile, bad) {
 			t.Errorf("unit file must not contain %q", bad)
 		}
@@ -266,6 +303,7 @@ func TestHermesStartScript_ProviderSeedingGated(t *testing.T) {
 		"KM_HERMES_MODEL='us.anthropic.claude-opus-4-1'",
 		`config get model.provider`,
 		`if [ -z "$cur" ] && awk`,
+		`case "$cur" in ""|auto|Auto|None|none|null|"(notset)"|notset) cur="";; esac`,
 		"/^[ ]*execution:[ ]*$/",
 		"useBedrock:[ ]*true",
 		"/opt/km/.km-profile.yaml",
@@ -576,10 +614,10 @@ func TestHermesUseBedrockAwk(t *testing.T) {
 }
 
 // TestHermesUnitExecStart_Executes runs the ExecStart bash body for real
-// (systemd's $$ unescaped, /home/sandbox pointed at a temp dir, a fake
-// python): the log is created 0600 and the picked interpreter is exec'd with
-// the loopback-only server arguments. bash -c, not -lc: a login shell's
-// /etc/profile would reorder PATH ahead of the fake.
+// (systemd's $$ unescaped, /home/sandbox pointed at a temp dir, fakes on
+// PATH): the log is created 0600 and the right interpreter is exec'd with the
+// loopback-only server arguments. bash -c, not -lc: a login shell's
+// /etc/profile would reorder PATH ahead of the fakes.
 func TestHermesUnitExecStart_Executes(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not on PATH")
@@ -588,51 +626,70 @@ func TestHermesUnitExecStart_Executes(t *testing.T) {
 	if m == nil {
 		t.Fatal("no ExecStart bash body")
 	}
-	fake := "#!/bin/sh\nprintf '%s ' \"$0\" \"$@\" > \"$KM_TEST_MARK\"\necho started\n"
-	for _, venv := range []bool{false, true} {
-		home := t.TempDir()
+	fakePy := "#!/bin/sh\nprintf '%s ' \"$0\" \"$@\" > \"$KM_TEST_MARK\"\necho started\n"
+	writeExe := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(path[:strings.LastIndex(path, "/")], 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(name string, setup func(home, bin string) (want string)) {
+		home, bin := t.TempDir(), t.TempDir()
 		body := strings.ReplaceAll(strings.ReplaceAll(m[1], "$$", "$"), "/home/sandbox", home)
 		if err := os.MkdirAll(home+"/.hermes/hermes-webui", 0o755); err != nil {
 			t.Fatal(err)
 		}
-		bin := t.TempDir()
-		want := bin + "/python3"
-		if err := os.WriteFile(want, []byte(fake), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if venv {
-			want = home + "/.hermes/hermes-agent/venv/bin/python"
-			if err := os.MkdirAll(home+"/.hermes/hermes-agent/venv/bin", 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(want, []byte(fake), 0o755); err != nil {
-				t.Fatal(err)
-			}
-		}
+		// A system python3 on PATH must never be picked (AL2023's is 3.9).
+		writeExe(bin+"/python3", "#!/bin/sh\necho WRONG-PYTHON > \"$KM_TEST_MARK\"\n")
+		want := setup(home, bin)
 		mark := t.TempDir() + "/mark"
 		cmd := exec.Command("bash", "-c", body)
 		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + home, "KM_TEST_MARK=" + mark}
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("venv=%v: ExecStart body failed: %v\n%s", venv, err, out)
+		out, err := cmd.CombinedOutput()
+		log, _ := os.ReadFile(home + "/.hermes/km-hermes.log")
+		if fi, serr := os.Stat(home + "/.hermes/km-hermes.log"); serr != nil || fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s: log missing or not 0600: %v", name, serr)
 		}
-		got, err := os.ReadFile(mark)
+		if want == "" {
+			if err == nil || !strings.Contains(string(log), "km-hermes: no Python for the WebUI") {
+				t.Errorf("%s: want a loud failure in the log, got err=%v log=%q", name, err, log)
+			}
+			if _, rerr := os.Stat(mark); rerr == nil {
+				t.Errorf("%s: something was exec'd although no interpreter was found", name)
+			}
+			return
+		}
 		if err != nil {
-			t.Fatalf("venv=%v: interpreter was not exec'd: %v", venv, err)
+			t.Fatalf("%s: ExecStart body failed: %v\n%s\nlog: %s", name, err, out, log)
 		}
+		got, _ := os.ReadFile(mark)
 		if !strings.HasPrefix(string(got), want+" bootstrap.py --foreground --no-browser --host 127.0.0.1 8787") {
-			t.Errorf("venv=%v: exec'd %q; want %s bootstrap.py …", venv, got, want)
+			t.Errorf("%s: exec'd %q; want %s bootstrap.py …", name, got, want)
 		}
-		fi, err := os.Stat(home + "/.hermes/km-hermes.log")
-		if err != nil {
-			t.Fatalf("venv=%v: log not created: %v", venv, err)
-		}
-		if fi.Mode().Perm() != 0o600 {
-			t.Errorf("venv=%v: log mode %o; want 600", venv, fi.Mode().Perm())
-		}
-		if log, _ := os.ReadFile(home + "/.hermes/km-hermes.log"); !strings.Contains(string(log), "started") {
-			t.Errorf("venv=%v: server output did not reach the log: %q", venv, log)
+		if !strings.Contains(string(log), "started") {
+			t.Errorf("%s: server output did not reach the log: %q", name, log)
 		}
 	}
+	run("agent runtime", func(home, bin string) string {
+		rt := home + "/.hermes/tools/python-3.14.7+20260901-linux-x64/bin/python3"
+		writeExe(rt, fakePy)
+		writeExe(bin+"/hermes", "#!/bin/sh\n[ \"$1\" = --print-runtime-command ] || exit 2\n"+
+			"echo '[\""+rt+"\", \"-I\", \"-m\", \"hermes_cli\"]'\n")
+		return rt
+	})
+	run("webui venv preferred", func(home, bin string) string {
+		v := home + "/.hermes/hermes-webui/.venv/bin/python"
+		writeExe(v, fakePy)
+		writeExe(bin+"/hermes", "#!/bin/sh\necho '[\"/nonexistent/python3\"]'\n")
+		return v
+	})
+	run("no interpreter", func(home, bin string) string {
+		writeExe(bin+"/hermes", "#!/bin/sh\nexit 1\n")
+		return ""
+	})
 }
 
 func TestHermesStartScript_LockRestartDeferralAndStdin(t *testing.T) {
