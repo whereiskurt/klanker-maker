@@ -180,7 +180,20 @@ manager fetch uv, a Python runtime, PyPI packages and frontend build tools.
 **Recipe:** install once on an open box, then read the hosts it reached with
 `km shell <sb> --root` → `km-netpolicy observed`. Add those suffixes to your
 locked profile's `allowedDNSSuffixes`. Or bake an AMI from the installed box
-(`km ami bake`). The UAT host list goes here once it is recorded.
+(`km ami bake`).
+
+Recorded on the UAT box (`km-netpolicy observed`, boot traffic filtered out):
+
+| Host | Why |
+|---|---|
+| `github.com`, `api.github.com`, `raw.githubusercontent.com`, `release-assets.githubusercontent.com` | the installer, the agent and WebUI checkouts, uv and tool releases |
+| `releases.astral.sh` | uv's Python downloads |
+| `pypi.org`, `files.pythonhosted.org` | the agent's and the WebUI's Python packages |
+| `nodejs.org`, `registry.npmjs.org` | the agent's TUI and web frontend build |
+| the AL2023 package repos (`al2023-repos-*.s3.*.amazonaws.com`) | `libatomic` |
+
+As suffixes: `.github.com`, `.githubusercontent.com`, `.astral.sh`,
+`.pypi.org`, `.pythonhosted.org`, `.nodejs.org`, `.npmjs.org`, plus the OS repo.
 
 `libatomic` on a locked box fails exactly as for t3 (`docs/t3code.md` § Locked
 egress profiles).
@@ -209,9 +222,12 @@ egress profiles).
 |---|---|---|
 | `km hermes start/stop/status/<connect>` | `make build` | Immediately, over SSM |
 | Signal 10 and the signal 5 exclusion | `make build` + `km init --sidecars` | On `km destroy && km create`, or a hot swap of `/opt/km/bin/km-presence` |
+| The http-proxy SigV4 `Accept-Encoding` fix (needed for Bedrock) | `make build` + `km init --sidecars` | On `km destroy && km create`, or a hot swap of `/opt/km/bin/km-http-proxy` + `systemctl restart km-http-proxy` |
 
 No Terraform, IAM, DynamoDB, Lambda, userdata, schema or plugin change. On a box
-whose km-presence predates signal 10, `km hermes status` warns.
+whose km-presence predates signal 10, `km hermes status` warns. On a box whose
+http-proxy predates the fix, every Hermes turn on Bedrock fails with a 403
+"signature … does not match".
 
 ## Troubleshooting
 
@@ -254,6 +270,36 @@ SigV4 fix). Confirmed: `hermes pm status` lists `"feature_list": ["all",
 One finding: the banner was still showing, because the WebUI persists
 `"check_for_updates": true` among its defaults, so "set only when absent" never
 fired. `start` now sets it once and records that with a marker (§ Providers).
+
+Fourth run 2026-11-06: the update banner is gone. `check_for_updates: false`
+and the marker survive a further server restart, so the WebUI does not write its
+in-memory settings back over the edit.
+
+**Live checklist, all passing:**
+
+| # | Check | Result |
+|---|---|---|
+| 1 | `status` on a box that never ran Hermes | ✓ "not installed — run `km hermes start`", exit 1 |
+| 2 | `start` on a fresh unprivileged AL2023 box (installs `libatomic`, agent, WebUI) | ✓ about 3.5 min; agent `v0.22.4`, WebUI `v0.52.544` |
+| 3 | `start` re-run over a crash-looping unit (upgrade in place) | ✓ unit up, Bedrock seeded over `auto` |
+| 4 | Connect, then log in in a headless browser through the forward | ✓ `/` redirects to `/login`, and the password logs in |
+| 5 | A real turn on Bedrock (instance role, through km's proxy) | ✓ `PONG` in about 1 s |
+| 6 | AI spend in `km status` | ✓ `bedrock_tokens_metered` per call. Prompt-cache tokens are not counted on the Bedrock path (pre-existing, all clients) |
+| 7 | Signal 10, server running, idle forward, no tab | ✓ `active=false` |
+| 8 | Signal 10 with a tab open | ✓ `active=true` on 2 ticks, then `false` one tick after closing |
+| 9 | Signal 10 with a 150 s turn running and **no tab** | ✓ `active=true` for its whole run, `false` on the next tick |
+| 10 | `km pause` → `km resume` (hibernate) | ✓ server up; the forward reconnected by itself |
+| 11 | `km stop` → `km resume` (cold boot) | ✓ unit came back on its own |
+| 12 | `km hermes stop` | ✓ `disabled` + `inactive`; `status` exits 1 and names `start` |
+| 13 | `status` on a box whose km-presence predates signal 10 | ✓ warns, and the warning goes away after the hot swap |
+| 14 | A second connect while one is running | ✓ "local port 8788 is already in use" |
+
+**Found in km itself, not Hermes:** km's http-proxy dropped the client's
+`Accept-Encoding` (goproxy's default), so any Python Anthropic SDK call to
+Bedrock through the proxy failed SigV4 with a 403. That SDK signs
+`accept-encoding`; botocore and Claude Code do not. Fixed in
+`sidecars/http-proxy` (`accept_encoding.go`). The header is kept only when
+SigV4 signs it, and metering decodes a compressed copy.
 
 Still marked `UAT:` in `internal/app/cmd/hermes.go`:
 
