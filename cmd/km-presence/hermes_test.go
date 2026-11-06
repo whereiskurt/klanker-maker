@@ -184,3 +184,46 @@ func TestTick_EmitWhenOnlyHermesActive(t *testing.T) {
 		t.Fatalf("expected a heartbeat when only signal 10 is positive (active=%v emitted=%v called=%v)", active, emitted, called)
 	}
 }
+
+// TestInExcludedUnit_MatchesOnlyTheSystemUnit: the exclusion keys on the
+// system unit's own cgroup path. A sandbox-created user unit of the same name
+// (`systemd-run --user --unit km-hermes`) or a lookalike suffix must still be
+// counted, or an agent could hide from signal 5 behind a name.
+func TestInExcludedUnit_MatchesOnlyTheSystemUnit(t *testing.T) {
+	cases := []struct {
+		name string
+		cg   string
+		want bool
+	}{
+		{"hermes system unit", "0::/system.slice/km-hermes.service\n", true},
+		{"t3 system unit", "0::/system.slice/km-t3code.service\n", true},
+		{"hermes sub-cgroup", "0::/system.slice/km-hermes.service/worker\n", true},
+		{"t3 sub-cgroup", "0::/system.slice/km-t3code.service/agents/a1\n", true},
+		{"hermes user unit", "0::/user.slice/user-1001.slice/user@1001.service/app.slice/km-hermes.service\n", false},
+		{"t3 user unit", "0::/user.slice/user-1001.slice/user@1001.service/app.slice/km-t3code.service\n", false},
+		{"lookalike suffix", "0::/system.slice/km-hermes.service-evil\n", false},
+		{"t3 lookalike suffix", "0::/system.slice/km-t3code.service.d\n", false},
+		{"other system unit", "0::/system.slice/km-slack-inbound-poller.service\n", false},
+		{"cgroup v1 line", "1:name=systemd:/system.slice/km-hermes.service\n", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withProcRoot(t, map[string]string{"500": c.cg})
+			if got := inExcludedUnit("500"); got != c.want {
+				t.Fatalf("inExcludedUnit(%q) = %v; want %v", c.cg, got, c.want)
+			}
+		})
+	}
+}
+
+func TestSignal5_UserUnitNamedLikeExcludedStillCounts(t *testing.T) {
+	withProcRoot(t, map[string]string{
+		"601": "0::/user.slice/user-1001.slice/user@1001.service/app.slice/km-hermes.service\n",
+	})
+	r := &fakeRunner{responses: map[string][]byte{
+		agentPgrepKey: []byte("601 claude -p hi\n"),
+	}}
+	if !checkAgentProcess(r) {
+		t.Fatal("signal 5 dropped an agent in a user unit merely named km-hermes.service")
+	}
+}

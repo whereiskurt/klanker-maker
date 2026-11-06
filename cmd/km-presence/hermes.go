@@ -16,8 +16,8 @@ import (
 // a cross-site pin test there keeps the two in step.
 const hermesPort = 8787
 
-// hermesUnitCgroup is the cgroup path fragment of the km-owned Hermes unit.
-const hermesUnitCgroup = "/km-hermes.service"
+// hermesUnitName is the km-owned Hermes system unit `km hermes start` writes.
+const hermesUnitName = "km-hermes.service"
 
 // httpGetter performs an unauthenticated GET and returns the body and HTTP
 // status. Injectable for tests.

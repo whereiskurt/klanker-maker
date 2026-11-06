@@ -23,33 +23,46 @@ const t3Port = 3773
 // never started, which reads as idle.
 const t3TokenPath = "/etc/km/t3/presence.token"
 
-// t3UnitCgroup is the cgroup path fragment of the km-owned T3 Code server unit
-// that `km t3 start` writes. t3's agent children stay inside it because the
-// unit unsets XDG_RUNTIME_DIR, which stops t3 from wrapping them in
-// `systemd-run --user` scopes.
-const t3UnitCgroup = "/km-t3code.service"
+// t3UnitName is the km-owned T3 Code server system unit that `km t3 start`
+// writes. t3's agent children stay inside its cgroup because the unit unsets
+// XDG_RUNTIME_DIR, which stops t3 from wrapping them in `systemd-run --user`
+// scopes.
+const t3UnitName = "km-t3code.service"
 
-// excludedAgentUnits are the km-owned server units whose claude/codex children
+// excludedAgentUnits are the km-owned system units whose claude/codex children
 // signal 5 does not count, because a dedicated signal asks the server whether
 // work is actually running: t3 (signal 9) keeps provider children alive long
 // after a turn, and Hermes (signal 10) can spawn claude/codex as subagents.
-var excludedAgentUnits = []string{t3UnitCgroup, hermesUnitCgroup}
+var excludedAgentUnits = []string{t3UnitName, hermesUnitName}
 
 // procRoot is the procfs mount, swapped by tests.
 var procRoot = "/proc"
 
-// inExcludedUnit reports whether pid runs inside one of excludedAgentUnits. A
-// read error reports false, so an unknown process keeps signal 5's existing
+// inExcludedUnit reports whether pid runs inside one of excludedAgentUnits as
+// a SYSTEM unit: some line of /proc/<pid>/cgroup has a path (after the last
+// ':') equal to /system.slice/<unit> or under it at a path-component boundary.
+// A substring match would also exclude a sandbox-made user unit of the same
+// name (`systemd-run --user --unit km-hermes` lands under user.slice) or a
+// lookalike such as km-hermes.service-evil, hiding an agent from signal 5.
+//
+// A read error reports false, so an unknown process keeps signal 5's existing
 // behaviour rather than silently dropping out of it.
 func inExcludedUnit(pid string) bool {
 	b, err := os.ReadFile(filepath.Join(procRoot, pid, "cgroup"))
 	if err != nil {
 		return false
 	}
-	cg := string(b)
-	for _, u := range excludedAgentUnits {
-		if strings.Contains(cg, u) {
-			return true
+	for _, line := range strings.Split(string(b), "\n") {
+		i := strings.LastIndex(line, ":")
+		if i < 0 {
+			continue
+		}
+		path := strings.TrimSpace(line[i+1:])
+		for _, u := range excludedAgentUnits {
+			unit := "/system.slice/" + u
+			if path == unit || strings.HasPrefix(path, unit+"/") {
+				return true
+			}
 		}
 	}
 	return false
