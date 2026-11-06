@@ -138,6 +138,23 @@ box awake. An idle-reaped box misses its scheduled jobs. Use `km extend <sb>
   default model). `start` treats `auto` as unconfigured. On a `useBedrock: true`
   profile it sets `model.provider: bedrock`, `model.default`
   (`us.anthropic.claude-sonnet-4-6`, or `--model`) and `bedrock.region`.
+- **The Bedrock extra.** Bedrock needs the agent's `bedrock` provider extra (the
+  `anthropic` package). The agent installs extras lazily at first use, but never
+  inside the running WebUI, which holds the agent runtime's install lock. The
+  first turn then fails with "The 'anthropic' package is required for the
+  Bedrock provider … another Hermes process is installing dependencies". So
+  whenever the provider is `bedrock` and `hermes pm status` does not list it,
+  `start` stops the unit and runs `hermes pm install --extra bedrock` as
+  `sandbox`, under `timeout 600`, then starts the unit. While a run is active
+  this waits for the next restart, like a config change. `km hermes status`
+  warns when the provider is `bedrock` and the extra is missing.
+- **No update banner.** Upstream's WebUI checks for agent updates and offers
+  "Update Now". That button would move the agent to `origin/main`, off the pinned
+  release pair the WebUI was tested with. `start` sets `"check_for_updates":
+  false` in `~/.hermes/webui/settings.json` only when the key is absent, so an
+  operator who turns it back on keeps it. Upgrade with
+  `km hermes start <sb> --agent-version X --webui-version Y`, a pair that
+  upstream released together.
 - **Bedrock** goes to `bedrock-runtime.*.amazonaws.com`. km's http-proxy already
   meters that host under `useBedrock: true`, so Hermes spend shows in
   `km status` / `km otel`.
@@ -216,8 +233,26 @@ First live run 2026-11-05 (AL2023, unprivileged; agent and WebUI installed in
 - `hermes config get model.provider` prints `auto` on a fresh install.
 - Telemetry is off by default.
 
-Still marked `UAT:` in `internal/app/cmd/hermes.go`: `git describe --tags` on a
-shallow clone, which the upgrade-in-place path exercises.
+Second run 2026-11-05 (upgrade in place): the unit came up, Bedrock was seeded
+over `auto`, browser login worked, `/health` stays public with a password set,
+and `/` redirects to `/login`. Two findings, both fixed in `start`:
+
+- **The first Bedrock turn failed**: the `anthropic` package was missing, and the
+  agent's lazy install always refuses inside the running server, which holds the
+  runtime lock. `hermes pm install --extra bedrock` with the unit stopped fixes
+  it in under a second. `start` now does this before starting the unit (§
+  Providers).
+- **The WebUI offered "5302 updates available — Update Now"** for the agent
+  (`origin/main`). `start` now turns `check_for_updates` off when the key is
+  unset (§ Providers).
+
+Still marked `UAT:` in `internal/app/cmd/hermes.go`:
+
+- `git describe --tags` on a shallow clone.
+- The `feature_list` field of `hermes pm status`. If it never matches, `start`
+  reinstalls the extra (idempotent) and restarts the server on every run.
+- Whether the server re-reads `settings.json`. `start` restarts it after a
+  change, in case it caches.
 
 Also confirm live:
 

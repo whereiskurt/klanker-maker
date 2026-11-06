@@ -5,10 +5,12 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -32,6 +34,8 @@ enabled
 200
 === provider ===
 bedrock
+=== bedrock extra ===
+yes
 === password file ===
 yes
 === libatomic present ===
@@ -755,5 +759,140 @@ func TestParseHermesStatus_BusyAndDeferred(t *testing.T) {
 func TestHermesStartPollBudget(t *testing.T) {
 	if hermesStartPollAttempts < 600 {
 		t.Errorf("start poll budget %d attempts; want ≥ 600 (20 min at 2 s)", hermesStartPollAttempts)
+	}
+}
+
+// TestHermesSettingsMergePy EXECUTES the update-banner merge with a real
+// python3: it adds check_for_updates=false only when the key is absent and
+// never clobbers an unreadable file.
+func TestHermesSettingsMergePy(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	if strings.Contains(hermesSettingsMergePy, "'") {
+		t.Fatal("the merge program is embedded in single quotes and must not contain one")
+	}
+	cases := []struct {
+		name, before string // "" = file absent
+		wantPrinted  bool
+		check        func(t *testing.T, after map[string]any, raw string)
+	}{
+		{"absent", "", true, func(t *testing.T, a map[string]any, _ string) {
+			if a["check_for_updates"] != false {
+				t.Errorf("got %v", a)
+			}
+		}},
+		{"other keys kept", `{"theme": "dark", "ignore_agent_updates": false}`, true, func(t *testing.T, a map[string]any, _ string) {
+			if a["check_for_updates"] != false || a["theme"] != "dark" || a["ignore_agent_updates"] != false {
+				t.Errorf("got %v", a)
+			}
+		}},
+		{"operator turned it on", `{"check_for_updates": true}`, false, func(t *testing.T, a map[string]any, _ string) {
+			if a["check_for_updates"] != true {
+				t.Errorf("operator's choice overwritten: %v", a)
+			}
+		}},
+		{"unreadable left alone", `{not json`, false, func(t *testing.T, _ map[string]any, raw string) {
+			if raw != `{not json` {
+				t.Errorf("unreadable file rewritten: %q", raw)
+			}
+		}},
+	}
+	for _, c := range cases {
+		dir := t.TempDir()
+		p := dir + "/webui/settings.json"
+		prog := strings.Replace(hermesSettingsMergePy, "/home/sandbox/.hermes/webui/settings.json", p, 1)
+		if c.before != "" {
+			if err := os.MkdirAll(dir+"/webui", 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(c.before), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := exec.Command("python3", "-I", "-c", prog).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", c.name, err, out)
+		}
+		if printed := strings.Contains(string(out), "km-seed: webui check_for_updates false"); printed != c.wantPrinted {
+			t.Errorf("%s: printed=%v want %v (%q)", c.name, printed, c.wantPrinted, out)
+		}
+		raw, _ := os.ReadFile(p)
+		var after map[string]any
+		_ = json.Unmarshal(raw, &after)
+		c.check(t, after, string(raw))
+		if entries, _ := os.ReadDir(dir + "/webui"); len(entries) != 1 {
+			t.Errorf("%s: temp file left behind: %v", c.name, entries)
+		}
+	}
+	s := hermesStartScript(hermesStartOpts{AgentVersion: "0.22.4", WebUIVersion: "0.52.544"})
+	seed := s[strings.Index(s, "<<'KM_HERMES_SEED_EOF'"):strings.Index(s, "\nKM_HERMES_SEED_EOF")]
+	if !strings.Contains(seed, `"$PY" -I -c '`+hermesSettingsMergePy+`' </dev/null`) {
+		t.Error("the merge must run inside the sandbox seed script, reading /dev/null")
+	}
+}
+
+// TestHermesBedrockExtraCheck runs the detector's pipeline on pm status JSON.
+func TestHermesBedrockExtraCheck(t *testing.T) {
+	pipe := hermesBedrockExtraCheck[strings.Index(hermesBedrockExtraCheck, "| tr -d")+2:]
+	for in, want := range map[string]bool{
+		"{\n  \"feature_list\": [\"all\", \"bedrock\"],\n  \"ok\": true\n}": true,
+		`{"feature_list": ["bedrock"]}`:                                     true,
+		`{"feature_list": ["all"], "other": ["bedrock"]}`:                   false,
+		`{"feature_list": []}`:                                              false,
+		``:                                                                  false,
+	} {
+		cmd := exec.Command("sh", "-c", pipe)
+		cmd.Stdin = strings.NewReader(in)
+		if got := cmd.Run() == nil; got != want {
+			t.Errorf("%q: installed=%v want %v", in, got, want)
+		}
+	}
+}
+
+func TestHermesStartScript_BedrockExtraBeforeStart(t *testing.T) {
+	s := hermesStartScript(hermesStartOpts{AgentVersion: "0.22.4", WebUIVersion: "0.52.544"})
+	install := `timeout 600 runuser -u sandbox -- bash -lc '"$0" pm install --extra bedrock </dev/null' "$H_BIN"`
+	i := strings.Index(s, install)
+	if i < 0 {
+		t.Fatal("start does not install the bedrock extra under a timeout")
+	}
+	block := s[strings.Index(s, "# 6b."):i]
+	for _, want := range []string{
+		`[ "$PROV" = bedrock ] && ! ` + hermesBedrockExtraCheck,
+		`if [ "$BUSY" = 1 ] && [ "$NEED_RESTART" = 0 ]; then
+    DEFERRED="$DEFERRED bedrock-extra"`,
+		"systemctl stop km-hermes.service",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("extra block missing %q", want)
+		}
+	}
+	if final := strings.Index(s, "if [ \"$NEED_RESTART\" = 1 ]; then systemctl restart km-hermes.service"); final < i {
+		t.Error("the extra must be installed before the unit is (re)started")
+	}
+	if strings.Index(s, "# 6b.") < strings.Index(s, "KM_HERMES_SEED_EOF\n# <<< sandbox") {
+		t.Error("the extra check must run after seeding (a seeded bedrock provider needs it)")
+	}
+}
+
+func TestHermesStatusReport_BedrockExtra(t *testing.T) {
+	st := parseHermesStatus(hermesStatusAllPresent)
+	st.BedrockExtra = false
+	var buf bytes.Buffer
+	_ = hermesStatusReport(&buf, "sb-1", st)
+	if !strings.Contains(buf.String(), "extra is not installed") {
+		t.Errorf("missing-extra warning absent:\n%s", buf.String())
+	}
+	st = parseHermesStatus("=== extra failed ===\nlock timeout\n=== restart deferred ===\nbedrock-extra\n" + hermesStatusAllPresent)
+	buf.Reset()
+	_ = hermesStatusReport(&buf, "sb-1", st)
+	for _, want := range []string{"did not install", "lock timeout", "installs on the next restart"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("report missing %q:\n%s", want, buf.String())
+		}
+	}
+	if st := parseHermesStatus("=== extra installed ===\n" + hermesStatusAllPresent); !slices.Contains(st.Seeded, "bedrock provider extra") {
+		t.Errorf("Seeded = %v", st.Seeded)
 	}
 }

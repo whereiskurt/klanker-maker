@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -140,12 +141,44 @@ echo "=== health ==="
 curl -sS --max-time 3 -w '\n=== health code ===\n%{http_code}\n' http://127.0.0.1:8787/health 2>/dev/null || true
 echo "=== provider ==="
 if [ -n "$H_BIN" ]; then runuser -u sandbox -- bash -lc '"$0" config get model.provider' "$H_BIN" 2>/dev/null | head -1 || true; fi
+echo "=== bedrock extra ==="
+if [ -n "$H_BIN" ] && ` + hermesBedrockExtraCheck + `; then echo yes; else echo no; fi
 echo "=== password file ==="
 if [ -s /etc/km/hermes/webui.env ]; then echo yes; else echo no; fi
 echo "=== libatomic present ==="
 if has_libatomic; then echo yes; else echo no; fi
 echo "=== presence signal10 ==="
 if grep -aq checkHermesInUse /opt/km/bin/km-presence 2>/dev/null; then echo yes; else echo no; fi`
+
+// hermesSettingsMergePy sets "check_for_updates": false in the WebUI's
+// settings.json only when the key is absent. An unreadable or non-object file
+// is left alone. No single quotes: it is embedded in a single-quoted -c.
+const hermesSettingsMergePy = `
+import json, os, sys, tempfile
+p = "/home/sandbox/.hermes/webui/settings.json"
+try:
+    with open(p) as f:
+        d = json.load(f)
+except FileNotFoundError:
+    d = {}
+except Exception:
+    sys.exit(0)
+if not isinstance(d, dict) or "check_for_updates" in d:
+    sys.exit(0)
+d["check_for_updates"] = False
+os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
+fd, t = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".settings.")
+with os.fdopen(fd, "w") as f:
+    json.dump(d, f, indent=2)
+os.replace(t, p)
+print("km-seed: webui check_for_updates false")
+`
+
+// hermesBedrockExtraCheck exits 0 iff the agent's provider extras include
+// bedrock (hermes pm status → "feature_list": [..., "bedrock"]). Needs $H_BIN.
+// UAT: the feature_list field name. If it never matches, start reinstalls the
+// extra (idempotent, under a second) and restarts on every run.
+const hermesBedrockExtraCheck = `runuser -u sandbox -- bash -lc '"$0" pm status </dev/null' "$H_BIN" 2>/dev/null | tr -d '[:space:]' | grep -q '"feature_list":\[[^]]*"bedrock"'`
 
 // hermesRedactSed masks password/token values in a server log tail before it
 // reaches SSM output.
@@ -366,6 +399,16 @@ elif [ -n "$KM_MODEL" ]; then
     "$KM_HBIN" config set model.default "$KM_MODEL" </dev/null >/dev/null 2>&1 && echo "km-seed: model $KM_MODEL"
   fi
 fi
+# The WebUI's update banner offers "Update Now", which moves the agent off the
+# pinned release pair. Turn the check off once — only when the key is absent,
+# so an operator who turns it back on wins. Written with the agent's runtime
+# Python, temp file + rename in the same dir.
+# UAT: whether the running server re-reads settings.json (a change here
+# restarts it, deferred while busy, in case it caches).
+PY=$("$KM_HBIN" --print-runtime-command </dev/null 2>/dev/null | head -n1 | cut -d, -f1 | tr -dc A-Za-z0-9_./+-)
+if [ -x "$PY" ]; then
+  "$PY" -I -c '` + hermesSettingsMergePy + `' </dev/null 2>/dev/null
+fi
 KM_HERMES_SEED_EOF
 # <<< sandbox
 SEED=$(grep '^km-seed: ' "$SEEDLOG" || true)
@@ -389,6 +432,30 @@ else
   rm -f "$NEWUNIT"
 fi
 systemctl enable km-hermes.service >/dev/null 2>&1
+# 6b. The Bedrock provider extra (the anthropic package). The agent installs it
+# lazily at first use, but inside the running server that always fails: the
+# server holds the agent runtime's install lock. So install it here with the
+# unit STOPPED. While a run is active and nothing else forces a restart, it
+# waits for the next restart like any config change. timeout: a patient
+# install waits on the lock forever.
+hermes_bin
+PROV=$(runuser -u sandbox -- bash -lc '"$0" config get model.provider </dev/null' "$H_BIN" 2>/dev/null | head -1 | tr -d '[:space:]')
+if [ -n "$H_BIN" ] && [ "$PROV" = bedrock ] && ! ` + hermesBedrockExtraCheck + `; then
+  if [ "$BUSY" = 1 ] && [ "$NEED_RESTART" = 0 ]; then
+    DEFERRED="$DEFERRED bedrock-extra"
+  else
+    systemctl stop km-hermes.service >/dev/null 2>&1 || true
+    XLOG=$(mktemp)
+    if timeout 600 runuser -u sandbox -- bash -lc '"$0" pm install --extra bedrock </dev/null' "$H_BIN" >"$XLOG" 2>&1 9>&-; then
+      echo "=== extra installed ==="
+    else
+      echo "=== extra failed ==="
+      tail -5 "$XLOG"
+    fi
+    rm -f "$XLOG"
+    NEED_RESTART=1
+  fi
+fi
 if [ "$SOFT_RESTART" = 1 ] && [ "$NEED_RESTART" = 0 ]; then
   if [ "$BUSY" = 1 ]; then DEFERRED="$DEFERRED config"; else NEED_RESTART=1; fi
 fi
@@ -429,6 +496,8 @@ type hermesBoxState struct {
 	Ready            bool // /health answered 200
 	Provider         string
 	PasswordFile     bool
+	BedrockExtra     bool   // the agent's bedrock provider extra is installed
+	ExtraFailed      string // installer tail when the bedrock extra failed
 	Libatomic        bool
 	Signal10         bool
 	LibatomicMissing bool
@@ -457,6 +526,8 @@ func parseHermesStatus(out string) hermesBoxState {
 		UnitLog:          field("=== unit log ==="),
 		Enabled:          field("=== unit enabled ===") == "enabled",
 		PasswordFile:     field("=== password file ===") == "yes",
+		BedrockExtra:     field("=== bedrock extra ===") == "yes",
+		ExtraFailed:      field("=== extra failed ==="),
 		Libatomic:        field("=== libatomic present ===") == "yes",
 		Signal10:         field("=== presence signal10 ===") == "yes",
 		LibatomicMissing: field("=== libatomic ===") == "missing",
@@ -487,6 +558,10 @@ func parseHermesStatus(out string) hermesBoxState {
 			st.Seeded = append(st.Seeded, l)
 		}
 	}
+	if strings.Contains(out, "=== extra installed ===") {
+		st.Seeded = append(st.Seeded, "bedrock provider extra")
+	}
+
 	st.Busy = strings.Contains(out, "=== busy ===")
 	if strings.Contains(out, "=== restart deferred ===") {
 		for _, l := range strings.Split(field("=== restart deferred ==="), "\n") {
@@ -557,6 +632,8 @@ func hermesStatusReport(w io.Writer, sandboxID string, st hermesBoxState) error 
 	}
 	for _, d := range st.Deferred {
 		switch d {
+		case "bedrock-extra":
+			fmt.Fprintf(w, "⚠ a run is active, so the Bedrock provider extra was not installed: it installs on the next restart (`km hermes stop %s && km hermes start %s`)\n", sandboxID, sandboxID)
 		case "password-rotation":
 			fmt.Fprintf(w, "⚠ a run is active, so the password was NOT rotated — rerun `km hermes start %s --rotate-password` when it is idle\n", sandboxID)
 		default:
@@ -570,6 +647,11 @@ func hermesStatusReport(w io.Writer, sandboxID string, st hermesBoxState) error 
 		}
 	} else if st.ActiveRuns > 0 || st.ActiveStreams > 0 {
 		fmt.Fprintf(w, "  busy: %d run(s), %d stream(s)\n", st.ActiveRuns, st.ActiveStreams)
+	}
+	if st.ExtraFailed != "" {
+		fmt.Fprintf(w, "⚠ the Bedrock provider extra did not install (hermes pm install --extra bedrock):\n%s\n", st.ExtraFailed)
+	} else if st.Provider == "bedrock" && !st.BedrockExtra && !slices.Contains(st.Deferred, "bedrock-extra") {
+		fmt.Fprintf(w, "⚠ provider is bedrock but its extra is not installed — turns will fail; run `km hermes stop %s && km hermes start %s`\n", sandboxID, sandboxID)
 	}
 	if st.Provider != "" {
 		fmt.Fprintf(w, "  model provider: %s\n", st.Provider)
