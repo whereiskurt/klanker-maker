@@ -125,12 +125,14 @@ func checkInboundSlack(slackStampPath, presenceStampPath string) bool {
 // Single subprocess call (vs three separate pgrep -af invocations) keeps the
 // loop body simple.
 //
-// Agents inside km-t3code.service are NOT counted here. t3 keeps one claude
-// child per provider session and one shared `codex app-server` alive for at
-// least 30 minutes after a turn (up to ~4.5 h while it believes background
-// work is pending), so matching them by name would hold the box awake long
-// after the work ended. Signal 9 (checkT3InUse) owns t3's agents: it asks the
-// server whether a turn is actually running.
+// Agents inside km-t3code.service or km-hermes.service are NOT counted here
+// (excludedAgentUnits). t3 keeps one claude child per provider session and one
+// shared `codex app-server` alive for at least 30 minutes after a turn (up to
+// ~4.5 h while it believes background work is pending), so matching them by
+// name would hold the box awake long after the work ended. Hermes can spawn
+// claude/codex as subagents from inside its unit, with the same risk. Signal 9
+// (checkT3InUse) and signal 10 (checkHermesInUse) own those agents: each asks
+// its server whether work is actually running.
 func checkAgentProcess(r commandRunner) bool {
 	out, err := r.Output("pgrep", "-af", `(^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\.sh`)
 	if err != nil {
@@ -142,7 +144,7 @@ func checkAgentProcess(r commandRunner) bool {
 		if len(fields) == 0 {
 			continue
 		}
-		if !inT3Unit(fields[0]) {
+		if !inExcludedUnit(fields[0]) {
 			return true
 		}
 	}
@@ -359,7 +361,7 @@ func shellSingleQuote(s string) string {
 // =============================================================================
 
 // tick runs one iteration of the presence loop. Returns (signalsActive, emitted).
-// signalsActive is true when any of the nine signals is positive; emitted is true
+// signalsActive is true when any of the ten signals is positive; emitted is true
 // when a heartbeat event was written to the audit pipe.
 // The presence stamp at presenceStampPath is ALWAYS touched at end of tick,
 // even if no signal is active or emit fails.
@@ -373,8 +375,9 @@ func tick(r commandRunner, sandboxID, mailDir, slackStampPath, presenceStampPath
 	s7 := checkSSHSessions(r)
 	s8 := checkHerdrPaneBusy(r, herdrConfigDir)
 	s9 := checkT3InUse(r, t3GetFn, t3TokenPath)
+	s10 := checkHermesInUse(r, hermesGetFn)
 
-	active := s1 || s2 || s3 || s4 || s5 || s6 || s7 || s8 || s9
+	active := s1 || s2 || s3 || s4 || s5 || s6 || s7 || s8 || s9 || s10
 
 	emitted := false
 	if active {

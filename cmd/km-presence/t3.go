@@ -29,18 +29,30 @@ const t3TokenPath = "/etc/km/t3/presence.token"
 // `systemd-run --user` scopes.
 const t3UnitCgroup = "/km-t3code.service"
 
+// excludedAgentUnits are the km-owned server units whose claude/codex children
+// signal 5 does not count, because a dedicated signal asks the server whether
+// work is actually running: t3 (signal 9) keeps provider children alive long
+// after a turn, and Hermes (signal 10) can spawn claude/codex as subagents.
+var excludedAgentUnits = []string{t3UnitCgroup, hermesUnitCgroup}
+
 // procRoot is the procfs mount, swapped by tests.
 var procRoot = "/proc"
 
-// inT3Unit reports whether pid runs inside km-t3code.service. A read error
-// reports false, so an unknown process keeps signal 5's existing behaviour
-// rather than silently dropping out of it.
-func inT3Unit(pid string) bool {
+// inExcludedUnit reports whether pid runs inside one of excludedAgentUnits. A
+// read error reports false, so an unknown process keeps signal 5's existing
+// behaviour rather than silently dropping out of it.
+func inExcludedUnit(pid string) bool {
 	b, err := os.ReadFile(filepath.Join(procRoot, pid, "cgroup"))
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(b), t3UnitCgroup)
+	cg := string(b)
+	for _, u := range excludedAgentUnits {
+		if strings.Contains(cg, u) {
+			return true
+		}
+	}
+	return false
 }
 
 // t3Getter performs the authenticated GET against the t3 server and returns
