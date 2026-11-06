@@ -296,6 +296,11 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 
+	// Accept-Encoding gate (registered before every other handler, including
+	// any an option registers): drop the client's Accept-Encoding unless a
+	// SigV4 signature covers it. See accept_encoding.go.
+	registerAcceptEncodingGate(proxy)
+
 	// Apply functional options to build the proxy config.
 	cfg := &proxyConfig{}
 	for _, opt := range opts {
@@ -434,7 +439,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				// the onComplete callback fires asynchronously to extract tokens and
 				// increment DynamoDB spend.
 				modelID := ExtractModelID(req.URL.Path)
-				resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+				resp.Body = newMeteringReader(resp.Body, meterDecoded(resp, sandboxID, "bedrock", func(captured []byte) {
 					inputTokens, outputTokens, parseErr := ExtractBedrockTokens(bytes.NewReader(captured))
 					if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
 						return
@@ -489,7 +494,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						remaining := limit - updatedSpend
 						be.onBudgetUpdate(remaining)
 					}
-				})
+				}))
 
 				return resp
 			},
@@ -555,7 +560,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 
 				// Wrap body in metering reader — streams through to client,
 				// fires token extraction + DynamoDB metering on EOF.
-				resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+				resp.Body = newMeteringReader(resp.Body, meterDecoded(resp, sandboxID, "anthropic", func(captured []byte) {
 					modelID, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, parseErr := ExtractAnthropicTokens(bytes.NewReader(captured))
 					if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
 						return
@@ -612,7 +617,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						remaining := limit - updatedSpend
 						be.onBudgetUpdate(remaining)
 					}
-				})
+				}))
 
 				return resp
 			},
@@ -678,7 +683,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 
 				// Wrap body in metering reader — streams through to client,
 				// fires token extraction + DynamoDB metering on EOF.
-				resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+				resp.Body = newMeteringReader(resp.Body, meterDecoded(resp, sandboxID, "openai", func(captured []byte) {
 					modelID, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens, parseErr := ExtractOpenAITokens(bytes.NewReader(captured))
 					if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
 						return
@@ -742,7 +747,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						remaining := limit - updatedSpend
 						be.onBudgetUpdate(remaining)
 					}
-				})
+				}))
 
 				return resp
 			},
