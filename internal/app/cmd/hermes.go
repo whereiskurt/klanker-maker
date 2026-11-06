@@ -150,12 +150,21 @@ if has_libatomic; then echo yes; else echo no; fi
 echo "=== presence signal10 ==="
 if grep -aq checkHermesInUse /opt/km/bin/km-presence 2>/dev/null; then echo yes; else echo no; fi`
 
-// hermesSettingsMergePy sets "check_for_updates": false in the WebUI's
-// settings.json only when the key is absent. An unreadable or non-object file
-// is left alone. No single quotes: it is embedded in a single-quoted -c.
+// hermesSettingsMergePy turns the WebUI's update check off ONCE. The WebUI
+// persists every default into settings.json on its first run, so "only when
+// the key is absent" never fires; instead a marker records that km already
+// decided. Marker absent: force "check_for_updates": false (temp + rename),
+// then write the marker. Marker present: never touch the key again, so an
+// operator who re-enables it wins. An unreadable or non-object file is left
+// alone with no marker, so a later start retries. It prints only when the file
+// changed (a seed, so start restarts the server). No single quotes: it is
+// embedded in a single-quoted -c.
 const hermesSettingsMergePy = `
 import json, os, sys, tempfile
 p = "/home/sandbox/.hermes/webui/settings.json"
+m = os.path.join(os.path.dirname(p), ".km-update-check-disabled")
+if os.path.exists(m):
+    sys.exit(0)
 try:
     with open(p) as f:
         d = json.load(f)
@@ -163,21 +172,25 @@ except FileNotFoundError:
     d = {}
 except Exception:
     sys.exit(0)
-if not isinstance(d, dict) or "check_for_updates" in d:
+if not isinstance(d, dict):
     sys.exit(0)
-d["check_for_updates"] = False
 os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
-fd, t = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".settings.")
-with os.fdopen(fd, "w") as f:
-    json.dump(d, f, indent=2)
-os.replace(t, p)
-print("km-seed: webui check_for_updates false")
+changed = d.get("check_for_updates") is not False
+if changed:
+    d["check_for_updates"] = False
+    fd, t = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".settings.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(d, f, indent=2)
+    os.replace(t, p)
+with open(m, "w") as f:
+    f.write("km hermes start set check_for_updates=false once; delete this file to have it do so again\n")
+if changed:
+    print("km-seed: webui check_for_updates false")
 `
 
 // hermesBedrockExtraCheck exits 0 iff the agent's provider extras include
-// bedrock (hermes pm status → "feature_list": [..., "bedrock"]). Needs $H_BIN.
-// UAT: the feature_list field name. If it never matches, start reinstalls the
-// extra (idempotent, under a second) and restarts on every run.
+// bedrock (hermes pm status → "feature_list": ["all", "bedrock"], confirmed
+// live). Needs $H_BIN.
 const hermesBedrockExtraCheck = `runuser -u sandbox -- bash -lc '"$0" pm status </dev/null' "$H_BIN" 2>/dev/null | tr -d '[:space:]' | grep -q '"feature_list":\[[^]]*"bedrock"'`
 
 // hermesRedactSed masks password/token values in a server log tail before it
@@ -318,8 +331,8 @@ curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/v$KM_V/s
 fi
 # 3. The WebUI (sandbox user): a shallow clone of the pinned tag, replaced only
 # when the checked-out tag differs. Its state lives in ~/.hermes/webui, not in
-# the checkout.
-# UAT: confirm describe --tags names the tag on a --depth 1 clone.
+# the checkout. describe --tags names the tag on the shallow clone (confirmed
+# live: v0.52.544).
 WT=$(runuser -u sandbox -- bash -lc 'git -C ~/.hermes/hermes-webui describe --tags 2>/dev/null' 2>/dev/null | head -1)
 if [ "$WT" != "v$KM_HERMES_WEBUI_VERSION" ]; then
   echo "installing hermes-webui v$KM_HERMES_WEBUI_VERSION"
@@ -400,9 +413,10 @@ elif [ -n "$KM_MODEL" ]; then
   fi
 fi
 # The WebUI's update banner offers "Update Now", which moves the agent off the
-# pinned release pair. Turn the check off once — only when the key is absent,
-# so an operator who turns it back on wins. Written with the agent's runtime
-# Python, temp file + rename in the same dir.
+# pinned release pair. Turn the check off once, recorded by a marker (the
+# WebUI persists its defaults, so the key is always present) — an operator who
+# turns it back on wins. Written with the agent's runtime Python, temp file +
+# rename in the same dir.
 # UAT: whether the running server re-reads settings.json (a change here
 # restarts it, deferred while busy, in case it caches).
 PY=$("$KM_HBIN" --print-runtime-command </dev/null 2>/dev/null | head -n1 | cut -d, -f1 | tr -dc A-Za-z0-9_./+-)

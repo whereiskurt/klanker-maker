@@ -774,25 +774,35 @@ func TestHermesSettingsMergePy(t *testing.T) {
 	}
 	cases := []struct {
 		name, before string // "" = file absent
+		marker       bool   // marker present before the run
 		wantPrinted  bool
+		wantMarker   bool
 		check        func(t *testing.T, after map[string]any, raw string)
 	}{
-		{"absent", "", true, func(t *testing.T, a map[string]any, _ string) {
+		{"absent", "", false, true, true, func(t *testing.T, a map[string]any, _ string) {
 			if a["check_for_updates"] != false {
 				t.Errorf("got %v", a)
 			}
 		}},
-		{"other keys kept", `{"theme": "dark", "ignore_agent_updates": false}`, true, func(t *testing.T, a map[string]any, _ string) {
-			if a["check_for_updates"] != false || a["theme"] != "dark" || a["ignore_agent_updates"] != false {
+		// The WebUI persists its defaults: the key is there, true, on any box
+		// whose server ran once.
+		{"persisted default, no marker", `{"theme": "dark", "check_for_updates": true, "ignore_agent_updates": false}`, false, true, true,
+			func(t *testing.T, a map[string]any, _ string) {
+				if a["check_for_updates"] != false || a["theme"] != "dark" || a["ignore_agent_updates"] != false {
+					t.Errorf("got %v", a)
+				}
+			}},
+		{"already false, no marker", `{"check_for_updates": false}`, false, false, true, func(t *testing.T, a map[string]any, _ string) {
+			if a["check_for_updates"] != false {
 				t.Errorf("got %v", a)
 			}
 		}},
-		{"operator turned it on", `{"check_for_updates": true}`, false, func(t *testing.T, a map[string]any, _ string) {
+		{"operator re-enabled, marker present", `{"check_for_updates": true}`, true, false, true, func(t *testing.T, a map[string]any, _ string) {
 			if a["check_for_updates"] != true {
 				t.Errorf("operator's choice overwritten: %v", a)
 			}
 		}},
-		{"unreadable left alone", `{not json`, false, func(t *testing.T, _ map[string]any, raw string) {
+		{"unreadable left alone, no marker", `{not json`, false, false, false, func(t *testing.T, _ map[string]any, raw string) {
 			if raw != `{not json` {
 				t.Errorf("unreadable file rewritten: %q", raw)
 			}
@@ -801,12 +811,18 @@ func TestHermesSettingsMergePy(t *testing.T) {
 	for _, c := range cases {
 		dir := t.TempDir()
 		p := dir + "/webui/settings.json"
+		mk := dir + "/webui/.km-update-check-disabled"
 		prog := strings.Replace(hermesSettingsMergePy, "/home/sandbox/.hermes/webui/settings.json", p, 1)
+		if err := os.MkdirAll(dir+"/webui", 0o700); err != nil {
+			t.Fatal(err)
+		}
 		if c.before != "" {
-			if err := os.MkdirAll(dir+"/webui", 0o700); err != nil {
+			if err := os.WriteFile(p, []byte(c.before), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(p, []byte(c.before), 0o600); err != nil {
+		}
+		if c.marker {
+			if err := os.WriteFile(mk, nil, 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -817,12 +833,18 @@ func TestHermesSettingsMergePy(t *testing.T) {
 		if printed := strings.Contains(string(out), "km-seed: webui check_for_updates false"); printed != c.wantPrinted {
 			t.Errorf("%s: printed=%v want %v (%q)", c.name, printed, c.wantPrinted, out)
 		}
+		if _, err := os.Stat(mk); (err == nil) != c.wantMarker {
+			t.Errorf("%s: marker present=%v want %v", c.name, err == nil, c.wantMarker)
+		}
 		raw, _ := os.ReadFile(p)
 		var after map[string]any
 		_ = json.Unmarshal(raw, &after)
 		c.check(t, after, string(raw))
-		if entries, _ := os.ReadDir(dir + "/webui"); len(entries) != 1 {
-			t.Errorf("%s: temp file left behind: %v", c.name, entries)
+		entries, _ := os.ReadDir(dir + "/webui")
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".settings.") {
+				t.Errorf("%s: temp file left behind: %s", c.name, e.Name())
+			}
 		}
 	}
 	s := hermesStartScript(hermesStartOpts{AgentVersion: "0.22.4", WebUIVersion: "0.52.544"})

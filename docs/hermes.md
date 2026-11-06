@@ -150,9 +150,12 @@ box awake. An idle-reaped box misses its scheduled jobs. Use `km extend <sb>
   warns when the provider is `bedrock` and the extra is missing.
 - **No update banner.** Upstream's WebUI checks for agent updates and offers
   "Update Now". That button would move the agent to `origin/main`, off the pinned
-  release pair the WebUI was tested with. `start` sets `"check_for_updates":
-  false` in `~/.hermes/webui/settings.json` only when the key is absent, so an
-  operator who turns it back on keeps it. Upgrade with
+  release pair the WebUI was tested with. The WebUI writes all its defaults into
+  `~/.hermes/webui/settings.json` on its first run, so the key is always there.
+  `start` therefore decides once: if `~/.hermes/webui/.km-update-check-disabled`
+  is absent, it sets `"check_for_updates": false` and then writes that marker.
+  After that it never touches the key, so an operator who turns the check back
+  on keeps it. Delete the marker to have `start` turn it off again. Upgrade with
   `km hermes start <sb> --agent-version X --webui-version Y`, a pair that
   upstream released together.
 - **Bedrock** goes to `bedrock-runtime.*.amazonaws.com`. km's http-proxy already
@@ -243,14 +246,17 @@ and `/` redirects to `/login`. Two findings, both fixed in `start`:
   it in under a second. `start` now does this before starting the unit (§
   Providers).
 - **The WebUI offered "5302 updates available — Update Now"** for the agent
-  (`origin/main`). `start` now turns `check_for_updates` off when the key is
-  unset (§ Providers).
+  (`origin/main`). `start` now turns `check_for_updates` off (§ Providers).
+
+Third run 2026-11-05: a real Bedrock turn works end to end (with the http-proxy
+SigV4 fix). Confirmed: `hermes pm status` lists `"feature_list": ["all",
+"bedrock"]`, and `git describe --tags` on the shallow clone returns `v0.52.544`.
+One finding: the banner was still showing, because the WebUI persists
+`"check_for_updates": true` among its defaults, so "set only when absent" never
+fired. `start` now sets it once and records that with a marker (§ Providers).
 
 Still marked `UAT:` in `internal/app/cmd/hermes.go`:
 
-- `git describe --tags` on a shallow clone.
-- The `feature_list` field of `hermes pm status`. If it never matches, `start`
-  reinstalls the extra (idempotent) and restarts the server on every run.
 - Whether the server re-reads `settings.json`. `start` restarts it after a
   change, in case it caches.
 
