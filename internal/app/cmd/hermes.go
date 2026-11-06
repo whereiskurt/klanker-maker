@@ -47,6 +47,11 @@ const (
 	// hermesDefaultModel is what provider seeding sets when the profile routes
 	// through Bedrock and the operator gave no --model.
 	hermesDefaultModel = "us.anthropic.claude-sonnet-4-6"
+	// hermesStartPollAttempts is start's SSM poll budget: 20 minutes at the 2 s
+	// poll interval. A first install (uv, a Python, the agent's frontend build)
+	// can outlast sendSSMAndWait's 5 minutes; an operator who then retries
+	// meets the start lock instead of a second installer.
+	hermesStartPollAttempts = 600
 )
 
 // hermesPythonCandidates are where the agent installer's virtualenv may put
@@ -142,10 +147,31 @@ var hermesStopScript = `systemctl disable --now km-hermes.service >/dev/null 2>&
 ` + hermesStatusScript
 
 // hermesPasswordScript prints the WebUI password under its marker. Only connect
-// sends it; start and status never print the password.
+// sends it, so the password does transit SSM command output on every connect
+// (retained by AWS for about 30 days; readable by operators who can already
+// km shell --root). Start and status never print it.
 const hermesPasswordScript = `
 echo "=== password ==="
 sed -n 's/^HERMES_WEBUI_PASSWORD=//p' /etc/km/hermes/webui.env 2>/dev/null || true`
+
+// hermesUseBedrockAwk exits 0 iff the on-box profile has useBedrock: true as
+// a DIRECT child of an execution: mapping. It skips block scalars (`a: |` /
+// `a: >-`), whose content is text, not keys — a configFiles entry that
+// happens to contain "useBedrock: true" must not count — and ignores deeper
+// nesting under execution. Executed by TestHermesUseBedrockAwk. No single
+// quotes: it is embedded in a single-quoted awk argument.
+const hermesUseBedrockAwk = `
+BEGIN { skip = -1; inb = 0; found = 0 }
+function indent(s) { match(s, /^ */); return RLENGTH }
+/^[ ]*(#.*)?$/ { next }
+{ n = indent($0) }
+skip >= 0 { if (n > skip) next; skip = -1 }
+inb && n <= ind { inb = 0 }
+!inb && /^[ ]*execution:[ ]*$/ { ind = n; inb = 1; child = -1; next }
+inb { if (child < 0) child = n; if (n == child && $0 ~ /^[ ]*useBedrock:[ ]*true[ ]*$/) found = 1 }
+/:[ ]*[|>][-+0-9]*[ ]*$/ { skip = n }
+END { exit found ? 0 : 1 }
+`
 
 // hermesModelRe bounds --model to what a Bedrock/provider model id looks like;
 // it is interpolated into a shell variable.
@@ -167,8 +193,14 @@ type hermesStartOpts struct {
 // user controls (~sandbox, /workspace, a fixed /tmp name) with a root file
 // operation: work in ~/.hermes happens via runuser as sandbox; root scratch
 // files come from mktemp; root writes stay in /etc/km/hermes (root 0700) and
-// /etc/systemd/system. The password never reaches stdout: SSM keeps command
-// output.
+// /etc/systemd/system. Start and status never print the password; connect
+// (hermesPasswordScript) does, so it travels in SSM command output, which AWS
+// retains for about 30 days — readable by anyone with ssm:GetCommandInvocation,
+// i.e. operators who can already km shell --root.
+//
+// Sections run as the sandbox user are fenced by `# >>> sandbox` /
+// `# <<< sandbox` lines (or are one-line runuser calls), which the root-ops
+// test strips before checking what root touches.
 func hermesStartScript(o hermesStartOpts) string {
 	rotate := 0
 	if o.RotatePassword {
@@ -176,7 +208,19 @@ func hermesStartScript(o hermesStartOpts) string {
 	}
 	head := fmt.Sprintf("KM_HERMES_AGENT_VERSION='%s'\nKM_HERMES_WEBUI_VERSION='%s'\nKM_HERMES_MODEL='%s'\nKM_HERMES_ROTATE=%d\n",
 		o.AgentVersion, o.WebUIVersion, o.Model, rotate)
-	return head + libatomicHasFunc + `# 1. libatomic (root). The agent installer's package step installs it with
+	return head + `# 0. One start at a time: a retry after the operator's poll gave up must not
+# race a still-running installer (both rm/mv the WebUI checkout). /run is
+# root-owned, so the fixed name is safe. flock is util-linux (AL2023 and
+# Ubuntu both ship it); guarded anyway. Installers get 9>&- so a process they
+# leave behind cannot hold the lock forever.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>/run/km-hermes-start.lock
+  if ! flock -n 9; then
+    echo "=== busy ==="
+    exit 0
+  fi
+fi
+` + libatomicHasFunc + `# 1. libatomic (root). The agent installer's package step installs it with
 # sudo -n, which an unprivileged sandbox cannot do. The package repos are
 # outside base/network/locked's allowlist, so on such a box this fails.
 ` + libatomicInstallStep + `NEED_RESTART=0
@@ -204,6 +248,7 @@ hermes_ver
 if [ "$CUR" != "$KM_HERMES_AGENT_VERSION" ]; then
   echo "installing hermes-agent v$KM_HERMES_AGENT_VERSION"
   INSTLOG=$(mktemp)
+# >>> sandbox
   if ! runuser -u sandbox -- env KM_V="$KM_HERMES_AGENT_VERSION" bash -lc '
 set -o pipefail
 SHA=$(git ls-remote https://github.com/NousResearch/hermes-agent.git "refs/tags/v$KM_V^{}" | cut -f1)
@@ -213,7 +258,8 @@ case "$SHA" in
 esac
 [ "${#SHA}" -eq 40 ] || { echo "tag v$KM_V resolved to an unexpected id: $SHA"; exit 1; }
 curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/v$KM_V/scripts/install.sh" | bash -s -- --non-interactive --skip-browser --skip-computer-use --branch main --commit "$SHA"
-' >"$INSTLOG" 2>&1; then
+' >"$INSTLOG" 2>&1 9>&-; then
+# <<< sandbox
     echo "=== install failed ==="
     tail -5 "$INSTLOG"
     rm -f "$INSTLOG"
@@ -236,6 +282,7 @@ WT=$(runuser -u sandbox -- bash -lc 'git -C ~/.hermes/hermes-webui describe --ta
 if [ "$WT" != "v$KM_HERMES_WEBUI_VERSION" ]; then
   echo "installing hermes-webui v$KM_HERMES_WEBUI_VERSION"
   INSTLOG=$(mktemp)
+# >>> sandbox
   if ! runuser -u sandbox -- env KM_W="$KM_HERMES_WEBUI_VERSION" bash -lc '
 set -e
 mkdir -p ~/.hermes
@@ -244,7 +291,8 @@ rm -rf hermes-webui.km-new
 git clone -q --depth 1 --branch "v$KM_W" https://github.com/nesquena/hermes-webui.git hermes-webui.km-new
 rm -rf hermes-webui
 mv hermes-webui.km-new hermes-webui
-' >"$INSTLOG" 2>&1; then
+' >"$INSTLOG" 2>&1 9>&-; then
+# <<< sandbox
     echo "=== install failed ==="
     tail -5 "$INSTLOG"
     rm -f "$INSTLOG"
@@ -256,19 +304,32 @@ fi
 # The WebUI's only deps are pyyaml + cryptography, in the agent's Python.
 # UAT: whether the agent env already has both; if not, which installer works
 # there (a uv venv may have no pip) — or HERMES_WEBUI_AUTO_INSTALL=1.
-runuser -u sandbox -- bash -lc '` + hermesPickPython("$") + `; "$P" -c "import yaml, cryptography" 2>/dev/null || "$P" -m pip install -q pyyaml cryptography' >/dev/null 2>&1 || true
+runuser -u sandbox -- bash -lc '` + hermesPickPython("$") + `; "$P" -c "import yaml, cryptography" 2>/dev/null || "$P" -m pip install -q pyyaml cryptography' >/dev/null 2>&1 9>&- || true
+# A run or stream in flight: a restart (KillMode=mixed) would kill it. Config
+# and password changes then wait for the next restart; an install or a unit
+# change still restarts (the files on disk already changed under the server).
+BUSY=0
+if systemctl is-active --quiet km-hermes.service && curl -sS --max-time 3 http://127.0.0.1:8787/health 2>/dev/null | grep -Eq '"active_(runs|streams)"[[:space:]]*:[[:space:]]*[1-9]'; then
+  BUSY=1
+fi
+SOFT_RESTART=0
+DEFERRED=""
 # 4. The login password, root-only, created only if absent (stable across
 # restarts and analysts) or on --rotate-password. mktemp inside the root-only
-# dir, then mv: no fixed name anywhere. Never printed.
+# dir, then mv: no fixed name anywhere. Never printed. A rotation while busy
+# is not applied at all — rewriting the file without a restart would make
+# connect print a password the running server does not accept.
 install -d -m 0700 -o root -g root /etc/km/hermes
-if [ "$KM_HERMES_ROTATE" = 1 ] || [ ! -s /etc/km/hermes/webui.env ]; then
+if [ "$KM_HERMES_ROTATE" = 1 ] && [ "$BUSY" = 1 ] && [ -s /etc/km/hermes/webui.env ]; then
+  DEFERRED="$DEFERRED password-rotation"
+elif [ "$KM_HERMES_ROTATE" = 1 ] || [ ! -s /etc/km/hermes/webui.env ]; then
   PWTMP=$(mktemp /etc/km/hermes/.webui.env.XXXXXX)
   PW=$(head -c 96 /dev/urandom | base64 | tr -dc 'A-Za-z0-9_-' | cut -c1-32)
   printf 'HERMES_WEBUI_PASSWORD=%s\nHERMES_WEBUI_COOKIE_NAME=km_hermes_session\n' "$PW" >"$PWTMP"
   PW=
   chmod 0600 "$PWTMP"
   mv -f "$PWTMP" /etc/km/hermes/webui.env
-  NEED_RESTART=1
+  SOFT_RESTART=1
 fi
 # 5. Provider seeding (sandbox user), only when model.provider is unset —
 # never clobber an operator's choice — and only when the profile routes
@@ -280,29 +341,31 @@ REGION=$(curl -sS --max-time 2 -H "X-aws-ec2-metadata-token: $TOK" http://169.25
 case "$REGION" in *[!a-z0-9-]*) REGION="";; esac
 hermes_bin
 SEEDLOG=$(mktemp)
-runuser -u sandbox -- env KM_REGION="$REGION" KM_MODEL="$KM_HERMES_MODEL" KM_HBIN="$H_BIN" bash -l >"$SEEDLOG" 2>/dev/null <<'KM_HERMES_SEED_EOF'
+# >>> sandbox
+runuser -u sandbox -- env KM_REGION="$REGION" KM_MODEL="$KM_HERMES_MODEL" KM_HBIN="$H_BIN" bash -l >"$SEEDLOG" 2>/dev/null 9>&- <<'KM_HERMES_SEED_EOF'
 [ -n "$KM_HBIN" ] || exit 0
-cur=$("$KM_HBIN" config get model.provider 2>/dev/null | head -1 | tr -d '[:space:]')
+# Every hermes call reads /dev/null, never this heredoc: the script itself is
+# bash's stdin, and a call that reads stdin would swallow the rest of it.
+cur=$("$KM_HBIN" config get model.provider </dev/null 2>/dev/null | head -1 | tr -d '[:space:]')
 case "$cur" in ""|None|none|null|"(notset)"|notset) cur="";; esac
-if [ -z "$cur" ] && awk '
-/^[ ]*execution:[ ]*$/ { match($0, /^ */); ind = RLENGTH; inb = 1; next }
-inb && $0 !~ /^[ ]*$/ { match($0, /^ */); if (RLENGTH <= ind) inb = 0 }
-inb && /^[ ]*useBedrock:[ ]*true[ ]*$/ { found = 1 }
-END { exit found ? 0 : 1 }
-' /opt/km/.km-profile.yaml 2>/dev/null; then
-  "$KM_HBIN" config set model.provider bedrock >/dev/null 2>&1 && echo "km-seed: provider bedrock"
-  "$KM_HBIN" config set model.default "${KM_MODEL:-us.anthropic.claude-sonnet-4-6}" >/dev/null 2>&1 && echo "km-seed: model ${KM_MODEL:-us.anthropic.claude-sonnet-4-6}"
-  if [ -n "$KM_REGION" ]; then "$KM_HBIN" config set bedrock.region "$KM_REGION" >/dev/null 2>&1 && echo "km-seed: bedrock.region $KM_REGION"; fi
+if [ -z "$cur" ] && awk '` + hermesUseBedrockAwk + `' /opt/km/.km-profile.yaml 2>/dev/null; then
+  "$KM_HBIN" config set model.provider bedrock </dev/null >/dev/null 2>&1 && echo "km-seed: provider bedrock"
+  "$KM_HBIN" config set model.default "${KM_MODEL:-us.anthropic.claude-sonnet-4-6}" </dev/null >/dev/null 2>&1 && echo "km-seed: model ${KM_MODEL:-us.anthropic.claude-sonnet-4-6}"
+  if [ -n "$KM_REGION" ]; then "$KM_HBIN" config set bedrock.region "$KM_REGION" </dev/null >/dev/null 2>&1 && echo "km-seed: bedrock.region $KM_REGION"; fi
 elif [ -n "$KM_MODEL" ]; then
-  "$KM_HBIN" config set model.default "$KM_MODEL" >/dev/null 2>&1 && echo "km-seed: model $KM_MODEL"
+  curmodel=$("$KM_HBIN" config get model.default </dev/null 2>/dev/null | head -1 | tr -d '[:space:]')
+  if [ "$curmodel" != "$KM_MODEL" ]; then
+    "$KM_HBIN" config set model.default "$KM_MODEL" </dev/null >/dev/null 2>&1 && echo "km-seed: model $KM_MODEL"
+  fi
 fi
 KM_HERMES_SEED_EOF
+# <<< sandbox
 SEED=$(grep '^km-seed: ' "$SEEDLOG" || true)
 rm -f "$SEEDLOG"
 if [ -n "$SEED" ]; then
   echo "=== seeded ==="
   printf '%s\n' "$SEED"
-  NEED_RESTART=1
+  SOFT_RESTART=1
 fi
 # 6. The unit, staged inside /etc/systemd/system.
 [ -d /workspace ] || install -d -o sandbox -g sandbox /workspace
@@ -318,6 +381,13 @@ else
   rm -f "$NEWUNIT"
 fi
 systemctl enable km-hermes.service >/dev/null 2>&1
+if [ "$SOFT_RESTART" = 1 ] && [ "$NEED_RESTART" = 0 ]; then
+  if [ "$BUSY" = 1 ]; then DEFERRED="$DEFERRED config"; else NEED_RESTART=1; fi
+fi
+if [ -n "$DEFERRED" ]; then
+  echo "=== restart deferred ==="
+  for d in $DEFERRED; do echo "$d"; done
+fi
 if [ "$NEED_RESTART" = 1 ]; then systemctl restart km-hermes.service; else systemctl start km-hermes.service; fi
 # 7. Wait for it to answer. The first boot may install the WebUI's deps.
 i=0
@@ -354,7 +424,9 @@ type hermesBoxState struct {
 	InstallFailed    string // installer tail when an install failed
 	NotReadyLog      string // redacted log tail when the server never answered
 	Seeded           []string
-	Password         string // only from connect's marker
+	Busy             bool     // another km hermes start holds the lock
+	Deferred         []string // changes not applied because a run was active
+	Password         string   // only from connect's marker
 }
 
 // parseHermesStatus never errors; callers decide which missing facts are fatal.
@@ -398,6 +470,14 @@ func parseHermesStatus(out string) hermesBoxState {
 			st.Seeded = append(st.Seeded, l)
 		}
 	}
+	st.Busy = strings.Contains(out, "=== busy ===")
+	if strings.Contains(out, "=== restart deferred ===") {
+		for _, l := range strings.Split(field("=== restart deferred ==="), "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				st.Deferred = append(st.Deferred, l)
+			}
+		}
+	}
 	if strings.Contains(out, "=== install failed ===") {
 		st.InstallFailed = field("=== install failed ===")
 		if st.InstallFailed == "" {
@@ -414,6 +494,8 @@ func parseHermesStatus(out string) hermesBoxState {
 // server up.
 func hermesSetupError(st hermesBoxState, sandboxID string) error {
 	switch {
+	case st.Busy:
+		return fmt.Errorf("another km hermes start is running on %s — wait for it to finish, then check `km hermes status %s`", sandboxID, sandboxID)
 	case st.LibatomicMissing:
 		return fmt.Errorf("libatomic is missing on %s and the OS package repos are unreachable from it "+
 			"(a base/network/locked-style egress allowlist). Add cdn.amazonlinux.com (AL2023) or the Ubuntu "+
@@ -445,6 +527,14 @@ func hermesStatusReport(w io.Writer, sandboxID string, st hermesBoxState) error 
 		st.Version, st.WebUITag, sandboxID, hermesRemotePort, enabled)
 	for _, s := range st.Seeded {
 		fmt.Fprintf(w, "  configured: %s\n", s)
+	}
+	for _, d := range st.Deferred {
+		switch d {
+		case "password-rotation":
+			fmt.Fprintf(w, "⚠ a run is active, so the password was NOT rotated — rerun `km hermes start %s --rotate-password` when it is idle\n", sandboxID)
+		default:
+			fmt.Fprintf(w, "⚠ a run is active, so the server was not restarted: the change applies on the next restart (`km hermes stop %s && km hermes start %s`)\n", sandboxID, sandboxID)
+		}
 	}
 	if !st.Ready {
 		fmt.Fprintf(w, "⚠ the server is not answering /health yet — see /home/sandbox/.hermes/km-hermes.log on the sandbox\n")
@@ -576,7 +666,7 @@ var hermesStart = func(ctx context.Context, cfg *config.Config, fetcher SandboxF
 		return err
 	}
 	fmt.Printf("Starting hermes-agent v%s + webui v%s on %s (installs on first run, a few minutes)…\n", o.AgentVersion, o.WebUIVersion, sandboxID)
-	out, err := sendSSMAndWait(ctx, s, instanceID, hermesStartScript(o))
+	out, err := sendSSMAndWaitN(ctx, s, instanceID, hermesStartScript(o), hermesStartPollAttempts)
 	if err != nil {
 		return fmt.Errorf("ssm start: %w", err)
 	}

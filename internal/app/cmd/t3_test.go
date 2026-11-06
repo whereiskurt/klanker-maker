@@ -247,7 +247,7 @@ func TestT3PortPinnedAcrossSites(t *testing.T) {
 	if m == nil || string(m[1]) != strconv.Itoa(t3RemotePort) {
 		t.Fatalf("km-presence t3Port = %q; want %d", m, t3RemotePort)
 	}
-	if !strings.Contains(string(src), `"/km-t3code.service"`) || t3UnitName != "km-t3code.service" {
+	if u := regexp.MustCompile(`const t3UnitName = "([^"]+)"`).FindSubmatch(src); u == nil || string(u[1]) != t3UnitName {
 		t.Error("km-presence's cgroup match and t3UnitName disagree")
 	}
 }

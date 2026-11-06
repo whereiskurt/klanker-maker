@@ -292,11 +292,19 @@ func TestHermesStartScript_ProviderSeedingGated(t *testing.T) {
 func TestHermesStartScript_NoRootFileOpsOnSandboxPaths(t *testing.T) {
 	s := hermesStartScript(hermesStartOpts{AgentVersion: "0.22.4", WebUIVersion: "0.52.544"})
 	rootPart := strings.Replace(s, hermesUnitFile, "", 1)
-	// Strip everything handed to the sandbox user: single-quoted bash -lc bodies
-	// and the seeding heredoc.
-	rootPart = regexp.MustCompile(`(?s)bash -lc '.*?'`).ReplaceAllString(rootPart, "")
-	rootPart = regexp.MustCompile(`(?s)<<'KM_HERMES_SEED_EOF'.*?\nKM_HERMES_SEED_EOF`).ReplaceAllString(rootPart, "")
-	rootPart = strings.ReplaceAll(rootPart, "runuser -u sandbox -- tail -20 /home/sandbox/.hermes/km-hermes.log", "")
+	// Strip everything handed to the sandbox user: the fenced multi-line
+	// sections and every one-line runuser call.
+	if strings.Count(rootPart, "# >>> sandbox") != 3 || strings.Count(rootPart, "# <<< sandbox") != 3 {
+		t.Fatalf("expected 3 fenced sandbox sections")
+	}
+	rootPart = regexp.MustCompile(`(?s)# >>> sandbox\n.*?# <<< sandbox\n`).ReplaceAllString(rootPart, "")
+	var kept []string
+	for _, l := range strings.Split(rootPart, "\n") {
+		if !strings.Contains(l, "runuser -u sandbox --") {
+			kept = append(kept, l)
+		}
+	}
+	rootPart = strings.Join(kept, "\n")
 	for _, bad := range []string{
 		"/tmp/",
 		"chown", "chmod 0600 /home", "touch /home", "rm -rf /home", "mkdir -p /home",
@@ -317,10 +325,18 @@ func TestHermesScripts_AreValidSh(t *testing.T) {
 		"stop":    hermesStopScript,
 		"connect": hermesStatusScript + hermesPasswordScript,
 	} {
-		cmd := exec.Command("sh", "-n")
-		cmd.Stdin = strings.NewReader(script)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Errorf("%s script fails sh -n: %v\n%s", name, err, out)
+		shells := []string{"sh"}
+		if _, err := exec.LookPath("dash"); err == nil {
+			shells = append(shells, "dash")
+		} else {
+			t.Logf("dash not on PATH: %s checked with sh -n only", name)
+		}
+		for _, sh := range shells {
+			cmd := exec.Command(sh, "-n")
+			cmd.Stdin = strings.NewReader(script)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Errorf("%s script fails %s -n: %v\n%s", name, sh, err, out)
+			}
 		}
 	}
 }
@@ -353,9 +369,7 @@ func TestHermesPortPinnedAcrossSites(t *testing.T) {
 	if !strings.Contains(string(src), "checkHermesInUse") || !strings.Contains(hermesStatusScript, "checkHermesInUse") {
 		t.Error("status's signal 10 probe and km-presence's symbol disagree")
 	}
-	presenceDir, _ := os.ReadFile("../../../cmd/km-presence/main.go")
-	all := string(src) + string(presenceDir)
-	if !strings.Contains(all, `"/km-hermes.service"`) && !strings.Contains(all, `"km-hermes.service"`) || hermesUnitName != "km-hermes.service" {
+	if u := regexp.MustCompile(`const hermesUnitName = "([^"]+)"`).FindSubmatch(src); u == nil || string(u[1]) != hermesUnitName {
 		t.Error("km-presence's cgroup match and hermesUnitName disagree")
 	}
 }
@@ -520,5 +534,169 @@ func TestHermesStartCmd_RejectsBadInputs(t *testing.T) {
 		if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "must look like") {
 			t.Errorf("%v: err = %v", args, err)
 		}
+	}
+}
+
+// TestHermesUseBedrockAwk EXECUTES the detector the provider seeding uses,
+// against real awk: only a direct execution.useBedrock: true counts.
+func TestHermesUseBedrockAwk(t *testing.T) {
+	if _, err := exec.LookPath("awk"); err != nil {
+		t.Skip("awk not on PATH")
+	}
+	cases := map[string]struct {
+		yaml string
+		want bool
+	}{
+		"true positive":  {"spec:\n    execution:\n        privileged: false\n        useBedrock: true\n    network:\n        enforcement: proxy\n", true},
+		"false":          {"spec:\n    execution:\n        useBedrock: false\n", false},
+		"absent":         {"spec:\n    execution:\n        privileged: true\n    agent:\n        default: claude\n", false},
+		"nested sibling": {"spec:\n    execution:\n        configFiles:\n            useBedrock: true\n        privileged: false\n", false},
+		"block scalar": {"spec:\n    execution:\n        configFiles:\n            a: |\n                useBedrock: true\n" +
+			"            b: >-\n                x\n                useBedrock: true\n        privileged: false\n", false},
+		"after block scalar": {"spec:\n    execution:\n        configFiles:\n            a: |\n                text\n        useBedrock: true\n", true},
+		"other block":        {"spec:\n    cli:\n        useBedrock: true\n    execution:\n        privileged: true\n", false},
+	}
+	dir := t.TempDir()
+	for name, c := range cases {
+		f := dir + "/p.yaml"
+		if err := os.WriteFile(f, []byte(c.yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := exec.Command("awk", hermesUseBedrockAwk, f).Run()
+		if got := err == nil; got != c.want {
+			t.Errorf("%s: matched=%v (err %v); want %v", name, got, err, c.want)
+		}
+	}
+	if strings.Contains(hermesUseBedrockAwk, "'") {
+		t.Error("the awk program is embedded in single quotes and must not contain one")
+	}
+	if !strings.Contains(hermesStartScript(hermesStartOpts{AgentVersion: "0.22.4", WebUIVersion: "0.52.544"}), "awk '"+hermesUseBedrockAwk+"' /opt/km/.km-profile.yaml") {
+		t.Error("start script does not embed hermesUseBedrockAwk")
+	}
+}
+
+// TestHermesUnitExecStart_Executes runs the ExecStart bash body for real
+// (systemd's $$ unescaped, /home/sandbox pointed at a temp dir, a fake
+// python): the log is created 0600 and the picked interpreter is exec'd with
+// the loopback-only server arguments. bash -c, not -lc: a login shell's
+// /etc/profile would reorder PATH ahead of the fake.
+func TestHermesUnitExecStart_Executes(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not on PATH")
+	}
+	m := regexp.MustCompile(`(?m)^ExecStart=/bin/bash -lc '(.*)'$`).FindStringSubmatch(hermesUnitFile)
+	if m == nil {
+		t.Fatal("no ExecStart bash body")
+	}
+	fake := "#!/bin/sh\nprintf '%s ' \"$0\" \"$@\" > \"$KM_TEST_MARK\"\necho started\n"
+	for _, venv := range []bool{false, true} {
+		home := t.TempDir()
+		body := strings.ReplaceAll(strings.ReplaceAll(m[1], "$$", "$"), "/home/sandbox", home)
+		if err := os.MkdirAll(home+"/.hermes/hermes-webui", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		bin := t.TempDir()
+		want := bin + "/python3"
+		if err := os.WriteFile(want, []byte(fake), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if venv {
+			want = home + "/.hermes/hermes-agent/venv/bin/python"
+			if err := os.MkdirAll(home+"/.hermes/hermes-agent/venv/bin", 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(want, []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mark := t.TempDir() + "/mark"
+		cmd := exec.Command("bash", "-c", body)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + home, "KM_TEST_MARK=" + mark}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("venv=%v: ExecStart body failed: %v\n%s", venv, err, out)
+		}
+		got, err := os.ReadFile(mark)
+		if err != nil {
+			t.Fatalf("venv=%v: interpreter was not exec'd: %v", venv, err)
+		}
+		if !strings.HasPrefix(string(got), want+" bootstrap.py --foreground --no-browser --host 127.0.0.1 8787") {
+			t.Errorf("venv=%v: exec'd %q; want %s bootstrap.py …", venv, got, want)
+		}
+		fi, err := os.Stat(home + "/.hermes/km-hermes.log")
+		if err != nil {
+			t.Fatalf("venv=%v: log not created: %v", venv, err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Errorf("venv=%v: log mode %o; want 600", venv, fi.Mode().Perm())
+		}
+		if log, _ := os.ReadFile(home + "/.hermes/km-hermes.log"); !strings.Contains(string(log), "started") {
+			t.Errorf("venv=%v: server output did not reach the log: %q", venv, log)
+		}
+	}
+}
+
+func TestHermesStartScript_LockRestartDeferralAndStdin(t *testing.T) {
+	s := hermesStartScript(hermesStartOpts{AgentVersion: "0.22.4", WebUIVersion: "0.52.544", Model: "m"})
+	lock := "exec 9>/run/km-hermes-start.lock\n  if ! flock -n 9; then\n    echo \"=== busy ===\""
+	if !strings.Contains(s, lock) || !strings.Contains(s, "command -v flock") {
+		t.Error("start must take the flock (guarded by command -v)")
+	}
+	if strings.Index(s, lock) > strings.Index(s, "has_libatomic()") {
+		t.Error("the lock must be taken before any work")
+	}
+	if strings.Count(s, ">\"$INSTLOG\" 2>&1 9>&-") != 2 {
+		t.Error("installers must not inherit the lock fd")
+	}
+	// Every hermes call inside the stdin-fed seed script reads /dev/null.
+	seed := s[strings.Index(s, "<<'KM_HERMES_SEED_EOF'"):]
+	seed = seed[:strings.Index(seed, "\nKM_HERMES_SEED_EOF")]
+	for _, l := range strings.Split(seed, "\n") {
+		if strings.Contains(l, `"$KM_HBIN" config`) && strings.Count(l, "</dev/null") != strings.Count(l, `"$KM_HBIN" config`) {
+			t.Errorf("hermes call reads the script's stdin: %s", l)
+		}
+	}
+	// --model is applied only when it differs from the current default.
+	if !strings.Contains(seed, `if [ "$curmodel" != "$KM_MODEL" ]; then`) {
+		t.Error("--model must compare before config set")
+	}
+	for _, want := range []string{
+		`"active_(runs|streams)"[[:space:]]*:[[:space:]]*[1-9]`,
+		`DEFERRED="$DEFERRED password-rotation"`,
+		`if [ "$BUSY" = 1 ]; then DEFERRED="$DEFERRED config"; else NEED_RESTART=1; fi`,
+		`echo "=== restart deferred ==="`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("start script missing %q", want)
+		}
+	}
+	if strings.Contains(s, "SEED\" ]; then\n  echo \"=== seeded ===\"\n  printf '%s\\n' \"$SEED\"\n  NEED_RESTART=1") {
+		t.Error("a seed must not force a restart")
+	}
+}
+
+func TestParseHermesStatus_BusyAndDeferred(t *testing.T) {
+	st := parseHermesStatus("=== busy ===\n")
+	err := hermesSetupError(st, "sb-1")
+	if err == nil || !strings.Contains(err.Error(), "another km hermes start is running on sb-1") {
+		t.Fatalf("err = %v", err)
+	}
+	st = parseHermesStatus("=== seeded ===\nkm-seed: model m\n=== restart deferred ===\npassword-rotation\nconfig\n" + hermesStatusAllPresent)
+	if strings.Join(st.Deferred, ",") != "password-rotation,config" {
+		t.Fatalf("Deferred = %v", st.Deferred)
+	}
+	var buf bytes.Buffer
+	if err := hermesStatusReport(&buf, "sb-1", st); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"NOT rotated", "next restart", "km hermes stop sb-1 && km hermes start sb-1"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("report missing %q:\n%s", want, buf.String())
+		}
+	}
+}
+
+func TestHermesStartPollBudget(t *testing.T) {
+	if hermesStartPollAttempts < 600 {
+		t.Errorf("start poll budget %d attempts; want ≥ 600 (20 min at 2 s)", hermesStartPollAttempts)
 	}
 }
