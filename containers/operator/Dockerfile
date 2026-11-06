@@ -342,9 +342,10 @@ RUN mkdir -p /root/.aws /root/.km/profiles /work
 # into a sandbox is never offered to the LAN.
 #
 # Default local ports, one per verb: vscode 2222, tunnel k8s|socks 2223,
-# herdr 2224, model 8001, desktop 8444, codex OAuth callback 1455/1457.
+# herdr 2224, t3 3774, model 8001, desktop 8444, hermes 8788, codex OAuth
+# callback 1455/1457.
 ENV KM_FORWARD_BIND=0.0.0.0
-EXPOSE 1455 1457 2222 2223 2224 8001 8444
+EXPOSE 1455 1457 2222 2223 2224 3774 8001 8444 8788
 
 COPY containers/operator/entrypoint.sh /usr/local/bin/km-entrypoint
 RUN chmod +x /usr/local/bin/km-entrypoint

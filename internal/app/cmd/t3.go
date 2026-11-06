@@ -105,6 +105,32 @@ const t3StopScript = `systemctl disable --now km-t3code.service >/dev/null 2>&1 
 
 var t3VersionRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
+// libatomicHasFunc and libatomicInstallStep are the root-side libatomic step
+// shared by km t3 start and km hermes start: both installers need it and both
+// pull it in with `sudo -n`, which an unprivileged sandbox cannot do. On a box
+// whose egress cannot reach the OS package repos the step prints the
+// `=== libatomic ===` / `missing` marker and exits, which each verb turns into
+// the same named error. POSIX sh.
+const libatomicHasFunc = `has_libatomic() {
+  ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1' && return 0
+  [ -e /usr/lib64/libatomic.so.1 ] || [ -e /usr/lib/x86_64-linux-gnu/libatomic.so.1 ]
+}
+`
+
+const libatomicInstallStep = `if ! has_libatomic; then
+  PKGLOG=$(mktemp)
+  if command -v dnf >/dev/null 2>&1; then dnf install -y libatomic >"$PKGLOG" 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then apt-get install -y libatomic1 >"$PKGLOG" 2>&1 || true
+  fi
+  rm -f "$PKGLOG"
+  if ! has_libatomic; then
+    echo "=== libatomic ==="
+    echo missing
+    exit 0
+  fi
+fi
+`
+
 // t3StartScript installs (if needed), writes and starts the unit, then mints the
 // presence token. version must already match t3VersionRe.
 //
@@ -118,27 +144,10 @@ var t3VersionRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 // Work on ~/.t3 happens via runuser as sandbox; root scratch files come from
 // mktemp; the unit is staged inside /etc/systemd/system.
 func t3StartScript(version string) string {
-	return fmt.Sprintf(`KM_T3_VERSION='%s'
-has_libatomic() {
-  ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1' && return 0
-  [ -e /usr/lib64/libatomic.so.1 ] || [ -e /usr/lib/x86_64-linux-gnu/libatomic.so.1 ]
-}
-# 1. libatomic (root). The t3 binary will not run without it on AL2023, and its
+	return fmt.Sprintf("KM_T3_VERSION='%s'\n", version) + libatomicHasFunc + `# 1. libatomic (root). The t3 binary will not run without it on AL2023, and its
 # installer's own smoke test fails first. The package repos are outside
 # base/network/locked's allowlist, so on such a box this fails — report it.
-if ! has_libatomic; then
-  PKGLOG=$(mktemp)
-  if command -v dnf >/dev/null 2>&1; then dnf install -y libatomic >"$PKGLOG" 2>&1 || true
-  elif command -v apt-get >/dev/null 2>&1; then apt-get install -y libatomic1 >"$PKGLOG" 2>&1 || true
-  fi
-  rm -f "$PKGLOG"
-  if ! has_libatomic; then
-    echo "=== libatomic ==="
-    echo missing
-    exit 0
-  fi
-fi
-# 2. t3 itself (sandbox user), pinned, from the tagged installer on GitHub —
+` + libatomicInstallStep + fmt.Sprintf(`# 2. t3 itself (sandbox user), pinned, from the tagged installer on GitHub —
 # not t3.codes, which base/network/locked does not allow. The installer
 # verifies the release's SHA256SUMS. Compared as an exact version so a re-run
 # on an up-to-date box never reinstalls and restarts mid-turn.
@@ -209,7 +218,7 @@ for s in json.load(sys.stdin):
 else
   rm -f /etc/km/t3/presence.token.tmp
 fi
-`, version, t3UnitFile) + t3StatusScript
+`, t3UnitFile) + t3StatusScript
 }
 
 // t3PairScript mints a single-use, 5-minute pairing link whose base URL is the

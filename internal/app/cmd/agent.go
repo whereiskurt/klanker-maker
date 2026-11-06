@@ -1205,6 +1205,12 @@ done'`
 // GetCommandInvocation until completion, returning stdout content.
 // Uses a fast 2-second poll interval since these are short utility commands.
 func sendSSMAndWait(ctx context.Context, ssmClient SSMSendAPI, instanceID, shellCmd string) (string, error) {
+	return sendSSMAndWaitN(ctx, ssmClient, instanceID, shellCmd, 150) // 5 minutes at 2s
+}
+
+// sendSSMAndWaitN is sendSSMAndWait with an explicit poll budget, for the few
+// commands (an installer) that legitimately run longer than five minutes.
+func sendSSMAndWaitN(ctx context.Context, ssmClient SSMSendAPI, instanceID, shellCmd string, maxAttempts int) (string, error) {
 	cmdOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 		InstanceIds:  []string{instanceID},
 		DocumentName: awssdk.String("AWS-RunShellScript"),
@@ -1218,7 +1224,6 @@ func sendSSMAndWait(ctx context.Context, ssmClient SSMSendAPI, instanceID, shell
 
 	// Poll for completion — fast interval for short utility commands
 	pollInterval := agentUtilPollInterval
-	maxAttempts := 150 // 5 minutes at 2s
 	for i := 0; i < maxAttempts; i++ {
 		// Brief initial delay to let SSM register the invocation
 		delay := pollInterval

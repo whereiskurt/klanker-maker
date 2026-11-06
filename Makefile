@@ -229,12 +229,12 @@ operator-image:
 ## instead of a confusing failure.
 ##
 ## KM_PUBLISH_PORTS: host-loopback ports published into the container so the
-## SSM port-forwards (km vscode 2222, tunnel 2223, herdr 2224, model 8001,
-## desktop 8444, codex OAuth 1455/1457) are usable from the host. The image
+## SSM port-forwards (km vscode 2222, tunnel 2223, herdr 2224, t3 3774, model 8001,
+## desktop 8444, hermes 8788, codex OAuth 1455/1457) are usable from the host. The image
 ## sets KM_FORWARD_BIND=0.0.0.0 so km relays each forward off the container's
 ## loopback. Override to free a port a native km is already holding:
 ##   make operator-shell KM_PUBLISH_PORTS="2224 8444"
-KM_PUBLISH_PORTS ?= 1455 1457 2222 2223 2224 8001 8444
+KM_PUBLISH_PORTS ?= 1455 1457 2222 2223 2224 3774 8001 8444 8788
 
 operator-shell:
 	@test -f km-config.yaml || { \

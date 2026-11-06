@@ -1,0 +1,62 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+# A sandbox for `km hermes` (docs/hermes.md): unprivileged, Bedrock-enabled, so
+# `km hermes start` seeds Hermes with Bedrock via the instance role and the
+# MITM proxy meters its spend. Egress is wide open because the Hermes installer
+# pulls uv, a Python runtime, PyPI and frontend tooling (see docs/hermes.md § Egress).
+metadata:
+  name: hermes
+  labels:
+    tier: development
+    tool: hermes-webui
+  prefix: hermes
+
+extends:
+  - base/os/redhat
+  - base/network/safenetwork
+  - base/userinit             # claude + codex (Hermes can delegate to them)
+  - base/platform
+
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "30m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    instanceType: t3.xlarge
+    region: us-east-1
+    rootVolumeSize: 60
+    spot: false
+    hibernation: true
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: true
+    privileged: false
+
+  budget:
+    ai:
+      maxSpendUSD: 5.00
+    compute:
+      maxSpendUSD: 5.00
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  agent:
+    default: claude
+
+  notification:
+    events:
+      onIdle: false
+      onPermission: false
+    email:
+      enabled: false

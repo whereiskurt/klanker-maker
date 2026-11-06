@@ -442,7 +442,7 @@ func (tl *TransparentListener) relayWithInspection(client, dest net.Conn, origHo
 func (tl *TransparentListener) meterBedrockResponse(resp *http.Response, req *http.Request) {
 	be := tl.budget
 	modelID := ExtractModelID(req.URL.Path)
-	resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+	resp.Body = newMeteringReader(resp.Body, meterDecoded(resp, tl.sandboxID, "bedrock", func(captured []byte) {
 		inputTokens, outputTokens, parseErr := ExtractBedrockTokens(bytes.NewReader(captured))
 		if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
 			return
@@ -464,14 +464,14 @@ func (tl *TransparentListener) meterBedrockResponse(resp *http.Response, req *ht
 			Msg("")
 
 		tl.updateBudgetSpend(be, modelID, inputTokens, outputTokens, costUSD)
-	})
+	}))
 }
 
 // meterAnthropicResponse wraps an Anthropic response body with a metering reader
 // that extracts tokens and writes spend to DynamoDB on EOF.
 func (tl *TransparentListener) meterAnthropicResponse(resp *http.Response, req *http.Request) {
 	be := tl.budget
-	resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+	resp.Body = newMeteringReader(resp.Body, meterDecoded(resp, tl.sandboxID, "anthropic", func(captured []byte) {
 		modelID, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, parseErr := ExtractAnthropicTokens(bytes.NewReader(captured))
 		if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
 			return
@@ -495,7 +495,7 @@ func (tl *TransparentListener) meterAnthropicResponse(resp *http.Response, req *
 			Msg("")
 
 		tl.updateBudgetSpend(be, modelID, inputTokens, outputTokens, costUSD)
-	})
+	}))
 }
 
 // meterOpenAIResponse wraps an OpenAI response body with a metering reader
@@ -504,7 +504,7 @@ func (tl *TransparentListener) meterAnthropicResponse(resp *http.Response, req *
 // with cache-subtract arithmetic (OpenAI: cached_tokens is subset of input_tokens).
 func (tl *TransparentListener) meterOpenAIResponse(resp *http.Response, req *http.Request) {
 	be := tl.budget
-	resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+	resp.Body = newMeteringReader(resp.Body, meterDecoded(resp, tl.sandboxID, "openai", func(captured []byte) {
 		modelID, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens, parseErr := ExtractOpenAITokens(bytes.NewReader(captured))
 		if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
 			return
@@ -535,7 +535,7 @@ func (tl *TransparentListener) meterOpenAIResponse(resp *http.Response, req *htt
 			Msg("")
 
 		tl.updateBudgetSpend(be, modelID, inputTokens, outputTokens, costUSD)
-	})
+	}))
 }
 
 // updateBudgetSpend writes metered AI spend to DynamoDB and updates the local cache.
