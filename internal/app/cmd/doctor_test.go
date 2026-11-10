@@ -668,7 +668,7 @@ func (c *testConfig) GetCapacityTableName() string                             {
 func (c *testConfig) GetNATGatewayEnabled() bool                               { return false }
 func (c *testConfig) GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig { return nil }
 func (c *testConfig) GetWebhooks() appcfg.WebhooksConfig                       { return appcfg.WebhooksConfig{} }
-func (c *testConfig) GetWizOutpost() *wizoutpost.Settings                       { return c.wiz }
+func (c *testConfig) GetWizOutpost() *wizoutpost.Settings                      { return c.wiz }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -1027,7 +1027,7 @@ func (c *testDoctorConfig) GetCapacityTableName() string                        
 func (c *testDoctorConfig) GetNATGatewayEnabled() bool                               { return false }
 func (c *testDoctorConfig) GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig { return nil }
 func (c *testDoctorConfig) GetWebhooks() appcfg.WebhooksConfig                       { return appcfg.WebhooksConfig{} }
-func (c *testDoctorConfig) GetWizOutpost() *wizoutpost.Settings                       { return c.wiz }
+func (c *testDoctorConfig) GetWizOutpost() *wizoutpost.Settings                      { return c.wiz }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{

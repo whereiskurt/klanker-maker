@@ -46,13 +46,13 @@ import (
 	"github.com/spf13/cobra"
 	appcfg "github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
-	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
 	"github.com/whereiskurt/klanker-maker/pkg/capacity"
 	"github.com/whereiskurt/klanker-maker/pkg/check"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	profilepkg "github.com/whereiskurt/klanker-maker/pkg/profile"
 	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
 	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
+	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
 	"gopkg.in/yaml.v3"
 )
 
