@@ -516,52 +516,48 @@ Service Control Policies (SCPs) are AWS Organizations policies that apply at the
 
 **Why SCPs matter:** IAM role policies are enforced by the IAM service. If an agent somehow obtains a more permissive role (e.g., via cross-role assumption or a confused deputy attack), IAM alone cannot stop it. SCPs are evaluated before IAM -- they are organization-level denies that no role within the target account can override. Even the account root cannot override an SCP.
 
-**Deployment:** The `infra/modules/scp/v1.0.0` module deploys a single SCP named `km-sandbox-containment` and attaches it to the Application account via `aws_organizations_policy_attachment`. The Management account is exempt from SCPs by AWS design.
+**Deployment:** `pkg/scp` renders the policy from `km-config.yaml` (`resource_prefix`, `accounts.application`, `region`, and the optional `scp:` block of extra trusted roles and regions); `infra/modules/scp/v3.0.0` deploys that document verbatim as `{prefix}-sandbox-containment` and attaches it to the Application account. One renderer means the `km bootstrap --scp` preview, the deployed policy, and `km doctor`'s "SCP content" check cannot disagree. The Management account is exempt from SCPs by AWS design. Apply with `km bootstrap --scp-only [--plan | --dry-run=false]`; see `OPERATOR-GUIDE.md` § Regenerating the SCP from km-config.yaml.
 
 ### Deny Statements
 
-The SCP has six deny statements across five `statement` blocks (DenySSMPivot and DenyOrgDiscovery are separate statements but the first four concerns are consolidated into three blocks). Most use `ArnNotLike` on `aws:PrincipalARN` to carve out trusted platform roles (note: `NotPrincipal` is not supported in SCPs -- `ArnNotLike` on the condition variable achieves the same effect).
+Six deny statements. All but DenyOrgDiscovery use `ArnNotLike` on `aws:PrincipalARN` to exempt trusted platform roles (`NotPrincipal` is not supported in SCPs). "Base" below = operator SSO roles in the application account, `*-ttl-handler`, `*-create-handler`, plus `scp.trusted_roles`. Patterns are prefix-agnostic (`*-ttl-handler`) so installs sharing an account do not deny each other.
 
-#### 1. DenyInfraAndStorage (consolidated)
+**No trust pattern may match the sandbox instance role.** The role is `{prefix}-ec2spot-ssm-{metadata.prefix}-{8hex}-{label}`, and `metadata.prefix` is chosen by the profile, so a pattern with a bare-word infix (the former `*-lifecycle-*` / `*-provisioner-*`) exempted any sandbox whose profile used that word as its prefix. `pkg/scp.ValidateTrustPatterns` rejects such a pattern, built-in or from config.
 
-A single consolidated statement denying Security Group mutation (create, delete, authorize/revoke ingress and egress rules, modify rules), network escape (creation of VPCs, subnets, route tables, internet gateways, NAT gateways, VPC peering connections, Transit Gateway attachments), and storage exfiltration (EBS snapshot creation, snapshot copying, AMI creation, AMI copying, image export) for all roles not in `trusted_arns_base`. This consolidation from three separate statements into one fits within the 5,120-byte SCP limit.
+#### 1. DenyInfraAndStorage
+
+Security-group mutation, network escape (VPC, subnet, route table, route, internet gateway, NAT gateway, VPC peering, Transit Gateway), and storage exfiltration or destruction (`CreateSnapshot`, `CopySnapshot`, `DeleteSnapshot`, `CreateImage`, `CopyImage`, `ExportImage`, `DeregisterImage`) for every principal outside Base. `ec2:CreateTags` is deliberately not denied: `RunInstances` with `TagSpecifications` is authorised as `CreateTags`.
 
 #### 2. DenyInstanceMutation
 
-Denies `ec2:RunInstances`, `ec2:ModifyInstanceAttribute`, and `ec2:ModifyInstanceMetadataOptions`. Trusted roles: `trusted_arns_instance` = base roles + `km-ecs-spot-handler` (which launches Spot instances as part of normal platform operation).
-
-**Important:** `km-ecs-task-*` is intentionally NOT carved out. The ECS task role IS the sandbox workload. If the task role could run new instances, it would escape its compute budget and IAM scope. The SCP enforces this at the organization level regardless of the task role's IAM policy.
+`ec2:RunInstances`, `ec2:ModifyInstanceAttribute`, `ec2:ModifyInstanceMetadataOptions`, for every principal outside Base. Sandbox creation runs as `*-create-handler` (remote) or operator SSO (local).
 
 #### 3. DenyIAMEscalation
 
-Denies `iam:CreateRole`, `iam:AttachRolePolicy`, `iam:DetachRolePolicy`, `iam:PassRole`, and `iam:AssumeRole`. Trusted roles: `trusted_arns_iam` = base roles + `km-budget-enforcer-*`.
-
-The budget-enforcer Lambda carve-out is precise: it needs `AttachRolePolicy`/`DetachRolePolicy` to revoke Bedrock IAM permissions on budget breach, but it does NOT need `CreateRole` or `PassRole`. The SCP allows the enforcer to do exactly what it needs without granting broader IAM escalation.
+`iam:CreateRole`, `iam:AttachRolePolicy`, `iam:DetachRolePolicy`, `iam:PassRole` (and `iam:AssumeRole`, which is not a real IAM action and denies nothing — `sts:AssumeRole` is deliberately absent because the IMDS fence's self-assume and cross-account launches need it). Exempt: Base + `*-budget-enforcer-*` (Attach/Detach to revoke Bedrock on budget breach) + `scp.trusted_iam_roles`.
 
 #### 4. DenySSMPivot
 
-Denies `ssm:SendCommand` and `ssm:StartSession`. Trusted roles: `trusted_arns_ssm` = only `km-ec2spot-ssm-*` instance roles, `km-github-token-refresher-*`, and operator SSO roles.
-
-This prevents a compromised sandbox from using SSM to pivot to other instances in the account. The GitHub token refresher is listed here (not in base/instance/iam carve-outs) because it only needs SSM `GetParameter`/`PutParameter`, not instance session access.
+`ssm:SendCommand` and `ssm:StartSession`. Exempt: operator SSO, `*-ttl-handler`, `*-create-handler`, `scp.trusted_ssm_roles`. The sandbox instance role is NOT exempt — until v3.0.0 the list contained `*-ec2spot-ssm-*`, which is the sandbox role itself, so the statement never applied to the principal it exists to stop (the instance role's own IAM policy grants neither action, so IAM was the only barrier).
 
 #### 5. DenyOrgDiscovery
 
-Denies `organizations:List*` and `organizations:Describe*` (wildcard actions covering all list and describe operations). This statement has **no condition** -- it applies to all roles in the Application account without exception. Application account roles have no legitimate reason to enumerate org structure. The management account is exempt by AWS design.
+`organizations:List*` and `organizations:Describe*`, **no condition** — every principal in the Application account. The management account is exempt by AWS design.
 
-#### 6. DenyOutsideAllowedRegions
+#### 6. DenyOutsideRegion
 
-Denies all actions outside the configured `allowed_regions` using `StringNotEquals` on `aws:RequestedRegion`. Uses `not_actions` (NotAction) so global AWS services (IAM, STS, Organizations, Route53, billing, CloudFront, health, pricing, Bedrock) work regardless of region. Trusted roles (`trusted_role_arns`) are exempt via an `ArnNotLike` condition so operators can perform cross-region operations (e.g., S3 replication to a secondary region).
+Every action outside `region` + `scp.extra_regions` (`StringNotEquals` on `aws:RequestedRegion`), except global or routed services listed in `NotAction` (IAM, STS, Organizations, Route53, billing, CloudFront, health, pricing, `bedrock:*`, `bedrock-mantle:*`, `aws-marketplace:*`). The NotAction list matches the ec2spot instance role's own region Deny; before v3.0.0 the SCP lacked `bedrock-mantle:*` and `aws-marketplace:*`, so that role's exemption for them was inert. Base is exempt.
 
 ### Carve-Out Summary
 
-| Statement | Trusted Roles (carve-out) |
-|-----------|--------------------------|
-| DenyInfraAndStorage | `trusted_arns_base` (operator SSO + provisioner roles) |
-| DenyInstanceMutation | `trusted_arns_instance` = base + `km-ecs-spot-handler` |
-| DenyIAMEscalation | `trusted_arns_iam` = base + `km-budget-enforcer-*` |
-| DenySSMPivot | `trusted_arns_ssm` = `km-ec2spot-ssm-*` + `km-github-token-refresher-*` + SSO roles |
-| DenyOrgDiscovery | None (applies to all) |
-| DenyOutsideAllowedRegions | `trusted_role_arns` (operators can operate cross-region) |
+| Statement | Exempt |
+|-----------|--------|
+| DenyInfraAndStorage | Base |
+| DenyInstanceMutation | Base |
+| DenyIAMEscalation | Base + `*-budget-enforcer-*` + `scp.trusted_iam_roles` |
+| DenySSMPivot | Operator SSO + `*-ttl-handler` + `*-create-handler` + `scp.trusted_ssm_roles` |
+| DenyOrgDiscovery | None |
+| DenyOutsideRegion | Base |
 
 ---
 

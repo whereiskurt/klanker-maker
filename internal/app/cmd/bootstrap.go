@@ -26,6 +26,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/pkg/scp"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt/planreport"
 )
@@ -638,183 +639,17 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 	return nil
 }
 
-// SCPStatement represents a single statement in an SCP policy document.
-// Exported so tests can inspect individual statement fields without AWS access.
-type SCPStatement struct {
-	Sid       string      `json:"Sid"`
-	Effect    string      `json:"Effect"`
-	Action    []string    `json:"Action,omitempty"`
-	NotAction []string    `json:"NotAction,omitempty"`
-	Resource  string      `json:"Resource"`
-	Condition interface{} `json:"Condition,omitempty"`
-}
-
-// SCPPolicyDoc is the top-level SCP policy document structure.
-// Exported so tests can inspect the full policy without AWS access.
-type SCPPolicyDoc struct {
-	Version   string         `json:"Version"`
-	Statement []SCPStatement `json:"Statement"`
-}
-
-// BuildSCPPolicy returns the SCP policy document for the application account
-// given the resolved trusted-principal sets. Pure (no AWS calls); tested directly.
-func BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM []string, region string) SCPPolicyDoc {
-	arnNotLike := func(arns []string) interface{} {
-		return map[string]interface{}{
-			"ArnNotLike": map[string]interface{}{
-				"aws:PrincipalARN": arns,
-			},
-		}
-	}
-
-	return SCPPolicyDoc{
-		Version: "2012-10-17",
-		Statement: []SCPStatement{
-			{
-				Sid:    "DenyInfraAndStorage",
-				Effect: "Deny",
-				Action: []string{
-					"ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
-					"ec2:AuthorizeSecurityGroup*", "ec2:RevokeSecurityGroup*",
-					"ec2:ModifySecurityGroupRules",
-					"ec2:CreateVpc", "ec2:CreateSubnet", "ec2:CreateRouteTable",
-					"ec2:CreateRoute", "ec2:*InternetGateway", "ec2:CreateNatGateway",
-					"ec2:*VpcPeeringConnection", "ec2:CreateTransitGateway*",
-					"ec2:CreateSnapshot", "ec2:CopySnapshot", "ec2:DeleteSnapshot",
-					// AMI / EBS snapshot lifecycle (Phase 56): trusted-base principals (operator,
-					// km-provisioner, km-lifecycle) may bake, copy, deregister, and clean up.
-					// Describe* ops are read-only and intentionally NOT denied here — they remain
-					// implicitly allowed for inspection. NOTE: SCP exemption alone does not grant
-					// permission — operator IAM allow policy must affirmatively include these ops.
-					// See WriteOperatorIAMGuidance() output for operator-side requirements.
-					"ec2:CreateImage", "ec2:CopyImage", "ec2:ExportImage", "ec2:DeregisterImage",
-					"ec2:CreateTags",
-				},
-				Resource:  "*",
-				Condition: arnNotLike(trustedBase),
-			},
-			{
-				Sid:    "DenyInstanceMutation",
-				Effect: "Deny",
-				Action: []string{
-					"ec2:RunInstances", "ec2:ModifyInstanceAttribute",
-					"ec2:ModifyInstanceMetadataOptions",
-				},
-				Resource:  "*",
-				Condition: arnNotLike(trustedInstance),
-			},
-			{
-				Sid:    "DenyIAMEscalation",
-				Effect: "Deny",
-				Action: []string{
-					"iam:CreateRole", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
-					"iam:PassRole", "iam:AssumeRole",
-				},
-				Resource:  "*",
-				Condition: arnNotLike(trustedIAM),
-			},
-			{
-				Sid:      "DenySSMPivot",
-				Effect:   "Deny",
-				Action:   []string{"ssm:SendCommand", "ssm:StartSession"},
-				Resource: "*",
-				Condition: arnNotLike(trustedSSM),
-			},
-			{
-				Sid:    "DenyOrgDiscovery",
-				Effect: "Deny",
-				Action: []string{"organizations:List*", "organizations:Describe*"},
-				Resource: "*",
-			},
-			{
-				Sid:    "DenyOutsideRegion",
-				Effect: "Deny",
-				NotAction: []string{
-					"iam:*", "sts:*", "organizations:*", "support:*", "health:*",
-					"trustedadvisor:*", "cloudfront:*", "waf:*", "shield:*",
-					"route53:*", "route53domains:*", "budgets:*", "ce:*", "cur:*",
-					"globalaccelerator:*", "networkmanager:*", "pricing:*", "bedrock:*",
-					"s3:GetAccountPublicAccessBlock", "s3:ListAllMyBuckets",
-					"s3:PutAccountPublicAccessBlock",
-				},
-				Resource: "*",
-				Condition: map[string]interface{}{
-					"StringNotEquals": map[string]interface{}{
-						"aws:RequestedRegion": []string{region},
-					},
-					"ArnNotLike": map[string]interface{}{
-						"aws:PrincipalArn": trustedBase,
-					},
-				},
-			},
-		},
-	}
-}
-
-// BuildSCPPolicyFromPrefix is a convenience wrapper introduced in Phase 84.4.
-// It computes the trusted ARN sets then delegates to BuildSCPPolicy. The ARN
-// set structure mirrors infra/modules/scp/v2.0.0/main.tf locals (trusted_arns_*)
-// with var.trusted_role_arns at its default (SSO wildcard only).
-//
-// Phase 84.4.1: SCP cross-install composition — trusted slot construction uses
-// *-* suffix patterns (account + prefix both wildcarded) so multiple installs
-// sharing an application account do not deny each other's roles. The parameters
-// resourcePrefix and applicationAccountID are accepted for signature compatibility
-// but are no longer used in trusted slot construction (blanked with _ = to
-// satisfy the Go compiler). allowedRegion continues to be used for the region
-// lock condition.
-//
-// Returns the policy as a JSON string (indented) for display and size checks.
-// The 5,000-byte safety threshold (matching the HCL precondition) is NOT enforced
-// here — callers should check len(result) <= 5000 if needed.
-func BuildSCPPolicyFromPrefix(resourcePrefix, applicationAccountID, allowedRegion string) string {
-	// Phase 84.4.1: resourcePrefix is not used in trust slot construction (patterns
-	// are prefix-agnostic *-* wildcards). applicationAccountID account-scopes the SSO
-	// trust entry so this preview matches the deployed policy.
-	_ = resourcePrefix
-
-	// IMPORTANT (preview parity): trustedBase MUST mirror the `trusted_role_arns`
-	// input in infra/live/management/scp/terragrunt.hcl — that terragrunt unit is the
-	// SOURCE OF TRUTH for the deployed SCP. This Go builder only renders the preview
-	// shown by `km bootstrap --scp`; keep the two lists in sync when either changes.
-	// (Previously this used the module DEFAULT — SSO-only — so the preview was MORE
-	// restrictive than reality and omitted provisioner/lifecycle/ttl/create-handler.)
-	trustedBase := []string{
-		// Operator SSO roles — account-scoped to the application account.
-		"arn:aws:iam::" + applicationAccountID + ":role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
-		// Provisioner / lifecycle / handler roles — account + prefix wildcarded.
-		"arn:aws:iam::*:role/*-provisioner-*",
-		"arn:aws:iam::*:role/*-lifecycle-*",
-		"arn:aws:iam::*:role/*-ecs-spot-handler",
-		"arn:aws:iam::*:role/*-ttl-handler",
-		"arn:aws:iam::*:role/*-create-handler",
-	}
-	// trustedInstance mirrors trusted_arns_instance: base + *-ecs-spot-handler.
-	trustedInstance := append(append([]string{}, trustedBase...),
-		"arn:aws:iam::*:role/*-ecs-spot-handler")
-	// trustedIAM mirrors trusted_arns_iam: base + *-budget-enforcer-*.
-	trustedIAM := append(append([]string{}, trustedBase...),
-		"arn:aws:iam::*:role/*-budget-enforcer-*")
-	// trustedSSM mirrors trusted_arns_ssm: narrower set — only SSM-specific roles + SSO.
-	// Phase 84.4.1: account + prefix wildcarded across all SSM carve-out roles.
-	trustedSSM := []string{
-		"arn:aws:iam::*:role/*-ec2spot-ssm-*",
-		"arn:aws:iam::*:role/*-github-token-refresher-*",
-		"arn:aws:iam::*:role/*-ttl-handler",
-		// Phase 116: create-handler runs `km create --prompt` for cold-create check
-		// dispatch (the on-box prompt-queue push uses ssm:SendCommand). Trusted
-		// control-plane Lambda, same as *-ttl-handler (the warm path). Keep in lockstep
-		// with infra/modules/scp/v2.0.0 trusted_arns_ssm. See 116-UAT.md Bug G2.
-		"arn:aws:iam::*:role/*-create-handler",
-		"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
-	}
-
-	policy := BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM, allowedRegion)
-	policyJSON, err := json.MarshalIndent(policy, "", "  ")
+// BuildSCPPolicyJSON renders the install's {prefix}-sandbox-containment SCP
+// from km-config.yaml as indented JSON. It is a thin wrapper over pkg/scp — the
+// single definition of the policy, which is also what `km bootstrap` deploys
+// (via KM_SCP_POLICY_JSON → infra/modules/scp/v3.0.0) and what `km doctor`
+// compares the live policy against.
+func BuildSCPPolicyJSON(cfg *config.Config) (string, error) {
+	p, err := renderSCP(cfg)
 	if err != nil {
-		return fmt.Sprintf("error marshaling SCP policy: %v", err)
+		return "", err
 	}
-	return string(policyJSON)
+	return p.Indented(), nil
 }
 
 // WriteOperatorIAMGuidance writes the Phase 56 AMI-lifecycle positive-allow
@@ -830,7 +665,10 @@ func WriteOperatorIAMGuidance(w io.Writer) {
 	fmt.Fprintln(w, "# operations for trusted-base principals via ArnNotLike exemption:")
 	fmt.Fprintln(w, "#")
 	fmt.Fprintln(w, "#   ec2:CreateImage, ec2:CopyImage, ec2:ExportImage,")
-	fmt.Fprintln(w, "#   ec2:DeregisterImage, ec2:DeleteSnapshot, ec2:CreateTags")
+	fmt.Fprintln(w, "#   ec2:DeregisterImage, ec2:DeleteSnapshot")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintln(w, "# ec2:CreateTags is NOT denied by the SCP (RunInstances with tags is")
+	fmt.Fprintln(w, "# authorised as CreateTags), but AMI copy still needs it in IAM.")
 	fmt.Fprintln(w, "#")
 	fmt.Fprintln(w, "# IMPORTANT: Un-blocking via SCP is NOT the same as granting permission.")
 	fmt.Fprintln(w, "# The operator's SSO permission set (or the klanker-terraform role's inline")
@@ -839,12 +677,12 @@ func WriteOperatorIAMGuidance(w io.Writer) {
 	fmt.Fprintln(w, "#")
 	fmt.Fprintln(w, "# Required AMI-lifecycle permissions for the operator role:")
 	fmt.Fprintln(w, "#")
-	fmt.Fprintln(w, "#   Mutating (also exempted in SCP above):")
+	fmt.Fprintln(w, "#   Mutating:")
 	fmt.Fprintln(w, "#     - ec2:CreateImage")
 	fmt.Fprintln(w, "#     - ec2:CopyImage")
 	fmt.Fprintln(w, "#     - ec2:DeregisterImage")
 	fmt.Fprintln(w, "#     - ec2:DeleteSnapshot")
-	fmt.Fprintln(w, "#     - ec2:CreateTags")
+	fmt.Fprintln(w, "#     - ec2:CreateTags        (not in the SCP; IAM only)")
 	fmt.Fprintln(w, "#")
 	fmt.Fprintln(w, "#   Read-only (NOT in SCP — must be in IAM allow policy):")
 	fmt.Fprintln(w, "#     - ec2:DescribeImages       (km ami list, km doctor stale-AMI check)")
@@ -1053,6 +891,10 @@ func detectSharedSecretsKeyState(ctx context.Context, lister KMSAliasLister, exp
 
 // runBootstrapSharedSecretsKeyPlan is the production entry point for
 // km bootstrap --shared-secrets-key --plan.
+// RunBootstrapSharedSecretsKeyPlanFunc is the seam for the shared-secrets-key
+// plan (--shared-secrets-key --plan and subflow 3 of --all --plan).
+var RunBootstrapSharedSecretsKeyPlanFunc = runBootstrapSharedSecretsKeyPlan
+
 func runBootstrapSharedSecretsKeyPlan(cfg *config.Config, acceptDestroys bool) error {
 	return runBootstrapSharedSecretsKeyPlanWithWriter(context.Background(), cfg, os.Stdout, nil, acceptDestroys)
 }
@@ -1156,7 +998,10 @@ func runBootstrapSharedSecretsKeyPlanWithWriter(ctx context.Context, cfg *config
 func runBootstrapAll(ctx context.Context, cfg *config.Config, dryRun, plan, acceptDestroys bool, w io.Writer) error {
 	fmt.Fprintln(w, "=== Bootstrap: SCP + KMS + artifacts ===")
 	if plan {
-		if err := RunBootstrapSharedSESPlanFunc(cfg, acceptDestroys); err != nil {
+		// The SCP is subflow 1's only terraform unit (KMS key and artifacts
+		// bucket are SDK-created, so they have no plan). This used to call the
+		// SES plan, planning SES twice and the SCP never.
+		if err := RunBootstrapSCPPlanFunc(cfg, acceptDestroys); err != nil {
 			return fmt.Errorf("runBootstrap plan (subflow 1) failed: %w", err)
 		}
 	} else {
@@ -1363,6 +1208,7 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 	var plan bool
 	var acceptDestroys bool
 	var all bool
+	var scpOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
@@ -1374,6 +1220,15 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 			}
 			if showPrereqs {
 				return runShowPrereqs(cmd.Context(), cfg, w)
+			}
+			if scpOnly && (all || sharedSES || sharedSecretsKey) {
+				return fmt.Errorf("--scp-only is mutually exclusive with --all, --shared-ses and --shared-secrets-key")
+			}
+			if scpOnly && plan {
+				return RunBootstrapSCPPlanFunc(cfg, acceptDestroys)
+			}
+			if scpOnly {
+				return RunBootstrapSCPOnlyFunc(cmd.Context(), cfg, dryRun, cmd.OutOrStdout())
 			}
 			// Phase 84.3: --all and --shared-ses are mutually exclusive.
 			if all && sharedSES {
@@ -1398,10 +1253,16 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 			}
 			// Phase 89: --shared-secrets-key flag routing (mirrors --shared-ses).
 			if sharedSecretsKey && plan {
-				return runBootstrapSharedSecretsKeyPlan(cfg, acceptDestroys)
+				return RunBootstrapSharedSecretsKeyPlanFunc(cfg, acceptDestroys)
 			}
 			if sharedSecretsKey {
 				return RunBootstrapSharedSecretsKeyFunc(cmd.Context(), cfg, dryRun, cmd.OutOrStdout(), nil)
+			}
+			// --plan with no subflow flag plans the foundation subflow's only
+			// terraform unit, the SCP (the KMS key and artifacts bucket are SDK
+			// calls with no plan). It used to fall through to the dry-run text.
+			if plan {
+				return RunBootstrapSCPPlanFunc(cfg, acceptDestroys)
 			}
 			return RunBootstrapFunc(cmd.Context(), cfg, dryRun, cmd.OutOrStdout())
 		},
@@ -1426,6 +1287,8 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&all, "all", false,
 		"Chain bootstrap subflows in order: foundation → shared SES rule set → shared sandbox-secrets KMS key (Phase 84.3/89)")
+	cmd.Flags().BoolVar(&scpOnly, "scp-only", false,
+		"Render the {prefix}-sandbox-containment SCP from km-config.yaml (resource_prefix, accounts.application, region, scp:) and act on it alone: print it (default), --plan to diff against the live policy, --dry-run=false to apply. Effective immediately for every principal in the application account; no sandbox recreate")
 
 	return cmd
 }
@@ -1674,8 +1537,12 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 		resourcePrefix = "km"
 	}
 
-	// Build SCP policy document via prefix-based builder (mirrors scp/v2.0.0/main.tf locals).
-	policyJSON := BuildSCPPolicyFromPrefix(resourcePrefix, appAccount, region)
+	// Rendered by pkg/scp — the same bytes `km bootstrap --scp-only` deploys.
+	policy, err := renderSCP(loadedCfg)
+	if err != nil {
+		return err
+	}
+	policyJSON := policy.Indented()
 
 	// --- Print SCP policy ---
 	policyName := resourcePrefix + "-sandbox-containment"
@@ -1684,6 +1551,9 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	fmt.Fprintln(w, "#")
 	fmt.Fprintf(w, "# Target: Application account %s\n", appAccount)
 	fmt.Fprintf(w, "# Region lock: %s\n", region)
+	fmt.Fprintf(w, "# Size: %d of %d bytes (compact, as deployed)\n", len(policy.JSON()), scp.MaxBytes)
+	fmt.Fprintln(w, "# Source: pkg/scp + the scp: block of km-config.yaml.")
+	fmt.Fprintln(w, "# Preview the change against the live policy: km bootstrap --scp-only --plan")
 	fmt.Fprintln(w, "# ============================================================")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, policyJSON)
@@ -1895,19 +1765,23 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 
 		// SCP policy section
 		if loadedCfg.OrganizationAccountID != "" {
-			// Display text must track the prefix the SCP is actually built with
-			// (BuildSCPPolicyFromPrefix); the literals here described a "km" install
-			// only, and misreported both the policy name and the trusted roles on
-			// every other install.
+			// The trusted-role line is read off the rendered policy so it cannot
+			// drift from what is deployed (it used to list ECS-era roles that
+			// were never in the policy, and omitted create-handler).
 			scpPrefix := loadedCfg.GetResourcePrefix()
-			fmt.Fprintf(w, "  SCP Policy:        %s-sandbox-containment\n", scpPrefix)
+			fmt.Fprintf(w, "  SCP Policy:        %s\n", scp.PolicyName(scpPrefix))
 			fmt.Fprintf(w, "    Target:          Application account (%s)\n", loadedCfg.ApplicationAccountID)
 			fmt.Fprintf(w, "    Threat coverage: SG mutation, network escape, instance mutation,\n")
 			fmt.Fprintf(w, "                     IAM escalation, storage exfiltration, SSM pivot,\n")
 			fmt.Fprintf(w, "                     Organizations discovery, region lock\n")
-			fmt.Fprintf(w, "    Trusted roles:   AWSReservedSSO_*_*, %[1]s-provisioner-*, %[1]s-lifecycle-*,\n", scpPrefix)
-			fmt.Fprintf(w, "                     %[1]s-ecs-spot-handler, %[1]s-ttl-handler\n", scpPrefix)
-			fmt.Fprintf(w, "    Deploy via:      km bootstrap (organization account credentials required)\n")
+			if p, rerr := renderSCP(loadedCfg); rerr != nil {
+				fmt.Fprintf(w, "    Render error:    %v\n", rerr)
+			} else {
+				fmt.Fprintf(w, "    Trusted roles:   %s\n", strings.Join(p.Statement[0].Condition["ArnNotLike"]["aws:PrincipalARN"], "\n                     "))
+				fmt.Fprintf(w, "    Size:            %d of %d bytes\n", len(p.JSON()), scp.MaxBytes)
+			}
+			fmt.Fprintf(w, "    Preview diff:    km bootstrap --scp-only --plan\n")
+			fmt.Fprintf(w, "    Deploy via:      km bootstrap --scp-only --dry-run=false (application-account SSO; assumes %s-org-admin)\n", scpPrefix)
 		} else {
 			fmt.Fprintf(w, "  SCP Policy:        [SKIPPED — accounts.organization not set]\n")
 			fmt.Fprintf(w, "    Run 'km configure' and set accounts.organization to enable SCP deployment.\n")
@@ -1934,27 +1808,8 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 	}
 
 	// Non-dry-run: deploy SCP sandbox-containment policy.
-	// DNS parent env var is always exported (independent of org).
-	os.Setenv("KM_ACCOUNTS_DNS_PARENT", loadedCfg.DNSParentAccountID)
-	if loadedCfg.OrganizationAccountID != "" {
-		// Export config values as env vars for Terragrunt's site.hcl get_env() calls.
-		os.Setenv("KM_ACCOUNTS_ORGANIZATION", loadedCfg.OrganizationAccountID)
-		os.Setenv("KM_ACCOUNTS_APPLICATION", loadedCfg.ApplicationAccountID)
-		if loadedCfg.Domain != "" {
-			os.Setenv("KM_DOMAIN", loadedCfg.Domain)
-		}
-		if loadedCfg.PrimaryRegion != "" {
-			os.Setenv("KM_REGION", loadedCfg.PrimaryRegion)
-		}
-
-		scpDir := filepath.Join(findRepoRoot(), "infra", "live", "management", "scp")
-		fmt.Fprintln(w, "Deploying SCP sandbox-containment policy...")
-		if err := ApplyTerragruntFunc(ctx, scpDir); err != nil {
-			return fmt.Errorf("scp bootstrap: %w", err)
-		}
-		fmt.Fprintln(w, "SCP sandbox-containment policy deployed to application account.")
-	} else {
-		fmt.Fprintln(w, "Skipping SCP deployment — no organization account configured.")
+	if err := applyBootstrapSCP(ctx, loadedCfg, w); err != nil {
+		return err
 	}
 
 	// Create the platform KMS key (alias/{prefix}-platform) for SSM SecureString encryption.
@@ -1971,6 +1826,46 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 		}
 	}
 
+	return nil
+}
+
+// setBootstrapSCPEnv exports what infra/live/management/scp reads: the account
+// ids and region for site.hcl, and the rendered policy. Rendering first means a
+// malformed scp: block stops the run before terragrunt starts.
+func setBootstrapSCPEnv(cfg *config.Config) (scp.Policy, error) {
+	os.Setenv("KM_ACCOUNTS_DNS_PARENT", cfg.DNSParentAccountID)
+	os.Setenv("KM_ACCOUNTS_ORGANIZATION", cfg.OrganizationAccountID)
+	os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
+	if cfg.Domain != "" {
+		os.Setenv("KM_DOMAIN", cfg.Domain)
+	}
+	if cfg.PrimaryRegion != "" {
+		os.Setenv("KM_REGION", cfg.PrimaryRegion)
+	}
+	return exportSCPPolicyEnv(cfg)
+}
+
+// applyBootstrapSCP renders the SCP from km-config.yaml and applies the
+// infra/live/management/scp unit. Re-running it is how an edited scp: block
+// (or a km upgrade that changes pkg/scp) reaches the live policy; the SCP
+// governs every request in the application account, so the change is
+// effective immediately with no sandbox recreate.
+func applyBootstrapSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
+	if cfg.OrganizationAccountID == "" {
+		os.Setenv("KM_ACCOUNTS_DNS_PARENT", cfg.DNSParentAccountID)
+		fmt.Fprintln(w, "Skipping SCP deployment — no organization account configured.")
+		return nil
+	}
+	p, err := setBootstrapSCPEnv(cfg)
+	if err != nil {
+		return err
+	}
+	scpDir := filepath.Join(findRepoRoot(), "infra", "live", "management", "scp")
+	fmt.Fprintf(w, "Deploying SCP %s (%d bytes)...\n", scp.PolicyName(cfg.GetResourcePrefix()), len(p.JSON()))
+	if err := ApplyTerragruntFunc(ctx, scpDir); err != nil {
+		return fmt.Errorf("scp bootstrap: %w", err)
+	}
+	fmt.Fprintln(w, "SCP sandbox-containment policy deployed to application account.")
 	return nil
 }
 

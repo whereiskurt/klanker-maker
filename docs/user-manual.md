@@ -819,7 +819,8 @@ policy on log groups that have none (default 30 days, `doctor_log_retention_days
 | Budget Table | DynamoDB `km-budgets` table exists |
 | Identity Table | DynamoDB `km-identities` table exists (WARN if absent, not ERROR) |
 | KMS Key | KMS alias `km-platform` exists |
-| SCP | `km-sandbox-containment` SCP attached to the application account |
+| SCP | `{prefix}-sandbox-containment` SCP attached to the application account |
+| SCP content | The live SCP matches the policy rendered from `km-config.yaml`; names every drifted statement and live-only entry (WARN) |
 | GitHub App Config | SSM parameters for GitHub App exist (WARN if missing — GitHub integration is optional) |
 | Credential Rotation | Checks rotation age against 90-day threshold from SSM |
 | VPC | km-managed VPC and subnets exist in the primary region |
@@ -1707,7 +1708,7 @@ of the two teardown layers; follow it with [`km unbootstrap`](#km-unbootstrap).
 Deploy SCP containment policy, KMS key, and artifacts bucket.
 
 ```
-km bootstrap [--all] [--shared-ses] [--shared-secrets-key] [--plan] [--dry-run] [--show-prereqs] [--scp]
+km bootstrap [--all] [--shared-ses] [--shared-secrets-key] [--scp-only] [--plan] [--dry-run] [--show-prereqs] [--scp]
 ```
 
 | Flag | Default | Description |
@@ -1718,7 +1719,8 @@ km bootstrap [--all] [--shared-ses] [--shared-secrets-key] [--plan] [--dry-run] 
 | `--shared-ses` | `false` | Provision the account-shared SES rule set and domain identity. Run before `km init` on a fresh account |
 | `--shared-secrets-key` | `false` | Provision the per-install shared KMS key for SOPS bundle decryption. Required before any profile can use `spec.secrets.sopsFile`. Idempotent, and combinable with `--shared-ses` |
 | `--all` | `false` | Chain the subflows in order: foundation, then shared SES rule set, then shared secrets key. Mutually exclusive with `--shared-ses` |
-| `--plan` | `false` | Run `terragrunt plan` for the bootstrap modules behind the destroy-class safety gate; never applies |
+| `--scp-only` | `false` | Act on the SCP alone, rendered from `km-config.yaml` (`scp:` block included): print it, `--plan` to diff against the live policy, `--dry-run=false` to apply. Retroactive — effective at once, no recreate. Mutually exclusive with `--all`/`--shared-ses`/`--shared-secrets-key` |
+| `--plan` | `false` | Run `terragrunt plan` for the bootstrap modules behind the destroy-class safety gate; never applies. Alone (or with `--scp-only`) it plans the SCP |
 
 The shared SES rule set (`sandbox-email-shared`) is account-shared and carries
 `lifecycle.prevent_destroy`. Each install adds exactly two rules to it, and `km uninit`
