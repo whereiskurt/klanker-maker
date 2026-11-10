@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
 )
 
 // ClusterConfig represents a single registered Kubernetes cluster for cross-account
@@ -1047,6 +1048,14 @@ type WebhookRateLimit struct {
 	WindowSeconds int `mapstructure:"window_seconds" yaml:"window_seconds" json:"window_seconds"`
 }
 
+// WizConfig maps to km-config.yaml key `wiz`.
+// CRITICAL: "wiz" must be in the v2->v merge-list in Load() or this block is
+// silently dropped (project_config_key_merge_list footgun). Decoded atomically
+// by v.UnmarshalKey("wiz", &cfg.Wiz). Outpost nil => feature dormant.
+type WizConfig struct {
+	Outpost *wizoutpost.Settings `mapstructure:"outpost" yaml:"outpost,omitempty"`
+}
+
 // WebhooksConfig maps to km-config.yaml key `webhooks`.
 // CRITICAL: "webhooks" must be in the v2->v merge-list in Load() or this block is
 // silently dropped (project_config_key_merge_list). It is a NEW top-level key and
@@ -1300,6 +1309,10 @@ type Config struct {
 	// Webhooks is the Phase 127 generic webhook ingress block (km-config.yaml
 	// key `webhooks`). Absent => zero value => dormant.
 	Webhooks WebhooksConfig `mapstructure:"webhooks" yaml:"webhooks,omitempty"`
+
+	// Wiz is the Wiz Outpost connector block (km-config.yaml key `wiz`).
+	// Absent => Outpost nil => dormant.
+	Wiz WizConfig `mapstructure:"wiz" yaml:"wiz,omitempty"`
 
 	// YAMLDefaults holds the raw km-config.yaml values for env-bound keys,
 	// snapshotted during Load() BEFORE viper's AutomaticEnv binds env vars into
@@ -1556,6 +1569,11 @@ func Load() (*Config, error) {
 			// v.UnmarshalKey("webhooks", &cfg.Webhooks) below — do NOT add sibling
 			// "webhooks.*" entries (mirrors the github, h1, and checks precedent).
 			"webhooks",
+			// Wiz Outpost connector block. CRITICAL: without this entry the
+			// wiz: block is silently dropped (project_config_key_merge_list
+			// footgun). NEW top-level key; decoded atomically by
+			// v.UnmarshalKey("wiz", &cfg.Wiz) below — no sibling "wiz.*" entries.
+			"wiz",
 			// Profile overlay directories searched when resolving `extends:`
 			// (profile.Resolve, via km create / km validate / km capacity) and by
 			// FindProfilesReferencingAMI. CRITICAL: without this entry an operator
@@ -1836,6 +1854,15 @@ func Load() (*Config, error) {
 
 	if err := v.UnmarshalKey("webhooks", &cfg.Webhooks); err != nil {
 		return nil, fmt.Errorf("decode webhooks config: %w", err)
+	}
+
+	if err := v.UnmarshalKey("wiz", &cfg.Wiz); err != nil {
+		return nil, fmt.Errorf("decode wiz config: %w", err)
+	}
+	if cfg.Wiz.Outpost != nil {
+		if err := cfg.Wiz.Outpost.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid km-config.yaml: %w", err)
+		}
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
