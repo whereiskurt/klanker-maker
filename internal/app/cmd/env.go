@@ -78,6 +78,17 @@ func runEnvExport(cfg *config.Config, w io.Writer, includeAWSProfile bool) error
 	for _, k := range keys {
 		fmt.Fprintf(w, "export %s=%s\n", k, vars[k])
 	}
+	// The rendered SCP, for a hand-driven `terragrunt plan` in
+	// infra/live/management/scp (its get_env has no default). Single-quoted:
+	// the value is JSON, and an IAM ARN cannot contain a single quote. A render
+	// error is printed as a comment so `eval` keeps the other exports.
+	if cfg.OrganizationAccountID != "" {
+		if p, err := renderSCP(cfg); err != nil {
+			fmt.Fprintf(w, "# %s not exported: %v\n", scpPolicyEnv, err)
+		} else {
+			fmt.Fprintf(w, "export %s='%s'\n", scpPolicyEnv, p.JSON())
+		}
+	}
 	if includeAWSProfile {
 		fmt.Fprintf(w, "export AWS_PROFILE=%s\n", os.Getenv("AWS_PROFILE"))
 	}

@@ -75,6 +75,24 @@ const DefaultPrivateSubnetCount = 4
 // Raising it requires adding CIDRs to that list first.
 const MaxPrivateSubnetCount = 4
 
+// SCPConfig is the km-config.yaml scp: block — what an install adds to the
+// built-in sandbox-containment SCP. Every list is optional; each entry is an
+// IAM role ARN pattern (arn:aws:iam::<account|*>:role/<name>, ArnLike `*`/`?`).
+// A pattern that a sandbox instance role could match is rejected at render
+// time (pkg/scp.ValidateTrustPatterns).
+type SCPConfig struct {
+	// TrustedRoles are exempt from every statement the km control plane is
+	// exempt from: infra/storage, instance mutation, IAM escalation, region lock.
+	TrustedRoles []string `mapstructure:"trusted_roles" yaml:"trusted_roles,omitempty"`
+	// TrustedIAMRoles are exempt from DenyIAMEscalation only (CreateRole,
+	// Attach/DetachRolePolicy, PassRole) — e.g. a CI deploy role.
+	TrustedIAMRoles []string `mapstructure:"trusted_iam_roles" yaml:"trusted_iam_roles,omitempty"`
+	// TrustedSSMRoles are exempt from DenySSMPivot only (SendCommand, StartSession).
+	TrustedSSMRoles []string `mapstructure:"trusted_ssm_roles" yaml:"trusted_ssm_roles,omitempty"`
+	// ExtraRegions are allowed by the region lock in addition to region.
+	ExtraRegions []string `mapstructure:"extra_regions" yaml:"extra_regions,omitempty"`
+}
+
 // ValidatePrivateSubnetCount bounds-checks network.private_subnet_count. Callers
 // run this before exporting KM_PRIVATE_SUBNET_COUNT so an out-of-range value
 // surfaces as a named config error rather than a slice() failure deep inside a
@@ -1297,6 +1315,13 @@ type Config struct {
 	// NEW top-level key and does not piggyback on any parent's merge-list entry.
 	LaunchAccounts map[string]LaunchAccountConfig `mapstructure:"launch_accounts" yaml:"launch_accounts,omitempty"`
 
+	// SCP holds install-specific additions to the {prefix}-sandbox-containment
+	// Service Control Policy (km-config.yaml key scp). Absent → the built-in
+	// policy only. Rendered by pkg/scp; applied with `km bootstrap --scp-only`.
+	// CRITICAL: "scp" must be in the v2→v merge-list in Load() or this block is
+	// silently ignored (project_config_key_merge_list footgun).
+	SCP SCPConfig `mapstructure:"scp" yaml:"scp,omitempty"`
+
 	// Webhooks is the Phase 127 generic webhook ingress block (km-config.yaml
 	// key `webhooks`). Absent => zero value => dormant.
 	Webhooks WebhooksConfig `mapstructure:"webhooks" yaml:"webhooks,omitempty"`
@@ -1548,6 +1573,11 @@ func Load() (*Config, error) {
 			// parent's merge-list entry (unlike github.commands). Decoded atomically by
 			// v.UnmarshalKey("launch_accounts", &cfg.LaunchAccounts) below.
 			"launch_accounts",
+			// SCP additions (trusted roles per statement, extra regions). CRITICAL:
+			// without this entry the whole scp: block is silently dropped, and the
+			// next `km bootstrap --scp-only` would REMOVE every exemption it lists
+			// from the live policy. Decoded atomically by UnmarshalKey("scp") below.
+			"scp",
 			// Phase 127: webhooks block (sources list-of-objects + rate_limit).
 			// CRITICAL: without this entry the entire webhooks: block is silently
 			// dropped regardless of km-config.yaml content
@@ -1832,6 +1862,10 @@ func Load() (*Config, error) {
 		}
 	} else if err := v.UnmarshalKey("launch_accounts", &cfg.LaunchAccounts); err != nil {
 		return nil, fmt.Errorf("unmarshal launch_accounts: %w", err)
+	}
+
+	if err := v.UnmarshalKey("scp", &cfg.SCP); err != nil {
+		return nil, fmt.Errorf("decode scp config: %w", err)
 	}
 
 	if err := v.UnmarshalKey("webhooks", &cfg.Webhooks); err != nil {

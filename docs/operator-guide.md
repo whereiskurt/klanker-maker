@@ -999,9 +999,12 @@ Dry run — the following infrastructure would be created:
     Threat coverage: SG mutation, network escape, instance mutation,
                      IAM escalation, storage exfiltration, SSM pivot,
                      Organizations discovery, region lock
-    Trusted roles:   AWSReservedSSO_*_*, km-provisioner-*, km-lifecycle-*,
-                     km-ecs-spot-handler, km-ttl-handler
-    Deploy via:      km bootstrap (management account credentials required)
+    Trusted roles:   arn:aws:iam::333333333333:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*
+                     arn:aws:iam::*:role/*-ttl-handler
+                     arn:aws:iam::*:role/*-create-handler
+    Size:            2717 of 5000 bytes
+    Preview diff:    km bootstrap --scp-only --plan
+    Deploy via:      km bootstrap --scp-only --dry-run=false (application-account SSO; assumes km-org-admin)
 
 Run 'km bootstrap --dry-run=false' to provision.
 ```
@@ -1010,7 +1013,7 @@ The `km-identities` DynamoDB table (for sandbox identity / Ed25519 public keys) 
 
 ### SCP deployment
 
-With `--dry-run=false` and a management account ID configured, `km bootstrap` runs `terragrunt apply` against `infra/live/management/scp/` to attach the `km-sandbox-containment` SCP to the application account. This requires credentials for the management account.
+With `--dry-run=false` and a management account ID configured, `km bootstrap` renders the policy from `km-config.yaml` (`pkg/scp`) and runs `terragrunt apply` against `infra/live/management/scp/` to attach the `km-sandbox-containment` SCP to the application account. It runs with application-account SSO credentials; the provider assumes `{prefix}-org-admin` in the management account. `km bootstrap --scp-only` does the SCP alone; add `--plan` to diff against the live policy first. See `OPERATOR-GUIDE.md` § Regenerating the SCP from km-config.yaml.
 
 If no management account is configured (single-account setup), SCP deployment is skipped with a notice.
 
@@ -1083,14 +1086,14 @@ The `km-sandbox-containment` SCP is an AWS Organizations Service Control Policy 
 
 ### Deployment
 
-Deploy via `km bootstrap --dry-run=false` (requires management account credentials), or apply directly:
+The policy is rendered from `km-config.yaml` by `pkg/scp` and deployed verbatim by `infra/modules/scp/v3.0.0`:
 
 ```bash
-cd infra/live/management/scp
-terragrunt apply
+km bootstrap --scp-only --plan           # statement diff vs live + terragrunt plan
+km bootstrap --scp-only --dry-run=false  # apply
 ```
 
-The Terragrunt unit runs against the management account profile (`klanker-terraform` by default in the SCP apply path). It creates the `km-sandbox-containment` SCP and attaches it to the application account.
+Run with application-account SSO credentials (the apply path uses the `klanker-terraform` profile); the terragrunt provider assumes `{prefix}-org-admin` in the management account. To drive terragrunt directly, `eval $(km env)` first — it exports the rendered policy as `KM_SCP_POLICY_JSON`, which the unit requires. Install-specific exemptions go in the `scp:` block of `km-config.yaml`; see `OPERATOR-GUIDE.md` § Regenerating the SCP from km-config.yaml.
 
 ### Prerequisites
 
@@ -1105,24 +1108,24 @@ aws organizations enable-policy-type \
 
 ### Deny Statements
 
-The SCP has 8 deny statements:
+The SCP has 6 deny statements. "Base" = operator SSO (application account) + `*-ttl-handler` + `*-create-handler` + `scp.trusted_roles`.
 
-| Statement | Blocked Actions | Carve-outs |
+| Statement | Blocked Actions | Exempt |
 |-----------|----------------|------------|
-| `DenySGMutation` | Create/delete/modify security groups | `trusted_arns_base` (SSO, provisioner, lifecycle roles) |
-| `DenyNetworkEscape` | Create VPC, subnet, route table, IGW, NAT gateway, VPC peering, Transit Gateway | `trusted_arns_base` |
-| `DenyInstanceMutation` | `RunInstances`, `ModifyInstanceAttribute`, `ModifyInstanceMetadataOptions` | `trusted_arns_instance` (base + `km-ecs-spot-handler`) |
-| `DenyIAMEscalation` | `CreateRole`, `AttachRolePolicy`, `DetachRolePolicy`, `PassRole`, `AssumeRole` | `trusted_arns_iam` (base + `km-budget-enforcer-*`) |
-| `DenyStorageExfiltration` | `CreateSnapshot`, `CopySnapshot`, `CreateImage`, `CopyImage`, `ExportImage` | `trusted_arns_base` |
-| `DenySSMPivot` | `SendCommand`, `StartSession` | `trusted_arns_ssm` (EC2 SSM roles, `km-github-token-refresher-*`, SSO roles only) |
-| `DenyOrganizationsDiscovery` | `ListAccounts`, `DescribeOrganization`, `ListRoots`, etc. | **None** — applies to ALL roles |
-| `DenyOutsideAllowedRegions` | All regional actions outside `var.allowed_regions` | Global services (`iam:*`, `sts:*`, `route53:*`, `s3:ListAllMyBuckets`, etc.) are excluded via `NotAction`; **no role carve-out** |
+| `DenyInfraAndStorage` | Security-group mutation; create VPC, subnet, route table, route, IGW, NAT gateway, VPC peering, Transit Gateway; `CreateSnapshot`, `CopySnapshot`, `DeleteSnapshot`, `CreateImage`, `CopyImage`, `ExportImage`, `DeregisterImage` | Base |
+| `DenyInstanceMutation` | `RunInstances`, `ModifyInstanceAttribute`, `ModifyInstanceMetadataOptions` | Base |
+| `DenyIAMEscalation` | `CreateRole`, `AttachRolePolicy`, `DetachRolePolicy`, `PassRole` | Base + `*-budget-enforcer-*` + `scp.trusted_iam_roles` |
+| `DenySSMPivot` | `SendCommand`, `StartSession` | Operator SSO, `*-ttl-handler`, `*-create-handler`, `scp.trusted_ssm_roles` — **not** the sandbox role |
+| `DenyOrgDiscovery` | `organizations:List*`, `organizations:Describe*` | **None** — applies to ALL roles |
+| `DenyOutsideRegion` | All regional actions outside `region` + `scp.extra_regions` | Base; global services (`iam:*`, `sts:*`, `route53:*`, `bedrock:*`, `bedrock-mantle:*`, `aws-marketplace:*`, …) excluded via `NotAction` |
+
+`ec2:CreateTags` is deliberately not denied: `RunInstances` with `TagSpecifications` is authorised as `CreateTags`.
 
 **Key design decisions:**
 
-- `km-ecs-task-*` is intentionally NOT carved out from any deny — it IS the sandbox workload and must be fully contained
-- `DenyOrganizationsDiscovery` has no condition — all application account roles are blocked from enumerating the org structure
-- Region lock uses `NotAction` (not `Deny` on specific actions) so global services work regardless of the requested region; it applies to operators too, not just sandbox roles
+- The sandbox instance role (`{prefix}-ec2spot-ssm-*`) is exempt from nothing — it IS the workload. No trust pattern may match it: `pkg/scp` rejects one that could (a profile picks `metadata.prefix`, which lands in the role name)
+- `DenyOrgDiscovery` has no condition — all application account roles are blocked from enumerating the org structure (which is why `km doctor` reads the SCP through `{prefix}-org-admin`)
+- Region lock uses `NotAction` (not `Deny` on specific actions) so global services work regardless of the requested region; base roles (operators, the create/ttl handlers) are exempt, sandbox roles are not
 - `km-budget-enforcer-*` gets an IAM carve-out specifically for `AttachRolePolicy`/`DetachRolePolicy` (Bedrock revocation on budget breach) — it does not need `CreateRole` or `PassRole`
 
 ### Trusted Role Arns (variables.tf)
@@ -1442,7 +1445,8 @@ All checks run in parallel. Results are sorted alphabetically by check name.
 | `Budget Table (km-budgets)` | DynamoDB `DescribeTable` on `km-budgets` (or custom budget table name) |
 | `Identity Table (km-identities)` | DynamoDB `DescribeTable` on `km-identities` — reported as WARN not ERROR if absent |
 | `KMS Key (km-platform)` | KMS `DescribeKey` on `alias/km-platform` |
-| `SCP (Sandbox Containment)` | Organizations `ListPoliciesForTarget` on the application account — verifies `km-sandbox-containment` is attached |
+| `SCP (Sandbox Containment)` | Organizations `ListPoliciesForTarget` on the application account — verifies `{prefix}-sandbox-containment` is attached |
+| `SCP content` | `DescribePolicy` through `{prefix}-org-admin` — compares the live SCP with the one rendered from `km-config.yaml` and names each drifted statement and live-only entry (WARN). A live-only entry is removed by the next `km bootstrap --scp-only --dry-run=false`; add it to `scp:` to keep it |
 | `GitHub App Config` | SSM `GetParameter` for `/km/config/github/app-client-id` and `installation-id` — reported as WARN if missing (GitHub integration is optional) |
 | `Credential Rotation` | Checks SSM credential rotation age — warns if credentials are older than 90 days |
 | `VPC (<region>)` | EC2 `DescribeVpcs` filtered by `km:managed=true` in each configured region |

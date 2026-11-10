@@ -104,7 +104,7 @@ Diagram 9 is the order. This is the wiring.
 
 | What | How | Where |
 |---|---|---|
-| SCP `{prefix}-sandbox-containment` | `terragrunt apply` | `infra/live/management/scp` → `infra/modules/scp/v2.0.0` |
+| SCP `{prefix}-sandbox-containment` | `terragrunt apply` (policy rendered by `pkg/scp`, passed as `KM_SCP_POLICY_JSON`) | `infra/live/management/scp` → `infra/modules/scp/v3.0.0` |
 | KMS key `alias/{prefix}-platform` | `kms.CreateKey` + `CreateAlias`, direct SDK | no unit, no state |
 | S3 `{prefix}-artifacts-{account-id}` | `s3.CreateBucket` + `PutBucketVersioning`, direct SDK | no unit, no state |
 
@@ -157,7 +157,7 @@ remote_state {
 }
 
 terraform {
-  source = "${dirname(find_in_parent_folders("CLAUDE.md"))}/infra/modules/scp//v2.0.0"
+  source = "${dirname(find_in_parent_folders("CLAUDE.md"))}/infra/modules/scp//v3.0.0"
 }
 ```
 
