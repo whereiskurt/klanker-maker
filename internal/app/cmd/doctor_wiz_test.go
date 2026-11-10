@@ -217,3 +217,16 @@ func TestCheckWizOutpostTrust_ListForms(t *testing.T) {
 		t.Fatalf("list mismatch: %s %s", r.Status, r.Message)
 	}
 }
+
+func TestCheckWizOutpostTrust_GovPartition(t *testing.T) {
+	s := wizoutpost.Settings{TrustRoleARN: "arn:aws-us-gov:iam::111122223333:role/wiz-dc", OrchestratorAccountID: "444455556666",
+		ExternalID: "abcdef12-3456-7890-abcd-ef1234567890", RoleSuffix: "km"}
+	scanner := "arn:aws-us-gov:iam::444455556666:role/WizOrchestratorNodePoolRole"
+	api := fakeWizIAM{
+		s.AccessRoleNameOrDefault(): trustDoc(s.TrustRoleARN, s.ExternalID),
+		s.ScannerRoleName():         trustDoc(scanner, s.ExternalID),
+	}
+	if r := checkWizOutpostTrust(context.Background(), api, s); r.Status != CheckOK {
+		t.Fatalf("gov partition: %s %s", r.Status, r.Message)
+	}
+}

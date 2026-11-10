@@ -1679,6 +1679,7 @@ func runInitDryRun(cfg *config.Config, region string) error {
 		"KM_ACCOUNTS_ORGANIZATION": cfg.OrganizationAccountID != "",
 		"KM_ACCOUNTS_DNS_PARENT":   cfg.DNSParentAccountID != "",
 		"KM_ACCOUNTS_APPLICATION":  cfg.ApplicationAccountID != "",
+		"KM_WIZ_OUTPOST_JSON":      cfg.Wiz.Outpost != nil,
 	}
 
 	fmt.Printf(" 11. Apply regional infrastructure modules (in order):\n")

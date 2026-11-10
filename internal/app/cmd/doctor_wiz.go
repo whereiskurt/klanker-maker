@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
@@ -157,9 +158,13 @@ func checkWizOutpostTrust(ctx context.Context, api WizRoleAPI, s wizoutpost.Sett
 		res.Status, res.Message = CheckSkipped, "IAM client not available"
 		return res
 	}
+	partition := "aws"
+	if parts := strings.Split(s.TrustRoleARN, ":"); len(parts) > 1 && parts[1] != "" {
+		partition = parts[1]
+	}
 	roles := []struct{ name, principal string }{
 		{s.AccessRoleNameOrDefault(), s.TrustRoleARN},
-		{s.ScannerRoleName(), fmt.Sprintf("arn:aws:iam::%s:role/WizOrchestratorNodePoolRole", s.OrchestratorAccountID)},
+		{s.ScannerRoleName(), fmt.Sprintf("arn:%s:iam::%s:role/WizOrchestratorNodePoolRole", partition, s.OrchestratorAccountID)},
 	}
 	for _, r := range roles {
 		msg, err := wizTrustMismatch(ctx, api, r.name, r.principal, s.ExternalID)

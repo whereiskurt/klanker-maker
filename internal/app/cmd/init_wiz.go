@@ -19,7 +19,7 @@ func requireWizBlock(cfg *config.Config, module string) error {
 		return nil
 	}
 	if cfg == nil || cfg.Wiz.Outpost == nil {
-		return fmt.Errorf("--wiz requires a wiz.outpost block in km-config.yaml")
+		return fmt.Errorf("wiz-outpost-connector (--wiz) requires a wiz.outpost block in km-config.yaml")
 	}
 	return nil
 }

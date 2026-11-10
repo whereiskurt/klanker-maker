@@ -84,7 +84,7 @@ func TestRunInitScoped_WizMissingOutputsWarnsNotFails(t *testing.T) {
 
 func TestRunInitScoped_WizWithoutBlock_ErrorsClearly(t *testing.T) {
 	err := cmd.RequireWizBlock(&config.Config{}, "wiz-outpost-connector")
-	if err == nil || !strings.Contains(err.Error(), "--wiz requires a wiz.outpost block in km-config.yaml") {
+	if err == nil || !strings.Contains(err.Error(), "wiz-outpost-connector (--wiz) requires a wiz.outpost block in km-config.yaml") {
 		t.Fatalf("got %v", err)
 	}
 	if err := cmd.RequireWizBlock(&config.Config{}, "lambda-github-bridge"); err != nil {

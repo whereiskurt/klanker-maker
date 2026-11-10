@@ -119,3 +119,35 @@ func TestWizModule_NoRequiredProviders(t *testing.T) {
 		}
 	}
 }
+
+func TestWizModule_OutputsIndexOnlyParametersMainSets(t *testing.T) {
+	main := wizRepoFile(t, "infra/modules/wiz-outpost-connector/v1.0.0/main.tf")
+	outputs := wizRepoFile(t, "infra/modules/wiz-outpost-connector/v1.0.0/outputs.tf")
+	if !regexp.MustCompile(`parameters\s*=\s*merge\(var\.parameters,\s*\{[^}]*WizVersionLastUpdated\s*=`).MatchString(main) {
+		t.Errorf("main.tf parameters must merge WizVersionLastUpdated into var.parameters")
+	}
+	for _, m := range regexp.MustCompile(`\.parameters\["([A-Za-z0-9_]+)"\]`).FindAllStringSubmatch(outputs, -1) {
+		if !regexp.MustCompile(`(?m)^\s*` + m[1] + `\s*=`).MatchString(main) {
+			t.Errorf("outputs.tf indexes parameters[%q] but main.tf never sets it", m[1])
+		}
+	}
+}
+
+func TestRunInitDryRun_WizModuleNotSkippedWhenConfigured(t *testing.T) {
+	t.Setenv("KM_WIZ_OUTPOST_JSON", "")
+	cfg := &config.Config{PrimaryRegion: "us-east-1"}
+	cfg.Wiz.Outpost = wizTestSettings()
+	out := captureStdout(func() { _ = runInitDryRun(cfg, "us-east-1") })
+	var line string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "wiz-outpost-connector") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no wiz-outpost-connector line in output:\n%s", out)
+	}
+	if strings.Contains(line, "[skip") {
+		t.Errorf("configured wiz module skipped: %q", line)
+	}
+}
