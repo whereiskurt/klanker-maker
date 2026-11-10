@@ -291,7 +291,7 @@ func TestCheckKMSKey_Missing(t *testing.T) {
 // =============================================================================
 
 func TestCheckSCP_SkippedWhenNoCreds(t *testing.T) {
-	result := checkSCP(context.Background(), nil, "")
+	result := checkSCP(context.Background(), nil, "", "km")
 	if result.Status != CheckSkipped {
 		t.Errorf("expected CheckSkipped for empty accountID, got %s", result.Status)
 	}
@@ -305,7 +305,7 @@ func TestCheckSCP_OK(t *testing.T) {
 			},
 		},
 	}
-	result := checkSCP(context.Background(), client, "123456789012")
+	result := checkSCP(context.Background(), client, "123456789012", "km")
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK, got %s: %s", result.Status, result.Message)
 	}
@@ -317,7 +317,7 @@ func TestCheckSCP_NotFound(t *testing.T) {
 			Policies: []orgtypes.PolicySummary{},
 		},
 	}
-	result := checkSCP(context.Background(), client, "123456789012")
+	result := checkSCP(context.Background(), client, "123456789012", "km")
 	if result.Status != CheckError {
 		t.Errorf("expected CheckError when SCP policy missing, got %s", result.Status)
 	}

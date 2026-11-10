@@ -1,87 +1,54 @@
 package cmd_test
 
-// bootstrap_scp_test.go — Phase 84.4.1 Plan 01 rewrite of SCP builder tests.
-//
-// Phase 84.4.1: SCP cross-install composition — trusted ARN slots now use
-// *-* suffix patterns (account + prefix both wildcarded) so that multiple
-// installs sharing an application account do not deny each other's roles.
-//
-// Previous behavior (Phase 84.4): prefix "km" → "km-ecs-spot-handler" etc.
-// New behavior (Phase 84.4.1): any prefix → "*-ecs-spot-handler" etc.
-// resourcePrefix and applicationAccountID accepted for signature compat but
-// no longer used in trust slot construction.
-//
-// Security trade-off: an attacker-deployed role named evil-create-handler
-// would pass the SCP pattern. Mitigations: operator-only IAM:CreateRole in
-// the application account; SCP is one defense-in-depth layer; deployed roles
-// still need cross-account assume-role grants. Documented in OPERATOR-GUIDE.md
-// (Wave 4 plan 84.4.1-06).
+// bootstrap_scp_test.go — the SCP is rendered by pkg/scp from km-config.yaml.
+// Trust patterns stay prefix-agnostic (`*-ttl-handler`, not `km-ttl-handler`) so
+// installs sharing an application account do not deny each other's control
+// plane; patterns a sandbox role could match were removed (see pkg/scp).
 
 import (
 	"strings"
 	"testing"
 
 	cmd "github.com/whereiskurt/klanker-maker/internal/app/cmd"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
 func TestBuildSCPPolicySize(t *testing.T) {
-	// Phase 84.4.1: all prefixes produce IDENTICAL output because prefix is ignored
-	// in the slot values. The parameterization is kept defensively — confirms that
-	// prefix truly does not appear in the trust slots for any input prefix.
-	cases := []struct {
-		prefix   string
-		maxBytes int
-	}{
-		{"km", 5000},
-		{"kph", 5000},
-		{"whereiskurt", 5000}, // 11-char prefix — upper bound case
-	}
-	for _, tc := range cases {
-		t.Run(tc.prefix, func(t *testing.T) {
-			got := cmd.BuildSCPPolicyFromPrefix(tc.prefix, "123456789012", "us-east-1")
-			if len(got) > tc.maxBytes {
-				t.Errorf("policy size %d bytes exceeds threshold %d for prefix %q", len(got), tc.maxBytes, tc.prefix)
+	for _, prefix := range []string{"km", "kph", "whereiskurt"} {
+		t.Run(prefix, func(t *testing.T) {
+			got, err := cmd.BuildSCPPolicyJSON(&config.Config{
+				ResourcePrefix: prefix, ApplicationAccountID: "123456789012", PrimaryRegion: "us-east-1",
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
-			// Phase 84.4.1: assert *-* pattern (prefix-agnostic)
-			expectedRoleSubstring := ":role/*-ecs-spot-handler"
-			if !strings.Contains(got, expectedRoleSubstring) {
-				t.Errorf("expected policy to contain %q, got: %s", expectedRoleSubstring, got)
+			// Indented display form; the deployed compact form is smaller.
+			if len(got) > 5000 {
+				t.Errorf("policy %d bytes for prefix %q", len(got), prefix)
 			}
-			// Phase 84.4.1: negative assertion — no prefix-bound substring must appear (catches regressions).
-			if strings.Contains(got, ":role/"+tc.prefix+"-ecs-spot-handler") {
-				t.Errorf("policy[%s] contains prefix-bound substring; expected *-pattern", tc.prefix)
+			if strings.Contains(got, ":role/"+prefix+"-ttl-handler") {
+				t.Errorf("prefix-bound trust pattern for %q; want *-ttl-handler", prefix)
 			}
 		})
 	}
 }
 
 func TestBuildSCPPolicyPrefix(t *testing.T) {
-	// Phase 84.4.1: patterns are prefix-agnostic; verify *-* substrings present.
-	got := cmd.BuildSCPPolicyFromPrefix("km", "123456789012", "us-east-1")
-
-	// Positive assertions: *-* patterns must be present.
-	for _, want := range []string{
-		"*-ecs-spot-handler",
-		"*-budget-enforcer-*",
-		"*-ec2spot-ssm-*",
-		"*-github-token-refresher-*",
-		"*-ttl-handler",
-	} {
+	got, err := cmd.BuildSCPPolicyJSON(&config.Config{
+		ResourcePrefix: "km", ApplicationAccountID: "123456789012", PrimaryRegion: "us-east-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"*-budget-enforcer-*", "*-ttl-handler", "*-create-handler", "bedrock-mantle:*"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("missing %q from rendered policy", want)
+			t.Errorf("missing %q", want)
 		}
 	}
-
-	// Negative assertions: prefix-bound role names MUST NOT appear (catches re-prefixing regressions).
-	for _, notWanted := range []string{
-		"km-ecs-spot-handler",
-		"km-budget-enforcer-*",
-		"km-ec2spot-ssm-*",
-		"km-github-token-refresher-*",
-		"km-ttl-handler",
-	} {
-		if strings.Contains(got, notWanted) {
-			t.Errorf("policy contains prefix-bound %q; expected *-pattern", notWanted)
+	// Removed: dead ECS-era roles, and patterns that matched the sandbox role.
+	for _, gone := range []string{"*-ecs-spot-handler", "*-ec2spot-ssm-*", "*-github-token-refresher-*", "*-provisioner-*", "*-lifecycle-*"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("policy still trusts %q", gone)
 		}
 	}
 }

@@ -280,6 +280,47 @@ km bootstrap --dry-run=false
 `km bootstrap` reads account IDs and region from `km-config.yaml` and passes them to
 Terragrunt automatically — no environment variable exports are needed.
 
+#### Regenerating the SCP from km-config.yaml
+
+The policy document is rendered by `pkg/scp` from `km-config.yaml` — `resource_prefix`
+names it, `accounts.application` is its target, `region` is its region lock — plus an
+optional `scp:` block. `infra/modules/scp/v3.0.0` deploys that rendered JSON verbatim
+(through `KM_SCP_POLICY_JSON`); it does not author the policy. So the `km bootstrap --scp`
+preview, the deployed policy, and the `km doctor` "SCP content" check are the same bytes.
+
+```yaml
+scp:
+  trusted_roles: []        # exempt from every statement except DenySSMPivot
+  trusted_iam_roles:       # exempt from DenyIAMEscalation only
+    - arn:aws:iam::111122223333:role/ci-deploy
+  trusted_ssm_roles: []    # exempt from DenySSMPivot only
+  extra_regions: []        # allowed by the region lock besides `region`
+```
+
+```bash
+km bootstrap --scp-only                  # print the rendered policy + its size
+km bootstrap --scp-only --plan           # statement diff vs the LIVE policy, then terragrunt plan
+km bootstrap --scp-only --dry-run=false  # apply the SCP alone (no KMS / artifacts steps)
+```
+
+- **It is retroactive.** An SCP is evaluated on every request in the application account,
+  so an apply takes effect immediately for every sandbox, Lambda, and operator — no
+  recreate (unlike the per-sandbox instance role).
+- **Run it with application-account SSO credentials.** Terragrunt's provider assumes
+  `{prefix}-org-admin` in the management account, and the state lives in the
+  application account's `tf-{prefix}-state-{label}` bucket. Management-account
+  credentials alone cannot run it.
+- **An exemption added by hand in the console is REMOVED by the next apply.** Put it in
+  `scp:` instead. `km doctor`'s "SCP content" check reads the live policy through
+  `{prefix}-org-admin` and names every live-only entry.
+- **Entries are IAM role ARN patterns** (`arn:aws:iam::<account|*>:role/<name>`, `*`/`?`).
+  A pattern a sandbox instance role could match is rejected at render time: the role is
+  `{prefix}-ec2spot-ssm-{metadata.prefix}-{8hex}-{label}`, and a profile chooses
+  `metadata.prefix`, so `*-lifecycle-*` would have exempted any box from a profile with
+  `prefix: lifecycle`. A render that exceeds 5,000 bytes also fails.
+- Driving terragrunt by hand: `eval $(km env)` exports `KM_SCP_POLICY_JSON`; the unit's
+  `get_env` has no default, so a run without it fails rather than applying a stale policy.
+
 The SCP policy constrains the application account to prevent sandbox workloads from
 escaping their containment boundary (security group mutation, network escape, IAM
 escalation, etc.). The bootstrap step must complete before creating sandboxes.
@@ -303,11 +344,11 @@ deployment-environment assumptions are worth knowing before a fresh setup:
 
 - **Operators are assumed to use AWS IAM Identity Center (SSO).** The default trusted
   principals key on `arn:aws:iam::<app-account>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*`.
-  **If your operators authenticate as plain IAM users/roles (not SSO),** add your operator
-  principal ARN pattern to `trusted_role_arns` in `infra/live/management/scp/terragrunt.hcl`
-  before deploying — otherwise the SCP will deny operators security-group / IAM / instance /
-  SSM mutation in the application account. The other trusted slots (provisioner, lifecycle,
-  spot/ttl/create handlers, budget-enforcer, ssm) are already wildcarded by role-name pattern.
+  **If your operators authenticate as plain IAM roles (not SSO),** add the role pattern to
+  `scp.trusted_roles` (and `scp.trusted_ssm_roles` for `km shell`) in `km-config.yaml` before
+  deploying — otherwise the SCP will deny operators security-group / IAM / instance / SSM
+  mutation in the application account. The platform's own roles (`*-ttl-handler`,
+  `*-create-handler`, `*-budget-enforcer-*`) are built in, wildcarded by role-name pattern.
 
 #### Multi-install in a shared application account
 
@@ -329,7 +370,9 @@ both attach to the same account; AWS evaluates all attached SCPs as a logical **
   `us-west-2` in the same account, the intersection denies sandbox roles in **both** regions
   (each region is "not allowed" by one of the two SCPs). SCPs cannot scope the region lock to a
   single install's resources, so this is an inherent cross-install invariant — keep
-  `accounts.application`-sharing installs on identical `allowed_regions`.
+  `accounts.application`-sharing installs on identical `allowed_regions`. The allowed set is
+  `region` plus `scp.extra_regions`: two installs in `us-east-1` and `ca-central-1` each list
+  the other's region in `scp.extra_regions`, then re-run `km bootstrap --scp-only --dry-run=false`.
 
 - **~5 installs per account.** AWS's default limit is 5 SCPs per account, so roughly five
   prefixes can coexist before you need an AWS limit increase. The 5,000-byte policy guard is
@@ -1393,11 +1436,11 @@ lock table. `make build-lambdas` produces all 6 Lambda zips that
 attaches its own `${prefix}-sandbox-containment` SCP; the account-level SCP count
 can reach 5 installs sharing a single application account before hitting this limit.
 
-**5,120-byte SCP policy size.** `infra/modules/scp/v2.0.0/main.tf` includes a
-`terraform_data.scp_size_guard` precondition that trips at plan-time if the rendered
-SCP policy JSON exceeds 5,000 bytes (120-byte buffer below the AWS hard limit). If
-a future `trusted_arns_*` addition would exceed the limit, the plan fails with a
-clear error before AWS rejects the apply.
+**5,120-byte SCP policy size.** `pkg/scp.Render` refuses a policy over 5,000 bytes
+(120-byte buffer below the AWS hard limit), so `km bootstrap --scp-only --plan` fails
+with a clear error naming the `scp:` trusted role lists to trim. `infra/modules/scp/v3.0.0/main.tf`
+carries the same bound as a `terraform_data.scp_size_guard` precondition, which catches a
+hand-set `KM_SCP_POLICY_JSON`.
 
 **1-2s SSM document outage during ssm-session-doc apply.** When applying
 `ssm-session-doc/v2.0.0` for the first time on an install that previously had

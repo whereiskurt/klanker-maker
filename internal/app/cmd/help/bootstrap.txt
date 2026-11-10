@@ -22,6 +22,13 @@ Flags:
   --scp            Print the {prefix}-sandbox-containment SCP policy JSON and
                    the {prefix}-org-admin role/trust policy with real account IDs
                    ({prefix} = resource_prefix from km-config.yaml)
+  --scp-only       Act on the sandbox-containment SCP alone: print it
+                   (default), --plan to diff it against the live policy,
+                   --dry-run=false to apply it
+  --plan           Real terragrunt plan behind the destroy-class gate. Alone
+                   (or with --scp-only) it plans the SCP; with --shared-ses or
+                   --shared-secrets-key it plans that unit; with --all, each
+                   subflow in turn. Never applies
 
 Infrastructure Preview:
   The dry-run output shows what a full bootstrap would provision:
@@ -46,6 +53,27 @@ Examples:
 
   # Dump the full SCP policy and management role (for review or manual apply)
   km bootstrap --scp
+
+  # Regenerate the SCP from km-config.yaml and apply it retroactively
+  km bootstrap --scp-only --plan          # statement diff vs live + terragrunt plan
+  km bootstrap --scp-only --dry-run=false # apply; effective at once, no recreate
+
+The SCP:
+  The policy is rendered from km-config.yaml by pkg/scp: resource_prefix
+  names it, accounts.application is its target, region is its region lock,
+  and the optional scp: block adds install-specific exemptions:
+
+    scp:
+      trusted_roles: []       # exempt from every statement but the SSM one
+      trusted_iam_roles: []   # exempt from DenyIAMEscalation only
+      trusted_ssm_roles: []   # exempt from DenySSMPivot only
+      extra_regions: []       # allowed besides region
+
+  Each entry is an IAM role ARN pattern. A pattern a sandbox instance role
+  could match is rejected. Run with application-account SSO credentials:
+  terragrunt assumes {prefix}-org-admin in the management account. An
+  exemption added by hand in the console is REMOVED by the next apply —
+  put it in scp: instead (km doctor "SCP content" reports the drift).
 
 Prerequisites:
   - km-config.yaml must exist (run 'km configure' first)

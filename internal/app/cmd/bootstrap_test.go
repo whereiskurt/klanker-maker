@@ -3,6 +3,7 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -41,20 +42,6 @@ func withShortBootstrapTimeout(t *testing.T, d time.Duration) {
 	orig := cmd.BootstrapApplyTimeout
 	cmd.BootstrapApplyTimeout = d
 	t.Cleanup(func() { cmd.BootstrapApplyTimeout = orig })
-}
-
-// testTrustedBase returns a minimal trusted-base ARN slice for use in SCP tests.
-// Uses a fixed account ID so tests are deterministic without AWS access.
-func testTrustedBase() []string {
-	acct := "123456789012"
-	return []string{
-		"arn:aws:iam::" + acct + ":role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
-		"arn:aws:iam::" + acct + ":role/km-provisioner-*",
-		"arn:aws:iam::" + acct + ":role/km-lifecycle-*",
-		"arn:aws:iam::" + acct + ":role/km-ecs-spot-handler",
-		"arn:aws:iam::" + acct + ":role/km-ttl-handler",
-		"arn:aws:iam::" + acct + ":role/km-create-handler",
-	}
 }
 
 // runBootstrapCmd is a helper that runs the bootstrap cobra command with the
@@ -168,128 +155,103 @@ func TestBootstrapSCPApplyPath(t *testing.T) {
 	}
 }
 
-// TestBootstrapSCP_IncludesAMILifecycleMutatingOps verifies that the DenyInfraAndStorage
-// statement in the SCP policy includes all three Phase 56 AMI-lifecycle mutating operations.
-// Calls buildSCPPolicy directly — requires no AWS config.
-func TestBootstrapSCP_IncludesAMILifecycleMutatingOps(t *testing.T) {
-	trustedBase := testTrustedBase()
-	trustedInstance := append([]string{}, trustedBase...)
-	trustedIAM := append(append([]string{}, trustedBase...), "arn:aws:iam::123456789012:role/km-budget-enforcer-*")
-	trustedSSM := []string{"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*"}
-
-	policy := cmd.BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM, "us-east-1")
-
-	wantOps := []string{
-		"ec2:DeregisterImage",
-		"ec2:DeleteSnapshot",
-		"ec2:CreateTags",
+// scpStatement returns the named statement of the policy BuildSCPPolicyJSON
+// renders for cfg, decoded generically.
+func scpStatement(t *testing.T, cfg *config.Config, sid string) map[string]any {
+	t.Helper()
+	doc, err := cmd.BuildSCPPolicyJSON(cfg)
+	if err != nil {
+		t.Fatalf("BuildSCPPolicyJSON: %v", err)
 	}
-
-	var denyActions []string
-	for _, stmt := range policy.Statement {
-		if stmt.Sid == "DenyInfraAndStorage" {
-			denyActions = stmt.Action
-			break
+	var p struct {
+		Statement []map[string]any
+	}
+	if err := json.Unmarshal([]byte(doc), &p); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, st := range p.Statement {
+		if st["Sid"] == sid {
+			return st
 		}
 	}
+	t.Fatalf("statement %s not found", sid)
+	return nil
+}
 
-	if denyActions == nil {
-		t.Fatal("DenyInfraAndStorage statement not found in SCP policy")
-	}
-
-	for _, op := range wantOps {
-		found := false
-		for _, a := range denyActions {
-			if a == op {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("DenyInfraAndStorage Action missing %q; actions: %v", op, denyActions)
-		}
+func scpTestConfig() *config.Config {
+	return &config.Config{
+		OrganizationAccountID: "123456789012",
+		ApplicationAccountID:  "987654321098",
+		PrimaryRegion:         "us-east-1",
+		ResourcePrefix:        "km",
 	}
 }
 
-// TestBootstrapSCP_DescribeOpsNotInDeny verifies that read-only Describe operations
-// are NOT in any Deny statement — they must remain implicitly allowed.
-// Calls buildSCPPolicy directly — requires no AWS config.
+func anyStrings(v any) []string {
+	var out []string
+	for _, x := range v.([]any) {
+		out = append(out, x.(string))
+	}
+	return out
+}
+
+// TestBootstrapSCP_StorageDenies: the Phase 56 AMI/snapshot destructive ops are
+// denied for untrusted principals — but ec2:CreateTags is not (RunInstances
+// with TagSpecifications is authorised as CreateTags).
+func TestBootstrapSCP_StorageDenies(t *testing.T) {
+	actions := strings.Join(anyStrings(scpStatement(t, scpTestConfig(), "DenyInfraAndStorage")["Action"]), " ")
+	for _, op := range []string{"ec2:DeregisterImage", "ec2:DeleteSnapshot", "ec2:CreateImage", "ec2:CreateSnapshot"} {
+		if !strings.Contains(actions, op) {
+			t.Errorf("DenyInfraAndStorage missing %s", op)
+		}
+	}
+	if strings.Contains(actions, "ec2:CreateTags") {
+		t.Error("ec2:CreateTags must not be denied")
+	}
+}
+
+// TestBootstrapSCP_DescribeOpsNotInDeny: read-only Describe ops stay allowed.
 func TestBootstrapSCP_DescribeOpsNotInDeny(t *testing.T) {
-	trustedBase := testTrustedBase()
-	trustedInstance := append([]string{}, trustedBase...)
-	trustedIAM := append(append([]string{}, trustedBase...), "arn:aws:iam::123456789012:role/km-budget-enforcer-*")
-	trustedSSM := []string{"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*"}
-
-	policy := cmd.BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM, "us-east-1")
-
-	readOnlyOps := []string{
-		"ec2:DescribeImages",
-		"ec2:DescribeSnapshots",
+	doc, err := cmd.BuildSCPPolicyJSON(scpTestConfig())
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	for _, stmt := range policy.Statement {
-		if stmt.Effect != "Deny" {
-			continue
-		}
-		for _, op := range readOnlyOps {
-			for _, a := range stmt.Action {
-				if a == op {
-					t.Errorf("read-only op %q must NOT appear in Deny statement %q", op, stmt.Sid)
-				}
-			}
+	for _, op := range []string{"ec2:DescribeImages", "ec2:DescribeSnapshots"} {
+		if strings.Contains(doc, op) {
+			t.Errorf("read-only op %q must not appear in the SCP", op)
 		}
 	}
 }
 
-// TestBootstrapSCP_TrustedBaseUnchanged verifies that the ArnNotLike condition on
-// DenyInfraAndStorage still includes the expected trusted-base principal patterns.
-// Calls buildSCPPolicy directly — requires no AWS config.
-func TestBootstrapSCP_TrustedBaseUnchanged(t *testing.T) {
-	trustedBase := testTrustedBase()
-	trustedInstance := append([]string{}, trustedBase...)
-	trustedIAM := append(append([]string{}, trustedBase...), "arn:aws:iam::123456789012:role/km-budget-enforcer-*")
-	trustedSSM := []string{"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*"}
-
-	policy := cmd.BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM, "us-east-1")
-
-	var denyStmt *cmd.SCPStatement
-	for i := range policy.Statement {
-		if policy.Statement[i].Sid == "DenyInfraAndStorage" {
-			denyStmt = &policy.Statement[i]
-			break
-		}
+// TestBootstrapSCP_ConfigExemptionsReachThePolicy: the scp: block of
+// km-config.yaml is what an apply deploys — the kmv-github-deploy drift found
+// in review is expressed here, scoped to the IAM statement only.
+func TestBootstrapSCP_ConfigExemptionsReachThePolicy(t *testing.T) {
+	cfg := scpTestConfig()
+	cfg.SCP.TrustedIAMRoles = []string{"arn:aws:iam::987654321098:role/kmv-github-deploy"}
+	trusted := func(sid string) []string {
+		c := scpStatement(t, cfg, sid)["Condition"].(map[string]any)["ArnNotLike"].(map[string]any)
+		return anyStrings(c["aws:PrincipalARN"])
 	}
+	if !strings.Contains(strings.Join(trusted("DenyIAMEscalation"), " "), "kmv-github-deploy") {
+		t.Error("trusted_iam_roles entry missing from DenyIAMEscalation")
+	}
+	if strings.Contains(strings.Join(trusted("DenyInfraAndStorage"), " "), "kmv-github-deploy") {
+		t.Error("trusted_iam_roles entry must not exempt DenyInfraAndStorage")
+	}
+	// Operator SSO is account-scoped to the application account.
+	if !strings.Contains(strings.Join(trusted("DenyInfraAndStorage"), " "), "arn:aws:iam::987654321098:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*") {
+		t.Error("operator SSO trust missing")
+	}
+}
 
-	if denyStmt == nil {
-		t.Fatal("DenyInfraAndStorage statement not found")
-	}
-
-	// Condition must be an ArnNotLike map containing the trusted-base ARNs.
-	condMap, ok := denyStmt.Condition.(map[string]interface{})
-	if !ok {
-		t.Fatalf("DenyInfraAndStorage Condition is not map[string]interface{}; got %T", denyStmt.Condition)
-	}
-	arnNotLike, ok := condMap["ArnNotLike"].(map[string]interface{})
-	if !ok {
-		t.Fatal("DenyInfraAndStorage Condition missing ArnNotLike key")
-	}
-	principals, ok := arnNotLike["aws:PrincipalARN"].([]string)
-	if !ok {
-		t.Fatalf("ArnNotLike aws:PrincipalARN is not []string; got %T", arnNotLike["aws:PrincipalARN"])
-	}
-
-	wantPatterns := []string{"AWSReservedSSO", "km-provisioner", "km-lifecycle"}
-	for _, pat := range wantPatterns {
-		found := false
-		for _, arn := range principals {
-			if strings.Contains(arn, pat) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("trusted-base condition missing principal pattern %q; got: %v", pat, principals)
-		}
+// TestBootstrapSCP_RejectsSandboxMatchingExemption: a config entry a sandbox
+// instance role would match fails the render rather than shipping a bypass.
+func TestBootstrapSCP_RejectsSandboxMatchingExemption(t *testing.T) {
+	cfg := scpTestConfig()
+	cfg.SCP.TrustedRoles = []string{"arn:aws:iam::*:role/*-lifecycle-*"}
+	if _, err := cmd.BuildSCPPolicyJSON(cfg); err == nil || !strings.Contains(err.Error(), "sandbox instance role") {
+		t.Fatalf("want sandbox-role rejection, got %v", err)
 	}
 }
 

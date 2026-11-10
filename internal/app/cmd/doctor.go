@@ -50,6 +50,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/check"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	profilepkg "github.com/whereiskurt/klanker-maker/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/scp"
 	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
 	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
@@ -321,6 +322,14 @@ type DoctorConfigProvider interface {
 type appConfigAdapter struct {
 	cfg *appcfg.Config
 }
+
+// scpInputProvider is implemented by appConfigAdapter only; the SCP content
+// check is skipped for any other DoctorConfigProvider (test fakes).
+type scpInputProvider interface {
+	SCPInput() scp.Input
+}
+
+func (a *appConfigAdapter) SCPInput() scp.Input { return scpInputFromConfig(a.cfg) }
 
 func (a *appConfigAdapter) GetDomain() string                { return a.cfg.Domain }
 func (a *appConfigAdapter) GetOrganizationAccountID() string { return a.cfg.OrganizationAccountID }
@@ -1012,7 +1021,7 @@ func checkKMSKey(ctx context.Context, client KMSDescribeAPI, alias string) Check
 
 // checkSCP checks that the km-sandbox-containment SCP is applied to the target account.
 // Empty accountID or nil client returns CheckSkipped.
-func checkSCP(ctx context.Context, client OrgsListPoliciesAPI, accountID string) CheckResult {
+func checkSCP(ctx context.Context, client OrgsListPoliciesAPI, accountID, prefix string) CheckResult {
 	if accountID == "" || client == nil {
 		return CheckResult{
 			Name:    "SCP (Sandbox Containment)",
@@ -1041,7 +1050,7 @@ func checkSCP(ctx context.Context, client OrgsListPoliciesAPI, accountID string)
 			Remediation: "Check Organizations permissions or run the SCP Terraform module",
 		}
 	}
-	const scpName = "km-sandbox-containment"
+	scpName := scp.PolicyName(prefix)
 	for _, p := range out.Policies {
 		if awssdk.ToString(p.Name) == scpName {
 			return CheckResult{
@@ -4031,6 +4040,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	// credentials we don't have.
 	orgsClient := deps.OrgsClient
 	appAccount := cfg.GetApplicationAccountID()
+	localResourcePrefixForSCP := cfg.GetResourcePrefix()
 	orgConfigured := cfg.GetOrganizationAccountID() != ""
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		if !orgConfigured {
@@ -4040,8 +4050,19 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 				Message: "skipped — accounts.organization not configured (no SCP to verify)",
 			}
 		}
-		return checkSCP(ctx, orgsClient, appAccount)
+		return checkSCP(ctx, orgsClient, appAccount, localResourcePrefixForSCP)
 	})
+
+	// SCP content check: the live policy against the one pkg/scp renders from
+	// km-config.yaml. The presence check above stays green through a hand edit
+	// of the live SCP; this names the drifted statement and entry.
+	if sp, ok := cfg.(scpInputProvider); ok {
+		contentClient, _ := deps.OrgsClient.(OrgsSCPReadAPI)
+		in := sp.SCPInput()
+		checks = append(checks, func(ctx context.Context) CheckResult {
+			return checkSCPContent(ctx, contentClient, in, orgConfigured)
+		})
+	}
 
 	// Orphan SCP check — Gap #3a (Phase 84.4.1.1). WARN level.
 	orphanSCPClient := deps.OrgsListAllPoliciesClient

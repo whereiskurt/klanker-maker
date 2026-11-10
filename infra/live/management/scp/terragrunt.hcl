@@ -1,7 +1,6 @@
 locals {
   site     = read_terragrunt_config(find_in_parent_folders("site.hcl")).locals.site
   accounts = read_terragrunt_config(find_in_parent_folders("site.hcl")).locals.accounts
-  region   = read_terragrunt_config(find_in_parent_folders("site.hcl")).locals.region
 }
 
 # Provider: Organizations API is global; must operate from management account.
@@ -61,36 +60,19 @@ remote_state {
 }
 
 terraform {
-  source = "${dirname(find_in_parent_folders("CLAUDE.md"))}/infra/modules/scp//v2.0.0"
+  source = "${dirname(find_in_parent_folders("CLAUDE.md"))}/infra/modules/scp//v3.0.0"
 }
 
+# The policy document is rendered by pkg/scp from km-config.yaml and passed in
+# verbatim — this unit no longer authors it. `km bootstrap --scp-only` (and
+# `eval $(km env)` for a hand-driven terragrunt run) set KM_SCP_POLICY_JSON.
+#
+# get_env with NO default is deliberate: an unset variable fails the run
+# instead of applying an empty or stale policy to the application account.
 inputs = {
   resource_prefix        = get_env("KM_RESOURCE_PREFIX", "km")
   application_account_id = local.accounts.application
-
-  # Single region from site config — SCP region lock enforces this
-  allowed_regions = [local.region.full]
-
-  # Trusted roles that can bypass the containment Deny statements.
-  # Phase 84.4.1: pattern-based trust — account + prefix both wildcarded so this list
-  # works for multi-install in a shared application account. Any install's well-known
-  # role suffixes are trusted by name pattern rather than explicit prefix.
-  # Note: budget-enforcer-* and ec2spot-ssm-* roles are intentionally NOT listed here.
-  # They are handled inside the module with statement-specific carve-outs (IAM and SSM only).
-  trusted_role_arns = [
-    # Operator SSO roles — must always be able to manage infrastructure (account-scoped)
-    "arn:aws:iam::${local.accounts.application}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
-    # Provisioner roles — account + prefix wildcarded (Phase 84.4.1)
-    "arn:aws:iam::*:role/*-provisioner-*",
-    # Lifecycle roles — account + prefix wildcarded (Phase 84.4.1)
-    "arn:aws:iam::*:role/*-lifecycle-*",
-    # Spot handler — launches EC2 Spot instances; instance mutation carve-out in module
-    "arn:aws:iam::*:role/*-ecs-spot-handler",
-    # TTL handler — tears down sandboxes on expiry
-    "arn:aws:iam::*:role/*-ttl-handler",
-    # Create handler — provisions sandboxes remotely via EventBridge
-    "arn:aws:iam::*:role/*-create-handler",
-  ]
+  policy_json            = get_env("KM_SCP_POLICY_JSON")
 }
 
 # Retry configuration for transient AWS API errors
