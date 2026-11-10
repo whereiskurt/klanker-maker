@@ -193,9 +193,11 @@ composable, and easy to confuse — they point in four different directions.
 | Wiz **reads the account** | `wiz.outpost:`, `docs/wiz-outpost-connector.md` | km deploys Wiz's Outpost connector roles so Wiz can read inventory, posture and scan disks in the install's AWS account. |
 
 The first two decide **when to spin up an agent** in response to something Wiz
-already knows. This one is the reverse: it makes what the agent *does* visible to
-Wiz in the first place. Running all three closes the loop — Wiz observes the
-sandbox, and the sandbox reacts to what Wiz observes elsewhere.
+already knows. The sensor (this document) is the reverse: it makes what the agent
+*does* visible to Wiz in the first place. The Outpost connector lets Wiz see the
+account itself. Running the sensor with the pull and push integrations closes the
+loop — Wiz observes the sandbox, and the sandbox reacts to what Wiz observes
+elsewhere; the connector is independent of that loop.
 
 They share no code and no configuration. Enabling one neither requires nor
 affects the others.

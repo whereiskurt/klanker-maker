@@ -40,8 +40,13 @@ applied and `km doctor` makes zero AWS calls for it.
     It must be UUID-shaped (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), the
     template's own `AllowedPattern`. It is stored in `km-config.yaml` in plain
     text; Wiz treats it as a confused-deputy nonce, not a secret.
-- The operator role that runs `km init` (application-account SSO) needs
-  `cloudformation:*` on the stack and IAM create/attach for the two roles.
+- The credentials that apply the stack (the application-account SSO role that
+  runs `km init`) need CloudFormation permissions to create, update, delete and
+  describe the stack, plus IAM permissions to create, attach and delete the
+  roles and policies for `WizAccess-Role` / `WizScannerRole-*`, and must be
+  allowed to pass `CAPABILITY_NAMED_IAM`. km's own operator policy
+  (`infra/modules/km-operator-policy`) does not grant `cloudformation:*`; an
+  admin-equivalent SSO role works.
 
 ## 3. The `wiz.outpost:` block
 
@@ -85,6 +90,8 @@ wiz:
   before any terragrunt run.
 - `km init` exports the block as `KM_WIZ_OUTPOST_JSON`; an env value that
   differs from the yaml produces a drift WARN (env wins), as for other blocks.
+  A `KM_WIZ_OUTPOST_JSON` already set in the shell also applies when there is no
+  yaml block at all (same as `KM_WEBHOOK_SOURCES`), again with the drift WARN.
 - **One region.** IAM role names are global, so the live unit exists only under
   `infra/live/use1/` (the home region). A `km init` for any other region skips
   it and never creates a second stack.
@@ -187,8 +194,9 @@ just skips the module, and `km wiz status` reports that the stack still exists.
   `km init --wiz --dry-run=false`.
 - **Disk scans fail inside Wiz with no km-side symptom**: if km's
   `{prefix}-sandbox-containment` SCP is attached to the account, it denies the
-  scanner's `ec2:CreateSnapshot`/`CopySnapshot`/`DeleteSnapshot`. km does not
-  warn about this in this release. Check with the SCP doctor check ("SCP
+  scanner's snapshot actions: the v3 SCP (`scp-from-config`) denies
+  `ec2:DeleteSnapshot`, the v2 SCP denies `ec2:CreateSnapshot`/`CopySnapshot`.
+  km does not warn about this in this release. Check with the SCP doctor check ("SCP
   content") or `km bootstrap --scp-only --plan` where available.
 - **Access errors in other regions**: expected if the account is region-restricted
   elsewhere; not a km bug.

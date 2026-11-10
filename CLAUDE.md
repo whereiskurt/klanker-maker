@@ -2245,9 +2245,9 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km hermes <sandbox-id>` — reconnecting SSM forward to the WebUI on localhost:8788, plus the login password (`--local-port`, `--no-password`)
 - `km hermes status <sandbox-id>` / `km hermes stop <sandbox-id>` — report install/versions/server/provider/signal 10; stop and disable the server (stays stopped across resume)
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
-- `km wiz status` — show the Wiz Outpost connector stack state, deployed template version, and the three values to paste into the Wiz UI
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role
+- `km wiz status` — show the Wiz Outpost connector stack state, deployed template version, and the three values to paste into the Wiz UI
 - `km account add <name> --aws-profile <target-admin> --trust <home-account-id> --instance-types ...` — enroll a target AWS account as a capacity-borrowing link (target-account admin creds; `--provision-network --az-count N`, `--provision-efs`, `--enable-bedrock`, `--dry-run` defaults true)
 - `km account register <name> --from-fragment <path> --aws-profile <home>` — register a link into the home account (home creds; writes `km-config.yaml` entry + SSM external-id + one read-only artifacts-bucket grant)
 - `km account list` — list configured cross-account capacity links (never prints the external id)
