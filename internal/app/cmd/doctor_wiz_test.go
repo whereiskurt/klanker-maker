@@ -193,3 +193,27 @@ func TestDoctor_WizDormant_NoChecks(t *testing.T) {
 		t.Errorf("configured install registered %d Wiz checks, want 2", found)
 	}
 }
+
+func TestCheckWizOutpostTrust_ListForms(t *testing.T) {
+	s := wizoutpost.Settings{TrustRoleARN: "arn:aws:iam::111122223333:role/wiz-dc", OrchestratorAccountID: "444455556666",
+		ExternalID: "abcdef12-3456-7890-abcd-ef1234567890", RoleSuffix: "km"}
+	scanner := "arn:aws:iam::444455556666:role/WizOrchestratorNodePoolRole"
+	listDoc := func(principal, ext string) string {
+		return `{"Statement":[{"Effect":"Allow","Principal":{"AWS":["` + principal +
+			`"]},"Action":"sts:AssumeRole","Condition":{"StringEquals":{"sts:ExternalId":["` + ext + `"]}}}]}`
+	}
+	ok := fakeWizIAM{
+		s.AccessRoleNameOrDefault(): listDoc(s.TrustRoleARN, s.ExternalID),
+		s.ScannerRoleName():         listDoc(scanner, s.ExternalID),
+	}
+	if r := checkWizOutpostTrust(context.Background(), ok, s); r.Status != CheckOK {
+		t.Fatalf("list forms: %s %s", r.Status, r.Message)
+	}
+	bad := fakeWizIAM{
+		s.AccessRoleNameOrDefault(): listDoc(s.TrustRoleARN, "other"),
+		s.ScannerRoleName():         ok[s.ScannerRoleName()],
+	}
+	if r := checkWizOutpostTrust(context.Background(), bad, s); r.Status != CheckWarn || !strings.Contains(r.Message, "ExternalId") {
+		t.Fatalf("list mismatch: %s %s", r.Status, r.Message)
+	}
+}

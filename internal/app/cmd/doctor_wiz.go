@@ -101,6 +101,22 @@ type wizTrustDoc struct {
 	} `json:"Statement"`
 }
 
+// wizContains reports whether v (a JSON string or list of strings, the two
+// shapes an IAM policy document may use) holds want.
+func wizContains(v any, want string) bool {
+	switch x := v.(type) {
+	case string:
+		return x == want
+	case []any:
+		for _, e := range x {
+			if e == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // wizTrustMismatch returns a description of how the role's trust policy
 // differs from the expected principal and external id, or "" when it matches.
 func wizTrustMismatch(ctx context.Context, api WizRoleAPI, role, wantPrincipal, wantExt string) (string, error) {
@@ -121,17 +137,8 @@ func wizTrustMismatch(ctx context.Context, api WizRoleAPI, role, wantPrincipal, 
 	}
 	var principalOK, extOK bool
 	for _, s := range doc.Statement {
-		switch v := s.Principal.AWS.(type) {
-		case string:
-			principalOK = principalOK || v == wantPrincipal
-		case []any:
-			for _, e := range v {
-				principalOK = principalOK || e == wantPrincipal
-			}
-		}
-		if e, ok := s.Condition.StringEquals["sts:ExternalId"].(string); ok && e == wantExt {
-			extOK = true
-		}
+		principalOK = principalOK || wizContains(s.Principal.AWS, wantPrincipal)
+		extOK = extOK || wizContains(s.Condition.StringEquals["sts:ExternalId"], wantExt)
 	}
 	if !principalOK {
 		return fmt.Sprintf("role %s trusts a principal other than %s", role, wantPrincipal), nil
