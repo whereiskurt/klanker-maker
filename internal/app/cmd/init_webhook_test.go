@@ -40,7 +40,7 @@ func TestWebhookBridge_RegisteredEverywhere(t *testing.T) {
 	})
 
 	t.Run("--webhooks resolves to the module", func(t *testing.T) {
-		got, err := cmd.ResolveScopedModule("", false, false, false, false, true)
+		got, err := cmd.ResolveScopedModule("", false, false, false, false, true, false)
 		if err != nil {
 			t.Fatalf("ResolveScopedModule(webhooks=true): unexpected error: %v", err)
 		}
