@@ -76,10 +76,10 @@ func TestUninitDestroyOrder(t *testing.T) {
 	// Adding a module to regionalModules() in init.go requires extending this
 	// slice too — keep it the exact reverse of that list (regionalModules()==30).
 	wantOrder := []string{
-		// wiz-outpost-connector is appended last in regionalModules(), so it
-		// destroys first.
-		"wiz-outpost-connector",
 		"ses",
+		// wiz-outpost-connector sits immediately before ses in regionalModules(),
+		// so it destroys right after ses.
+		"wiz-outpost-connector",
 		// Phase 116 (check-runner scaffolding); forward tail is
 		// ...lambda-h1-bridge, lambda-webhook-bridge, dynamodb-checks,
 		// check-runner-role, ses, so the reverse destroy order places these two

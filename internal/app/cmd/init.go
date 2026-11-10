@@ -46,9 +46,9 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
-	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt/planreport"
 	"github.com/whereiskurt/klanker-maker/pkg/version"
+	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
 	"gopkg.in/yaml.v3"
 )
 
@@ -846,19 +846,20 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
+			// Wiz Outpost connector roles (CloudFormation stack). No dependencies;
+			// placed immediately before ses so ses stays last. Skipped (envReqs)
+			// when km-config.yaml has no wiz.outpost.
+			name:    "wiz-outpost-connector",
+			dir:     filepath.Join(regionDir, "wiz-outpost-connector"),
+			envReqs: []string{"KM_WIZ_OUTPOST_JSON"},
+		},
+		{
 			// SES must apply LAST because it owns the consolidated S3 bucket policy.
 			// The email-handler must apply before SES so its ARN is available for
 			// the operator-inbound receipt rule.
 			name:    "ses",
 			dir:     filepath.Join(regionDir, "ses"),
 			envReqs: []string{"KM_ROUTE53_ZONE_ID"},
-		},
-		{
-			// Wiz Outpost connector roles (CloudFormation stack). No dependencies;
-			// appended last. Skipped (envReqs) when km-config.yaml has no wiz.outpost.
-			name:    "wiz-outpost-connector",
-			dir:     filepath.Join(regionDir, "wiz-outpost-connector"),
-			envReqs: []string{"KM_WIZ_OUTPOST_JSON"},
 		},
 	}
 }

@@ -65,9 +65,12 @@ func TestExportTerragruntEnvVars_WizOutpostEnvDriftWarns(t *testing.T) {
 
 func TestRegionalModules_WizOutpostEntry(t *testing.T) {
 	mods := regionalModules(t.TempDir())
-	last := mods[len(mods)-1]
+	if mods[len(mods)-1].name != "ses" {
+		t.Fatalf("last module = %q, want ses", mods[len(mods)-1].name)
+	}
+	last := mods[len(mods)-2]
 	if last.name != "wiz-outpost-connector" {
-		t.Fatalf("last module = %q, want wiz-outpost-connector", last.name)
+		t.Fatalf("module before ses = %q, want wiz-outpost-connector", last.name)
 	}
 	if len(last.envReqs) != 1 || last.envReqs[0] != "KM_WIZ_OUTPOST_JSON" {
 		t.Errorf("envReqs = %v, want [KM_WIZ_OUTPOST_JSON]", last.envReqs)
