@@ -156,3 +156,13 @@ func TestStackAndRoleNames(t *testing.T) {
 		t.Fatal("access default")
 	}
 }
+
+func TestTemplateVersion(t *testing.T) {
+	v, err := TemplateVersion(filepath.Join("..", ".."))
+	if err != nil || v != "2025-10-07" {
+		t.Fatalf("got %q, %v", v, err)
+	}
+	if _, err := TemplateVersion(t.TempDir()); err == nil {
+		t.Fatal("expected error for missing template")
+	}
+}

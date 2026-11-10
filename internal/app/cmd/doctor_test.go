@@ -33,6 +33,7 @@ import (
 	appcfg "github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
 )
 
 // --- Mock STS ---
@@ -609,6 +610,7 @@ func TestCheckSandboxSummary_OK(t *testing.T) {
 // testConfig is a simple struct used in checkConfig tests to avoid depending
 // on a fully-loaded config.Config.
 type testConfig struct {
+	wiz           *wizoutpost.Settings
 	domain        string
 	dnsParentAcct string
 	orgAcct       string
@@ -666,6 +668,7 @@ func (c *testConfig) GetCapacityTableName() string                             {
 func (c *testConfig) GetNATGatewayEnabled() bool                               { return false }
 func (c *testConfig) GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig { return nil }
 func (c *testConfig) GetWebhooks() appcfg.WebhooksConfig                       { return appcfg.WebhooksConfig{} }
+func (c *testConfig) GetWizOutpost() *wizoutpost.Settings                       { return c.wiz }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -968,6 +971,7 @@ func minimalConfigWithProfile() *testDoctorConfig {
 
 // testDoctorConfig implements the DoctorConfigProvider interface.
 type testDoctorConfig struct {
+	wiz           *wizoutpost.Settings
 	domain        string
 	dnsParentAcct string
 	orgAcct       string
@@ -1023,6 +1027,7 @@ func (c *testDoctorConfig) GetCapacityTableName() string                        
 func (c *testDoctorConfig) GetNATGatewayEnabled() bool                               { return false }
 func (c *testDoctorConfig) GetLaunchAccounts() map[string]appcfg.LaunchAccountConfig { return nil }
 func (c *testDoctorConfig) GetWebhooks() appcfg.WebhooksConfig                       { return appcfg.WebhooksConfig{} }
+func (c *testDoctorConfig) GetWizOutpost() *wizoutpost.Settings                       { return c.wiz }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{

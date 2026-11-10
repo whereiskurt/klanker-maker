@@ -114,6 +114,9 @@ func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister
 	totalOrphanGB := int32(0)
 	detachedCount := 0
 	for _, v := range volumes {
+		if isWizScanResource(v.Tags) {
+			continue
+		}
 		var sandboxID string
 		for _, tag := range v.Tags {
 			if awssdk.ToString(tag.Key) == "km:sandbox-id" {
@@ -285,6 +288,9 @@ func checkUntaggedAvailableVolumes(ctx context.Context, ec2Client EC2VolumeAPI, 
 	var found []stale
 	totalGB := int32(0)
 	for _, v := range volumes {
+		if isWizScanResource(v.Tags) {
+			continue
+		}
 		var hasSandboxID, hasName, doctorIgnore bool
 		for _, tag := range v.Tags {
 			switch awssdk.ToString(tag.Key) {
@@ -402,6 +408,9 @@ func checkOrphanedSnapshots(ctx context.Context, ec2Client EC2VolumeAPI) CheckRe
 	var orphans []orphan
 	totalOrphanGB := int32(0)
 	for _, s := range snaps {
+		if isWizScanResource(s.Tags) {
+			continue
+		}
 		sid := awssdk.ToString(s.SnapshotId)
 		if referenced[sid] {
 			continue

@@ -6,6 +6,8 @@ package wizoutpost
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 )
 
@@ -139,4 +141,24 @@ func ExportJSON(s Settings) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// TemplateVersion returns the vendored template's WizVersionLastUpdated
+// parameter default (the version km deploys), read from repoRoot.
+func TemplateVersion(repoRoot string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot, TemplateRelPath))
+	if err != nil {
+		return "", fmt.Errorf("read wiz template: %w", err)
+	}
+	var t struct {
+		Parameters map[string]struct{ Default string }
+	}
+	if err := json.Unmarshal(raw, &t); err != nil {
+		return "", fmt.Errorf("parse wiz template: %w", err)
+	}
+	p, ok := t.Parameters["WizVersionLastUpdated"]
+	if !ok || p.Default == "" {
+		return "", fmt.Errorf("wiz template has no WizVersionLastUpdated default")
+	}
+	return p.Default, nil
 }
