@@ -72,10 +72,13 @@ func TestUninitDestroyOrder(t *testing.T) {
 		t.Fatal("expected Destroy to be called for modules, got 0 calls")
 	}
 
-	// Reverse of the 29-module regionalModules() apply order (init.go).
+	// Reverse of the 30-module regionalModules() apply order (init.go).
 	// Adding a module to regionalModules() in init.go requires extending this
-	// slice too — keep it the exact reverse of that list (regionalModules()==29).
+	// slice too — keep it the exact reverse of that list (regionalModules()==30).
 	wantOrder := []string{
+		// wiz-outpost-connector is appended last in regionalModules(), so it
+		// destroys first.
+		"wiz-outpost-connector",
 		"ses",
 		// Phase 116 (check-runner scaffolding); forward tail is
 		// ...lambda-h1-bridge, lambda-webhook-bridge, dynamodb-checks,
@@ -253,8 +256,8 @@ func TestUninitContinuesPastModuleErrors(t *testing.T) {
 
 	// All modules should still be attempted (one module's destroy error is
 	// non-fatal; uninit warns and continues to the next). Count matches the full
-	// regionalModules() inventory (regionalModules()==29; same as TestUninitDestroyOrder).
-	const wantCalls = 29
+	// regionalModules() inventory (regionalModules()==30; same as TestUninitDestroyOrder).
+	const wantCalls = 30
 	if len(runner.calls) != wantCalls {
 		t.Errorf("expected %d Destroy calls (all modules attempted), got %d: %v", wantCalls, len(runner.calls), runner.calls)
 	}
@@ -498,9 +501,9 @@ func TestUninitDetectsBackendDrift(t *testing.T) {
 	}
 	// All modules should still be attempted — backend drift on one module is
 	// non-fatal. Count must match the full regionalModules() inventory
-	// (regionalModules()==29; the same count as TestUninitDestroyOrder's wantOrder).
-	if len(runner.calls) != 29 {
-		t.Errorf("expected %d Destroy calls (continue past drift), got %d", 29, len(runner.calls))
+	// (regionalModules()==30; the same count as TestUninitDestroyOrder's wantOrder).
+	if len(runner.calls) != 30 {
+		t.Errorf("expected %d Destroy calls (continue past drift), got %d", 30, len(runner.calls))
 	}
 }
 

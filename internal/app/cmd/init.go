@@ -46,6 +46,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
+	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt/planreport"
 	"github.com/whereiskurt/klanker-maker/pkg/version"
 	"gopkg.in/yaml.v3"
@@ -851,6 +852,13 @@ func regionalModules(regionDir string) []regionalModule {
 			name:    "ses",
 			dir:     filepath.Join(regionDir, "ses"),
 			envReqs: []string{"KM_ROUTE53_ZONE_ID"},
+		},
+		{
+			// Wiz Outpost connector roles (CloudFormation stack). No dependencies;
+			// appended last. Skipped (envReqs) when km-config.yaml has no wiz.outpost.
+			name:    "wiz-outpost-connector",
+			dir:     filepath.Join(regionDir, "wiz-outpost-connector"),
+			envReqs: []string{"KM_WIZ_OUTPOST_JSON"},
 		},
 	}
 }
@@ -2670,6 +2678,22 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 					envVal, yamlWebhooks)
 			} else if envVal == "" {
 				os.Setenv("KM_WEBHOOK_SOURCES", yamlWebhooks) //nolint:errcheck
+			}
+		}
+	}
+
+	// KM_WIZ_OUTPOST_JSON — {"parameters":{...}} CloudFormation parameters for the
+	// Wiz Outpost connector stack, consumed by
+	// infra/live/use1/wiz-outpost-connector/terragrunt.hcl. Absent wiz.outpost
+	// leaves it unset (dormant). env-wins with a drift WARN, like KM_WEBHOOK_SOURCES.
+	if cfg.Wiz.Outpost != nil {
+		if yamlWiz, err := wizoutpost.ExportJSON(*cfg.Wiz.Outpost); err == nil {
+			if envVal := os.Getenv("KM_WIZ_OUTPOST_JSON"); envVal != "" && envVal != yamlWiz {
+				fmt.Fprintf(os.Stderr,
+					"WARN: KM_WIZ_OUTPOST_JSON=%s (env) overrides km-config.yaml wiz.outpost=%s\n",
+					envVal, yamlWiz)
+			} else if envVal == "" {
+				os.Setenv("KM_WIZ_OUTPOST_JSON", yamlWiz) //nolint:errcheck
 			}
 		}
 	}

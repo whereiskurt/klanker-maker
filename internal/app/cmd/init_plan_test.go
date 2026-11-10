@@ -437,13 +437,13 @@ func TestRunInitPlan_VerboseStreamsPlan(t *testing.T) {
 // ahead of the bridges 2026-10-18: the slack/h1/webhook bridge units depend on it),
 // lambda-slack-bridge, lambda-github-bridge, lambda-h1-bridge, lambda-webhook-bridge,
 // dynamodb-checks, lambda-quota-alerter, check-runner-role, ses
-// 27 + lambda-webhook-bridge (Phase 127)
+// 27 + lambda-webhook-bridge (Phase 127); + wiz-outpost-connector appended last (30 total)
 func TestRunInitPlan_ModuleOrder(t *testing.T) {
 	repoRoot := t.TempDir()
 	mods := cmd.RegionalModules(repoRoot)
 
-	if len(mods) != 29 {
-		t.Errorf("len(mods) = %d, want 29", len(mods))
+	if len(mods) != 30 {
+		t.Errorf("len(mods) = %d, want 30", len(mods))
 	}
 	if len(mods) == 0 {
 		t.Fatal("RegionalModules returned empty list")
@@ -452,9 +452,13 @@ func TestRunInitPlan_ModuleOrder(t *testing.T) {
 	if mods[0].Name != "network" {
 		t.Errorf("mods[0].Name = %q, want %q", mods[0].Name, "network")
 	}
-	// ses must be last
-	if mods[len(mods)-1].Name != "ses" {
-		t.Errorf("mods[last].Name = %q, want %q", mods[len(mods)-1].Name, "ses")
+	// wiz-outpost-connector is appended last (no dependencies); ses must still
+	// apply after everything it depends on, i.e. second to last.
+	if mods[len(mods)-1].Name != "wiz-outpost-connector" {
+		t.Errorf("mods[last].Name = %q, want %q", mods[len(mods)-1].Name, "wiz-outpost-connector")
+	}
+	if mods[len(mods)-2].Name != "ses" {
+		t.Errorf("mods[last-1].Name = %q, want %q", mods[len(mods)-2].Name, "ses")
 	}
 	// The history table must apply before the bridge that reads it (list order
 	// IS apply order on a fresh install).
