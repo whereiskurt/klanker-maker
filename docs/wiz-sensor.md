@@ -182,19 +182,22 @@ items below.
 
 ## 7. Relationship to the other Wiz integrations
 
-As of v0.8.3 there are three Wiz integrations in km. They are independent,
-composable, and easy to confuse — they point in three different directions.
+There are four Wiz integrations in km. They are independent,
+composable, and easy to confuse — they point in four different directions.
 
 | Direction | Mechanism | What it does |
 |---|---|---|
 | km **pulls** from Wiz | `checks.triggers` (Phase 116), `profiles/checks/wiz-intel/` | A scheduled Lambda polls the Wiz API; a predicate on the result dispatches a sandbox agent. |
 | Wiz **pushes** to km | `webhooks:` (Phase 127), `docs/webhook-ingress.md` | A Wiz Automation Rule POSTs an Issue or Threat payload to `km-webhook-bridge`, which dispatches a sandbox agent to triage it. |
 | A sandbox **reports to** Wiz | this document | The Wiz Runtime Sensor runs on the sandbox and reports process, file, and network activity to your Wiz tenant. |
+| Wiz **reads the account** | `wiz.outpost:`, `docs/wiz-outpost-connector.md` | km deploys Wiz's Outpost connector roles so Wiz can read inventory, posture and scan disks in the install's AWS account. |
 
 The first two decide **when to spin up an agent** in response to something Wiz
-already knows. This one is the reverse: it makes what the agent *does* visible to
-Wiz in the first place. Running all three closes the loop — Wiz observes the
-sandbox, and the sandbox reacts to what Wiz observes elsewhere.
+already knows. The sensor (this document) is the reverse: it makes what the agent
+*does* visible to Wiz in the first place. The Outpost connector lets Wiz see the
+account itself. Running the sensor with the pull and push integrations closes the
+loop — Wiz observes the sandbox, and the sandbox reacts to what Wiz observes
+elsewhere; the connector is independent of that loop.
 
 They share no code and no configuration. Enabling one neither requires nor
 affects the others.

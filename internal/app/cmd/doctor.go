@@ -18,6 +18,7 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -52,6 +53,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/scp"
 	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
 	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
+	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
 	"gopkg.in/yaml.v3"
 )
 
@@ -311,6 +313,9 @@ type DoctorConfigProvider interface {
 	// config. Zero-value (nil Sources) when webhooks: is absent from
 	// km-config.yaml (dormant).
 	GetWebhooks() appcfg.WebhooksConfig
+	// GetWizOutpost returns the wiz.outpost connector settings, nil when the
+	// block is absent (dormant).
+	GetWizOutpost() *wizoutpost.Settings
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -403,6 +408,9 @@ func (a *appConfigAdapter) GetLaunchAccounts() map[string]appcfg.LaunchAccountCo
 }
 func (a *appConfigAdapter) GetWebhooks() appcfg.WebhooksConfig {
 	return a.cfg.Webhooks
+}
+func (a *appConfigAdapter) GetWizOutpost() *wizoutpost.Settings {
+	return a.cfg.Wiz.Outpost
 }
 
 // LaunchAccountAssumeRoleFunc builds a per-link assumed-role aws.Config from
@@ -597,6 +605,10 @@ type DoctorDeps struct {
 	// checkInboundDLQDepth returns CheckSkipped (dormant). Production reuses the
 	// SlackInboundSQS client.
 	InboundDLQSQS kmaws.SQSClient
+
+	// Wiz Outpost connector checks. Nil clients ⇒ the checks report SKIPPED.
+	WizCFN WizStackAPI
+	WizIAM WizRoleAPI
 	// InboundResourcePrefix is the resource prefix used to derive the shared DLQ
 	// names. Production reuses SlackResourcePrefix.
 	InboundResourcePrefix string
@@ -5029,6 +5041,28 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		})
 	}
 
+	// Wiz Outpost connector checks: registered only when wiz.outpost is
+	// configured, so a dormant install makes no AWS call.
+	if wizCfg := cfg.GetWizOutpost(); wizCfg != nil {
+		wizSettings := *wizCfg
+		wizPrefix := cfg.GetResourcePrefix()
+		wizWant, wizErr := wizoutpost.TemplateVersion(findRepoRoot())
+		if wizErr != nil {
+			wizWant = "" // template unreadable: skip the version comparison
+		}
+		wizCFN, wizIAM := deps.WizCFN, deps.WizIAM
+		checks = append(checks, func(ctx context.Context) CheckResult {
+			r := checkWizOutpostStack(ctx, wizCFN, wizPrefix, wizWant)
+			if wizErr != nil && r.Status == CheckOK {
+				r.Message += " (version comparison skipped: " + wizErr.Error() + ")"
+			}
+			return r
+		})
+		checks = append(checks, func(ctx context.Context) CheckResult {
+			return checkWizOutpostTrust(ctx, wizIAM, wizSettings)
+		})
+	}
+
 	// Phase 126 Plan 09 — cross-account link doctor checks (REQ-126-DOCTOR).
 	// launchAccounts is read once here (pure config, no AWS call); each
 	// closure re-checks len(launchAccounts)==0 internally so every check
@@ -5179,6 +5213,8 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.StateLockDDBWriteClient = dynamodb.NewFromConfig(awsCfg)
 	deps.KMSCleanupClient = kms.NewFromConfig(awsCfg)
 	deps.IAMCleanupClient = iam.NewFromConfig(awsCfg)
+	deps.WizCFN = cloudformation.NewFromConfig(awsCfg)
+	deps.WizIAM = iam.NewFromConfig(awsCfg)
 	deps.SchedulerClient = scheduler.NewFromConfig(awsCfg)
 	deps.SSMDeleterClient = ssm.NewFromConfig(awsCfg)
 	deps.EC2InstanceClient = ec2.NewFromConfig(awsCfg)

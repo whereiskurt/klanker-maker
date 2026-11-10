@@ -11,9 +11,11 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
 )
 
 // NewEnvCmd creates the "km env" subcommand.
@@ -87,6 +89,18 @@ func runEnvExport(cfg *config.Config, w io.Writer, includeAWSProfile bool) error
 			fmt.Fprintf(w, "# %s not exported: %v\n", scpPolicyEnv, err)
 		} else {
 			fmt.Fprintf(w, "export %s='%s'\n", scpPolicyEnv, p.JSON())
+		}
+	}
+	// The Wiz Outpost connector's CloudFormation parameters, for a hand-driven
+	// `terragrunt plan` in infra/live/use1/wiz-outpost-connector (its get_env
+	// falls back to "{}", which would plan empty parameters). Single-quoted for
+	// eval; role_suffix and access_role_name are free text, so an embedded
+	// single quote is closed, escaped and reopened ('\'').
+	if cfg.Wiz.Outpost != nil {
+		if j, err := wizoutpost.ExportJSON(*cfg.Wiz.Outpost); err != nil {
+			fmt.Fprintf(w, "# KM_WIZ_OUTPOST_JSON not exported: %v\n", err)
+		} else {
+			fmt.Fprintf(w, "export KM_WIZ_OUTPOST_JSON='%s'\n", strings.ReplaceAll(j, "'", `'\''`))
 		}
 	}
 	if includeAWSProfile {

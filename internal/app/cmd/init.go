@@ -48,6 +48,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt/planreport"
 	"github.com/whereiskurt/klanker-maker/pkg/version"
+	"github.com/whereiskurt/klanker-maker/pkg/wizoutpost"
 	"gopkg.in/yaml.v3"
 )
 
@@ -152,6 +153,9 @@ var scopedCheapAllowlist = []string{
 	// Phase 127: generic webhook ingress bridge — same bounded, non-destructive
 	// apply semantics as the other bridge Lambdas.
 	"lambda-webhook-bridge",
+	// Wiz Outpost connector: IAM roles + CloudFormation-equivalent resources only;
+	// bounded, non-destructive apply semantics.
+	"wiz-outpost-connector",
 }
 
 // scopedGatedAllowlist is the Tier-2 set of modules that km init --only may target
@@ -173,17 +177,17 @@ func isScopedGated(name string) bool {
 // name and validates it against the combined scoped allowlist.
 //
 // Rules:
-//   - At most one of {onlyVal != "", github, slack, h1, email, webhooks} may be
+//   - At most one of {onlyVal != "", github, slack, h1, email, webhooks, wiz} may be
 //     set; >1 → error.
 //   - None set → ("", nil): no scoped request; caller falls through to normal init.
 //   - Sugar alias bools map to: github→lambda-github-bridge, slack→lambda-slack-bridge,
-//     h1→lambda-h1-bridge, email→email-handler, webhooks→lambda-webhook-bridge.
+//     h1→lambda-h1-bridge, email→email-handler, webhooks→lambda-webhook-bridge, wiz→wiz-outpost-connector.
 //   - onlyVal is used verbatim as the candidate module name.
 //   - Candidate must be in scopedCheapAllowlist ∪ scopedGatedAllowlist; otherwise error
 //     listing the allowed set.
 //
 // Exported so cmd_test (external test package) can call it directly in unit tests.
-func ResolveScopedModule(onlyVal string, github, slack, h1, email, webhooks bool) (string, error) {
+func ResolveScopedModule(onlyVal string, github, slack, h1, email, webhooks, wiz bool) (string, error) {
 	// Count how many entry points are set.
 	setCount := 0
 	if onlyVal != "" {
@@ -204,8 +208,11 @@ func ResolveScopedModule(onlyVal string, github, slack, h1, email, webhooks bool
 	if webhooks {
 		setCount++
 	}
+	if wiz {
+		setCount++
+	}
 	if setCount > 1 {
-		return "", fmt.Errorf("at most one of --only/--github/--slack/--h1/--email/--webhooks may be set")
+		return "", fmt.Errorf("at most one of --only/--github/--slack/--h1/--email/--webhooks/--wiz may be set")
 	}
 	if setCount == 0 {
 		return "", nil
@@ -224,6 +231,8 @@ func ResolveScopedModule(onlyVal string, github, slack, h1, email, webhooks bool
 		candidate = "email-handler"
 	case webhooks:
 		candidate = "lambda-webhook-bridge"
+	case wiz:
+		candidate = "wiz-outpost-connector"
 	}
 
 	// Validate candidate against the combined allowlist.
@@ -396,8 +405,18 @@ func RunInitScopedWithRunner(runner InitRunner, repoRoot, region, module string,
 		}
 	}
 
+	if module == wizOutpostModule {
+		printWizOutputsAfterApply(ctx, runner, target.dir, os.Stdout)
+	}
+
 	fmt.Println()
 	fmt.Printf("Scoped init complete for %s.\n", module)
+	if module == wizOutpostModule {
+		// A CloudFormation stack, not a bridge Lambda: the env+IAM/code-zip
+		// notes below do not apply.
+		fmt.Printf("Next: paste the three values into the Wiz UI connector form, then run km doctor.\n")
+		return nil
+	}
 	fmt.Printf("Note: this refreshed env+IAM only. For a stale code zip: make build-lambdas && km init --lambdas\n")
 	fmt.Printf("Note: for new resources/tables/queues: km init --dry-run=false\n")
 	return nil
@@ -414,6 +433,10 @@ func RunInitScopedWithRunner(runner InitRunner, repoRoot, region, module string,
 //  4. PublishH1CommandsToSSM(...)          — gated on module == lambda-h1-bridge + cfg.H1.Programs
 func runInitScoped(cfg *config.Config, awsProfile, region string, verbose bool, module string, dryRun, acceptDestroys bool) error {
 	ctx := context.Background()
+
+	if err := requireWizBlock(cfg, module); err != nil {
+		return err
+	}
 
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
 	if err != nil {
@@ -843,6 +866,14 @@ func regionalModules(regionDir string) []regionalModule {
 			name:    "check-runner-role",
 			dir:     filepath.Join(regionDir, "check-runner-role"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
+			// Wiz Outpost connector roles (CloudFormation stack). No dependencies;
+			// placed immediately before ses so ses stays last. Skipped (envReqs)
+			// when km-config.yaml has no wiz.outpost.
+			name:    "wiz-outpost-connector",
+			dir:     filepath.Join(regionDir, "wiz-outpost-connector"),
+			envReqs: []string{"KM_WIZ_OUTPOST_JSON"},
 		},
 		{
 			// SES must apply LAST because it owns the consolidated S3 bucket policy.
@@ -1514,7 +1545,7 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 	var plan bool
 	var acceptDestroys bool
 	var onlyModule string
-	var githubFlag, slackFlag, h1Flag, emailFlag, webhooksFlag bool
+	var githubFlag, slackFlag, h1Flag, emailFlag, webhooksFlag, wizFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -1525,12 +1556,12 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 				awsProfile = "klanker-application"
 			}
 			// Phase 105: resolve scoped module flags before any other dispatch.
-			scopedModule, scopedErr := ResolveScopedModule(onlyModule, githubFlag, slackFlag, h1Flag, emailFlag, webhooksFlag)
+			scopedModule, scopedErr := ResolveScopedModule(onlyModule, githubFlag, slackFlag, h1Flag, emailFlag, webhooksFlag, wizFlag)
 			if scopedErr != nil {
 				return scopedErr
 			}
 			if scopedModule != "" && (plan || sidecarsOnly || lambdasOnly) {
-				return fmt.Errorf("--only/--github/--slack/--h1/--email/--webhooks cannot be combined with --plan, --sidecars, or --lambdas")
+				return fmt.Errorf("--only/--github/--slack/--h1/--email/--webhooks/--wiz cannot be combined with --plan, --sidecars, or --lambdas")
 			}
 			// Phase 84.2: --plan always wins over --dry-run / sidecars / lambdas (Decision 1).
 			if plan && (sidecarsOnly || lambdasOnly) {
@@ -1589,6 +1620,8 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 		"Scoped apply of email-handler (sugar for --only email-handler)")
 	cmd.Flags().BoolVar(&webhooksFlag, "webhooks", false,
 		"Scoped apply of lambda-webhook-bridge (sugar for --only lambda-webhook-bridge)")
+	cmd.Flags().BoolVar(&wizFlag, "wiz", false,
+		"Scoped apply of wiz-outpost-connector (sugar for --only wiz-outpost-connector)")
 
 	return cmd
 }
@@ -1652,6 +1685,7 @@ func runInitDryRun(cfg *config.Config, region string) error {
 		"KM_ACCOUNTS_ORGANIZATION": cfg.OrganizationAccountID != "",
 		"KM_ACCOUNTS_DNS_PARENT":   cfg.DNSParentAccountID != "",
 		"KM_ACCOUNTS_APPLICATION":  cfg.ApplicationAccountID != "",
+		"KM_WIZ_OUTPOST_JSON":      cfg.Wiz.Outpost != nil,
 	}
 
 	fmt.Printf(" 11. Apply regional infrastructure modules (in order):\n")
@@ -2674,6 +2708,22 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 		}
 	}
 
+	// KM_WIZ_OUTPOST_JSON — {"parameters":{...}} CloudFormation parameters for the
+	// Wiz Outpost connector stack, consumed by
+	// infra/live/use1/wiz-outpost-connector/terragrunt.hcl. Absent wiz.outpost
+	// leaves it unset (dormant). env-wins with a drift WARN, like KM_WEBHOOK_SOURCES.
+	if cfg.Wiz.Outpost != nil {
+		if yamlWiz, err := wizoutpost.ExportJSON(*cfg.Wiz.Outpost); err == nil {
+			if envVal := os.Getenv("KM_WIZ_OUTPOST_JSON"); envVal != "" && envVal != yamlWiz {
+				fmt.Fprintf(os.Stderr,
+					"WARN: KM_WIZ_OUTPOST_JSON=%s (env) overrides km-config.yaml wiz.outpost=%s\n",
+					envVal, yamlWiz)
+			} else if envVal == "" {
+				os.Setenv("KM_WIZ_OUTPOST_JSON", yamlWiz) //nolint:errcheck
+			}
+		}
+	}
+
 	// Phase 125: KM_NAT_GATEWAY_ENABLED — install-level toggle for whether the
 	// per-AZ NAT gateway infrastructure exists. Consumed by
 	// infra/live/use1/network/terragrunt.hcl
@@ -3474,6 +3524,11 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 					}
 				}
 			}
+		}
+
+		// After wiz-outpost-connector: print the values to paste into the Wiz UI.
+		if mod.name == wizOutpostModule {
+			printWizOutputsAfterApply(ctx, runner, mod.dir, os.Stdout)
 		}
 	}
 
