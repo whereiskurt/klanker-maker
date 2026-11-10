@@ -2166,6 +2166,7 @@ this. Same deploy surface; existing sandboxes keep the gap until recreate.
 | Composable multi-parent profile inheritance — `extends:` list, deep-merge, `profiles/base/` fragments, `initCommandsAppend`, v1 narrowing limitation | `OPERATOR-GUIDE.md` § Composable inheritance |
 | Wiz Runtime Sensor on a sandbox — opt-in `base/security/wiz` fragment, the prefix-relative SSM-path rule, why it is not tamper-proof, deploy surface | `docs/wiz-sensor.md` |
 | Which Wiz integration is which — km **pulls** from Wiz (`checks.triggers`, Phase 116), Wiz **pushes** to km (`webhooks:`, Phase 127), and a sandbox **reports to** Wiz (the runtime sensor). Three directions, independent, composable | `docs/wiz-sensor.md` § Relationship to the other Wiz integrations |
+| Make the install's AWS account a connected Wiz Outpost account — `wiz.outpost:` block, `km init --wiz`, the three values to paste into the Wiz UI, `km wiz status`, `km doctor` checks, template bump procedure | `docs/wiz-outpost-connector.md` |
 
 ## Sandbox-side helper binaries (`/opt/km/bin`)
 
@@ -2244,13 +2245,14 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km hermes <sandbox-id>` — reconnecting SSM forward to the WebUI on localhost:8788, plus the login password (`--local-port`, `--no-password`)
 - `km hermes status <sandbox-id>` / `km hermes stop <sandbox-id>` — report install/versions/server/provider/signal 10; stop and disable the server (stays stopped across resume)
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
+- `km wiz status` — show the Wiz Outpost connector stack state, deployed template version, and the three values to paste into the Wiz UI
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role
 - `km account add <name> --aws-profile <target-admin> --trust <home-account-id> --instance-types ...` — enroll a target AWS account as a capacity-borrowing link (target-account admin creds; `--provision-network --az-count N`, `--provision-efs`, `--enable-bedrock`, `--dry-run` defaults true)
 - `km account register <name> --from-fragment <path> --aws-profile <home>` — register a link into the home account (home creds; writes `km-config.yaml` entry + SSM external-id + one read-only artifacts-bucket grant)
 - `km account list` — list configured cross-account capacity links (never prints the external id)
 - `km account rm <name> [--target-aws-profile <profile>] [--purge-backend]` — remove a link (home-only by default; `--target-aws-profile` also destroys the target-account footprint; `--purge-backend` deletes the shared state bucket/lock table)
-- `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy, `--plan` to preview with destroy-class safety gate, `--dry-run=false` to actually apply, `--only <module>` for a scoped single-module apply; sugar: `--github` / `--slack` / `--h1` / `--email` (tier-1, env+IAM, no confirmation); `--only ses` (tier-2, destroy-class gated))
+- `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy, `--plan` to preview with destroy-class safety gate, `--dry-run=false` to actually apply, `--only <module>` for a scoped single-module apply; sugar: `--github` / `--slack` / `--h1` / `--email` / `--webhooks` / `--wiz` (tier-1, env+IAM, no confirmation); `--only ses` (tier-2, destroy-class gated))
 - `km bootstrap --shared-ses` — provision the shared SES rule set (idempotent; `--plan` previews with destroy-class safety gate)
 - `km bootstrap --shared-secrets-key` — provision the shared KMS key for SOPS secret injection (one-time per install; `--plan` previews with destroy-class gate; see `docs/sandbox-secrets.md`)
 - `km bootstrap --all` — chain foundation (SCP/KMS/artifacts) + shared SES rule set in one command; mutex with `--shared-ses`; `--plan` honors the destroy-class gate
