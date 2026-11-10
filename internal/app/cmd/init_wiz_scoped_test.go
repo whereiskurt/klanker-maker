@@ -96,3 +96,29 @@ func TestRunInitScoped_WizWithoutBlock_ErrorsClearly(t *testing.T) {
 		t.Fatalf("with block: %v", err)
 	}
 }
+
+// UAT 2026-11-10: the scoped wiz apply ended with the bridge-Lambda notes
+// ("refreshed env+IAM only … stale code zip"), which do not apply to a
+// CloudFormation stack. It must print the Wiz next step instead.
+func TestRunInitScoped_WizClosingNoteIsWizSpecific(t *testing.T) {
+	repoRoot := makeScopedRepoRoot(t, []string{"wiz-outpost-connector"})
+	t.Setenv("KM_WIZ_OUTPOST_JSON", "{}")
+	mock := &mockRunner{outputs: map[string]interface{}{
+		"access_role_arn":  map[string]interface{}{"value": "arn:aws:iam::111122223333:role/WizAccess-Role"},
+		"scanner_role_arn": map[string]interface{}{"value": "arn:aws:iam::111122223333:role/WizScannerRole-km"},
+		"external_id":      map[string]interface{}{"value": "abcdef12-3456-7890-abcd-ef1234567890"},
+	}}
+	var err error
+	out := captureStdout(t, func() {
+		err = cmd.RunInitScopedWithRunner(mock, repoRoot, "us-east-1", "wiz-outpost-connector", false, false)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "stale code zip") || strings.Contains(out, "refreshed env+IAM only") {
+		t.Fatalf("bridge-Lambda notes printed for the wiz module:\n%s", out)
+	}
+	if !strings.Contains(out, "Next: paste the three values into the Wiz UI connector form, then run km doctor.") {
+		t.Fatalf("missing wiz next-step note:\n%s", out)
+	}
+}

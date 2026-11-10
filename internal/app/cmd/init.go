@@ -411,6 +411,12 @@ func RunInitScopedWithRunner(runner InitRunner, repoRoot, region, module string,
 
 	fmt.Println()
 	fmt.Printf("Scoped init complete for %s.\n", module)
+	if module == wizOutpostModule {
+		// A CloudFormation stack, not a bridge Lambda: the env+IAM/code-zip
+		// notes below do not apply.
+		fmt.Printf("Next: paste the three values into the Wiz UI connector form, then run km doctor.\n")
+		return nil
+	}
 	fmt.Printf("Note: this refreshed env+IAM only. For a stale code zip: make build-lambdas && km init --lambdas\n")
 	fmt.Printf("Note: for new resources/tables/queues: km init --dry-run=false\n")
 	return nil

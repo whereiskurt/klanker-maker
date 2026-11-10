@@ -209,11 +209,21 @@ and no sandbox recreate. Existing installs with no `wiz:` block are unaffected.
 
 ## 11. Live UAT
 
-Not yet run.
+**Run 2026-11-10 against a real application account with stand-in trust roles.** No Wiz tenant
+was available, so the "Wiz tenant" principal was a permissionless role in the same account and the
+"orchestrator" was a permissionless role named `WizOrchestratorNodePoolRole` in that account. IAM
+validates that a trust-policy principal exists at `CreateRole`, so made-up ARNs would have failed the
+apply. Both stand-ins were deleted afterwards. This exercises everything km owns; the Wiz-side rows
+need a real tenant.
 
-- [ ] `km init --wiz --dry-run` on an install with no `wiz:` block: no module listed, no AWS call.
-- [ ] With the block: plan shows one `aws_cloudformation_stack` create; apply; the three values print; both roles exist with the expected trust policies.
-- [ ] Paste into the Wiz UI; the connector reaches healthy and account inventory appears.
-- [ ] A disk scan of a long-lived sandbox completes; Wiz's temporary volume/snapshot appear tagged `wiz=auto-gen-*`; `km doctor` does not list them as orphans.
-- [ ] `km doctor` group is green; edit `external_id` in yaml without applying and doctor flags the trust mismatch.
-- [ ] `km uninit` removes the stack.
+- [x] `km init --wiz --dry-run` with no `wiz:` block fails before any AWS call (`wiz-outpost-connector (--wiz) requires a wiz.outpost block in km-config.yaml`); `km doctor` registers no Wiz checks.
+- [x] With the block: `terragrunt plan` of the unit shows `1 to add`, with `WizVersionLastUpdated = "2025-10-07"` in the stack parameters. `km init --wiz --dry-run=false` created the stack in under a minute and printed the three values. `WizAccess-Role` trusts the tenant principal and `WizScannerRole-km` trusts `WizOrchestratorNodePoolRole`, both with the external id; the expected managed and inline policies are attached.
+- [x] `km wiz status` shows `CREATE_COMPLETE`, template `2025-10-07`, and the paste-out.
+- [x] `km doctor` "Wiz Outpost connector stack" and "… trust" are green; with a different `external_id` in yaml (not applied) the trust check WARNs `role WizAccess-Role sts:ExternalId does not match wiz.outpost.external_id`.
+- [x] With the `wiz:` block removed and the stack still present, `km wiz status` warns that the stack exists but is not configured; `km doctor` shows no Wiz rows.
+- [x] Destroy of the unit with `KM_WIZ_OUTPOST_JSON` unset (the `km uninit`-after-removal path, run as a single-unit `terragrunt destroy` rather than a full `km uninit`) removed the stack and both roles.
+- [ ] Paste into the Wiz UI; the connector reaches healthy and account inventory appears. *(needs a Wiz tenant)*
+- [ ] A disk scan of a long-lived sandbox completes; Wiz's temporary volume/snapshot appear tagged `wiz=auto-gen-*`; `km doctor` does not list them as orphans. *(needs a Wiz tenant)*
+
+Two findings, both fixed: `km env` did not export `KM_WIZ_OUTPOST_JSON` (a hand-driven plan would
+have used empty parameters), and the scoped apply ended with the bridge-Lambda "stale code zip" notes.
