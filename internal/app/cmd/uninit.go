@@ -151,12 +151,31 @@ func NewUninitCmd(cfg *config.Config) *cobra.Command {
 	var yes bool
 	var verbose bool
 	var includeSCP bool
+	var wiz bool
 
 	cmd := &cobra.Command{
 		Use:   "uninit",
 		Short: "Tear down all shared regional infrastructure for a region",
 		Long:  helpText("uninit"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ValidateUninitFlags(wiz, includeSCP); err != nil {
+				return err
+			}
+			if awsProfile == "" {
+				awsProfile = "klanker-application"
+			}
+			if wiz {
+				if !yes {
+					fmt.Print(UninitWizPrompt(cfg, region))
+					var answer string
+					fmt.Scanln(&answer)
+					if answer != "y" && answer != "Y" && answer != "yes" {
+						fmt.Println("Aborted.")
+						return nil
+					}
+				}
+				return runUninitScoped(cfg, awsProfile, region, verbose, wizOutpostModule)
+			}
 			if !yes {
 				fmt.Printf("Destroy ALL shared infrastructure in %s? This cannot be undone. [y/N] ", region)
 				var answer string
@@ -183,6 +202,8 @@ func NewUninitCmd(cfg *config.Config) *cobra.Command {
 		"Skip confirmation prompt")
 	cmd.Flags().BoolVar(&verbose, "verbose", false,
 		"Show full terragrunt/terraform output")
+	cmd.Flags().BoolVar(&wiz, "wiz", false,
+		"Destroy only the Wiz Outpost connector stack (WizAccess-Role, WizScannerRole-*); leaves everything else")
 	cmd.Flags().BoolVar(&includeSCP, "include-scp", false,
 		"Also detach and delete the install's sandbox-containment SCP from AWS Organizations (requires "+cfg.GetResourcePrefix()+"-org-admin role)")
 
