@@ -12,7 +12,7 @@ import (
 )
 
 // TemplateRelPath is the vendored Wiz template, relative to the repo root.
-const TemplateRelPath = "infra/modules/wiz-outpost-connector/v1.0.0/wiz-outpost-connector.json"
+const TemplateRelPath = "infra/modules/wiz-outpost-connector/v1.1.0/wiz-outpost-connector.json"
 
 // MaxInlineTemplateBytes is CloudFormation's TemplateBody size limit.
 const MaxInlineTemplateBytes = 51200
@@ -31,6 +31,7 @@ type Scanning struct {
 	S3AWSLogs        *bool `mapstructure:"s3_aws_logs" yaml:"s3_aws_logs,omitempty"`
 	S3KMSDecrypt     *bool `mapstructure:"s3_kms_decrypt" yaml:"s3_kms_decrypt,omitempty"`
 	TerraformBuckets *bool `mapstructure:"terraform_buckets" yaml:"terraform_buckets,omitempty"`
+	S3Inventory      *bool `mapstructure:"s3_inventory" yaml:"s3_inventory,omitempty"`
 }
 
 // Settings is the wiz.outpost block of km-config.yaml.
@@ -48,7 +49,7 @@ type Settings struct {
 var RequiredParameters = []string{
 	"ExternalId", "RoleARN", "OrchestratorAccountID", "RoleSuffix", "WizRoleName", "isOrg",
 	"CloudCostScanning", "DataScanning", "EKSScanning", "LightsailScanning", "RDSLogsScanning",
-	"S3AWSLogsScanning", "S3KMSDecrypt", "ServerlessScanning", "TerraformBucketScanning",
+	"S3AWSLogsScanning", "S3KMSDecrypt", "ServerlessScanning", "TerraformBucketScanning", "S3InventoryScanning",
 	"WizVersionLastUpdated",
 }
 
@@ -131,6 +132,7 @@ func (s Settings) Parameters() map[string]string {
 		"S3KMSDecrypt":            toggle(sc.S3KMSDecrypt, true),
 		"ServerlessScanning":      toggle(sc.Serverless, true),
 		"TerraformBucketScanning": toggle(sc.TerraformBuckets, true),
+		"S3InventoryScanning":     toggle(sc.S3Inventory, false),
 	}
 }
 

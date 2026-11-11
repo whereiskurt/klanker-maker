@@ -23,6 +23,7 @@ func TestParameters_DefaultsMirrorTemplate(t *testing.T) {
 		"isOrg": "Disabled", "CloudCostScanning": "Enabled", "DataScanning": "Disabled", "EKSScanning": "Disabled",
 		"LightsailScanning": "Disabled", "RDSLogsScanning": "Enabled", "S3AWSLogsScanning": "Enabled",
 		"S3KMSDecrypt": "Enabled", "ServerlessScanning": "Enabled", "TerraformBucketScanning": "Enabled",
+		"S3InventoryScanning": "Disabled",
 	}
 	if got := valid().Parameters(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
@@ -159,10 +160,44 @@ func TestStackAndRoleNames(t *testing.T) {
 
 func TestTemplateVersion(t *testing.T) {
 	v, err := TemplateVersion(filepath.Join("..", ".."))
-	if err != nil || v != "2025-10-07" {
+	if err != nil || v != "2026-10-21" {
 		t.Fatalf("got %q, %v", v, err)
 	}
 	if _, err := TemplateVersion(t.TempDir()); err == nil {
 		t.Fatal("expected error for missing template")
+	}
+}
+
+// A template bump must not silently change what an unset toggle means: every
+// scan parameter Parameters() emits with no scanning: block must equal the
+// vendored template's own Default.
+func TestParameters_DefaultsEqualTemplateDefaults(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", TemplateRelPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tpl struct {
+		Parameters map[string]struct {
+			Default *string `json:"Default"`
+		} `json:"Parameters"`
+	}
+	if err := json.Unmarshal(raw, &tpl); err != nil {
+		t.Fatal(err)
+	}
+	s := Settings{TrustRoleARN: "arn:aws:iam::111122223333:role/wiz-dc", OrchestratorAccountID: "444455556666",
+		ExternalID: "abcdef12-3456-7890-abcd-ef1234567890", RoleSuffix: "km"}
+	for k, v := range s.Parameters() {
+		switch k {
+		case "ExternalId", "RoleARN", "OrchestratorAccountID", "RoleSuffix":
+			continue // operator-supplied, no meaningful template default
+		}
+		p, ok := tpl.Parameters[k]
+		if !ok || p.Default == nil {
+			t.Errorf("%s: no Default in the vendored template", k)
+			continue
+		}
+		if *p.Default != v {
+			t.Errorf("%s: km default %q, template Default %q", k, v, *p.Default)
+		}
 	}
 }
