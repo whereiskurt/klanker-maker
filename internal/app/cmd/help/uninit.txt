@@ -28,10 +28,15 @@ Examples:
   # Force teardown even when active sandboxes exist
   km uninit --region us-east-1 --force
 
+  # Remove only the Wiz Outpost connector (the stack km init --wiz created);
+  # nothing else is touched and no active-sandbox check runs
+  km uninit --wiz
+
 Flags:
   --aws-profile string   AWS CLI profile to use (default: klanker-application)
   --region string        AWS region to uninitialize (default: us-east-1)
   --force                Proceed even if active sandboxes exist in the region
+  --wiz                  Destroy only the Wiz Outpost connector stack (not with --include-scp)
 
 Prerequisites:
   - AWS credentials configured (profile: klanker-application)

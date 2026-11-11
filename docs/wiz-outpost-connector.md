@@ -210,8 +210,14 @@ without a reviewable diff.
 ## 8. Removing it
 
 1. Remove the connector in the Wiz UI first.
-2. Then `km uninit` (destroys the stack when its state exists; it does not need
-   `KM_WIZ_OUTPOST_JSON`), or delete the stack yourself.
+2. Run `km uninit --wiz` (add `--yes` to skip the prompt). It destroys only the
+   `{prefix}-wiz-outpost-connector` stack, and with it `WizAccess-Role`,
+   `WizScannerRole-<role_suffix>` and their policies. Nothing else is touched and
+   no active-sandbox check runs, since no sandbox depends on these roles. It works
+   with or without the `wiz:` block still in `km-config.yaml` (the unit falls back
+   to empty parameters on destroy), and cannot be combined with `--include-scp`.
+   A full `km uninit` also destroys the stack, along with everything else.
+3. Delete the `wiz:` block from `km-config.yaml`, or the next `km init` recreates the stack.
 
 Removing the `wiz:` block from `km-config.yaml` alone destroys nothing: `km init`
 just skips the module, and `km wiz status` reports that the stack still exists.

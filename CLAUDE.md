@@ -2269,7 +2269,7 @@ Infra sidecars also live here (`km-http-proxy`, `km-dns-proxy`, `km-audit-log`, 
 - `km rsync save|load|list|view|delete <sandbox-id>` — snapshot and restore the sandbox user's `$HOME` to/from S3
 - `km roll creds` — rotate all platform + sandbox credentials
 - `km configure` — interactive wizard to generate `km-config.yaml` (`km configure github` configures the GitHub App)
-- `km uninit` — tear down all shared regional infrastructure for a region (`--yes`, `--force` if active sandboxes exist, `--include-scp`; NO `--dry-run` — confirmation is `--yes`)
+- `km uninit` — tear down all shared regional infrastructure for a region (`--yes`, `--force` if active sandboxes exist, `--include-scp`; `--wiz` destroys only the Wiz Outpost connector stack; NO `--dry-run` — confirmation is `--yes`)
 - `km unbootstrap` — tear down platform-foundational resources: SSM params, buckets, KMS key (`--include-zone` to also delete the Route53 zone, `--kms-deletion-window`, `--yes`)
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
 - `km version` — print the km version (alias for `km --version`)
