@@ -29,7 +29,7 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/wiz-outpost-connector/v1.0.0"
+  source = "${local.repo_root}/infra/modules/wiz-outpost-connector/v1.1.0"
 }
 
 # KM_WIZ_OUTPOST_JSON is exported by km init from km-config.yaml wiz.outpost

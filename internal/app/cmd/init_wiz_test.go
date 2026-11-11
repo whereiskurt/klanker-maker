@@ -82,7 +82,7 @@ func TestWizLiveUnit_ToleratesEmptyEnv(t *testing.T) {
 	for _, want := range []string{
 		`get_env("KM_WIZ_OUTPOST_JSON", "{}")`,
 		`try(jsondecode(`,
-		`infra/modules/wiz-outpost-connector/v1.0.0`,
+		`infra/modules/wiz-outpost-connector/v1.1.0`,
 	} {
 		if !strings.Contains(hcl, want) {
 			t.Errorf("live unit missing %q", want)
@@ -114,15 +114,15 @@ func TestWizLiveUnit_StackNameMatchesStackName(t *testing.T) {
 
 func TestWizModule_NoRequiredProviders(t *testing.T) {
 	for _, f := range []string{"main.tf", "variables.tf", "outputs.tf"} {
-		if strings.Contains(wizRepoFile(t, "infra/modules/wiz-outpost-connector/v1.0.0/"+f), "required_providers") {
+		if strings.Contains(wizRepoFile(t, "infra/modules/wiz-outpost-connector/v1.1.0/"+f), "required_providers") {
 			t.Errorf("%s declares required_providers", f)
 		}
 	}
 }
 
 func TestWizModule_OutputsIndexOnlyParametersMainSets(t *testing.T) {
-	main := wizRepoFile(t, "infra/modules/wiz-outpost-connector/v1.0.0/main.tf")
-	outputs := wizRepoFile(t, "infra/modules/wiz-outpost-connector/v1.0.0/outputs.tf")
+	main := wizRepoFile(t, "infra/modules/wiz-outpost-connector/v1.1.0/main.tf")
+	outputs := wizRepoFile(t, "infra/modules/wiz-outpost-connector/v1.1.0/outputs.tf")
 	if !regexp.MustCompile(`parameters\s*=\s*merge\(var\.parameters,\s*\{[^}]*WizVersionLastUpdated\s*=`).MatchString(main) {
 		t.Errorf("main.tf parameters must merge WizVersionLastUpdated into var.parameters")
 	}

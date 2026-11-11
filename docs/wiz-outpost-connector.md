@@ -70,6 +70,7 @@ wiz:
       s3_aws_logs: true
       s3_kms_decrypt: true
       terraform_buckets: true
+      s3_inventory: false
 ```
 
 | Key | Required | Default |
@@ -81,6 +82,31 @@ wiz:
 | `access_role_name` | no | `WizAccess-Role` |
 | `scanning.data` / `eks` / `lightsail` | no | `false` |
 | `scanning.serverless` / `cloud_cost` / `rds_logs` / `s3_aws_logs` / `s3_kms_decrypt` / `terraform_buckets` | no | `true` |
+| `scanning.s3_inventory` | no | `false` |
+
+**From the Wiz UI.** The Wiz UI's Outpost connector page offers a Terraform snippet
+(`wiz-aws-connector-with-outpost-no-cloudformation-terraform-module`). Its values map
+onto this block as follows; the Terraform module and the CloudFormation template km
+deploys are the same build and grant the same permissions.
+
+| Wiz Terraform snippet | `wiz.outpost:` key |
+|---|---|
+| `remote-arn` | `trust_role_arn` |
+| `outpost-remote-arn` (`arn:aws:iam::<account>:role/WizOrchestratorNodePoolRole`) | `orchestrator_account_id` (the `<account>` part; km builds the rest) |
+| `external-id` | `external_id` |
+| `wiz_access_rolename` | `access_role_name` |
+| `wiz_scanner_rolename` | none: the scanner role is `WizScannerRole-<role_suffix>` (see below) |
+| `data-scanning`, `eks-scanning`, `lightsail-scanning`, `serverless_scanning`, `terraform-bucket-scanning`, `cloud-cost-scanning` | `scanning.data`, `eks`, `lightsail`, `serverless`, `terraform_buckets`, `cloud_cost` |
+
+**Why `role_suffix`.** Wiz's CloudFormation template names the scanner role
+`WizScannerRole-${RoleSuffix}`; with an empty suffix that is `WizScannerRole-`
+(trailing hyphen), so km requires a non-empty one. The suffix changes only that
+role's name: not the access role, the policies, the trust, or the stack. Wiz's
+Terraform module defaults to a plain `WizScannerRole` instead. The Wiz connector
+form takes the scanner role ARN, so either name registers; if your orchestrator's
+`WizOrchestratorNodePoolRole` policy restricts `sts:AssumeRole` to an exact role
+name rather than a pattern such as `WizScannerRole*`, check it allows the suffixed
+name.
 
 - There is **no `disk` toggle**: disk scanning is always on (the template has no
   parameter for it; `WizScannerPolicy` is always attached to the scanner role).
@@ -158,19 +184,26 @@ A stack left behind after the `wiz:` block is removed is reported by
 
 The template is Wiz's own file, vendored as
 `infra/modules/wiz-outpost-connector/v1.0.0/wiz-outpost-connector.json`
-(v1.0.0 ships the public copy, `WizVersionLastUpdated: 2025-10-07`). It is never
+(v1.1.0 ships Wiz's public template from
+`https://wizio-public.s3.amazonaws.com/deployment-v2/aws/wiz-aws-standard-outpost-org.json`,
+`WizVersionLastUpdated: 2026-10-21`, the same build as the Wiz UI's Terraform module
+`2810`; v1.0.0 carried `2025-10-07`). It is never
 fetched at apply time, so a Wiz-side change cannot alter scanning permissions
 without a reviewable diff.
 
-1. Export the current Outpost connector template from your Wiz tenant, or take
-   the Terraform/CloudFormation the other accounts use.
-2. Create `infra/modules/wiz-outpost-connector/v1.1.0/` as a copy of `v1.0.0/`
-   with the new JSON in place (module versions are immutable; never edit v1.0.0).
-3. Repoint `infra/live/use1/wiz-outpost-connector/terragrunt.hcl` (`terraform.source`) at `v1.1.0`.
+1. Download the current template from the URL above (or export it from your Wiz
+   tenant) and confirm its `WizVersionLastUpdated` default is newer.
+2. Create the next module version (e.g. `v1.2.0/`) as a copy of the current one
+   with the new JSON in place, byte for byte (module versions are immutable; never
+   edit an existing one).
+3. Repoint `infra/live/use1/wiz-outpost-connector/terragrunt.hcl` (`terraform.source`)
+   and `pkg/wizoutpost.TemplateRelPath` at it. If the template adds a scan
+   parameter, expose it as a `scanning:` toggle with the template's default.
 4. Run `go test ./pkg/wizoutpost/`. The contract test names any parameter or
-   output the new template renamed or dropped, and checks the minified template
+   output the new template renamed or dropped, a defaults test fails if a
+   template default no longer matches km's, and a size test checks the minified template
    stays under CloudFormation's 51,200-byte inline limit (if it does not, the
-   module must stage it in S3 and use `template_url`; not built yet).
+   module must stage it in S3 and use `template_url`; not built yet). The 2026-10-21 template is 46,715 bytes minified, so headroom is about 4.5 KB; expect a future bump to need that S3 path.
 5. `km init --wiz --dry-run`, review, then `km init --wiz --dry-run=false`.
 6. Confirm the connector stays healthy in the Wiz UI and `km doctor` is green.
 
